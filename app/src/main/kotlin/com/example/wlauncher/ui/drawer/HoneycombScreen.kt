@@ -43,6 +43,7 @@ import kotlin.math.roundToInt
 @Composable
 fun HoneycombScreen(
     apps: List<AppInfo>,
+    blurEnabled: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,
     onSettingsClick: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -54,6 +55,7 @@ fun HoneycombScreen(
         val screenCenterX = screenWidthPx / 2f
         val screenCenterY = screenHeightPx / 2f
         val screenRadius = minOf(screenWidthPx, screenHeightPx) / 2f
+        val useBlurApi = blurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
         val iconSizeDp = 80.dp
         val cellSize = with(density) { iconSizeDp.toPx() }
@@ -106,11 +108,18 @@ fun HoneycombScreen(
                     )
                 }
         ) {
+            val currentScroll = scrollOffset.value
+            val visibleTop = -iconSizePx * 2
+            val visibleBottom = screenHeightPx + iconSizePx * 2
+
             apps.forEachIndexed { index, app ->
                 if (index >= positions.size) return@forEachIndexed
                 val gridPos = positions[index]
+                val posY = screenCenterY + gridPos.y + currentScroll
 
-                // 用 key 确保 composable 稳定
+                // 跳过不可见图标，减少 composition
+                if (posY < visibleTop || posY > visibleBottom) return@forEachIndexed
+
                 key(app.packageName) {
                     AppBubble(
                         icon = app.cachedIcon,
@@ -124,31 +133,25 @@ fun HoneycombScreen(
                         modifier = Modifier.graphicsLayer {
                             val sy = scrollOffset.value
                             val posX = screenCenterX + gridPos.x
-                            val posY = screenCenterY + gridPos.y + sy
-
-                            // 视口裁剪
-                            if (posY < -iconSizePx || posY > screenHeightPx + iconSizePx) {
-                                alpha = 0f
-                                return@graphicsLayer
-                            }
+                            val pY = screenCenterY + gridPos.y + sy
 
                             translationX = posX - iconSizePx / 2
-                            translationY = posY - iconSizePx / 2
+                            translationY = pY - iconSizePx / 2
 
                             // 鱼眼缩放
                             val dx = posX - screenCenterX
-                            val dy = posY - screenCenterY
+                            val dy = pY - screenCenterY
                             val dist = kotlin.math.sqrt(dx * dx + dy * dy)
                             val s = fisheyeScale(dist, screenRadius * 1.8f, minScale = 0.55f)
                             scaleX = s
                             scaleY = s
                             this.alpha = s.coerceIn(0.2f, 1f)
 
-                            // 边缘模糊 (API 31+)
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                val edgeDist = minOf(posY, screenHeightPx - posY)
+                            // 边缘模糊
+                            if (useBlurApi) {
+                                val edgeDist = minOf(pY, screenHeightPx - pY)
                                 val blurZone = screenHeightPx * 0.15f
-                                if (edgeDist < blurZone && edgeDist > 0) {
+                                if (edgeDist in 0f..blurZone) {
                                     val blurAmount = ((1f - edgeDist / blurZone) * 12f).coerceIn(0f, 12f)
                                     if (blurAmount > 0.5f) {
                                         renderEffect = RenderEffect.createBlurEffect(

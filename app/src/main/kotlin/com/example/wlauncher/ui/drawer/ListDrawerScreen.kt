@@ -35,16 +35,19 @@ import kotlin.math.abs
 @Composable
 fun ListDrawerScreen(
     apps: List<AppInfo>,
-    onAppClick: (AppInfo) -> Unit,
+    blurEnabled: Boolean = true,
+    onAppClick: (AppInfo, androidx.compose.ui.geometry.Offset) -> Unit,
     onSettingsClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
     val density = LocalDensity.current
+    val useBlurApi = blurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
     Box(modifier = modifier.fillMaxSize()) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val screenHeightPx = with(density) { maxHeight.toPx() }
+            val screenWidthPx = with(density) { maxWidth.toPx() }
             val screenCenterY = screenHeightPx / 2f
 
             LazyColumn(
@@ -71,7 +74,7 @@ fun ListDrawerScreen(
                                 scaleX = itemScale
                                 scaleY = itemScale
                                 alpha = itemScale.coerceIn(0.3f, 1f)
-                                if (edgeBlur > 0.5f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                if (useBlurApi && edgeBlur > 0.5f) {
                                     renderEffect = RenderEffect.createBlurEffect(
                                         edgeBlur, edgeBlur, Shader.TileMode.CLAMP
                                     ).asComposeRenderEffect()
@@ -109,13 +112,16 @@ fun ListDrawerScreen(
                                 scaleX = itemScale
                                 scaleY = itemScale
                                 alpha = itemScale.coerceIn(0.3f, 1f)
-                                if (edgeBlur > 0.5f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                if (useBlurApi && edgeBlur > 0.5f) {
                                     renderEffect = RenderEffect.createBlurEffect(
                                         edgeBlur, edgeBlur, Shader.TileMode.CLAMP
                                     ).asComposeRenderEffect()
                                 }
                             }
-                            .clickable { onAppClick(app) }
+                            .clickable {
+                                val centerY = (itemInfo?.let { it.offset + it.size / 2f } ?: screenCenterY) / screenHeightPx
+                                onAppClick(app, androidx.compose.ui.geometry.Offset(0.5f, centerY))
+                            }
                             .padding(horizontal = 16.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {

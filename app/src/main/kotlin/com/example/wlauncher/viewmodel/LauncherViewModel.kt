@@ -1,8 +1,12 @@
 package com.example.wlauncher.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.os.Build
 import androidx.compose.ui.geometry.Offset
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.*
+import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.wlauncher.data.model.AppInfo
@@ -11,13 +15,21 @@ import com.example.wlauncher.ui.navigation.LayoutMode
 import com.example.wlauncher.ui.navigation.ScreenState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+
+val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "launcher_settings")
 
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
 
+    companion object {
+        val KEY_LAYOUT = stringPreferencesKey("layout_mode")
+        val KEY_BLUR = booleanPreferencesKey("blur_enabled")
+        val KEY_LOW_RES = booleanPreferencesKey("low_res_icons")
+        val KEY_SPLASH_ICON = booleanPreferencesKey("splash_icon")
+    }
+
+    private val store = application.dataStore
     private val appRepository = AppRepository(application)
 
     val apps: StateFlow<List<AppInfo>> = appRepository.apps
@@ -34,23 +46,41 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _lowResIcons = MutableStateFlow(false)
     val lowResIcons: StateFlow<Boolean> = _lowResIcons.asStateFlow()
 
+    private val _splashIcon = MutableStateFlow(true)
+    val splashIcon: StateFlow<Boolean> = _splashIcon.asStateFlow()
+
     private val _appOpenOrigin = MutableStateFlow(Offset(0.5f, 0.5f))
     val appOpenOrigin: StateFlow<Offset> = _appOpenOrigin.asStateFlow()
 
     private val _currentApp = MutableStateFlow<AppInfo?>(null)
     val currentApp: StateFlow<AppInfo?> = _currentApp.asStateFlow()
 
-    // 是否正在启动外部应用（用于区分 onResume 来源）
     private var launchingExternalApp = false
     private var launchJob: Job? = null
+
+    init {
+        // 从 DataStore 读取持久化设置
+        viewModelScope.launch {
+            store.data.collect { prefs ->
+                prefs[KEY_LAYOUT]?.let {
+                    _layoutMode.value = try { LayoutMode.valueOf(it) } catch (_: Exception) { LayoutMode.Honeycomb }
+                }
+                prefs[KEY_BLUR]?.let {
+                    _blurEnabled.value = it && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                }
+                prefs[KEY_LOW_RES]?.let {
+                    _lowResIcons.value = it
+                    appRepository.refresh(if (it) 64 else 128)
+                }
+                prefs[KEY_SPLASH_ICON]?.let { _splashIcon.value = it }
+            }
+        }
+    }
 
     fun setState(state: ScreenState) {
         _screenState.value = state
     }
 
-    /**
-     * 打开应用：先播放退出动画，等动画完成后再启动外部 Activity。
-     */
     fun openApp(appInfo: AppInfo, origin: Offset = Offset(0.5f, 0.5f)) {
         _currentApp.value = appInfo
         _appOpenOrigin.value = origin
@@ -58,34 +88,24 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
         launchJob?.cancel()
         launchJob = viewModelScope.launch {
-            // 等待退出动画播放完 (~500ms)
             delay(500)
             launchingExternalApp = true
             appRepository.launchApp(appInfo)
         }
     }
 
-    /**
-     * 从外部应用返回桌面时调用。
-     * 播放返回动画：从 App 状态回到 Apps 状态。
-     */
     fun onReturnToLauncher() {
         if (launchingExternalApp) {
             launchingExternalApp = false
-            // 回到应用列表，触发返回动画
             _screenState.value = ScreenState.Apps
         }
     }
 
-    /**
-     * 主页键：表盘 ↔ 应用列表 切换，其他状态一律回表盘。
-     */
     fun handleHomePress() {
         when (_screenState.value) {
             ScreenState.Face -> _screenState.value = ScreenState.Apps
             ScreenState.Apps -> _screenState.value = ScreenState.Face
             ScreenState.App -> {
-                // 动画中按主页键，取消启动，回到应用列表
                 launchJob?.cancel()
                 launchJob = null
                 launchingExternalApp = false
@@ -95,15 +115,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    /**
-     * 返回键：按层级回退。表盘不响应。
-     */
     fun handleBackPress() {
         when (_screenState.value) {
-            ScreenState.Face -> { /* 表盘不响应返回键 */ }
+            ScreenState.Face -> {}
             ScreenState.Apps -> _screenState.value = ScreenState.Face
             ScreenState.App -> {
-                // 动画未完成，取消启动
                 launchJob?.cancel()
                 launchJob = null
                 launchingExternalApp = false
@@ -116,29 +132,30 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun closeApp() {
-        _screenState.value = ScreenState.Apps
-    }
-
-    fun goHome() {
-        _screenState.value = ScreenState.Face
-    }
+    fun closeApp() { _screenState.value = ScreenState.Apps }
+    fun goHome() { _screenState.value = ScreenState.Face }
+    fun openSettings() { _screenState.value = ScreenState.Settings }
 
     fun setLayoutMode(mode: LayoutMode) {
         _layoutMode.value = mode
+        viewModelScope.launch { store.edit { it[KEY_LAYOUT] = mode.name } }
     }
 
     fun setBlurEnabled(enabled: Boolean) {
-        _blurEnabled.value = enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+        val v = enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+        _blurEnabled.value = v
+        viewModelScope.launch { store.edit { it[KEY_BLUR] = v } }
     }
 
     fun setLowResIcons(enabled: Boolean) {
         _lowResIcons.value = enabled
         appRepository.refresh(if (enabled) 64 else 128)
+        viewModelScope.launch { store.edit { it[KEY_LOW_RES] = enabled } }
     }
 
-    fun openSettings() {
-        _screenState.value = ScreenState.Settings
+    fun setSplashIcon(enabled: Boolean) {
+        _splashIcon.value = enabled
+        viewModelScope.launch { store.edit { it[KEY_SPLASH_ICON] = enabled } }
     }
 
     override fun onCleared() {
