@@ -72,3 +72,40 @@ fun fisheyeScale(
     val t = (distance / maxDistance).coerceIn(0f, 1f)
     return maxScale - (maxScale - minScale) * t
 }
+
+/**
+ * 行列式蜂窝布局：交替宽窄行排列，模拟 Apple Watch 蜂窝网格。
+ * @param count 图标总数
+ * @param narrowCols 窄行列数（宽行 = narrowCols + 1）
+ * @param cellSize 图标间距（像素）
+ * @return 每个图标相对于网格中心的像素偏移列表
+ */
+fun generateHoneycombRows(count: Int, narrowCols: Int, cellSize: Float): List<Offset> {
+    if (count <= 0) return emptyList()
+    val result = mutableListOf<Offset>()
+    val wideCols = narrowCols + 1
+    val rowHeight = cellSize * sqrt(3f) / 2f
+
+    var row = 0
+    var placed = 0
+    while (placed < count) {
+        val isWideRow = row % 2 == 1
+        val cols = if (isWideRow) wideCols else narrowCols
+        val itemsInRow = minOf(cols, count - placed)
+
+        for (col in 0 until itemsInRow) {
+            // 居中排列：宽行和窄行各自居中
+            val totalWidth = (cols - 1) * cellSize
+            val x = col * cellSize - totalWidth / 2f
+            val y = row * rowHeight
+            result.add(Offset(x, y))
+        }
+        placed += itemsInRow
+        row++
+    }
+
+    // 将整个网格的 Y 中心移到 0
+    val totalHeight = (row - 1) * rowHeight
+    val yOffset = totalHeight / 2f
+    return result.map { Offset(it.x, it.y - yOffset) }
+}

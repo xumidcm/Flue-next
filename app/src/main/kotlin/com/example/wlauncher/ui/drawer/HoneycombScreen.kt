@@ -29,10 +29,9 @@ import androidx.compose.ui.unit.dp
 import com.example.wlauncher.data.model.AppInfo
 import com.example.wlauncher.ui.theme.WatchColors
 import com.example.wlauncher.util.fisheyeScale
-import com.example.wlauncher.util.generateHexSpiral
-import com.example.wlauncher.util.hexToPixel
+import com.example.wlauncher.util.generateHoneycombRows
 import kotlinx.coroutines.launch
-import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.roundToInt
 
 @Composable
@@ -49,23 +48,25 @@ fun HoneycombScreen(
         val screenCenter = Offset(screenWidthPx / 2f, screenHeightPx / 2f)
         val screenRadius = minOf(screenWidthPx, screenHeightPx) / 2f
 
-        val baseCellSize = with(density) { 46.dp.toPx() }
+        // 图标尺寸和列数
         val iconSizeDp = 54.dp
+        val cellSize = with(density) { iconSizeDp.toPx() }
+        val narrowCols = (floor(screenWidthPx / cellSize).toInt() - 1).coerceAtLeast(3)
 
-        val hexPositions = remember(apps.size) { generateHexSpiral(apps.size) }
+        // 行列式蜂窝布局
+        val positions = remember(apps.size, narrowCols, cellSize) {
+            generateHoneycombRows(apps.size, narrowCols, cellSize)
+        }
 
-        // 仅 Y 轴平移
+        // Y 轴滚动
         var panOffsetY by remember { mutableFloatStateOf(0f) }
         val scope = rememberCoroutineScope()
         val animY = remember { Animatable(0f) }
 
-        // 计算 Y 轴滚动边界
-        val maxScrollY = remember(hexPositions, baseCellSize) {
-            if (hexPositions.isEmpty()) 0f
-            else {
-                val maxAbsY = hexPositions.maxOf { abs(hexToPixel(it, baseCellSize).y) }
-                maxAbsY + baseCellSize * 2
-            }
+        // 滚动边界
+        val maxScrollY = remember(positions) {
+            if (positions.isEmpty()) 0f
+            else positions.maxOf { kotlin.math.abs(it.y) } + cellSize
         }
 
         fun clampY(y: Float): Float = y.coerceIn(-maxScrollY, maxScrollY)
@@ -103,21 +104,27 @@ fun HoneycombScreen(
                     .collect { panOffsetY = clampY(it) }
             }
 
-            apps.forEachIndexed { index, app ->
-                if (index >= hexPositions.size) return@forEachIndexed
+            val iconSizePx = with(density) { iconSizeDp.toPx() }
 
-                val hexPixel = hexToPixel(hexPositions[index], baseCellSize)
-                val worldPos = Offset(hexPixel.x, hexPixel.y + panOffsetY)
-                val screenPos = screenCenter + worldPos
-                val distFromCenter = worldPos.getDistance()
+            apps.forEachIndexed { index, app ->
+                if (index >= positions.size) return@forEachIndexed
+
+                val gridPos = positions[index]
+                val screenPos = Offset(
+                    screenCenter.x + gridPos.x,
+                    screenCenter.y + gridPos.y + panOffsetY
+                )
 
                 // 视口裁剪
-                if (screenPos.x < -100 || screenPos.x > screenWidthPx + 100 ||
-                    screenPos.y < -100 || screenPos.y > screenHeightPx + 100
+                if (screenPos.y < -iconSizePx || screenPos.y > screenHeightPx + iconSizePx
                 ) return@forEachIndexed
 
+                // 鱼眼：基于到屏幕中心的距离
+                val distFromCenter = Offset(
+                    screenPos.x - screenCenter.x,
+                    screenPos.y - screenCenter.y
+                ).getDistance()
                 val scale = fisheyeScale(distFromCenter, screenRadius * 1.2f)
-                val iconSizePx = with(density) { iconSizeDp.toPx() }
 
                 AppBubble(
                     icon = app.icon,
@@ -145,7 +152,7 @@ fun HoneycombScreen(
             }
         }
 
-        // 设置按钮 - 悬浮在右下角
+        // 设置按钮
         FloatingActionButton(
             onClick = onSettingsClick,
             modifier = Modifier
