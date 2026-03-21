@@ -30,10 +30,12 @@ fun LauncherSettingsSheet(
     blurEnabled: Boolean,
     lowResIcons: Boolean = false,
     splashIcon: Boolean = true,
+    splashDelay: Int = 500,
     onLayoutChange: (LayoutMode) -> Unit,
     onBlurToggle: (Boolean) -> Unit,
     onLowResToggle: (Boolean) -> Unit = {},
     onSplashToggle: (Boolean) -> Unit = {},
+    onSplashDelayChange: (Int) -> Unit = {},
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -81,6 +83,31 @@ fun LauncherSettingsSheet(
             item(key = "splash") {
                 val s = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "splash" }, screenCenterY, screenHeightPx)
                 SettingToggle("启动遮罩", "打开应用时显示居中图标", splashIcon, onSplashToggle, s)
+            }
+            if (splashIcon) {
+                item(key = "splash_delay") {
+                    val s = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "splash_delay" }, screenCenterY, screenHeightPx)
+                    Column(
+                        modifier = Modifier.fillMaxWidth()
+                            .graphicsLayer { scaleX = s; scaleY = s; alpha = s }
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(WatchColors.SurfaceGlass)
+                            .padding(14.dp)
+                    ) {
+                        Text("启动延迟: ${splashDelay}ms", fontSize = 14.sp, fontWeight = FontWeight.W600, color = Color.White)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        androidx.compose.material3.Slider(
+                            value = splashDelay.toFloat(),
+                            onValueChange = { onSplashDelayChange(it.toInt()) },
+                            valueRange = 300f..1500f,
+                            steps = 11,
+                            colors = androidx.compose.material3.SliderDefaults.colors(
+                                thumbColor = WatchColors.ActiveCyan,
+                                activeTrackColor = WatchColors.ActiveCyan
+                            )
+                        )
+                    }
+                }
             }
 
             item(key = "h_perf") { ScaledSectionHeader("性能", listState, "h_perf", screenCenterY, screenHeightPx) }

@@ -48,6 +48,7 @@ class LauncherActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashHandler(applicationContext).install()
         window.setFlags(
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
@@ -89,6 +90,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val apps by vm.apps.collectAsState()
     val appOpenOrigin by vm.appOpenOrigin.collectAsState()
     val splashIcon by vm.splashIcon.collectAsState()
+    val splashDelay by vm.splashDelay.collectAsState()
     val currentApp by vm.currentApp.collectAsState()
 
     // 跟踪上一个状态，判断是否从 App 返回
@@ -104,7 +106,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     LaunchedEffect(screenState) {
         if (screenState == ScreenState.App && splashIcon) {
             showSplash = false
-            delay(350) // 等 appListLayer 缩放飞出后
+            delay((splashDelay * 0.7f).toLong()) // 等 appListLayer 缩放飞出后
             showSplash = true
         } else {
             showSplash = false
@@ -150,14 +152,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     LayoutMode.Honeycomb -> HoneycombScreen(
                         apps = apps,
                         blurEnabled = blurEnabled,
-                        onAppClick = { appInfo, origin -> vm.openApp(appInfo, origin) },
-                        onSettingsClick = { vm.openSettings() }
+                        onAppClick = { appInfo, origin -> vm.openApp(appInfo, origin) }
                     )
                     LayoutMode.List -> ListDrawerScreen(
                         apps = apps,
                         blurEnabled = blurEnabled,
-                        onAppClick = { appInfo, origin -> vm.openApp(appInfo, origin) },
-                        onSettingsClick = { vm.openSettings() }
+                        onAppClick = { appInfo, origin -> vm.openApp(appInfo, origin) }
                     )
                 }
             }
@@ -223,10 +223,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     blurEnabled = blurEnabled,
                     lowResIcons = vm.lowResIcons.collectAsState().value,
                     splashIcon = splashIcon,
+                    splashDelay = splashDelay,
                     onLayoutChange = { vm.setLayoutMode(it) },
                     onBlurToggle = { vm.setBlurEnabled(it) },
                     onLowResToggle = { vm.setLowResIcons(it) },
                     onSplashToggle = { vm.setSplashIcon(it) },
+                    onSplashDelayChange = { vm.setSplashDelay(it) },
                     onDismiss = { vm.setState(ScreenState.Apps) }
                 )
             }

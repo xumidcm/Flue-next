@@ -45,7 +45,11 @@ class AppRepository(private val context: Context) {
         val myPackage = context.packageName
 
         _apps.value = resolveInfos
-            .filter { it.activityInfo.packageName != myPackage }
+            .filter { ri ->
+                // 只过滤 LauncherActivity，保留 SettingsActivity 让它在桌面可见
+                !(ri.activityInfo.packageName == myPackage &&
+                    ri.activityInfo.name == "com.example.wlauncher.LauncherActivity")
+            }
             .map { ri ->
                 val drawable = ri.loadIcon(pm)
                 AppInfo(

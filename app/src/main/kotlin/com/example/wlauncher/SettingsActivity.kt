@@ -15,9 +15,9 @@ import com.example.wlauncher.ui.theme.WatchLauncherTheme
 import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_BLUR
 import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_LAYOUT
 import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_LOW_RES
+import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_SPLASH_DELAY
 import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_SPLASH_ICON
 import com.example.wlauncher.viewmodel.dataStore
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 class SettingsActivity : ComponentActivity() {
@@ -34,16 +34,19 @@ class SettingsActivity : ComponentActivity() {
                 val blurEnabled = prefs?.get(KEY_BLUR) ?: (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S)
                 val lowRes = prefs?.get(KEY_LOW_RES) ?: false
                 val splash = prefs?.get(KEY_SPLASH_ICON) ?: true
+                val delay = prefs?.get(KEY_SPLASH_DELAY) ?: 500
 
                 LauncherSettingsSheet(
                     currentLayout = layoutMode,
                     blurEnabled = blurEnabled,
                     lowResIcons = lowRes,
                     splashIcon = splash,
+                    splashDelay = delay,
                     onLayoutChange = { scope.launch { dataStore.edit { p -> p[KEY_LAYOUT] = it.name } } },
                     onBlurToggle = { scope.launch { dataStore.edit { p -> p[KEY_BLUR] = it && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S } } },
                     onLowResToggle = { scope.launch { dataStore.edit { p -> p[KEY_LOW_RES] = it } } },
                     onSplashToggle = { scope.launch { dataStore.edit { p -> p[KEY_SPLASH_ICON] = it } } },
+                    onSplashDelayChange = { scope.launch { dataStore.edit { p -> p[KEY_SPLASH_DELAY] = it } } },
                     onDismiss = { finish() },
                     modifier = Modifier.fillMaxSize().background(Color.Black)
                 )

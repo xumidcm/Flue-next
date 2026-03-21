@@ -11,14 +11,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asComposeRenderEffect
@@ -29,15 +27,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.wlauncher.data.model.AppInfo
-import com.example.wlauncher.ui.theme.WatchColors
 import kotlin.math.abs
 
 @Composable
 fun ListDrawerScreen(
     apps: List<AppInfo>,
     blurEnabled: Boolean = true,
-    onAppClick: (AppInfo, androidx.compose.ui.geometry.Offset) -> Unit,
-    onSettingsClick: () -> Unit = {},
+    onAppClick: (AppInfo, Offset) -> Unit,
+    onLongClick: (AppInfo) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -47,61 +44,23 @@ fun ListDrawerScreen(
     Box(modifier = modifier.fillMaxSize()) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val screenHeightPx = with(density) { maxHeight.toPx() }
-            val screenWidthPx = with(density) { maxWidth.toPx() }
             val screenCenterY = screenHeightPx / 2f
+            // 第一项居中：top padding = 半屏高度 - 预估 item 高度一半
+            val topPadding = with(density) { (screenHeightPx / 2f - 40.dp.toPx()).toDp() }
 
             LazyColumn(
                 state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black),
+                modifier = Modifier.fillMaxSize().background(Color.Black),
                 contentPadding = PaddingValues(
-                    top = 40.dp,
-                    bottom = 60.dp,
+                    top = topPadding,
+                    bottom = topPadding,
                     start = 12.dp,
                     end = 12.dp
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                item(key = "__settings__") {
-                    val itemInfo = listState.layoutInfo.visibleItemsInfo.find { it.index == 0 }
-                    val itemScale = computeItemScale(itemInfo, screenCenterY, screenHeightPx)
-                    val edgeBlur = computeEdgeBlur(itemInfo, screenHeightPx, density)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .graphicsLayer {
-                                scaleX = itemScale
-                                scaleY = itemScale
-                                alpha = itemScale.coerceIn(0.3f, 1f)
-                                if (useBlurApi && edgeBlur > 0.5f) {
-                                    renderEffect = RenderEffect.createBlurEffect(
-                                        edgeBlur, edgeBlur, Shader.TileMode.CLAMP
-                                    ).asComposeRenderEffect()
-                                }
-                            }
-                            .clickable { onSettingsClick() }
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Filled.Settings,
-                            contentDescription = "设置",
-                            tint = WatchColors.TextSecondary,
-                            modifier = Modifier.size(52.dp)
-                        )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Text(
-                            text = "桌面设置",
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.W500,
-                            color = WatchColors.ActiveCyan
-                        )
-                    }
-                }
-
                 items(apps, key = { it.packageName }) { app ->
-                    val itemIndex = apps.indexOf(app) + 1
+                    val itemIndex = apps.indexOf(app)
                     val itemInfo = listState.layoutInfo.visibleItemsInfo.find { it.index == itemIndex }
                     val itemScale = computeItemScale(itemInfo, screenCenterY, screenHeightPx)
                     val edgeBlur = computeEdgeBlur(itemInfo, screenHeightPx, density)
@@ -119,8 +78,9 @@ fun ListDrawerScreen(
                                 }
                             }
                             .clickable {
+                                // origin x 偏左（图标在左侧约 15% 位置）
                                 val centerY = (itemInfo?.let { it.offset + it.size / 2f } ?: screenCenterY) / screenHeightPx
-                                onAppClick(app, androidx.compose.ui.geometry.Offset(0.5f, centerY))
+                                onAppClick(app, Offset(0.15f, centerY))
                             }
                             .padding(horizontal = 16.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -128,9 +88,7 @@ fun ListDrawerScreen(
                         Image(
                             bitmap = app.cachedIcon,
                             contentDescription = app.label,
-                            modifier = Modifier
-                                .size(52.dp)
-                                .clip(CircleShape),
+                            modifier = Modifier.size(52.dp).clip(CircleShape),
                             contentScale = ContentScale.Crop
                         )
                         Spacer(modifier = Modifier.width(16.dp))
@@ -147,26 +105,17 @@ fun ListDrawerScreen(
 
         // 顶部渐变遮罩
         Box(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .height(60.dp)
+            modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().height(60.dp)
                 .background(Brush.verticalGradient(listOf(Color.Black, Color.Transparent)))
         )
         // 底部渐变遮罩
         Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .height(60.dp)
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(60.dp)
                 .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
         )
     }
 }
 
-/**
- * 根据 item 在屏幕上的位置计算缩放比例（靠近中心=1.0，靠近边缘缩小）
- */
 private fun computeItemScale(
     itemInfo: androidx.compose.foundation.lazy.LazyListItemInfo?,
     screenCenterY: Float,

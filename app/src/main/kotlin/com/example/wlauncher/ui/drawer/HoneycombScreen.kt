@@ -5,6 +5,7 @@ import android.graphics.Shader
 import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.exponentialDecay
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
@@ -12,14 +13,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.FloatingActionButtonDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,14 +31,13 @@ import com.example.wlauncher.util.fisheyeScale
 import com.example.wlauncher.util.generateHoneycombRows
 import kotlinx.coroutines.launch
 import kotlin.math.abs
-import kotlin.math.roundToInt
 
 @Composable
 fun HoneycombScreen(
     apps: List<AppInfo>,
     blurEnabled: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,
-    onSettingsClick: () -> Unit = {},
+    onLongClick: (AppInfo) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
@@ -88,18 +80,39 @@ fun HoneycombScreen(
                         onDrag = { change, dragAmount ->
                             change.consume()
                             velocityTracker.addPosition(change.uptimeMillis, change.position)
-                            val newVal = (scrollOffset.value + dragAmount.y)
-                                .coerceIn(-maxScrollY, maxScrollY)
-                            scope.launch { scrollOffset.snapTo(newVal) }
+                            val current = scrollOffset.value
+                            // 橡皮筋效果：超出边界时阻力增大
+                            val overscroll = when {
+                                current + dragAmount.y > maxScrollY -> (current + dragAmount.y - maxScrollY)
+                                current + dragAmount.y < -maxScrollY -> -((-maxScrollY) - (current + dragAmount.y))
+                                else -> 0f
+                            }
+                            val dampedDrag = if (overscroll != 0f) {
+                                dragAmount.y * 0.3f // 超出边界时 30% 阻力
+                            } else dragAmount.y
+                            scope.launch { scrollOffset.snapTo(current + dampedDrag) }
                         },
                         onDragEnd = {
                             val velocity = velocityTracker.calculateVelocity()
-                            scope.launch {
-                                scrollOffset.animateDecay(velocity.y, exponentialDecay()) {
-                                    // clamp during decay
-                                    if (value < -maxScrollY || value > maxScrollY) {
-                                        scope.launch {
-                                            scrollOffset.snapTo(value.coerceIn(-maxScrollY, maxScrollY))
+                            val current = scrollOffset.value
+                            if (current < -maxScrollY || current > maxScrollY) {
+                                // 超出边界，spring 回弹
+                                scope.launch {
+                                    scrollOffset.animateTo(
+                                        current.coerceIn(-maxScrollY, maxScrollY),
+                                        spring(dampingRatio = 0.6f, stiffness = 400f)
+                                    )
+                                }
+                            } else {
+                                scope.launch {
+                                    scrollOffset.animateDecay(velocity.y, exponentialDecay()) {
+                                        if (value < -maxScrollY || value > maxScrollY) {
+                                            scope.launch {
+                                                scrollOffset.animateTo(
+                                                    value.coerceIn(-maxScrollY, maxScrollY),
+                                                    spring(dampingRatio = 0.6f, stiffness = 400f)
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -184,24 +197,5 @@ fun HoneycombScreen(
                 .height(80.dp)
                 .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
         )
-
-        // 设置按钮
-        FloatingActionButton(
-            onClick = onSettingsClick,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(bottom = 24.dp, end = 16.dp)
-                .size(40.dp),
-            shape = CircleShape,
-            containerColor = WatchColors.SurfaceGlass,
-            elevation = FloatingActionButtonDefaults.elevation(0.dp)
-        ) {
-            Icon(
-                Icons.Filled.Settings,
-                contentDescription = "设置",
-                tint = Color.White.copy(alpha = 0.7f),
-                modifier = Modifier.size(20.dp)
-            )
-        }
     }
 }

@@ -27,6 +27,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_BLUR = booleanPreferencesKey("blur_enabled")
         val KEY_LOW_RES = booleanPreferencesKey("low_res_icons")
         val KEY_SPLASH_ICON = booleanPreferencesKey("splash_icon")
+        val KEY_SPLASH_DELAY = intPreferencesKey("splash_delay")
     }
 
     private val store = application.dataStore
@@ -45,6 +46,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _lowResIcons = MutableStateFlow(false)
     val lowResIcons: StateFlow<Boolean> = _lowResIcons.asStateFlow()
+
+    private val _splashDelay = MutableStateFlow(500)
+    val splashDelay: StateFlow<Int> = _splashDelay.asStateFlow()
 
     private val _splashIcon = MutableStateFlow(true)
     val splashIcon: StateFlow<Boolean> = _splashIcon.asStateFlow()
@@ -73,6 +77,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     appRepository.refresh(if (it) 64 else 128)
                 }
                 prefs[KEY_SPLASH_ICON]?.let { _splashIcon.value = it }
+                prefs[KEY_SPLASH_DELAY]?.let { _splashDelay.value = it.coerceIn(300, 1500) }
             }
         }
     }
@@ -88,7 +93,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
         launchJob?.cancel()
         launchJob = viewModelScope.launch {
-            delay(500)
+            delay(_splashDelay.value.toLong())
             launchingExternalApp = true
             appRepository.launchApp(appInfo)
         }
@@ -156,6 +161,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setSplashIcon(enabled: Boolean) {
         _splashIcon.value = enabled
         viewModelScope.launch { store.edit { it[KEY_SPLASH_ICON] = enabled } }
+    }
+
+    fun setSplashDelay(ms: Int) {
+        _splashDelay.value = ms.coerceIn(300, 1500)
+        viewModelScope.launch { store.edit { it[KEY_SPLASH_DELAY] = _splashDelay.value } }
     }
 
     override fun onCleared() {
