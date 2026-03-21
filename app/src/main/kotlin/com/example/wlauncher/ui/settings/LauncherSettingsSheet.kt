@@ -135,6 +135,22 @@ fun LauncherSettingsSheet(
                     SettingOption(pack.second, pack.first ?: "", iconPackName == pack.first, { onIconPackChange(pack.first) }, s)
                 }
             }
+            item(key = "iconpack_scan") {
+                val s = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "iconpack_scan" }, screenCenterY, screenHeightPx)
+                val ctx = androidx.compose.ui.platform.LocalContext.current
+                Box(
+                    modifier = Modifier.fillMaxWidth().graphicsLayer { scaleX = s; scaleY = s; alpha = s }
+                        .clip(RoundedCornerShape(16.dp)).background(WatchColors.SurfaceGlass)
+                        .clickable {
+                            val mgr = com.example.wlauncher.data.iconpack.IconPackManager(ctx)
+                            val found = mgr.getInstalledIconPacks()
+                            val msg = if (found.isEmpty()) "未找到图标包" else "找到 ${found.size} 个: ${found.joinToString { it.label }}"
+                            android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_LONG).show()
+                        }
+                        .padding(14.dp),
+                    contentAlignment = Alignment.Center
+                ) { Text("手动扫描图标包", fontSize = 14.sp, color = WatchColors.ActiveCyan) }
+            }
 
             item(key = "h_about") { ScaledSectionHeader("调试", listState, "h_about", screenCenterY, screenHeightPx) }
             item(key = "export_log") {

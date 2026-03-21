@@ -50,25 +50,19 @@ fun ListDrawerScreen(
     val useBlurApi = blurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     val context = LocalContext.current
     var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
-
-    // 记录每个可见 item 的屏幕内实际位置
     val itemPositions = remember { mutableMapOf<Int, Float>() }
 
     Box(modifier = modifier.fillMaxSize()) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val screenHeightPx = with(density) { maxHeight.toPx() }
-            val screenWidthPx = with(density) { maxWidth.toPx() }
             val screenCenterY = screenHeightPx / 2f
-            // 首项居中：top padding = 屏幕中心 - item高度/2
-            val itemHeightApprox = with(density) { (iconSize + 20.dp).toPx() }
-            val topPadding = with(density) { ((screenCenterY - itemHeightApprox / 2f) / density.density).dp }
 
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().background(Color.Black),
                 contentPadding = PaddingValues(
-                    top = topPadding.coerceAtLeast(20.dp),
-                    bottom = topPadding.coerceAtLeast(60.dp),
+                    top = 40.dp,
+                    bottom = 60.dp,
                     start = 12.dp,
                     end = 12.dp
                 ),
@@ -83,8 +77,7 @@ fun ListDrawerScreen(
                             .fillMaxWidth()
                             .onGloballyPositioned { coords ->
                                 val posY = coords.positionInRoot().y
-                                val centerY = posY + coords.size.height / 2f
-                                itemPositions[index] = centerY
+                                itemPositions[index] = posY + coords.size.height / 2f
                             }
                             .graphicsLayer {
                                 scaleX = itemScale
@@ -127,12 +120,7 @@ fun ListDrawerScreen(
             }
         }
 
-        // 顶部渐变遮罩
-        Box(
-            modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().height(60.dp)
-                .background(Brush.verticalGradient(listOf(Color.Black, Color.Transparent)))
-        )
-        // 底部渐变遮罩
+        // 底部渐变遮罩（去掉了顶部模糊）
         Box(
             modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(60.dp)
                 .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
@@ -155,7 +143,7 @@ private fun computeItemScale(
     val dist = abs(itemCenterY - screenCenterY)
     val maxDist = screenHeight / 2f
     val t = (dist / maxDist).coerceIn(0f, 1f)
-    return 1f - 0.15f * t
+    return 1f - 0.2f * t
 }
 
 private fun computeEdgeBlur(
@@ -166,7 +154,7 @@ private fun computeEdgeBlur(
     if (itemInfo == null) return 0f
     val itemCenterY = itemInfo.offset + itemInfo.size / 2f
     val edgeDist = minOf(itemCenterY.coerceAtLeast(0f), (screenHeight - itemCenterY).coerceAtLeast(0f))
-    val blurZone = screenHeight * 0.18f
-    if (edgeDist >= blurZone) return 0f
+    val blurZone = screenHeight * 0.15f
+    if (edgeDist >= blurZone || edgeDist <= 0) return 0f
     return ((1f - edgeDist / blurZone) * 10f * density.density).coerceIn(0f, 10f * density.density)
 }
