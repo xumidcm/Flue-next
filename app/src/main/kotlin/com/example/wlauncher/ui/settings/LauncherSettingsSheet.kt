@@ -306,7 +306,6 @@ private fun SettingToggle(
 }
 
 @Composable
-@Composable
 private fun StepperSetting(
     label: String,
     valueText: String,
