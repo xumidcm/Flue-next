@@ -11,9 +11,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -29,14 +26,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.wlauncher.data.model.AppInfo
-import com.example.wlauncher.ui.theme.WatchColors
 import kotlin.math.abs
 
 @Composable
 fun ListDrawerScreen(
     apps: List<AppInfo>,
-    onAppClick: (AppInfo) -> Unit,
-    onSettingsClick: () -> Unit = {},
+    onAppClick: (AppInfo, androidx.compose.ui.geometry.Offset) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -60,45 +55,8 @@ fun ListDrawerScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                item(key = "__settings__") {
-                    val itemInfo = listState.layoutInfo.visibleItemsInfo.find { it.index == 0 }
-                    val itemScale = computeItemScale(itemInfo, screenCenterY, screenHeightPx)
-                    val edgeBlur = computeEdgeBlur(itemInfo, screenHeightPx, density)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .graphicsLayer {
-                                scaleX = itemScale
-                                scaleY = itemScale
-                                alpha = itemScale.coerceIn(0.3f, 1f)
-                                if (edgeBlur > 0.5f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                    renderEffect = RenderEffect.createBlurEffect(
-                                        edgeBlur, edgeBlur, Shader.TileMode.CLAMP
-                                    ).asComposeRenderEffect()
-                                }
-                            }
-                            .clickable { onSettingsClick() }
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Filled.Settings,
-                            contentDescription = "设置",
-                            tint = WatchColors.TextSecondary,
-                            modifier = Modifier.size(52.dp)
-                        )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Text(
-                            text = "桌面设置",
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.W500,
-                            color = WatchColors.ActiveCyan
-                        )
-                    }
-                }
-
                 items(apps, key = { it.packageName }) { app ->
-                    val itemIndex = apps.indexOf(app) + 1
+                    val itemIndex = apps.indexOf(app)
                     val itemInfo = listState.layoutInfo.visibleItemsInfo.find { it.index == itemIndex }
                     val itemScale = computeItemScale(itemInfo, screenCenterY, screenHeightPx)
                     val edgeBlur = computeEdgeBlur(itemInfo, screenHeightPx, density)
@@ -115,7 +73,10 @@ fun ListDrawerScreen(
                                     ).asComposeRenderEffect()
                                 }
                             }
-                            .clickable { onAppClick(app) }
+                            .clickable {
+                                val centerY = (itemInfo?.let { it.offset + it.size / 2f } ?: screenCenterY) / screenHeightPx
+                                onAppClick(app, androidx.compose.ui.geometry.Offset(0.5f, centerY))
+                            }
                             .padding(horizontal = 16.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -167,7 +128,8 @@ private fun computeItemScale(
     screenHeight: Float
 ): Float {
     if (itemInfo == null) return 0.85f
-    val itemCenterY = itemInfo.offset + itemInfo.size / 2f
+    // itemInfo.offset 是相对于 viewport 的，直接使用即可（viewport 起点就是屏幕顶部）
+    val itemCenterY = itemInfo.offset.toFloat() + itemInfo.size / 2f
     val dist = abs(itemCenterY - screenCenterY)
     val maxDist = screenHeight / 2f
     val t = (dist / maxDist).coerceIn(0f, 1f)
@@ -180,9 +142,10 @@ private fun computeEdgeBlur(
     density: androidx.compose.ui.unit.Density
 ): Float {
     if (itemInfo == null) return 0f
-    val itemCenterY = itemInfo.offset + itemInfo.size / 2f
-    val edgeDist = minOf(itemCenterY, screenHeight - itemCenterY)
-    val blurZone = screenHeight * 0.15f
-    if (edgeDist >= blurZone || edgeDist <= 0) return 0f
-    return ((1f - edgeDist / blurZone) * 10f * density.density).coerceIn(0f, 10f * density.density)
+    val itemCenterY = itemInfo.offset.toFloat() + itemInfo.size / 2f
+    // 确保 edgeDist 不会因为 contentPadding 导致负值
+    val edgeDist = minOf(itemCenterY.coerceAtLeast(0f), (screenHeight - itemCenterY).coerceAtLeast(0f))
+    val blurZone = screenHeight * 0.12f
+    if (edgeDist >= blurZone) return 0f
+    return ((1f - edgeDist / blurZone) * 8f * density.density).coerceIn(0f, 8f * density.density)
 }
