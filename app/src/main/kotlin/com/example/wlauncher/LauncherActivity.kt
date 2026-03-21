@@ -247,7 +247,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     onDismiss = { vm.setState(ScreenState.Apps) }
                 )
             }
-            }
         }
     }
 }

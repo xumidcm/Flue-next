@@ -133,7 +133,7 @@ fun HoneycombScreen(
                 // 跳过不可见图标，减少 composition
                 if (posY < visibleTop || posY > visibleBottom) return@forEachIndexed
 
-                key(app.packageName) {
+                key("${app.packageName}/${app.activityName}") {
                     AppBubble(
                         icon = app.cachedIcon,
                         size = iconSizeDp,

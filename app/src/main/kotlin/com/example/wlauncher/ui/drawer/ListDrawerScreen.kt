@@ -57,7 +57,7 @@ fun ListDrawerScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                items(apps, key = { it.packageName }) { app ->
+                items(apps, key = { "${it.packageName}/${it.activityName}" }) { app ->
                     val itemIndex = apps.indexOf(app)
                     val itemInfo = listState.layoutInfo.visibleItemsInfo.find { it.index == itemIndex }
                     val itemScale = computeItemScale(itemInfo, screenCenterY, screenHeightPx)
