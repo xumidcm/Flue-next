@@ -235,7 +235,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
             // Layer 6: Settings
             if (screenState == ScreenState.Settings) {
                 val iconPackState by vm.iconPack.collectAsState()
-                val iconPacks = remember { vm.getIconPackManager().getInstalledIconPacks().map { it.packageName to it.label } }
+                var iconPackRefresh by remember { mutableIntStateOf(0) }
+                val iconPacks = remember(iconPackRefresh) { vm.getIconPackManager().getInstalledIconPacks().map { it.packageName to it.label } }
                 LauncherSettingsSheet(
                     currentLayout = layoutMode,
                     blurEnabled = blurEnabled,

@@ -73,6 +73,7 @@ class AppRepository(private val context: Context) {
                 !(ri.activityInfo.packageName == myPackage &&
                     ri.activityInfo.name == "com.example.wlauncher.LauncherActivity")
             }
+            .distinctBy { "${it.activityInfo.packageName}/${it.activityInfo.name}" }
             .map { ri ->
                 val componentKey = "${ri.activityInfo.packageName}/${ri.activityInfo.name}"
                 val iconDrawable = if (currentIconPack != null) {
