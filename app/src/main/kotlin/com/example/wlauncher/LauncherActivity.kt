@@ -53,13 +53,11 @@ import com.example.wlauncher.ui.theme.WatchLauncherTheme
 import com.example.wlauncher.viewmodel.LauncherViewModel
 import kotlinx.coroutines.delay
 
+private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
+
 class LauncherActivity : ComponentActivity() {
 
     private lateinit var vm: LauncherViewModel
-
-    companion object {
-        private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
