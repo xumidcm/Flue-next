@@ -2,6 +2,7 @@ package com.example.wlauncher
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.Build
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
@@ -35,12 +36,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.wlauncher.ui.anim.appListLayerValues
-import com.example.wlauncher.ui.anim.controlCenterLayerValues
 import com.example.wlauncher.ui.anim.faceLayerValues
 import com.example.wlauncher.ui.anim.notificationLayerValues
 import com.example.wlauncher.ui.anim.scaleBlurAlpha
 import com.example.wlauncher.ui.anim.stackLayerValues
-import com.example.wlauncher.ui.controlcenter.ControlCenterLayer
 import com.example.wlauncher.ui.drawer.HoneycombScreen
 import com.example.wlauncher.ui.drawer.ListDrawerScreen
 import com.example.wlauncher.ui.home.WatchFaceLayer
@@ -107,17 +106,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val splashDelay by vm.splashDelay.collectAsState()
     val currentApp by vm.currentApp.collectAsState()
     val listIconSize by vm.listIconSize.collectAsState()
-    val listTextSize by vm.listTextSize.collectAsState()
     val honeycombCols by vm.honeycombCols.collectAsState()
     val honeycombTopBlur by vm.honeycombTopBlur.collectAsState()
     val honeycombBottomBlur by vm.honeycombBottomBlur.collectAsState()
     val honeycombTopFade by vm.honeycombTopFade.collectAsState()
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsState()
-    val showSteps by vm.showSteps.collectAsState()
-    val stepGoal by vm.stepGoal.collectAsState()
     val showNotification by vm.showNotification.collectAsState()
-    val showControlCenter by vm.showControlCenter.collectAsState()
     val firstRun by vm.firstRun.collectAsState()
+    val layerBlurEnabled = blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
 
     var prevState by remember { mutableStateOf(screenState) }
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
@@ -148,7 +144,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             screenState = screenState,
             onStateChange = { vm.setState(it) },
             showNotification = showNotification,
-            showControlCenter = showControlCenter,
+            showControlCenter = false,
             modifier = Modifier.fillMaxSize()
         ) {
             Box(
@@ -157,9 +153,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .scaleBlurAlpha(
                         targetValues = faceLayerValues(screenState),
                         screenHeight = screenHeightPx,
-                        blurEnabled = blurEnabled
+                        blurEnabled = layerBlurEnabled
                     )
-            ) { WatchFaceLayer(showSteps = showSteps, stepGoal = stepGoal) }
+            ) { WatchFaceLayer() }
 
             Box(
                 modifier = Modifier
@@ -167,7 +163,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .scaleBlurAlpha(
                         targetValues = appListLayerValues(screenState),
                         screenHeight = screenHeightPx,
-                        blurEnabled = blurEnabled,
+                        blurEnabled = layerBlurEnabled,
                         origin = if (useOrigin) appOpenOrigin else null
                     )
             ) {
@@ -189,7 +185,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         blurEnabled = blurEnabled,
                         edgeBlurEnabled = edgeBlurEnabled,
                         iconSize = listIconSize.dp,
-                        textSizeSp = listTextSize,
                         onAppClick = { appInfo, origin -> vm.openApp(appInfo, origin) },
                         onScrollToTop = { vm.setState(ScreenState.Face) }
                     )
@@ -240,7 +235,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .scaleBlurAlpha(
                         targetValues = stackLayerValues(screenState),
                         screenHeight = screenHeightPx,
-                        blurEnabled = blurEnabled
+                        blurEnabled = layerBlurEnabled
                     )
             ) { SmartStackLayer() }
 
@@ -251,21 +246,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         .scaleBlurAlpha(
                             targetValues = notificationLayerValues(screenState),
                             screenHeight = screenHeightPx,
-                            blurEnabled = blurEnabled
+                            blurEnabled = layerBlurEnabled
                         )
                 ) { NotificationLayer() }
-            }
-
-            if (showControlCenter) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .scaleBlurAlpha(
-                            targetValues = controlCenterLayerValues(screenState),
-                            screenHeight = screenHeightPx,
-                            blurEnabled = blurEnabled
-                        )
-                ) { ControlCenterLayer() }
             }
 
             if (screenState == ScreenState.Settings) {
@@ -277,16 +260,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     splashIcon = splashIcon,
                     splashDelay = splashDelay,
                     listIconSize = listIconSize,
-                    listTextSize = listTextSize,
                     honeycombCols = honeycombCols,
                     honeycombTopBlur = honeycombTopBlur,
                     honeycombBottomBlur = honeycombBottomBlur,
                     honeycombTopFade = honeycombTopFade,
                     honeycombBottomFade = honeycombBottomFade,
-                    showSteps = showSteps,
-                    stepGoal = stepGoal,
                     showNotification = showNotification,
-                    showControlCenter = showControlCenter,
                     onLayoutChange = { vm.setLayoutMode(it) },
                     onBlurToggle = { vm.setBlurEnabled(it) },
                     onEdgeBlurToggle = { vm.setEdgeBlurEnabled(it) },
@@ -294,16 +273,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     onSplashToggle = { vm.setSplashIcon(it) },
                     onSplashDelayChange = { vm.setSplashDelay(it) },
                     onListIconSizeChange = { vm.setListIconSize(it) },
-                    onListTextSizeChange = { vm.setListTextSize(it) },
                     onHoneycombColsChange = { vm.setHoneycombCols(it) },
                     onHoneycombTopBlurChange = { vm.setHoneycombTopBlur(it) },
                     onHoneycombBottomBlurChange = { vm.setHoneycombBottomBlur(it) },
                     onHoneycombTopFadeChange = { vm.setHoneycombTopFade(it) },
                     onHoneycombBottomFadeChange = { vm.setHoneycombBottomFade(it) },
-                    onShowStepsChange = { vm.setShowSteps(it) },
-                    onStepGoalChange = { vm.setStepGoal(it) },
                     onShowNotificationChange = { vm.setShowNotification(it) },
-                    onShowControlCenterChange = { vm.setShowControlCenter(it) },
                     onResetDefaults = { vm.resetSettings() },
                     onDismiss = { vm.setState(ScreenState.Apps) }
                 )

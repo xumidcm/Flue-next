@@ -14,7 +14,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.wlauncher.data.model.AppInfo
 import com.example.wlauncher.data.repository.AppRepository
-import com.example.wlauncher.service.StepCounterManager
 import com.example.wlauncher.ui.navigation.LayoutMode
 import com.example.wlauncher.ui.navigation.ScreenState
 import kotlinx.coroutines.Job
@@ -37,16 +36,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_SPLASH_DELAY = intPreferencesKey("splash_delay")
         val KEY_APP_ORDER = stringPreferencesKey("app_order")
         val KEY_LIST_ICON_SIZE = intPreferencesKey("list_icon_size")
-        val KEY_LIST_TEXT_SIZE = intPreferencesKey("list_text_size")
         val KEY_HONEYCOMB_COLS = intPreferencesKey("honeycomb_cols")
         val KEY_HONEYCOMB_TOP_BLUR = intPreferencesKey("honeycomb_top_blur")
         val KEY_HONEYCOMB_BOTTOM_BLUR = intPreferencesKey("honeycomb_bottom_blur")
         val KEY_HONEYCOMB_TOP_FADE = intPreferencesKey("honeycomb_top_fade")
         val KEY_HONEYCOMB_BOTTOM_FADE = intPreferencesKey("honeycomb_bottom_fade")
-        val KEY_STEP_GOAL = intPreferencesKey("step_goal")
-        val KEY_SHOW_STEPS = booleanPreferencesKey("show_steps")
         val KEY_SHOW_NOTIFICATION = booleanPreferencesKey("show_notification")
-        val KEY_SHOW_CONTROL_CENTER = booleanPreferencesKey("show_control_center")
         val KEY_FIRST_RUN = booleanPreferencesKey("first_run")
     }
 
@@ -79,9 +74,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _listIconSize = MutableStateFlow(48)
     val listIconSize: StateFlow<Int> = _listIconSize.asStateFlow()
 
-    private val _listTextSize = MutableStateFlow(18)
-    val listTextSize: StateFlow<Int> = _listTextSize.asStateFlow()
-
     private val _honeycombCols = MutableStateFlow(4)
     val honeycombCols: StateFlow<Int> = _honeycombCols.asStateFlow()
 
@@ -100,17 +92,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _splashIcon = MutableStateFlow(true)
     val splashIcon: StateFlow<Boolean> = _splashIcon.asStateFlow()
 
-    private val _stepGoal = MutableStateFlow(10000)
-    val stepGoal: StateFlow<Int> = _stepGoal.asStateFlow()
-
-    private val _showSteps = MutableStateFlow(true)
-    val showSteps: StateFlow<Boolean> = _showSteps.asStateFlow()
-
     private val _showNotification = MutableStateFlow(true)
     val showNotification: StateFlow<Boolean> = _showNotification.asStateFlow()
-
-    private val _showControlCenter = MutableStateFlow(true)
-    val showControlCenter: StateFlow<Boolean> = _showControlCenter.asStateFlow()
 
     private val _firstRun = MutableStateFlow(true)
     val firstRun: StateFlow<Boolean> = _firstRun.asStateFlow()
@@ -148,24 +131,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     appRepository.setCustomOrder(order)
                 }
                 prefs[KEY_LIST_ICON_SIZE]?.let { _listIconSize.value = it.coerceIn(32, 80) }
-                prefs[KEY_LIST_TEXT_SIZE]?.let { _listTextSize.value = it.coerceIn(12, 28) }
                 prefs[KEY_HONEYCOMB_COLS]?.let { _honeycombCols.value = it.coerceIn(3, 6) }
                 prefs[KEY_HONEYCOMB_TOP_BLUR]?.let { _honeycombTopBlur.value = it.coerceIn(0, 48) }
                 prefs[KEY_HONEYCOMB_BOTTOM_BLUR]?.let { _honeycombBottomBlur.value = it.coerceIn(0, 48) }
                 prefs[KEY_HONEYCOMB_TOP_FADE]?.let { _honeycombTopFade.value = it.coerceIn(0, 160) }
                 prefs[KEY_HONEYCOMB_BOTTOM_FADE]?.let { _honeycombBottomFade.value = it.coerceIn(0, 160) }
-                prefs[KEY_STEP_GOAL]?.let {
-                    _stepGoal.value = it.coerceIn(1000, 50000)
-                    StepCounterManager.setGoal(it)
-                }
-                prefs[KEY_SHOW_STEPS]?.let { _showSteps.value = it }
                 prefs[KEY_SHOW_NOTIFICATION]?.let { _showNotification.value = it }
-                prefs[KEY_SHOW_CONTROL_CENTER]?.let { _showControlCenter.value = it }
                 prefs[KEY_FIRST_RUN]?.let { _firstRun.value = it }
             }
         }
-
-        StepCounterManager.initialize(application)
     }
 
     fun setState(state: ScreenState) {
@@ -230,15 +204,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setBlurEnabled(enabled: Boolean) {
         _blurEnabled.value = enabled
-        if (!enabled) {
-            _edgeBlurEnabled.value = false
-        }
+        if (!enabled) _edgeBlurEnabled.value = false
         viewModelScope.launch {
             store.edit {
                 it[KEY_BLUR] = enabled
-                if (!enabled) {
-                    it[KEY_EDGE_BLUR] = false
-                }
+                if (!enabled) it[KEY_EDGE_BLUR] = false
             }
         }
     }
@@ -276,11 +246,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { store.edit { it[KEY_LIST_ICON_SIZE] = _listIconSize.value } }
     }
 
-    fun setListTextSize(size: Int) {
-        _listTextSize.value = size.coerceIn(12, 28)
-        viewModelScope.launch { store.edit { it[KEY_LIST_TEXT_SIZE] = _listTextSize.value } }
-    }
-
     fun setHoneycombCols(cols: Int) {
         _honeycombCols.value = cols.coerceIn(3, 6)
         viewModelScope.launch { store.edit { it[KEY_HONEYCOMB_COLS] = _honeycombCols.value } }
@@ -306,25 +271,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { store.edit { it[KEY_HONEYCOMB_BOTTOM_FADE] = _honeycombBottomFade.value } }
     }
 
-    fun setStepGoal(goal: Int) {
-        _stepGoal.value = goal.coerceIn(1000, 50000)
-        StepCounterManager.setGoal(_stepGoal.value)
-        viewModelScope.launch { store.edit { it[KEY_STEP_GOAL] = _stepGoal.value } }
-    }
-
-    fun setShowSteps(show: Boolean) {
-        _showSteps.value = show
-        viewModelScope.launch { store.edit { it[KEY_SHOW_STEPS] = show } }
-    }
-
     fun setShowNotification(show: Boolean) {
         _showNotification.value = show
         viewModelScope.launch { store.edit { it[KEY_SHOW_NOTIFICATION] = show } }
-    }
-
-    fun setShowControlCenter(show: Boolean) {
-        _showControlCenter.value = show
-        viewModelScope.launch { store.edit { it[KEY_SHOW_CONTROL_CENTER] = show } }
     }
 
     fun setFirstRun(first: Boolean) {
@@ -349,16 +298,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _splashIcon.value = true
         _splashDelay.value = 500
         _listIconSize.value = 48
-        _listTextSize.value = 18
         _honeycombCols.value = 4
         _honeycombTopBlur.value = 12
         _honeycombBottomBlur.value = 12
         _honeycombTopFade.value = 56
         _honeycombBottomFade.value = 56
-        _stepGoal.value = 10000
-        _showSteps.value = true
         _showNotification.value = true
-        _showControlCenter.value = true
         appRepository.refresh(128)
         viewModelScope.launch {
             store.edit {
@@ -369,16 +314,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_SPLASH_ICON] = true
                 it[KEY_SPLASH_DELAY] = 500
                 it[KEY_LIST_ICON_SIZE] = 48
-                it[KEY_LIST_TEXT_SIZE] = 18
                 it[KEY_HONEYCOMB_COLS] = 4
                 it[KEY_HONEYCOMB_TOP_BLUR] = 12
                 it[KEY_HONEYCOMB_BOTTOM_BLUR] = 12
                 it[KEY_HONEYCOMB_TOP_FADE] = 56
                 it[KEY_HONEYCOMB_BOTTOM_FADE] = 56
-                it[KEY_STEP_GOAL] = 10000
-                it[KEY_SHOW_STEPS] = true
                 it[KEY_SHOW_NOTIFICATION] = true
-                it[KEY_SHOW_CONTROL_CENTER] = true
             }
         }
     }
@@ -386,6 +327,5 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     override fun onCleared() {
         super.onCleared()
         appRepository.destroy()
-        StepCounterManager.release()
     }
 }

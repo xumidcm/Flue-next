@@ -54,16 +54,12 @@ fun LauncherSettingsSheet(
     splashIcon: Boolean = true,
     splashDelay: Int = 500,
     listIconSize: Int = 48,
-    listTextSize: Int = 18,
     honeycombCols: Int = 4,
     honeycombTopBlur: Int = 12,
     honeycombBottomBlur: Int = 12,
     honeycombTopFade: Int = 56,
     honeycombBottomFade: Int = 56,
-    showSteps: Boolean = true,
-    stepGoal: Int = 10000,
     showNotification: Boolean = true,
-    showControlCenter: Boolean = true,
     onLayoutChange: (LayoutMode) -> Unit,
     onBlurToggle: (Boolean) -> Unit,
     onEdgeBlurToggle: (Boolean) -> Unit = {},
@@ -71,16 +67,12 @@ fun LauncherSettingsSheet(
     onSplashToggle: (Boolean) -> Unit = {},
     onSplashDelayChange: (Int) -> Unit = {},
     onListIconSizeChange: (Int) -> Unit = {},
-    onListTextSizeChange: (Int) -> Unit = {},
     onHoneycombColsChange: (Int) -> Unit = {},
     onHoneycombTopBlurChange: (Int) -> Unit = {},
     onHoneycombBottomBlurChange: (Int) -> Unit = {},
     onHoneycombTopFadeChange: (Int) -> Unit = {},
     onHoneycombBottomFadeChange: (Int) -> Unit = {},
-    onShowStepsChange: (Boolean) -> Unit = {},
-    onStepGoalChange: (Int) -> Unit = {},
     onShowNotificationChange: (Boolean) -> Unit = {},
-    onShowControlCenterChange: (Boolean) -> Unit = {},
     onResetDefaults: () -> Unit = {},
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
@@ -182,18 +174,6 @@ fun LauncherSettingsSheet(
                         onValueCommitted = { onListIconSizeChange(it.toInt()) }
                     )
                 }
-                item("list_text_size") {
-                    val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "list_text_size" }, screenCenterY, screenHeightPx)
-                    DeferredSliderCard(
-                        label = tr(isZh, "列表文字大小", "List Text Size"),
-                        valueText = "${listTextSize}sp",
-                        value = listTextSize.toFloat(),
-                        valueRange = 12f..28f,
-                        steps = 15,
-                        scale = scale,
-                        onValueCommitted = { onListTextSizeChange(it.toInt()) }
-                    )
-                }
             }
 
             if (currentLayout == LayoutMode.Honeycomb) {
@@ -263,31 +243,9 @@ fun LauncherSettingsSheet(
             }
 
             item("features_header") { ScaledSectionHeader(tr(isZh, "功能", "Features"), listState, "features_header", screenCenterY, screenHeightPx) }
-            item("steps_toggle") {
-                val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "steps_toggle" }, screenCenterY, screenHeightPx)
-                SettingToggle(tr(isZh, "步数环", "Show Step Ring"), tr(isZh, "在表盘上显示步数进度", "Display step progress on the watch face"), showSteps, onShowStepsChange, scale = scale)
-            }
-            if (showSteps) {
-                item("steps_goal") {
-                    val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "steps_goal" }, screenCenterY, screenHeightPx)
-                    DeferredSliderCard(
-                        label = tr(isZh, "步数目标", "Step Goal"),
-                        valueText = tr(isZh, "$stepGoal 步", "$stepGoal steps"),
-                        value = stepGoal.toFloat(),
-                        valueRange = 1000f..30000f,
-                        steps = 28,
-                        scale = scale,
-                        onValueCommitted = { onStepGoalChange(it.toInt()) }
-                    )
-                }
-            }
             item("notification_toggle") {
                 val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "notification_toggle" }, screenCenterY, screenHeightPx)
                 SettingToggle(tr(isZh, "通知中心", "Notification Center"), tr(isZh, "启用占位通知页", "Enable the placeholder notification sheet"), showNotification, onShowNotificationChange, scale = scale)
-            }
-            item("control_center_toggle") {
-                val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "control_center_toggle" }, screenCenterY, screenHeightPx)
-                SettingToggle(tr(isZh, "控制中心", "Control Center"), tr(isZh, "启用占位控制中心", "Enable the placeholder control center sheet"), showControlCenter, onShowControlCenterChange, scale = scale)
             }
 
             item("tools_header") { ScaledSectionHeader(tr(isZh, "工具", "Tools"), listState, "tools_header", screenCenterY, screenHeightPx) }

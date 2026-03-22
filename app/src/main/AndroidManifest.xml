@@ -1,18 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 查询所有已安装应用（启动器必需） -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-    <!-- 蓝牙控制 -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <!-- 勿扰模式 -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
-    <!-- 系统亮度等设置 -->
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />
-    <!-- 步数统计 -->
-    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
-    <!-- 后台健康数据访问 -->
-    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_HEALTH_DATA" />
 
     <application
         android:allowBackup="false"
@@ -31,19 +23,17 @@
             android:screenOrientation="portrait"
             android:configChanges="keyboard|keyboardHidden|navigation">
 
-            <!-- 启动器 intent filter -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.HOME" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
 
-            <!-- 也作为普通应用可以从桌面图标打开 -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- App Shortcuts -->
+
             <meta-data
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />

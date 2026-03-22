@@ -13,7 +13,7 @@ fun GestureHost(
     onStateChange: (ScreenState) -> Unit,
     modifier: Modifier = Modifier,
     showNotification: Boolean = true,
-    showControlCenter: Boolean = true,
+    showControlCenter: Boolean = false,
     content: @Composable () -> Unit
 ) {
     var totalDx by remember { mutableFloatStateOf(0f) }

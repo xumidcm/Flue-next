@@ -40,7 +40,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -48,11 +47,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.wlauncher.data.model.AppInfo
-import com.example.wlauncher.ui.anim.platformBlur
-import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -61,8 +59,7 @@ fun ListDrawerScreen(
     apps: List<AppInfo>,
     blurEnabled: Boolean = true,
     edgeBlurEnabled: Boolean = false,
-    iconSize: Dp = 56.dp,
-    textSizeSp: Int = 18,
+    iconSize: Dp = 48.dp,
     onAppClick: (AppInfo, Offset) -> Unit,
     onLongClick: (AppInfo) -> Unit = {},
     onScrollToTop: () -> Unit = {},
@@ -83,7 +80,7 @@ fun ListDrawerScreen(
                 val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
                 if (available.y > 0f && atTop) {
                     scope.launch {
-                        overscroll.snapTo((overscroll.value + available.y * 0.45f).coerceAtMost(240f))
+                        overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtMost(160f))
                     }
                     return Offset(0f, available.y)
                 }
@@ -97,13 +94,14 @@ fun ListDrawerScreen(
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (overscroll.value > 96f || available.y > 1200f && listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0) {
+                val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+                if ((overscroll.value > 80f || available.y > 1200f) && atTop) {
                     overscroll.snapTo(0f)
                     onScrollToTop()
                     return available
                 }
                 if (overscroll.value > 0f) {
-                    overscroll.animateTo(0f, spring(dampingRatio = 0.72f, stiffness = 420f))
+                    overscroll.animateTo(0f, spring(dampingRatio = 0.75f, stiffness = 460f))
                     return available
                 }
                 return Velocity.Zero
@@ -116,7 +114,6 @@ fun ListDrawerScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .nestedScroll(nestedScrollConnection)
-                .platformBlur(16f, longPressedApp != null && blurEnabled)
         ) {
             val screenHeightPx = with(density) { maxHeight.toPx() }
             val screenCenterY = screenHeightPx / 2f
@@ -127,66 +124,59 @@ fun ListDrawerScreen(
                     .fillMaxSize()
                     .graphicsLayer { translationY = overscroll.value }
                     .background(Color.Black),
-                contentPadding = PaddingValues(top = 28.dp, bottom = 72.dp, start = 8.dp, end = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                contentPadding = PaddingValues(
+                    top = 40.dp,
+                    bottom = 60.dp,
+                    start = 12.dp,
+                    end = 12.dp
+                ),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 itemsIndexed(apps, key = { _, app -> "${app.packageName}/${app.activityName}" }) { index, app ->
                     val itemInfo = listState.layoutInfo.visibleItemsInfo.find { it.index == index }
                     val itemScale = computeItemScale(itemInfo, screenCenterY, screenHeightPx)
-                    val edgeBlur = computeBottomEdgeBlur(itemInfo, screenHeightPx)
-
-                    Box(
+                    val useSoftBlur = blurEnabled && edgeBlurEnabled && Build.VERSION.SDK_INT < Build.VERSION_CODES.S && isNearBottom(itemInfo, screenHeightPx)
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .onGloballyPositioned { coords ->
-                                    val posY = coords.positionInRoot().y
-                                    itemPositions[index] = posY + coords.size.height / 2f
-                                }
-                                .graphicsLayer {
-                                    scaleX = itemScale
-                                    scaleY = itemScale
-                                    alpha = itemScale.coerceIn(0.36f, 1f)
-                                }
-                                .platformBlur(edgeBlur, blurEnabled && edgeBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                                .combinedClickable(
-                                    onClick = {
-                                        val centerY = itemPositions[index] ?: screenCenterY
-                                        onAppClick(app, Offset(0.28f, centerY / screenHeightPx))
-                                    },
-                                    onLongClick = {
-                                        vibrateHaptic(context)
-                                        onLongClick(app)
-                                        longPressedApp = app
-                                    }
-                                )
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Image(
-                                bitmap = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && blurEnabled && edgeBlurEnabled && edgeBlur > 0.5f) {
-                                    app.cachedBlurredIcon
-                                } else {
-                                    app.cachedIcon
+                            .onGloballyPositioned { coords ->
+                                val posY = coords.positionInRoot().y
+                                itemPositions[index] = posY + coords.size.height / 2f
+                            }
+                            .graphicsLayer {
+                                scaleX = itemScale
+                                scaleY = itemScale
+                                alpha = itemScale.coerceIn(0.3f, 1f)
+                            }
+                            .combinedClickable(
+                                onClick = {
+                                    val centerY = itemPositions[index] ?: screenCenterY
+                                    onAppClick(app, Offset(0.15f, centerY / screenHeightPx))
                                 },
-                                contentDescription = app.label,
-                                modifier = Modifier
-                                    .size(iconSize)
-                                    .clip(CircleShape),
-                                contentScale = ContentScale.Crop
+                                onLongClick = {
+                                    vibrateHaptic(context)
+                                    onLongClick(app)
+                                    longPressedApp = app
+                                }
                             )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = app.label,
-                                fontSize = textSizeSp.sp,
-                                fontWeight = FontWeight.W600,
-                                color = Color.White
-                            )
-                        }
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Image(
+                            bitmap = if (useSoftBlur) app.cachedBlurredIcon else app.cachedIcon,
+                            contentDescription = app.label,
+                            modifier = Modifier
+                                .size(iconSize)
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Text(
+                            text = app.label,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.W500,
+                            color = Color.White
+                        )
                     }
                 }
             }
@@ -196,7 +186,7 @@ fun ListDrawerScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .height(88.dp)
+                .height(60.dp)
                 .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
         )
     }
@@ -211,22 +201,20 @@ private fun computeItemScale(
     screenCenterY: Float,
     screenHeight: Float
 ): Float {
-    if (itemInfo == null) return 0.9f
+    if (itemInfo == null) return 0.85f
     val itemCenterY = itemInfo.offset + itemInfo.size / 2f
     val dist = abs(itemCenterY - screenCenterY)
     val maxDist = screenHeight / 2f
     val t = (dist / maxDist).coerceIn(0f, 1f)
-    return 1f - 0.12f * t
+    return 1f - 0.2f * t
 }
 
-private fun computeBottomEdgeBlur(
+private fun isNearBottom(
     itemInfo: androidx.compose.foundation.lazy.LazyListItemInfo?,
     screenHeight: Float
-): Float {
-    if (itemInfo == null) return 0f
+): Boolean {
+    if (itemInfo == null) return false
     val itemCenterY = itemInfo.offset + itemInfo.size / 2f
     val edgeDist = (screenHeight - itemCenterY).coerceAtLeast(0f)
-    val blurZone = screenHeight * 0.22f
-    if (edgeDist >= blurZone || edgeDist <= 0f) return 0f
-    return ((1f - edgeDist / blurZone) * 16f).coerceIn(0f, 16f)
+    return edgeDist in 0f..(screenHeight * 0.18f)
 }

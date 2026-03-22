@@ -1,9 +1,11 @@
 package com.example.wlauncher.ui.drawer
 
 import android.os.Build
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.exponentialDecay
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
@@ -163,6 +165,20 @@ fun HoneycombScreen(
                 val appKey = "${app.packageName}/${app.activityName}"
 
                 key(appKey) {
+                    val targetNeighborSink = neighborPressOffset(
+                        appKey = appKey,
+                        pressedAppKey = pressedAppKey,
+                        current = gridPos,
+                        positions = positions,
+                        apps = apps,
+                        iconSizePx = iconSizePx,
+                        cellSize = cellSize
+                    )
+                    val animatedNeighborSink by animateFloatAsState(
+                        targetValue = targetNeighborSink,
+                        animationSpec = tween(durationMillis = 180),
+                        label = "neighbor_sink"
+                    )
                     AppBubble(
                         icon = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && blurEnabled && edgeBlurEnabled && itemBlur > 0.5f) {
                             app.cachedBlurredIcon
@@ -196,19 +212,10 @@ fun HoneycombScreen(
                                 val dy = pY - screenCenterY
                                 val dist = sqrt(dx * dx + dy * dy)
                                 val scale = fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
-                                val pressedOffset = neighborPressOffset(
-                                    appKey = appKey,
-                                    pressedAppKey = pressedAppKey,
-                                    current = gridPos,
-                                    positions = positions,
-                                    apps = apps,
-                                    iconSizePx = iconSizePx,
-                                    cellSize = cellSize
-                                )
                                 scaleX = scale
                                 scaleY = scale
                                 alpha = scale.coerceIn(0.24f, 1f)
-                                translationY += pressedOffset
+                                translationY += animatedNeighborSink
                             }
                             .platformBlur(itemBlur, blurEnabled && edgeBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                     )
@@ -257,12 +264,12 @@ private fun neighborPressOffset(
     cellSize: Float
 ): Float {
     if (pressedAppKey == null) return 0f
-    if (pressedAppKey == appKey) return iconSizePx * 0.08f
+    if (pressedAppKey == appKey) return 0f
     val pressedIndex = apps.indexOfFirst { "${it.packageName}/${it.activityName}" == pressedAppKey }
     val pressedPos = positions.getOrNull(pressedIndex) ?: return 0f
     val ddx = current.x - pressedPos.x
     val ddy = current.y - pressedPos.y
     val distance = sqrt(ddx * ddx + ddy * ddy)
     val range = cellSize * 1.2f
-    return iconSizePx * 0.03f * (1f - distance / range).coerceIn(0f, 1f)
+    return iconSizePx * 0.02f * (1f - distance / range).coerceIn(0f, 1f)
 }

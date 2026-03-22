@@ -1,11 +1,15 @@
 package com.example.wlauncher.ui.drawer
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
@@ -14,10 +18,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
@@ -33,8 +38,16 @@ fun AppBubble(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
-    val density = LocalDensity.current
-    val pressOffsetPx = with(density) { size.toPx() * 0.08f }
+    val pressedScale by animateFloatAsState(
+        targetValue = if (isPressed) 0.9f else 1f,
+        animationSpec = tween(durationMillis = 180),
+        label = "bubble_scale"
+    )
+    val pressedOverlayAlpha by animateFloatAsState(
+        targetValue = if (isPressed) 0.16f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "bubble_overlay"
+    )
 
     LaunchedEffect(isPressed) {
         onPressedChange(isPressed)
@@ -44,13 +57,11 @@ fun AppBubble(
         modifier = modifier
             .size(size)
             .graphicsLayer {
-                val pressedScale = if (isPressed) 0.92f else 1f
                 shadowElevation = 8.dp.toPx()
                 shape = CircleShape
                 clip = true
                 scaleX = pressedScale
                 scaleY = pressedScale
-                translationY = if (isPressed) pressOffsetPx else 0f
             }
             .combinedClickable(
                 interactionSource = interactionSource,
@@ -66,5 +77,13 @@ fun AppBubble(
             modifier = Modifier.size(size),
             contentScale = ContentScale.Crop
         )
+        if (pressedOverlayAlpha > 0f) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = pressedOverlayAlpha))
+            )
+        }
     }
 }
