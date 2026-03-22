@@ -9,7 +9,6 @@ import android.content.pm.ResolveInfo
 import android.graphics.Bitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
-import androidx.renderscript.Toolkit
 import com.example.wlauncher.data.model.AppInfo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -71,11 +70,7 @@ class AppRepository(private val context: Context) {
             .map { ri ->
                 val iconDrawable = ri.loadIcon(pm)
                 val iconBitmap = iconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
-                val blurredBitmap = try {
-                    Toolkit.blur(iconBitmap, 12)
-                } catch (_: Throwable) {
-                    iconBitmap
-                }
+                val blurredBitmap = createSoftenedBitmap(iconBitmap)
                 AppInfo(
                     label = ri.loadLabel(pm).toString(),
                     packageName = ri.activityInfo.packageName,
@@ -117,5 +112,15 @@ class AppRepository(private val context: Context) {
             context.unregisterReceiver(packageReceiver)
         } catch (_: Exception) {
         }
+    }
+
+    private fun createSoftenedBitmap(source: Bitmap): Bitmap {
+        val downscaled = Bitmap.createScaledBitmap(
+            source,
+            (source.width * 0.25f).toInt().coerceAtLeast(1),
+            (source.height * 0.25f).toInt().coerceAtLeast(1),
+            true
+        )
+        return Bitmap.createScaledBitmap(downscaled, source.width, source.height, true)
     }
 }
