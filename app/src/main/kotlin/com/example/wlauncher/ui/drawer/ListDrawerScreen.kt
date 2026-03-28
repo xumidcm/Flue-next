@@ -41,6 +41,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -68,7 +69,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.platformBlur
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
@@ -110,6 +110,9 @@ fun ListDrawerScreen(
     var dragPointerY by remember { mutableFloatStateOf(Float.NaN) }
     var glidePressedIndex by remember { mutableStateOf<Int?>(null) }
     var initializedAtTop by remember { mutableStateOf(false) }
+    var settlingApp by remember { mutableStateOf<AppInfo?>(null) }
+    var settlingKey by remember { mutableStateOf<String?>(null) }
+    val settlingCenterY = remember { Animatable(0f) }
 
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
@@ -194,6 +197,9 @@ fun ListDrawerScreen(
                     val maxDistancePx = with(density) { 72.dp.toPx() }
                     val menuDragStartPx = with(density) { LIST_MENU_DRAG_START_DP.dp.toPx() }
                     awaitEachGesture {
+                        val releaseScreenHeightPx = size.height.toFloat()
+                        val releaseOverlayHeightPx = dragFromIndex?.let { itemHeights[it] }
+                            ?: with(density) { (iconSize + 20.dp).toPx() }
                         val down = awaitPrimaryDown()
                         val startIndex = findNearestListIndex(
                             pointerY = down.position.y,
@@ -262,7 +268,33 @@ fun ListDrawerScreen(
                         val from = dragFromIndex
                         val to = dragCurrentIndex
                         if (dragActive && from != null && to != null && from != to && hasDragged) {
+                            val droppedApp = apps.getOrNull(from)
+                            val currentCenter = dragPointerY.coerceIn(
+                                releaseOverlayHeightPx * 0.5f,
+                                releaseScreenHeightPx - releaseOverlayHeightPx * 0.5f
+                            )
+                            val targetCenter = (itemCenters[to] ?: currentCenter).coerceIn(
+                                releaseOverlayHeightPx * 0.5f,
+                                releaseScreenHeightPx - releaseOverlayHeightPx * 0.5f
+                            )
+                            if (droppedApp != null) {
+                                settlingApp = droppedApp
+                                settlingKey = droppedApp.componentKey
+                                scope.launch {
+                                    settlingCenterY.snapTo(currentCenter)
+                                    settlingCenterY.animateTo(
+                                        targetCenter,
+                                        tween(durationMillis = 110)
+                                    )
+                                    settlingApp = null
+                                    settlingKey = null
+                                    settlingCenterY.snapTo(0f)
+                                }
+                            }
                             onReorder(from, to)
+                        } else {
+                            settlingApp = null
+                            settlingKey = null
                         }
                         dragFromIndex = null
                         dragCurrentIndex = null
@@ -283,31 +315,39 @@ fun ListDrawerScreen(
             val dragOverlayHeightPx = dragFromIndex?.let { itemHeights[it] } ?: with(density) { (iconSize + 20.dp).toPx() }
 
             LaunchedEffect(dragFromIndex, screenHeightPx) {
+                var previousFrameNanos = 0L
                 while (dragFromIndex != null) {
-                    val pointerY = dragPointerY
-                    val activeFromIndex = dragFromIndex
-                    if (!pointerY.isNaN() && activeFromIndex != null) {
-                        val autoScrollDelta = when {
-                            pointerY < autoScrollEdgePx -> {
-                                -LIST_AUTO_SCROLL_MAX_PX * ((autoScrollEdgePx - pointerY) / autoScrollEdgePx)
-                            }
-                            pointerY > screenHeightPx - autoScrollEdgePx -> {
-                                LIST_AUTO_SCROLL_MAX_PX * ((pointerY - (screenHeightPx - autoScrollEdgePx)) / autoScrollEdgePx)
-                            }
-                            else -> 0f
+                    withFrameNanos { frameTimeNanos ->
+                        val frameDeltaSeconds = if (previousFrameNanos == 0L) {
+                            1f / 60f
+                        } else {
+                            ((frameTimeNanos - previousFrameNanos) / 1_000_000_000f).coerceIn(1f / 144f, 0.05f)
                         }
-                        if (autoScrollDelta != 0f) {
-                            listState.scrollBy(autoScrollDelta)
+                        previousFrameNanos = frameTimeNanos
+                        val pointerY = dragPointerY
+                        val activeFromIndex = dragFromIndex
+                        if (!pointerY.isNaN() && activeFromIndex != null) {
+                            val autoScrollVelocity = when {
+                                pointerY < autoScrollEdgePx -> {
+                                    -LIST_AUTO_SCROLL_MAX_PX * 60f * ((autoScrollEdgePx - pointerY) / autoScrollEdgePx)
+                                }
+                                pointerY > screenHeightPx - autoScrollEdgePx -> {
+                                    LIST_AUTO_SCROLL_MAX_PX * 60f * ((pointerY - (screenHeightPx - autoScrollEdgePx)) / autoScrollEdgePx)
+                                }
+                                else -> 0f
+                            }
+                            if (autoScrollVelocity != 0f) {
+                                listState.scrollBy(autoScrollVelocity * frameDeltaSeconds)
+                            }
+                            val anchorCenter = itemCenters[activeFromIndex] ?: pointerY
+                            dragOffsetY = pointerY - anchorCenter
+                            dragCurrentIndex = findNearestListIndex(
+                                pointerY = pointerY,
+                                itemCenters = itemCenters,
+                                maxDistance = Float.MAX_VALUE
+                            ) ?: dragCurrentIndex
                         }
-                        val anchorCenter = itemCenters[activeFromIndex] ?: pointerY
-                        dragOffsetY = pointerY - anchorCenter
-                        dragCurrentIndex = findNearestListIndex(
-                            pointerY = pointerY,
-                            itemCenters = itemCenters,
-                            maxDistance = Float.MAX_VALUE
-                        ) ?: dragCurrentIndex
                     }
-                    delay(16)
                 }
             }
 
@@ -349,6 +389,7 @@ fun ListDrawerScreen(
                     val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
                     val isPressed by interactionSource.collectIsPressedAsState()
                     val isDragged = dragFromIndex == index
+                    val isSettling = settlingKey == app.componentKey
                     val isGlidePressed = glidePressedIndex == index
                     val displacedTarget = listDisplacementForIndex(
                         index = index,
@@ -396,8 +437,9 @@ fun ListDrawerScreen(
                                 translationY = if (isDragged) 0f else displayDisplacement
                                 scaleX = targetScale
                                 scaleY = targetScale
-                                alpha = if (isDragged) 0f else itemScale.coerceIn(0.3f, 1f)
+                                alpha = if (isDragged || isSettling) 0f else itemScale.coerceIn(0.3f, 1f)
                             }
+                            .platformBlur(itemBlur, blurEnabled && edgeBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                             .background(Color.Black.copy(alpha = pressedOverlay), RoundedCornerShape(18.dp))
                             .combinedClickable(
                                 interactionSource = interactionSource,
@@ -415,8 +457,7 @@ fun ListDrawerScreen(
                             contentDescription = app.label,
                             modifier = Modifier
                                 .size(iconSize)
-                                .clip(CircleShape)
-                                .platformBlur(itemBlur, blurEnabled && edgeBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S),
+                                .clip(CircleShape),
                             contentScale = ContentScale.Crop
                         )
                         Spacer(modifier = Modifier.width(14.dp))
@@ -431,14 +472,18 @@ fun ListDrawerScreen(
             }
 
             val draggedIndex = dragFromIndex
-            val draggedApp = draggedIndex?.let { apps.getOrNull(it) }
-            if (draggedApp != null && !dragPointerY.isNaN()) {
-                val clampedDragCenterY = dragPointerY.coerceIn(
+            val draggedApp = draggedIndex?.let { apps.getOrNull(it) } ?: settlingApp
+            val overlayCenterY = when {
+                draggedIndex != null && !dragPointerY.isNaN() -> dragPointerY.coerceIn(
                     dragOverlayHeightPx * 0.5f,
                     screenHeightPx - dragOverlayHeightPx * 0.5f
                 )
+                settlingApp != null -> settlingCenterY.value
+                else -> Float.NaN
+            }
+            if (draggedApp != null && !overlayCenterY.isNaN()) {
                 val draggedBlur = computeVerticalEdgeBlur(
-                    centerY = clampedDragCenterY,
+                    centerY = overlayCenterY,
                     screenHeight = screenHeightPx,
                     topBlurZonePx = topEdgeBlurZonePx,
                     bottomBlurZonePx = bottomEdgeBlurZonePx,
@@ -447,8 +492,9 @@ fun ListDrawerScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .platformBlur(draggedBlur, blurEnabled && edgeBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                         .graphicsLayer {
-                            translationY = clampedDragCenterY - dragOverlayHeightPx / 2f
+                            translationY = overlayCenterY - dragOverlayHeightPx / 2f
                             scaleX = 0.965f
                             scaleY = 0.965f
                             alpha = 0.98f
@@ -472,8 +518,7 @@ fun ListDrawerScreen(
                         contentDescription = draggedApp.label,
                         modifier = Modifier
                             .size(iconSize)
-                            .clip(CircleShape)
-                            .platformBlur(draggedBlur, blurEnabled && edgeBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S),
+                            .clip(CircleShape),
                         contentScale = ContentScale.Crop
                     )
                     Spacer(modifier = Modifier.width(14.dp))
