@@ -111,7 +111,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val splashIcon by vm.splashIcon.collectAsState()
     val splashDelay by vm.splashDelay.collectAsState()
     val currentApp by vm.currentApp.collectAsState()
-    val listIconSize by vm.listIconSize.collectAsState()
     val iconCacheSize by vm.iconCacheSize.collectAsState()
     val honeycombCols by vm.honeycombCols.collectAsState()
     val honeycombTopBlur by vm.honeycombTopBlur.collectAsState()
@@ -198,7 +197,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         blurEnabled = blurEnabled,
                         edgeBlurEnabled = edgeBlurEnabled,
                         suppressHeavyEffects = reduceLegacyDrawerEffects,
-                        iconSize = listIconSize.dp,
                         onAppClick = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
                             vm.openApp(appInfo, origin, launchDelay)
@@ -288,7 +286,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     animationOverrideEnabled = animationOverrideEnabled,
                     splashIcon = splashIcon,
                     splashDelay = splashDelay,
-                    listIconSize = listIconSize,
                     honeycombCols = honeycombCols,
                     honeycombTopBlur = honeycombTopBlur,
                     honeycombBottomBlur = honeycombBottomBlur,
@@ -303,7 +300,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     onAnimationOverrideToggle = { vm.setAnimationOverrideEnabled(it) },
                     onSplashToggle = { vm.setSplashIcon(it) },
                     onSplashDelayChange = { vm.setSplashDelay(it) },
-                    onListIconSizeChange = { vm.setListIconSize(it) },
                     onHoneycombColsChange = { vm.setHoneycombCols(it) },
                     onHoneycombTopBlurChange = { vm.setHoneycombTopBlur(it) },
                     onHoneycombBottomBlurChange = { vm.setHoneycombBottomBlur(it) },

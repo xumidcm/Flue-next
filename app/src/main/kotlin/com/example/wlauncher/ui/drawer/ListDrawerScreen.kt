@@ -113,9 +113,12 @@ fun ListDrawerScreen(
     var settlingApp by remember { mutableStateOf<AppInfo?>(null) }
     var settlingKey by remember { mutableStateOf<String?>(null) }
     val settlingCenterY = remember { Animatable(0f) }
+    var focusReady by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
+    LaunchedEffect(focusReady) {
+        if (focusReady) {
+            runCatching { focusRequester.requestFocus() }
+        }
     }
     LaunchedEffect(apps.size) {
         if (!initializedAtTop && apps.isNotEmpty()) {
@@ -130,6 +133,9 @@ fun ListDrawerScreen(
                 .fillMaxSize()
                 .focusRequester(focusRequester)
                 .focusable()
+                .onGloballyPositioned {
+                    if (!focusReady) focusReady = true
+                }
                 .onRotaryScrollEvent {
                     scope.launch { listState.scrollBy(-it.verticalScrollPixels) }
                     true
@@ -449,6 +455,7 @@ fun ListDrawerScreen(
                                 interactionSource = interactionSource,
                                 indication = null,
                                 onClick = {
+                                    if (longPressedApp != null || dragFromIndex != null) return@combinedClickable
                                     val centerY = itemCenters[index] ?: screenCenterY
                                     onAppClick(app, Offset(0.15f, centerY / screenHeightPx))
                                 }

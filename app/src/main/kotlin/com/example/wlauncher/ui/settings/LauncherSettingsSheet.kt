@@ -1,4 +1,4 @@
-package com.flue.launcher.ui.settings
+﻿package com.flue.launcher.ui.settings
 
 import android.content.Intent
 import android.widget.Toast
@@ -64,7 +64,6 @@ fun LauncherSettingsSheet(
     animationOverrideEnabled: Boolean = true,
     splashIcon: Boolean = true,
     splashDelay: Int = 500,
-    listIconSize: Int = 48,
     honeycombCols: Int = 4,
     honeycombTopBlur: Int = 4,
     honeycombBottomBlur: Int = 4,
@@ -79,7 +78,6 @@ fun LauncherSettingsSheet(
     onAnimationOverrideToggle: (Boolean) -> Unit = {},
     onSplashToggle: (Boolean) -> Unit = {},
     onSplashDelayChange: (Int) -> Unit = {},
-    onListIconSizeChange: (Int) -> Unit = {},
     onHoneycombColsChange: (Int) -> Unit = {},
     onHoneycombTopBlurChange: (Int) -> Unit = {},
     onHoneycombBottomBlurChange: (Int) -> Unit = {},
@@ -228,20 +226,6 @@ fun LauncherSettingsSheet(
                 )
             }
 
-            if (currentLayout == LayoutMode.List) {
-                item("list_icon_size") {
-                    val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "list_icon_size" }, screenCenterY, screenHeightPx)
-                    DeferredSliderCard(
-                        label = tr(isZh, "列表图标大小", "List Icon Size"),
-                        valueText = "$listIconSize dp",
-                        value = listIconSize.toFloat(),
-                        valueRange = 40f..84f,
-                        steps = 10,
-                        scale = scale,
-                        onValueCommitted = { onListIconSizeChange(it.toInt()) }
-                    )
-                }
-            }
 
             if (currentLayout == LayoutMode.Honeycomb) {
                 item("honeycomb_header") { ScaledSectionHeader(tr(isZh, "蜂窝边缘调节", "Honeycomb Edge Tuning"), listState, "honeycomb_header", screenCenterY, screenHeightPx) }

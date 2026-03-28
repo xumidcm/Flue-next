@@ -35,6 +35,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -85,9 +86,12 @@ fun HoneycombScreen(
     val settlingX = remember { Animatable(0f) }
     val settlingY = remember { Animatable(0f) }
     val effectiveEdgeBlur = edgeBlurEnabled && !suppressHeavyEffects
+    var focusReady by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
+    LaunchedEffect(focusReady) {
+        if (focusReady) {
+            runCatching { focusRequester.requestFocus() }
+        }
     }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
@@ -141,16 +145,18 @@ fun HoneycombScreen(
                     previousFrameNanos = frameTimeNanos
                     val pointer = dragPointer
                     if (pointer != null) {
-                        val clampedPointer = Offset(
-                            x = pointer.x.coerceIn(iconSizePx * 0.5f, screenWidthPx - iconSizePx * 0.5f),
-                            y = pointer.y.coerceIn(iconSizePx * 0.5f, screenHeightPx - iconSizePx * 0.5f)
+                        val displayPointer = clampHoneycombDisplayPointer(
+                            pointer = pointer,
+                            screenWidthPx = screenWidthPx,
+                            screenHeightPx = screenHeightPx,
+                            iconSizePx = iconSizePx
                         )
                         val autoScrollVelocity = when {
-                            clampedPointer.y < honeycombAutoScrollEdgePx -> {
-                                HONEYCOMB_AUTO_SCROLL_MAX_PX * 60f * ((honeycombAutoScrollEdgePx - clampedPointer.y) / honeycombAutoScrollEdgePx)
+                            pointer.y < honeycombAutoScrollEdgePx -> {
+                                HONEYCOMB_AUTO_SCROLL_MAX_PX * 60f * ((honeycombAutoScrollEdgePx - pointer.y) / honeycombAutoScrollEdgePx).coerceAtMost(1.8f)
                             }
-                            clampedPointer.y > screenHeightPx - honeycombAutoScrollEdgePx -> {
-                                -HONEYCOMB_AUTO_SCROLL_MAX_PX * 60f * ((clampedPointer.y - (screenHeightPx - honeycombAutoScrollEdgePx)) / honeycombAutoScrollEdgePx)
+                            pointer.y > screenHeightPx - honeycombAutoScrollEdgePx -> {
+                                -HONEYCOMB_AUTO_SCROLL_MAX_PX * 60f * ((pointer.y - (screenHeightPx - honeycombAutoScrollEdgePx)) / honeycombAutoScrollEdgePx).coerceAtMost(1.8f)
                             }
                             else -> 0f
                         }
@@ -161,7 +167,7 @@ fun HoneycombScreen(
                             }
                         }
                         dragCurrentIndex = findNearestHoneycombIndex(
-                            pointer = clampedPointer,
+                            pointer = displayPointer,
                             positions = positions,
                             screenCenterX = screenCenterX,
                             screenCenterY = screenCenterY + scrollOffset.value,
@@ -178,6 +184,9 @@ fun HoneycombScreen(
                 .fillMaxSize()
                 .focusRequester(focusRequester)
                 .focusable()
+                .onGloballyPositioned {
+                    if (!focusReady) focusReady = true
+                }
                 .onRotaryScrollEvent {
                     val next = (scrollOffset.value - it.verticalScrollPixels).coerceIn(minScroll, maxScroll)
                     scope.launch { scrollOffset.snapTo(next) }
@@ -255,11 +264,14 @@ fun HoneycombScreen(
                                 if (dragOffset.getDistance() > menuDragStartPx * 0.35f) {
                                     hasDragged = true
                                 }
+                                val displayPointer = clampHoneycombDisplayPointer(
+                                    pointer = pointer,
+                                    screenWidthPx = screenWidthPx,
+                                    screenHeightPx = screenHeightPx,
+                                    iconSizePx = iconSizePx
+                                )
                                 val dragTarget = findNearestHoneycombIndex(
-                                    pointer = Offset(
-                                        x = pointer.x.coerceIn(iconSizePx * 0.5f, screenWidthPx - iconSizePx * 0.5f),
-                                        y = pointer.y.coerceIn(iconSizePx * 0.5f, screenHeightPx - iconSizePx * 0.5f)
-                                    ),
+                                    pointer = displayPointer,
                                     positions = positions,
                                     screenCenterX = screenCenterX,
                                     screenCenterY = screenCenterY + scrollOffset.value,
@@ -490,11 +502,13 @@ fun HoneycombScreen(
                         },
                         size = iconSizeDp,
                         onClick = {
-                            val sy = scrollOffset.value
-                            val clickPos = if (isDragged) gridPos else visualPos
-                            val sx = screenCenterX + clickPos.x
-                            val syPos = screenCenterY + clickPos.y + sy
-                            onAppClick(app, Offset(sx / screenWidthPx, syPos / screenHeightPx))
+                            if (longPressedApp == null && dragFromIndex == null) {
+                                val sy = scrollOffset.value
+                                val clickPos = if (isDragged) gridPos else visualPos
+                                val sx = screenCenterX + clickPos.x
+                                val syPos = screenCenterY + clickPos.y + sy
+                                onAppClick(app, Offset(sx / screenWidthPx, syPos / screenHeightPx))
+                            }
                         },
                         onLongClick = null,
                         forcePressed = isDragged || isGlidePressed || menuPressedKey == appKey,
@@ -513,15 +527,14 @@ fun HoneycombScreen(
                                 translationX = posX - iconSizePx / 2f
                                 translationY = pY - iconSizePx / 2f
                                 if (isDragged) {
-                                    val pointer = dragPointer
-                                    translationX = ((pointer?.x ?: posX).coerceIn(
-                                        iconSizePx * 0.5f,
-                                        screenWidthPx - iconSizePx * 0.5f
-                                    )) - iconSizePx / 2f
-                                    translationY = ((pointer?.y ?: pY).coerceIn(
-                                        iconSizePx * 0.5f,
-                                        screenHeightPx - iconSizePx * 0.5f
-                                    )) - iconSizePx / 2f
+                                    val displayPointer = clampHoneycombDisplayPointer(
+                                        pointer = dragPointer ?: Offset(posX, pY),
+                                        screenWidthPx = screenWidthPx,
+                                        screenHeightPx = screenHeightPx,
+                                        iconSizePx = iconSizePx
+                                    )
+                                    translationX = displayPointer.x - iconSizePx / 2f
+                                    translationY = displayPointer.y - iconSizePx / 2f
                                 } else {
                                     translationX += animatedNeighborShiftX
                                     translationY += animatedNeighborShiftY
@@ -658,6 +671,20 @@ private fun findNearestHoneycombIndex(
         }
     }
     return bestIndex
+}
+
+private fun clampHoneycombDisplayPointer(
+    pointer: Offset,
+    screenWidthPx: Float,
+    screenHeightPx: Float,
+    iconSizePx: Float
+): Offset {
+    val horizontalOverflow = iconSizePx * 0.22f
+    val verticalOverflow = iconSizePx * 0.42f
+    return Offset(
+        x = pointer.x.coerceIn(-horizontalOverflow, screenWidthPx + horizontalOverflow),
+        y = pointer.y.coerceIn(-verticalOverflow, screenHeightPx + verticalOverflow)
+    )
 }
 
 private fun honeycombVisualSlotIndex(
