@@ -131,6 +131,7 @@ fun HoneycombScreen(
         LaunchedEffect(dragFromIndex, minScroll, maxScroll, screenHeightPx) {
             var previousFrameNanos = 0L
             while (dragFromIndex != null) {
+                var pendingScrollTarget: Float? = null
                 withFrameNanos { frameTimeNanos ->
                     val frameDeltaSeconds = if (previousFrameNanos == 0L) {
                         1f / 60f
@@ -156,7 +157,7 @@ fun HoneycombScreen(
                         if (autoScrollVelocity != 0f) {
                             val next = (scrollOffset.value + autoScrollVelocity * frameDeltaSeconds).coerceIn(minScroll, maxScroll)
                             if (next != scrollOffset.value) {
-                                scrollOffset.snapTo(next)
+                                pendingScrollTarget = next
                             }
                         }
                         dragCurrentIndex = findNearestHoneycombIndex(
@@ -168,6 +169,7 @@ fun HoneycombScreen(
                         ) ?: dragCurrentIndex
                     }
                 }
+                pendingScrollTarget?.let { scrollOffset.snapTo(it) }
             }
         }
 
@@ -312,8 +314,10 @@ fun HoneycombScreen(
                         } else {
                             settlingApp = null
                             settlingKey = null
-                            settlingX.snapTo(0f)
-                            settlingY.snapTo(0f)
+                            scope.launch {
+                                settlingX.snapTo(0f)
+                                settlingY.snapTo(0f)
+                            }
                         }
                         dragFromIndex = null
                         dragCurrentIndex = null

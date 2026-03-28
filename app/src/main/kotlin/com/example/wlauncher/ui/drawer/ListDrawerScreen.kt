@@ -317,6 +317,7 @@ fun ListDrawerScreen(
             LaunchedEffect(dragFromIndex, screenHeightPx) {
                 var previousFrameNanos = 0L
                 while (dragFromIndex != null) {
+                    var pendingScrollDelta = 0f
                     withFrameNanos { frameTimeNanos ->
                         val frameDeltaSeconds = if (previousFrameNanos == 0L) {
                             1f / 60f
@@ -337,7 +338,7 @@ fun ListDrawerScreen(
                                 else -> 0f
                             }
                             if (autoScrollVelocity != 0f) {
-                                listState.scrollBy(autoScrollVelocity * frameDeltaSeconds)
+                                pendingScrollDelta = autoScrollVelocity * frameDeltaSeconds
                             }
                             val anchorCenter = itemCenters[activeFromIndex] ?: pointerY
                             dragOffsetY = pointerY - anchorCenter
@@ -347,6 +348,9 @@ fun ListDrawerScreen(
                                 maxDistance = Float.MAX_VALUE
                             ) ?: dragCurrentIndex
                         }
+                    }
+                    if (pendingScrollDelta != 0f) {
+                        listState.scrollBy(pendingScrollDelta)
                     }
                 }
             }
