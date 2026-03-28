@@ -546,7 +546,8 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awa
         var cancelledByGesture = false
         while (true) {
             val event = awaitPointerEvent()
-            val change = event.changes.firstOrNull { it.id == pointerId } ?: run {
+            val change = event.changes.firstOrNull { it.id == pointerId }
+            if (change == null) {
                 cancelledByGesture = true
                 break
             }
