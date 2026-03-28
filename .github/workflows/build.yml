@@ -24,11 +24,13 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.10
 
       - name: Build Release APK
         run: |
           for i in 1 2 3; do
-            ./gradlew --no-daemon assembleRelease && break
+            gradle --no-daemon assembleRelease && break
             if [ "$i" -eq 3 ]; then
               echo "Gradle build failed after 3 attempts."
               exit 1
