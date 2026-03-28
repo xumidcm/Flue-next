@@ -32,6 +32,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_BLUR = booleanPreferencesKey("blur_enabled")
         val KEY_EDGE_BLUR = booleanPreferencesKey("edge_blur_enabled")
         val KEY_LOW_RES = booleanPreferencesKey("low_res_icons")
+        val KEY_ICON_CACHE_SIZE = intPreferencesKey("icon_cache_size")
         val KEY_ANIMATION_OVERRIDE = booleanPreferencesKey("animation_override_enabled")
         val KEY_SPLASH_ICON = booleanPreferencesKey("splash_icon")
         val KEY_SPLASH_DELAY = intPreferencesKey("splash_delay")
@@ -64,6 +65,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _lowResIcons = MutableStateFlow(false)
     val lowResIcons: StateFlow<Boolean> = _lowResIcons.asStateFlow()
+
+    private val _iconCacheSize = MutableStateFlow(128)
+    val iconCacheSize: StateFlow<Int> = _iconCacheSize.asStateFlow()
 
     private val _animationOverrideEnabled = MutableStateFlow(true)
     val animationOverrideEnabled: StateFlow<Boolean> = _animationOverrideEnabled.asStateFlow()
@@ -110,6 +114,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     init {
         viewModelScope.launch {
             store.data.collect { prefs ->
+                var refreshIconsNeeded = false
                 prefs[KEY_LAYOUT]?.let {
                     _layoutMode.value = try {
                         LayoutMode.valueOf(it)
@@ -121,7 +126,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 prefs[KEY_EDGE_BLUR]?.let { _edgeBlurEnabled.value = it }
                 prefs[KEY_LOW_RES]?.let {
                     _lowResIcons.value = it
-                    appRepository.refresh(if (it) 64 else 128)
+                    refreshIconsNeeded = true
+                }
+                prefs[KEY_ICON_CACHE_SIZE]?.let {
+                    _iconCacheSize.value = it.coerceIn(64, 192)
+                    refreshIconsNeeded = true
                 }
                 prefs[KEY_ANIMATION_OVERRIDE]?.let { _animationOverrideEnabled.value = it }
                 prefs[KEY_SPLASH_ICON]?.let { _splashIcon.value = it }
@@ -138,6 +147,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 prefs[KEY_HONEYCOMB_TOP_FADE]?.let { _honeycombTopFade.value = it.coerceIn(0, 160) }
                 prefs[KEY_HONEYCOMB_BOTTOM_FADE]?.let { _honeycombBottomFade.value = it.coerceIn(0, 160) }
                 prefs[KEY_SHOW_NOTIFICATION]?.let { _showNotification.value = it }
+                if (refreshIconsNeeded) {
+                    refreshIcons()
+                }
             }
         }
     }
@@ -221,8 +233,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setLowResIcons(enabled: Boolean) {
         _lowResIcons.value = enabled
-        appRepository.refresh(if (enabled) 64 else 128)
+        refreshIcons()
         viewModelScope.launch { store.edit { it[KEY_LOW_RES] = enabled } }
+    }
+
+    fun setIconCacheSize(size: Int) {
+        _iconCacheSize.value = size.coerceIn(64, 192)
+        refreshIcons()
+        viewModelScope.launch { store.edit { it[KEY_ICON_CACHE_SIZE] = _iconCacheSize.value } }
     }
 
     fun setAnimationOverrideEnabled(enabled: Boolean) {
@@ -295,6 +313,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _blurEnabled.value = true
         _edgeBlurEnabled.value = false
         _lowResIcons.value = false
+        _iconCacheSize.value = 128
         _animationOverrideEnabled.value = true
         _splashIcon.value = true
         _splashDelay.value = 500
@@ -305,13 +324,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _honeycombTopFade.value = 56
         _honeycombBottomFade.value = 56
         _showNotification.value = true
-        appRepository.refresh(128)
+        refreshIcons()
         viewModelScope.launch {
             store.edit {
                 it[KEY_LAYOUT] = LayoutMode.Honeycomb.name
                 it[KEY_BLUR] = true
                 it[KEY_EDGE_BLUR] = false
                 it[KEY_LOW_RES] = false
+                it[KEY_ICON_CACHE_SIZE] = 128
                 it[KEY_ANIMATION_OVERRIDE] = true
                 it[KEY_SPLASH_ICON] = true
                 it[KEY_SPLASH_DELAY] = 500
@@ -324,6 +344,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_SHOW_NOTIFICATION] = true
             }
         }
+    }
+
+    private fun refreshIcons() {
+        val targetSize = if (_lowResIcons.value) 64 else _iconCacheSize.value
+        appRepository.refresh(targetSize.coerceIn(64, 192))
     }
 
     override fun onCleared() {

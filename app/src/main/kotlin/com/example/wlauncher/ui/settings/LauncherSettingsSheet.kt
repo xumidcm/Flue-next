@@ -60,6 +60,7 @@ fun LauncherSettingsSheet(
     blurEnabled: Boolean,
     edgeBlurEnabled: Boolean = false,
     lowResIcons: Boolean = false,
+    iconCacheSize: Int = 128,
     animationOverrideEnabled: Boolean = true,
     splashIcon: Boolean = true,
     splashDelay: Int = 500,
@@ -74,6 +75,7 @@ fun LauncherSettingsSheet(
     onBlurToggle: (Boolean) -> Unit,
     onEdgeBlurToggle: (Boolean) -> Unit = {},
     onLowResToggle: (Boolean) -> Unit = {},
+    onIconCacheSizeChange: (Int) -> Unit = {},
     onAnimationOverrideToggle: (Boolean) -> Unit = {},
     onSplashToggle: (Boolean) -> Unit = {},
     onSplashDelayChange: (Int) -> Unit = {},
@@ -210,6 +212,20 @@ fun LauncherSettingsSheet(
             item("low_res_toggle") {
                 val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "low_res_toggle" }, screenCenterY, screenHeightPx)
                 SettingToggle(tr(isZh, "低分辨率图标", "Low-res Icons"), tr(isZh, "使用更小的缓存图标来提升滚动流畅度", "Use smaller cached icons for smoother scrolling"), lowResIcons, onLowResToggle, scale = scale)
+            }
+
+            item("icon_cache_size") {
+                val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "icon_cache_size" }, screenCenterY, screenHeightPx)
+                DeferredSliderCard(
+                    label = tr(isZh, "鍥惧儚缂撳瓨灏哄", "Icon Cache Size"),
+                    valueText = "$iconCacheSize px",
+                    value = iconCacheSize.toFloat(),
+                    valueRange = 64f..192f,
+                    steps = 12,
+                    enabled = !lowResIcons,
+                    scale = scale,
+                    onValueCommitted = { onIconCacheSizeChange(it.toInt()) }
+                )
             }
 
             if (currentLayout == LayoutMode.List) {
@@ -463,6 +479,7 @@ private fun DeferredSliderCard(
     onValueCommitted: (Float) -> Unit
 ) {
     var sliderValue by remember(label) { mutableFloatStateOf(value) }
+    val valueSuffix = remember(valueText) { valueText.substringAfter(" ", "").trim() }
     LaunchedEffect(value) { sliderValue = value }
     Column(
         modifier = Modifier
@@ -474,12 +491,18 @@ private fun DeferredSliderCard(
     ) {
         Text(label, fontSize = 14.sp, fontWeight = FontWeight.W600, color = Color.White)
         Spacer(modifier = Modifier.height(2.dp))
-        Text(valueText, fontSize = 12.sp, color = WatchColors.TextTertiary)
+        Text(
+            if (valueSuffix.isNotEmpty()) "${sliderValue.toInt()} $valueSuffix" else sliderValue.toInt().toString(),
+            fontSize = 12.sp,
+            color = WatchColors.TextTertiary
+        )
         Spacer(modifier = Modifier.height(8.dp))
         Slider(
             value = sliderValue,
             onValueChange = { sliderValue = it },
-            onValueChangeFinished = { onValueCommitted(sliderValue) },
+            onValueChangeFinished = {
+                onValueCommitted(sliderValue)
+            },
             valueRange = valueRange,
             steps = steps,
             enabled = enabled,

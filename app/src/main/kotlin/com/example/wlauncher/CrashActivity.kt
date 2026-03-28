@@ -1,4 +1,4 @@
-package com.flue.launcher
+﻿package com.flue.launcher
 
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -10,6 +10,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -23,7 +24,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -55,7 +59,7 @@ class CrashActivity : ComponentActivity() {
                 onCopyLog = {
                     copyText(
                         fullCrashLog,
-                        if (isZh) "已复制详细崩溃日志" else "Copied full crash log"
+                        if (isZh) "已复制完整崩溃日志" else "Copied full crash log"
                     )
                 },
                 onRestart = { restart() },
@@ -99,70 +103,87 @@ fun CrashScreen(
     onRestart: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
+    var showFull by remember { mutableStateOf(false) }
+    val previewCrash = remember(crashInfo) { crashInfo.lineSequence().take(5).joinToString("\n") }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.White)
-            .padding(horizontal = 24.dp)
+            .background(Color.Black)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp, vertical = 32.dp)
     ) {
-        Spacer(modifier = Modifier.height(60.dp))
         Text(
-            text = if (isZh) "哎呀，应用崩溃了" else "Oops, it crashed",
+            text = if (isZh) "应用发生崩溃" else "App Crashed",
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFF111111)
+            color = Color.White
         )
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = if (isZh) {
-                "请复制完整日志给开发者，并附上触发崩溃的操作步骤。"
+                "默认仅展示前五行错误，点击可展开完整日志；页面可整体滚动。"
             } else {
-                "Copy the logs for the developer and include the steps that caused the crash."
+                "Shows first five error lines by default. Tap to expand full log."
             },
             fontSize = 14.sp,
-            color = Color(0xFF666666),
+            color = Color(0xFFBFBFBF),
             lineHeight = 20.sp
         )
+
         Spacer(modifier = Modifier.height(16.dp))
 
         Box(
             modifier = Modifier
-                .weight(1f)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(Color(0xFFFCEAEA))
-                .padding(16.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xFF171717))
+                .padding(14.dp)
         ) {
             Text(
-                text = "$appInfo\n\n$crashInfo",
-                fontSize = 11.sp,
-                color = Color(0xFF222222),
-                modifier = Modifier.verticalScroll(rememberScrollState())
+                text = "$appInfo\n\n${if (showFull) crashInfo else previewCrash}",
+                fontSize = 12.sp,
+                color = Color(0xFFE8E8E8),
+                lineHeight = 17.sp
             )
         }
 
+        Spacer(modifier = Modifier.height(10.dp))
+        Text(
+            text = if (showFull) {
+                if (isZh) "收起日志" else "Collapse"
+            } else {
+                if (isZh) "展开完整日志" else "Show full log"
+            },
+            fontSize = 13.sp,
+            color = Color(0xFF74B8FF),
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { showFull = !showFull }
+                .padding(horizontal = 6.dp, vertical = 4.dp)
+        )
+
         Spacer(modifier = Modifier.height(18.dp))
         CrashButton(
-            text = if (isZh) "复制详细崩溃日志" else "Copy full crash log",
-            bg = Color(0xFFFF4D73),
+            text = if (isZh) "复制完整崩溃日志" else "Copy full crash log",
+            bg = Color(0xFF2D7DFF),
             fg = Color.White,
             onClick = onCopyLog
         )
         Spacer(modifier = Modifier.height(10.dp))
         CrashButton(
             text = if (isZh) "重启应用" else "Restart app",
-            bg = Color(0xFFF3F3F3),
-            fg = Color(0xFFFF4D73),
+            bg = Color(0xFF1F1F1F),
+            fg = Color(0xFF74B8FF),
             onClick = onRestart
         )
         Spacer(modifier = Modifier.height(10.dp))
         CrashButton(
             text = if (isZh) "应用详情" else "App settings",
-            bg = Color(0xFFF3F3F3),
-            fg = Color(0xFFFF4D73),
+            bg = Color(0xFF1F1F1F),
+            fg = Color(0xFF74B8FF),
             onClick = onOpenSettings
         )
-        Spacer(modifier = Modifier.height(24.dp))
     }
 }
 
@@ -173,7 +194,7 @@ private fun CrashButton(text: String, bg: Color, fg: Color, onClick: () -> Unit)
         modifier = Modifier
             .fillMaxWidth()
             .height(52.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(bg)
     ) {
         Text(text, color = fg, fontSize = 16.sp, fontWeight = FontWeight.W600)

@@ -23,12 +23,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -65,6 +69,7 @@ fun HoneycombScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val focusRequester = remember { FocusRequester() }
     var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
     var pressedAppKey by remember { mutableStateOf<String?>(null) }
     var glidePressedKey by remember { mutableStateOf<String?>(null) }
@@ -72,6 +77,7 @@ fun HoneycombScreen(
     var dragFromIndex by remember { mutableStateOf<Int?>(null) }
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    var initializedAtTop by remember { mutableStateOf(false) }
     val effectiveEdgeBlur = edgeBlurEnabled && !suppressHeavyEffects
 
     LaunchedEffect(settledPressIndex) {
@@ -79,6 +85,9 @@ fun HoneycombScreen(
             delay(190)
             settledPressIndex = null
         }
+    }
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
     }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
@@ -110,10 +119,38 @@ fun HoneycombScreen(
         val scrollOffset = remember { Animatable(0f) }
         val scope = rememberCoroutineScope()
         val overlayBlurActive = longPressedApp != null && blurEnabled && !suppressHeavyEffects
+        LaunchedEffect(maxScroll, apps.size) {
+            if (!initializedAtTop && apps.isNotEmpty()) {
+                scrollOffset.snapTo(maxScroll)
+                initializedAtTop = true
+            }
+        }
 
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .focusRequester(focusRequester)
+                .focusable()
+                .onRotaryScrollEvent {
+                    val next = (scrollOffset.value - it.verticalScrollPixels).coerceIn(minScroll, maxScroll)
+                    scope.launch { scrollOffset.snapTo(next) }
+                    true
+                }
+                .pointerInput(minScroll, maxScroll) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.type == PointerEventType.Scroll) {
+                                val delta = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                                if (delta != 0f) {
+                                    val next = (scrollOffset.value + delta * 24f).coerceIn(minScroll, maxScroll)
+                                    scope.launch { scrollOffset.snapTo(next) }
+                                    event.changes.forEach { it.consume() }
+                                }
+                            }
+                        }
+                    }
+                }
                 .platformBlur(16f, overlayBlurActive)
                 .pointerInput(apps, positions, scrollOffset.value) {
                     val holdSlopPx = with(density) { HONEYCOMB_HOLD_SLOP_DP.dp.toPx() }

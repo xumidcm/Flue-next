@@ -58,6 +58,7 @@ class AppRepository(private val context: Context) {
 
     fun refresh(iconSize: Int = 128) {
         val pm = context.packageManager
+        val installTimeCache = mutableMapOf<String, Long>()
         val mainIntent = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
         }
@@ -72,12 +73,13 @@ class AppRepository(private val context: Context) {
             .distinctBy { "${it.activityInfo.packageName}/${it.activityInfo.name}" }
             .map { ri ->
                 val iconDrawable = ri.loadIcon(pm)
+                val packageName = ri.activityInfo.packageName
                 val iconBitmap = createCircularBitmap(
                     iconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
                 )
                 AppInfo(
                     label = ri.loadLabel(pm).toString(),
-                    packageName = ri.activityInfo.packageName,
+                    packageName = packageName,
                     activityName = ri.activityInfo.name,
                     icon = iconDrawable,
                     cachedIcon = iconBitmap.asImageBitmap()
@@ -87,10 +89,14 @@ class AppRepository(private val context: Context) {
                 if (customOrder.isNotEmpty()) {
                     list.sortedWith(
                         compareBy<AppInfo> { orderRank(it) }
+                            .thenBy { installTimeCache.getOrPut(it.packageName) { packageInstallTime(it.packageName) } }
                             .thenBy { it.label.lowercase() }
                     )
                 } else {
-                    list.sortedBy { it.label.lowercase() }
+                    list.sortedWith(
+                        compareBy<AppInfo> { installTimeCache.getOrPut(it.packageName) { packageInstallTime(it.packageName) } }
+                            .thenBy { it.label.lowercase() }
+                    )
                 }
             }
     }
@@ -134,5 +140,14 @@ class AppRepository(private val context: Context) {
         val legacyIndex = customOrder.indexOf(app.packageName)
         if (legacyIndex >= 0) return legacyIndex
         return Int.MAX_VALUE
+    }
+
+    private fun packageInstallTime(packageName: String): Long {
+        return try {
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageInfo(packageName, 0).firstInstallTime
+        } catch (_: Exception) {
+            Long.MAX_VALUE
+        }
     }
 }

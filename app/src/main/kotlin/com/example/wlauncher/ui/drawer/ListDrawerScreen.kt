@@ -9,6 +9,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -32,6 +33,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -41,6 +43,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -49,6 +53,8 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -89,6 +95,7 @@ fun ListDrawerScreen(
     val density = LocalDensity.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val focusRequester = remember { FocusRequester() }
     val effectiveEdgeBlur = edgeBlurEnabled && !suppressHeavyEffects
 
     var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
@@ -99,11 +106,42 @@ fun ListDrawerScreen(
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
     var glidePressedIndex by remember { mutableStateOf<Int?>(null) }
+    var initializedAtTop by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+    LaunchedEffect(apps.size) {
+        if (!initializedAtTop && apps.isNotEmpty()) {
+            listState.scrollToItem(0)
+            initializedAtTop = true
+        }
+    }
 
     Box(modifier = modifier.fillMaxSize()) {
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
+                .focusRequester(focusRequester)
+                .focusable()
+                .onRotaryScrollEvent {
+                    scope.launch { listState.scrollBy(-it.verticalScrollPixels) }
+                    true
+                }
+                .pointerInput(listState) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.type == PointerEventType.Scroll) {
+                                val delta = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                                if (delta != 0f) {
+                                    scope.launch { listState.scrollBy(delta * 30f) }
+                                    event.changes.forEach { it.consume() }
+                                }
+                            }
+                        }
+                    }
+                }
                 .nestedScroll(
                     remember(listState, dragFromIndex) {
                         object : NestedScrollConnection {
@@ -257,7 +295,7 @@ fun ListDrawerScreen(
             val screenHeightPx = with(density) { maxHeight.toPx() }
             val screenCenterY = screenHeightPx / 2f
             val estimatedItemHeight = iconSize.coerceAtLeast(48.dp) + 20.dp
-            val centeredPadding = ((maxHeight - estimatedItemHeight) / 2f).coerceAtLeast(0.dp)
+            val centeredPadding = 8.dp
             val dragRowShift = dragFromIndex?.let { itemHeights[it] } ?: with(density) { estimatedItemHeight.toPx() }
 
             LazyColumn(

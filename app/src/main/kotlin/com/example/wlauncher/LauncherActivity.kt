@@ -112,6 +112,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val splashDelay by vm.splashDelay.collectAsState()
     val currentApp by vm.currentApp.collectAsState()
     val listIconSize by vm.listIconSize.collectAsState()
+    val iconCacheSize by vm.iconCacheSize.collectAsState()
     val honeycombCols by vm.honeycombCols.collectAsState()
     val honeycombTopBlur by vm.honeycombTopBlur.collectAsState()
     val honeycombBottomBlur by vm.honeycombBottomBlur.collectAsState()
@@ -283,6 +284,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     blurEnabled = blurEnabled,
                     edgeBlurEnabled = edgeBlurEnabled,
                     lowResIcons = vm.lowResIcons.collectAsState().value,
+                    iconCacheSize = iconCacheSize,
                     animationOverrideEnabled = animationOverrideEnabled,
                     splashIcon = splashIcon,
                     splashDelay = splashDelay,
@@ -297,6 +299,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     onBlurToggle = { vm.setBlurEnabled(it) },
                     onEdgeBlurToggle = { vm.setEdgeBlurEnabled(it) },
                     onLowResToggle = { vm.setLowResIcons(it) },
+                    onIconCacheSizeChange = { vm.setIconCacheSize(it) },
                     onAnimationOverrideToggle = { vm.setAnimationOverrideEnabled(it) },
                     onSplashToggle = { vm.setSplashIcon(it) },
                     onSplashDelayChange = { vm.setSplashDelay(it) },
