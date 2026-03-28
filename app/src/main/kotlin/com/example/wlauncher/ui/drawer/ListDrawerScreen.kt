@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.platformBlur
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
@@ -104,6 +105,7 @@ fun ListDrawerScreen(
     var dragFromIndex by remember { mutableStateOf<Int?>(null) }
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    var dragPointerY by remember { mutableFloatStateOf(Float.NaN) }
     var glidePressedIndex by remember { mutableStateOf<Int?>(null) }
     var initializedAtTop by remember { mutableStateOf(false) }
 
@@ -189,7 +191,6 @@ fun ListDrawerScreen(
                 .pointerInput(apps) {
                     val maxDistancePx = with(density) { 72.dp.toPx() }
                     val menuDragStartPx = with(density) { LIST_MENU_DRAG_START_DP.dp.toPx() }
-                    val autoScrollEdgePx = with(density) { LIST_AUTO_SCROLL_EDGE_DP.dp.toPx() }
                     awaitEachGesture {
                         val down = awaitPrimaryDown()
                         val startIndex = findNearestListIndex(
@@ -205,6 +206,7 @@ fun ListDrawerScreen(
                             timeoutMillis = LIST_MENU_TRIGGER_MS
                         )
                         if (longPress == null) {
+                            dragPointerY = Float.NaN
                             glidePressedIndex = null
                             return@awaitEachGesture
                         }
@@ -230,29 +232,18 @@ fun ListDrawerScreen(
                                 dragActive = true
                                 dragFromIndex = startIndex
                                 dragCurrentIndex = startIndex
+                                dragPointerY = pointerY
                                 glidePressedIndex = null
                                 vibrateHaptic(context)
                             }
 
                             val activeFromIndex = dragFromIndex
                             if (dragActive && activeFromIndex != null) {
+                                dragPointerY = pointerY
                                 val anchorCenter = itemCenters[activeFromIndex] ?: pointerY
                                 dragOffsetY = pointerY - anchorCenter
                                 if (abs(dragOffsetY) > menuDragStartPx * 0.35f) {
                                     hasDragged = true
-                                }
-
-                                val autoScrollDelta = when {
-                                    pointerY < autoScrollEdgePx -> {
-                                        -LIST_AUTO_SCROLL_MAX_PX * ((autoScrollEdgePx - pointerY) / autoScrollEdgePx)
-                                    }
-                                    pointerY > size.height - autoScrollEdgePx -> {
-                                        LIST_AUTO_SCROLL_MAX_PX * ((pointerY - (size.height - autoScrollEdgePx)) / autoScrollEdgePx)
-                                    }
-                                    else -> 0f
-                                }
-                                if (autoScrollDelta != 0f) {
-                                    scope.launch { listState.scrollBy(autoScrollDelta) }
                                 }
 
                                 dragCurrentIndex = findNearestListIndex(
@@ -274,15 +265,47 @@ fun ListDrawerScreen(
                         dragFromIndex = null
                         dragCurrentIndex = null
                         dragOffsetY = 0f
+                        dragPointerY = Float.NaN
                         glidePressedIndex = null
                     }
                 }
         ) {
             val screenHeightPx = with(density) { maxHeight.toPx() }
             val screenCenterY = screenHeightPx / 2f
+            val autoScrollEdgePx = with(density) { LIST_AUTO_SCROLL_EDGE_DP.dp.toPx() }
             val estimatedItemHeight = iconSize.coerceAtLeast(48.dp) + 20.dp
             val centeredPadding = 8.dp
             val dragRowShift = dragFromIndex?.let { itemHeights[it] } ?: with(density) { estimatedItemHeight.toPx() }
+            val dragOverlayHeightPx = dragFromIndex?.let { itemHeights[it] } ?: with(density) { (iconSize + 20.dp).toPx() }
+
+            LaunchedEffect(dragFromIndex, screenHeightPx) {
+                while (dragFromIndex != null) {
+                    val pointerY = dragPointerY
+                    val activeFromIndex = dragFromIndex
+                    if (!pointerY.isNaN() && activeFromIndex != null) {
+                        val autoScrollDelta = when {
+                            pointerY < autoScrollEdgePx -> {
+                                -LIST_AUTO_SCROLL_MAX_PX * ((autoScrollEdgePx - pointerY) / autoScrollEdgePx)
+                            }
+                            pointerY > screenHeightPx - autoScrollEdgePx -> {
+                                LIST_AUTO_SCROLL_MAX_PX * ((pointerY - (screenHeightPx - autoScrollEdgePx)) / autoScrollEdgePx)
+                            }
+                            else -> 0f
+                        }
+                        if (autoScrollDelta != 0f) {
+                            listState.scrollBy(autoScrollDelta)
+                        }
+                        val anchorCenter = itemCenters[activeFromIndex] ?: pointerY
+                        dragOffsetY = pointerY - anchorCenter
+                        dragCurrentIndex = findNearestListIndex(
+                            pointerY = pointerY,
+                            itemCenters = itemCenters,
+                            maxDistance = Float.MAX_VALUE
+                        ) ?: dragCurrentIndex
+                    }
+                    delay(16)
+                }
+            }
 
             LazyColumn(
                 state = listState,
@@ -349,10 +372,10 @@ fun ListDrawerScreen(
                             }
                             .graphicsLayer {
                                 val targetScale = itemScale * pressedScale
-                                translationY = displayDisplacement
+                                translationY = if (isDragged) 0f else displayDisplacement
                                 scaleX = targetScale
                                 scaleY = targetScale
-                                alpha = if (isDragged) 0.96f else itemScale.coerceIn(0.3f, 1f)
+                                alpha = if (isDragged) 0f else itemScale.coerceIn(0.3f, 1f)
                             }
                             .background(Color.Black.copy(alpha = pressedOverlay), RoundedCornerShape(18.dp))
                             .combinedClickable(
@@ -382,6 +405,41 @@ fun ListDrawerScreen(
                             color = Color.White
                         )
                     }
+                }
+            }
+
+            val draggedIndex = dragFromIndex
+            val draggedApp = draggedIndex?.let { apps.getOrNull(it) }
+            if (draggedApp != null && !dragPointerY.isNaN()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer {
+                            translationY = dragPointerY - dragOverlayHeightPx / 2f
+                            scaleX = 0.965f
+                            scaleY = 0.965f
+                            alpha = 0.98f
+                            shadowElevation = 18.dp.toPx()
+                        }
+                        .background(Color.Black.copy(alpha = 0.10f), RoundedCornerShape(18.dp))
+                        .padding(horizontal = 28.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Image(
+                        bitmap = draggedApp.cachedIcon,
+                        contentDescription = draggedApp.label,
+                        modifier = Modifier
+                            .size(iconSize)
+                            .clip(CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+                    Spacer(modifier = Modifier.width(14.dp))
+                    Text(
+                        text = draggedApp.label,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.W500,
+                        color = Color.White
+                    )
                 }
             }
         }

@@ -42,6 +42,7 @@ import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.platformBlur
 import com.flue.launcher.util.fisheyeScale
 import com.flue.launcher.util.generateHoneycombRows
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.sqrt
@@ -49,6 +50,8 @@ import kotlin.math.sqrt
 private const val HONEYCOMB_MENU_TRIGGER_MS = 560L
 private const val HONEYCOMB_MENU_DRAG_START_DP = 20f
 private const val HONEYCOMB_PRESS_DURATION_MS = 200
+private const val HONEYCOMB_AUTO_SCROLL_EDGE_DP = 84f
+private const val HONEYCOMB_AUTO_SCROLL_MAX_PX = 26f
 
 @Composable
 fun HoneycombScreen(
@@ -74,6 +77,7 @@ fun HoneycombScreen(
     var dragFromIndex by remember { mutableStateOf<Int?>(null) }
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    var dragPointer by remember { mutableStateOf<Offset?>(null) }
     var initializedAtTop by remember { mutableStateOf(false) }
     val effectiveEdgeBlur = edgeBlurEnabled && !suppressHeavyEffects
 
@@ -110,10 +114,50 @@ fun HoneycombScreen(
         val scrollOffset = remember { Animatable(0f) }
         val scope = rememberCoroutineScope()
         val overlayBlurActive = longPressedApp != null && blurEnabled && !suppressHeavyEffects
+        val honeycombAutoScrollEdgePx = with(density) { HONEYCOMB_AUTO_SCROLL_EDGE_DP.dp.toPx() }
         LaunchedEffect(maxScroll, apps.size) {
             if (!initializedAtTop && apps.isNotEmpty()) {
                 scrollOffset.snapTo(maxScroll)
                 initializedAtTop = true
+            }
+        }
+        LaunchedEffect(dragFromIndex, minScroll, maxScroll, screenHeightPx) {
+            while (dragFromIndex != null) {
+                val pointer = dragPointer
+                if (pointer != null) {
+                    val autoScrollDelta = when {
+                        pointer.y < honeycombAutoScrollEdgePx -> {
+                            -HONEYCOMB_AUTO_SCROLL_MAX_PX * ((honeycombAutoScrollEdgePx - pointer.y) / honeycombAutoScrollEdgePx)
+                        }
+                        pointer.y > screenHeightPx - honeycombAutoScrollEdgePx -> {
+                            HONEYCOMB_AUTO_SCROLL_MAX_PX * ((pointer.y - (screenHeightPx - honeycombAutoScrollEdgePx)) / honeycombAutoScrollEdgePx)
+                        }
+                        else -> 0f
+                    }
+                    if (autoScrollDelta != 0f) {
+                        val next = (scrollOffset.value + autoScrollDelta).coerceIn(minScroll, maxScroll)
+                        if (next != scrollOffset.value) {
+                            scrollOffset.snapTo(next)
+                            val fromIndex = dragFromIndex
+                            if (fromIndex != null) {
+                                dragCurrentIndex = findNearestHoneycombIndex(
+                                    pointer = dragPointerCenter(
+                                        index = fromIndex,
+                                        positions = positions,
+                                        screenCenterX = screenCenterX,
+                                        screenCenterY = screenCenterY + scrollOffset.value,
+                                        dragOffset = dragOffset
+                                    ),
+                                    positions = positions,
+                                    screenCenterX = screenCenterX,
+                                    screenCenterY = screenCenterY + scrollOffset.value,
+                                    maxDistance = cellSize * 0.95f
+                                ) ?: dragCurrentIndex
+                            }
+                        }
+                    }
+                }
+                delay(16)
             }
         }
 
@@ -187,12 +231,14 @@ fun HoneycombScreen(
                                 dragFromIndex = startIndex
                                 dragCurrentIndex = startIndex
                                 dragOffset = Offset.Zero
+                                dragPointer = pointer
                                 glidePressedKey = null
                                 vibrateHaptic(context)
                             }
 
                             val fromIndex = dragFromIndex
                             if (dragActive && fromIndex != null) {
+                                dragPointer = pointer
                                 dragOffset = pointer - dragOrigin
                                 if (dragOffset.getDistance() > menuDragStartPx * 0.35f) {
                                     hasDragged = true
@@ -223,6 +269,7 @@ fun HoneycombScreen(
                         dragFromIndex = null
                         dragCurrentIndex = null
                         dragOffset = Offset.Zero
+                        dragPointer = null
                         glidePressedKey = null
                     }
                 }
@@ -309,11 +356,14 @@ fun HoneycombScreen(
                 val visualSlotIndex = honeycombVisualSlotIndex(index, dragFromIndex, dragCurrentIndex)
                 val gridPos = positions[index]
                 val visualPos = positions.getOrNull(visualSlotIndex) ?: gridPos
-                val posY = screenCenterY + visualPos.y + currentScroll
-                if (posY < visibleTop || posY > visibleBottom) return@forEachIndexed
-
                 val appKey = app.componentKey
                 val isDragged = dragFromIndex == index
+                val visibilityY = if (isDragged) {
+                    screenCenterY + gridPos.y + currentScroll + dragOffset.y
+                } else {
+                    screenCenterY + visualPos.y + currentScroll
+                }
+                if (!isDragged && (visibilityY < visibleTop || visibilityY > visibleBottom)) return@forEachIndexed
                 val isGlidePressed = glidePressedKey == appKey
                 val menuPressedKey = longPressedApp?.componentKey
                 val menuPressedIndex = menuPressedKey?.let { key ->
