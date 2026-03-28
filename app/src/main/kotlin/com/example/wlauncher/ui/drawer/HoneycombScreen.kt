@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -31,15 +32,19 @@ import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.platformBlur
 import com.flue.launcher.util.fisheyeScale
 import com.flue.launcher.util.generateHoneycombRows
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.sqrt
 
-private const val HONEYCOMB_DRAG_ARM_MS = 300L
-private const val HONEYCOMB_MENU_TRIGGER_MS = 500L
+private const val HONEYCOMB_MENU_TRIGGER_MS = 560L
+private const val HONEYCOMB_HOLD_SLOP_DP = 10f
+private const val HONEYCOMB_MENU_DRAG_START_DP = 20f
+private const val HONEYCOMB_GLIDE_SLOP_DP = 4f
 private const val HONEYCOMB_PRESS_DURATION_MS = 200
 
 @Composable
@@ -62,10 +67,19 @@ fun HoneycombScreen(
     val context = LocalContext.current
     var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
     var pressedAppKey by remember { mutableStateOf<String?>(null) }
+    var glidePressedKey by remember { mutableStateOf<String?>(null) }
+    var settledPressIndex by remember { mutableStateOf<Int?>(null) }
     var dragFromIndex by remember { mutableStateOf<Int?>(null) }
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
     val effectiveEdgeBlur = edgeBlurEnabled && !suppressHeavyEffects
+
+    LaunchedEffect(settledPressIndex) {
+        if (settledPressIndex != null) {
+            delay(190)
+            settledPressIndex = null
+        }
+    }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -102,8 +116,9 @@ fun HoneycombScreen(
                 .fillMaxSize()
                 .platformBlur(16f, overlayBlurActive)
                 .pointerInput(apps, positions, scrollOffset.value) {
-                    val dragStartDistancePx = with(density) { 8.dp.toPx() }
-                    val menuCancelDistancePx = with(density) { 16.dp.toPx() }
+                    val holdSlopPx = with(density) { HONEYCOMB_HOLD_SLOP_DP.dp.toPx() }
+                    val menuDragStartPx = with(density) { HONEYCOMB_MENU_DRAG_START_DP.dp.toPx() }
+                    val glideSlopPx = with(density) { HONEYCOMB_GLIDE_SLOP_DP.dp.toPx() }
                     awaitEachGesture {
                         val down = awaitPrimaryDown()
                         val startIndex = findNearestHoneycombIndex(
@@ -116,10 +131,12 @@ fun HoneycombScreen(
                         val app = apps.getOrNull(startIndex) ?: return@awaitEachGesture
                         val downPoint = down.position
                         val downTime = down.uptimeMillis
-                        var armTriggered = false
                         var menuShown = false
+                        var menuEligible = true
+                        var dragActive = false
                         var hasDragged = false
-                        var dragAnchor = downPoint
+                        pressedAppKey = app.componentKey
+                        glidePressedKey = app.componentKey
 
                         while (true) {
                             val event = awaitPointerEvent()
@@ -129,42 +146,48 @@ fun HoneycombScreen(
                             val elapsed = change.uptimeMillis - downTime
                             val pointer = change.position
                             val movedDistance = (pointer - downPoint).getDistance()
+                            val hoverIndex = findNearestHoneycombIndex(
+                                pointer = pointer,
+                                positions = positions,
+                                screenCenterX = screenCenterX,
+                                screenCenterY = screenCenterY + scrollOffset.value,
+                                maxDistance = iconSizePx * 0.9f
+                            )
+                            if (!dragActive && !menuShown && movedDistance >= glideSlopPx) {
+                                glidePressedKey = hoverIndex?.let { apps.getOrNull(it)?.componentKey }
+                                pressedAppKey = glidePressedKey
+                            }
 
-                            if (!armTriggered && elapsed >= HONEYCOMB_DRAG_ARM_MS) {
-                                armTriggered = true
+                            if (!menuShown && !dragActive) {
+                                if (movedDistance > holdSlopPx) {
+                                    menuEligible = false
+                                }
+                                if (menuEligible && elapsed >= HONEYCOMB_MENU_TRIGGER_MS) {
+                                    menuShown = true
+                                    glidePressedKey = null
+                                    pressedAppKey = app.componentKey
+                                    onLongClick(app)
+                                    longPressedApp = app
+                                    vibrateHaptic(context)
+                                }
+                            }
+
+                            if (menuShown && !dragActive && movedDistance > menuDragStartPx) {
+                                menuShown = false
+                                longPressedApp = null
+                                dragActive = true
                                 dragFromIndex = startIndex
                                 dragCurrentIndex = startIndex
                                 dragOffset = Offset.Zero
-                                dragAnchor = pointer
-                                pressedAppKey = app.componentKey
+                                glidePressedKey = null
+                                pressedAppKey = null
                                 vibrateHaptic(context)
                             }
 
-                            if (!menuShown && elapsed >= HONEYCOMB_MENU_TRIGGER_MS && movedDistance <= menuCancelDistancePx) {
-                                menuShown = true
-                                dragFromIndex = null
-                                dragCurrentIndex = null
-                                dragOffset = Offset.Zero
-                                pressedAppKey = app.componentKey
-                                onLongClick(app)
-                                longPressedApp = app
-                            }
-
-                            if (menuShown && movedDistance > menuCancelDistancePx) {
-                                menuShown = false
-                                longPressedApp = null
-                                armTriggered = true
-                                dragAnchor = pointer
-                                dragFromIndex = startIndex
-                                dragCurrentIndex = startIndex
-                                dragOffset = Offset.Zero
-                                pressedAppKey = app.componentKey
-                            }
-
                             val fromIndex = dragFromIndex
-                            if (fromIndex != null && !menuShown) {
-                                dragOffset = pointer - dragAnchor
-                                if (dragOffset.getDistance() > dragStartDistancePx) {
+                            if (dragActive && fromIndex != null) {
+                                dragOffset = pointer - downPoint
+                                if (dragOffset.getDistance() > menuDragStartPx * 0.45f) {
                                     hasDragged = true
                                 }
                                 val dragTarget = findNearestHoneycombIndex(
@@ -187,27 +210,47 @@ fun HoneycombScreen(
 
                         val from = dragFromIndex
                         val to = dragCurrentIndex
-                        if (from != null && to != null && from != to && hasDragged) {
+                        if (dragActive && from != null && to != null && from != to && hasDragged) {
                             onReorder(from, to)
+                            settledPressIndex = to
                         }
                         dragFromIndex = null
                         dragCurrentIndex = null
                         dragOffset = Offset.Zero
-                        pressedAppKey = null
+                        glidePressedKey = null
+                        if (dragActive || !menuShown) {
+                            pressedAppKey = null
+                        }
                     }
                 }
                 .pointerInput(apps, positions, minScroll, maxScroll) {
                     val velocityTracker = VelocityTracker()
                     detectDragGestures(
-                        onDragStart = {
+                        onDragStart = { startOffset ->
                             if (dragFromIndex != null || longPressedApp != null) return@detectDragGestures
                             scope.launch { scrollOffset.stop() }
                             velocityTracker.resetTracking()
+                            val hoverIndex = findNearestHoneycombIndex(
+                                pointer = startOffset,
+                                positions = positions,
+                                screenCenterX = screenCenterX,
+                                screenCenterY = screenCenterY + scrollOffset.value,
+                                maxDistance = iconSizePx * 0.9f
+                            )
+                            glidePressedKey = hoverIndex?.let { apps.getOrNull(it)?.componentKey }
                         },
                         onDrag = { change, dragAmount ->
                             if (dragFromIndex != null || longPressedApp != null) return@detectDragGestures
                             change.consume()
                             velocityTracker.addPosition(change.uptimeMillis, change.position)
+                            val hoverIndex = findNearestHoneycombIndex(
+                                pointer = change.position,
+                                positions = positions,
+                                screenCenterX = screenCenterX,
+                                screenCenterY = screenCenterY + scrollOffset.value,
+                                maxDistance = iconSizePx * 0.9f
+                            )
+                            glidePressedKey = hoverIndex?.let { apps.getOrNull(it)?.componentKey }
                             val current = scrollOffset.value
                             val next = current + dragAmount.y
                             val overscroll = when {
@@ -221,6 +264,7 @@ fun HoneycombScreen(
                         onDragEnd = {
                             val velocity = velocityTracker.calculateVelocity().y
                             val current = scrollOffset.value
+                            glidePressedKey = null
                             if (current >= maxScroll - iconSizePx * 0.45f && velocity > 800f) {
                                 onScrollToTop()
                                 return@detectDragGestures
@@ -246,6 +290,9 @@ fun HoneycombScreen(
                                     }
                                 }
                             }
+                        },
+                        onDragCancel = {
+                            glidePressedKey = null
                         }
                     )
                 }
@@ -256,22 +303,28 @@ fun HoneycombScreen(
 
             apps.forEachIndexed { index, app ->
                 if (index >= positions.size) return@forEachIndexed
+                val visualSlotIndex = honeycombVisualSlotIndex(index, dragFromIndex, dragCurrentIndex)
                 val gridPos = positions[index]
-                val posY = screenCenterY + gridPos.y + currentScroll
+                val visualPos = positions.getOrNull(visualSlotIndex) ?: gridPos
+                val posY = screenCenterY + visualPos.y + currentScroll
                 if (posY < visibleTop || posY > visibleBottom) return@forEachIndexed
 
                 val appKey = app.componentKey
                 val isDragged = dragFromIndex == index
+                val isGlidePressed = glidePressedKey == appKey
+                val sourcePress = pressedAppKey == appKey
                 val pressedIndex = pressedAppKey?.let { key ->
                     apps.indexOfFirst { it.componentKey == key }.takeIf { it >= 0 }
                 }
+                val settledAnchor = settledPressIndex?.let { positions.getOrNull(it) }
                 val pressedAnchor = when {
-                    dragFromIndex != null && dragFromIndex in positions.indices -> positions[dragFromIndex!!] + dragOffset
+                    dragFromIndex != null -> null
+                    settledAnchor != null -> settledAnchor
                     pressedIndex != null && pressedIndex in positions.indices -> positions[pressedIndex]
                     else -> null
                 }
                 val motion = neighborPressMotion(
-                    current = gridPos,
+                    current = visualPos,
                     pressedAnchor = pressedAnchor,
                     iconSizePx = iconSizePx,
                     cellSize = cellSize
@@ -302,26 +355,44 @@ fun HoneycombScreen(
                         ),
                         label = "neighbor_shift_y"
                     )
+                    val animatedSlotX by animateFloatAsState(
+                        targetValue = visualPos.x,
+                        animationSpec = spring(dampingRatio = 0.80f, stiffness = 360f),
+                        label = "honeycomb_slot_x"
+                    )
+                    val animatedSlotY by animateFloatAsState(
+                        targetValue = visualPos.y,
+                        animationSpec = spring(dampingRatio = 0.80f, stiffness = 360f),
+                        label = "honeycomb_slot_y"
+                    )
                     AppBubble(
                         icon = app.cachedIcon,
                         size = iconSizeDp,
                         onClick = {
                             val sy = scrollOffset.value
-                            val sx = screenCenterX + gridPos.x
-                            val syPos = screenCenterY + gridPos.y + sy
+                            val clickPos = if (isDragged) gridPos else visualPos
+                            val sx = screenCenterX + clickPos.x
+                            val syPos = screenCenterY + clickPos.y + sy
                             onAppClick(app, Offset(sx / screenWidthPx, syPos / screenHeightPx))
                         },
                         onLongClick = null,
-                        forcePressed = isDragged || (pressedAppKey == appKey),
+                        forcePressed = isDragged || isGlidePressed || sourcePress,
                         pressScaleTarget = if (isDragged) 1.12f else 0.9f,
                         pressAnimationDelayMillis = 0,
                         pressAnimationDurationMillis = HONEYCOMB_PRESS_DURATION_MS,
-                        onPressedChange = {},
+                        onPressedChange = { pressed ->
+                            if (dragFromIndex == null && longPressedApp == null && !isGlidePressed) {
+                                pressedAppKey = if (pressed) appKey else pressedAppKey.takeUnless { it == appKey }
+                            }
+                        },
                         modifier = Modifier
+                            .zIndex(if (isDragged) 12f else 0f)
                             .graphicsLayer {
                                 val sy = scrollOffset.value
-                                val posX = screenCenterX + gridPos.x
-                                val pY = screenCenterY + gridPos.y + sy
+                                val baseX = if (isDragged) gridPos.x else animatedSlotX
+                                val baseY = if (isDragged) gridPos.y else animatedSlotY
+                                val posX = screenCenterX + baseX
+                                val pY = screenCenterY + baseY + sy
                                 translationX = posX - iconSizePx / 2f
                                 translationY = pY - iconSizePx / 2f
                                 if (isDragged) {
@@ -447,6 +518,20 @@ private fun dragPointerCenter(
         x = screenCenterX + base.x + dragOffset.x,
         y = screenCenterY + base.y + dragOffset.y
     )
+}
+
+private fun honeycombVisualSlotIndex(
+    index: Int,
+    dragFromIndex: Int?,
+    dragCurrentIndex: Int?
+): Int {
+    if (dragFromIndex == null || dragCurrentIndex == null || dragFromIndex == dragCurrentIndex) return index
+    if (index == dragFromIndex) return dragFromIndex
+    return when {
+        dragCurrentIndex > dragFromIndex && index in (dragFromIndex + 1)..dragCurrentIndex -> index - 1
+        dragCurrentIndex < dragFromIndex && index in dragCurrentIndex until dragFromIndex -> index + 1
+        else -> index
+    }
 }
 
 private data class HoneycombNeighborMotion(
