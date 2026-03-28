@@ -543,14 +543,23 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awa
     timeoutMillis: Long
 ): androidx.compose.ui.input.pointer.PointerInputChange? {
     val cancelled = withTimeoutOrNull<Boolean>(timeoutMillis) {
+        var cancelledByGesture = false
         while (true) {
             val event = awaitPointerEvent()
-            val change = event.changes.firstOrNull { it.id == pointerId } ?: return@withTimeoutOrNull true
-            if (!change.pressed) return@withTimeoutOrNull true
+            val change = event.changes.firstOrNull { it.id == pointerId } ?: run {
+                cancelledByGesture = true
+                break
+            }
+            if (!change.pressed) {
+                cancelledByGesture = true
+                break
+            }
             if ((change.position - downPosition).getDistance() > viewConfiguration.touchSlop) {
-                return@withTimeoutOrNull true
+                cancelledByGesture = true
+                break
             }
         }
+        cancelledByGesture
     } ?: false
     if (cancelled) return null
     val current = currentEvent.changes.firstOrNull { it.id == pointerId }
