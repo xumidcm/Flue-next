@@ -1,5 +1,6 @@
 package com.flue.launcher.ui.drawer
 
+import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.exponentialDecay
@@ -47,10 +48,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.sqrt
 
-private const val HONEYCOMB_MENU_TRIGGER_MS = 560L
+private const val HONEYCOMB_MENU_TRIGGER_MS = 410L
 private const val HONEYCOMB_MENU_DRAG_START_DP = 20f
 private const val HONEYCOMB_PRESS_DURATION_MS = 200
-private const val HONEYCOMB_AUTO_SCROLL_EDGE_DP = 84f
+private const val HONEYCOMB_AUTO_SCROLL_EDGE_DP = 96f
 private const val HONEYCOMB_AUTO_SCROLL_MAX_PX = 26f
 
 @Composable
@@ -101,6 +102,8 @@ fun HoneycombScreen(
         )
         val iconSizeDp = with(density) { iconSizePx.toDp() }
         val cellSize = iconSizePx * 1.02f
+        val topFadePx = with(density) { topFadeRangeDp.dp.toPx() }
+        val bottomFadePx = with(density) { bottomFadeRangeDp.dp.toPx() }
 
         val positions = remember(apps.size, narrowCols, cellSize) {
             generateHoneycombRows(apps.size, narrowCols, cellSize)
@@ -364,6 +367,14 @@ fun HoneycombScreen(
                     screenCenterY + visualPos.y + currentScroll
                 }
                 if (!isDragged && (visibilityY < visibleTop || visibilityY > visibleBottom)) return@forEachIndexed
+                val itemBlur = computeHoneycombEdgeBlur(
+                    centerY = visibilityY,
+                    screenHeight = screenHeightPx,
+                    topBlurZonePx = topFadePx,
+                    bottomBlurZonePx = bottomFadePx,
+                    topBlurDp = topBlurRadiusDp.toFloat(),
+                    bottomBlurDp = bottomBlurRadiusDp.toFloat()
+                )
                 val isGlidePressed = glidePressedKey == appKey
                 val menuPressedKey = longPressedApp?.componentKey
                 val menuPressedIndex = menuPressedKey?.let { key ->
@@ -417,7 +428,16 @@ fun HoneycombScreen(
                         label = "honeycomb_slot_y"
                     )
                     AppBubble(
-                        icon = app.cachedIcon,
+                        icon = if (
+                            Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
+                            blurEnabled &&
+                            effectiveEdgeBlur &&
+                            itemBlur > 0.5f
+                        ) {
+                            app.cachedBlurredIcon
+                        } else {
+                            app.cachedIcon
+                        },
                         size = iconSizeDp,
                         onClick = {
                             val sy = scrollOffset.value
@@ -433,6 +453,7 @@ fun HoneycombScreen(
                         pressAnimationDurationMillis = HONEYCOMB_PRESS_DURATION_MS,
                         onPressedChange = {},
                         modifier = Modifier
+                            .platformBlur(itemBlur, blurEnabled && effectiveEdgeBlur && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                             .zIndex(if (isDragged) 12f else 0f)
                             .graphicsLayer {
                                 val sy = scrollOffset.value
@@ -444,7 +465,11 @@ fun HoneycombScreen(
                                 translationY = pY - iconSizePx / 2f
                                 if (isDragged) {
                                     translationX += dragOffset.x
-                                    translationY += dragOffset.y
+                                    val draggedY = translationY + dragOffset.y
+                                    translationY = draggedY.coerceIn(
+                                        -iconSizePx * 0.15f,
+                                        screenHeightPx - iconSizePx * 0.85f
+                                    )
                                 } else {
                                     translationX += animatedNeighborShiftX
                                     translationY += animatedNeighborShiftY
@@ -586,6 +611,28 @@ private data class HoneycombNeighborMotion(
     val shiftX: Float = 0f,
     val shiftY: Float = 0f
 )
+
+private fun computeHoneycombEdgeBlur(
+    centerY: Float,
+    screenHeight: Float,
+    topBlurZonePx: Float,
+    bottomBlurZonePx: Float,
+    topBlurDp: Float,
+    bottomBlurDp: Float
+): Float {
+    val topStrength = if (topBlurZonePx <= 0f) {
+        0f
+    } else {
+        (1f - (centerY / topBlurZonePx)).coerceIn(0f, 1f)
+    }
+    val bottomDistance = screenHeight - centerY
+    val bottomStrength = if (bottomBlurZonePx <= 0f) {
+        0f
+    } else {
+        (1f - (bottomDistance / bottomBlurZonePx)).coerceIn(0f, 1f)
+    }
+    return maxOf(topStrength * topBlurDp, bottomStrength * bottomBlurDp)
+}
 
 private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awaitLongPressByTimeoutOrCancel(
     pointerId: androidx.compose.ui.input.pointer.PointerId,

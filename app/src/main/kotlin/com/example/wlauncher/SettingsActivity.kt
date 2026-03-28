@@ -51,8 +51,8 @@ class SettingsActivity : ComponentActivity() {
                 val splash = prefs?.get(KEY_SPLASH_ICON) ?: true
                 val delay = prefs?.get(KEY_SPLASH_DELAY) ?: 500
                 val honeycombCols = prefs?.get(KEY_HONEYCOMB_COLS) ?: 4
-                val topBlur = prefs?.get(KEY_HONEYCOMB_TOP_BLUR) ?: 12
-                val bottomBlur = prefs?.get(KEY_HONEYCOMB_BOTTOM_BLUR) ?: 12
+                val topBlur = prefs?.get(KEY_HONEYCOMB_TOP_BLUR) ?: 4
+                val bottomBlur = prefs?.get(KEY_HONEYCOMB_BOTTOM_BLUR) ?: 4
                 val topFade = prefs?.get(KEY_HONEYCOMB_TOP_FADE) ?: 56
                 val bottomFade = prefs?.get(KEY_HONEYCOMB_BOTTOM_FADE) ?: 56
 
@@ -101,8 +101,8 @@ class SettingsActivity : ComponentActivity() {
                                 p[KEY_SPLASH_ICON] = true
                                 p[KEY_SPLASH_DELAY] = 500
                                 p[KEY_HONEYCOMB_COLS] = 4
-                                p[KEY_HONEYCOMB_TOP_BLUR] = 12
-                                p[KEY_HONEYCOMB_BOTTOM_BLUR] = 12
+                                p[KEY_HONEYCOMB_TOP_BLUR] = 4
+                                p[KEY_HONEYCOMB_BOTTOM_BLUR] = 4
                                 p[KEY_HONEYCOMB_TOP_FADE] = 56
                                 p[KEY_HONEYCOMB_BOTTOM_FADE] = 56
                             }

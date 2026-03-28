@@ -77,12 +77,14 @@ class AppRepository(private val context: Context) {
                 val iconBitmap = createCircularBitmap(
                     iconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
                 )
+                val blurredBitmap = createSoftenedBitmap(iconBitmap)
                 AppInfo(
                     label = ri.loadLabel(pm).toString(),
                     packageName = packageName,
                     activityName = ri.activityInfo.name,
                     icon = iconDrawable,
-                    cachedIcon = iconBitmap.asImageBitmap()
+                    cachedIcon = iconBitmap.asImageBitmap(),
+                    cachedBlurredIcon = blurredBitmap.asImageBitmap()
                 )
             }
             .let { list ->
@@ -131,6 +133,16 @@ class AppRepository(private val context: Context) {
         val radius = minOf(source.width, source.height) / 2f
         canvas.drawCircle(source.width / 2f, source.height / 2f, radius, paint)
         return output
+    }
+
+    private fun createSoftenedBitmap(source: Bitmap): Bitmap {
+        val downscaled = Bitmap.createScaledBitmap(
+            source,
+            (source.width * 0.25f).toInt().coerceAtLeast(1),
+            (source.height * 0.25f).toInt().coerceAtLeast(1),
+            true
+        )
+        return Bitmap.createScaledBitmap(downscaled, source.width, source.height, true)
     }
 
     private fun orderRank(app: AppInfo): Int {

@@ -84,10 +84,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _honeycombCols = MutableStateFlow(4)
     val honeycombCols: StateFlow<Int> = _honeycombCols.asStateFlow()
 
-    private val _honeycombTopBlur = MutableStateFlow(12)
+    private val _honeycombTopBlur = MutableStateFlow(4)
     val honeycombTopBlur: StateFlow<Int> = _honeycombTopBlur.asStateFlow()
 
-    private val _honeycombBottomBlur = MutableStateFlow(12)
+    private val _honeycombBottomBlur = MutableStateFlow(4)
     val honeycombBottomBlur: StateFlow<Int> = _honeycombBottomBlur.asStateFlow()
 
     private val _honeycombTopFade = MutableStateFlow(56)
@@ -319,8 +319,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _splashDelay.value = 500
         _listIconSize.value = 48
         _honeycombCols.value = 4
-        _honeycombTopBlur.value = 12
-        _honeycombBottomBlur.value = 12
+        _honeycombTopBlur.value = 4
+        _honeycombBottomBlur.value = 4
         _honeycombTopFade.value = 56
         _honeycombBottomFade.value = 56
         _showNotification.value = true
@@ -337,8 +337,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_SPLASH_DELAY] = 500
                 it[KEY_LIST_ICON_SIZE] = 48
                 it[KEY_HONEYCOMB_COLS] = 4
-                it[KEY_HONEYCOMB_TOP_BLUR] = 12
-                it[KEY_HONEYCOMB_BOTTOM_BLUR] = 12
+                it[KEY_HONEYCOMB_TOP_BLUR] = 4
+                it[KEY_HONEYCOMB_BOTTOM_BLUR] = 4
                 it[KEY_HONEYCOMB_TOP_FADE] = 56
                 it[KEY_HONEYCOMB_BOTTOM_FADE] = 56
                 it[KEY_SHOW_NOTIFICATION] = true
