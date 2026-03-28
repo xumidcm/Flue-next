@@ -26,7 +26,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.awaitFirstDown
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalContext
@@ -106,7 +105,7 @@ fun HoneycombScreen(
                     val dragStartDistancePx = with(density) { 8.dp.toPx() }
                     val menuCancelDistancePx = with(density) { 16.dp.toPx() }
                     awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val down = awaitPrimaryDown()
                         val startIndex = findNearestHoneycombIndex(
                             pointer = down.position,
                             positions = positions,
@@ -455,3 +454,12 @@ private data class HoneycombNeighborMotion(
     val shiftX: Float = 0f,
     val shiftY: Float = 0f
 )
+
+private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awaitPrimaryDown():
+    androidx.compose.ui.input.pointer.PointerInputChange {
+    while (true) {
+        val event = awaitPointerEvent()
+        val change = event.changes.firstOrNull { it.pressed }
+        if (change != null) return change
+    }
+}
