@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.wlauncher"
+    namespace = "com.flue.launcher"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.wlauncher"
+        applicationId = "com.flue.launcher"
         minSdk = 27
         targetSdk = 35
         versionCode = 1

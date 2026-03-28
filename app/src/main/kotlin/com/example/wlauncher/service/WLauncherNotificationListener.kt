@@ -1,4 +1,4 @@
-package com.example.wlauncher.service
+package com.flue.launcher.service
 
 import android.app.Notification
 import android.content.pm.PackageManager

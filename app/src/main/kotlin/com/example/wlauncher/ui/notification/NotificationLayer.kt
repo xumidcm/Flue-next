@@ -1,4 +1,4 @@
-package com.example.wlauncher.ui.notification
+package com.flue.launcher.ui.notification
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -23,7 +23,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.wlauncher.ui.theme.WatchColors
+import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.launch
 
 data class NotificationItem(

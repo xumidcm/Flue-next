@@ -1,4 +1,4 @@
-package com.example.wlauncher.ui.drawer
+package com.flue.launcher.ui.drawer
 
 import android.os.Build
 import androidx.compose.animation.core.Animatable
@@ -32,10 +32,10 @@ import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import com.example.wlauncher.data.model.AppInfo
-import com.example.wlauncher.ui.anim.platformBlur
-import com.example.wlauncher.util.fisheyeScale
-import com.example.wlauncher.util.generateHoneycombRows
+import com.flue.launcher.data.model.AppInfo
+import com.flue.launcher.ui.anim.platformBlur
+import com.flue.launcher.util.fisheyeScale
+import com.flue.launcher.util.generateHoneycombRows
 import kotlinx.coroutines.launch
 import kotlin.math.sqrt
 

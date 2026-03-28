@@ -1,4 +1,4 @@
-package com.example.wlauncher
+package com.flue.launcher
 
 import android.content.ClipData
 import android.content.ClipboardManager

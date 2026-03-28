@@ -1,4 +1,4 @@
-package com.example.wlauncher.ui.drawer
+package com.flue.launcher.ui.drawer
 
 import android.os.Build
 import androidx.compose.animation.core.AnimationVector1D
@@ -59,8 +59,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.wlauncher.data.model.AppInfo
-import com.example.wlauncher.ui.anim.platformBlur
+import com.flue.launcher.data.model.AppInfo
+import com.flue.launcher.ui.anim.platformBlur
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 

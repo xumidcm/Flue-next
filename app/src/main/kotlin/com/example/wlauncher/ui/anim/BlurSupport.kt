@@ -1,4 +1,4 @@
-package com.example.wlauncher.ui.anim
+package com.flue.launcher.ui.anim
 
 import android.graphics.RenderEffect
 import android.graphics.Shader

@@ -1,4 +1,4 @@
-package com.example.wlauncher.viewmodel
+package com.flue.launcher.viewmodel
 
 import android.app.Application
 import android.content.Context
@@ -12,10 +12,10 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.wlauncher.data.model.AppInfo
-import com.example.wlauncher.data.repository.AppRepository
-import com.example.wlauncher.ui.navigation.LayoutMode
-import com.example.wlauncher.ui.navigation.ScreenState
+import com.flue.launcher.data.model.AppInfo
+import com.flue.launcher.data.repository.AppRepository
+import com.flue.launcher.ui.navigation.LayoutMode
+import com.flue.launcher.ui.navigation.ScreenState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow

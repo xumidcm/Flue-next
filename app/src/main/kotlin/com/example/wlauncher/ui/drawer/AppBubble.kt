@@ -1,4 +1,4 @@
-package com.example.wlauncher.ui.drawer
+package com.flue.launcher.ui.drawer
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween

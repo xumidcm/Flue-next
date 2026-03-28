@@ -1,4 +1,4 @@
-package com.example.wlauncher.util
+package com.flue.launcher.util
 
 import androidx.compose.ui.geometry.Offset
 import kotlin.math.abs

@@ -1,4 +1,4 @@
-package com.example.wlauncher.ui.anim
+package com.flue.launcher.ui.anim
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.runtime.Composable

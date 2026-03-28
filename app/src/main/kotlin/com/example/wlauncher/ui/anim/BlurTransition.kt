@@ -1,9 +1,9 @@
-package com.example.wlauncher.ui.anim
+package com.flue.launcher.ui.anim
 
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import com.example.wlauncher.ui.navigation.ScreenState
+import com.flue.launcher.ui.navigation.ScreenState
 
 /**
  * 每个层在某个状态下的 scale / blur / opacity 目标值。

@@ -1,4 +1,4 @@
-package com.example.wlauncher.ui.theme
+package com.flue.launcher.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

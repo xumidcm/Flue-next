@@ -1,4 +1,4 @@
-package com.example.wlauncher.data.model
+package com.flue.launcher.data.model
 
 import android.graphics.drawable.Drawable
 import androidx.compose.ui.graphics.ImageBitmap

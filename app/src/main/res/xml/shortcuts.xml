@@ -3,12 +3,12 @@
     <shortcut
         android:shortcutId="settings"
         android:enabled="true"
-        android:icon="@android:drawable/ic_menu_preferences"
+        android:icon="@mipmap/ic_settings_launcher"
         android:shortcutShortLabel="@string/shortcut_settings"
         android:shortcutLongLabel="@string/shortcut_settings">
         <intent
             android:action="android.intent.action.MAIN"
-            android:targetPackage="com.example.wlauncher"
-            android:targetClass="com.example.wlauncher.SettingsActivity" />
+            android:targetPackage="com.flue.launcher"
+            android:targetClass="com.flue.launcher.SettingsActivity" />
     </shortcut>
 </shortcuts>

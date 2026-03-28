@@ -1,4 +1,4 @@
-package com.example.wlauncher.ui.smartstack
+package com.flue.launcher.ui.smartstack
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -15,7 +15,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.wlauncher.ui.theme.WatchColors
+import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.*

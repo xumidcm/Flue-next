@@ -1,4 +1,4 @@
-package com.example.wlauncher
+package com.flue.launcher
 
 import android.content.Intent
 import android.os.Bundle
@@ -35,22 +35,22 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.wlauncher.ui.anim.appListLayerValues
-import com.example.wlauncher.ui.anim.faceLayerValues
-import com.example.wlauncher.ui.anim.notificationLayerValues
-import com.example.wlauncher.ui.anim.scaleBlurAlpha
-import com.example.wlauncher.ui.anim.stackLayerValues
-import com.example.wlauncher.ui.drawer.HoneycombScreen
-import com.example.wlauncher.ui.drawer.ListDrawerScreen
-import com.example.wlauncher.ui.home.WatchFaceLayer
-import com.example.wlauncher.ui.navigation.GestureHost
-import com.example.wlauncher.ui.navigation.LayoutMode
-import com.example.wlauncher.ui.navigation.ScreenState
-import com.example.wlauncher.ui.notification.NotificationLayer
-import com.example.wlauncher.ui.settings.LauncherSettingsSheet
-import com.example.wlauncher.ui.smartstack.SmartStackLayer
-import com.example.wlauncher.ui.theme.WatchLauncherTheme
-import com.example.wlauncher.viewmodel.LauncherViewModel
+import com.flue.launcher.ui.anim.appListLayerValues
+import com.flue.launcher.ui.anim.faceLayerValues
+import com.flue.launcher.ui.anim.notificationLayerValues
+import com.flue.launcher.ui.anim.scaleBlurAlpha
+import com.flue.launcher.ui.anim.stackLayerValues
+import com.flue.launcher.ui.drawer.HoneycombScreen
+import com.flue.launcher.ui.drawer.ListDrawerScreen
+import com.flue.launcher.ui.home.WatchFaceLayer
+import com.flue.launcher.ui.navigation.GestureHost
+import com.flue.launcher.ui.navigation.LayoutMode
+import com.flue.launcher.ui.navigation.ScreenState
+import com.flue.launcher.ui.notification.NotificationLayer
+import com.flue.launcher.ui.settings.LauncherSettingsSheet
+import com.flue.launcher.ui.smartstack.SmartStackLayer
+import com.flue.launcher.ui.theme.WatchLauncherTheme
+import com.flue.launcher.viewmodel.LauncherViewModel
 import kotlinx.coroutines.delay
 
 private const val BASE_LAUNCH_MASK_DELAY_MS = 180L

@@ -1,4 +1,4 @@
-package com.example.wlauncher.ui.settings
+package com.flue.launcher.ui.settings
 
 import android.content.Intent
 import android.widget.Toast
@@ -50,8 +50,8 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
-import com.example.wlauncher.ui.navigation.LayoutMode
-import com.example.wlauncher.ui.theme.WatchColors
+import com.flue.launcher.ui.navigation.LayoutMode
+import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.launch
 
 @Composable

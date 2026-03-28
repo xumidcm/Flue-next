@@ -1,4 +1,4 @@
-package com.example.wlauncher.ui.drawer
+package com.flue.launcher.ui.drawer
 
 import android.content.Context
 import android.content.Intent
@@ -32,7 +32,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.wlauncher.data.model.AppInfo
+import com.flue.launcher.data.model.AppInfo
 import kotlinx.coroutines.delay
 
 /**

@@ -1,4 +1,4 @@
-package com.example.wlauncher
+package com.flue.launcher
 
 import android.app.AlarmManager
 import android.app.PendingIntent

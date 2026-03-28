@@ -1,4 +1,4 @@
-package com.example.wlauncher
+package com.flue.launcher
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -11,22 +11,22 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.datastore.preferences.core.edit
-import com.example.wlauncher.ui.navigation.LayoutMode
-import com.example.wlauncher.ui.settings.LauncherSettingsSheet
-import com.example.wlauncher.ui.theme.WatchLauncherTheme
-import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_BLUR
-import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_EDGE_BLUR
-import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_HONEYCOMB_BOTTOM_BLUR
-import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_HONEYCOMB_BOTTOM_FADE
-import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_HONEYCOMB_COLS
-import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_HONEYCOMB_TOP_BLUR
-import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_HONEYCOMB_TOP_FADE
-import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_ANIMATION_OVERRIDE
-import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_LAYOUT
-import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_LOW_RES
-import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_SPLASH_DELAY
-import com.example.wlauncher.viewmodel.LauncherViewModel.Companion.KEY_SPLASH_ICON
-import com.example.wlauncher.viewmodel.dataStore
+import com.flue.launcher.ui.navigation.LayoutMode
+import com.flue.launcher.ui.settings.LauncherSettingsSheet
+import com.flue.launcher.ui.theme.WatchLauncherTheme
+import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_BLUR
+import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_EDGE_BLUR
+import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_HONEYCOMB_BOTTOM_BLUR
+import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_HONEYCOMB_BOTTOM_FADE
+import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_HONEYCOMB_COLS
+import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_HONEYCOMB_TOP_BLUR
+import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_HONEYCOMB_TOP_FADE
+import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_ANIMATION_OVERRIDE
+import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_LAYOUT
+import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_LOW_RES
+import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_SPLASH_DELAY
+import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_SPLASH_ICON
+import com.flue.launcher.viewmodel.dataStore
 import kotlinx.coroutines.launch
 
 class SettingsActivity : ComponentActivity() {

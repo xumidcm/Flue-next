@@ -1,4 +1,4 @@
-package com.example.wlauncher.data.repository
+package com.flue.launcher.data.repository
 
 import android.content.BroadcastReceiver
 import android.content.ComponentName
@@ -13,7 +13,7 @@ import android.graphics.Paint
 import android.graphics.Shader
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
-import com.example.wlauncher.data.model.AppInfo
+import com.flue.launcher.data.model.AppInfo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -67,7 +67,7 @@ class AppRepository(private val context: Context) {
         _apps.value = resolveInfos
             .filter { ri ->
                 !(ri.activityInfo.packageName == myPackage &&
-                    ri.activityInfo.name == "com.example.wlauncher.LauncherActivity")
+                    ri.activityInfo.name == "com.flue.launcher.LauncherActivity")
             }
             .distinctBy { "${it.activityInfo.packageName}/${it.activityInfo.name}" }
             .map { ri ->

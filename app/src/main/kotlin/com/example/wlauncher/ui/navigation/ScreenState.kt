@@ -1,4 +1,4 @@
-package com.example.wlauncher.ui.navigation
+package com.flue.launcher.ui.navigation
 
 /**
  * 启动器屏幕状态机，对应 HTML 原型中的 state-face / state-apps / state-app 等状态。

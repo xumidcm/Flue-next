@@ -1,4 +1,4 @@
-package com.example.wlauncher.ui.navigation
+package com.flue.launcher.ui.navigation
 
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
