@@ -75,14 +75,12 @@ class AppRepository(private val context: Context) {
                 val iconBitmap = createCircularBitmap(
                     iconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
                 )
-                val blurredBitmap = createSoftenedBitmap(iconBitmap)
                 AppInfo(
                     label = ri.loadLabel(pm).toString(),
                     packageName = ri.activityInfo.packageName,
                     activityName = ri.activityInfo.name,
                     icon = iconDrawable,
-                    cachedIcon = iconBitmap.asImageBitmap(),
-                    cachedBlurredIcon = blurredBitmap.asImageBitmap()
+                    cachedIcon = iconBitmap.asImageBitmap()
                 )
             }
             .let { list ->
@@ -116,18 +114,6 @@ class AppRepository(private val context: Context) {
             context.unregisterReceiver(packageReceiver)
         } catch (_: Exception) {
         }
-    }
-
-    private fun createSoftenedBitmap(source: Bitmap): Bitmap {
-        val downscaled = Bitmap.createScaledBitmap(
-            source,
-            (source.width * 0.25f).toInt().coerceAtLeast(1),
-            (source.height * 0.25f).toInt().coerceAtLeast(1),
-            true
-        )
-        return createCircularBitmap(
-            Bitmap.createScaledBitmap(downscaled, source.width, source.height, true)
-        )
     }
 
     private fun createCircularBitmap(source: Bitmap): Bitmap {

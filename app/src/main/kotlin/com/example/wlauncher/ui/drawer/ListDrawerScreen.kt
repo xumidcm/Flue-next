@@ -1,6 +1,5 @@
 package com.flue.launcher.ui.drawer
 
-import android.os.Build
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
@@ -10,7 +9,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -48,6 +47,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.awaitFirstDown
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -63,6 +63,9 @@ import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.platformBlur
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+
+private const val LIST_DRAG_ARM_MS = 300L
+private const val LIST_MENU_TRIGGER_MS = 500L
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -143,44 +146,85 @@ fun ListDrawerScreen(
                 .platformBlur(16f, longPressedApp != null && blurEnabled && !suppressHeavyEffects)
                 .pointerInput(apps) {
                     val maxDistancePx = with(density) { 72.dp.toPx() }
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = { startOffset ->
-                            val startIndex = findNearestListIndex(startOffset.y, itemCenters, maxDistancePx)
-                            if (startIndex != null) {
+                    val dragStartDistancePx = with(density) { 8.dp.toPx() }
+                    val menuCancelDistancePx = with(density) { 14.dp.toPx() }
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val startIndex = findNearestListIndex(
+                            pointerY = down.position.y,
+                            itemCenters = itemCenters,
+                            maxDistance = maxDistancePx
+                        ) ?: return@awaitEachGesture
+                        val app = apps.getOrNull(startIndex) ?: return@awaitEachGesture
+                        val downY = down.position.y
+                        val downTime = down.uptimeMillis
+                        var armTriggered = false
+                        var menuShown = false
+                        var hasDragged = false
+                        var dragAnchorY = downY
+
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break
+
+                            val elapsed = change.uptimeMillis - downTime
+                            val pointerY = change.position.y
+                            val deltaFromDown = abs(pointerY - downY)
+
+                            if (!armTriggered && elapsed >= LIST_DRAG_ARM_MS) {
+                                armTriggered = true
                                 dragFromIndex = startIndex
                                 dragCurrentIndex = startIndex
                                 dragOffsetY = 0f
                                 vibrateHaptic(context)
                             }
-                        },
-                        onDrag = { change, dragAmount ->
-                            val fromIndex = dragFromIndex ?: return@detectDragGesturesAfterLongPress
-                            change.consume()
-                            dragOffsetY += dragAmount.y
-                            val anchorCenter = itemCenters[fromIndex] ?: change.position.y
-                            val nextCenter = anchorCenter + dragOffsetY
-                            dragCurrentIndex = findNearestListIndex(
-                                pointerY = nextCenter,
-                                itemCenters = itemCenters,
-                                maxDistance = Float.MAX_VALUE
-                            ) ?: dragCurrentIndex
-                        },
-                        onDragEnd = {
-                            val from = dragFromIndex
-                            val to = dragCurrentIndex
-                            if (from != null && to != null && from != to) {
-                                onReorder(from, to)
+
+                            if (!menuShown && elapsed >= LIST_MENU_TRIGGER_MS && deltaFromDown <= menuCancelDistancePx) {
+                                menuShown = true
+                                dragFromIndex = null
+                                dragCurrentIndex = null
+                                dragOffsetY = 0f
+                                onLongClick(app)
+                                longPressedApp = app
                             }
-                            dragFromIndex = null
-                            dragCurrentIndex = null
-                            dragOffsetY = 0f
-                        },
-                        onDragCancel = {
-                            dragFromIndex = null
-                            dragCurrentIndex = null
-                            dragOffsetY = 0f
+
+                            if (menuShown && deltaFromDown > menuCancelDistancePx) {
+                                menuShown = false
+                                longPressedApp = null
+                                armTriggered = true
+                                dragAnchorY = pointerY
+                                dragFromIndex = startIndex
+                                dragCurrentIndex = startIndex
+                                dragOffsetY = 0f
+                            }
+
+                            val activeFromIndex = dragFromIndex
+                            if (activeFromIndex != null && !menuShown) {
+                                dragOffsetY = pointerY - dragAnchorY
+                                if (abs(dragOffsetY) > dragStartDistancePx) {
+                                    hasDragged = true
+                                }
+                                val anchorCenter = itemCenters[startIndex] ?: pointerY
+                                val nextCenter = anchorCenter + dragOffsetY
+                                dragCurrentIndex = findNearestListIndex(
+                                    pointerY = nextCenter,
+                                    itemCenters = itemCenters,
+                                    maxDistance = Float.MAX_VALUE
+                                ) ?: dragCurrentIndex
+                                change.consume()
+                            }
                         }
-                    )
+
+                        val from = dragFromIndex
+                        val to = dragCurrentIndex
+                        if (from != null && to != null && from != to && hasDragged) {
+                            onReorder(from, to)
+                        }
+                        dragFromIndex = null
+                        dragCurrentIndex = null
+                        dragOffsetY = 0f
+                    }
                 }
         ) {
             val screenHeightPx = with(density) { maxHeight.toPx() }
@@ -206,10 +250,6 @@ fun ListDrawerScreen(
                 itemsIndexed(apps, key = { _, app -> app.componentKey }) { index, app ->
                     val itemInfo = listState.layoutInfo.visibleItemsInfo.find { it.index == index }
                     val itemScale = computeItemScale(itemInfo, screenCenterY, screenHeightPx)
-                    val useSoftBlur = blurEnabled &&
-                        effectiveEdgeBlur &&
-                        Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
-                        isNearBottom(itemInfo, screenHeightPx)
                     val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
                     val isPressed by interactionSource.collectIsPressedAsState()
                     val isDragged = dragFromIndex == index
@@ -225,12 +265,16 @@ fun ListDrawerScreen(
                         label = "list_drag_displacement"
                     )
                     val pressedScale by animateFloatAsState(
-                        targetValue = if (isPressed || isDragged) 0.97f else 1f,
+                        targetValue = when {
+                            isDragged -> 1.09f
+                            isPressed -> 0.97f
+                            else -> 1f
+                        },
                         animationSpec = tween(durationMillis = 170),
                         label = "list_press_scale"
                     )
                     val pressedOverlay by animateFloatAsState(
-                        targetValue = if (isPressed || isDragged) 0.10f else 0f,
+                        targetValue = if (isPressed || isDragged) 0.14f else 0f,
                         animationSpec = tween(durationMillis = 170),
                         label = "list_press_overlay"
                     )
@@ -257,20 +301,13 @@ fun ListDrawerScreen(
                                 onClick = {
                                     val centerY = itemCenters[index] ?: screenCenterY
                                     onAppClick(app, Offset(0.15f, centerY / screenHeightPx))
-                                },
-                                onLongClick = {
-                                    if (dragFromIndex == null) {
-                                        vibrateHaptic(context)
-                                        onLongClick(app)
-                                        longPressedApp = app
-                                    }
                                 }
                             )
                             .padding(horizontal = 16.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Image(
-                            bitmap = if (useSoftBlur) app.cachedBlurredIcon else app.cachedIcon,
+                            bitmap = app.cachedIcon,
                             contentDescription = app.label,
                             modifier = Modifier
                                 .size(iconSize)
@@ -289,6 +326,40 @@ fun ListDrawerScreen(
             }
         }
 
+        if (blurEnabled && effectiveEdgeBlur) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(72.dp)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.Black.copy(alpha = 0.38f),
+                                Color.Black.copy(alpha = 0.14f),
+                                Color.Transparent
+                            )
+                        )
+                    )
+                    .platformBlur(14f, true)
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(78.dp)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.14f),
+                                Color.Black.copy(alpha = 0.42f)
+                            )
+                        )
+                    )
+                    .platformBlur(14f, true)
+            )
+        }
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -373,14 +444,4 @@ private fun computeItemScale(
     val maxDist = screenHeight / 2f
     val t = (dist / maxDist).coerceIn(0f, 1f)
     return 1f - 0.2f * t
-}
-
-private fun isNearBottom(
-    itemInfo: androidx.compose.foundation.lazy.LazyListItemInfo?,
-    screenHeight: Float
-): Boolean {
-    if (itemInfo == null) return false
-    val itemCenterY = itemInfo.offset + itemInfo.size / 2f
-    val edgeDist = (screenHeight - itemCenterY).coerceAtLeast(0f)
-    return edgeDist in 0f..(screenHeight * 0.18f)
 }
