@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -64,41 +63,52 @@ fun WatchFaceSettingCard(
                 .size(52.dp)
                 .clip(RoundedCornerShape(14.dp))
         )
-        Column(modifier = Modifier.weight(1f)) {
-            Text(descriptor.displayName, fontSize = 14.sp, color = Color.White)
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                descriptor.packageName ?: "Built-in",
-                fontSize = 11.sp,
-                color = WatchColors.TextTertiary
-            )
-            val meta = buildString {
-                if (descriptor.author != null) append(descriptor.author)
-                if (descriptor.versionCode > 0) {
-                    if (isNotEmpty()) append("  ·  ")
-                    append("v")
-                    append(descriptor.versionCode)
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Column(modifier = Modifier.padding(end = 56.dp)) {
+                Text(descriptor.displayName, fontSize = 14.sp, color = Color.White)
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    descriptor.packageName ?: "Built-in",
+                    fontSize = 11.sp,
+                    color = WatchColors.TextTertiary
+                )
+                val meta = buildString {
+                    if (descriptor.author != null) append(descriptor.author)
+                    if (descriptor.versionCode > 0) {
+                        if (isNotEmpty()) append("  ·  ")
+                        append("v")
+                        append(descriptor.versionCode)
+                    }
+                }
+                if (meta.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(meta, fontSize = 11.sp, color = WatchColors.TextTertiary)
                 }
             }
-            if (meta.isNotBlank()) {
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(meta, fontSize = 11.sp, color = WatchColors.TextTertiary)
-            }
-        }
-        if (onOpenSettings != null && descriptor.settingsEntryClassName != null) {
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color.White.copy(alpha = 0.08f))
-                    .clickable(onClick = onOpenSettings)
-                    .padding(8.dp),
-                contentAlignment = Alignment.Center
+            Row(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Filled.Settings, contentDescription = null, tint = WatchColors.ActiveCyan)
+                if (onOpenSettings != null && descriptor.settingsEntryClassName != null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color.White.copy(alpha = 0.08f))
+                            .clickable(onClick = onOpenSettings)
+                            .padding(8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Filled.Settings, contentDescription = null, tint = WatchColors.ActiveCyan)
+                    }
+                }
+                if (selected) {
+                    Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = WatchColors.ActiveCyan)
+                }
             }
-        }
-        if (selected) {
-            Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = WatchColors.ActiveCyan)
         }
     }
 }
