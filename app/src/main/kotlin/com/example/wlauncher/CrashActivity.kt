@@ -114,7 +114,7 @@ fun CrashScreen(
             .padding(horizontal = 24.dp, vertical = 32.dp)
     ) {
         Text(
-            text = if (isZh) "应用发生崩溃" else "App Crashed",
+            text = if (isZh) "哎呀，崩溃了" else "App Crashed",
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold,
             color = Color.White
@@ -122,7 +122,7 @@ fun CrashScreen(
         Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = if (isZh) {
-                "默认仅展示前五行错误，点击可展开完整日志；页面可整体滚动。"
+                "请复制详细错误并提供复现步骤给开发者。"
             } else {
                 "Shows first five error lines by default. Tap to expand full log."
             },
