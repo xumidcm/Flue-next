@@ -32,12 +32,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_BLUR = booleanPreferencesKey("blur_enabled")
         val KEY_EDGE_BLUR = booleanPreferencesKey("edge_blur_enabled")
         val KEY_LOW_RES = booleanPreferencesKey("low_res_icons")
-        val KEY_ICON_CACHE_SIZE = intPreferencesKey("icon_cache_size")
         val KEY_ANIMATION_OVERRIDE = booleanPreferencesKey("animation_override_enabled")
         val KEY_SPLASH_ICON = booleanPreferencesKey("splash_icon")
         val KEY_SPLASH_DELAY = intPreferencesKey("splash_delay")
         val KEY_APP_ORDER = stringPreferencesKey("app_order")
-        val KEY_LIST_ICON_SIZE = intPreferencesKey("list_icon_size")
         val KEY_HONEYCOMB_COLS = intPreferencesKey("honeycomb_cols")
         val KEY_HONEYCOMB_TOP_BLUR = intPreferencesKey("honeycomb_top_blur")
         val KEY_HONEYCOMB_BOTTOM_BLUR = intPreferencesKey("honeycomb_bottom_blur")
@@ -66,9 +64,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _lowResIcons = MutableStateFlow(false)
     val lowResIcons: StateFlow<Boolean> = _lowResIcons.asStateFlow()
 
-    private val _iconCacheSize = MutableStateFlow(128)
-    val iconCacheSize: StateFlow<Int> = _iconCacheSize.asStateFlow()
-
     private val _animationOverrideEnabled = MutableStateFlow(true)
     val animationOverrideEnabled: StateFlow<Boolean> = _animationOverrideEnabled.asStateFlow()
 
@@ -77,9 +72,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _appOrder = MutableStateFlow<List<String>>(emptyList())
     val appOrder: StateFlow<List<String>> = _appOrder.asStateFlow()
-
-    private val _listIconSize = MutableStateFlow(48)
-    val listIconSize: StateFlow<Int> = _listIconSize.asStateFlow()
 
     private val _honeycombCols = MutableStateFlow(4)
     val honeycombCols: StateFlow<Int> = _honeycombCols.asStateFlow()
@@ -128,10 +120,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _lowResIcons.value = it
                     refreshIconsNeeded = true
                 }
-                prefs[KEY_ICON_CACHE_SIZE]?.let {
-                    _iconCacheSize.value = it.coerceIn(64, 192)
-                    refreshIconsNeeded = true
-                }
                 prefs[KEY_ANIMATION_OVERRIDE]?.let { _animationOverrideEnabled.value = it }
                 prefs[KEY_SPLASH_ICON]?.let { _splashIcon.value = it }
                 prefs[KEY_SPLASH_DELAY]?.let { _splashDelay.value = it.coerceIn(300, 1500) }
@@ -140,7 +128,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appOrder.value = order
                     appRepository.setCustomOrder(order)
                 }
-                prefs[KEY_LIST_ICON_SIZE]?.let { _listIconSize.value = it.coerceIn(32, 80) }
                 prefs[KEY_HONEYCOMB_COLS]?.let { _honeycombCols.value = it.coerceIn(3, 6) }
                 prefs[KEY_HONEYCOMB_TOP_BLUR]?.let { _honeycombTopBlur.value = it.coerceIn(0, 48) }
                 prefs[KEY_HONEYCOMB_BOTTOM_BLUR]?.let { _honeycombBottomBlur.value = it.coerceIn(0, 48) }
@@ -237,12 +224,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { store.edit { it[KEY_LOW_RES] = enabled } }
     }
 
-    fun setIconCacheSize(size: Int) {
-        _iconCacheSize.value = size.coerceIn(64, 192)
-        refreshIcons()
-        viewModelScope.launch { store.edit { it[KEY_ICON_CACHE_SIZE] = _iconCacheSize.value } }
-    }
-
     fun setAnimationOverrideEnabled(enabled: Boolean) {
         _animationOverrideEnabled.value = enabled
         viewModelScope.launch { store.edit { it[KEY_ANIMATION_OVERRIDE] = enabled } }
@@ -262,11 +243,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appOrder.value = order
         appRepository.setCustomOrder(order)
         viewModelScope.launch { store.edit { it[KEY_APP_ORDER] = order.joinToString(",") } }
-    }
-
-    fun setListIconSize(size: Int) {
-        _listIconSize.value = size.coerceIn(32, 80)
-        viewModelScope.launch { store.edit { it[KEY_LIST_ICON_SIZE] = _listIconSize.value } }
     }
 
     fun setHoneycombCols(cols: Int) {
@@ -313,11 +289,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _blurEnabled.value = true
         _edgeBlurEnabled.value = false
         _lowResIcons.value = false
-        _iconCacheSize.value = 128
         _animationOverrideEnabled.value = true
         _splashIcon.value = true
         _splashDelay.value = 500
-        _listIconSize.value = 48
         _honeycombCols.value = 4
         _honeycombTopBlur.value = 4
         _honeycombBottomBlur.value = 4
@@ -331,11 +305,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_BLUR] = true
                 it[KEY_EDGE_BLUR] = false
                 it[KEY_LOW_RES] = false
-                it[KEY_ICON_CACHE_SIZE] = 128
                 it[KEY_ANIMATION_OVERRIDE] = true
                 it[KEY_SPLASH_ICON] = true
                 it[KEY_SPLASH_DELAY] = 500
-                it[KEY_LIST_ICON_SIZE] = 48
                 it[KEY_HONEYCOMB_COLS] = 4
                 it[KEY_HONEYCOMB_TOP_BLUR] = 4
                 it[KEY_HONEYCOMB_BOTTOM_BLUR] = 4
@@ -347,8 +319,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun refreshIcons() {
-        val targetSize = if (_lowResIcons.value) 64 else _iconCacheSize.value
-        appRepository.refresh(targetSize.coerceIn(64, 192))
+        appRepository.refresh(if (_lowResIcons.value) 64 else 128)
     }
 
     override fun onCleared() {

@@ -78,6 +78,7 @@ fun HoneycombScreen(
     var dragFromIndex by remember { mutableStateOf<Int?>(null) }
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
     var dragPointer by remember { mutableStateOf<Offset?>(null) }
+    var dragApp by remember { mutableStateOf<AppInfo?>(null) }
     var initializedAtTop by remember { mutableStateOf(false) }
     var settlingApp by remember { mutableStateOf<AppInfo?>(null) }
     var settlingKey by remember { mutableStateOf<String?>(null) }
@@ -258,6 +259,7 @@ fun HoneycombScreen(
                                     dragFromIndex = startIndex
                                     dragCurrentIndex = startIndex
                                     dragPointer = pointer
+                                    dragApp = app
                                     glidePressedKey = null
                                     vibrateHaptic(context)
                                 }
@@ -288,32 +290,36 @@ fun HoneycombScreen(
 
                             val from = dragFromIndex
                             val to = dragCurrentIndex
+                            val releasePointer = dragPointer
+                            val releaseScroll = scrollOffset.value
                             if (dragActive && from != null && to != null && from != to && hasDragged) {
                                 val droppedApp = apps.getOrNull(from)
-                                val currentPointer = dragPointer
-                                if (droppedApp != null && currentPointer != null) {
-                                    val targetSlot = positions.getOrNull(to)
-                                    if (targetSlot != null) {
-                                        settlingApp = droppedApp
-                                        settlingKey = droppedApp.componentKey
-                                        scope.launch {
-                                            settlingX.snapTo(currentPointer.x.coerceIn(iconSizePx * 0.5f, screenWidthPx - iconSizePx * 0.5f))
-                                            settlingY.snapTo(currentPointer.y.coerceIn(iconSizePx * 0.5f, screenHeightPx - iconSizePx * 0.5f))
-                                            launch {
-                                                settlingX.animateTo(
-                                                    screenCenterX + targetSlot.x,
-                                                    tween(durationMillis = 120)
-                                                )
-                                            }
-                                            launch {
-                                                settlingY.animateTo(
-                                                    (screenCenterY + targetSlot.y + scrollOffset.value).coerceIn(
-                                                        iconSizePx * 0.5f,
-                                                        screenHeightPx - iconSizePx * 0.5f
-                                                    ),
-                                                    tween(durationMillis = 120)
-                                                )
-                                            }
+                                val targetSlot = positions.getOrNull(to)
+                                dragFromIndex = null
+                                dragCurrentIndex = null
+                                dragPointer = null
+                                dragApp = null
+                                glidePressedKey = null
+                                if (droppedApp != null && releasePointer != null && targetSlot != null) {
+                                    settlingApp = droppedApp
+                                    settlingKey = droppedApp.componentKey
+                                    scope.launch {
+                                        settlingX.snapTo(releasePointer.x.coerceIn(iconSizePx * 0.5f, screenWidthPx - iconSizePx * 0.5f))
+                                        settlingY.snapTo(releasePointer.y.coerceIn(iconSizePx * 0.5f, screenHeightPx - iconSizePx * 0.5f))
+                                        launch {
+                                            settlingX.animateTo(
+                                                screenCenterX + targetSlot.x,
+                                                tween(durationMillis = 120)
+                                            )
+                                        }
+                                        launch {
+                                            settlingY.animateTo(
+                                                (screenCenterY + targetSlot.y + releaseScroll).coerceIn(
+                                                    iconSizePx * 0.5f,
+                                                    screenHeightPx - iconSizePx * 0.5f
+                                                ),
+                                                tween(durationMillis = 120)
+                                            )
                                         }
                                     }
                                 }
@@ -328,6 +334,11 @@ fun HoneycombScreen(
                                     settlingY.snapTo(0f)
                                 }
                             } else {
+                                dragFromIndex = null
+                                dragCurrentIndex = null
+                                dragPointer = null
+                                dragApp = null
+                                glidePressedKey = null
                                 settlingApp = null
                                 settlingKey = null
                                 scope.launch {
@@ -335,15 +346,12 @@ fun HoneycombScreen(
                                     settlingY.snapTo(0f)
                                 }
                             }
-                            dragFromIndex = null
-                            dragCurrentIndex = null
-                            dragPointer = null
-                            glidePressedKey = null
                         }
                     } finally {
                         dragFromIndex = null
                         dragCurrentIndex = null
                         dragPointer = null
+                        dragApp = null
                         glidePressedKey = null
                     }
                 }
@@ -424,6 +432,16 @@ fun HoneycombScreen(
             val currentScroll = scrollOffset.value
             val visibleTop = -iconSizePx * 1.5f
             val visibleBottom = screenHeightPx + iconSizePx * 1.5f
+            val dragOverlayApp = dragApp
+            val dragOverlayPointer = dragPointer?.let {
+                clampHoneycombDisplayPointer(
+                    pointer = it,
+                    screenWidthPx = screenWidthPx,
+                    screenHeightPx = screenHeightPx,
+                    iconSizePx = iconSizePx
+                )
+            }
+            val dragScalePointer = dragPointer
 
             apps.forEachIndexed { index, app ->
                 if (index >= positions.size) return@forEachIndexed
@@ -446,6 +464,11 @@ fun HoneycombScreen(
                         screenHeightPx = screenHeightPx,
                         iconSizePx = iconSizePx
                     )
+                } else {
+                    null
+                }
+                val currentDragScalePointer = if (isDragged) {
+                    dragScalePointer ?: dragDisplayPointer ?: slotCenter
                 } else {
                     null
                 }
@@ -533,22 +556,20 @@ fun HoneycombScreen(
                             }
                         },
                         onLongClick = null,
-                        forcePressed = isDragged || isGlidePressed || menuPressedKey == appKey,
-                        pressScaleTarget = if (isDragged) 1.12f else 0.9f,
+                        forcePressed = isGlidePressed || menuPressedKey == appKey,
+                        pressScaleTarget = 0.9f,
                         pressAnimationDelayMillis = 0,
                         pressAnimationDurationMillis = HONEYCOMB_PRESS_DURATION_MS,
                         onPressedChange = {},
                         modifier = Modifier
-                            .zIndex(if (isDragged) 12f else 0f)
+                            .zIndex(0f)
                             .graphicsLayer {
                                 val sy = scrollOffset.value
                                 val baseX = when {
-                                    isDragged -> gridPos.x
                                     settlingKey == appKey -> visualPos.x
                                     else -> animatedSlotX
                                 }
                                 val baseY = when {
-                                    isDragged -> gridPos.y
                                     settlingKey == appKey -> visualPos.y
                                     else -> animatedSlotY
                                 }
@@ -558,17 +579,15 @@ fun HoneycombScreen(
                                 var actualCenterY = pY
                                 translationX = posX - iconSizePx / 2f
                                 translationY = pY - iconSizePx / 2f
-                                if (isDragged) {
-                                    val displayPointer = dragDisplayPointer ?: Offset(posX, pY)
-                                    translationX = displayPointer.x - iconSizePx / 2f
-                                    translationY = displayPointer.y - iconSizePx / 2f
-                                    actualCenterX = displayPointer.x
-                                    actualCenterY = displayPointer.y
-                                } else {
+                                if (!isDragged) {
                                     translationX += animatedNeighborShiftX
                                     translationY += animatedNeighborShiftY
                                     actualCenterX += animatedNeighborShiftX
                                     actualCenterY += animatedNeighborShiftY
+                                } else {
+                                    val scalePointer = currentDragScalePointer ?: dragDisplayPointer ?: Offset(posX, pY)
+                                    actualCenterX = scalePointer.x
+                                    actualCenterY = scalePointer.y
                                 }
 
                                 val dx = actualCenterX - screenCenterX
@@ -577,10 +596,54 @@ fun HoneycombScreen(
                                 val scale = fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
                                 scaleX = scale * animatedNeighborScale
                                 scaleY = scale * animatedNeighborScale
-                                alpha = if (settlingKey == app.componentKey) 0f else scale.coerceIn(0.24f, 1f)
+                                alpha = when {
+                                    isDragged -> 0f
+                                    settlingKey == app.componentKey -> 0f
+                                    else -> scale.coerceIn(0.24f, 1f)
+                                }
                             }
                     )
                 }
+            }
+
+            if (dragOverlayApp != null && dragOverlayPointer != null) {
+                val dragOverlayBlur = computeHoneycombEdgeBlur(
+                    centerY = dragOverlayPointer.y,
+                    screenHeight = screenHeightPx,
+                    topBlurZonePx = topFadePx,
+                    bottomBlurZonePx = bottomFadePx,
+                    topBlurDp = topBlurRadiusDp.toFloat(),
+                    bottomBlurDp = bottomBlurRadiusDp.toFloat()
+                )
+                val scalePointer = dragScalePointer ?: dragOverlayPointer
+                val dragDx = scalePointer.x - screenCenterX
+                val dragDy = scalePointer.y - screenCenterY
+                val dragDist = sqrt(dragDx * dragDx + dragDy * dragDy)
+                val dragScale = fisheyeScale(dragDist, screenRadius * 1.65f, minScale = 0.58f)
+                AppBubble(
+                    icon = if (blurEnabled && effectiveEdgeBlur && dragOverlayBlur > 0.5f) {
+                        dragOverlayApp.cachedBlurredIcon
+                    } else {
+                        dragOverlayApp.cachedIcon
+                    },
+                    size = iconSizeDp,
+                    onClick = {},
+                    onLongClick = null,
+                    forcePressed = false,
+                    pressScaleTarget = 1f,
+                    pressAnimationDelayMillis = 0,
+                    pressAnimationDurationMillis = HONEYCOMB_PRESS_DURATION_MS,
+                    onPressedChange = {},
+                    modifier = Modifier
+                        .zIndex(13f)
+                        .graphicsLayer {
+                            translationX = dragOverlayPointer.x - iconSizePx / 2f
+                            translationY = dragOverlayPointer.y - iconSizePx / 2f
+                            scaleX = dragScale
+                            scaleY = dragScale
+                            alpha = dragScale.coerceIn(0.24f, 1f)
+                        }
+                )
             }
         }
 
