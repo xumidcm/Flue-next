@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -97,12 +98,15 @@ fun AppShortcutOverlay(
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val panelWidth = (maxWidth * 0.86f).coerceIn(220.dp, 360.dp)
+            val panelMaxHeight = maxHeight * 0.86f
 
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 16.dp)
+                    .align(Alignment.Center)
+                    .width(panelWidth)
+                    .heightIn(max = panelMaxHeight)
+                    .padding(horizontal = 8.dp, vertical = 12.dp)
                     .verticalScroll(rememberScrollState())
                     .graphicsLayer {
                         scaleX = animScale
@@ -114,7 +118,7 @@ fun AppShortcutOverlay(
 
                 Column(
                     modifier = Modifier
-                        .width(panelWidth)
+                        .fillMaxWidth()
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color(0xFF2C2C2E))
                 ) {

@@ -68,12 +68,11 @@ import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.platformBlur
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
 private const val LIST_MENU_TRIGGER_MS = 560L
-private const val LIST_HOLD_SLOP_DP = 10f
 private const val LIST_MENU_DRAG_START_DP = 20f
-private const val LIST_GLIDE_SLOP_DP = 4f
 private const val LIST_AUTO_SCROLL_EDGE_DP = 84f
 private const val LIST_AUTO_SCROLL_MAX_PX = 30f
 
@@ -143,10 +142,10 @@ fun ListDrawerScreen(
                     }
                 }
                 .nestedScroll(
-                    remember(listState, dragFromIndex) {
+                    remember(listState, dragFromIndex, longPressedApp) {
                         object : NestedScrollConnection {
                             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                                if (source != NestedScrollSource.Drag || dragFromIndex != null) return Offset.Zero
+                                if (source != NestedScrollSource.Drag || dragFromIndex != null || longPressedApp != null) return Offset.Zero
                                 return consumeListOverscroll(
                                     availableY = available.y,
                                     listState = listState,
@@ -160,7 +159,7 @@ fun ListDrawerScreen(
                                 available: Offset,
                                 source: NestedScrollSource
                             ): Offset {
-                                if (source != NestedScrollSource.Drag || dragFromIndex != null) return Offset.Zero
+                                if (source != NestedScrollSource.Drag || dragFromIndex != null || longPressedApp != null) return Offset.Zero
                                 return consumeListOverscroll(
                                     availableY = available.y,
                                     listState = listState,
@@ -170,7 +169,7 @@ fun ListDrawerScreen(
                             }
 
                             override suspend fun onPreFling(available: Velocity): Velocity {
-                                if (dragFromIndex != null) return Velocity.Zero
+                                if (dragFromIndex != null || longPressedApp != null) return Velocity.Zero
                                 val atTop = !listState.canScrollBackward
                                 if ((overscroll.value > 80f || available.y > 1200f) && atTop) {
                                     overscroll.snapTo(0f)
@@ -189,9 +188,7 @@ fun ListDrawerScreen(
                 .platformBlur(16f, longPressedApp != null && blurEnabled && !suppressHeavyEffects)
                 .pointerInput(apps) {
                     val maxDistancePx = with(density) { 72.dp.toPx() }
-                    val holdSlopPx = with(density) { LIST_HOLD_SLOP_DP.dp.toPx() }
                     val menuDragStartPx = with(density) { LIST_MENU_DRAG_START_DP.dp.toPx() }
-                    val glideSlopPx = with(density) { LIST_GLIDE_SLOP_DP.dp.toPx() }
                     val autoScrollEdgePx = with(density) { LIST_AUTO_SCROLL_EDGE_DP.dp.toPx() }
                     awaitEachGesture {
                         val down = awaitPrimaryDown()
@@ -201,47 +198,34 @@ fun ListDrawerScreen(
                             maxDistance = maxDistancePx
                         ) ?: return@awaitEachGesture
                         val app = apps.getOrNull(startIndex) ?: return@awaitEachGesture
-                        val downY = down.position.y
-                        val downTime = down.uptimeMillis
-                        var menuShown = false
-                        var menuEligible = true
+                        glidePressedIndex = startIndex
+                        val longPress = awaitLongPressByTimeoutOrCancel(
+                            pointerId = down.id,
+                            downPosition = down.position,
+                            timeoutMillis = LIST_MENU_TRIGGER_MS
+                        )
+                        if (longPress == null) {
+                            glidePressedIndex = null
+                            return@awaitEachGesture
+                        }
+
+                        onLongClick(app)
+                        longPressedApp = app
+                        glidePressedIndex = null
+                        vibrateHaptic(context)
+
+                        val dragAnchorY = longPress.position.y
                         var dragActive = false
                         var hasDragged = false
-                        glidePressedIndex = startIndex
 
                         while (true) {
                             val event = awaitPointerEvent()
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
                             if (!change.pressed) break
 
-                            val elapsed = change.uptimeMillis - downTime
                             val pointerY = change.position.y
-                            val deltaFromDown = abs(pointerY - downY)
-
-                            val hoveredIndex = findNearestListIndex(
-                                pointerY = pointerY,
-                                itemCenters = itemCenters,
-                                maxDistance = maxDistancePx
-                            )
-                            if (!dragActive && !menuShown && deltaFromDown >= glideSlopPx) {
-                                glidePressedIndex = hoveredIndex
-                            }
-
-                            if (!menuShown && !dragActive) {
-                                if (deltaFromDown > holdSlopPx) {
-                                    menuEligible = false
-                                }
-                                if (menuEligible && elapsed >= LIST_MENU_TRIGGER_MS) {
-                                    menuShown = true
-                                    glidePressedIndex = null
-                                    onLongClick(app)
-                                    longPressedApp = app
-                                    vibrateHaptic(context)
-                                }
-                            }
-
-                            if (menuShown && !dragActive && deltaFromDown > menuDragStartPx) {
-                                menuShown = false
+                            val deltaFromAnchor = abs(pointerY - dragAnchorY)
+                            if (!dragActive && deltaFromAnchor > menuDragStartPx) {
                                 longPressedApp = null
                                 dragActive = true
                                 dragFromIndex = startIndex
@@ -254,7 +238,7 @@ fun ListDrawerScreen(
                             if (dragActive && activeFromIndex != null) {
                                 val anchorCenter = itemCenters[activeFromIndex] ?: pointerY
                                 dragOffsetY = pointerY - anchorCenter
-                                if (abs(dragOffsetY) > menuDragStartPx * 0.45f) {
+                                if (abs(dragOffsetY) > menuDragStartPx * 0.35f) {
                                     hasDragged = true
                                 }
 
@@ -276,7 +260,9 @@ fun ListDrawerScreen(
                                     itemCenters = itemCenters,
                                     maxDistance = Float.MAX_VALUE
                                 ) ?: dragCurrentIndex
-                                change.consume()
+                                if (change.positionChanged()) {
+                                    change.consume()
+                                }
                             }
                         }
 
@@ -300,6 +286,7 @@ fun ListDrawerScreen(
 
             LazyColumn(
                 state = listState,
+                userScrollEnabled = dragFromIndex == null && longPressedApp == null,
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer { translationY = overscroll.value }
@@ -333,8 +320,8 @@ fun ListDrawerScreen(
                     val displayDisplacement = if (isDragged) dragOffsetY else animatedDisplacement
                     val pressedScale by animateFloatAsState(
                         targetValue = when {
-                            isDragged -> 1.09f
-                            isGlidePressed -> 0.985f
+                            isDragged -> 0.965f
+                            isGlidePressed -> 0.992f
                             isPressed -> 0.97f
                             else -> 1f
                         },
@@ -343,8 +330,8 @@ fun ListDrawerScreen(
                     )
                     val pressedOverlay by animateFloatAsState(
                         targetValue = when {
-                            isDragged -> 0.14f
-                            isGlidePressed -> 0.08f
+                            isDragged -> 0.10f
+                            isGlidePressed -> 0.05f
                             isPressed -> 0.12f
                             else -> 0f
                         },
@@ -517,6 +504,26 @@ private fun computeItemScale(
     val maxDist = screenHeight / 2f
     val t = (dist / maxDist).coerceIn(0f, 1f)
     return 1f - 0.2f * t
+}
+
+private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awaitLongPressByTimeoutOrCancel(
+    pointerId: androidx.compose.ui.input.pointer.PointerId,
+    downPosition: Offset,
+    timeoutMillis: Long
+): androidx.compose.ui.input.pointer.PointerInputChange? {
+    val cancelled = withTimeoutOrNull(timeoutMillis) {
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == pointerId } ?: return@withTimeoutOrNull true
+            if (!change.pressed) return@withTimeoutOrNull true
+            if ((change.position - downPosition).getDistance() > viewConfiguration.touchSlop) {
+                return@withTimeoutOrNull true
+            }
+        }
+    } ?: false
+    if (cancelled) return null
+    val current = currentEvent.changes.firstOrNull { it.id == pointerId }
+    return current?.takeIf { it.pressed }
 }
 
 private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awaitPrimaryDown():
