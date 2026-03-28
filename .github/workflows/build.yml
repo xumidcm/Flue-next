@@ -25,7 +25,10 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
-          gradle-version: 8.10
+          gradle-version: '8.10'
+
+      - name: Verify Gradle Version
+        run: gradle --version
 
       - name: Build Release APK
         run: |
