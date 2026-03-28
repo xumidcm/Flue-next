@@ -117,6 +117,7 @@ fun ListDrawerScreen(
 
     LaunchedEffect(focusReady) {
         if (focusReady) {
+            withFrameNanos { }
             runCatching { focusRequester.requestFocus() }
         }
     }
@@ -237,7 +238,12 @@ fun ListDrawerScreen(
                         while (true) {
                             val event = awaitPointerEvent()
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!change.pressed) break
+                            if (!change.pressed) {
+                                if (!dragActive) {
+                                    change.consume()
+                                }
+                                break
+                            }
 
                             val pointerY = change.position.y
                             val deltaFromAnchor = abs(pointerY - dragAnchorY)

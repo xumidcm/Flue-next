@@ -8,6 +8,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -64,6 +65,10 @@ fun AppShortcutOverlay(
     val blockInteraction = remember { MutableInteractionSource() }
 
     LaunchedEffect(Unit) { showing = true }
+
+    BackHandler(enabled = showing && !dismissing) {
+        animateDismiss()
+    }
 
     fun animateDismiss() {
         dismissing = true

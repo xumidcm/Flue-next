@@ -90,6 +90,7 @@ fun HoneycombScreen(
 
     LaunchedEffect(focusReady) {
         if (focusReady) {
+            withFrameNanos { }
             runCatching { focusRequester.requestFocus() }
         }
     }
@@ -152,11 +153,11 @@ fun HoneycombScreen(
                             iconSizePx = iconSizePx
                         )
                         val autoScrollVelocity = when {
-                            pointer.y < honeycombAutoScrollEdgePx -> {
-                                HONEYCOMB_AUTO_SCROLL_MAX_PX * 60f * ((honeycombAutoScrollEdgePx - pointer.y) / honeycombAutoScrollEdgePx).coerceAtMost(1.8f)
+                            pointer.y in (-iconSizePx)..honeycombAutoScrollEdgePx -> {
+                                HONEYCOMB_AUTO_SCROLL_MAX_PX * 60f * ((honeycombAutoScrollEdgePx - pointer.y) / honeycombAutoScrollEdgePx).coerceIn(0f, 1.15f)
                             }
-                            pointer.y > screenHeightPx - honeycombAutoScrollEdgePx -> {
-                                -HONEYCOMB_AUTO_SCROLL_MAX_PX * 60f * ((pointer.y - (screenHeightPx - honeycombAutoScrollEdgePx)) / honeycombAutoScrollEdgePx).coerceAtMost(1.8f)
+                            pointer.y in (screenHeightPx - honeycombAutoScrollEdgePx)..(screenHeightPx + iconSizePx) -> {
+                                -HONEYCOMB_AUTO_SCROLL_MAX_PX * 60f * ((pointer.y - (screenHeightPx - honeycombAutoScrollEdgePx)) / honeycombAutoScrollEdgePx).coerceIn(0f, 1.15f)
                             }
                             else -> 0f
                         }
@@ -242,7 +243,12 @@ fun HoneycombScreen(
                         while (true) {
                             val event = awaitPointerEvent()
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!change.pressed) break
+                            if (!change.pressed) {
+                                if (!dragActive) {
+                                    change.consume()
+                                }
+                                break
+                            }
 
                             val pointer = change.position
                             val movedDistance = (pointer - dragOrigin).getDistance()
@@ -679,8 +685,8 @@ private fun clampHoneycombDisplayPointer(
     screenHeightPx: Float,
     iconSizePx: Float
 ): Offset {
-    val horizontalOverflow = iconSizePx * 0.22f
-    val verticalOverflow = iconSizePx * 0.42f
+    val horizontalOverflow = iconSizePx * 0.3f
+    val verticalOverflow = iconSizePx * 1.15f
     return Offset(
         x = pointer.x.coerceIn(-horizontalOverflow, screenWidthPx + horizontalOverflow),
         y = pointer.y.coerceIn(-verticalOverflow, screenHeightPx + verticalOverflow)
