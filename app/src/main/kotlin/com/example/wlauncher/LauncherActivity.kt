@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Build
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.activity.compose.setContent
@@ -32,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -51,6 +53,8 @@ import com.flue.launcher.ui.settings.LauncherSettingsSheet
 import com.flue.launcher.ui.smartstack.SmartStackLayer
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.viewmodel.LauncherViewModel
+import com.flue.launcher.watchface.LunchWatchFaceHost
+import com.flue.launcher.watchface.LunchWatchFaceRuntime
 import kotlinx.coroutines.delay
 
 private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
@@ -87,7 +91,10 @@ class LauncherActivity : ComponentActivity() {
             @Suppress("DEPRECATION")
             overridePendingTransition(android.R.anim.fade_in, R.anim.launcher_return_cupertino_exit)
         }
-        if (::vm.isInitialized) vm.onReturnToLauncher()
+        if (::vm.isInitialized) {
+            vm.onReturnToLauncher()
+            vm.refreshWatchFaces()
+        }
     }
 
     override fun onPause() {
@@ -101,6 +108,7 @@ class LauncherActivity : ComponentActivity() {
 
 @Composable
 fun LauncherScreen(vm: LauncherViewModel) {
+    val context = LocalContext.current
     val screenState by vm.screenState.collectAsState()
     val layoutMode by vm.layoutMode.collectAsState()
     val blurEnabled by vm.blurEnabled.collectAsState()
@@ -117,6 +125,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val honeycombTopFade by vm.honeycombTopFade.collectAsState()
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsState()
     val showNotification by vm.showNotification.collectAsState()
+    val watchFaces by vm.availableWatchFaces.collectAsState()
+    val selectedWatchFace by vm.selectedWatchFace.collectAsState()
+    val watchFaceRefreshToken by vm.watchFaceRefreshToken.collectAsState()
+    val watchFaceLastError by vm.watchFaceLastError.collectAsState()
     val layerBlurEnabled = blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
 
@@ -161,7 +173,20 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled
                     )
-            ) { WatchFaceLayer() }
+            ) {
+                if (selectedWatchFace.isBuiltin) {
+                    WatchFaceLayer()
+                } else {
+                    LunchWatchFaceHost(
+                        descriptor = selectedWatchFace,
+                        isFaceVisible = screenState == ScreenState.Face,
+                        refreshToken = watchFaceRefreshToken,
+                        onLoadFailure = { descriptor, error ->
+                            vm.fallbackToBuiltIn("${descriptor.displayName}: ${error.message ?: error.javaClass.simpleName}")
+                        }
+                    )
+                }
+            }
 
             Box(
                 modifier = Modifier
@@ -290,6 +315,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     honeycombTopFade = honeycombTopFade,
                     honeycombBottomFade = honeycombBottomFade,
                     showNotification = showNotification,
+                    watchFaces = watchFaces,
+                    selectedWatchFaceId = selectedWatchFace.id,
+                    watchFaceLastError = watchFaceLastError,
                     onLayoutChange = { vm.setLayoutMode(it) },
                     onBlurToggle = { vm.setBlurEnabled(it) },
                     onEdgeBlurToggle = { vm.setEdgeBlurEnabled(it) },
@@ -303,6 +331,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     onHoneycombTopFadeChange = { vm.setHoneycombTopFade(it) },
                     onHoneycombBottomFadeChange = { vm.setHoneycombBottomFade(it) },
                     onShowNotificationChange = { vm.setShowNotification(it) },
+                    onWatchFaceSelect = { vm.selectWatchFace(it) },
+                    onOpenWatchFaceSettings = { descriptor ->
+                        if (!LunchWatchFaceRuntime.openSettings(context, descriptor)) {
+                            Toast.makeText(context, "No watchface settings available", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onRefreshWatchFaces = { vm.refreshWatchFaces() },
+                    onClearWatchFaceError = { vm.clearWatchFaceError() },
                     onResetDefaults = { vm.resetSettings() },
                     onDismiss = { vm.setState(ScreenState.Apps) }
                 )

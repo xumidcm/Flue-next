@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.theme.WatchColors
+import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import kotlinx.coroutines.launch
 
 @Composable
@@ -69,6 +70,9 @@ fun LauncherSettingsSheet(
     honeycombTopFade: Int = 56,
     honeycombBottomFade: Int = 56,
     showNotification: Boolean = true,
+    watchFaces: List<LunchWatchFaceDescriptor> = emptyList(),
+    selectedWatchFaceId: String = "",
+    watchFaceLastError: String? = null,
     onLayoutChange: (LayoutMode) -> Unit,
     onBlurToggle: (Boolean) -> Unit,
     onEdgeBlurToggle: (Boolean) -> Unit = {},
@@ -82,6 +86,10 @@ fun LauncherSettingsSheet(
     onHoneycombTopFadeChange: (Int) -> Unit = {},
     onHoneycombBottomFadeChange: (Int) -> Unit = {},
     onShowNotificationChange: (Boolean) -> Unit = {},
+    onWatchFaceSelect: (String) -> Unit = {},
+    onOpenWatchFaceSettings: (LunchWatchFaceDescriptor) -> Unit = {},
+    onRefreshWatchFaces: () -> Unit = {},
+    onClearWatchFaceError: () -> Unit = {},
     onResetDefaults: () -> Unit = {},
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
@@ -147,6 +155,48 @@ fun LauncherSettingsSheet(
                         .padding(bottom = 16.dp)
                         .graphicsLayer { scaleX = scale; scaleY = scale; alpha = scale }
                 )
+            }
+
+            item("watchface_header") { ScaledSectionHeader(tr(isZh, "表盘", "Watch Faces"), listState, "watchface_header", screenCenterY, screenHeightPx) }
+            if (watchFaceLastError != null) {
+                item("watchface_error") {
+                    val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "watchface_error" }, screenCenterY, screenHeightPx)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer { scaleX = scale; scaleY = scale; alpha = scale.coerceIn(0.3f, 1f) }
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0x33FF6B6B))
+                            .clickable { onClearWatchFaceError() }
+                            .padding(14.dp)
+                    ) {
+                        Text(
+                            text = watchFaceLastError,
+                            fontSize = 12.sp,
+                            color = Color.White
+                        )
+                    }
+                }
+            }
+            watchFaces.forEach { descriptor ->
+                item("watchface_${descriptor.id}") {
+                    val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "watchface_${descriptor.id}" }, screenCenterY, screenHeightPx)
+                    WatchFaceSettingCard(
+                        descriptor = descriptor,
+                        selected = descriptor.id == selectedWatchFaceId,
+                        scale = scale,
+                        onSelect = { onWatchFaceSelect(descriptor.id) },
+                        onOpenSettings = if (descriptor.settingsEntryClassName != null) {
+                            { onOpenWatchFaceSettings(descriptor) }
+                        } else {
+                            null
+                        }
+                    )
+                }
+            }
+            item("watchface_refresh") {
+                val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "watchface_refresh" }, screenCenterY, screenHeightPx)
+                ToolButton(tr(isZh, "刷新表盘列表", "Refresh Watch Faces"), scale, onRefreshWatchFaces)
             }
 
             item("layout_header") { ScaledSectionHeader(tr(isZh, "布局", "Layout"), listState, "layout_header", screenCenterY, screenHeightPx) }

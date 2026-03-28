@@ -59,6 +59,12 @@
             android:theme="@style/Theme.WatchLauncher"
             android:screenOrientation="portrait" />
 
+        <activity
+            android:name="com.dudu.wearlauncher.ui.WatchSurfaceBaseActivity"
+            android:exported="false"
+            android:theme="@style/Theme.WatchLauncher"
+            android:screenOrientation="portrait" />
+
         <service
             android:name=".service.WLauncherNotificationListener"
             android:exported="true"

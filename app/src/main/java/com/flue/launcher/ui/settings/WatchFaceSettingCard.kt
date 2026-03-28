@@ -1,0 +1,104 @@
+﻿package com.flue.launcher.ui.settings
+
+import android.widget.ImageView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.weight
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import com.flue.launcher.ui.theme.WatchColors
+import com.flue.launcher.watchface.LunchWatchFaceDescriptor
+import com.flue.launcher.watchface.LunchWatchFaceScanner
+
+@Composable
+fun WatchFaceSettingCard(
+    descriptor: LunchWatchFaceDescriptor,
+    selected: Boolean,
+    scale: Float,
+    onSelect: () -> Unit,
+    onOpenSettings: (() -> Unit)? = null
+) {
+    val context = LocalContext.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer { scaleX = scale; scaleY = scale; alpha = scale.coerceIn(0.3f, 1f) }
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (selected) WatchColors.ActiveCyan.copy(alpha = 0.16f) else WatchColors.SurfaceGlass)
+            .clickable(onClick = onSelect)
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        AndroidView(
+            factory = { imageContext ->
+                ImageView(imageContext).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+            },
+            update = { imageView ->
+                imageView.setImageDrawable(LunchWatchFaceScanner.loadPreviewDrawable(context, descriptor))
+            },
+            modifier = Modifier
+                .size(52.dp)
+                .clip(RoundedCornerShape(14.dp))
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(descriptor.displayName, fontSize = 14.sp, color = Color.White)
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                descriptor.packageName ?: "Built-in",
+                fontSize = 11.sp,
+                color = WatchColors.TextTertiary
+            )
+            val meta = buildString {
+                if (descriptor.author != null) append(descriptor.author)
+                if (descriptor.versionCode > 0) {
+                    if (isNotEmpty()) append("  ·  ")
+                    append("v")
+                    append(descriptor.versionCode)
+                }
+            }
+            if (meta.isNotBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(meta, fontSize = 11.sp, color = WatchColors.TextTertiary)
+            }
+        }
+        if (onOpenSettings != null && descriptor.settingsEntryClassName != null) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color.White.copy(alpha = 0.08f))
+                    .clickable(onClick = onOpenSettings)
+                    .padding(8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Filled.Settings, contentDescription = null, tint = WatchColors.ActiveCyan)
+            }
+        }
+        if (selected) {
+            Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = WatchColors.ActiveCyan)
+        }
+    }
+}

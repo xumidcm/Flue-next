@@ -16,6 +16,10 @@ import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.repository.AppRepository
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.navigation.ScreenState
+import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
+import com.flue.launcher.watchface.LunchWatchFaceDescriptor
+import com.flue.launcher.watchface.LunchWatchFaceRegistry
+import com.flue.launcher.watchface.LunchWatchFaceScanner
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,6 +46,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_HONEYCOMB_TOP_FADE = intPreferencesKey("honeycomb_top_fade")
         val KEY_HONEYCOMB_BOTTOM_FADE = intPreferencesKey("honeycomb_bottom_fade")
         val KEY_SHOW_NOTIFICATION = booleanPreferencesKey("show_notification")
+        val KEY_SELECTED_WATCHFACE_ID = stringPreferencesKey("selected_watchface_id")
+        val KEY_LAST_WATCHFACE_ERROR = stringPreferencesKey("last_watchface_error")
     }
 
     private val store = application.dataStore
@@ -94,6 +100,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _showNotification = MutableStateFlow(true)
     val showNotification: StateFlow<Boolean> = _showNotification.asStateFlow()
 
+    private val _availableWatchFaces = MutableStateFlow(listOf(LunchWatchFaceScanner.builtInDescriptor()))
+    val availableWatchFaces: StateFlow<List<LunchWatchFaceDescriptor>> = _availableWatchFaces.asStateFlow()
+
+    private val _selectedWatchFaceId = MutableStateFlow(BUILT_IN_WATCHFACE_ID)
+    val selectedWatchFaceId: StateFlow<String> = _selectedWatchFaceId.asStateFlow()
+
+    private val _selectedWatchFace = MutableStateFlow(LunchWatchFaceScanner.builtInDescriptor())
+    val selectedWatchFace: StateFlow<LunchWatchFaceDescriptor> = _selectedWatchFace.asStateFlow()
+
+    private val _watchFaceRefreshToken = MutableStateFlow(0)
+    val watchFaceRefreshToken: StateFlow<Int> = _watchFaceRefreshToken.asStateFlow()
+
+    private val _watchFaceLastError = MutableStateFlow<String?>(null)
+    val watchFaceLastError: StateFlow<String?> = _watchFaceLastError.asStateFlow()
+
     private val _appOpenOrigin = MutableStateFlow(Offset(0.5f, 0.5f))
     val appOpenOrigin: StateFlow<Offset> = _appOpenOrigin.asStateFlow()
 
@@ -134,11 +155,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 prefs[KEY_HONEYCOMB_TOP_FADE]?.let { _honeycombTopFade.value = it.coerceIn(0, 160) }
                 prefs[KEY_HONEYCOMB_BOTTOM_FADE]?.let { _honeycombBottomFade.value = it.coerceIn(0, 160) }
                 prefs[KEY_SHOW_NOTIFICATION]?.let { _showNotification.value = it }
+                prefs[KEY_SELECTED_WATCHFACE_ID]?.let { _selectedWatchFaceId.value = it }
+                _watchFaceLastError.value = prefs[KEY_LAST_WATCHFACE_ERROR]
                 if (refreshIconsNeeded) {
                     refreshIcons()
                 }
+                syncSelectedWatchFace()
             }
         }
+        refreshWatchFaces()
     }
 
     fun setState(state: ScreenState) {
@@ -275,6 +300,46 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { store.edit { it[KEY_SHOW_NOTIFICATION] = show } }
     }
 
+    fun refreshWatchFaces() {
+        viewModelScope.launch {
+            val scanned = listOf(LunchWatchFaceScanner.builtInDescriptor()) + LunchWatchFaceScanner.scanInstalled(getApplication())
+            _availableWatchFaces.value = scanned
+            LunchWatchFaceRegistry.update(scanned)
+            syncSelectedWatchFace()
+        }
+    }
+
+    fun selectWatchFace(id: String) {
+        _selectedWatchFaceId.value = id
+        syncSelectedWatchFace()
+        viewModelScope.launch { store.edit { it[KEY_SELECTED_WATCHFACE_ID] = _selectedWatchFace.value.id } }
+    }
+
+    fun fallbackToBuiltIn(error: String? = null) {
+        _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
+        _watchFaceLastError.value = error
+        syncSelectedWatchFace()
+        viewModelScope.launch {
+            store.edit {
+                it[KEY_SELECTED_WATCHFACE_ID] = BUILT_IN_WATCHFACE_ID
+                if (error.isNullOrBlank()) {
+                    it.remove(KEY_LAST_WATCHFACE_ERROR)
+                } else {
+                    it[KEY_LAST_WATCHFACE_ERROR] = error
+                }
+            }
+        }
+    }
+
+    fun clearWatchFaceError() {
+        _watchFaceLastError.value = null
+        viewModelScope.launch { store.edit { it.remove(KEY_LAST_WATCHFACE_ERROR) } }
+    }
+
+    fun requestWatchFaceRefresh() {
+        _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
+    }
+
     fun swapApps(fromIndex: Int, toIndex: Int) {
         val current = apps.value.toMutableList()
         if (fromIndex in current.indices && toIndex in current.indices) {
@@ -298,6 +363,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _honeycombTopFade.value = 56
         _honeycombBottomFade.value = 56
         _showNotification.value = true
+        _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
+        _selectedWatchFace.value = LunchWatchFaceScanner.builtInDescriptor()
+        _watchFaceLastError.value = null
+        LunchWatchFaceRegistry.setCurrentSelectedId(BUILT_IN_WATCHFACE_ID)
         refreshIcons()
         viewModelScope.launch {
             store.edit {
@@ -314,8 +383,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_HONEYCOMB_TOP_FADE] = 56
                 it[KEY_HONEYCOMB_BOTTOM_FADE] = 56
                 it[KEY_SHOW_NOTIFICATION] = true
+                it[KEY_SELECTED_WATCHFACE_ID] = BUILT_IN_WATCHFACE_ID
+                it.remove(KEY_LAST_WATCHFACE_ERROR)
             }
         }
+    }
+
+    private fun syncSelectedWatchFace() {
+        val match = _availableWatchFaces.value.firstOrNull { it.id == _selectedWatchFaceId.value }
+            ?: _availableWatchFaces.value.firstOrNull()
+            ?: LunchWatchFaceScanner.builtInDescriptor()
+        _selectedWatchFace.value = match
+        _selectedWatchFaceId.value = match.id
+        LunchWatchFaceRegistry.setCurrentSelectedId(match.id)
     }
 
     private fun refreshIcons() {

@@ -1,19 +1,24 @@
 package com.flue.launcher
 
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.datastore.preferences.core.edit
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.settings.LauncherSettingsSheet
 import com.flue.launcher.ui.theme.WatchLauncherTheme
+import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_BLUR
 import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_EDGE_BLUR
 import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_HONEYCOMB_BOTTOM_BLUR
@@ -27,6 +32,7 @@ import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_LOW_RES
 import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_SPLASH_DELAY
 import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_SPLASH_ICON
 import com.flue.launcher.viewmodel.dataStore
+import com.flue.launcher.watchface.LunchWatchFaceRuntime
 import kotlinx.coroutines.launch
 
 class SettingsActivity : ComponentActivity() {
@@ -34,8 +40,17 @@ class SettingsActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             WatchLauncherTheme {
+                val context = LocalContext.current
                 val scope = rememberCoroutineScope()
                 val prefs by dataStore.data.collectAsState(initial = null)
+                val vm: LauncherViewModel = viewModel()
+                val watchFaces by vm.availableWatchFaces.collectAsState()
+                val selectedWatchFace by vm.selectedWatchFace.collectAsState()
+                val watchFaceLastError by vm.watchFaceLastError.collectAsState()
+
+                LaunchedEffect(Unit) {
+                    vm.refreshWatchFaces()
+                }
 
                 val layoutMode = prefs?.get(KEY_LAYOUT)?.let {
                     try {
@@ -69,6 +84,9 @@ class SettingsActivity : ComponentActivity() {
                     honeycombBottomBlur = bottomBlur,
                     honeycombTopFade = topFade,
                     honeycombBottomFade = bottomFade,
+                    watchFaces = watchFaces,
+                    selectedWatchFaceId = selectedWatchFace.id,
+                    watchFaceLastError = watchFaceLastError,
                     onLayoutChange = { scope.launch { dataStore.edit { p -> p[KEY_LAYOUT] = it.name } } },
                     onBlurToggle = {
                         scope.launch {
@@ -90,24 +108,15 @@ class SettingsActivity : ComponentActivity() {
                     onHoneycombBottomBlurChange = { scope.launch { dataStore.edit { p -> p[KEY_HONEYCOMB_BOTTOM_BLUR] = it } } },
                     onHoneycombTopFadeChange = { scope.launch { dataStore.edit { p -> p[KEY_HONEYCOMB_TOP_FADE] = it } } },
                     onHoneycombBottomFadeChange = { scope.launch { dataStore.edit { p -> p[KEY_HONEYCOMB_BOTTOM_FADE] = it } } },
-                    onResetDefaults = {
-                        scope.launch {
-                            dataStore.edit { p ->
-                                p[KEY_LAYOUT] = LayoutMode.Honeycomb.name
-                                p[KEY_BLUR] = true
-                                p[KEY_EDGE_BLUR] = false
-                                p[KEY_LOW_RES] = false
-                                p[KEY_ANIMATION_OVERRIDE] = true
-                                p[KEY_SPLASH_ICON] = true
-                                p[KEY_SPLASH_DELAY] = 500
-                                p[KEY_HONEYCOMB_COLS] = 4
-                                p[KEY_HONEYCOMB_TOP_BLUR] = 4
-                                p[KEY_HONEYCOMB_BOTTOM_BLUR] = 4
-                                p[KEY_HONEYCOMB_TOP_FADE] = 56
-                                p[KEY_HONEYCOMB_BOTTOM_FADE] = 56
-                            }
+                    onWatchFaceSelect = { vm.selectWatchFace(it) },
+                    onOpenWatchFaceSettings = { descriptor ->
+                        if (!LunchWatchFaceRuntime.openSettings(context, descriptor)) {
+                            Toast.makeText(context, "No watchface settings available", Toast.LENGTH_SHORT).show()
                         }
                     },
+                    onRefreshWatchFaces = { vm.refreshWatchFaces() },
+                    onClearWatchFaceError = { vm.clearWatchFaceError() },
+                    onResetDefaults = { vm.resetSettings() },
                     onDismiss = { finish() },
                     modifier = Modifier
                         .fillMaxSize()
