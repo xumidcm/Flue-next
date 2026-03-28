@@ -209,134 +209,142 @@ fun HoneycombScreen(
                     }
                 }
                 .platformBlur(16f, overlayBlurActive)
-                .pointerInput(apps, positions, scrollOffset.value) {
+                .pointerInput(apps, positions) {
                     val menuDragStartPx = with(density) { HONEYCOMB_MENU_DRAG_START_DP.dp.toPx() }
-                    awaitEachGesture {
-                        val down = awaitPrimaryDown()
-                        val startIndex = findNearestHoneycombIndex(
-                            pointer = down.position,
-                            positions = positions,
-                            screenCenterX = screenCenterX,
-                            screenCenterY = screenCenterY + scrollOffset.value,
-                            maxDistance = iconSizePx * 0.7f
-                        ) ?: return@awaitEachGesture
-                        val app = apps.getOrNull(startIndex) ?: return@awaitEachGesture
-                        val longPress = awaitLongPressByTimeoutOrCancel(
-                            pointerId = down.id,
-                            downPosition = down.position,
-                            timeoutMillis = HONEYCOMB_MENU_TRIGGER_MS
-                        )
-                        if (longPress == null) {
+                    try {
+                        awaitEachGesture {
+                            val down = awaitPrimaryDown()
+                            val startIndex = findNearestHoneycombIndex(
+                                pointer = down.position,
+                                positions = positions,
+                                screenCenterX = screenCenterX,
+                                screenCenterY = screenCenterY + scrollOffset.value,
+                                maxDistance = iconSizePx * 0.7f
+                            ) ?: return@awaitEachGesture
+                            val app = apps.getOrNull(startIndex) ?: return@awaitEachGesture
+                            val longPress = awaitLongPressByTimeoutOrCancel(
+                                pointerId = down.id,
+                                downPosition = down.position,
+                                timeoutMillis = HONEYCOMB_MENU_TRIGGER_MS
+                            )
+                            if (longPress == null) {
+                                glidePressedKey = null
+                                return@awaitEachGesture
+                            }
+
+                            onLongClick(app)
+                            longPressedApp = app
                             glidePressedKey = null
-                            return@awaitEachGesture
-                        }
+                            vibrateHaptic(context)
 
-                        onLongClick(app)
-                        longPressedApp = app
-                        glidePressedKey = null
-                        vibrateHaptic(context)
+                            val dragOrigin = longPress.position
+                            var dragActive = false
+                            var hasDragged = false
 
-                        val dragOrigin = longPress.position
-                        var dragActive = false
-                        var hasDragged = false
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) {
+                                    if (!dragActive) {
+                                        change.consume()
+                                    }
+                                    break
+                                }
 
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!change.pressed) {
-                                if (!dragActive) {
+                                val pointer = change.position
+                                val movedDistance = (pointer - dragOrigin).getDistance()
+                                if (!dragActive && movedDistance > menuDragStartPx) {
+                                    longPressedApp = null
+                                    dragActive = true
+                                    dragFromIndex = startIndex
+                                    dragCurrentIndex = startIndex
+                                    dragOffset = Offset.Zero
+                                    dragPointer = pointer
+                                    glidePressedKey = null
+                                    vibrateHaptic(context)
+                                }
+
+                                val fromIndex = dragFromIndex
+                                if (dragActive && fromIndex != null) {
+                                    dragPointer = pointer
+                                    dragOffset = pointer - dragOrigin
+                                    if (dragOffset.getDistance() > menuDragStartPx * 0.35f) {
+                                        hasDragged = true
+                                    }
+                                    val displayPointer = clampHoneycombDisplayPointer(
+                                        pointer = pointer,
+                                        screenWidthPx = screenWidthPx,
+                                        screenHeightPx = screenHeightPx,
+                                        iconSizePx = iconSizePx
+                                    )
+                                    val dragTarget = findNearestHoneycombIndex(
+                                        pointer = displayPointer,
+                                        positions = positions,
+                                        screenCenterX = screenCenterX,
+                                        screenCenterY = screenCenterY + scrollOffset.value,
+                                        maxDistance = cellSize * 0.95f
+                                    )
+                                    dragCurrentIndex = dragTarget ?: fromIndex
                                     change.consume()
                                 }
-                                break
                             }
 
-                            val pointer = change.position
-                            val movedDistance = (pointer - dragOrigin).getDistance()
-                            if (!dragActive && movedDistance > menuDragStartPx) {
-                                longPressedApp = null
-                                dragActive = true
-                                dragFromIndex = startIndex
-                                dragCurrentIndex = startIndex
-                                dragOffset = Offset.Zero
-                                dragPointer = pointer
-                                glidePressedKey = null
-                                vibrateHaptic(context)
-                            }
-
-                            val fromIndex = dragFromIndex
-                            if (dragActive && fromIndex != null) {
-                                dragPointer = pointer
-                                dragOffset = pointer - dragOrigin
-                                if (dragOffset.getDistance() > menuDragStartPx * 0.35f) {
-                                    hasDragged = true
-                                }
-                                val displayPointer = clampHoneycombDisplayPointer(
-                                    pointer = pointer,
-                                    screenWidthPx = screenWidthPx,
-                                    screenHeightPx = screenHeightPx,
-                                    iconSizePx = iconSizePx
-                                )
-                                val dragTarget = findNearestHoneycombIndex(
-                                    pointer = displayPointer,
-                                    positions = positions,
-                                    screenCenterX = screenCenterX,
-                                    screenCenterY = screenCenterY + scrollOffset.value,
-                                    maxDistance = cellSize * 0.95f
-                                )
-                                dragCurrentIndex = dragTarget ?: fromIndex
-                                change.consume()
-                            }
-                        }
-
-                        val from = dragFromIndex
-                        val to = dragCurrentIndex
-                        if (dragActive && from != null && to != null && from != to && hasDragged) {
-                            val droppedApp = apps.getOrNull(from)
-                            val currentPointer = dragPointer
-                            if (droppedApp != null && currentPointer != null) {
-                                val targetSlot = positions.getOrNull(to)
-                                if (targetSlot != null) {
-                                    settlingApp = droppedApp
-                                    settlingKey = droppedApp.componentKey
-                                    scope.launch {
-                                        settlingX.snapTo(currentPointer.x.coerceIn(iconSizePx * 0.5f, screenWidthPx - iconSizePx * 0.5f))
-                                        settlingY.snapTo(currentPointer.y.coerceIn(iconSizePx * 0.5f, screenHeightPx - iconSizePx * 0.5f))
-                                        launch {
-                                            settlingX.animateTo(
-                                                screenCenterX + targetSlot.x,
-                                                tween(durationMillis = 120)
-                                            )
-                                        }
-                                        launch {
-                                            settlingY.animateTo(
-                                                (screenCenterY + targetSlot.y + scrollOffset.value).coerceIn(
-                                                    iconSizePx * 0.5f,
-                                                    screenHeightPx - iconSizePx * 0.5f
-                                                ),
-                                                tween(durationMillis = 120)
-                                            )
+                            val from = dragFromIndex
+                            val to = dragCurrentIndex
+                            if (dragActive && from != null && to != null && from != to && hasDragged) {
+                                val droppedApp = apps.getOrNull(from)
+                                val currentPointer = dragPointer
+                                if (droppedApp != null && currentPointer != null) {
+                                    val targetSlot = positions.getOrNull(to)
+                                    if (targetSlot != null) {
+                                        settlingApp = droppedApp
+                                        settlingKey = droppedApp.componentKey
+                                        scope.launch {
+                                            settlingX.snapTo(currentPointer.x.coerceIn(iconSizePx * 0.5f, screenWidthPx - iconSizePx * 0.5f))
+                                            settlingY.snapTo(currentPointer.y.coerceIn(iconSizePx * 0.5f, screenHeightPx - iconSizePx * 0.5f))
+                                            launch {
+                                                settlingX.animateTo(
+                                                    screenCenterX + targetSlot.x,
+                                                    tween(durationMillis = 120)
+                                                )
+                                            }
+                                            launch {
+                                                settlingY.animateTo(
+                                                    (screenCenterY + targetSlot.y + scrollOffset.value).coerceIn(
+                                                        iconSizePx * 0.5f,
+                                                        screenHeightPx - iconSizePx * 0.5f
+                                                    ),
+                                                    tween(durationMillis = 120)
+                                                )
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            onReorder(from, to)
-                            dropPressedIndex = to
-                            scope.launch {
-                                kotlinx.coroutines.delay(180)
-                                dropPressedIndex = null
+                                onReorder(from, to)
+                                dropPressedIndex = to
+                                scope.launch {
+                                    kotlinx.coroutines.delay(180)
+                                    dropPressedIndex = null
+                                    settlingApp = null
+                                    settlingKey = null
+                                    settlingX.snapTo(0f)
+                                    settlingY.snapTo(0f)
+                                }
+                            } else {
                                 settlingApp = null
                                 settlingKey = null
-                                settlingX.snapTo(0f)
-                                settlingY.snapTo(0f)
+                                scope.launch {
+                                    settlingX.snapTo(0f)
+                                    settlingY.snapTo(0f)
+                                }
                             }
-                        } else {
-                            settlingApp = null
-                            settlingKey = null
-                            scope.launch {
-                                settlingX.snapTo(0f)
-                                settlingY.snapTo(0f)
-                            }
+                            dragFromIndex = null
+                            dragCurrentIndex = null
+                            dragOffset = Offset.Zero
+                            dragPointer = null
+                            glidePressedKey = null
                         }
+                    } finally {
                         dragFromIndex = null
                         dragCurrentIndex = null
                         dragOffset = Offset.Zero
