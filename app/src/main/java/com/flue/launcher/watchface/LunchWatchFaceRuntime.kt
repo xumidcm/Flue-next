@@ -8,6 +8,7 @@ import android.content.res.Configuration
 import android.os.Build
 import android.view.View
 import com.dudu.wearlauncher.model.WatchFaceBridge
+import com.dudu.wearlauncher.ui.WatchSurfaceBaseActivity
 import dalvik.system.DexClassLoader
 
 object LunchWatchFaceRuntime {
@@ -36,7 +37,7 @@ object LunchWatchFaceRuntime {
                 )
             } else if (isLegacyWatchSurface(clazz)) {
                 context.startActivity(
-                    Intent(context, com.dudu.wearlauncher.ui.WatchSurfaceBaseActivity::class.java).apply {
+                    Intent(context, WatchSurfaceBaseActivity::class.java).apply {
                         putExtra("wfName", descriptor.watchFaceName)
                         putExtra("wsfClassName", settingsClassName)
                         putExtra("packageName", descriptor.packageName)
