@@ -64,15 +64,15 @@ fun AppShortcutOverlay(
     val dismissInteraction = remember { MutableInteractionSource() }
     val blockInteraction = remember { MutableInteractionSource() }
 
+    fun animateDismiss() {
+        dismissing = true
+        showing = false
+    }
+
     LaunchedEffect(Unit) { showing = true }
 
     BackHandler(enabled = showing && !dismissing) {
         animateDismiss()
-    }
-
-    fun animateDismiss() {
-        dismissing = true
-        showing = false
     }
 
     LaunchedEffect(dismissing) {
