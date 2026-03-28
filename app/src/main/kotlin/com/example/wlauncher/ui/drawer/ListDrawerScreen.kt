@@ -260,7 +260,7 @@ fun ListDrawerScreen(
                                     itemCenters = itemCenters,
                                     maxDistance = Float.MAX_VALUE
                                 ) ?: dragCurrentIndex
-                                if (change.positionChanged()) {
+                                if (change.position != change.previousPosition) {
                                     change.consume()
                                 }
                             }
@@ -511,7 +511,7 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awa
     downPosition: Offset,
     timeoutMillis: Long
 ): androidx.compose.ui.input.pointer.PointerInputChange? {
-    val cancelled = withTimeoutOrNull(timeoutMillis) {
+    val cancelled = withTimeoutOrNull<Boolean>(timeoutMillis) {
         while (true) {
             val event = awaitPointerEvent()
             val change = event.changes.firstOrNull { it.id == pointerId } ?: return@withTimeoutOrNull true
