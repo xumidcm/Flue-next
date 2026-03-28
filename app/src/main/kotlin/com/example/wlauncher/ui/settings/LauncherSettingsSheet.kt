@@ -60,7 +60,6 @@ fun LauncherSettingsSheet(
     blurEnabled: Boolean,
     edgeBlurEnabled: Boolean = false,
     lowResIcons: Boolean = false,
-    iconCacheSize: Int = 128,
     animationOverrideEnabled: Boolean = true,
     splashIcon: Boolean = true,
     splashDelay: Int = 500,
@@ -74,7 +73,6 @@ fun LauncherSettingsSheet(
     onBlurToggle: (Boolean) -> Unit,
     onEdgeBlurToggle: (Boolean) -> Unit = {},
     onLowResToggle: (Boolean) -> Unit = {},
-    onIconCacheSizeChange: (Int) -> Unit = {},
     onAnimationOverrideToggle: (Boolean) -> Unit = {},
     onSplashToggle: (Boolean) -> Unit = {},
     onSplashDelayChange: (Int) -> Unit = {},
@@ -211,21 +209,6 @@ fun LauncherSettingsSheet(
                 val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "low_res_toggle" }, screenCenterY, screenHeightPx)
                 SettingToggle(tr(isZh, "低分辨率图标", "Low-res Icons"), tr(isZh, "使用更小的缓存图标来提升滚动流畅度", "Use smaller cached icons for smoother scrolling"), lowResIcons, onLowResToggle, scale = scale)
             }
-
-            item("icon_cache_size") {
-                val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "icon_cache_size" }, screenCenterY, screenHeightPx)
-                DeferredSliderCard(
-                    label = tr(isZh, "鍥惧儚缂撳瓨灏哄", "Icon Cache Size"),
-                    valueText = "$iconCacheSize px",
-                    value = iconCacheSize.toFloat(),
-                    valueRange = 64f..192f,
-                    steps = 12,
-                    enabled = !lowResIcons,
-                    scale = scale,
-                    onValueCommitted = { onIconCacheSizeChange(it.toInt()) }
-                )
-            }
-
 
             if (currentLayout == LayoutMode.Honeycomb) {
                 item("honeycomb_header") { ScaledSectionHeader(tr(isZh, "蜂窝边缘调节", "Honeycomb Edge Tuning"), listState, "honeycomb_header", screenCenterY, screenHeightPx) }

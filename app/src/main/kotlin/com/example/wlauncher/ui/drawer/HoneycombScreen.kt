@@ -77,7 +77,6 @@ fun HoneycombScreen(
     var glidePressedKey by remember { mutableStateOf<String?>(null) }
     var dragFromIndex by remember { mutableStateOf<Int?>(null) }
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
-    var dragOffset by remember { mutableStateOf(Offset.Zero) }
     var dragPointer by remember { mutableStateOf<Offset?>(null) }
     var initializedAtTop by remember { mutableStateOf(false) }
     var settlingApp by remember { mutableStateOf<AppInfo?>(null) }
@@ -258,7 +257,6 @@ fun HoneycombScreen(
                                     dragActive = true
                                     dragFromIndex = startIndex
                                     dragCurrentIndex = startIndex
-                                    dragOffset = Offset.Zero
                                     dragPointer = pointer
                                     glidePressedKey = null
                                     vibrateHaptic(context)
@@ -267,8 +265,7 @@ fun HoneycombScreen(
                                 val fromIndex = dragFromIndex
                                 if (dragActive && fromIndex != null) {
                                     dragPointer = pointer
-                                    dragOffset = pointer - dragOrigin
-                                    if (dragOffset.getDistance() > menuDragStartPx * 0.35f) {
+                                    if ((pointer - dragOrigin).getDistance() > menuDragStartPx * 0.35f) {
                                         hasDragged = true
                                     }
                                     val displayPointer = clampHoneycombDisplayPointer(
@@ -340,14 +337,12 @@ fun HoneycombScreen(
                             }
                             dragFromIndex = null
                             dragCurrentIndex = null
-                            dragOffset = Offset.Zero
                             dragPointer = null
                             glidePressedKey = null
                         }
                     } finally {
                         dragFromIndex = null
                         dragCurrentIndex = null
-                        dragOffset = Offset.Zero
                         dragPointer = null
                         glidePressedKey = null
                     }
@@ -437,11 +432,24 @@ fun HoneycombScreen(
                 val visualPos = positions.getOrNull(visualSlotIndex) ?: gridPos
                 val appKey = app.componentKey
                 val isDragged = dragFromIndex == index
-                val visibilityY = if (isDragged) {
-                    screenCenterY + gridPos.y + currentScroll + dragOffset.y
+                val slotCenter = Offset(
+                    x = screenCenterX + visualPos.x,
+                    y = screenCenterY + visualPos.y + currentScroll
+                )
+                val dragDisplayPointer = if (isDragged) {
+                    clampHoneycombDisplayPointer(
+                        pointer = dragPointer ?: Offset(
+                            screenCenterX + gridPos.x,
+                            screenCenterY + gridPos.y + currentScroll
+                        ),
+                        screenWidthPx = screenWidthPx,
+                        screenHeightPx = screenHeightPx,
+                        iconSizePx = iconSizePx
+                    )
                 } else {
-                    screenCenterY + visualPos.y + currentScroll
+                    null
                 }
+                val visibilityY = dragDisplayPointer?.y ?: slotCenter.y
                 if (!isDragged && (visibilityY < visibleTop || visibilityY > visibleBottom)) return@forEachIndexed
                 val itemBlur = computeHoneycombEdgeBlur(
                     centerY = visibilityY,
@@ -534,28 +542,37 @@ fun HoneycombScreen(
                             .zIndex(if (isDragged) 12f else 0f)
                             .graphicsLayer {
                                 val sy = scrollOffset.value
-                                val baseX = if (isDragged) gridPos.x else animatedSlotX
-                                val baseY = if (isDragged) gridPos.y else animatedSlotY
+                                val baseX = when {
+                                    isDragged -> gridPos.x
+                                    settlingKey == appKey -> visualPos.x
+                                    else -> animatedSlotX
+                                }
+                                val baseY = when {
+                                    isDragged -> gridPos.y
+                                    settlingKey == appKey -> visualPos.y
+                                    else -> animatedSlotY
+                                }
                                 val posX = screenCenterX + baseX
                                 val pY = screenCenterY + baseY + sy
+                                var actualCenterX = posX
+                                var actualCenterY = pY
                                 translationX = posX - iconSizePx / 2f
                                 translationY = pY - iconSizePx / 2f
                                 if (isDragged) {
-                                    val displayPointer = clampHoneycombDisplayPointer(
-                                        pointer = dragPointer ?: Offset(posX, pY),
-                                        screenWidthPx = screenWidthPx,
-                                        screenHeightPx = screenHeightPx,
-                                        iconSizePx = iconSizePx
-                                    )
+                                    val displayPointer = dragDisplayPointer ?: Offset(posX, pY)
                                     translationX = displayPointer.x - iconSizePx / 2f
                                     translationY = displayPointer.y - iconSizePx / 2f
+                                    actualCenterX = displayPointer.x
+                                    actualCenterY = displayPointer.y
                                 } else {
                                     translationX += animatedNeighborShiftX
                                     translationY += animatedNeighborShiftY
+                                    actualCenterX += animatedNeighborShiftX
+                                    actualCenterY += animatedNeighborShiftY
                                 }
 
-                                val dx = posX - screenCenterX
-                                val dy = pY - screenCenterY
+                                val dx = actualCenterX - screenCenterX
+                                val dy = actualCenterY - screenCenterY
                                 val dist = sqrt(dx * dx + dy * dy)
                                 val scale = fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
                                 scaleX = scale * animatedNeighborScale
@@ -595,6 +612,13 @@ fun HoneycombScreen(
                     .graphicsLayer {
                         translationX = settlingX.value - iconSizePx / 2f
                         translationY = settlingY.value - iconSizePx / 2f
+                        val dx = settlingX.value - screenCenterX
+                        val dy = settlingY.value - screenCenterY
+                        val dist = sqrt(dx * dx + dy * dy)
+                        val scale = fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = scale.coerceIn(0.24f, 1f)
                     }
             )
         }
