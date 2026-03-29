@@ -127,34 +127,34 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
     when (destination) {
         SettingsDestination.ROOT -> SettingsPageScaffold(
-            title = "????",
+            title = "\u684c\u9762\u8bbe\u7f6e",
             onBack = onFinish
         ) {
             item {
                 SettingsCategoryCard(
-                    title = "??",
-                    subtitle = watchFaces.firstOrNull { it.id == selectedWatchFaceId }?.displayName ?: "?? ??",
+                    title = "\u8868\u76d8",
+                    subtitle = watchFaces.firstOrNull { it.id == selectedWatchFaceId }?.displayName ?: "\u661f\u91ce \u6df1\u84dd",
                     onClick = { destination = SettingsDestination.WATCH_FACES }
                 )
             }
             item {
                 SettingsCategoryCard(
-                    title = "?????",
-                    subtitle = "??????????",
+                    title = "\u663e\u793a\u4e0e\u5916\u89c2",
+                    subtitle = "\u5e03\u5c40\u3001\u6a21\u7cca\u4e0e\u542f\u52a8\u56fe\u6807",
                     onClick = { destination = SettingsDestination.APPEARANCE }
                 )
             }
             item {
                 SettingsCategoryCard(
-                    title = "?????",
-                    subtitle = "??????????",
+                    title = "\u6027\u80fd\u4e0e\u52a8\u753b",
+                    subtitle = "\u56fe\u6807\u8d28\u91cf\u4e0e\u52a8\u753b\u63a7\u5236",
                     onClick = { destination = SettingsDestination.PERFORMANCE }
                 )
             }
         }
 
         SettingsDestination.WATCH_FACES -> SettingsPageScaffold(
-            title = "??",
+            title = "\u8868\u76d8",
             onBack = { destination = SettingsDestination.ROOT }
         ) {
             if (!watchFaceLastError.isNullOrBlank()) {
@@ -201,7 +201,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
             }
             item {
                 ActionCard(
-                    title = "??????",
+                    title = "\u91cd\u65b0\u626b\u63cf\u8868\u76d8",
                     icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
                     onClick = { vm.refreshWatchFaces() }
                 )
@@ -209,49 +209,49 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
         }
 
         SettingsDestination.APPEARANCE -> SettingsPageScaffold(
-            title = "?????",
+            title = "\u663e\u793a\u4e0e\u5916\u89c2",
             onBack = { destination = SettingsDestination.ROOT }
         ) {
-            item { SectionTitle("??") }
+            item { SectionTitle("\u5e03\u5c40") }
             item {
                 SettingsChoiceRow(
-                    title = "????",
-                    subtitle = "Apple Watch ????",
+                    title = "\u8702\u7a9d\u5e03\u5c40",
+                    subtitle = "Apple Watch \u98ce\u683c",
                     selected = layoutMode == LayoutMode.Honeycomb,
                     onClick = { vm.setLayoutMode(LayoutMode.Honeycomb) }
                 )
             }
             item {
                 SettingsChoiceRow(
-                    title = "????",
-                    subtitle = "??????",
+                    title = "\u5217\u8868\u5e03\u5c40",
+                    subtitle = "\u7ecf\u5178\u7eb5\u5411\u5217\u8868",
                     selected = layoutMode == LayoutMode.List,
                     onClick = { vm.setLayoutMode(LayoutMode.List) }
                 )
             }
-            item { SectionTitle("??") }
+            item { SectionTitle("\u89c6\u89c9") }
             item {
                 SettingsSwitchRow(
-                    title = "????",
-                    subtitle = "?????????????",
+                    title = "\u80cc\u666f\u6a21\u7cca",
+                    subtitle = "\u5728\u62bd\u5c49\u4e0e\u5c42\u7ea7\u5207\u6362\u4e2d\u542f\u7528\u6a21\u7cca",
                     checked = blurEnabled,
                     onToggle = { vm.setBlurEnabled(it) }
                 )
             }
             item {
                 SettingsSwitchRow(
-                    title = "????",
-                    subtitle = if (blurEnabled) "??????????????" else "????????",
+                    title = "\u8fb9\u7f18\u6a21\u7cca",
+                    subtitle = if (blurEnabled) "\u4e3a\u9876\u90e8\u548c\u5e95\u90e8\u6dfb\u52a0\u6e10\u53d8\u6a21\u7cca" else "\u5f00\u542f\u80cc\u666f\u6a21\u7cca\u540e\u53ef\u7528",
                     checked = edgeBlurEnabled,
                     enabled = blurEnabled,
                     onToggle = { vm.setEdgeBlurEnabled(it) }
                 )
             }
-            item { SectionTitle("????") }
+            item { SectionTitle("\u542f\u52a8") }
             item {
                 SettingsSwitchRow(
-                    title = "????",
-                    subtitle = "??????????????",
+                    title = "\u542f\u52a8\u906e\u7f69",
+                    subtitle = "\u6253\u5f00\u5e94\u7528\u65f6\u663e\u793a\u56fe\u6807\u8fc7\u6e21",
                     checked = splashIcon,
                     onToggle = { vm.setSplashIcon(it) }
                 )
@@ -259,7 +259,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
             if (splashIcon) {
                 item {
                     SettingsSliderRow(
-                        title = "????",
+                        title = "\u906e\u7f69\u65f6\u957f",
                         value = splashDelay.toFloat(),
                         valueText = "${splashDelay} ms",
                         range = 300f..1500f,
@@ -271,29 +271,29 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
         }
 
         SettingsDestination.PERFORMANCE -> SettingsPageScaffold(
-            title = "?????",
+            title = "\u6027\u80fd\u4e0e\u52a8\u753b",
             onBack = { destination = SettingsDestination.ROOT }
         ) {
             item {
                 SettingsSwitchRow(
-                    title = "????????",
-                    subtitle = "??????????????",
+                    title = "\u4f4e\u5206\u8fa8\u7387\u56fe\u6807",
+                    subtitle = "\u964d\u4f4e\u56fe\u6807\u5f00\u9500\u4ee5\u63d0\u5347\u6d41\u7545\u5ea6",
                     checked = lowResIcons,
                     onToggle = { vm.setLowResIcons(it) }
                 )
             }
             item {
                 SettingsSwitchRow(
-                    title = "????",
-                    subtitle = "???????????",
+                    title = "\u684c\u9762\u8fd4\u56de\u52a8\u753b",
+                    subtitle = "\u542f\u7528\u7c7b watchOS \u7684\u8fd4\u56de\u8fc7\u6e21",
                     checked = animationOverrideEnabled,
                     onToggle = { vm.setAnimationOverrideEnabled(it) }
                 )
             }
             item {
                 ActionCard(
-                    title = "??????",
-                    subtitle = "?????????????",
+                    title = "\u6062\u590d\u9ed8\u8ba4\u8bbe\u7f6e",
+                    subtitle = "\u91cd\u7f6e\u684c\u9762\u5916\u89c2\u4e0e\u6027\u80fd\u9009\u9879",
                     onClick = { vm.resetSettings() }
                 )
             }

@@ -43,7 +43,7 @@
         <activity
             android:name=".SettingsActivity"
             android:exported="true"
-            android:label="妗岄潰璁剧疆"
+            android:label="@string/settings_title"
             android:icon="@mipmap/ic_settings_launcher"
             android:theme="@style/Theme.WatchLauncher"
             android:screenOrientation="portrait">
