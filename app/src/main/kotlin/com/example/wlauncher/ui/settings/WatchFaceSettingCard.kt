@@ -19,10 +19,13 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.graphicsLayer
@@ -34,6 +37,8 @@ import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceScanner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun WatchFaceSettingCard(
@@ -73,10 +78,12 @@ fun WatchFaceSettingCard(
             )
         } else {
             val context = androidx.compose.ui.platform.LocalContext.current
-            val previewBitmap = androidx.compose.runtime.remember(descriptor.stableKey) {
-                LunchWatchFaceScanner.loadPreviewDrawable(context, descriptor)
-                    ?.toBitmap(120, 120)
-                    ?.asImageBitmap()
+            val previewBitmap by produceState<ImageBitmap?>(initialValue = null, key1 = descriptor.stableKey) {
+                value = withContext(Dispatchers.Default) {
+                    LunchWatchFaceScanner.loadPreviewDrawable(context, descriptor)
+                        ?.toBitmap(120, 120)
+                        ?.asImageBitmap()
+                }
             }
             if (previewBitmap != null) {
                 Image(

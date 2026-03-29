@@ -28,6 +28,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -35,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
@@ -55,6 +57,8 @@ import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceRuntime
 import com.flue.launcher.watchface.LunchWatchFaceScanner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.absoluteValue
 
 class WatchFaceChooserActivity : ComponentActivity() {
@@ -84,7 +88,8 @@ private fun WatchFaceChooserScreen(
     val builtInVideoClockSize by vm.builtInVideoClockSize.collectAsState()
     val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(watchFaces.isEmpty()) {
+        if (watchFaces.isNotEmpty()) return@LaunchedEffect
         vm.refreshWatchFaces()
     }
 
@@ -310,10 +315,12 @@ private fun WatchFacePreviewCard(
 @Composable
 private fun WatchFacePreviewDrawable(descriptor: LunchWatchFaceDescriptor) {
     val context = LocalContext.current
-    val previewBitmap = remember(descriptor.stableKey) {
-        LunchWatchFaceScanner.loadPreviewDrawable(context, descriptor)
-            ?.toBitmap(720, 720)
-            ?.asImageBitmap()
+    val previewBitmap by produceState<ImageBitmap?>(initialValue = null, key1 = descriptor.stableKey) {
+        value = withContext(Dispatchers.Default) {
+            LunchWatchFaceScanner.loadPreviewDrawable(context, descriptor)
+                ?.toBitmap(420, 420)
+                ?.asImageBitmap()
+        }
     }
     if (previewBitmap != null) {
         androidx.compose.foundation.Image(

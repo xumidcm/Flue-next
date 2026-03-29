@@ -25,12 +25,14 @@ import com.flue.launcher.watchface.WatchClockPosition
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceRegistry
 import com.flue.launcher.watchface.LunchWatchFaceScanner
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "launcher_settings")
 
@@ -375,6 +377,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val next = _hiddenApps.value.toMutableSet().apply {
             if (hidden) add(componentKey) else remove(componentKey)
         }
+        setHiddenApps(next)
+    }
+
+    fun setHiddenApps(components: Set<String>) {
+        val next = components.filter(String::isNotBlank).toSet()
         _hiddenApps.value = next
         appRepository.setHiddenComponents(next)
         viewModelScope.launch {
@@ -386,7 +393,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun refreshIconPacks() {
-        _availableIconPacks.value = IconPackScanner.scanInstalled(getApplication())
+        viewModelScope.launch {
+            val packs = withContext(Dispatchers.IO) {
+                IconPackScanner.scanInstalled(getApplication())
+            }
+            _availableIconPacks.value = packs
+        }
     }
 
     fun setIconPackPackage(packageName: String?) {
@@ -405,7 +417,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun refreshWatchFaces() {
         viewModelScope.launch {
-            val scanned = LunchWatchFaceScanner.builtInDescriptors() + LunchWatchFaceScanner.scanInstalled(getApplication())
+            val scanned = withContext(Dispatchers.IO) {
+                LunchWatchFaceScanner.builtInDescriptors() + LunchWatchFaceScanner.scanInstalled(getApplication())
+            }
             _availableWatchFaces.value = scanned
             LunchWatchFaceRegistry.update(scanned)
             watchFaceScanHydrated = true

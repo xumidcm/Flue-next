@@ -155,13 +155,35 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
     val headerTime = rememberSettingsHeaderTime()
 
     var destination by remember { mutableStateOf(SettingsDestination.ROOT) }
+    var hiddenAppsDraft by remember { mutableStateOf(hiddenApps) }
+    var hiddenAppsDirty by remember { mutableStateOf(false) }
+
+    LaunchedEffect(hiddenApps) {
+        if (!hiddenAppsDirty) {
+            hiddenAppsDraft = hiddenApps
+        }
+    }
 
     LaunchedEffect(Unit) {
         vm.refreshWatchFaces()
     }
 
+    val commitHiddenAppsDraft = {
+        if (hiddenAppsDirty) {
+            vm.setHiddenApps(hiddenAppsDraft)
+            hiddenAppsDirty = false
+        }
+    }
+
+    val navigateTo: (SettingsDestination) -> Unit = { next ->
+        if (destination == SettingsDestination.HIDDEN_APPS && next != SettingsDestination.HIDDEN_APPS) {
+            commitHiddenAppsDraft()
+        }
+        destination = next
+    }
+
     BackHandler(enabled = destination != SettingsDestination.ROOT) {
-        destination = SettingsDestination.ROOT
+        navigateTo(SettingsDestination.ROOT)
     }
 
     val selectedIconPackLabel = availableIconPacks.firstOrNull { it.packageName == selectedIconPackPackage }?.label
@@ -177,14 +199,17 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
         when (currentDestination) {
             SettingsDestination.ROOT -> SettingsPageScaffold(
                 title = "\u684c\u9762\u8bbe\u7f6e",
-                onBack = onFinish,
+                onBack = {
+                    commitHiddenAppsDraft()
+                    onFinish()
+                },
                 headerTime = headerTime
             ) { listState, screenCenterY, screenHeightPx ->
                 item("watchfaces") {
                     SettingsCategoryCard(
                         title = "\u8868\u76d8",
                         subtitle = selectedWatchFace.displayName,
-                        onClick = { destination = SettingsDestination.WATCH_FACES },
+                        onClick = { navigateTo(SettingsDestination.WATCH_FACES) },
                         scale = itemFisheye(listState, "watchfaces", screenCenterY, screenHeightPx)
                     )
                 }
@@ -192,15 +217,15 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                     SettingsCategoryCard(
                         title = "\u663e\u793a\u4e0e\u5916\u89c2",
                         subtitle = "\u5e03\u5c40\u3001\u6a21\u7cca\u4e0e\u542f\u52a8\u56fe\u6807",
-                        onClick = { destination = SettingsDestination.APPEARANCE },
+                        onClick = { navigateTo(SettingsDestination.APPEARANCE) },
                         scale = itemFisheye(listState, "appearance", screenCenterY, screenHeightPx)
                     )
                 }
                 item("hidden_apps") {
                     SettingsCategoryCard(
                         title = "\u9690\u85cf\u5e94\u7528",
-                        subtitle = "\u5df2\u9690\u85cf ${hiddenApps.size} \u4e2a\u5e94\u7528",
-                        onClick = { destination = SettingsDestination.HIDDEN_APPS },
+                        subtitle = "\u5df2\u9690\u85cf ${hiddenAppsDraft.size} \u4e2a\u5e94\u7528",
+                        onClick = { navigateTo(SettingsDestination.HIDDEN_APPS) },
                         scale = itemFisheye(listState, "hidden_apps", screenCenterY, screenHeightPx)
                     )
                 }
@@ -208,7 +233,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                     SettingsCategoryCard(
                         title = "\u56fe\u6807\u5305",
                         subtitle = selectedIconPackLabel ?: "\u7cfb\u7edf\u9ed8\u8ba4\u56fe\u6807",
-                        onClick = { destination = SettingsDestination.ICON_PACKS },
+                        onClick = { navigateTo(SettingsDestination.ICON_PACKS) },
                         scale = itemFisheye(listState, "icon_packs", screenCenterY, screenHeightPx)
                     )
                 }
@@ -216,7 +241,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                     SettingsCategoryCard(
                         title = "\u6027\u80fd\u4e0e\u52a8\u753b",
                         subtitle = "\u56fe\u6807\u8d28\u91cf\u4e0e\u52a8\u753b\u63a7\u5236",
-                        onClick = { destination = SettingsDestination.PERFORMANCE },
+                        onClick = { navigateTo(SettingsDestination.PERFORMANCE) },
                         scale = itemFisheye(listState, "performance", screenCenterY, screenHeightPx)
                     )
                 }
@@ -224,7 +249,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                     SettingsCategoryCard(
                         title = "\u5de5\u5177",
                         subtitle = "\u5bfc\u51fa\u65e5\u5fd7\u4e0e\u6062\u590d\u9ed8\u8ba4",
-                        onClick = { destination = SettingsDestination.TOOLS },
+                        onClick = { navigateTo(SettingsDestination.TOOLS) },
                         scale = itemFisheye(listState, "tools", screenCenterY, screenHeightPx)
                     )
                 }
@@ -232,7 +257,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                     SettingsCategoryCard(
                         title = "\u5173\u4e8e",
                         subtitle = "Flue  $ABOUT_VERSION",
-                        onClick = { destination = SettingsDestination.ABOUT },
+                        onClick = { navigateTo(SettingsDestination.ABOUT) },
                         scale = itemFisheye(listState, "about", screenCenterY, screenHeightPx)
                     )
                 }
@@ -240,12 +265,12 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
             SettingsDestination.HIDDEN_APPS -> SettingsPageScaffold(
                 title = "\u9690\u85cf\u5e94\u7528",
-                onBack = { destination = SettingsDestination.ROOT },
+                onBack = { navigateTo(SettingsDestination.ROOT) },
                 headerTime = headerTime
             ) { listState, screenCenterY, screenHeightPx ->
                 item("hidden_summary") {
                     MessageCard(
-                        text = "\u5df2\u9690\u85cf ${hiddenApps.size} \u4e2a\u5e94\u7528",
+                        text = "\u5df2\u9690\u85cf ${hiddenAppsDraft.size} \u4e2a\u5e94\u7528",
                         background = WatchColors.SurfaceGlass,
                         onClick = {}
                     )
@@ -254,8 +279,13 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                     SettingsSwitchRow(
                         title = app.label,
                         subtitle = app.packageName,
-                        checked = hiddenApps.contains(app.componentKey) || hiddenApps.contains(app.packageName),
-                        onToggle = { vm.setAppHidden(app.componentKey, it) },
+                        checked = hiddenAppsDraft.contains(app.componentKey) || hiddenAppsDraft.contains(app.packageName),
+                        onToggle = {
+                            hiddenAppsDraft = hiddenAppsDraft.toMutableSet().apply {
+                                if (it) add(app.componentKey) else remove(app.componentKey)
+                            }
+                            hiddenAppsDirty = true
+                        },
                         scale = itemFisheye(listState, "app_${app.componentKey}", screenCenterY, screenHeightPx),
                         leadingIcon = app.cachedIcon
                     )
@@ -264,7 +294,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
             SettingsDestination.ICON_PACKS -> SettingsPageScaffold(
                 title = "\u56fe\u6807\u5305",
-                onBack = { destination = SettingsDestination.ROOT },
+                onBack = { navigateTo(SettingsDestination.ROOT) },
                 headerTime = headerTime
             ) { listState, screenCenterY, screenHeightPx ->
                 item("icon_pack_default") {
@@ -298,7 +328,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
             SettingsDestination.WATCH_FACES -> SettingsPageScaffold(
             title = "\u8868\u76d8",
-            onBack = { destination = SettingsDestination.ROOT },
+            onBack = { navigateTo(SettingsDestination.ROOT) },
             headerTime = headerTime
         ) { _, _, _ ->
             if (!watchFaceLastError.isNullOrBlank()) {
@@ -356,7 +386,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
             SettingsDestination.APPEARANCE -> SettingsPageScaffold(
             title = "\u663e\u793a\u4e0e\u5916\u89c2",
-            onBack = { destination = SettingsDestination.ROOT },
+            onBack = { navigateTo(SettingsDestination.ROOT) },
             headerTime = headerTime
         ) { listState, screenCenterY, screenHeightPx ->
             item("layout_header") { SectionTitle("\u5e03\u5c40", itemFisheye(listState, "layout_header", screenCenterY, screenHeightPx)) }
@@ -482,7 +512,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
             SettingsDestination.PERFORMANCE -> SettingsPageScaffold(
             title = "\u6027\u80fd\u4e0e\u52a8\u753b",
-            onBack = { destination = SettingsDestination.ROOT },
+            onBack = { navigateTo(SettingsDestination.ROOT) },
             headerTime = headerTime
         ) { listState, screenCenterY, screenHeightPx ->
             item("low_res") {
@@ -507,7 +537,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
             SettingsDestination.TOOLS -> SettingsPageScaffold(
             title = "\u5de5\u5177",
-            onBack = { destination = SettingsDestination.ROOT },
+            onBack = { navigateTo(SettingsDestination.ROOT) },
             headerTime = headerTime
         ) { listState, screenCenterY, screenHeightPx ->
             item("export_log") {
@@ -530,7 +560,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
             SettingsDestination.ABOUT -> SettingsPageScaffold(
                 title = "\u5173\u4e8e",
-                onBack = { destination = SettingsDestination.ROOT },
+                onBack = { navigateTo(SettingsDestination.ROOT) },
                 headerTime = headerTime
             ) { listState, screenCenterY, screenHeightPx ->
                 item("about_card") {
@@ -657,7 +687,7 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
         label = "settings_category_scale"
     )
     val background by animateColorAsState(
-        if (pressed) WatchColors.SurfaceGlass.copy(alpha = 0.82f) else WatchColors.SurfaceGlass,
+        if (pressed) Color(0xFF1A1A1D) else WatchColors.SurfaceGlass,
         label = "settings_category_bg"
     )
     Box(
@@ -770,8 +800,8 @@ private fun SettingsChoiceRow(
             .clip(RoundedCornerShape(18.dp))
             .background(
                 when {
-                    pressed && selected -> WatchColors.ActiveCyan.copy(alpha = 0.22f)
-                    pressed -> WatchColors.SurfaceGlass.copy(alpha = 0.82f)
+                    pressed && selected -> WatchColors.ActiveCyan.copy(alpha = 0.10f)
+                    pressed -> Color(0xFF1A1A1D)
                     selected -> WatchColors.ActiveCyan.copy(alpha = 0.16f)
                     else -> WatchColors.SurfaceGlass
                 }
@@ -840,7 +870,7 @@ private fun SettingsSwitchRow(
                 alpha = if (enabled) scale.coerceIn(0.55f, 1f) else 0.5f
             }
             .clip(RoundedCornerShape(18.dp))
-            .background(if (pressed) WatchColors.SurfaceGlass.copy(alpha = 0.82f) else WatchColors.SurfaceGlass)
+            .background(if (pressed) Color(0xFF1A1A1D) else WatchColors.SurfaceGlass)
             .instantPressGesture(pressedState, enabled = enabled) { onToggle(!checked) }
             .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
@@ -962,7 +992,7 @@ private fun ActionCard(
                 alpha = scale.coerceIn(0.55f, 1f)
             }
             .clip(RoundedCornerShape(18.dp))
-            .background(if (pressed) WatchColors.SurfaceGlass.copy(alpha = 0.82f) else WatchColors.SurfaceGlass)
+            .background(if (pressed) Color(0xFF1A1A1D) else WatchColors.SurfaceGlass)
             .instantPressGesture(pressedState, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
