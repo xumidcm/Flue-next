@@ -54,7 +54,7 @@ val FIXED_PREVIEW_CLOCK = ClockSnapshot(
     date = "\u0031\u0031\u6708\u0031\u0033\u65e5"
 )
 
-private data class ClockPalette(
+data class ClockPalette(
     val timeColor: Color,
     val dateColor: Color
 )
@@ -250,6 +250,26 @@ private fun MediaVideoBackground(path: String?, isFaceVisible: Boolean, fillScre
 }
 
 @Composable
+fun ClockOverlayPreview(
+    clock: ClockSnapshot,
+    clockPosition: WatchClockPosition,
+    clockSizeSp: Int,
+    palette: ClockPalette,
+    fallbackTitle: String? = null,
+    fallbackSubtitle: String? = null
+) {
+    ClockOverlay(
+        clock = clock,
+        compact = false,
+        clockPosition = clockPosition,
+        clockSizeSp = clockSizeSp,
+        palette = palette,
+        fallbackTitle = fallbackTitle,
+        fallbackSubtitle = fallbackSubtitle
+    )
+}
+
+@Composable
 private fun ClockOverlay(
     clock: ClockSnapshot,
     compact: Boolean,
@@ -324,6 +344,13 @@ private fun rememberClockSnapshot(): ClockSnapshot {
     }
     return snapshot
 }
+
+@Composable
+fun rememberClockPaletteForPreview(
+    watchFaceId: String,
+    photoPath: String?,
+    clockPosition: WatchClockPosition
+): ClockPalette = rememberClockPalette(watchFaceId, photoPath, clockPosition)
 
 @Composable
 private fun rememberClockPalette(

@@ -1,6 +1,8 @@
 package com.flue.launcher
 
 import android.content.Intent
+import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -35,19 +37,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.graphics.drawable.toBitmap
-import com.flue.launcher.ui.home.BuiltInWatchFacePreview
+import com.flue.launcher.ui.home.ClockOverlayPreview
 import com.flue.launcher.ui.home.ClockSnapshot
 import com.flue.launcher.ui.home.FIXED_PREVIEW_CLOCK
+import com.flue.launcher.ui.home.rememberClockPaletteForPreview
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.viewmodel.LauncherViewModel
@@ -59,6 +64,7 @@ import com.flue.launcher.watchface.LunchWatchFaceRuntime
 import com.flue.launcher.watchface.LunchWatchFaceScanner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.absoluteValue
 
 class WatchFaceChooserActivity : ComponentActivity() {
@@ -295,20 +301,120 @@ private fun WatchFacePreviewCard(
         contentAlignment = Alignment.Center
     ) {
         if (descriptor.isBuiltin) {
-            BuiltInWatchFacePreview(
+            BuiltInChooserPreview(
                 watchFaceId = descriptor.id,
                 photoPath = builtInPhotoPath,
                 videoPath = builtInVideoPath,
                 photoOptions = photoOptions,
                 videoOptions = videoOptions,
                 clockOverride = clockOverride,
-                showClock = true,
-                playVideo = true,
                 modifier = Modifier.fillMaxSize()
             )
         } else {
             WatchFacePreviewDrawable(descriptor)
         }
+    }
+}
+
+@Composable
+private fun BuiltInChooserPreview(
+    watchFaceId: String,
+    photoPath: String?,
+    videoPath: String?,
+    photoOptions: BuiltInWatchFaceOptions,
+    videoOptions: BuiltInWatchFaceOptions,
+    clockOverride: ClockSnapshot?,
+    modifier: Modifier = Modifier
+) {
+    val previewBitmap by produceState<ImageBitmap?>(initialValue = null, key1 = watchFaceId, key2 = photoPath, key3 = videoPath) {
+        value = withContext(Dispatchers.IO) {
+            when (watchFaceId) {
+                BUILT_IN_PHOTO_WATCHFACE_ID -> photoPath
+                    ?.takeIf { File(it).exists() }
+                    ?.let {
+                        BitmapFactory.decodeFile(it, BitmapFactory.Options().apply { inSampleSize = 2 })
+                            ?.asImageBitmap()
+                    }
+                BUILT_IN_VIDEO_WATCHFACE_ID -> videoPath
+                    ?.takeIf { File(it).exists() }
+                    ?.let { path ->
+                        runCatching {
+                            val retriever = MediaMetadataRetriever()
+                            try {
+                                retriever.setDataSource(path)
+                                retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                                    ?.asImageBitmap()
+                            } finally {
+                                runCatching { retriever.release() }
+                            }
+                        }.getOrNull()
+                    }
+                else -> null
+            }
+        }
+    }
+    val clock = clockOverride ?: FIXED_PREVIEW_CLOCK
+    val clockPosition = when (watchFaceId) {
+        BUILT_IN_PHOTO_WATCHFACE_ID -> photoOptions.clockPosition
+        BUILT_IN_VIDEO_WATCHFACE_ID -> videoOptions.clockPosition
+        else -> com.flue.launcher.watchface.WatchClockPosition.CENTER
+    }
+    val clockSizeSp = when (watchFaceId) {
+        BUILT_IN_PHOTO_WATCHFACE_ID -> photoOptions.clockSizeSp
+        BUILT_IN_VIDEO_WATCHFACE_ID -> videoOptions.clockSizeSp
+        else -> 64
+    }
+    val palette = rememberClockPaletteForPreview(
+        watchFaceId = watchFaceId,
+        photoPath = photoPath,
+        clockPosition = clockPosition
+    )
+
+    Box(
+        modifier = modifier.background(Color.Black),
+        contentAlignment = Alignment.Center
+    ) {
+        val bitmap = previewBitmap
+        if (bitmap != null) {
+            androidx.compose.foundation.Image(
+                bitmap = bitmap,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            val fallbackModifier = when (watchFaceId) {
+                BUILT_IN_VIDEO_WATCHFACE_ID -> Modifier.background(Color(0xFF05070C))
+                BUILT_IN_PHOTO_WATCHFACE_ID -> Modifier.background(Color(0xFF0C1018))
+                else -> Modifier.background(
+                    Brush.radialGradient(
+                        colors = listOf(Color(0xFF16304A), Color(0xFF0B1322), Color.Black),
+                        radius = 900f
+                    )
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(fallbackModifier)
+            )
+        }
+        ClockOverlayPreview(
+            clock = clock,
+            clockPosition = clockPosition,
+            clockSizeSp = clockSizeSp,
+            palette = palette,
+            fallbackTitle = when (watchFaceId) {
+                BUILT_IN_PHOTO_WATCHFACE_ID -> if (photoPath.isNullOrBlank()) "\u672A\u8BBE\u7F6E\u56FE\u7247" else null
+                BUILT_IN_VIDEO_WATCHFACE_ID -> if (videoPath.isNullOrBlank()) "\u672A\u8BBE\u7F6E\u89C6\u9891" else null
+                else -> null
+            },
+            fallbackSubtitle = when (watchFaceId) {
+                BUILT_IN_PHOTO_WATCHFACE_ID -> if (photoPath.isNullOrBlank()) "\u5728\u8868\u76D8\u8BBE\u7F6E\u91CC\u9009\u62E9\u4E00\u5F20\u56FE\u7247" else null
+                BUILT_IN_VIDEO_WATCHFACE_ID -> if (videoPath.isNullOrBlank()) "\u5728\u8868\u76D8\u8BBE\u7F6E\u91CC\u9009\u62E9\u4E00\u4E2A\u89C6\u9891" else null
+                else -> null
+            }
+        )
     }
 }
 

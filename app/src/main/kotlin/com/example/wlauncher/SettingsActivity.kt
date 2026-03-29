@@ -56,6 +56,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -204,7 +205,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                     onFinish()
                 },
                 headerTime = headerTime
-            ) { listState, screenCenterY, screenHeightPx ->
+            ) { listState, screenCenterY, screenHeightPx, _ ->
                 item("watchfaces") {
                     SettingsCategoryCard(
                         title = "\u8868\u76d8",
@@ -267,7 +268,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                 title = "\u9690\u85cf\u5e94\u7528",
                 onBack = { navigateTo(SettingsDestination.ROOT) },
                 headerTime = headerTime
-            ) { listState, screenCenterY, screenHeightPx ->
+            ) { listState, screenCenterY, screenHeightPx, visibleItemKeys ->
                 item("hidden_summary") {
                     MessageCard(
                         text = "\u5df2\u9690\u85cf ${hiddenAppsDraft.size} \u4e2a\u5e94\u7528",
@@ -287,7 +288,8 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                             hiddenAppsDirty = true
                         },
                         scale = itemFisheye(listState, "app_${app.componentKey}", screenCenterY, screenHeightPx),
-                        leadingIcon = app.cachedIcon
+                        leadingIcon = app.cachedIcon.takeIf { visibleItemKeys.contains("app_${app.componentKey}") },
+                        reserveLeadingIconSpace = true
                     )
                 }
             }
@@ -296,7 +298,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                 title = "\u56fe\u6807\u5305",
                 onBack = { navigateTo(SettingsDestination.ROOT) },
                 headerTime = headerTime
-            ) { listState, screenCenterY, screenHeightPx ->
+            ) { listState, screenCenterY, screenHeightPx, _ ->
                 item("icon_pack_default") {
                     SettingsChoiceRow(
                         title = "\u7cfb\u7edf\u9ed8\u8ba4",
@@ -330,7 +332,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
             title = "\u8868\u76d8",
             onBack = { navigateTo(SettingsDestination.ROOT) },
             headerTime = headerTime
-        ) { _, _, _ ->
+        ) { _, _, _, _ ->
             if (!watchFaceLastError.isNullOrBlank()) {
                 item("watchface_error") {
                     MessageCard(
@@ -388,7 +390,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
             title = "\u663e\u793a\u4e0e\u5916\u89c2",
             onBack = { navigateTo(SettingsDestination.ROOT) },
             headerTime = headerTime
-        ) { listState, screenCenterY, screenHeightPx ->
+        ) { listState, screenCenterY, screenHeightPx, _ ->
             item("layout_header") { SectionTitle("\u5e03\u5c40", itemFisheye(listState, "layout_header", screenCenterY, screenHeightPx)) }
             item("layout_honeycomb") {
                 SettingsChoiceRow(
@@ -514,7 +516,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
             title = "\u6027\u80fd\u4e0e\u52a8\u753b",
             onBack = { navigateTo(SettingsDestination.ROOT) },
             headerTime = headerTime
-        ) { listState, screenCenterY, screenHeightPx ->
+        ) { listState, screenCenterY, screenHeightPx, _ ->
             item("low_res") {
                 SettingsSwitchRow(
                     title = "\u4f4e\u5206\u8fa8\u7387\u56fe\u6807",
@@ -539,7 +541,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
             title = "\u5de5\u5177",
             onBack = { navigateTo(SettingsDestination.ROOT) },
             headerTime = headerTime
-        ) { listState, screenCenterY, screenHeightPx ->
+        ) { listState, screenCenterY, screenHeightPx, _ ->
             item("export_log") {
                 ActionCard(
                     title = "\u5bfc\u51fa\u65e5\u5fd7",
@@ -562,7 +564,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                 title = "\u5173\u4e8e",
                 onBack = { navigateTo(SettingsDestination.ROOT) },
                 headerTime = headerTime
-            ) { listState, screenCenterY, screenHeightPx ->
+            ) { listState, screenCenterY, screenHeightPx, _ ->
                 item("about_card") {
                     AboutCard(
                         scale = itemFisheye(listState, "about_card", screenCenterY, screenHeightPx)
@@ -578,11 +580,16 @@ private fun SettingsPageScaffold(
     title: String,
     onBack: () -> Unit,
     headerTime: String,
-    content: LazyListScope.(LazyListState, Float, Float) -> Unit
+    content: LazyListScope.(LazyListState, Float, Float, Set<Any>) -> Unit
 ) {
     val listState = rememberLazyListState()
     val overscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = rememberCoroutineScope()
+    val visibleItemKeys by remember(listState) {
+        derivedStateOf {
+            listState.layoutInfo.visibleItemsInfo.mapNotNull { it.key }.toSet()
+        }
+    }
 
     val nestedScrollConnection = remember(listState) {
         object : NestedScrollConnection {
@@ -654,7 +661,7 @@ private fun SettingsPageScaffold(
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
             }
-            content(listState, screenCenterY, screenHeightPx)
+            content(listState, screenCenterY, screenHeightPx, visibleItemKeys)
         }
     }
 }
@@ -838,7 +845,8 @@ private fun SettingsSwitchRow(
     enabled: Boolean = true,
     onToggle: (Boolean) -> Unit,
     scale: Float,
-    leadingIcon: ImageBitmap? = null
+    leadingIcon: ImageBitmap? = null,
+    reserveLeadingIconSpace: Boolean = false
 ) {
     val pressedState = rememberPressedState()
     val pressed by pressedState
@@ -885,14 +893,24 @@ private fun SettingsSwitchRow(
                     .padding(end = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (leadingIcon != null) {
-                    Image(
-                        bitmap = leadingIcon,
-                        contentDescription = null,
+                if (leadingIcon != null || reserveLeadingIconSpace) {
+                    Box(
                         modifier = Modifier
                             .size(34.dp)
                             .clip(RoundedCornerShape(11.dp))
-                    )
+                            .background(Color.White.copy(alpha = if (leadingIcon != null) 0f else 0.05f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (leadingIcon != null) {
+                            Image(
+                                bitmap = leadingIcon,
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(11.dp))
+                            )
+                        }
+                    }
                     Spacer(modifier = Modifier.width(12.dp))
                 }
                 Column {
