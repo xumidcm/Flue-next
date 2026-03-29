@@ -17,6 +17,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -27,7 +28,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
@@ -625,7 +625,11 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column(modifier = Modifier.weight(1f)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.84f)
+                    .padding(end = 12.dp)
+            ) {
                 Text(title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(subtitle, color = WatchColors.TextTertiary, fontSize = 13.sp)
@@ -695,7 +699,11 @@ private fun SettingsChoiceRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.84f)
+                    .padding(end = 12.dp)
+            ) {
                 Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(3.dp))
                 Text(subtitle, color = WatchColors.TextTertiary, fontSize = 12.sp)
@@ -747,7 +755,11 @@ private fun SettingsSwitchRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.82f)
+                    .padding(end = 12.dp)
+            ) {
                 Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(3.dp))
                 Text(subtitle, color = WatchColors.TextTertiary, fontSize = 12.sp)
@@ -848,7 +860,11 @@ private fun ActionCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.82f)
+                    .padding(end = 12.dp)
+            ) {
                 Text(title, color = WatchColors.ActiveCyan, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 if (!subtitle.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(3.dp))
