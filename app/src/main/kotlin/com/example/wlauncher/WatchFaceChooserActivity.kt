@@ -392,7 +392,10 @@ private fun BuiltInChooserPreview(
         BUILT_IN_VIDEO_WATCHFACE_ID -> if (videoPath.isNullOrBlank()) "\u5728\u8868\u76D8\u8BBE\u7F6E\u91CC\u9009\u62E9\u4E00\u4E2A\u89C6\u9891" else null
         else -> null
     }
-    val previewBitmap by produceState<ImageBitmap?>(initialValue = null, key1 = watchFaceId, key2 = photoPath, key3 = videoPath, key4 = clockPosition, key5 = clockSizeSp, key6 = boldClock, key7 = palette, key8 = fallbackTitle, key9 = fallbackSubtitle) {
+    val previewBitmap by produceState<ImageBitmap?>(
+        initialValue = null,
+        key1 = listOf(watchFaceId, photoPath, videoPath, clockPosition, clockSizeSp, boldClock, palette, fallbackTitle, fallbackSubtitle)
+    ) {
         value = withContext(Dispatchers.IO) {
             renderBuiltInChooserBitmap(
                 watchFaceId = watchFaceId,
@@ -569,7 +572,7 @@ private fun drawChooserClock(
     val height = canvas.height.toFloat()
     val horizontalPadding = width * 0.1f
     val verticalPadding = height * 0.12f
-    val textAlign = when (clockPosition) {
+    val paintAlign = when (clockPosition) {
         WatchClockPosition.TOP_LEFT,
         WatchClockPosition.BOTTOM_LEFT,
         WatchClockPosition.LEFT_CENTER -> Paint.Align.LEFT
@@ -598,14 +601,14 @@ private fun drawChooserClock(
     }
     val timePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = timeColor
-        textAlign = textAlign
+        textAlign = paintAlign
         textSize = clockSizeSp * 5.2f
         typeface = if (boldClock) Typeface.DEFAULT_BOLD else Typeface.create(Typeface.DEFAULT, 300, false)
         isSubpixelText = true
     }
     val datePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = dateColor
-        textAlign = textAlign
+        textAlign = paintAlign
         textSize = clockSizeSp * 1.25f
         typeface = Typeface.DEFAULT_BOLD
         alpha = 220
@@ -616,7 +619,7 @@ private fun drawChooserClock(
     fallbackTitle?.let { title ->
         val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = timeColor
-            textAlign = textAlign
+            textAlign = paintAlign
             textSize = clockSizeSp * 1.45f
             typeface = Typeface.DEFAULT_BOLD
         }
@@ -624,7 +627,7 @@ private fun drawChooserClock(
         fallbackSubtitle?.let { subtitle ->
             val subtitlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = timeColor
-                textAlign = textAlign
+                textAlign = paintAlign
                 textSize = clockSizeSp * 0.92f
                 alpha = 196
             }

@@ -183,6 +183,14 @@ fun HoneycombScreen(
             }
         }
 
+        val currentScroll = scrollOffset.value
+        val lastItemCenterY = screenCenterY + maxGridY + currentScroll
+        val bottomFlattenProgress = computeHoneycombBottomFlattenProgress(
+            lastItemCenterY = lastItemCenterY,
+            safeBottom = safeBottom,
+            iconSizePx = iconSizePx
+        )
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -432,15 +440,8 @@ fun HoneycombScreen(
                     )
                 }
         ) {
-            val currentScroll = scrollOffset.value
             val visibleTop = -iconSizePx * 1.5f
             val visibleBottom = screenHeightPx + iconSizePx * 1.5f
-            val lastItemCenterY = screenCenterY + maxGridY + currentScroll
-            val bottomFlattenProgress = computeHoneycombBottomFlattenProgress(
-                lastItemCenterY = lastItemCenterY,
-                safeBottom = safeBottom,
-                iconSizePx = iconSizePx
-            )
             val dragOverlayApp = dragApp
             val dragOverlayPointer = dragPointer?.let {
                 clampHoneycombDisplayPointer(
