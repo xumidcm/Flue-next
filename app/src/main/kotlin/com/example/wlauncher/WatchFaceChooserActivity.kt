@@ -322,9 +322,10 @@ private fun WatchFacePreviewDrawable(descriptor: LunchWatchFaceDescriptor) {
                 ?.asImageBitmap()
         }
     }
-    if (previewBitmap != null) {
+    val bitmap = previewBitmap
+    if (bitmap != null) {
         androidx.compose.foundation.Image(
-            bitmap = previewBitmap,
+            bitmap = bitmap,
             contentDescription = null,
             modifier = Modifier.fillMaxSize(),
             contentScale = androidx.compose.ui.layout.ContentScale.Crop

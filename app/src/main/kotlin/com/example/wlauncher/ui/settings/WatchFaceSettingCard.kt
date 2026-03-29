@@ -85,9 +85,10 @@ fun WatchFaceSettingCard(
                         ?.asImageBitmap()
                 }
             }
-            if (previewBitmap != null) {
+            val bitmap = previewBitmap
+            if (bitmap != null) {
                 Image(
-                    bitmap = previewBitmap,
+                    bitmap = bitmap,
                     contentDescription = null,
                     modifier = Modifier
                         .size(52.dp)
