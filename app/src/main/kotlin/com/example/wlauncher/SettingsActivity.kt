@@ -704,11 +704,6 @@ private fun HeaderBackButton(onClick: () -> Unit) {
 private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () -> Unit, scale: Float) {
     val pressedState = rememberPressedState()
     val pressed by pressedState
-    val animatedScale by animateFloatAsState(
-        targetValue = scale,
-        animationSpec = tween(durationMillis = 180),
-        label = "settings_category_fisheye"
-    )
     val pressedScale by animateFloatAsState(
         if (pressed) 0.958f else 1f,
         animationSpec = spring(stiffness = 780f, dampingRatio = 0.72f),
@@ -722,9 +717,9 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                scaleX = animatedScale * pressedScale
-                scaleY = animatedScale * pressedScale
-                alpha = animatedScale.coerceIn(0.55f, 1f)
+                scaleX = scale * pressedScale
+                scaleY = scale * pressedScale
+                alpha = scale.coerceIn(0.55f, 1f)
             }
             .clip(RoundedCornerShape(24.dp))
             .background(background)
@@ -752,11 +747,6 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
 
 @Composable
 private fun SectionTitle(text: String, scale: Float) {
-    val animatedScale by animateFloatAsState(
-        targetValue = scale,
-        animationSpec = tween(durationMillis = 180),
-        label = "settings_section_fisheye"
-    )
     Text(
         text = text,
         color = WatchColors.TextTertiary,
@@ -765,9 +755,9 @@ private fun SectionTitle(text: String, scale: Float) {
         modifier = Modifier
             .padding(top = 4.dp, start = 4.dp, bottom = 2.dp)
             .graphicsLayer {
-                scaleX = animatedScale
-                scaleY = animatedScale
-                alpha = animatedScale.coerceIn(0.55f, 1f)
+                scaleX = scale
+                scaleY = scale
+                alpha = scale.coerceIn(0.55f, 1f)
             }
     )
 }
@@ -817,11 +807,6 @@ private fun SettingsChoiceRow(
 ) {
     val pressedState = rememberPressedState()
     val pressed by pressedState
-    val animatedScale by animateFloatAsState(
-        targetValue = scale,
-        animationSpec = tween(durationMillis = 180),
-        label = "settings_choice_fisheye"
-    )
     val pressedScale by animateFloatAsState(
         if (pressed) 0.964f else 1f,
         animationSpec = spring(stiffness = 820f, dampingRatio = 0.74f),
@@ -831,9 +816,9 @@ private fun SettingsChoiceRow(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                scaleX = animatedScale * pressedScale
-                scaleY = animatedScale * pressedScale
-                alpha = animatedScale.coerceIn(0.55f, 1f)
+                scaleX = scale * pressedScale
+                scaleY = scale * pressedScale
+                alpha = scale.coerceIn(0.55f, 1f)
             }
             .clip(RoundedCornerShape(18.dp))
             .background(
@@ -881,11 +866,6 @@ private fun SettingsSwitchRow(
 ) {
     val pressedState = rememberPressedState()
     val pressed by pressedState
-    val animatedScale by animateFloatAsState(
-        targetValue = scale,
-        animationSpec = tween(durationMillis = 180),
-        label = "settings_switch_fisheye"
-    )
     val pressedScale by animateFloatAsState(
         if (pressed) 0.958f else 1f,
         animationSpec = spring(stiffness = 860f, dampingRatio = 0.72f),
@@ -909,9 +889,9 @@ private fun SettingsSwitchRow(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                scaleX = animatedScale * pressedScale
-                scaleY = animatedScale * pressedScale
-                alpha = if (enabled) animatedScale.coerceIn(0.55f, 1f) else 0.5f
+                scaleX = scale * pressedScale
+                scaleY = scale * pressedScale
+                alpha = if (enabled) scale.coerceIn(0.55f, 1f) else 0.5f
             }
             .clip(RoundedCornerShape(18.dp))
             .background(if (pressed) Color(0xFF1A1A1D) else WatchColors.SurfaceGlass)
@@ -987,18 +967,13 @@ private fun SettingsSliderRow(
 ) {
     var localValue by remember(title) { mutableFloatStateOf(value) }
     LaunchedEffect(value) { localValue = value }
-    val animatedScale by animateFloatAsState(
-        targetValue = scale,
-        animationSpec = tween(durationMillis = 180),
-        label = "settings_slider_fisheye"
-    )
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                scaleX = animatedScale
-                scaleY = animatedScale
-                alpha = if (enabled) animatedScale.coerceIn(0.55f, 1f) else 0.5f
+                scaleX = scale
+                scaleY = scale
+                alpha = if (enabled) scale.coerceIn(0.55f, 1f) else 0.5f
             }
             .clip(RoundedCornerShape(18.dp))
             .background(WatchColors.SurfaceGlass)
@@ -1037,11 +1012,6 @@ private fun ActionCard(
 ) {
     val pressedState = rememberPressedState()
     val pressed by pressedState
-    val animatedScale by animateFloatAsState(
-        targetValue = scale,
-        animationSpec = tween(durationMillis = 180),
-        label = "settings_action_fisheye"
-    )
     val pressedScale by animateFloatAsState(
         if (pressed) 0.96f else 1f,
         animationSpec = spring(stiffness = 820f, dampingRatio = 0.74f),
@@ -1051,9 +1021,9 @@ private fun ActionCard(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                scaleX = animatedScale * pressedScale
-                scaleY = animatedScale * pressedScale
-                alpha = animatedScale.coerceIn(0.55f, 1f)
+                scaleX = scale * pressedScale
+                scaleY = scale * pressedScale
+                alpha = scale.coerceIn(0.55f, 1f)
             }
             .clip(RoundedCornerShape(18.dp))
             .background(if (pressed) Color(0xFF1A1A1D) else WatchColors.SurfaceGlass)
@@ -1083,18 +1053,13 @@ private fun ActionCard(
 
 @Composable
 private fun AboutCard(scale: Float) {
-    val animatedScale by animateFloatAsState(
-        targetValue = scale,
-        animationSpec = tween(durationMillis = 180),
-        label = "settings_about_fisheye"
-    )
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                scaleX = animatedScale
-                scaleY = animatedScale
-                alpha = animatedScale.coerceIn(0.55f, 1f)
+                scaleX = scale
+                scaleY = scale
+                alpha = scale.coerceIn(0.55f, 1f)
             }
             .clip(RoundedCornerShape(28.dp))
             .background(WatchColors.SurfaceGlass)
