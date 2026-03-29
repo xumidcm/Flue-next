@@ -457,7 +457,9 @@ private class InternalLoopingVideoView(context: Context) : FrameLayout(context) 
     init {
         addView(
             videoView,
-            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
+                gravity = android.view.Gravity.CENTER
+            }
         )
         addView(
             placeholder,
@@ -503,20 +505,50 @@ private class InternalLoopingVideoView(context: Context) : FrameLayout(context) 
     }
 
     private fun updateScale() {
-        if (!fillScreen || videoWidth <= 0 || videoHeight <= 0 || width <= 0 || height <= 0) {
+        if (videoWidth <= 0 || videoHeight <= 0 || width <= 0 || height <= 0) {
+            videoView.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
+                gravity = android.view.Gravity.CENTER
+            }
             videoView.scaleX = 1f
             videoView.scaleY = 1f
+            videoView.translationX = 0f
+            videoView.translationY = 0f
             return
         }
-        val viewAspect = width.toFloat() / height.toFloat()
+
+        val containerWidth = width.toFloat()
+        val containerHeight = height.toFloat()
         val videoAspect = videoWidth.toFloat() / videoHeight.toFloat()
-        if (videoAspect > viewAspect) {
-            videoView.scaleX = videoAspect / viewAspect
-            videoView.scaleY = 1f
+        val containerAspect = containerWidth / containerHeight
+
+        val (targetWidth, targetHeight) = if (fillScreen) {
+            if (videoAspect > containerAspect) {
+                (containerHeight * videoAspect) to containerHeight
+            } else {
+                containerWidth to (containerWidth / videoAspect)
+            }
         } else {
-            videoView.scaleX = 1f
-            videoView.scaleY = viewAspect / videoAspect
+            if (videoAspect > containerAspect) {
+                containerWidth to (containerWidth / videoAspect)
+            } else {
+                (containerHeight * videoAspect) to containerHeight
+            }
         }
+
+        val widthPx = targetWidth.toInt().coerceAtLeast(1)
+        val heightPx = targetHeight.toInt().coerceAtLeast(1)
+        val layoutParams = (videoView.layoutParams as? LayoutParams)
+            ?: LayoutParams(widthPx, heightPx)
+        if (layoutParams.width != widthPx || layoutParams.height != heightPx || layoutParams.gravity != android.view.Gravity.CENTER) {
+            layoutParams.width = widthPx
+            layoutParams.height = heightPx
+            layoutParams.gravity = android.view.Gravity.CENTER
+            videoView.layoutParams = layoutParams
+        }
+        videoView.scaleX = 1f
+        videoView.scaleY = 1f
+        videoView.translationX = 0f
+        videoView.translationY = 0f
     }
 
     override fun onDetachedFromWindow() {
