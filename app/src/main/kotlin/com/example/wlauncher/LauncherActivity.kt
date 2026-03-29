@@ -199,7 +199,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     )
             ) {
                 AnimatedContent(
-                    targetState = if (watchFaceSelectionReady || selectedWatchFaceId == BUILT_IN_WATCHFACE_ID) {
+                    targetState = if (watchFaceSelectionReady || selectedWatchFace.isBuiltin || selectedWatchFaceId == BUILT_IN_WATCHFACE_ID) {
                         selectedWatchFace.stableKey
                     } else {
                         "loading"

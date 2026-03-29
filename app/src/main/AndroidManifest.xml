@@ -56,12 +56,14 @@
         <activity
             android:name=".WatchFaceChooserActivity"
             android:exported="false"
+            android:label="@string/watchface_chooser_title"
             android:theme="@style/Theme.WatchLauncher"
             android:screenOrientation="portrait" />
 
         <activity
             android:name=".InternalWatchFaceConfigActivity"
             android:exported="false"
+            android:label="@string/internal_watchface_config_title"
             android:theme="@style/Theme.WatchLauncher"
             android:screenOrientation="portrait" />
 

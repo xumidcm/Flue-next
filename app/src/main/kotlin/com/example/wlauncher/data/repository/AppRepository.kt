@@ -14,16 +14,25 @@ import android.graphics.Shader
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
 import com.flue.launcher.data.model.AppInfo
+import com.flue.launcher.iconpack.IconPackMapping
+import com.flue.launcher.iconpack.IconPackScanner
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 class AppRepository(private val context: Context) {
 
+    private val _allApps = MutableStateFlow<List<AppInfo>>(emptyList())
+    val allApps: StateFlow<List<AppInfo>> = _allApps.asStateFlow()
+
     private val _apps = MutableStateFlow<List<AppInfo>>(emptyList())
     val apps: StateFlow<List<AppInfo>> = _apps.asStateFlow()
 
     private var customOrder: List<String> = emptyList()
+    private var hiddenComponents: Set<String> = emptySet()
+    private var currentIconSize = 128
+    private var iconPackPackage: String? = null
+    private var iconPackMapping: IconPackMapping? = null
 
     private val packageReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -47,16 +56,25 @@ class AppRepository(private val context: Context) {
         reorder()
     }
 
+    fun setHiddenComponents(components: Set<String>) {
+        hiddenComponents = components
+        applyFilters()
+    }
+
+    fun setIconPackPackage(packageName: String?) {
+        iconPackPackage = packageName?.takeIf { it.isNotBlank() }
+        iconPackMapping = iconPackPackage?.let { IconPackScanner.loadMapping(context, it) }
+        refresh(currentIconSize)
+    }
+
     private fun reorder() {
-        if (customOrder.isEmpty()) return
-        val current = _apps.value
-        _apps.value = current.sortedWith(
-            compareBy<AppInfo> { orderRank(it) }
-                .thenBy { it.label.lowercase() }
-        )
+        val current = _allApps.value
+        _allApps.value = sortApps(current)
+        applyFilters()
     }
 
     fun refresh(iconSize: Int = 128) {
+        currentIconSize = iconSize
         val pm = context.packageManager
         val installTimeCache = mutableMapOf<String, Long>()
         val mainIntent = Intent(Intent.ACTION_MAIN).apply {
@@ -65,18 +83,24 @@ class AppRepository(private val context: Context) {
         val resolveInfos: List<ResolveInfo> = pm.queryIntentActivities(mainIntent, 0)
         val myPackage = context.packageName
 
-        _apps.value = resolveInfos
+        iconPackMapping = iconPackPackage?.let { IconPackScanner.loadMapping(context, it) }
+
+        val loadedApps = resolveInfos
             .filter { ri ->
                 !(ri.activityInfo.packageName == myPackage &&
                     ri.activityInfo.name == "com.flue.launcher.LauncherActivity")
             }
             .distinctBy { "${it.activityInfo.packageName}/${it.activityInfo.name}" }
             .map { ri ->
-                val iconDrawable = ri.loadIcon(pm)
                 val packageName = ri.activityInfo.packageName
-                val iconBitmap = createCircularBitmap(
+                val componentKey = "$packageName/${ri.activityInfo.name}"
+                val packedIcon = iconPackMapping?.let { IconPackScanner.loadIconDrawable(context, it, componentKey) }
+                val iconDrawable = packedIcon ?: ri.loadIcon(pm)
+                val iconBitmap = if (packedIcon != null) {
                     iconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
-                )
+                } else {
+                    createCircularBitmap(iconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888))
+                }
                 val blurredBitmap = createSoftenedBitmap(iconBitmap)
                 AppInfo(
                     label = ri.loadLabel(pm).toString(),
@@ -87,20 +111,8 @@ class AppRepository(private val context: Context) {
                     cachedBlurredIcon = blurredBitmap.asImageBitmap()
                 )
             }
-            .let { list ->
-                if (customOrder.isNotEmpty()) {
-                    list.sortedWith(
-                        compareBy<AppInfo> { orderRank(it) }
-                            .thenBy { installTimeCache.getOrPut(it.packageName) { packageInstallTime(it.packageName) } }
-                            .thenBy { it.label.lowercase() }
-                    )
-                } else {
-                    list.sortedWith(
-                        compareBy<AppInfo> { installTimeCache.getOrPut(it.packageName) { packageInstallTime(it.packageName) } }
-                            .thenBy { it.label.lowercase() }
-                    )
-                }
-            }
+        _allApps.value = sortApps(loadedApps, installTimeCache)
+        applyFilters()
     }
 
     fun launchApp(appInfo: AppInfo) {
@@ -160,6 +172,30 @@ class AppRepository(private val context: Context) {
             context.packageManager.getPackageInfo(packageName, 0).firstInstallTime
         } catch (_: Exception) {
             Long.MAX_VALUE
+        }
+    }
+
+    private fun sortApps(
+        apps: List<AppInfo>,
+        installTimeCache: MutableMap<String, Long> = mutableMapOf()
+    ): List<AppInfo> {
+        return if (customOrder.isNotEmpty()) {
+            apps.sortedWith(
+                compareBy<AppInfo> { orderRank(it) }
+                    .thenBy { installTimeCache.getOrPut(it.packageName) { packageInstallTime(it.packageName) } }
+                    .thenBy { it.label.lowercase() }
+            )
+        } else {
+            apps.sortedWith(
+                compareBy<AppInfo> { installTimeCache.getOrPut(it.packageName) { packageInstallTime(it.packageName) } }
+                    .thenBy { it.label.lowercase() }
+            )
+        }
+    }
+
+    private fun applyFilters() {
+        _apps.value = _allApps.value.filterNot { app ->
+            hiddenComponents.contains(app.componentKey) || hiddenComponents.contains(app.packageName)
         }
     }
 }

@@ -21,7 +21,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -37,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.home.BuiltInWatchFacePreview
+import com.flue.launcher.ui.home.FIXED_PREVIEW_CLOCK
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.viewmodel.LauncherViewModel
@@ -97,6 +100,7 @@ private fun InternalWatchFaceConfigScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 18.dp, vertical = 22.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -135,6 +139,7 @@ private fun InternalWatchFaceConfigScreen(
                     clockSizeSp = videoClockSize,
                     cropToFill = videoFillScreen
                 ),
+                clockOverride = FIXED_PREVIEW_CLOCK,
                 showClock = true,
                 playVideo = true,
                 modifier = Modifier.fillMaxSize()

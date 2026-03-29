@@ -44,11 +44,11 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.home.BuiltInWatchFacePreview
+import com.flue.launcher.ui.home.ClockSnapshot
+import com.flue.launcher.ui.home.FIXED_PREVIEW_CLOCK
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.viewmodel.LauncherViewModel
-import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_SELECTED_WATCHFACE_ID
-import com.flue.launcher.viewmodel.dataStore
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
@@ -74,7 +74,6 @@ private fun WatchFaceChooserScreen(
 ) {
     val vm: LauncherViewModel = viewModel()
     val context = LocalContext.current
-    val prefs by context.dataStore.data.collectAsState(initial = null)
     val watchFaces by vm.availableWatchFaces.collectAsState()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsState()
     val builtInPhotoPath by vm.builtInPhotoPath.collectAsState()
@@ -89,42 +88,51 @@ private fun WatchFaceChooserScreen(
         vm.refreshWatchFaces()
     }
 
-    val persistedSelectedId = prefs?.get(KEY_SELECTED_WATCHFACE_ID) ?: selectedWatchFaceId
-    val targetPage = remember(watchFaces, persistedSelectedId) {
-        watchFaces.indexOfFirst { it.id == persistedSelectedId }
+    var initialSelectionId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(watchFaces, selectedWatchFaceId) {
+        if (initialSelectionId == null && watchFaces.isNotEmpty()) {
+            initialSelectionId = selectedWatchFaceId
+        }
+    }
+
+    val seedSelectionId = initialSelectionId ?: selectedWatchFaceId
+    val targetPage = remember(watchFaces, seedSelectionId) {
+        watchFaces.indexOfFirst { it.id == seedSelectionId }
             .takeIf { it >= 0 }
             ?: 0
     }
     val pagerState = rememberPagerState(initialPage = 0) { watchFaces.size.coerceAtLeast(1) }
-    var chooserReady by remember(watchFaces, persistedSelectedId) { mutableStateOf(watchFaces.isEmpty()) }
+    var initialAligned by remember(watchFaces, seedSelectionId) { mutableStateOf(false) }
 
-    LaunchedEffect(watchFaces, persistedSelectedId, targetPage) {
-        if (watchFaces.isEmpty()) return@LaunchedEffect
-        chooserReady = false
+    LaunchedEffect(watchFaces, targetPage) {
+        if (watchFaces.isEmpty()) {
+            initialAligned = false
+            return@LaunchedEffect
+        }
+        initialAligned = false
         if (pagerState.currentPage != targetPage) {
             pagerState.scrollToPage(targetPage)
         }
-        chooserReady = pagerState.currentPage == targetPage
+        initialAligned = true
     }
 
-    val currentDescriptor = if (watchFaces.isNotEmpty()) {
-        watchFaces[pagerState.currentPage.coerceIn(0, watchFaces.lastIndex)]
+    val displayIndex = if (watchFaces.isEmpty()) {
+        -1
+    } else if (initialAligned) {
+        pagerState.currentPage.coerceIn(0, watchFaces.lastIndex)
     } else {
-        null
+        targetPage.coerceIn(0, watchFaces.lastIndex)
     }
+    val currentDescriptor = watchFaces.getOrNull(displayIndex)
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        if (!chooserReady) {
-            return@Box
-        }
-
         if (currentDescriptor == null) {
             Text(
-                text = "\u6CA1\u6709\u53EF\u7528\u8868\u76D8",
+                text = "\u6ca1\u6709\u53ef\u7528\u8868\u76d8",
                 color = Color.White,
                 modifier = Modifier.align(Alignment.Center)
             )
@@ -145,46 +153,68 @@ private fun WatchFaceChooserScreen(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = if (currentDescriptor.summary.isNotBlank()) currentDescriptor.summary else "\u5DF2\u5B89\u88C5\u8868\u76D8",
+                text = currentDescriptor.summary.ifBlank { "\u5df2\u5b89\u88c5\u8868\u76d8" },
                 color = WatchColors.TextTertiary,
                 fontSize = 13.sp
             )
             Spacer(modifier = Modifier.height(20.dp))
 
-            HorizontalPager(
-                state = pagerState,
-                contentPadding = PaddingValues(horizontal = 26.dp),
-                pageSpacing = 18.dp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(420.dp)
-            ) { page ->
-                val descriptor = watchFaces.getOrNull(page) ?: return@HorizontalPager
-                val pageOffset = ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction).absoluteValue
-                val pageScale = 1f - (pageOffset.coerceIn(0f, 1f) * 0.12f)
-                Box(
+            if (!initialAligned) {
+                WatchFacePreviewCard(
+                    descriptor = currentDescriptor,
+                    builtInPhotoPath = builtInPhotoPath,
+                    builtInVideoPath = builtInVideoPath,
+                    photoOptions = BuiltInWatchFaceOptions(
+                        clockPosition = builtInPhotoClockPosition,
+                        clockSizeSp = builtInPhotoClockSize
+                    ),
+                    videoOptions = BuiltInWatchFaceOptions(
+                        clockPosition = builtInVideoClockPosition,
+                        clockSizeSp = builtInVideoClockSize,
+                        cropToFill = builtInVideoFillScreen
+                    ),
+                    clockOverride = FIXED_PREVIEW_CLOCK,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .graphicsLayer {
-                            alpha = 1f - (pageOffset.coerceIn(0f, 1f) * 0.35f)
-                        }
-                        .scale(pageScale)
-                ) {
-                    WatchFacePreviewCard(
-                        descriptor = descriptor,
-                        builtInPhotoPath = builtInPhotoPath,
-                        builtInVideoPath = builtInVideoPath,
-                        photoOptions = BuiltInWatchFaceOptions(
-                            clockPosition = builtInPhotoClockPosition,
-                            clockSizeSp = builtInPhotoClockSize
-                        ),
-                        videoOptions = BuiltInWatchFaceOptions(
-                            clockPosition = builtInVideoClockPosition,
-                            clockSizeSp = builtInVideoClockSize,
-                            cropToFill = builtInVideoFillScreen
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                        .height(420.dp)
+                )
+            } else {
+                HorizontalPager(
+                    state = pagerState,
+                    contentPadding = PaddingValues(horizontal = 26.dp),
+                    pageSpacing = 18.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(420.dp)
+                ) { page ->
+                    val descriptor = watchFaces.getOrNull(page) ?: return@HorizontalPager
+                    val pageOffset = ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction).absoluteValue
+                    val pageScale = 1f - (pageOffset.coerceIn(0f, 1f) * 0.12f)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer {
+                                alpha = 1f - (pageOffset.coerceIn(0f, 1f) * 0.35f)
+                            }
+                            .scale(pageScale)
+                    ) {
+                        WatchFacePreviewCard(
+                            descriptor = descriptor,
+                            builtInPhotoPath = builtInPhotoPath,
+                            builtInVideoPath = builtInVideoPath,
+                            photoOptions = BuiltInWatchFaceOptions(
+                                clockPosition = builtInPhotoClockPosition,
+                                clockSizeSp = builtInPhotoClockSize
+                            ),
+                            videoOptions = BuiltInWatchFaceOptions(
+                                clockPosition = builtInVideoClockPosition,
+                                clockSizeSp = builtInVideoClockSize,
+                                cropToFill = builtInVideoFillScreen
+                            ),
+                            clockOverride = FIXED_PREVIEW_CLOCK,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
 
@@ -197,14 +227,10 @@ private fun WatchFaceChooserScreen(
                 watchFaces.forEachIndexed { index, _ ->
                     Box(
                         modifier = Modifier
-                            .size(if (index == pagerState.currentPage.coerceIn(0, (watchFaces.size - 1).coerceAtLeast(0))) 8.dp else 6.dp)
+                            .size(if (index == displayIndex.coerceAtLeast(0)) 8.dp else 6.dp)
                             .clip(CircleShape)
                             .background(
-                                if (index == pagerState.currentPage.coerceIn(0, (watchFaces.size - 1).coerceAtLeast(0))) {
-                                    WatchColors.ActiveCyan
-                                } else {
-                                    Color.White.copy(alpha = 0.24f)
-                                }
+                                if (index == displayIndex.coerceAtLeast(0)) WatchColors.ActiveCyan else Color.White.copy(alpha = 0.24f)
                             )
                     )
                 }
@@ -226,7 +252,7 @@ private fun WatchFaceChooserScreen(
                 horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally)
             ) {
                 if (currentDescriptor.supportsSettings) {
-                    ChooserButton("\u8BBE\u7F6E", 1f) {
+                    ChooserButton("\u8bbe\u7f6e") {
                         if (currentDescriptor.isBuiltin && currentDescriptor.id in setOf(BUILT_IN_PHOTO_WATCHFACE_ID, BUILT_IN_VIDEO_WATCHFACE_ID)) {
                             context.startActivity(
                                 Intent(context, InternalWatchFaceConfigActivity::class.java)
@@ -237,7 +263,7 @@ private fun WatchFaceChooserScreen(
                         }
                     }
                 }
-                ChooserButton("\u5B8C\u6210", 1f) {
+                ChooserButton("\u5b8c\u6210") {
                     vm.selectWatchFace(currentDescriptor.id)
                     onDismiss()
                 }
@@ -253,6 +279,7 @@ private fun WatchFacePreviewCard(
     builtInVideoPath: String? = null,
     photoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
     videoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
+    clockOverride: ClockSnapshot? = FIXED_PREVIEW_CLOCK,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -269,6 +296,7 @@ private fun WatchFacePreviewCard(
                 videoPath = builtInVideoPath,
                 photoOptions = photoOptions,
                 videoOptions = videoOptions,
+                clockOverride = clockOverride,
                 showClock = true,
                 playVideo = true,
                 modifier = Modifier.fillMaxSize()
@@ -281,7 +309,7 @@ private fun WatchFacePreviewCard(
 
 @Composable
 private fun WatchFacePreviewDrawable(descriptor: LunchWatchFaceDescriptor) {
-    val context = LocalContext.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     AndroidView(
         factory = { imageContext ->
             ImageView(imageContext).apply {
@@ -298,13 +326,11 @@ private fun WatchFacePreviewDrawable(descriptor: LunchWatchFaceDescriptor) {
 @Composable
 private fun ChooserButton(
     label: String,
-    scale: Float,
     onClick: () -> Unit
 ) {
     Box(
         modifier = Modifier
             .fillMaxWidth(0.42f)
-            .graphicsLayer { scaleX = scale; scaleY = scale; alpha = scale.coerceIn(0.3f, 1f) }
             .clip(RoundedCornerShape(16.dp))
             .background(WatchColors.SurfaceGlass)
             .clickable(onClick = onClick)

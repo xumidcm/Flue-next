@@ -14,6 +14,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.repository.AppRepository
+import com.flue.launcher.iconpack.IconPackDescriptor
+import com.flue.launcher.iconpack.IconPackScanner
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.navigation.ScreenState
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
@@ -49,6 +51,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_HONEYCOMB_TOP_FADE = intPreferencesKey("honeycomb_top_fade")
         val KEY_HONEYCOMB_BOTTOM_FADE = intPreferencesKey("honeycomb_bottom_fade")
         val KEY_SHOW_NOTIFICATION = booleanPreferencesKey("show_notification")
+        val KEY_HIDDEN_APPS = stringPreferencesKey("hidden_apps")
+        val KEY_ICON_PACK_PACKAGE = stringPreferencesKey("icon_pack_package")
         val KEY_SELECTED_WATCHFACE_ID = stringPreferencesKey("selected_watchface_id")
         val KEY_LAST_WATCHFACE_ERROR = stringPreferencesKey("last_watchface_error")
         val KEY_BUILTIN_PHOTO_PATH = stringPreferencesKey("builtin_photo_path")
@@ -63,6 +67,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val store = application.dataStore
     private val appRepository = AppRepository(application)
 
+    val allApps: StateFlow<List<AppInfo>> = appRepository.allApps
     val apps: StateFlow<List<AppInfo>> = appRepository.apps
 
     private val _screenState = MutableStateFlow(ScreenState.Face)
@@ -109,6 +114,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _showNotification = MutableStateFlow(false)
     val showNotification: StateFlow<Boolean> = _showNotification.asStateFlow()
+
+    private val _hiddenApps = MutableStateFlow<Set<String>>(emptySet())
+    val hiddenApps: StateFlow<Set<String>> = _hiddenApps.asStateFlow()
+
+    private val _availableIconPacks = MutableStateFlow<List<IconPackDescriptor>>(emptyList())
+    val availableIconPacks: StateFlow<List<IconPackDescriptor>> = _availableIconPacks.asStateFlow()
+
+    private val _selectedIconPackPackage = MutableStateFlow<String?>(null)
+    val selectedIconPackPackage: StateFlow<String?> = _selectedIconPackPackage.asStateFlow()
 
     private val _availableWatchFaces = MutableStateFlow(LunchWatchFaceScanner.builtInDescriptors())
     val availableWatchFaces: StateFlow<List<LunchWatchFaceDescriptor>> = _availableWatchFaces.asStateFlow()
@@ -191,6 +205,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 prefs[KEY_HONEYCOMB_TOP_FADE]?.let { _honeycombTopFade.value = it.coerceIn(0, 160) }
                 prefs[KEY_HONEYCOMB_BOTTOM_FADE]?.let { _honeycombBottomFade.value = it.coerceIn(0, 160) }
                 prefs[KEY_SHOW_NOTIFICATION]?.let { _showNotification.value = it }
+                val hidden = prefs[KEY_HIDDEN_APPS]
+                    ?.split(",")
+                    ?.filter(String::isNotBlank)
+                    ?.toSet()
+                    ?: emptySet()
+                _hiddenApps.value = hidden
+                appRepository.setHiddenComponents(hidden)
+                _selectedIconPackPackage.value = prefs[KEY_ICON_PACK_PACKAGE]
+                appRepository.setIconPackPackage(_selectedIconPackPackage.value)
                 prefs[KEY_SELECTED_WATCHFACE_ID]?.let { _selectedWatchFaceId.value = it }
                 _watchFaceLastError.value = prefs[KEY_LAST_WATCHFACE_ERROR]
                 _builtInPhotoPath.value = prefs[KEY_BUILTIN_PHOTO_PATH]
@@ -204,6 +227,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 _builtInPhotoClockSize.value = (prefs[KEY_PHOTO_CLOCK_SIZE] ?: 64).coerceIn(28, 92)
                 _builtInVideoClockSize.value = (prefs[KEY_VIDEO_CLOCK_SIZE] ?: 64).coerceIn(28, 92)
                 _builtInVideoFillScreen.value = prefs[KEY_VIDEO_FILL_SCREEN] ?: true
+                _availableIconPacks.value = IconPackScanner.scanInstalled(getApplication())
                 if (refreshIconsNeeded) {
                     refreshIcons()
                 }
@@ -348,6 +372,38 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { store.edit { it[KEY_SHOW_NOTIFICATION] = show } }
     }
 
+    fun setAppHidden(componentKey: String, hidden: Boolean) {
+        val next = _hiddenApps.value.toMutableSet().apply {
+            if (hidden) add(componentKey) else remove(componentKey)
+        }
+        _hiddenApps.value = next
+        appRepository.setHiddenComponents(next)
+        viewModelScope.launch {
+            store.edit {
+                if (next.isEmpty()) it.remove(KEY_HIDDEN_APPS)
+                else it[KEY_HIDDEN_APPS] = next.joinToString(",")
+            }
+        }
+    }
+
+    fun refreshIconPacks() {
+        _availableIconPacks.value = IconPackScanner.scanInstalled(getApplication())
+    }
+
+    fun setIconPackPackage(packageName: String?) {
+        _selectedIconPackPackage.value = packageName?.takeIf { it.isNotBlank() }
+        appRepository.setIconPackPackage(_selectedIconPackPackage.value)
+        viewModelScope.launch {
+            store.edit {
+                if (_selectedIconPackPackage.value.isNullOrBlank()) {
+                    it.remove(KEY_ICON_PACK_PACKAGE)
+                } else {
+                    it[KEY_ICON_PACK_PACKAGE] = _selectedIconPackPackage.value!!
+                }
+            }
+        }
+    }
+
     fun refreshWatchFaces() {
         viewModelScope.launch {
             val scanned = LunchWatchFaceScanner.builtInDescriptors() + LunchWatchFaceScanner.scanInstalled(getApplication())
@@ -361,6 +417,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun selectWatchFace(id: String) {
         _selectedWatchFaceId.value = id
         syncSelectedWatchFace()
+        _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
         viewModelScope.launch { store.edit { it[KEY_SELECTED_WATCHFACE_ID] = id } }
     }
 
@@ -387,6 +444,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setBuiltInPhotoPath(path: String?) {
         _builtInPhotoPath.value = path
+        _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
         viewModelScope.launch {
             store.edit {
                 if (path.isNullOrBlank()) it.remove(KEY_BUILTIN_PHOTO_PATH)
@@ -397,6 +455,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setBuiltInVideoPath(path: String?) {
         _builtInVideoPath.value = path
+        _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
         viewModelScope.launch {
             store.edit {
                 if (path.isNullOrBlank()) it.remove(KEY_BUILTIN_VIDEO_PATH)
@@ -457,6 +516,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _honeycombTopFade.value = 56
         _honeycombBottomFade.value = 56
         _showNotification.value = false
+        _hiddenApps.value = emptySet()
+        _selectedIconPackPackage.value = null
         _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
         _selectedWatchFace.value = LunchWatchFaceScanner.builtInDescriptor(BUILT_IN_WATCHFACE_ID)
         _watchFaceLastError.value = null
@@ -465,6 +526,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _builtInPhotoClockSize.value = 64
         _builtInVideoClockSize.value = 64
         _builtInVideoFillScreen.value = true
+        appRepository.setHiddenComponents(emptySet())
+        appRepository.setIconPackPackage(null)
         LunchWatchFaceRegistry.setCurrentSelectedId(BUILT_IN_WATCHFACE_ID)
         refreshIcons()
         viewModelScope.launch {
@@ -482,6 +545,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_HONEYCOMB_TOP_FADE] = 56
                 it[KEY_HONEYCOMB_BOTTOM_FADE] = 56
                 it[KEY_SHOW_NOTIFICATION] = false
+                it.remove(KEY_HIDDEN_APPS)
+                it.remove(KEY_ICON_PACK_PACKAGE)
                 it[KEY_SELECTED_WATCHFACE_ID] = BUILT_IN_WATCHFACE_ID
                 it[KEY_PHOTO_CLOCK_POSITION] = WatchClockPosition.CENTER.name
                 it[KEY_VIDEO_CLOCK_POSITION] = WatchClockPosition.CENTER.name

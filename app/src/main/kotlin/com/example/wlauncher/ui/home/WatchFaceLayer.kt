@@ -49,6 +49,11 @@ data class ClockSnapshot(
     val date: String
 )
 
+val FIXED_PREVIEW_CLOCK = ClockSnapshot(
+    time = "12:31",
+    date = "\u0031\u0031\u6708\u0031\u0033\u65e5"
+)
+
 private data class ClockPalette(
     val timeColor: Color,
     val dateColor: Color
@@ -72,6 +77,7 @@ fun WatchFaceLayer(
         isFaceVisible = isFaceVisible,
         photoOptions = photoOptions,
         videoOptions = videoOptions,
+        clockOverride = null,
         onLongPress = onLongPress,
         showClock = true,
         modifier = modifier
@@ -85,6 +91,7 @@ fun BuiltInWatchFacePreview(
     videoPath: String? = null,
     photoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
     videoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
+    clockOverride: ClockSnapshot? = FIXED_PREVIEW_CLOCK,
     modifier: Modifier = Modifier,
     showClock: Boolean = false,
     playVideo: Boolean = true
@@ -96,6 +103,7 @@ fun BuiltInWatchFacePreview(
         isFaceVisible = playVideo,
         photoOptions = photoOptions,
         videoOptions = videoOptions,
+        clockOverride = clockOverride,
         onLongPress = null,
         showClock = showClock,
         modifier = modifier
@@ -110,11 +118,13 @@ private fun BuiltInWatchFaceSurface(
     isFaceVisible: Boolean,
     photoOptions: BuiltInWatchFaceOptions,
     videoOptions: BuiltInWatchFaceOptions,
+    clockOverride: ClockSnapshot?,
     onLongPress: (() -> Unit)?,
     showClock: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val clock = rememberClockSnapshot()
+    val liveClock = rememberClockSnapshot()
+    val clock = clockOverride ?: liveClock
     val clockPalette = rememberClockPalette(
         watchFaceId = watchFaceId,
         photoPath = photoPath,

@@ -1,9 +1,10 @@
-package com.flue.launcher
+﻿package com.flue.launcher
 
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
@@ -13,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,7 +27,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -58,10 +63,12 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.settings.WatchFaceSettingCard
@@ -72,17 +79,22 @@ import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceRuntime
+import java.text.SimpleDateFormat
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
+import java.io.File
 import java.util.Date
 import java.util.Locale
+
+private const val ABOUT_VERSION = "beta0.4"
 
 enum class SettingsDestination {
     ROOT,
     WATCH_FACES,
+    APPS,
     APPEARANCE,
-    PERFORMANCE
+    PERFORMANCE,
+    TOOLS
 }
 
 class SettingsActivity : ComponentActivity() {
@@ -102,6 +114,11 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
     val vm: LauncherViewModel = viewModel()
     val watchFaces by vm.availableWatchFaces.collectAsState()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsState()
+    val selectedWatchFace by vm.selectedWatchFace.collectAsState()
+    val allApps by vm.allApps.collectAsState()
+    val hiddenApps by vm.hiddenApps.collectAsState()
+    val availableIconPacks by vm.availableIconPacks.collectAsState()
+    val selectedIconPackPackage by vm.selectedIconPackPackage.collectAsState()
     val watchFaceLastError by vm.watchFaceLastError.collectAsState()
     val layoutMode by vm.layoutMode.collectAsState()
     val blurEnabled by vm.blurEnabled.collectAsState()
@@ -110,6 +127,11 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
     val animationOverrideEnabled by vm.animationOverrideEnabled.collectAsState()
     val splashIcon by vm.splashIcon.collectAsState()
     val splashDelay by vm.splashDelay.collectAsState()
+    val honeycombCols by vm.honeycombCols.collectAsState()
+    val honeycombTopBlur by vm.honeycombTopBlur.collectAsState()
+    val honeycombBottomBlur by vm.honeycombBottomBlur.collectAsState()
+    val honeycombTopFade by vm.honeycombTopFade.collectAsState()
+    val honeycombBottomFade by vm.honeycombBottomFade.collectAsState()
     val builtInPhotoPath by vm.builtInPhotoPath.collectAsState()
     val builtInVideoPath by vm.builtInVideoPath.collectAsState()
     val builtInPhotoClockPosition by vm.builtInPhotoClockPosition.collectAsState()
@@ -117,6 +139,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
     val builtInPhotoClockSize by vm.builtInPhotoClockSize.collectAsState()
     val builtInVideoClockSize by vm.builtInVideoClockSize.collectAsState()
     val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
+    val headerTime = rememberSettingsHeaderTime()
 
     var destination by remember { mutableStateOf(SettingsDestination.ROOT) }
 
@@ -124,40 +147,121 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
         vm.refreshWatchFaces()
     }
 
+    BackHandler(enabled = destination != SettingsDestination.ROOT) {
+        destination = SettingsDestination.ROOT
+    }
+
     when (destination) {
         SettingsDestination.ROOT -> SettingsPageScaffold(
             title = "\u684c\u9762\u8bbe\u7f6e",
-            onBack = onFinish
-        ) {
-            item {
+            onBack = onFinish,
+            headerTime = headerTime
+        ) { listState, screenCenterY, screenHeightPx ->
+            item("watchfaces") {
                 SettingsCategoryCard(
                     title = "\u8868\u76d8",
-                    subtitle = watchFaces.firstOrNull { it.id == selectedWatchFaceId }?.displayName ?: "\u661f\u91ce \u6df1\u84dd",
-                    onClick = { destination = SettingsDestination.WATCH_FACES }
+                    subtitle = selectedWatchFace.displayName,
+                    onClick = { destination = SettingsDestination.WATCH_FACES },
+                    scale = itemFisheye(listState, "watchfaces", screenCenterY, screenHeightPx)
                 )
             }
-            item {
+            item("appearance") {
                 SettingsCategoryCard(
                     title = "\u663e\u793a\u4e0e\u5916\u89c2",
                     subtitle = "\u5e03\u5c40\u3001\u6a21\u7cca\u4e0e\u542f\u52a8\u56fe\u6807",
-                    onClick = { destination = SettingsDestination.APPEARANCE }
+                    onClick = { destination = SettingsDestination.APPEARANCE },
+                    scale = itemFisheye(listState, "appearance", screenCenterY, screenHeightPx)
                 )
             }
-            item {
+            item("apps") {
+                SettingsCategoryCard(
+                    title = "\u5e94\u7528\u4e0e\u56fe\u6807",
+                    subtitle = "\u5df2\u9690\u85cf ${hiddenApps.size} \u4e2a\u5e94\u7528\u00b7${selectedIconPackPackage?.let { "\u5df2\u542f\u7528\u56fe\u6807\u5305" } ?: "\u7cfb\u7edf\u9ed8\u8ba4\u56fe\u6807"}",
+                    onClick = { destination = SettingsDestination.APPS },
+                    scale = itemFisheye(listState, "apps", screenCenterY, screenHeightPx)
+                )
+            }
+            item("performance") {
                 SettingsCategoryCard(
                     title = "\u6027\u80fd\u4e0e\u52a8\u753b",
                     subtitle = "\u56fe\u6807\u8d28\u91cf\u4e0e\u52a8\u753b\u63a7\u5236",
-                    onClick = { destination = SettingsDestination.PERFORMANCE }
+                    onClick = { destination = SettingsDestination.PERFORMANCE },
+                    scale = itemFisheye(listState, "performance", screenCenterY, screenHeightPx)
+                )
+            }
+            item("tools") {
+                SettingsCategoryCard(
+                    title = "\u5de5\u5177\u4e0e\u5173\u4e8e",
+                    subtitle = "\u5bfc\u51fa\u65e5\u5fd7\u3001\u6062\u590d\u9ed8\u8ba4\u4e0e\u7248\u672c\u4fe1\u606f",
+                    onClick = { destination = SettingsDestination.TOOLS },
+                    scale = itemFisheye(listState, "tools", screenCenterY, screenHeightPx)
+                )
+            }
+        }
+
+        SettingsDestination.APPS -> SettingsPageScaffold(
+            title = "\u5e94\u7528\u4e0e\u56fe\u6807",
+            onBack = { destination = SettingsDestination.ROOT },
+            headerTime = headerTime
+        ) { listState, screenCenterY, screenHeightPx ->
+            item("icon_pack_header") {
+                SectionTitle("\u56fe\u6807\u5305", itemFisheye(listState, "icon_pack_header", screenCenterY, screenHeightPx))
+            }
+            item("icon_pack_default") {
+                SettingsChoiceRow(
+                    title = "\u7cfb\u7edf\u9ed8\u8ba4",
+                    subtitle = "\u4f7f\u7528 Flue \u5f53\u524d\u5e94\u7528\u56fe\u6807",
+                    selected = selectedIconPackPackage.isNullOrBlank(),
+                    onClick = { vm.setIconPackPackage(null) },
+                    scale = itemFisheye(listState, "icon_pack_default", screenCenterY, screenHeightPx)
+                )
+            }
+            items(availableIconPacks, key = { "iconpack_${it.packageName}" }) { pack ->
+                SettingsChoiceRow(
+                    title = pack.label,
+                    subtitle = "ADW Icon Pack Standard",
+                    selected = pack.packageName == selectedIconPackPackage,
+                    onClick = { vm.setIconPackPackage(pack.packageName) },
+                    scale = itemFisheye(listState, "iconpack_${pack.packageName}", screenCenterY, screenHeightPx)
+                )
+            }
+            item("icon_pack_refresh") {
+                ActionCard(
+                    title = "\u5237\u65b0\u56fe\u6807\u5305",
+                    subtitle = "\u91cd\u65b0\u626b\u63cf\u5df2\u5b89\u88c5\u7684 ADW \u56fe\u6807\u5305",
+                    icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                    onClick = { vm.refreshIconPacks() },
+                    scale = itemFisheye(listState, "icon_pack_refresh", screenCenterY, screenHeightPx)
+                )
+            }
+            item("hidden_header") {
+                SectionTitle("\u5e94\u7528\u9690\u85cf", itemFisheye(listState, "hidden_header", screenCenterY, screenHeightPx))
+            }
+            item("hidden_summary") {
+                MessageCard(
+                    text = "\u5df2\u9690\u85cf ${hiddenApps.size} \u4e2a\u5e94\u7528",
+                    background = WatchColors.SurfaceGlass,
+                    onClick = {}
+                )
+            }
+            items(allApps, key = { "app_${it.componentKey}" }) { app ->
+                SettingsSwitchRow(
+                    title = app.label,
+                    subtitle = app.packageName,
+                    checked = hiddenApps.contains(app.componentKey) || hiddenApps.contains(app.packageName),
+                    onToggle = { vm.setAppHidden(app.componentKey, it) },
+                    scale = itemFisheye(listState, "app_${app.componentKey}", screenCenterY, screenHeightPx)
                 )
             }
         }
 
         SettingsDestination.WATCH_FACES -> SettingsPageScaffold(
             title = "\u8868\u76d8",
-            onBack = { destination = SettingsDestination.ROOT }
-        ) {
+            onBack = { destination = SettingsDestination.ROOT },
+            headerTime = headerTime
+        ) { _, _, _ ->
             if (!watchFaceLastError.isNullOrBlank()) {
-                item {
+                item("watchface_error") {
                     MessageCard(
                         text = watchFaceLastError!!,
                         background = Color(0x33FF6B6B),
@@ -198,9 +302,11 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                     }
                 )
             }
-            item {
+            item("watchface_refresh") {
                 ActionCard(
                     title = "\u91cd\u65b0\u626b\u63cf\u8868\u76d8",
+                    subtitle = "\u5237\u65b0\u5df2\u5b89\u88c5\u7684 Lunch \u517c\u5bb9\u8868\u76d8",
+                    scale = 1f,
                     icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
                     onClick = { vm.refreshWatchFaces() }
                 )
@@ -209,61 +315,125 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
         SettingsDestination.APPEARANCE -> SettingsPageScaffold(
             title = "\u663e\u793a\u4e0e\u5916\u89c2",
-            onBack = { destination = SettingsDestination.ROOT }
-        ) {
-            item { SectionTitle("\u5e03\u5c40") }
-            item {
+            onBack = { destination = SettingsDestination.ROOT },
+            headerTime = headerTime
+        ) { listState, screenCenterY, screenHeightPx ->
+            item("layout_header") { SectionTitle("\u5e03\u5c40", itemFisheye(listState, "layout_header", screenCenterY, screenHeightPx)) }
+            item("layout_honeycomb") {
                 SettingsChoiceRow(
                     title = "\u8702\u7a9d\u5e03\u5c40",
                     subtitle = "Apple Watch \u98ce\u683c",
                     selected = layoutMode == LayoutMode.Honeycomb,
-                    onClick = { vm.setLayoutMode(LayoutMode.Honeycomb) }
+                    onClick = { vm.setLayoutMode(LayoutMode.Honeycomb) },
+                    scale = itemFisheye(listState, "layout_honeycomb", screenCenterY, screenHeightPx)
                 )
             }
-            item {
+            item("layout_list") {
                 SettingsChoiceRow(
                     title = "\u5217\u8868\u5e03\u5c40",
                     subtitle = "\u7ecf\u5178\u7eb5\u5411\u5217\u8868",
                     selected = layoutMode == LayoutMode.List,
-                    onClick = { vm.setLayoutMode(LayoutMode.List) }
+                    onClick = { vm.setLayoutMode(LayoutMode.List) },
+                    scale = itemFisheye(listState, "layout_list", screenCenterY, screenHeightPx)
                 )
             }
-            item { SectionTitle("\u89c6\u89c9") }
-            item {
+            item("visual_header") { SectionTitle("\u89c6\u89c9", itemFisheye(listState, "visual_header", screenCenterY, screenHeightPx)) }
+            item("blur_enabled") {
                 SettingsSwitchRow(
                     title = "\u80cc\u666f\u6a21\u7cca",
                     subtitle = "\u5728\u62bd\u5c49\u4e0e\u5c42\u7ea7\u5207\u6362\u4e2d\u542f\u7528\u6a21\u7cca",
                     checked = blurEnabled,
-                    onToggle = { vm.setBlurEnabled(it) }
+                    onToggle = { vm.setBlurEnabled(it) },
+                    scale = itemFisheye(listState, "blur_enabled", screenCenterY, screenHeightPx)
                 )
             }
-            item {
+            item("edge_blur") {
                 SettingsSwitchRow(
                     title = "\u8fb9\u7f18\u6a21\u7cca",
                     subtitle = if (blurEnabled) "\u4e3a\u9876\u90e8\u548c\u5e95\u90e8\u6dfb\u52a0\u6e10\u53d8\u6a21\u7cca" else "\u5f00\u542f\u80cc\u666f\u6a21\u7cca\u540e\u53ef\u7528",
                     checked = edgeBlurEnabled,
                     enabled = blurEnabled,
-                    onToggle = { vm.setEdgeBlurEnabled(it) }
+                    onToggle = { vm.setEdgeBlurEnabled(it) },
+                    scale = itemFisheye(listState, "edge_blur", screenCenterY, screenHeightPx)
                 )
             }
-            item { SectionTitle("\u542f\u52a8") }
-            item {
+            item("honeycomb_cols") {
+                SettingsSliderRow(
+                    title = "\u8702\u7a9d\u5217\u6570",
+                    value = honeycombCols.toFloat(),
+                    valueText = "$honeycombCols \u5217",
+                    range = 3f..6f,
+                    steps = 2,
+                    onValueChange = { vm.setHoneycombCols(it.toInt()) },
+                    scale = itemFisheye(listState, "honeycomb_cols", screenCenterY, screenHeightPx)
+                )
+            }
+            item("top_blur") {
+                SettingsSliderRow(
+                    title = "\u9876\u90e8\u6a21\u7cca\u534a\u5f84",
+                    value = honeycombTopBlur.toFloat(),
+                    valueText = "$honeycombTopBlur dp",
+                    range = 0f..48f,
+                    steps = 11,
+                    onValueChange = { vm.setHoneycombTopBlur(it.toInt()) },
+                    enabled = blurEnabled,
+                    scale = itemFisheye(listState, "top_blur", screenCenterY, screenHeightPx)
+                )
+            }
+            item("bottom_blur") {
+                SettingsSliderRow(
+                    title = "\u5e95\u90e8\u6a21\u7cca\u534a\u5f84",
+                    value = honeycombBottomBlur.toFloat(),
+                    valueText = "$honeycombBottomBlur dp",
+                    range = 0f..48f,
+                    steps = 11,
+                    onValueChange = { vm.setHoneycombBottomBlur(it.toInt()) },
+                    enabled = blurEnabled,
+                    scale = itemFisheye(listState, "bottom_blur", screenCenterY, screenHeightPx)
+                )
+            }
+            item("top_fade") {
+                SettingsSliderRow(
+                    title = "\u9876\u90e8\u6e10\u9690\u8303\u56f4",
+                    value = honeycombTopFade.toFloat(),
+                    valueText = "$honeycombTopFade dp",
+                    range = 0f..160f,
+                    steps = 15,
+                    onValueChange = { vm.setHoneycombTopFade(it.toInt()) },
+                    scale = itemFisheye(listState, "top_fade", screenCenterY, screenHeightPx)
+                )
+            }
+            item("bottom_fade") {
+                SettingsSliderRow(
+                    title = "\u5e95\u90e8\u6e10\u9690\u8303\u56f4",
+                    value = honeycombBottomFade.toFloat(),
+                    valueText = "$honeycombBottomFade dp",
+                    range = 0f..160f,
+                    steps = 15,
+                    onValueChange = { vm.setHoneycombBottomFade(it.toInt()) },
+                    scale = itemFisheye(listState, "bottom_fade", screenCenterY, screenHeightPx)
+                )
+            }
+            item("launch_header") { SectionTitle("\u542f\u52a8", itemFisheye(listState, "launch_header", screenCenterY, screenHeightPx)) }
+            item("splash_toggle") {
                 SettingsSwitchRow(
                     title = "\u542f\u52a8\u906e\u7f69",
                     subtitle = "\u6253\u5f00\u5e94\u7528\u65f6\u663e\u793a\u56fe\u6807\u8fc7\u6e21",
                     checked = splashIcon,
-                    onToggle = { vm.setSplashIcon(it) }
+                    onToggle = { vm.setSplashIcon(it) },
+                    scale = itemFisheye(listState, "splash_toggle", screenCenterY, screenHeightPx)
                 )
             }
             if (splashIcon) {
-                item {
+                item("splash_delay") {
                     SettingsSliderRow(
                         title = "\u906e\u7f69\u65f6\u957f",
                         value = splashDelay.toFloat(),
                         valueText = "${splashDelay} ms",
                         range = 300f..1500f,
                         steps = 11,
-                        onValueChange = { vm.setSplashDelay(it.toInt()) }
+                        onValueChange = { vm.setSplashDelay(it.toInt()) },
+                        scale = itemFisheye(listState, "splash_delay", screenCenterY, screenHeightPx)
                     )
                 }
             }
@@ -271,29 +441,53 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
         SettingsDestination.PERFORMANCE -> SettingsPageScaffold(
             title = "\u6027\u80fd\u4e0e\u52a8\u753b",
-            onBack = { destination = SettingsDestination.ROOT }
-        ) {
-            item {
+            onBack = { destination = SettingsDestination.ROOT },
+            headerTime = headerTime
+        ) { listState, screenCenterY, screenHeightPx ->
+            item("low_res") {
                 SettingsSwitchRow(
                     title = "\u4f4e\u5206\u8fa8\u7387\u56fe\u6807",
                     subtitle = "\u964d\u4f4e\u56fe\u6807\u5f00\u9500\u4ee5\u63d0\u5347\u6d41\u7545\u5ea6",
                     checked = lowResIcons,
-                    onToggle = { vm.setLowResIcons(it) }
+                    onToggle = { vm.setLowResIcons(it) },
+                    scale = itemFisheye(listState, "low_res", screenCenterY, screenHeightPx)
                 )
             }
-            item {
+            item("anim_override") {
                 SettingsSwitchRow(
                     title = "\u684c\u9762\u8fd4\u56de\u52a8\u753b",
                     subtitle = "\u542f\u7528\u7c7b watchOS \u7684\u8fd4\u56de\u8fc7\u6e21",
                     checked = animationOverrideEnabled,
-                    onToggle = { vm.setAnimationOverrideEnabled(it) }
+                    onToggle = { vm.setAnimationOverrideEnabled(it) },
+                    scale = itemFisheye(listState, "anim_override", screenCenterY, screenHeightPx)
                 )
             }
-            item {
+        }
+
+        SettingsDestination.TOOLS -> SettingsPageScaffold(
+            title = "\u5de5\u5177\u4e0e\u5173\u4e8e",
+            onBack = { destination = SettingsDestination.ROOT },
+            headerTime = headerTime
+        ) { listState, screenCenterY, screenHeightPx ->
+            item("export_log") {
+                ActionCard(
+                    title = "\u5bfc\u51fa\u65e5\u5fd7",
+                    subtitle = "\u5bfc\u51fa\u6700\u8fd1 500 \u884c\u7cfb\u7edf\u65e5\u5fd7",
+                    onClick = { exportLog(context) },
+                    scale = itemFisheye(listState, "export_log", screenCenterY, screenHeightPx)
+                )
+            }
+            item("reset_defaults") {
                 ActionCard(
                     title = "\u6062\u590d\u9ed8\u8ba4\u8bbe\u7f6e",
                     subtitle = "\u91cd\u7f6e\u684c\u9762\u5916\u89c2\u4e0e\u6027\u80fd\u9009\u9879",
-                    onClick = { vm.resetSettings() }
+                    onClick = { vm.resetSettings() },
+                    scale = itemFisheye(listState, "reset_defaults", screenCenterY, screenHeightPx)
+                )
+            }
+            item("about_card") {
+                AboutCard(
+                    scale = itemFisheye(listState, "about_card", screenCenterY, screenHeightPx)
                 )
             }
         }
@@ -304,12 +498,12 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 private fun SettingsPageScaffold(
     title: String,
     onBack: () -> Unit,
-    content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit
+    headerTime: String,
+    content: LazyListScope.(LazyListState, Float, Float) -> Unit
 ) {
     val listState = rememberLazyListState()
     val overscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = rememberCoroutineScope()
-    val currentTime = rememberHeaderTime()
 
     val nestedScrollConnection = remember(listState) {
         object : NestedScrollConnection {
@@ -337,11 +531,14 @@ private fun SettingsPageScaffold(
         }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
+        val screenHeightPx = constraints.maxHeight.toFloat()
+        val screenCenterY = screenHeightPx / 2f
+
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -362,7 +559,7 @@ private fun SettingsPageScaffold(
                 ) {
                     HeaderBackButton(onClick = onBack)
                     Text(
-                        text = currentTime,
+                        text = headerTime,
                         color = Color.White,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold
@@ -378,7 +575,7 @@ private fun SettingsPageScaffold(
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
             }
-            content()
+            content(listState, screenCenterY, screenHeightPx)
         }
     }
 }
@@ -402,16 +599,24 @@ private fun HeaderBackButton(onClick: () -> Unit) {
 }
 
 @Composable
-private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () -> Unit) {
+private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () -> Unit, scale: Float) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.97f else 1f, label = "settings_category_scale")
+    val pressedScale by animateFloatAsState(if (pressed) 0.965f else 1f, label = "settings_category_scale")
+    val background by animateColorAsState(
+        if (pressed) WatchColors.SurfaceGlass.copy(alpha = 0.92f) else WatchColors.SurfaceGlass,
+        label = "settings_category_bg"
+    )
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .graphicsLayer {
+                scaleX = scale * pressedScale
+                scaleY = scale * pressedScale
+                alpha = scale.coerceIn(0.55f, 1f)
+            }
             .clip(RoundedCornerShape(24.dp))
-            .background(WatchColors.SurfaceGlass)
+            .background(background)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 18.dp)
     ) {
@@ -420,7 +625,7 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(subtitle, color = WatchColors.TextTertiary, fontSize = 13.sp)
@@ -431,13 +636,19 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
 }
 
 @Composable
-private fun SectionTitle(text: String) {
+private fun SectionTitle(text: String, scale: Float) {
     Text(
         text = text,
         color = WatchColors.TextTertiary,
         fontSize = 13.sp,
         fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(top = 4.dp, start = 4.dp, bottom = 2.dp)
+        modifier = Modifier
+            .padding(top = 4.dp, start = 4.dp, bottom = 2.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                alpha = scale.coerceIn(0.55f, 1f)
+            }
     )
 }
 
@@ -460,15 +671,20 @@ private fun SettingsChoiceRow(
     title: String,
     subtitle: String,
     selected: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    scale: Float
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.98f else 1f, label = "choice_row_scale")
+    val pressedScale by animateFloatAsState(if (pressed) 0.972f else 1f, label = "choice_row_scale")
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .graphicsLayer {
+                scaleX = scale * pressedScale
+                scaleY = scale * pressedScale
+                alpha = scale.coerceIn(0.55f, 1f)
+            }
             .clip(RoundedCornerShape(18.dp))
             .background(if (selected) WatchColors.ActiveCyan.copy(alpha = 0.16f) else WatchColors.SurfaceGlass)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
@@ -479,7 +695,7 @@ private fun SettingsChoiceRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column(modifier = Modifier.padding(end = 12.dp)) {
+            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
                 Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(3.dp))
                 Text(subtitle, color = WatchColors.TextTertiary, fontSize = 12.sp)
@@ -497,11 +713,12 @@ private fun SettingsSwitchRow(
     subtitle: String,
     checked: Boolean,
     enabled: Boolean = true,
-    onToggle: (Boolean) -> Unit
+    onToggle: (Boolean) -> Unit,
+    scale: Float
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.985f else 1f, label = "switch_row_scale")
+    val pressedScale by animateFloatAsState(if (pressed) 0.96f else 1f, label = "switch_row_scale")
     val trackColor by animateColorAsState(
         when {
             !enabled -> Color(0xFF2A2A2A)
@@ -515,7 +732,11 @@ private fun SettingsSwitchRow(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .graphicsLayer {
+                scaleX = scale * pressedScale
+                scaleY = scale * pressedScale
+                alpha = if (enabled) scale.coerceIn(0.55f, 1f) else 0.5f
+            }
             .clip(RoundedCornerShape(18.dp))
             .background(WatchColors.SurfaceGlass)
             .clickable(enabled = enabled, interactionSource = interaction, indication = null) { onToggle(!checked) }
@@ -526,7 +747,7 @@ private fun SettingsSwitchRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column(modifier = Modifier.padding(end = 12.dp)) {
+            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
                 Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(3.dp))
                 Text(subtitle, color = WatchColors.TextTertiary, fontSize = 12.sp)
@@ -557,13 +778,20 @@ private fun SettingsSliderRow(
     valueText: String,
     range: ClosedFloatingPointRange<Float>,
     steps: Int,
-    onValueChange: (Float) -> Unit
+    onValueChange: (Float) -> Unit,
+    scale: Float,
+    enabled: Boolean = true
 ) {
     var localValue by remember(title) { mutableFloatStateOf(value) }
     LaunchedEffect(value) { localValue = value }
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                alpha = if (enabled) scale.coerceIn(0.55f, 1f) else 0.5f
+            }
             .clip(RoundedCornerShape(18.dp))
             .background(WatchColors.SurfaceGlass)
             .padding(horizontal = 16.dp, vertical = 14.dp)
@@ -581,6 +809,7 @@ private fun SettingsSliderRow(
                 },
                 valueRange = range,
                 steps = steps,
+                enabled = enabled,
                 colors = SliderDefaults.colors(
                     thumbColor = WatchColors.ActiveCyan,
                     activeTrackColor = WatchColors.ActiveCyan
@@ -595,15 +824,20 @@ private fun ActionCard(
     title: String,
     subtitle: String? = null,
     icon: (@Composable () -> Unit)? = null,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    scale: Float
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.98f else 1f, label = "action_card_scale")
+    val pressedScale by animateFloatAsState(if (pressed) 0.965f else 1f, label = "action_card_scale")
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .graphicsLayer {
+                scaleX = scale * pressedScale
+                scaleY = scale * pressedScale
+                alpha = scale.coerceIn(0.55f, 1f)
+            }
             .clip(RoundedCornerShape(18.dp))
             .background(WatchColors.SurfaceGlass)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
@@ -614,7 +848,7 @@ private fun ActionCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column(modifier = Modifier.padding(end = 12.dp)) {
+            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
                 Text(title, color = WatchColors.ActiveCyan, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 if (!subtitle.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(3.dp))
@@ -627,7 +861,92 @@ private fun ActionCard(
 }
 
 @Composable
-private fun rememberHeaderTime(): String {
+private fun AboutCard(scale: Float) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                alpha = scale.coerceIn(0.55f, 1f)
+            }
+            .clip(RoundedCornerShape(28.dp))
+            .background(WatchColors.SurfaceGlass)
+            .padding(horizontal = 20.dp, vertical = 24.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(98.dp)
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(Color.White.copy(alpha = 0.06f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    painter = painterResource(id = R.mipmap.ic_launcher_round),
+                    contentDescription = null,
+                    modifier = Modifier.size(76.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(14.dp))
+            Text("Flue", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(ABOUT_VERSION, color = WatchColors.TextTertiary, fontSize = 12.sp)
+            Spacer(modifier = Modifier.height(22.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Image(
+                    painter = painterResource(id = R.drawable.author_avatar),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(30.dp)
+                        .clip(CircleShape)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text("\u67da\u5b50\u67da\u5b50\u76ae", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            }
+        }
+    }
+}
+
+private fun itemFisheye(
+    listState: LazyListState,
+    key: String,
+    screenCenterY: Float,
+    screenHeight: Float
+): Float {
+    val info = listState.layoutInfo.visibleItemsInfo.find { it.key == key } ?: return 0.92f
+    val itemCenterY = info.offset + info.size / 2f
+    val distance = kotlin.math.abs(itemCenterY - screenCenterY)
+    val normalized = (distance / (screenHeight / 2f)).coerceIn(0f, 1f)
+    return 1f - 0.14f * normalized
+}
+
+private fun exportLog(context: android.content.Context) {
+    try {
+        val log = Runtime.getRuntime().exec("logcat -d -t 500").inputStream.bufferedReader().readText()
+        val file = File(context.cacheDir, "wlauncher_log.txt")
+        file.writeText(log)
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        context.startActivity(
+            Intent.createChooser(
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                },
+                "\u5bfc\u51fa\u65e5\u5fd7"
+            )
+        )
+    } catch (_: Exception) {
+        Toast.makeText(context, "\u5bfc\u51fa\u5931\u8d25", Toast.LENGTH_SHORT).show()
+    }
+}
+
+@Composable
+private fun rememberSettingsHeaderTime(): String {
     var time by remember { mutableStateOf("--:--") }
     LaunchedEffect(Unit) {
         val formatter = SimpleDateFormat("HH:mm", Locale.getDefault())

@@ -1,4 +1,4 @@
-package com.flue.launcher.watchface
+﻿package com.flue.launcher.watchface
 
 import android.content.Context
 import android.content.Intent
@@ -15,21 +15,21 @@ object LunchWatchFaceScanner {
         LunchWatchFaceDescriptor(
             id = BUILT_IN_WATCHFACE_ID,
             type = LunchWatchFaceType.BUILTIN,
-            displayName = "星野 深藍",
-            summary = "内置表盘"
+            displayName = "\u661f\u91ce \u6df1\u85cd",
+            summary = "\u5185\u7f6e\u8868\u76d8"
         ),
         LunchWatchFaceDescriptor(
             id = BUILT_IN_PHOTO_WATCHFACE_ID,
             type = LunchWatchFaceType.BUILTIN,
-            displayName = "图片表盘",
-            summary = "Flue 内置表盘",
+            displayName = "\u56fe\u7247\u8868\u76d8",
+            summary = "Flue \u5185\u7f6e\u8868\u76d8",
             supportsSettings = true
         ),
         LunchWatchFaceDescriptor(
             id = BUILT_IN_VIDEO_WATCHFACE_ID,
             type = LunchWatchFaceType.BUILTIN,
-            displayName = "视频表盘",
-            summary = "Flue 内置表盘",
+            displayName = "\u89c6\u9891\u8868\u76d8",
+            summary = "Flue \u5185\u7f6e\u8868\u76d8",
             supportsSettings = true
         )
     )
@@ -99,7 +99,7 @@ object LunchWatchFaceScanner {
                     id = packageName,
                     type = LunchWatchFaceType.EXTERNAL,
                     displayName = displayName.ifBlank { packageName },
-                    summary = author?.takeIf { it.isNotBlank() } ?: "Lunch 兼容表盘",
+                    summary = author?.takeIf { it.isNotBlank() } ?: "Lunch \u517c\u5bb9\u8868\u76d8",
                     packageName = packageName,
                     watchFaceClassName = watchFaceClass,
                     settingsEntryClassName = settingsClass.ifBlank { null },
@@ -162,3 +162,4 @@ object LunchWatchFaceScanner {
         }.getOrNull()
     }
 }
+
