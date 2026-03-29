@@ -1,5 +1,6 @@
 package com.flue.launcher.ui.drawer
 
+import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.exponentialDecay
@@ -120,8 +121,10 @@ fun HoneycombScreen(
 
         val minGridY = positions.minOfOrNull { it.y } ?: 0f
         val maxGridY = positions.maxOfOrNull { it.y } ?: 0f
-        val maxScroll = -minGridY
-        val minScroll = -maxGridY
+        val safeTop = topFadePx + iconSizePx * 0.55f
+        val safeBottom = screenHeightPx - bottomFadePx - iconSizePx * 0.55f
+        val maxScroll = safeTop - (screenCenterY + minGridY)
+        val minScroll = safeBottom - (screenCenterY + maxGridY)
 
         val scrollOffset = remember { Animatable(0f) }
         val scope = rememberCoroutineScope()
@@ -432,6 +435,12 @@ fun HoneycombScreen(
             val currentScroll = scrollOffset.value
             val visibleTop = -iconSizePx * 1.5f
             val visibleBottom = screenHeightPx + iconSizePx * 1.5f
+            val lastItemCenterY = screenCenterY + maxGridY + currentScroll
+            val bottomFlattenProgress = computeHoneycombBottomFlattenProgress(
+                lastItemCenterY = lastItemCenterY,
+                safeBottom = safeBottom,
+                iconSizePx = iconSizePx
+            )
             val dragOverlayApp = dragApp
             val dragOverlayPointer = dragPointer?.let {
                 clampHoneycombDisplayPointer(
@@ -539,7 +548,8 @@ fun HoneycombScreen(
                         icon = if (
                             blurEnabled &&
                             effectiveEdgeBlur &&
-                            itemBlur > 0.5f
+                            itemBlur > 0.5f &&
+                            Build.VERSION.SDK_INT < Build.VERSION_CODES.S
                         ) {
                             app.cachedBlurredIcon
                         } else {
@@ -593,7 +603,14 @@ fun HoneycombScreen(
                                 val dx = actualCenterX - screenCenterX
                                 val dy = actualCenterY - screenCenterY
                                 val dist = sqrt(dx * dx + dy * dy)
-                                val scale = fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
+                                val scale = honeycombDisplayScale(
+                                    distance = dist,
+                                    actualCenterY = actualCenterY,
+                                    screenCenterY = screenCenterY,
+                                    screenHeightPx = screenHeightPx,
+                                    screenRadius = screenRadius,
+                                    bottomFlattenProgress = bottomFlattenProgress
+                                )
                                 scaleX = scale * animatedNeighborScale
                                 scaleY = scale * animatedNeighborScale
                                 alpha = when {
@@ -602,6 +619,10 @@ fun HoneycombScreen(
                                     else -> scale.coerceIn(0.24f, 1f)
                                 }
                             }
+                            .platformBlur(
+                                itemBlur,
+                                blurEnabled && effectiveEdgeBlur && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                            )
                     )
                 }
             }
@@ -619,9 +640,16 @@ fun HoneycombScreen(
                 val dragDx = scalePointer.x - screenCenterX
                 val dragDy = scalePointer.y - screenCenterY
                 val dragDist = sqrt(dragDx * dragDx + dragDy * dragDy)
-                val dragScale = fisheyeScale(dragDist, screenRadius * 1.65f, minScale = 0.58f)
+                val dragScale = honeycombDisplayScale(
+                    distance = dragDist,
+                    actualCenterY = scalePointer.y,
+                    screenCenterY = screenCenterY,
+                    screenHeightPx = screenHeightPx,
+                    screenRadius = screenRadius,
+                    bottomFlattenProgress = bottomFlattenProgress
+                )
                 AppBubble(
-                    icon = if (blurEnabled && effectiveEdgeBlur && dragOverlayBlur > 0.5f) {
+                    icon = if (blurEnabled && effectiveEdgeBlur && dragOverlayBlur > 0.5f && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
                         dragOverlayApp.cachedBlurredIcon
                     } else {
                         dragOverlayApp.cachedIcon
@@ -636,6 +664,10 @@ fun HoneycombScreen(
                     onPressedChange = {},
                     modifier = Modifier
                         .zIndex(13f)
+                        .platformBlur(
+                            dragOverlayBlur,
+                            blurEnabled && effectiveEdgeBlur && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                        )
                         .graphicsLayer {
                             translationX = dragOverlayPointer.x - iconSizePx / 2f
                             translationY = dragOverlayPointer.y - iconSizePx / 2f
@@ -658,7 +690,7 @@ fun HoneycombScreen(
                 bottomBlurDp = bottomBlurRadiusDp.toFloat()
             )
             AppBubble(
-                icon = if (blurEnabled && effectiveEdgeBlur && settlingBlur > 0.5f) {
+                icon = if (blurEnabled && effectiveEdgeBlur && settlingBlur > 0.5f && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
                     settlingOverlayApp.cachedBlurredIcon
                 } else {
                     settlingOverlayApp.cachedIcon
@@ -672,13 +704,24 @@ fun HoneycombScreen(
                 onPressedChange = {},
                 modifier = Modifier
                     .zIndex(14f)
+                    .platformBlur(
+                        settlingBlur,
+                        blurEnabled && effectiveEdgeBlur && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                    )
                     .graphicsLayer {
                         translationX = settlingX.value - iconSizePx / 2f
                         translationY = settlingY.value - iconSizePx / 2f
                         val dx = settlingX.value - screenCenterX
                         val dy = settlingY.value - screenCenterY
                         val dist = sqrt(dx * dx + dy * dy)
-                        val scale = fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
+                        val scale = honeycombDisplayScale(
+                            distance = dist,
+                            actualCenterY = settlingY.value,
+                            screenCenterY = screenCenterY,
+                            screenHeightPx = screenHeightPx,
+                            screenRadius = screenRadius,
+                            bottomFlattenProgress = bottomFlattenProgress
+                        )
                         scaleX = scale
                         scaleY = scale
                         alpha = scale.coerceIn(0.24f, 1f)
@@ -695,8 +738,7 @@ fun HoneycombScreen(
                     .background(
                         Brush.verticalGradient(
                             listOf(
-                                Color.Black.copy(alpha = 0.42f),
-                                Color.Black.copy(alpha = 0.18f),
+                                Color.Black,
                                 Color.Transparent
                             )
                         )
@@ -713,8 +755,7 @@ fun HoneycombScreen(
                         Brush.verticalGradient(
                             listOf(
                                 Color.Transparent,
-                                Color.Black.copy(alpha = 0.18f),
-                                Color.Black.copy(alpha = 0.46f)
+                                Color.Black
                             )
                         )
                     )
@@ -828,6 +869,32 @@ private fun computeHoneycombEdgeBlur(
         (1f - (bottomDistance / bottomBlurZonePx)).coerceIn(0f, 1f)
     }
     return maxOf(topStrength * topBlurDp, bottomStrength * bottomBlurDp)
+}
+
+private fun computeHoneycombBottomFlattenProgress(
+    lastItemCenterY: Float,
+    safeBottom: Float,
+    iconSizePx: Float
+): Float {
+    val flattenStart = safeBottom - iconSizePx * 0.9f
+    return ((lastItemCenterY - flattenStart) / (safeBottom - flattenStart).coerceAtLeast(1f))
+        .coerceIn(0f, 1f)
+}
+
+private fun honeycombDisplayScale(
+    distance: Float,
+    actualCenterY: Float,
+    screenCenterY: Float,
+    screenHeightPx: Float,
+    screenRadius: Float,
+    bottomFlattenProgress: Float
+): Float {
+    val baseScale = fisheyeScale(distance, screenRadius * 1.65f, minScale = 0.58f)
+    if (bottomFlattenProgress <= 0f) return baseScale
+    val lowerHalfProgress = ((actualCenterY - screenCenterY) / (screenHeightPx * 0.5f)).coerceIn(0f, 1f)
+    if (lowerHalfProgress <= 0f) return baseScale
+    val flatten = bottomFlattenProgress * lowerHalfProgress
+    return 1f - (1f - baseScale) * (1f - flatten)
 }
 
 private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awaitLongPressByTimeoutOrCancel(

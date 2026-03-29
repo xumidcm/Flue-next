@@ -102,7 +102,7 @@ fun AppShortcutOverlay(
         contentAlignment = Alignment.Center
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val panelWidth = (maxWidth * 0.86f).coerceIn(220.dp, 360.dp)
+            val panelWidth = (maxWidth * 0.76f).coerceIn(220.dp, 312.dp)
             val panelMaxHeight = maxHeight * 0.86f
 
             Column(
@@ -136,14 +136,10 @@ fun AppShortcutOverlay(
                     Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
                     ShortcutMenuItem("卸载", Color(0xFFFF453A)) {
                         val packageUri = Uri.fromParts("package", app.packageName, null)
-                        val deleteIntent = Intent(Intent.ACTION_DELETE).apply {
-                            data = packageUri
-                            putExtra(Intent.EXTRA_RETURN_RESULT, true)
+                        val deleteIntent = Intent(Intent.ACTION_DELETE, packageUri).apply {
                             if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
-                        val uninstallIntent = Intent(Intent.ACTION_UNINSTALL_PACKAGE).apply {
-                            data = packageUri
-                            putExtra(Intent.EXTRA_RETURN_RESULT, true)
+                        val uninstallIntent = Intent(Intent.ACTION_UNINSTALL_PACKAGE, packageUri).apply {
                             if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         val detailsIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {

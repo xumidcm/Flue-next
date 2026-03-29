@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -32,6 +33,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -89,23 +91,66 @@ private fun InternalWatchFaceConfigScreen(
     val activeClockPosition = if (isPhoto) photoClockPosition else videoClockPosition
     val activeClockSize = if (isPhoto) photoClockSize else videoClockSize
     val activeClockBold = if (isPhoto) photoClockBold else videoClockBold
+    var localPath by remember(watchFaceId) { mutableStateOf(currentPath) }
+    var localClockPosition by remember(watchFaceId) { mutableStateOf(activeClockPosition) }
     var localClockSize by remember(watchFaceId) { mutableFloatStateOf(activeClockSize.toFloat()) }
+    var localClockBold by remember(watchFaceId) { mutableStateOf(activeClockBold) }
+    var localVideoFillScreen by remember(watchFaceId) { mutableStateOf(videoFillScreen) }
 
-    androidx.compose.runtime.LaunchedEffect(activeClockSize, watchFaceId) {
+    androidx.compose.runtime.LaunchedEffect(
+        watchFaceId,
+        currentPath,
+        activeClockPosition,
+        activeClockSize,
+        activeClockBold,
+        videoFillScreen
+    ) {
+        localPath = currentPath
+        localClockPosition = activeClockPosition
         localClockSize = activeClockSize.toFloat()
+        localClockBold = activeClockBold
+        localVideoFillScreen = videoFillScreen
+    }
+
+    fun persistPendingChanges() {
+        if (isPhoto) {
+            if (localPath != photoPath) vm.setBuiltInPhotoPath(localPath)
+            if (localClockPosition != photoClockPosition) vm.setBuiltInPhotoClockPosition(localClockPosition)
+            if (localClockSize.toInt() != photoClockSize) vm.setBuiltInPhotoClockSize(localClockSize.toInt())
+            if (localClockBold != photoClockBold) vm.setBuiltInPhotoClockBold(localClockBold)
+        } else {
+            if (localPath != videoPath) vm.setBuiltInVideoPath(localPath)
+            if (localClockPosition != videoClockPosition) vm.setBuiltInVideoClockPosition(localClockPosition)
+            if (localClockSize.toInt() != videoClockSize) vm.setBuiltInVideoClockSize(localClockSize.toInt())
+            if (localClockBold != videoClockBold) vm.setBuiltInVideoClockBold(localClockBold)
+            if (localVideoFillScreen != videoFillScreen) vm.setBuiltInVideoFillScreen(localVideoFillScreen)
+        }
     }
 
     val picker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
-            handlePickedMedia(
-                viewModel = vm,
+            val savedPath = handlePickedMedia(
+                application = vm.getApplication(),
                 watchFaceId = watchFaceId,
                 sourceUri = uri,
                 onMessage = { message ->
                     Toast.makeText(vm.getApplication(), message, Toast.LENGTH_SHORT).show()
                 }
             )
+            if (!savedPath.isNullOrBlank()) {
+                localPath = savedPath
+                if (isPhoto) {
+                    vm.setBuiltInPhotoPath(savedPath)
+                } else {
+                    vm.setBuiltInVideoPath(savedPath)
+                }
+            }
         }
+    }
+
+    BackHandler {
+        persistPendingChanges()
+        onBack()
     }
 
     Column(
@@ -140,18 +185,18 @@ private fun InternalWatchFaceConfigScreen(
         ) {
             BuiltInWatchFacePreview(
                 watchFaceId = watchFaceId,
-                photoPath = photoPath,
-                videoPath = videoPath,
+                photoPath = if (isPhoto) localPath else photoPath,
+                videoPath = if (isPhoto) videoPath else localPath,
                 photoOptions = BuiltInWatchFaceOptions(
-                    clockPosition = photoClockPosition,
+                    clockPosition = if (isPhoto) localClockPosition else photoClockPosition,
                     clockSizeSp = localClockSize.toInt(),
-                    boldClock = photoClockBold
+                    boldClock = if (isPhoto) localClockBold else photoClockBold
                 ),
                 videoOptions = BuiltInWatchFaceOptions(
-                    clockPosition = videoClockPosition,
+                    clockPosition = if (isPhoto) videoClockPosition else localClockPosition,
                     clockSizeSp = localClockSize.toInt(),
-                    boldClock = videoClockBold,
-                    cropToFill = videoFillScreen
+                    boldClock = if (isPhoto) videoClockBold else localClockBold,
+                    cropToFill = if (isPhoto) videoFillScreen else localVideoFillScreen
                 ),
                 clockOverride = FIXED_PREVIEW_CLOCK,
                 showClock = true,
@@ -171,9 +216,9 @@ private fun InternalWatchFaceConfigScreen(
         )
         Spacer(modifier = Modifier.height(8.dp))
         PositionPickerRow(
-            current = activeClockPosition,
+            current = localClockPosition,
             onSelect = {
-                if (isPhoto) vm.setBuiltInPhotoClockPosition(it) else vm.setBuiltInVideoClockPosition(it)
+                localClockPosition = it
             }
         )
 
@@ -206,9 +251,9 @@ private fun InternalWatchFaceConfigScreen(
         Spacer(modifier = Modifier.height(8.dp))
         ToggleRow(
             label = "\u7C97\u4F53\u65F6\u949F",
-            enabled = activeClockBold,
+            enabled = localClockBold,
             onToggle = {
-                if (isPhoto) vm.setBuiltInPhotoClockBold(!photoClockBold) else vm.setBuiltInVideoClockBold(!videoClockBold)
+                localClockBold = !localClockBold
             }
         )
 
@@ -216,15 +261,15 @@ private fun InternalWatchFaceConfigScreen(
             Spacer(modifier = Modifier.height(8.dp))
             ToggleRow(
                 label = "\u89C6\u9891\u94FA\u6EE1\u5168\u5C4F",
-                enabled = videoFillScreen,
-                onToggle = { vm.setBuiltInVideoFillScreen(!videoFillScreen) }
+                enabled = localVideoFillScreen,
+                onToggle = { localVideoFillScreen = !localVideoFillScreen }
             )
         }
 
         Spacer(modifier = Modifier.height(18.dp))
 
         ActionButton(
-            text = if (currentPath.isNullOrBlank()) {
+            text = if (localPath.isNullOrBlank()) {
                 if (isPhoto) "\u9009\u62E9\u56FE\u7247" else "\u9009\u62E9\u89C6\u9891"
             } else {
                 if (isPhoto) "\u66F4\u6362\u56FE\u7247" else "\u66F4\u6362\u89C6\u9891"
@@ -237,14 +282,22 @@ private fun InternalWatchFaceConfigScreen(
 
         ActionButton(
             text = if (isPhoto) "\u6E05\u9664\u56FE\u7247" else "\u6E05\u9664\u89C6\u9891",
-            enabled = !currentPath.isNullOrBlank()
+            enabled = !localPath.isNullOrBlank()
         ) {
-            if (isPhoto) vm.setBuiltInPhotoPath(null) else vm.setBuiltInVideoPath(null)
+            localPath = null
+            if (isPhoto) {
+                vm.setBuiltInPhotoPath(null)
+            } else {
+                vm.setBuiltInVideoPath(null)
+            }
         }
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        ActionButton(text = "\u8FD4\u56DE", onClick = onBack)
+        ActionButton(text = "\u8FD4\u56DE") {
+            persistPendingChanges()
+            onBack()
+        }
     }
 }
 
@@ -273,12 +326,12 @@ private fun ActionButton(
 }
 
 private fun handlePickedMedia(
-    viewModel: LauncherViewModel,
+    application: Application,
     watchFaceId: String,
     sourceUri: Uri,
     onMessage: (String) -> Unit
-) {
-    val context = viewModel.getApplication<Application>()
+): String? {
+    val context = application
     runCatching {
         context.contentResolver.takePersistableUriPermission(
             sourceUri,
@@ -293,15 +346,10 @@ private fun handlePickedMedia(
 
     if (savedPath.isNullOrBlank()) {
         onMessage("\u4FDD\u5B58\u5A92\u4F53\u5931\u8D25")
-        return
-    }
-
-    if (watchFaceId == BUILT_IN_PHOTO_WATCHFACE_ID) {
-        viewModel.setBuiltInPhotoPath(savedPath)
-    } else {
-        viewModel.setBuiltInVideoPath(savedPath)
+        return null
     }
     onMessage("\u8868\u76D8\u5A92\u4F53\u5DF2\u66F4\u65B0")
+    return savedPath
 }
 
 @Composable

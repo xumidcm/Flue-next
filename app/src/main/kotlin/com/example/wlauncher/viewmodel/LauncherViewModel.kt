@@ -2,6 +2,7 @@ package com.flue.launcher.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.os.Build
 import androidx.compose.ui.geometry.Offset
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -80,7 +81,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _layoutMode = MutableStateFlow(LayoutMode.Honeycomb)
     val layoutMode: StateFlow<LayoutMode> = _layoutMode.asStateFlow()
 
-    private val _blurEnabled = MutableStateFlow(true)
+    private val _blurEnabled = MutableStateFlow(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
     val blurEnabled: StateFlow<Boolean> = _blurEnabled.asStateFlow()
 
     private val _edgeBlurEnabled = MutableStateFlow(false)
@@ -537,7 +538,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun resetSettings() {
         _layoutMode.value = LayoutMode.Honeycomb
-        _blurEnabled.value = true
+        _blurEnabled.value = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         _edgeBlurEnabled.value = false
         _lowResIcons.value = false
         _animationOverrideEnabled.value = true

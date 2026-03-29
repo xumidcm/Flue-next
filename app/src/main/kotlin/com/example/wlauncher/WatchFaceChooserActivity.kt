@@ -1,8 +1,16 @@
 package com.flue.launcher
 
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color as AndroidColor
+import android.graphics.LinearGradient
 import android.media.MediaMetadataRetriever
+import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Shader
+import android.graphics.Typeface
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -43,6 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -50,19 +59,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.graphics.drawable.toBitmap
-import com.flue.launcher.ui.home.ClockOverlayPreview
 import com.flue.launcher.ui.home.ClockSnapshot
+import com.flue.launcher.ui.home.ClockPalette
 import com.flue.launcher.ui.home.FIXED_PREVIEW_CLOCK
 import com.flue.launcher.ui.home.rememberClockPaletteForPreview
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.viewmodel.LauncherViewModel
+import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceRuntime
 import com.flue.launcher.watchface.LunchWatchFaceScanner
+import com.flue.launcher.watchface.WatchClockPosition
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -350,38 +361,11 @@ private fun BuiltInChooserPreview(
     clockOverride: ClockSnapshot?,
     modifier: Modifier = Modifier
 ) {
-    val previewBitmap by produceState<ImageBitmap?>(initialValue = null, key1 = watchFaceId, key2 = photoPath, key3 = videoPath) {
-        value = withContext(Dispatchers.IO) {
-            when (watchFaceId) {
-                BUILT_IN_PHOTO_WATCHFACE_ID -> photoPath
-                    ?.takeIf { File(it).exists() }
-                    ?.let {
-                        BitmapFactory.decodeFile(it, BitmapFactory.Options().apply { inSampleSize = 2 })
-                            ?.asImageBitmap()
-                    }
-                BUILT_IN_VIDEO_WATCHFACE_ID -> videoPath
-                    ?.takeIf { File(it).exists() }
-                    ?.let { path ->
-                        runCatching {
-                            val retriever = MediaMetadataRetriever()
-                            try {
-                                retriever.setDataSource(path)
-                                retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                                    ?.asImageBitmap()
-                            } finally {
-                                runCatching { retriever.release() }
-                            }
-                        }.getOrNull()
-                    }
-                else -> null
-            }
-        }
-    }
     val clock = clockOverride ?: FIXED_PREVIEW_CLOCK
     val clockPosition = when (watchFaceId) {
         BUILT_IN_PHOTO_WATCHFACE_ID -> photoOptions.clockPosition
         BUILT_IN_VIDEO_WATCHFACE_ID -> videoOptions.clockPosition
-        else -> com.flue.launcher.watchface.WatchClockPosition.CENTER
+        else -> WatchClockPosition.CENTER
     }
     val clockSizeSp = when (watchFaceId) {
         BUILT_IN_PHOTO_WATCHFACE_ID -> photoOptions.clockSizeSp
@@ -398,6 +382,32 @@ private fun BuiltInChooserPreview(
         photoPath = photoPath,
         clockPosition = clockPosition
     )
+    val fallbackTitle = when (watchFaceId) {
+        BUILT_IN_PHOTO_WATCHFACE_ID -> if (photoPath.isNullOrBlank()) "\u672A\u8BBE\u7F6E\u56FE\u7247" else null
+        BUILT_IN_VIDEO_WATCHFACE_ID -> if (videoPath.isNullOrBlank()) "\u672A\u8BBE\u7F6E\u89C6\u9891" else null
+        else -> null
+    }
+    val fallbackSubtitle = when (watchFaceId) {
+        BUILT_IN_PHOTO_WATCHFACE_ID -> if (photoPath.isNullOrBlank()) "\u5728\u8868\u76D8\u8BBE\u7F6E\u91CC\u9009\u62E9\u4E00\u5F20\u56FE\u7247" else null
+        BUILT_IN_VIDEO_WATCHFACE_ID -> if (videoPath.isNullOrBlank()) "\u5728\u8868\u76D8\u8BBE\u7F6E\u91CC\u9009\u62E9\u4E00\u4E2A\u89C6\u9891" else null
+        else -> null
+    }
+    val previewBitmap by produceState<ImageBitmap?>(initialValue = null, key1 = watchFaceId, key2 = photoPath, key3 = videoPath, key4 = clockPosition, key5 = clockSizeSp, key6 = boldClock, key7 = palette, key8 = fallbackTitle, key9 = fallbackSubtitle) {
+        value = withContext(Dispatchers.IO) {
+            renderBuiltInChooserBitmap(
+                watchFaceId = watchFaceId,
+                photoPath = photoPath,
+                videoPath = videoPath,
+                clock = clock,
+                clockPosition = clockPosition,
+                clockSizeSp = clockSizeSp,
+                boldClock = boldClock,
+                palette = palette,
+                fallbackTitle = fallbackTitle,
+                fallbackSubtitle = fallbackSubtitle
+            )
+        }
+    }
 
     Box(
         modifier = modifier.background(Color.Black),
@@ -428,23 +438,198 @@ private fun BuiltInChooserPreview(
                     .then(fallbackModifier)
             )
         }
-        ClockOverlayPreview(
-            clock = clock,
-            clockPosition = clockPosition,
-            clockSizeSp = clockSizeSp,
-            boldClock = boldClock,
-            palette = palette,
-            fallbackTitle = when (watchFaceId) {
-                BUILT_IN_PHOTO_WATCHFACE_ID -> if (photoPath.isNullOrBlank()) "\u672A\u8BBE\u7F6E\u56FE\u7247" else null
-                BUILT_IN_VIDEO_WATCHFACE_ID -> if (videoPath.isNullOrBlank()) "\u672A\u8BBE\u7F6E\u89C6\u9891" else null
-                else -> null
-            },
-            fallbackSubtitle = when (watchFaceId) {
-                BUILT_IN_PHOTO_WATCHFACE_ID -> if (photoPath.isNullOrBlank()) "\u5728\u8868\u76D8\u8BBE\u7F6E\u91CC\u9009\u62E9\u4E00\u5F20\u56FE\u7247" else null
-                BUILT_IN_VIDEO_WATCHFACE_ID -> if (videoPath.isNullOrBlank()) "\u5728\u8868\u76D8\u8BBE\u7F6E\u91CC\u9009\u62E9\u4E00\u4E2A\u89C6\u9891" else null
-                else -> null
+    }
+}
+
+private fun renderBuiltInChooserBitmap(
+    watchFaceId: String,
+    photoPath: String?,
+    videoPath: String?,
+    clock: ClockSnapshot,
+    clockPosition: WatchClockPosition,
+    clockSizeSp: Int,
+    boldClock: Boolean,
+    palette: ClockPalette,
+    fallbackTitle: String?,
+    fallbackSubtitle: String?
+): ImageBitmap? {
+    val size = 720
+    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    when (watchFaceId) {
+        BUILT_IN_PHOTO_WATCHFACE_ID -> {
+            val source = photoPath
+                ?.takeIf { File(it).exists() }
+                ?.let { BitmapFactory.decodeFile(it, BitmapFactory.Options().apply { inSampleSize = 2 }) }
+            if (source != null) {
+                drawBitmapCover(canvas, source)
+            } else {
+                canvas.drawColor(AndroidColor.parseColor("#0C1018"))
             }
+        }
+        BUILT_IN_VIDEO_WATCHFACE_ID -> {
+            val source = videoPath
+                ?.takeIf { File(it).exists() }
+                ?.let { path ->
+                    runCatching {
+                        val retriever = MediaMetadataRetriever()
+                        try {
+                            retriever.setDataSource(path)
+                            retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                        } finally {
+                            runCatching { retriever.release() }
+                        }
+                    }.getOrNull()
+                }
+            if (source != null) {
+                drawBitmapCover(canvas, source)
+            } else {
+                canvas.drawColor(AndroidColor.parseColor("#05070C"))
+            }
+        }
+        BUILT_IN_WATCHFACE_ID -> {
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = LinearGradient(
+                    0f,
+                    0f,
+                    size.toFloat(),
+                    size.toFloat(),
+                    intArrayOf(
+                        AndroidColor.parseColor("#16304A"),
+                        AndroidColor.parseColor("#0B1322"),
+                        AndroidColor.BLACK
+                    ),
+                    null,
+                    Shader.TileMode.CLAMP
+                )
+            }
+            canvas.drawRect(0f, 0f, size.toFloat(), size.toFloat(), paint)
+        }
+        else -> {
+            canvas.drawColor(AndroidColor.parseColor("#10141D"))
+        }
+    }
+
+    val scrimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        shader = LinearGradient(
+            0f,
+            0f,
+            0f,
+            size.toFloat(),
+            intArrayOf(
+                AndroidColor.argb(28, 0, 0, 0),
+                AndroidColor.TRANSPARENT,
+                AndroidColor.argb(112, 0, 0, 0)
+            ),
+            null,
+            Shader.TileMode.CLAMP
         )
+    }
+    canvas.drawRect(0f, 0f, size.toFloat(), size.toFloat(), scrimPaint)
+
+    drawChooserClock(
+        canvas = canvas,
+        clock = clock,
+        clockPosition = clockPosition,
+        clockSizeSp = clockSizeSp,
+        boldClock = boldClock,
+        timeColor = palette.timeColor.toArgb(),
+        dateColor = palette.dateColor.toArgb(),
+        fallbackTitle = fallbackTitle,
+        fallbackSubtitle = fallbackSubtitle
+    )
+    return bitmap.asImageBitmap()
+}
+
+private fun drawBitmapCover(canvas: Canvas, source: Bitmap) {
+    val scale = maxOf(
+        canvas.width / source.width.toFloat(),
+        canvas.height / source.height.toFloat()
+    )
+    val scaledWidth = source.width * scale
+    val scaledHeight = source.height * scale
+    val left = (canvas.width - scaledWidth) / 2f
+    val top = (canvas.height - scaledHeight) / 2f
+    val dst = RectF(left, top, left + scaledWidth, top + scaledHeight)
+    canvas.drawBitmap(source, null, dst, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+}
+
+private fun drawChooserClock(
+    canvas: Canvas,
+    clock: ClockSnapshot,
+    clockPosition: WatchClockPosition,
+    clockSizeSp: Int,
+    boldClock: Boolean,
+    timeColor: Int,
+    dateColor: Int,
+    fallbackTitle: String?,
+    fallbackSubtitle: String?
+) {
+    val width = canvas.width.toFloat()
+    val height = canvas.height.toFloat()
+    val horizontalPadding = width * 0.1f
+    val verticalPadding = height * 0.12f
+    val textAlign = when (clockPosition) {
+        WatchClockPosition.TOP_LEFT,
+        WatchClockPosition.BOTTOM_LEFT,
+        WatchClockPosition.LEFT_CENTER -> Paint.Align.LEFT
+        WatchClockPosition.TOP_RIGHT,
+        WatchClockPosition.BOTTOM_RIGHT,
+        WatchClockPosition.RIGHT_CENTER -> Paint.Align.RIGHT
+        WatchClockPosition.CENTER -> Paint.Align.CENTER
+    }
+    val anchorX = when (clockPosition) {
+        WatchClockPosition.TOP_LEFT,
+        WatchClockPosition.BOTTOM_LEFT,
+        WatchClockPosition.LEFT_CENTER -> horizontalPadding
+        WatchClockPosition.TOP_RIGHT,
+        WatchClockPosition.BOTTOM_RIGHT,
+        WatchClockPosition.RIGHT_CENTER -> width - horizontalPadding
+        WatchClockPosition.CENTER -> width / 2f
+    }
+    val anchorY = when (clockPosition) {
+        WatchClockPosition.TOP_LEFT,
+        WatchClockPosition.TOP_RIGHT -> verticalPadding + clockSizeSp * 2.7f
+        WatchClockPosition.LEFT_CENTER,
+        WatchClockPosition.CENTER,
+        WatchClockPosition.RIGHT_CENTER -> height * 0.46f
+        WatchClockPosition.BOTTOM_LEFT,
+        WatchClockPosition.BOTTOM_RIGHT -> height - verticalPadding - clockSizeSp * 1.1f
+    }
+    val timePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = timeColor
+        textAlign = textAlign
+        textSize = clockSizeSp * 5.2f
+        typeface = if (boldClock) Typeface.DEFAULT_BOLD else Typeface.create(Typeface.DEFAULT, 300, false)
+        isSubpixelText = true
+    }
+    val datePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = dateColor
+        textAlign = textAlign
+        textSize = clockSizeSp * 1.25f
+        typeface = Typeface.DEFAULT_BOLD
+        alpha = 220
+    }
+    canvas.drawText(clock.time, anchorX, anchorY, timePaint)
+    canvas.drawText(clock.date, anchorX, anchorY + clockSizeSp * 1.7f, datePaint)
+
+    fallbackTitle?.let { title ->
+        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = timeColor
+            textAlign = textAlign
+            textSize = clockSizeSp * 1.45f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        canvas.drawText(title, anchorX, anchorY + clockSizeSp * 3.7f, titlePaint)
+        fallbackSubtitle?.let { subtitle ->
+            val subtitlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = timeColor
+                textAlign = textAlign
+                textSize = clockSizeSp * 0.92f
+                alpha = 196
+            }
+            canvas.drawText(subtitle, anchorX, anchorY + clockSizeSp * 5.05f, subtitlePaint)
+        }
     }
 }
 
