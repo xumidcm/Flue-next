@@ -125,7 +125,7 @@ class SettingsActivity : ComponentActivity() {
                                     .putExtra(EXTRA_INTERNAL_WATCHFACE_ID, descriptor.id)
                             )
                         } else if (!LunchWatchFaceRuntime.openSettings(context, descriptor)) {
-                            Toast.makeText(context, "娌℃湁鍙敤鐨勮〃鐩樿缃?, Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "\u6CA1\u6709\u53EF\u7528\u7684\u8868\u76D8\u8BBE\u7F6E", Toast.LENGTH_SHORT).show()
                         }
                     },
                     onRefreshWatchFaces = { vm.refreshWatchFaces() },

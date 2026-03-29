@@ -21,7 +21,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
@@ -236,7 +235,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 if (screenState == ScreenState.Face) {
                     Box(
                         modifier = Modifier
-                            .matchParentSize()
+                            .fillMaxSize()
                             .pointerInput(openWatchFaceChooser) {
                                 detectTapGestures(onLongPress = { openWatchFaceChooser() })
                             }
