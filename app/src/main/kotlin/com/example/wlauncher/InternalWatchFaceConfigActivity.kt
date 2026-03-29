@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Slider
@@ -296,19 +295,25 @@ private fun PositionPickerRow(
         ).forEach { rowItems ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.Center
             ) {
                 rowItems.forEach { (position, label) ->
                     SmallChoiceChip(
                         label = label,
                         selected = position == current,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .width(92.dp)
+                            .padding(horizontal = 4.dp)
                     ) {
                         onSelect(position)
                     }
                 }
                 repeat(3 - rowItems.size) {
-                    Spacer(modifier = Modifier.weight(1f))
+                    Spacer(
+                        modifier = Modifier
+                            .width(92.dp)
+                            .padding(horizontal = 4.dp)
+                    )
                 }
             }
         }
