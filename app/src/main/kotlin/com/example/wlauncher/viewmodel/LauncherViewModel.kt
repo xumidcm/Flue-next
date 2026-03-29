@@ -17,6 +17,8 @@ import com.flue.launcher.data.repository.AppRepository
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.navigation.ScreenState
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
+import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
+import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceRegistry
 import com.flue.launcher.watchface.LunchWatchFaceScanner
@@ -48,6 +50,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_SHOW_NOTIFICATION = booleanPreferencesKey("show_notification")
         val KEY_SELECTED_WATCHFACE_ID = stringPreferencesKey("selected_watchface_id")
         val KEY_LAST_WATCHFACE_ERROR = stringPreferencesKey("last_watchface_error")
+        val KEY_BUILTIN_PHOTO_PATH = stringPreferencesKey("builtin_photo_path")
+        val KEY_BUILTIN_VIDEO_PATH = stringPreferencesKey("builtin_video_path")
     }
 
     private val store = application.dataStore
@@ -100,13 +104,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _showNotification = MutableStateFlow(true)
     val showNotification: StateFlow<Boolean> = _showNotification.asStateFlow()
 
-    private val _availableWatchFaces = MutableStateFlow(listOf(LunchWatchFaceScanner.builtInDescriptor()))
+    private val _availableWatchFaces = MutableStateFlow(LunchWatchFaceScanner.builtInDescriptors())
     val availableWatchFaces: StateFlow<List<LunchWatchFaceDescriptor>> = _availableWatchFaces.asStateFlow()
 
     private val _selectedWatchFaceId = MutableStateFlow(BUILT_IN_WATCHFACE_ID)
     val selectedWatchFaceId: StateFlow<String> = _selectedWatchFaceId.asStateFlow()
 
-    private val _selectedWatchFace = MutableStateFlow(LunchWatchFaceScanner.builtInDescriptor())
+    private val _selectedWatchFace = MutableStateFlow(LunchWatchFaceScanner.builtInDescriptor(BUILT_IN_WATCHFACE_ID))
     val selectedWatchFace: StateFlow<LunchWatchFaceDescriptor> = _selectedWatchFace.asStateFlow()
 
     private val _watchFaceSelectionReady = MutableStateFlow(false)
@@ -117,6 +121,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _watchFaceLastError = MutableStateFlow<String?>(null)
     val watchFaceLastError: StateFlow<String?> = _watchFaceLastError.asStateFlow()
+
+    private val _builtInPhotoPath = MutableStateFlow<String?>(null)
+    val builtInPhotoPath: StateFlow<String?> = _builtInPhotoPath.asStateFlow()
+
+    private val _builtInVideoPath = MutableStateFlow<String?>(null)
+    val builtInVideoPath: StateFlow<String?> = _builtInVideoPath.asStateFlow()
 
     private val _appOpenOrigin = MutableStateFlow(Offset(0.5f, 0.5f))
     val appOpenOrigin: StateFlow<Offset> = _appOpenOrigin.asStateFlow()
@@ -162,6 +172,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 prefs[KEY_SHOW_NOTIFICATION]?.let { _showNotification.value = it }
                 prefs[KEY_SELECTED_WATCHFACE_ID]?.let { _selectedWatchFaceId.value = it }
                 _watchFaceLastError.value = prefs[KEY_LAST_WATCHFACE_ERROR]
+                _builtInPhotoPath.value = prefs[KEY_BUILTIN_PHOTO_PATH]
+                _builtInVideoPath.value = prefs[KEY_BUILTIN_VIDEO_PATH]
                 if (refreshIconsNeeded) {
                     refreshIcons()
                 }
@@ -308,7 +320,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun refreshWatchFaces() {
         viewModelScope.launch {
-            val scanned = listOf(LunchWatchFaceScanner.builtInDescriptor()) + LunchWatchFaceScanner.scanInstalled(getApplication())
+            val scanned = LunchWatchFaceScanner.builtInDescriptors() + LunchWatchFaceScanner.scanInstalled(getApplication())
             _availableWatchFaces.value = scanned
             LunchWatchFaceRegistry.update(scanned)
             watchFaceScanHydrated = true
@@ -343,6 +355,26 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { store.edit { it.remove(KEY_LAST_WATCHFACE_ERROR) } }
     }
 
+    fun setBuiltInPhotoPath(path: String?) {
+        _builtInPhotoPath.value = path
+        viewModelScope.launch {
+            store.edit {
+                if (path.isNullOrBlank()) it.remove(KEY_BUILTIN_PHOTO_PATH)
+                else it[KEY_BUILTIN_PHOTO_PATH] = path
+            }
+        }
+    }
+
+    fun setBuiltInVideoPath(path: String?) {
+        _builtInVideoPath.value = path
+        viewModelScope.launch {
+            store.edit {
+                if (path.isNullOrBlank()) it.remove(KEY_BUILTIN_VIDEO_PATH)
+                else it[KEY_BUILTIN_VIDEO_PATH] = path
+            }
+        }
+    }
+
     fun requestWatchFaceRefresh() {
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
     }
@@ -371,7 +403,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _honeycombBottomFade.value = 56
         _showNotification.value = true
         _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
-        _selectedWatchFace.value = LunchWatchFaceScanner.builtInDescriptor()
+        _selectedWatchFace.value = LunchWatchFaceScanner.builtInDescriptor(BUILT_IN_WATCHFACE_ID)
         _watchFaceLastError.value = null
         LunchWatchFaceRegistry.setCurrentSelectedId(BUILT_IN_WATCHFACE_ID)
         refreshIcons()
@@ -409,7 +441,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             watchFaceScanHydrated -> {
                 val fallback = available.firstOrNull { it.id == BUILT_IN_WATCHFACE_ID }
                     ?: available.firstOrNull()
-                    ?: LunchWatchFaceScanner.builtInDescriptor()
+                    ?: LunchWatchFaceScanner.builtInDescriptor(BUILT_IN_WATCHFACE_ID)
                 _selectedWatchFace.value = fallback
                 _selectedWatchFaceId.value = fallback.id
                 LunchWatchFaceRegistry.setCurrentSelectedId(fallback.id)
@@ -420,7 +452,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 }
             }
             else -> {
-                _selectedWatchFace.value = LunchWatchFaceScanner.builtInDescriptor()
+                _selectedWatchFace.value = LunchWatchFaceScanner.builtInDescriptor(BUILT_IN_WATCHFACE_ID)
                 LunchWatchFaceRegistry.setCurrentSelectedId(requestedId)
             }
         }

@@ -1,4 +1,4 @@
-﻿package com.flue.launcher.watchface
+package com.flue.launcher.watchface
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -163,8 +163,9 @@ private class LunchWatchFaceHostView(context: Context) : FrameLayout(context) {
     }
 
     private fun showFailure(error: Throwable) {
+        val rootCause = generateSequence(error) { it.cause }.last()
         val view = TextView(context).apply {
-            text = "Watchface load failed"
+            text = "表盘加载失败：${rootCause.message ?: rootCause.javaClass.simpleName}"
             gravity = Gravity.CENTER
             setTextColor(android.graphics.Color.WHITE)
         }

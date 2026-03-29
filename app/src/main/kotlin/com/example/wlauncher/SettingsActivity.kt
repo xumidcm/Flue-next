@@ -1,5 +1,6 @@
 package com.flue.launcher
 
+import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -33,6 +34,8 @@ import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_SELECTED_WATC
 import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_SPLASH_DELAY
 import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_SPLASH_ICON
 import com.flue.launcher.viewmodel.dataStore
+import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
+import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.LunchWatchFaceRuntime
 import kotlinx.coroutines.launch
 
@@ -48,6 +51,8 @@ class SettingsActivity : ComponentActivity() {
                 val watchFaces by vm.availableWatchFaces.collectAsState()
                 val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsState()
                 val watchFaceLastError by vm.watchFaceLastError.collectAsState()
+                val builtInPhotoPath by vm.builtInPhotoPath.collectAsState()
+                val builtInVideoPath by vm.builtInVideoPath.collectAsState()
 
                 LaunchedEffect(Unit) {
                     vm.refreshWatchFaces()
@@ -89,6 +94,8 @@ class SettingsActivity : ComponentActivity() {
                     watchFaces = watchFaces,
                     selectedWatchFaceId = persistedSelectedWatchFaceId,
                     watchFaceLastError = watchFaceLastError,
+                    builtInPhotoPath = builtInPhotoPath,
+                    builtInVideoPath = builtInVideoPath,
                     onLayoutChange = { scope.launch { dataStore.edit { p -> p[KEY_LAYOUT] = it.name } } },
                     onBlurToggle = {
                         scope.launch {
@@ -112,8 +119,13 @@ class SettingsActivity : ComponentActivity() {
                     onHoneycombBottomFadeChange = { scope.launch { dataStore.edit { p -> p[KEY_HONEYCOMB_BOTTOM_FADE] = it } } },
                     onWatchFaceSelect = { vm.selectWatchFace(it) },
                     onOpenWatchFaceSettings = { descriptor ->
-                        if (!LunchWatchFaceRuntime.openSettings(context, descriptor)) {
-                            Toast.makeText(context, "No watchface settings available", Toast.LENGTH_SHORT).show()
+                        if (descriptor.isBuiltin && descriptor.id in setOf(BUILT_IN_PHOTO_WATCHFACE_ID, BUILT_IN_VIDEO_WATCHFACE_ID)) {
+                            context.startActivity(
+                                Intent(context, InternalWatchFaceConfigActivity::class.java)
+                                    .putExtra(EXTRA_INTERNAL_WATCHFACE_ID, descriptor.id)
+                            )
+                        } else if (!LunchWatchFaceRuntime.openSettings(context, descriptor)) {
+                            Toast.makeText(context, "娌℃湁鍙敤鐨勮〃鐩樿缃?, Toast.LENGTH_SHORT).show()
                         }
                     },
                     onRefreshWatchFaces = { vm.refreshWatchFaces() },

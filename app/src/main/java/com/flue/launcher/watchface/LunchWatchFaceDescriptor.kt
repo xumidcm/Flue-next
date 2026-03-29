@@ -1,8 +1,10 @@
-﻿package com.flue.launcher.watchface
+package com.flue.launcher.watchface
 
 import android.graphics.drawable.Drawable
 
 const val BUILT_IN_WATCHFACE_ID = "builtin"
+const val BUILT_IN_PHOTO_WATCHFACE_ID = "builtin_photo"
+const val BUILT_IN_VIDEO_WATCHFACE_ID = "builtin_video"
 const val WATCHFACE_ACTION = "com.dudu.wearlauncher.WATCHFACE"
 const val WATCHFACE_REFRESH_ACTION = "com.flue.launcher.action.WATCHFACE_REFRESH"
 
@@ -25,7 +27,8 @@ data class LunchWatchFaceDescriptor(
     val author: String? = null,
     val sourceApkPath: String? = null,
     val watchFaceName: String = id,
-    val buildConfigClassName: String? = null
+    val buildConfigClassName: String? = null,
+    val supportsSettings: Boolean = false
 ) {
     val isBuiltin: Boolean get() = type == LunchWatchFaceType.BUILTIN
     val stableKey: String get() = packageName ?: id

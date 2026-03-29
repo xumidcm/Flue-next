@@ -1,4 +1,4 @@
-﻿package com.flue.launcher.ui.settings
+package com.flue.launcher.ui.settings
 
 import android.content.Intent
 import android.widget.Toast
@@ -73,6 +73,8 @@ fun LauncherSettingsSheet(
     watchFaces: List<LunchWatchFaceDescriptor> = emptyList(),
     selectedWatchFaceId: String = "",
     watchFaceLastError: String? = null,
+    builtInPhotoPath: String? = null,
+    builtInVideoPath: String? = null,
     onLayoutChange: (LayoutMode) -> Unit,
     onBlurToggle: (Boolean) -> Unit,
     onEdgeBlurToggle: (Boolean) -> Unit = {},
@@ -185,8 +187,10 @@ fun LauncherSettingsSheet(
                         descriptor = descriptor,
                         selected = descriptor.id == selectedWatchFaceId,
                         scale = scale,
+                        builtInPhotoPath = builtInPhotoPath,
+                        builtInVideoPath = builtInVideoPath,
                         onSelect = { onWatchFaceSelect(descriptor.id) },
-                        onOpenSettings = if (descriptor.settingsEntryClassName != null) {
+                        onOpenSettings = if (descriptor.supportsSettings) {
                             { onOpenWatchFaceSettings(descriptor) }
                         } else {
                             null

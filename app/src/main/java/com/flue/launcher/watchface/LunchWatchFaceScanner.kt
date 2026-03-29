@@ -1,4 +1,4 @@
-﻿package com.flue.launcher.watchface
+package com.flue.launcher.watchface
 
 import android.content.Context
 import android.content.Intent
@@ -11,12 +11,31 @@ import dalvik.system.DexClassLoader
 import org.xmlpull.v1.XmlPullParser
 
 object LunchWatchFaceScanner {
-    fun builtInDescriptor(): LunchWatchFaceDescriptor = LunchWatchFaceDescriptor(
-        id = BUILT_IN_WATCHFACE_ID,
-        type = LunchWatchFaceType.BUILTIN,
-        displayName = "星野 深蓝",
-        summary = "内置表盘"
+    fun builtInDescriptors(): List<LunchWatchFaceDescriptor> = listOf(
+        LunchWatchFaceDescriptor(
+            id = BUILT_IN_WATCHFACE_ID,
+            type = LunchWatchFaceType.BUILTIN,
+            displayName = "星野 深藍",
+            summary = "内置表盘"
+        ),
+        LunchWatchFaceDescriptor(
+            id = BUILT_IN_PHOTO_WATCHFACE_ID,
+            type = LunchWatchFaceType.BUILTIN,
+            displayName = "图片表盘",
+            summary = "Flue 内置表盘",
+            supportsSettings = true
+        ),
+        LunchWatchFaceDescriptor(
+            id = BUILT_IN_VIDEO_WATCHFACE_ID,
+            type = LunchWatchFaceType.BUILTIN,
+            displayName = "视频表盘",
+            summary = "Flue 内置表盘",
+            supportsSettings = true
+        )
     )
+
+    fun builtInDescriptor(id: String = BUILT_IN_WATCHFACE_ID): LunchWatchFaceDescriptor =
+        builtInDescriptors().firstOrNull { it.id == id } ?: builtInDescriptors().first()
 
     fun scanInstalled(context: Context): List<LunchWatchFaceDescriptor> {
         val pm = context.packageManager
@@ -90,7 +109,8 @@ object LunchWatchFaceScanner {
                     author = author,
                     sourceApkPath = apkPath,
                     watchFaceName = watchFaceName,
-                    buildConfigClassName = buildConfigClassName
+                    buildConfigClassName = buildConfigClassName,
+                    supportsSettings = settingsClass.isNotBlank()
                 )
             }.getOrNull()
         }.sortedBy { it.displayName.lowercase() }

@@ -1,4 +1,4 @@
-﻿package com.flue.launcher.ui.settings
+package com.flue.launcher.ui.settings
 
 import android.widget.ImageView
 import androidx.compose.foundation.background
@@ -24,10 +24,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.flue.launcher.ui.home.BuiltInWatchFacePreview
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceScanner
@@ -37,10 +37,11 @@ fun WatchFaceSettingCard(
     descriptor: LunchWatchFaceDescriptor,
     selected: Boolean,
     scale: Float,
+    builtInPhotoPath: String? = null,
+    builtInVideoPath: String? = null,
     onSelect: () -> Unit,
     onOpenSettings: (() -> Unit)? = null
 ) {
-    val context = LocalContext.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -52,17 +53,31 @@ fun WatchFaceSettingCard(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        AndroidView(
-            factory = { imageContext ->
-                ImageView(imageContext).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
-            },
-            update = { imageView ->
-                imageView.setImageDrawable(LunchWatchFaceScanner.loadPreviewDrawable(context, descriptor))
-            },
-            modifier = Modifier
-                .size(52.dp)
-                .clip(RoundedCornerShape(14.dp))
-        )
+        if (descriptor.isBuiltin) {
+            BuiltInWatchFacePreview(
+                watchFaceId = descriptor.id,
+                photoPath = builtInPhotoPath,
+                videoPath = builtInVideoPath,
+                showClock = false,
+                playVideo = false,
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(RoundedCornerShape(14.dp))
+            )
+        } else {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            AndroidView(
+                factory = { imageContext ->
+                    ImageView(imageContext).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+                },
+                update = { imageView ->
+                    imageView.setImageDrawable(LunchWatchFaceScanner.loadPreviewDrawable(context, descriptor))
+                },
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(RoundedCornerShape(14.dp))
+            )
+        }
         Box(
             modifier = Modifier.fillMaxWidth(),
             contentAlignment = Alignment.CenterStart
@@ -101,7 +116,7 @@ fun WatchFaceSettingCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (onOpenSettings != null && descriptor.settingsEntryClassName != null) {
+                if (onOpenSettings != null && descriptor.supportsSettings) {
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))

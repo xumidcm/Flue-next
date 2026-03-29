@@ -43,7 +43,7 @@
         <activity
             android:name=".SettingsActivity"
             android:exported="true"
-            android:label="桌面设置"
+            android:label="妗岄潰璁剧疆"
             android:icon="@mipmap/ic_settings_launcher"
             android:theme="@style/Theme.WatchLauncher"
             android:screenOrientation="portrait">
@@ -55,6 +55,12 @@
 
         <activity
             android:name=".WatchFaceChooserActivity"
+            android:exported="false"
+            android:theme="@style/Theme.WatchLauncher"
+            android:screenOrientation="portrait" />
+
+        <activity
+            android:name=".InternalWatchFaceConfigActivity"
             android:exported="false"
             android:theme="@style/Theme.WatchLauncher"
             android:screenOrientation="portrait" />
