@@ -322,7 +322,7 @@ fun ListDrawerScreen(
             val topEdgeBlurZonePx = with(density) { 72.dp.toPx() }
             val bottomEdgeBlurZonePx = with(density) { 78.dp.toPx() }
             val estimatedItemHeight = iconSize.coerceAtLeast(48.dp) + 20.dp
-            val centeredPadding = 8.dp
+            val centeredPadding = ((maxHeight - estimatedItemHeight) / 2f).coerceAtLeast(8.dp)
             val dragRowShift = dragFromIndex?.let { itemHeights[it] } ?: with(density) { estimatedItemHeight.toPx() }
             val dragOverlayHeightPx = dragFromIndex?.let { itemHeights[it] } ?: with(density) { (iconSize + 20.dp).toPx() }
 

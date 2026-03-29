@@ -121,10 +121,8 @@ fun HoneycombScreen(
 
         val minGridY = positions.minOfOrNull { it.y } ?: 0f
         val maxGridY = positions.maxOfOrNull { it.y } ?: 0f
-        val safeTop = topFadePx + iconSizePx * 0.55f
-        val safeBottom = screenHeightPx - bottomFadePx - iconSizePx * 0.55f
-        val maxScroll = safeTop - (screenCenterY + minGridY)
-        val minScroll = safeBottom - (screenCenterY + maxGridY)
+        val maxScroll = -minGridY
+        val minScroll = -maxGridY
 
         val scrollOffset = remember { Animatable(0f) }
         val scope = rememberCoroutineScope()
