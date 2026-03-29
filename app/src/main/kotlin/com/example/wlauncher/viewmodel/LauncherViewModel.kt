@@ -109,6 +109,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _selectedWatchFace = MutableStateFlow(LunchWatchFaceScanner.builtInDescriptor())
     val selectedWatchFace: StateFlow<LunchWatchFaceDescriptor> = _selectedWatchFace.asStateFlow()
 
+    private val _watchFaceSelectionReady = MutableStateFlow(false)
+    val watchFaceSelectionReady: StateFlow<Boolean> = _watchFaceSelectionReady.asStateFlow()
+
     private val _watchFaceRefreshToken = MutableStateFlow(0)
     val watchFaceRefreshToken: StateFlow<Int> = _watchFaceRefreshToken.asStateFlow()
 
@@ -123,6 +126,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private var launchingExternalApp = false
     private var launchJob: Job? = null
+    private var watchFacePrefsHydrated = false
+    private var watchFaceScanHydrated = false
 
     init {
         viewModelScope.launch {
@@ -160,6 +165,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 if (refreshIconsNeeded) {
                     refreshIcons()
                 }
+                watchFacePrefsHydrated = true
                 syncSelectedWatchFace()
             }
         }
@@ -305,6 +311,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             val scanned = listOf(LunchWatchFaceScanner.builtInDescriptor()) + LunchWatchFaceScanner.scanInstalled(getApplication())
             _availableWatchFaces.value = scanned
             LunchWatchFaceRegistry.update(scanned)
+            watchFaceScanHydrated = true
             syncSelectedWatchFace()
         }
     }
@@ -312,7 +319,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun selectWatchFace(id: String) {
         _selectedWatchFaceId.value = id
         syncSelectedWatchFace()
-        viewModelScope.launch { store.edit { it[KEY_SELECTED_WATCHFACE_ID] = _selectedWatchFace.value.id } }
+        viewModelScope.launch { store.edit { it[KEY_SELECTED_WATCHFACE_ID] = id } }
     }
 
     fun fallbackToBuiltIn(error: String? = null) {
@@ -390,12 +397,35 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun syncSelectedWatchFace() {
-        val match = _availableWatchFaces.value.firstOrNull { it.id == _selectedWatchFaceId.value }
-            ?: _availableWatchFaces.value.firstOrNull()
-            ?: LunchWatchFaceScanner.builtInDescriptor()
-        _selectedWatchFace.value = match
-        _selectedWatchFaceId.value = match.id
-        LunchWatchFaceRegistry.setCurrentSelectedId(match.id)
+        val requestedId = _selectedWatchFaceId.value.ifBlank { BUILT_IN_WATCHFACE_ID }
+        val available = _availableWatchFaces.value
+        val match = available.firstOrNull { it.id == requestedId }
+
+        when {
+            match != null -> {
+                _selectedWatchFace.value = match
+                LunchWatchFaceRegistry.setCurrentSelectedId(match.id)
+            }
+            watchFaceScanHydrated -> {
+                val fallback = available.firstOrNull { it.id == BUILT_IN_WATCHFACE_ID }
+                    ?: available.firstOrNull()
+                    ?: LunchWatchFaceScanner.builtInDescriptor()
+                _selectedWatchFace.value = fallback
+                _selectedWatchFaceId.value = fallback.id
+                LunchWatchFaceRegistry.setCurrentSelectedId(fallback.id)
+                if (watchFacePrefsHydrated && requestedId != fallback.id) {
+                    viewModelScope.launch {
+                        store.edit { it[KEY_SELECTED_WATCHFACE_ID] = fallback.id }
+                    }
+                }
+            }
+            else -> {
+                _selectedWatchFace.value = LunchWatchFaceScanner.builtInDescriptor()
+                LunchWatchFaceRegistry.setCurrentSelectedId(requestedId)
+            }
+        }
+
+        _watchFaceSelectionReady.value = watchFacePrefsHydrated && watchFaceScanHydrated
     }
 
     private fun refreshIcons() {

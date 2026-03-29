@@ -1,6 +1,7 @@
 package com.flue.launcher.ui.home
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -17,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -28,6 +30,7 @@ import java.util.Locale
 
 @Composable
 fun WatchFaceLayer(
+    onLongPress: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var currentTime by remember { mutableStateOf("") }
@@ -51,6 +54,15 @@ fun WatchFaceLayer(
     Box(
         modifier = modifier
             .fillMaxSize()
+            .then(
+                if (onLongPress != null) {
+                    Modifier.pointerInput(onLongPress) {
+                        detectTapGestures(onLongPress = { onLongPress() })
+                    }
+                } else {
+                    Modifier
+                }
+            )
             .background(
                 Brush.radialGradient(
                     colors = listOf(Color(0xFF1A1A2E), Color.Black),

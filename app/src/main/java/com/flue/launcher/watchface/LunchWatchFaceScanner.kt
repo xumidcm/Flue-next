@@ -28,13 +28,16 @@ object LunchWatchFaceScanner {
         return resolveInfos.mapNotNull { info ->
             runCatching {
                 val packageName = info.activityInfo.packageName
+                val displayLabel = runCatching { info.loadLabel(pm)?.toString() }
+                    .getOrNull()
+                    .orEmpty()
                 val packageContext = context.createPackageContext(packageName, Context.CONTEXT_IGNORE_SECURITY)
                 val resources = packageContext.resources
                 val configId = resources.getIdentifier("watchface_config", "xml", packageName)
                 if (configId == 0) return@runCatching null
                 val parser = resources.getXml(configId)
                 var eventType = parser.eventType
-                var displayName = info.loadLabel(pm)?.toString().orEmpty()
+                var displayName = displayLabel.ifBlank { packageName }
                 var watchFaceClass = ""
                 var settingsClass = ""
                 var previewResId = 0

@@ -23,17 +23,20 @@ fun LunchWatchFaceHost(
     isFaceVisible: Boolean,
     refreshToken: Int,
     onLoadFailure: (LunchWatchFaceDescriptor, Throwable) -> Unit,
+    onLongPress: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     AndroidView(
         factory = { context ->
             LunchWatchFaceHostView(context).apply {
                 setFailureHandler(onLoadFailure)
+                setLongPressHandler(onLongPress)
             }
         },
         modifier = modifier.fillMaxSize(),
         update = { host ->
             host.setFailureHandler(onLoadFailure)
+            host.setLongPressHandler(onLongPress)
             host.bind(descriptor, isFaceVisible, refreshToken)
         }
     )
@@ -46,6 +49,7 @@ private class LunchWatchFaceHostView(context: Context) : FrameLayout(context) {
     private var screenOn: Boolean = currentScreenOn(context)
     private var bridge: WatchFaceBridge? = null
     private var failureHandler: ((LunchWatchFaceDescriptor, Throwable) -> Unit)? = null
+    private var longPressHandler: (() -> Unit)? = null
 
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -78,10 +82,19 @@ private class LunchWatchFaceHostView(context: Context) : FrameLayout(context) {
 
     init {
         layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+        isLongClickable = true
+        setOnLongClickListener {
+            longPressHandler?.invoke()
+            longPressHandler != null
+        }
     }
 
     fun setFailureHandler(handler: (LunchWatchFaceDescriptor, Throwable) -> Unit) {
         failureHandler = handler
+    }
+
+    fun setLongPressHandler(handler: (() -> Unit)?) {
+        longPressHandler = handler
     }
 
     fun bind(descriptor: LunchWatchFaceDescriptor, isFaceVisible: Boolean, refreshToken: Int) {

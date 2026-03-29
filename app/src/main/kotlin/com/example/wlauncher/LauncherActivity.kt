@@ -53,6 +53,7 @@ import com.flue.launcher.ui.settings.LauncherSettingsSheet
 import com.flue.launcher.ui.smartstack.SmartStackLayer
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.viewmodel.LauncherViewModel
+import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.LunchWatchFaceHost
 import com.flue.launcher.watchface.LunchWatchFaceRuntime
 import kotlinx.coroutines.delay
@@ -126,11 +127,18 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsState()
     val showNotification by vm.showNotification.collectAsState()
     val watchFaces by vm.availableWatchFaces.collectAsState()
+    val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsState()
     val selectedWatchFace by vm.selectedWatchFace.collectAsState()
+    val watchFaceSelectionReady by vm.watchFaceSelectionReady.collectAsState()
     val watchFaceRefreshToken by vm.watchFaceRefreshToken.collectAsState()
     val watchFaceLastError by vm.watchFaceLastError.collectAsState()
     val layerBlurEnabled = blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
+    val openWatchFaceChooser = remember(context) {
+        {
+            context.startActivity(Intent(context, WatchFaceChooserActivity::class.java))
+        }
+    }
 
     var prevState by remember { mutableStateOf(screenState) }
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
@@ -174,13 +182,20 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         blurEnabled = layerBlurEnabled
                     )
             ) {
-                if (selectedWatchFace.isBuiltin) {
-                    WatchFaceLayer()
+                if (!watchFaceSelectionReady && selectedWatchFaceId != BUILT_IN_WATCHFACE_ID) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black)
+                    )
+                } else if (selectedWatchFace.isBuiltin) {
+                    WatchFaceLayer(onLongPress = openWatchFaceChooser)
                 } else {
                     LunchWatchFaceHost(
                         descriptor = selectedWatchFace,
                         isFaceVisible = screenState == ScreenState.Face,
                         refreshToken = watchFaceRefreshToken,
+                        onLongPress = openWatchFaceChooser,
                         onLoadFailure = { descriptor, error ->
                             vm.fallbackToBuiltIn("${descriptor.displayName}: ${error.message ?: error.javaClass.simpleName}")
                         }
@@ -316,7 +331,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     honeycombBottomFade = honeycombBottomFade,
                     showNotification = showNotification,
                     watchFaces = watchFaces,
-                    selectedWatchFaceId = selectedWatchFace.id,
+                    selectedWatchFaceId = selectedWatchFaceId,
                     watchFaceLastError = watchFaceLastError,
                     onLayoutChange = { vm.setLayoutMode(it) },
                     onBlurToggle = { vm.setBlurEnabled(it) },

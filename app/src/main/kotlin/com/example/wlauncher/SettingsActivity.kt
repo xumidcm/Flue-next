@@ -45,7 +45,7 @@ class SettingsActivity : ComponentActivity() {
                 val prefs by dataStore.data.collectAsState(initial = null)
                 val vm: LauncherViewModel = viewModel()
                 val watchFaces by vm.availableWatchFaces.collectAsState()
-                val selectedWatchFace by vm.selectedWatchFace.collectAsState()
+                val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsState()
                 val watchFaceLastError by vm.watchFaceLastError.collectAsState()
 
                 LaunchedEffect(Unit) {
@@ -85,7 +85,7 @@ class SettingsActivity : ComponentActivity() {
                     honeycombTopFade = topFade,
                     honeycombBottomFade = bottomFade,
                     watchFaces = watchFaces,
-                    selectedWatchFaceId = selectedWatchFace.id,
+                    selectedWatchFaceId = selectedWatchFaceId,
                     watchFaceLastError = watchFaceLastError,
                     onLayoutChange = { scope.launch { dataStore.edit { p -> p[KEY_LAYOUT] = it.name } } },
                     onBlurToggle = {

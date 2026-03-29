@@ -3,16 +3,21 @@
 import android.app.Activity
 import android.content.ComponentName
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.res.Configuration
+import android.os.Bundle
 import android.os.Build
 import android.view.View
 import com.dudu.wearlauncher.model.WatchFaceBridge
 import com.dudu.wearlauncher.ui.WatchSurfaceBaseActivity
+import com.flue.launcher.WatchFaceChooserActivity
 import dalvik.system.DexClassLoader
 
 object LunchWatchFaceRuntime {
     private const val LEGACY_SURFACE_CLASS = "com.dudu.wearlauncher.model.WatchSurface"
+    private const val LUNCH_PACKAGE = "com.dudu.wearlauncher"
+    private const val LUNCH_CHOOSER_CLASS = "com.dudu.wearlauncher.ui.home.ChooseWatchFaceActivity"
 
     fun loadExternalWatchFace(hostContext: Context, descriptor: LunchWatchFaceDescriptor): LunchWatchFaceLoadResult {
         require(!descriptor.isBuiltin) { "Built-in watchface should not use external loader" }
@@ -75,7 +80,12 @@ object LunchWatchFaceRuntime {
         val base = hostContext.createPackageContext(packageName, Context.CONTEXT_IGNORE_SECURITY)
         val fitContext = createFitDisplayContext(base, if (useLegacySurfaceScale) 360 else 320)
         injectClassLoader(fitContext, classLoader)
-        return fitContext
+        return PluginRuntimeContext(
+            base = fitContext,
+            hostContext = hostContext,
+            descriptor = descriptor,
+            classLoader = classLoader
+        )
     }
 
     private fun createFitDisplayContext(context: Context, referenceWidth: Int): Context {
@@ -132,5 +142,45 @@ object LunchWatchFaceRuntime {
             }
         }
         return null
+    }
+
+    private class PluginRuntimeContext(
+        base: Context,
+        private val hostContext: Context,
+        private val descriptor: LunchWatchFaceDescriptor,
+        private val pluginClassLoader: ClassLoader
+    ) : ContextWrapper(base) {
+
+        override fun getClassLoader(): ClassLoader = pluginClassLoader
+
+        override fun getApplicationContext(): Context = this
+
+        override fun startActivity(intent: Intent?) {
+            if (intent == null) return
+            hostContext.startActivity(routeIntent(intent))
+        }
+
+        override fun startActivity(intent: Intent?, options: Bundle?) {
+            if (intent == null) return
+            hostContext.startActivity(routeIntent(intent), options)
+        }
+
+        private fun routeIntent(source: Intent): Intent {
+            val component = source.component
+            val matchesLunchChooser =
+                component?.packageName == LUNCH_PACKAGE &&
+                    component.className == LUNCH_CHOOSER_CLASS
+
+            if (!matchesLunchChooser) {
+                return Intent(source).apply {
+                    if (hostContext !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+
+            return Intent(hostContext, WatchFaceChooserActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                if (hostContext !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        }
     }
 }
