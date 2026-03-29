@@ -84,7 +84,7 @@ object LunchWatchFaceRuntime {
             base = fitContext,
             hostContext = hostContext,
             descriptor = descriptor,
-            classLoader = classLoader
+            pluginClassLoader = classLoader
         )
     }
 
