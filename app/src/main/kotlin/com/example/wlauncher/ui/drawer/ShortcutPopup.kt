@@ -135,18 +135,39 @@ fun AppShortcutOverlay(
                     }
                     Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
                     ShortcutMenuItem("卸载", Color(0xFFFF453A)) {
-                        val packageUri = Uri.parse("package:${app.packageName}")
+                        val packageUri = Uri.fromParts("package", app.packageName, null)
+                        val deleteIntent = Intent(Intent.ACTION_DELETE).apply {
+                            data = packageUri
+                            putExtra(Intent.EXTRA_RETURN_RESULT, true)
+                            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
                         val uninstallIntent = Intent(Intent.ACTION_UNINSTALL_PACKAGE).apply {
                             data = packageUri
                             putExtra(Intent.EXTRA_RETURN_RESULT, true)
+                            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
-                        val fallbackIntent = Intent(Intent.ACTION_DELETE).apply {
+                        val detailsIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                             data = packageUri
+                            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         try {
-                            context.startActivity(uninstallIntent)
+                            when {
+                                Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+                                    deleteIntent.resolveActivity(context.packageManager) != null -> {
+                                    context.startActivity(deleteIntent)
+                                }
+                                uninstallIntent.resolveActivity(context.packageManager) != null -> {
+                                    context.startActivity(uninstallIntent)
+                                }
+                                deleteIntent.resolveActivity(context.packageManager) != null -> {
+                                    context.startActivity(deleteIntent)
+                                }
+                                else -> {
+                                    context.startActivity(detailsIntent)
+                                }
+                            }
                         } catch (_: Exception) {
-                            context.startActivity(fallbackIntent)
+                            context.startActivity(detailsIntent)
                         }
                         onDismiss()
                     }

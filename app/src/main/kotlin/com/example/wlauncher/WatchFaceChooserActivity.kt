@@ -67,7 +67,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.absoluteValue
-import kotlin.math.min
 
 class WatchFaceChooserActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -315,7 +314,7 @@ private fun WatchFacePreviewCard(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
-            val cardSize = min(maxWidth, maxHeight)
+            val cardSize = if (maxWidth < maxHeight) maxWidth else maxHeight
             val cardModifier = Modifier
                 .size(cardSize)
                 .clip(RoundedCornerShape(32.dp))
