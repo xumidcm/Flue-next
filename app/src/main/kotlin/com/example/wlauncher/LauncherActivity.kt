@@ -8,17 +8,20 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
@@ -37,6 +40,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.anim.appListLayerValues
 import com.flue.launcher.ui.anim.faceLayerValues
@@ -54,7 +58,9 @@ import com.flue.launcher.ui.settings.LauncherSettingsSheet
 import com.flue.launcher.ui.smartstack.SmartStackLayer
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.viewmodel.LauncherViewModel
+import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
+import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.LunchWatchFaceHost
 import com.flue.launcher.watchface.LunchWatchFaceRuntime
 import kotlinx.coroutines.delay
@@ -133,6 +139,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val watchFaceSelectionReady by vm.watchFaceSelectionReady.collectAsState()
     val watchFaceRefreshToken by vm.watchFaceRefreshToken.collectAsState()
     val watchFaceLastError by vm.watchFaceLastError.collectAsState()
+    val builtInPhotoPath by vm.builtInPhotoPath.collectAsState()
+    val builtInVideoPath by vm.builtInVideoPath.collectAsState()
     val layerBlurEnabled = blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
     val openWatchFaceChooser = remember(context) {
@@ -177,38 +185,61 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .then(
-                        if (selectedWatchFace.isBuiltin) {
-                            Modifier.pointerInput(openWatchFaceChooser) {
-                                detectTapGestures(onLongPress = { openWatchFaceChooser() })
-                            }
-                        } else {
-                            Modifier
-                        }
-                    )
+                    .zIndex(if (screenState == ScreenState.Face) 3f else 1f)
                     .scaleBlurAlpha(
                         targetValues = faceLayerValues(screenState),
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled
                     )
             ) {
-                if (!watchFaceSelectionReady && selectedWatchFaceId != BUILT_IN_WATCHFACE_ID) {
+                AnimatedContent(
+                    targetState = if (watchFaceSelectionReady || selectedWatchFaceId == BUILT_IN_WATCHFACE_ID) {
+                        selectedWatchFace.stableKey
+                    } else {
+                        "loading"
+                    },
+                    transitionSpec = {
+                        fadeIn(animationSpec = androidx.compose.animation.core.tween(220, delayMillis = 70)) togetherWith
+                            fadeOut(animationSpec = androidx.compose.animation.core.tween(180))
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                    label = "watchface_switch"
+                ) { targetKey ->
+                    if (targetKey == "loading") {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black)
+                        )
+                    } else if (selectedWatchFace.isBuiltin) {
+                        WatchFaceLayer(
+                            watchFaceId = selectedWatchFace.id,
+                            photoPath = builtInPhotoPath,
+                            videoPath = builtInVideoPath,
+                            isFaceVisible = screenState == ScreenState.Face,
+                            onLongPress = null
+                        )
+                    } else {
+                        LunchWatchFaceHost(
+                            descriptor = selectedWatchFace,
+                            isFaceVisible = screenState == ScreenState.Face,
+                            refreshToken = watchFaceRefreshToken,
+                            onLongPress = null,
+                            onLoadFailure = { descriptor, error ->
+                                val rootCause = generateSequence(error) { it.cause }.last()
+                                vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
+                            }
+                        )
+                    }
+                }
+
+                if (screenState == ScreenState.Face) {
                     Box(
                         modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color.Black)
-                    )
-                } else if (selectedWatchFace.isBuiltin) {
-                    WatchFaceLayer(onLongPress = openWatchFaceChooser)
-                } else {
-                    LunchWatchFaceHost(
-                        descriptor = selectedWatchFace,
-                        isFaceVisible = screenState == ScreenState.Face,
-                        refreshToken = watchFaceRefreshToken,
-                        onLongPress = openWatchFaceChooser,
-                        onLoadFailure = { descriptor, error ->
-                            vm.fallbackToBuiltIn("${descriptor.displayName}: ${error.message ?: error.javaClass.simpleName}")
-                        }
+                            .matchParentSize()
+                            .pointerInput(openWatchFaceChooser) {
+                                detectTapGestures(onLongPress = { openWatchFaceChooser() })
+                            }
                     )
                 }
             }
@@ -216,6 +247,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .zIndex(if (screenState == ScreenState.Apps) 3f else 0f)
                     .scaleBlurAlpha(
                         targetValues = appListLayerValues(screenState),
                         screenHeight = screenHeightPx,
@@ -358,12 +390,19 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     onShowNotificationChange = { vm.setShowNotification(it) },
                     onWatchFaceSelect = { vm.selectWatchFace(it) },
                     onOpenWatchFaceSettings = { descriptor ->
-                        if (!LunchWatchFaceRuntime.openSettings(context, descriptor)) {
-                            Toast.makeText(context, "No watchface settings available", Toast.LENGTH_SHORT).show()
+                        if (descriptor.isBuiltin && descriptor.id in setOf(BUILT_IN_PHOTO_WATCHFACE_ID, BUILT_IN_VIDEO_WATCHFACE_ID)) {
+                            context.startActivity(
+                                Intent(context, InternalWatchFaceConfigActivity::class.java)
+                                    .putExtra(EXTRA_INTERNAL_WATCHFACE_ID, descriptor.id)
+                            )
+                        } else if (!LunchWatchFaceRuntime.openSettings(context, descriptor)) {
+                            Toast.makeText(context, "没有可用的表盘设置", Toast.LENGTH_SHORT).show()
                         }
                     },
                     onRefreshWatchFaces = { vm.refreshWatchFaces() },
                     onClearWatchFaceError = { vm.clearWatchFaceError() },
+                    builtInPhotoPath = builtInPhotoPath,
+                    builtInVideoPath = builtInVideoPath,
                     onResetDefaults = { vm.resetSettings() },
                     onDismiss = { vm.setState(ScreenState.Apps) }
                 )
@@ -372,3 +411,4 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
     }
 }
+

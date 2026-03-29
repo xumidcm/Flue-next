@@ -1,5 +1,6 @@
 package com.flue.launcher
 
+import android.content.Intent
 import android.os.Bundle
 import android.widget.ImageView
 import android.widget.Toast
@@ -27,12 +28,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
@@ -41,11 +44,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.flue.launcher.ui.home.BuiltInWatchFacePreview
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_SELECTED_WATCHFACE_ID
 import com.flue.launcher.viewmodel.dataStore
+import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
+import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceRuntime
 import com.flue.launcher.watchface.LunchWatchFaceScanner
@@ -57,9 +63,7 @@ class WatchFaceChooserActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             WatchLauncherTheme {
-                WatchFaceChooserScreen(
-                    onDismiss = { finish() }
-                )
+                WatchFaceChooserScreen(onDismiss = { finish() })
             }
         }
     }
@@ -74,22 +78,29 @@ private fun WatchFaceChooserScreen(
     val prefs by context.dataStore.data.collectAsState(initial = null)
     val watchFaces by vm.availableWatchFaces.collectAsState()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsState()
+    val builtInPhotoPath by vm.builtInPhotoPath.collectAsState()
+    val builtInVideoPath by vm.builtInVideoPath.collectAsState()
 
     LaunchedEffect(Unit) {
         vm.refreshWatchFaces()
     }
 
     val persistedSelectedId = prefs?.get(KEY_SELECTED_WATCHFACE_ID) ?: selectedWatchFaceId
-    val pagerState = rememberPagerState(initialPage = 0) { watchFaces.size.coerceAtLeast(1) }
-
-    LaunchedEffect(watchFaces, persistedSelectedId) {
-        if (watchFaces.isEmpty()) return@LaunchedEffect
-        val targetPage = watchFaces.indexOfFirst { it.id == persistedSelectedId }
+    val targetPage = remember(watchFaces, persistedSelectedId) {
+        watchFaces.indexOfFirst { it.id == persistedSelectedId }
             .takeIf { it >= 0 }
             ?: 0
+    }
+    val pagerState = rememberPagerState(initialPage = 0) { watchFaces.size.coerceAtLeast(1) }
+    var chooserReady by remember(watchFaces, persistedSelectedId) { mutableStateOf(watchFaces.isEmpty()) }
+
+    LaunchedEffect(watchFaces, persistedSelectedId, targetPage) {
+        if (watchFaces.isEmpty()) return@LaunchedEffect
+        chooserReady = false
         if (pagerState.currentPage != targetPage) {
             pagerState.scrollToPage(targetPage)
         }
+        chooserReady = pagerState.currentPage == targetPage
     }
 
     LaunchedEffect(watchFaces, pagerState, persistedSelectedId) {
@@ -116,9 +127,13 @@ private fun WatchFaceChooserScreen(
             .fillMaxSize()
             .background(Color.Black)
     ) {
+        if (!chooserReady) {
+            return@Box
+        }
+
         if (currentDescriptor == null) {
             Text(
-                text = "No watch faces available",
+                text = "\u6CA1\u6709\u53EF\u7528\u8868\u76D8",
                 color = Color.White,
                 modifier = Modifier.align(Alignment.Center)
             )
@@ -139,7 +154,7 @@ private fun WatchFaceChooserScreen(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = if (currentDescriptor.summary.isNotBlank()) currentDescriptor.summary else "Installed watch face",
+                text = if (currentDescriptor.summary.isNotBlank()) currentDescriptor.summary else "\u5DF2\u5B89\u88C5\u8868\u76D8",
                 color = WatchColors.TextTertiary,
                 fontSize = 13.sp
             )
@@ -166,6 +181,8 @@ private fun WatchFaceChooserScreen(
                 ) {
                     WatchFacePreviewCard(
                         descriptor = descriptor,
+                        builtInPhotoPath = builtInPhotoPath,
+                        builtInVideoPath = builtInVideoPath,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -208,14 +225,19 @@ private fun WatchFaceChooserScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally)
             ) {
-                if (currentDescriptor.settingsEntryClassName != null) {
-                    ChooserButton("Settings", 1f) {
-                        if (!LunchWatchFaceRuntime.openSettings(context, currentDescriptor)) {
-                            Toast.makeText(context, "No settings page available", Toast.LENGTH_SHORT).show()
+                if (currentDescriptor.supportsSettings) {
+                    ChooserButton("\u8BBE\u7F6E", 1f) {
+                        if (currentDescriptor.isBuiltin && currentDescriptor.id in setOf(BUILT_IN_PHOTO_WATCHFACE_ID, BUILT_IN_VIDEO_WATCHFACE_ID)) {
+                            context.startActivity(
+                                Intent(context, InternalWatchFaceConfigActivity::class.java)
+                                    .putExtra(EXTRA_INTERNAL_WATCHFACE_ID, currentDescriptor.id)
+                            )
+                        } else if (!LunchWatchFaceRuntime.openSettings(context, currentDescriptor)) {
+                            Toast.makeText(context, "\u6CA1\u6709\u53EF\u7528\u7684\u8868\u76D8\u8BBE\u7F6E", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
-                ChooserButton("Done", 1f, onDismiss)
+                ChooserButton("\u5B8C\u6210", 1f, onDismiss)
             }
         }
     }
@@ -224,6 +246,8 @@ private fun WatchFaceChooserScreen(
 @Composable
 private fun WatchFacePreviewCard(
     descriptor: LunchWatchFaceDescriptor,
+    builtInPhotoPath: String? = null,
+    builtInVideoPath: String? = null,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -234,42 +258,16 @@ private fun WatchFacePreviewCard(
         contentAlignment = Alignment.Center
     ) {
         if (descriptor.isBuiltin) {
-            BuiltInWatchFacePreview()
+            BuiltInWatchFacePreview(
+                watchFaceId = descriptor.id,
+                photoPath = builtInPhotoPath,
+                videoPath = builtInVideoPath,
+                showClock = true,
+                playVideo = true,
+                modifier = Modifier.fillMaxSize()
+            )
         } else {
             WatchFacePreviewDrawable(descriptor)
-        }
-    }
-}
-
-@Composable
-private fun BuiltInWatchFacePreview() {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(Color(0xFF0F1B2F), Color(0xFF08101C), Color.Black)
-                )
-            )
-            .padding(28.dp)
-    ) {
-        Column(
-            modifier = Modifier.align(Alignment.Center),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = "10:08",
-                color = Color.White,
-                fontSize = 54.sp,
-                fontWeight = FontWeight.W200
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "Built-in",
-                color = WatchColors.ActiveCyan,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium
-            )
         }
     }
 }
