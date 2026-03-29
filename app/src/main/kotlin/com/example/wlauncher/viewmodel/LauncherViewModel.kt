@@ -173,8 +173,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private var launchJob: Job? = null
     private var watchFacePrefsHydrated = false
     private var watchFaceScanHydrated = false
-
     init {
+        refreshIconPacks()
         viewModelScope.launch {
             store.data.collect { prefs ->
                 var refreshIconsNeeded = false
@@ -227,7 +227,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 _builtInPhotoClockSize.value = (prefs[KEY_PHOTO_CLOCK_SIZE] ?: 64).coerceIn(28, 92)
                 _builtInVideoClockSize.value = (prefs[KEY_VIDEO_CLOCK_SIZE] ?: 64).coerceIn(28, 92)
                 _builtInVideoFillScreen.value = prefs[KEY_VIDEO_FILL_SCREEN] ?: true
-                _availableIconPacks.value = IconPackScanner.scanInstalled(getApplication())
                 if (refreshIconsNeeded) {
                     refreshIcons()
                 }

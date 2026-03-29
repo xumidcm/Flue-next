@@ -1,6 +1,6 @@
 package com.flue.launcher.ui.settings
 
-import android.widget.ImageView
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,10 +23,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.graphics.drawable.toBitmap
 import com.flue.launcher.ui.home.BuiltInWatchFacePreview
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
@@ -71,17 +73,28 @@ fun WatchFaceSettingCard(
             )
         } else {
             val context = androidx.compose.ui.platform.LocalContext.current
-            AndroidView(
-                factory = { imageContext ->
-                    ImageView(imageContext).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
-                },
-                update = { imageView ->
-                    imageView.setImageDrawable(LunchWatchFaceScanner.loadPreviewDrawable(context, descriptor))
-                },
-                modifier = Modifier
-                    .size(52.dp)
-                    .clip(RoundedCornerShape(14.dp))
-            )
+            val previewBitmap = androidx.compose.runtime.remember(descriptor.stableKey) {
+                LunchWatchFaceScanner.loadPreviewDrawable(context, descriptor)
+                    ?.toBitmap(120, 120)
+                    ?.asImageBitmap()
+            }
+            if (previewBitmap != null) {
+                Image(
+                    bitmap = previewBitmap,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(RoundedCornerShape(14.dp)),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color.White.copy(alpha = 0.08f))
+                )
+            }
         }
         Box(
             modifier = Modifier.fillMaxWidth(),

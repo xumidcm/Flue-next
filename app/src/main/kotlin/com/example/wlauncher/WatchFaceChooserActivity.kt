@@ -2,7 +2,6 @@ package com.flue.launcher
 
 import android.content.Intent
 import android.os.Bundle
-import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -36,13 +35,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.core.graphics.drawable.toBitmap
 import com.flue.launcher.ui.home.BuiltInWatchFacePreview
 import com.flue.launcher.ui.home.ClockSnapshot
 import com.flue.launcher.ui.home.FIXED_PREVIEW_CLOCK
@@ -309,18 +309,34 @@ private fun WatchFacePreviewCard(
 
 @Composable
 private fun WatchFacePreviewDrawable(descriptor: LunchWatchFaceDescriptor) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    AndroidView(
-        factory = { imageContext ->
-            ImageView(imageContext).apply {
-                scaleType = ImageView.ScaleType.CENTER_CROP
-            }
-        },
-        update = { imageView ->
-            imageView.setImageDrawable(LunchWatchFaceScanner.loadPreviewDrawable(context, descriptor))
-        },
-        modifier = Modifier.fillMaxSize()
-    )
+    val context = LocalContext.current
+    val previewBitmap = remember(descriptor.stableKey) {
+        LunchWatchFaceScanner.loadPreviewDrawable(context, descriptor)
+            ?.toBitmap(720, 720)
+            ?.asImageBitmap()
+    }
+    if (previewBitmap != null) {
+        androidx.compose.foundation.Image(
+            bitmap = previewBitmap,
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop
+        )
+    } else {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF151922)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = descriptor.displayName,
+                color = Color.White.copy(alpha = 0.82f),
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
 }
 
 @Composable

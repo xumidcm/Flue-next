@@ -179,7 +179,6 @@ object LunchWatchFaceRuntime {
             }
 
             return Intent(hostContext, WatchFaceChooserActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 if (hostContext !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
         }
