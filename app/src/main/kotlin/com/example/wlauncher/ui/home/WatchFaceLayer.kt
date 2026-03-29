@@ -398,11 +398,14 @@ private suspend fun sampleClockPalette(
         val xRange = when (position) {
             WatchClockPosition.TOP_LEFT, WatchClockPosition.BOTTOM_LEFT -> 0 until (bitmap.width * 4 / 10).coerceAtLeast(1)
             WatchClockPosition.TOP_RIGHT, WatchClockPosition.BOTTOM_RIGHT -> (bitmap.width * 6 / 10).coerceAtMost(bitmap.width - 1) until bitmap.width
+            WatchClockPosition.LEFT_CENTER -> 0 until (bitmap.width * 4 / 10).coerceAtLeast(1)
+            WatchClockPosition.RIGHT_CENTER -> (bitmap.width * 6 / 10).coerceAtMost(bitmap.width - 1) until bitmap.width
             WatchClockPosition.CENTER -> (bitmap.width * 3 / 10).coerceAtMost(bitmap.width - 1) until (bitmap.width * 7 / 10).coerceAtLeast(1)
         }
         val yRange = when (position) {
             WatchClockPosition.TOP_LEFT, WatchClockPosition.TOP_RIGHT -> 0 until (bitmap.height * 4 / 10).coerceAtLeast(1)
             WatchClockPosition.BOTTOM_LEFT, WatchClockPosition.BOTTOM_RIGHT -> (bitmap.height * 6 / 10).coerceAtMost(bitmap.height - 1) until bitmap.height
+            WatchClockPosition.LEFT_CENTER, WatchClockPosition.RIGHT_CENTER -> (bitmap.height * 3 / 10).coerceAtMost(bitmap.height - 1) until (bitmap.height * 7 / 10).coerceAtLeast(1)
             WatchClockPosition.CENTER -> (bitmap.height * 3 / 10).coerceAtMost(bitmap.height - 1) until (bitmap.height * 7 / 10).coerceAtLeast(1)
         }
         var luminanceSum = 0.0

@@ -67,6 +67,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.absoluteValue
+import kotlin.math.min
 
 class WatchFaceChooserActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
