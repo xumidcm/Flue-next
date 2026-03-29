@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -71,10 +70,10 @@ private fun WatchFaceChooserScreen(
     onDismiss: () -> Unit
 ) {
     val vm: LauncherViewModel = viewModel()
-    val prefs by dataStore.data.collectAsState(initial = null)
+    val context = LocalContext.current
+    val prefs by context.dataStore.data.collectAsState(initial = null)
     val watchFaces by vm.availableWatchFaces.collectAsState()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsState()
-    val context = LocalContext.current
 
     LaunchedEffect(Unit) {
         vm.refreshWatchFaces()
@@ -152,7 +151,7 @@ private fun WatchFaceChooserScreen(
                 pageSpacing = 18.dp,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f, fill = false)
+                    .height(420.dp)
             ) { page ->
                 val descriptor = watchFaces.getOrNull(page) ?: return@HorizontalPager
                 val pageOffset = ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction).absoluteValue
@@ -210,17 +209,13 @@ private fun WatchFaceChooserScreen(
                 horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally)
             ) {
                 if (currentDescriptor.settingsEntryClassName != null) {
-                    Box(modifier = Modifier.weight(1f)) {
-                        ChooserButton("Settings", 1f) {
-                            if (!LunchWatchFaceRuntime.openSettings(context, currentDescriptor)) {
-                                Toast.makeText(context, "No settings page available", Toast.LENGTH_SHORT).show()
-                            }
+                    ChooserButton("Settings", 1f) {
+                        if (!LunchWatchFaceRuntime.openSettings(context, currentDescriptor)) {
+                            Toast.makeText(context, "No settings page available", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
-                Box(modifier = Modifier.weight(1f)) {
-                    ChooserButton("Done", 1f, onDismiss)
-                }
+                ChooserButton("Done", 1f, onDismiss)
             }
         }
     }
@@ -303,7 +298,7 @@ private fun ChooserButton(
 ) {
     Box(
         modifier = Modifier
-            .fillMaxWidth()
+            .fillMaxWidth(0.42f)
             .graphicsLayer { scaleX = scale; scaleY = scale; alpha = scale.coerceIn(0.3f, 1f) }
             .clip(RoundedCornerShape(16.dp))
             .background(WatchColors.SurfaceGlass)
