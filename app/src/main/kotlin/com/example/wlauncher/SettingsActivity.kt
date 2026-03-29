@@ -29,6 +29,7 @@ import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_HONEYCOMB_TOP
 import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_ANIMATION_OVERRIDE
 import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_LAYOUT
 import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_LOW_RES
+import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_SELECTED_WATCHFACE_ID
 import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_SPLASH_DELAY
 import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_SPLASH_ICON
 import com.flue.launcher.viewmodel.dataStore
@@ -70,6 +71,7 @@ class SettingsActivity : ComponentActivity() {
                 val bottomBlur = prefs?.get(KEY_HONEYCOMB_BOTTOM_BLUR) ?: 4
                 val topFade = prefs?.get(KEY_HONEYCOMB_TOP_FADE) ?: 56
                 val bottomFade = prefs?.get(KEY_HONEYCOMB_BOTTOM_FADE) ?: 56
+                val persistedSelectedWatchFaceId = prefs?.get(KEY_SELECTED_WATCHFACE_ID) ?: selectedWatchFaceId
 
                 LauncherSettingsSheet(
                     currentLayout = layoutMode,
@@ -85,7 +87,7 @@ class SettingsActivity : ComponentActivity() {
                     honeycombTopFade = topFade,
                     honeycombBottomFade = bottomFade,
                     watchFaces = watchFaces,
-                    selectedWatchFaceId = selectedWatchFaceId,
+                    selectedWatchFaceId = persistedSelectedWatchFaceId,
                     watchFaceLastError = watchFaceLastError,
                     onLayoutChange = { scope.launch { dataStore.edit { p -> p[KEY_LAYOUT] = it.name } } },
                     onBlurToggle = {

@@ -14,6 +14,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -176,6 +177,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .then(
+                        if (selectedWatchFace.isBuiltin) {
+                            Modifier.pointerInput(openWatchFaceChooser) {
+                                detectTapGestures(onLongPress = { openWatchFaceChooser() })
+                            }
+                        } else {
+                            Modifier
+                        }
+                    )
                     .scaleBlurAlpha(
                         targetValues = faceLayerValues(screenState),
                         screenHeight = screenHeightPx,

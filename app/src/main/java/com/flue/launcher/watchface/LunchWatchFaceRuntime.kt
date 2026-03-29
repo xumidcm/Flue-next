@@ -24,7 +24,7 @@ object LunchWatchFaceRuntime {
         val dexLoader = createDexClassLoader(hostContext, descriptor)
         val pluginContext = createPluginContext(hostContext, descriptor, dexLoader)
         val clazz = dexLoader.loadClass(descriptor.watchFaceClassName ?: error("Missing watchface class for ${descriptor.id}"))
-        val view = instantiateWatchFace(clazz, pluginContext, hostContext, descriptor.sourceApkPath.orEmpty())
+        val view = instantiateWatchFace(clazz, pluginContext, descriptor.sourceApkPath.orEmpty())
         return LunchWatchFaceLoadResult(descriptor = descriptor, view = view, bridge = WatchFaceBridge(view))
     }
 
@@ -59,8 +59,9 @@ object LunchWatchFaceRuntime {
 
     fun instantiateWatchSurface(hostContext: Context, descriptor: LunchWatchFaceDescriptor, className: String): View {
         val loader = createDexClassLoader(hostContext, descriptor)
+        val pluginContext = createPluginContext(hostContext, descriptor, loader, useLegacySurfaceScale = true)
         val clazz = loader.loadClass(className)
-        val instance = instantiateLegacyView(clazz, hostContext, descriptor.sourceApkPath.orEmpty())
+        val instance = instantiateLegacyView(clazz, pluginContext, descriptor.sourceApkPath.orEmpty())
         require(instance is View) { "Settings surface is not a View" }
         return instance
     }
@@ -107,11 +108,11 @@ object LunchWatchFaceRuntime {
         }
     }
 
-    private fun instantiateWatchFace(clazz: Class<*>, pluginContext: Context, hostContext: Context, apkPath: String): View {
+    private fun instantiateWatchFace(clazz: Class<*>, pluginContext: Context, apkPath: String): View {
         return try {
             clazz.getConstructor(Context::class.java).newInstance(pluginContext) as View
         } catch (_: NoSuchMethodException) {
-            instantiateLegacyView(clazz, hostContext, apkPath) as View
+            instantiateLegacyView(clazz, pluginContext, apkPath) as View
         }
     }
 

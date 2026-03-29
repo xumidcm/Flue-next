@@ -70,13 +70,21 @@ fun WatchFaceSettingCard(
             Column(modifier = Modifier.padding(end = 56.dp)) {
                 Text(descriptor.displayName, fontSize = 14.sp, color = Color.White)
                 Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    descriptor.packageName ?: "Built-in",
-                    fontSize = 11.sp,
-                    color = WatchColors.TextTertiary
-                )
+                if (descriptor.summary.isNotBlank()) {
+                    Text(
+                        descriptor.summary,
+                        fontSize = 11.sp,
+                        color = WatchColors.TextTertiary
+                    )
+                }
                 val meta = buildString {
-                    if (descriptor.author != null) append(descriptor.author)
+                    if (!descriptor.isBuiltin && descriptor.packageName != null) {
+                        append(descriptor.packageName)
+                    }
+                    if (descriptor.author != null) {
+                        if (isNotEmpty()) append("  ·  ")
+                        append(descriptor.author)
+                    }
                     if (descriptor.versionCode > 0) {
                         if (isNotEmpty()) append("  ·  ")
                         append("v")

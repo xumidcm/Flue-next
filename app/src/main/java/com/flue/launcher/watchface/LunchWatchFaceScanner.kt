@@ -5,6 +5,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.os.Build
+import androidx.core.content.ContextCompat
+import com.flue.launcher.R
 import dalvik.system.DexClassLoader
 import org.xmlpull.v1.XmlPullParser
 
@@ -12,7 +14,8 @@ object LunchWatchFaceScanner {
     fun builtInDescriptor(): LunchWatchFaceDescriptor = LunchWatchFaceDescriptor(
         id = BUILT_IN_WATCHFACE_ID,
         type = LunchWatchFaceType.BUILTIN,
-        displayName = "Flue Default"
+        displayName = "星野 深蓝",
+        summary = "内置表盘"
     )
 
     fun scanInstalled(context: Context): List<LunchWatchFaceDescriptor> {
@@ -77,6 +80,7 @@ object LunchWatchFaceScanner {
                     id = packageName,
                     type = LunchWatchFaceType.EXTERNAL,
                     displayName = displayName.ifBlank { packageName },
+                    summary = author?.takeIf { it.isNotBlank() } ?: "Lunch 兼容表盘",
                     packageName = packageName,
                     watchFaceClassName = watchFaceClass,
                     settingsEntryClassName = settingsClass.ifBlank { null },
@@ -93,7 +97,9 @@ object LunchWatchFaceScanner {
     }
 
     fun loadPreviewDrawable(context: Context, descriptor: LunchWatchFaceDescriptor): Drawable? {
-        if (descriptor.isBuiltin) return null
+        if (descriptor.isBuiltin) {
+            return ContextCompat.getDrawable(context, R.mipmap.ic_launcher_round)
+        }
         val packageName = descriptor.packageName ?: return null
         return runCatching {
             val packageContext = context.createPackageContext(packageName, Context.CONTEXT_IGNORE_SECURITY)

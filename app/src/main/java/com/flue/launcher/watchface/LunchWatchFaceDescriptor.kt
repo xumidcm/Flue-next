@@ -15,6 +15,7 @@ data class LunchWatchFaceDescriptor(
     val id: String,
     val type: LunchWatchFaceType,
     val displayName: String,
+    val summary: String = "",
     val packageName: String? = null,
     val watchFaceClassName: String? = null,
     val settingsEntryClassName: String? = null,
