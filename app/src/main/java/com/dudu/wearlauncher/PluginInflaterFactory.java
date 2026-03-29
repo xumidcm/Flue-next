@@ -1,4 +1,4 @@
-﻿package com.dudu.wearlauncher;
+package com.dudu.wearlauncher;
 
 import android.content.Context;
 import android.util.AttributeSet;

@@ -1,4 +1,4 @@
-﻿package com.dudu.wearlauncher.model;
+package com.dudu.wearlauncher.model;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;

@@ -1,4 +1,4 @@
-﻿package com.dudu.wearlauncher.utils;
+package com.dudu.wearlauncher.utils;
 
 import com.dudu.wearlauncher.model.WatchFace;
 import java.io.File;

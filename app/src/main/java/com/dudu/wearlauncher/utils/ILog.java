@@ -1,4 +1,4 @@
-﻿package com.dudu.wearlauncher.utils;
+package com.dudu.wearlauncher.utils;
 
 import android.util.Log;
 import java.io.File;

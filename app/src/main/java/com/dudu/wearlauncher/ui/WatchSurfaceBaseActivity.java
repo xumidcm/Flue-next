@@ -1,4 +1,4 @@
-﻿package com.dudu.wearlauncher.ui;
+package com.dudu.wearlauncher.ui;
 
 import android.app.Activity;
 import android.content.Context;

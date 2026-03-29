@@ -1,4 +1,4 @@
-﻿package com.dudu.wearlauncher.model;
+package com.dudu.wearlauncher.model;
 
 import android.content.Context;
 import android.content.res.AssetManager;
