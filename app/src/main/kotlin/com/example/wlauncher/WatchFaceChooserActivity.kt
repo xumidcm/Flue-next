@@ -11,6 +11,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -22,8 +23,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -136,24 +139,29 @@ private fun WatchFaceChooserScreen(
     }
     val currentDescriptor = watchFaces.getOrNull(displayIndex)
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
+        val previewHeight = (maxHeight - 248.dp).coerceIn(220.dp, 420.dp)
+        val topSpacing = if (maxHeight < 420.dp) 14.dp else 20.dp
+        val bottomSpacing = if (maxHeight < 420.dp) 12.dp else 18.dp
+
         if (currentDescriptor == null) {
             Text(
                 text = "\u6ca1\u6709\u53ef\u7528\u8868\u76d8",
                 color = Color.White,
                 modifier = Modifier.align(Alignment.Center)
             )
-            return@Box
+            return@BoxWithConstraints
         }
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 18.dp, vertical = 24.dp),
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp, vertical = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
@@ -168,7 +176,7 @@ private fun WatchFaceChooserScreen(
                 color = WatchColors.TextTertiary,
                 fontSize = 13.sp
             )
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(topSpacing))
 
             if (!initialAligned) {
                 WatchFacePreviewCard(
@@ -187,7 +195,7 @@ private fun WatchFaceChooserScreen(
                     clockOverride = FIXED_PREVIEW_CLOCK,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(420.dp)
+                        .height(previewHeight)
                 )
             } else {
                 HorizontalPager(
@@ -196,7 +204,7 @@ private fun WatchFaceChooserScreen(
                     pageSpacing = 18.dp,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(420.dp)
+                        .height(previewHeight)
                 ) { page ->
                     val descriptor = watchFaces.getOrNull(page) ?: return@HorizontalPager
                     val pageOffset = ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction).absoluteValue
@@ -229,7 +237,7 @@ private fun WatchFaceChooserScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(bottomSpacing))
 
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -247,7 +255,7 @@ private fun WatchFaceChooserScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(bottomSpacing))
 
             if (!currentDescriptor.isBuiltin && currentDescriptor.packageName != null) {
                 Text(
