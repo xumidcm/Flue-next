@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.flue.launcher.ui.home.BuiltInWatchFacePreview
 import com.flue.launcher.ui.theme.WatchColors
+import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceScanner
 
@@ -39,6 +40,8 @@ fun WatchFaceSettingCard(
     scale: Float,
     builtInPhotoPath: String? = null,
     builtInVideoPath: String? = null,
+    photoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
+    videoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
     onSelect: () -> Unit,
     onOpenSettings: (() -> Unit)? = null
 ) {
@@ -58,6 +61,8 @@ fun WatchFaceSettingCard(
                 watchFaceId = descriptor.id,
                 photoPath = builtInPhotoPath,
                 videoPath = builtInVideoPath,
+                photoOptions = photoOptions,
+                videoOptions = videoOptions,
                 showClock = false,
                 playVideo = false,
                 modifier = Modifier

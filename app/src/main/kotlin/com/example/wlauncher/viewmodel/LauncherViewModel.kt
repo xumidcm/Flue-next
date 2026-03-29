@@ -19,6 +19,7 @@ import com.flue.launcher.ui.navigation.ScreenState
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
+import com.flue.launcher.watchface.WatchClockPosition
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceRegistry
 import com.flue.launcher.watchface.LunchWatchFaceScanner
@@ -52,6 +53,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_LAST_WATCHFACE_ERROR = stringPreferencesKey("last_watchface_error")
         val KEY_BUILTIN_PHOTO_PATH = stringPreferencesKey("builtin_photo_path")
         val KEY_BUILTIN_VIDEO_PATH = stringPreferencesKey("builtin_video_path")
+        val KEY_PHOTO_CLOCK_POSITION = stringPreferencesKey("photo_clock_position")
+        val KEY_VIDEO_CLOCK_POSITION = stringPreferencesKey("video_clock_position")
+        val KEY_PHOTO_CLOCK_SIZE = intPreferencesKey("photo_clock_size")
+        val KEY_VIDEO_CLOCK_SIZE = intPreferencesKey("video_clock_size")
+        val KEY_VIDEO_FILL_SCREEN = booleanPreferencesKey("video_fill_screen")
     }
 
     private val store = application.dataStore
@@ -101,7 +107,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _splashIcon = MutableStateFlow(true)
     val splashIcon: StateFlow<Boolean> = _splashIcon.asStateFlow()
 
-    private val _showNotification = MutableStateFlow(true)
+    private val _showNotification = MutableStateFlow(false)
     val showNotification: StateFlow<Boolean> = _showNotification.asStateFlow()
 
     private val _availableWatchFaces = MutableStateFlow(LunchWatchFaceScanner.builtInDescriptors())
@@ -127,6 +133,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _builtInVideoPath = MutableStateFlow<String?>(null)
     val builtInVideoPath: StateFlow<String?> = _builtInVideoPath.asStateFlow()
+
+    private val _builtInPhotoClockPosition = MutableStateFlow(WatchClockPosition.CENTER)
+    val builtInPhotoClockPosition: StateFlow<WatchClockPosition> = _builtInPhotoClockPosition.asStateFlow()
+
+    private val _builtInVideoClockPosition = MutableStateFlow(WatchClockPosition.CENTER)
+    val builtInVideoClockPosition: StateFlow<WatchClockPosition> = _builtInVideoClockPosition.asStateFlow()
+
+    private val _builtInPhotoClockSize = MutableStateFlow(64)
+    val builtInPhotoClockSize: StateFlow<Int> = _builtInPhotoClockSize.asStateFlow()
+
+    private val _builtInVideoClockSize = MutableStateFlow(64)
+    val builtInVideoClockSize: StateFlow<Int> = _builtInVideoClockSize.asStateFlow()
+
+    private val _builtInVideoFillScreen = MutableStateFlow(true)
+    val builtInVideoFillScreen: StateFlow<Boolean> = _builtInVideoFillScreen.asStateFlow()
 
     private val _appOpenOrigin = MutableStateFlow(Offset(0.5f, 0.5f))
     val appOpenOrigin: StateFlow<Offset> = _appOpenOrigin.asStateFlow()
@@ -174,6 +195,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 _watchFaceLastError.value = prefs[KEY_LAST_WATCHFACE_ERROR]
                 _builtInPhotoPath.value = prefs[KEY_BUILTIN_PHOTO_PATH]
                 _builtInVideoPath.value = prefs[KEY_BUILTIN_VIDEO_PATH]
+                _builtInPhotoClockPosition.value = prefs[KEY_PHOTO_CLOCK_POSITION]
+                    ?.let(::parseClockPosition)
+                    ?: WatchClockPosition.CENTER
+                _builtInVideoClockPosition.value = prefs[KEY_VIDEO_CLOCK_POSITION]
+                    ?.let(::parseClockPosition)
+                    ?: WatchClockPosition.CENTER
+                _builtInPhotoClockSize.value = (prefs[KEY_PHOTO_CLOCK_SIZE] ?: 64).coerceIn(28, 92)
+                _builtInVideoClockSize.value = (prefs[KEY_VIDEO_CLOCK_SIZE] ?: 64).coerceIn(28, 92)
+                _builtInVideoFillScreen.value = prefs[KEY_VIDEO_FILL_SCREEN] ?: true
                 if (refreshIconsNeeded) {
                     refreshIcons()
                 }
@@ -375,6 +405,31 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun setBuiltInPhotoClockPosition(position: WatchClockPosition) {
+        _builtInPhotoClockPosition.value = position
+        viewModelScope.launch { store.edit { it[KEY_PHOTO_CLOCK_POSITION] = position.name } }
+    }
+
+    fun setBuiltInVideoClockPosition(position: WatchClockPosition) {
+        _builtInVideoClockPosition.value = position
+        viewModelScope.launch { store.edit { it[KEY_VIDEO_CLOCK_POSITION] = position.name } }
+    }
+
+    fun setBuiltInPhotoClockSize(sizeSp: Int) {
+        _builtInPhotoClockSize.value = sizeSp.coerceIn(28, 92)
+        viewModelScope.launch { store.edit { it[KEY_PHOTO_CLOCK_SIZE] = _builtInPhotoClockSize.value } }
+    }
+
+    fun setBuiltInVideoClockSize(sizeSp: Int) {
+        _builtInVideoClockSize.value = sizeSp.coerceIn(28, 92)
+        viewModelScope.launch { store.edit { it[KEY_VIDEO_CLOCK_SIZE] = _builtInVideoClockSize.value } }
+    }
+
+    fun setBuiltInVideoFillScreen(fillScreen: Boolean) {
+        _builtInVideoFillScreen.value = fillScreen
+        viewModelScope.launch { store.edit { it[KEY_VIDEO_FILL_SCREEN] = fillScreen } }
+    }
+
     fun requestWatchFaceRefresh() {
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
     }
@@ -401,10 +456,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _honeycombBottomBlur.value = 4
         _honeycombTopFade.value = 56
         _honeycombBottomFade.value = 56
-        _showNotification.value = true
+        _showNotification.value = false
         _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
         _selectedWatchFace.value = LunchWatchFaceScanner.builtInDescriptor(BUILT_IN_WATCHFACE_ID)
         _watchFaceLastError.value = null
+        _builtInPhotoClockPosition.value = WatchClockPosition.CENTER
+        _builtInVideoClockPosition.value = WatchClockPosition.CENTER
+        _builtInPhotoClockSize.value = 64
+        _builtInVideoClockSize.value = 64
+        _builtInVideoFillScreen.value = true
         LunchWatchFaceRegistry.setCurrentSelectedId(BUILT_IN_WATCHFACE_ID)
         refreshIcons()
         viewModelScope.launch {
@@ -421,12 +481,20 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_HONEYCOMB_BOTTOM_BLUR] = 4
                 it[KEY_HONEYCOMB_TOP_FADE] = 56
                 it[KEY_HONEYCOMB_BOTTOM_FADE] = 56
-                it[KEY_SHOW_NOTIFICATION] = true
+                it[KEY_SHOW_NOTIFICATION] = false
                 it[KEY_SELECTED_WATCHFACE_ID] = BUILT_IN_WATCHFACE_ID
+                it[KEY_PHOTO_CLOCK_POSITION] = WatchClockPosition.CENTER.name
+                it[KEY_VIDEO_CLOCK_POSITION] = WatchClockPosition.CENTER.name
+                it[KEY_PHOTO_CLOCK_SIZE] = 64
+                it[KEY_VIDEO_CLOCK_SIZE] = 64
+                it[KEY_VIDEO_FILL_SCREEN] = true
                 it.remove(KEY_LAST_WATCHFACE_ERROR)
             }
         }
     }
+
+    private fun parseClockPosition(value: String): WatchClockPosition =
+        runCatching { WatchClockPosition.valueOf(value) }.getOrDefault(WatchClockPosition.CENTER)
 
     private fun syncSelectedWatchFace() {
         val requestedId = _selectedWatchFaceId.value.ifBlank { BUILT_IN_WATCHFACE_ID }

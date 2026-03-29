@@ -31,7 +31,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,10 +51,10 @@ import com.flue.launcher.viewmodel.LauncherViewModel.Companion.KEY_SELECTED_WATC
 import com.flue.launcher.viewmodel.dataStore
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
+import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceRuntime
 import com.flue.launcher.watchface.LunchWatchFaceScanner
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.absoluteValue
 
 class WatchFaceChooserActivity : ComponentActivity() {
@@ -80,6 +79,11 @@ private fun WatchFaceChooserScreen(
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsState()
     val builtInPhotoPath by vm.builtInPhotoPath.collectAsState()
     val builtInVideoPath by vm.builtInVideoPath.collectAsState()
+    val builtInPhotoClockPosition by vm.builtInPhotoClockPosition.collectAsState()
+    val builtInVideoClockPosition by vm.builtInVideoClockPosition.collectAsState()
+    val builtInPhotoClockSize by vm.builtInPhotoClockSize.collectAsState()
+    val builtInVideoClockSize by vm.builtInVideoClockSize.collectAsState()
+    val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
 
     LaunchedEffect(Unit) {
         vm.refreshWatchFaces()
@@ -101,19 +105,6 @@ private fun WatchFaceChooserScreen(
             pagerState.scrollToPage(targetPage)
         }
         chooserReady = pagerState.currentPage == targetPage
-    }
-
-    LaunchedEffect(watchFaces, pagerState, persistedSelectedId) {
-        snapshotFlow { if (watchFaces.isEmpty()) -1 else pagerState.settledPage }
-            .distinctUntilChanged()
-            .collect { page ->
-                if (page in watchFaces.indices) {
-                    val descriptor = watchFaces[page]
-                    if (descriptor.id != persistedSelectedId) {
-                        vm.selectWatchFace(descriptor.id)
-                    }
-                }
-            }
     }
 
     val currentDescriptor = if (watchFaces.isNotEmpty()) {
@@ -183,6 +174,15 @@ private fun WatchFaceChooserScreen(
                         descriptor = descriptor,
                         builtInPhotoPath = builtInPhotoPath,
                         builtInVideoPath = builtInVideoPath,
+                        photoOptions = BuiltInWatchFaceOptions(
+                            clockPosition = builtInPhotoClockPosition,
+                            clockSizeSp = builtInPhotoClockSize
+                        ),
+                        videoOptions = BuiltInWatchFaceOptions(
+                            clockPosition = builtInVideoClockPosition,
+                            clockSizeSp = builtInVideoClockSize,
+                            cropToFill = builtInVideoFillScreen
+                        ),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -237,7 +237,10 @@ private fun WatchFaceChooserScreen(
                         }
                     }
                 }
-                ChooserButton("\u5B8C\u6210", 1f, onDismiss)
+                ChooserButton("\u5B8C\u6210", 1f) {
+                    vm.selectWatchFace(currentDescriptor.id)
+                    onDismiss()
+                }
             }
         }
     }
@@ -248,6 +251,8 @@ private fun WatchFacePreviewCard(
     descriptor: LunchWatchFaceDescriptor,
     builtInPhotoPath: String? = null,
     builtInVideoPath: String? = null,
+    photoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
+    videoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -262,6 +267,8 @@ private fun WatchFacePreviewCard(
                 watchFaceId = descriptor.id,
                 photoPath = builtInPhotoPath,
                 videoPath = builtInVideoPath,
+                photoOptions = photoOptions,
+                videoOptions = videoOptions,
                 showClock = true,
                 playVideo = true,
                 modifier = Modifier.fillMaxSize()

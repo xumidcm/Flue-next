@@ -11,14 +11,20 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -36,7 +42,9 @@ import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
+import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.InternalWatchFaceStorage
+import com.flue.launcher.watchface.WatchClockPosition
 
 const val EXTRA_INTERNAL_WATCHFACE_ID = "internal_watchface_id"
 
@@ -63,8 +71,15 @@ private fun InternalWatchFaceConfigScreen(
     val vm: LauncherViewModel = viewModel()
     val photoPath by vm.builtInPhotoPath.collectAsState()
     val videoPath by vm.builtInVideoPath.collectAsState()
+    val photoClockPosition by vm.builtInPhotoClockPosition.collectAsState()
+    val videoClockPosition by vm.builtInVideoClockPosition.collectAsState()
+    val photoClockSize by vm.builtInPhotoClockSize.collectAsState()
+    val videoClockSize by vm.builtInVideoClockSize.collectAsState()
+    val videoFillScreen by vm.builtInVideoFillScreen.collectAsState()
     val isPhoto = watchFaceId == BUILT_IN_PHOTO_WATCHFACE_ID
     val currentPath = if (isPhoto) photoPath else videoPath
+    val activeClockPosition = if (isPhoto) photoClockPosition else videoClockPosition
+    val activeClockSize = if (isPhoto) photoClockSize else videoClockSize
 
     val picker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
@@ -112,6 +127,15 @@ private fun InternalWatchFaceConfigScreen(
                 watchFaceId = watchFaceId,
                 photoPath = photoPath,
                 videoPath = videoPath,
+                photoOptions = BuiltInWatchFaceOptions(
+                    clockPosition = photoClockPosition,
+                    clockSizeSp = photoClockSize
+                ),
+                videoOptions = BuiltInWatchFaceOptions(
+                    clockPosition = videoClockPosition,
+                    clockSizeSp = videoClockSize,
+                    cropToFill = videoFillScreen
+                ),
                 showClock = true,
                 playVideo = true,
                 modifier = Modifier.fillMaxSize()
@@ -119,6 +143,55 @@ private fun InternalWatchFaceConfigScreen(
         }
 
         Spacer(modifier = Modifier.height(22.dp))
+
+        Text(
+            text = "\u65F6\u95F4\u4F4D\u7F6E",
+            color = Color.White,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        PositionPickerRow(
+            current = activeClockPosition,
+            onSelect = {
+                if (isPhoto) vm.setBuiltInPhotoClockPosition(it) else vm.setBuiltInVideoClockPosition(it)
+            }
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = "\u65F6\u95F4\u5927\u5C0F  ${activeClockSize}sp",
+            color = Color.White,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Slider(
+            value = activeClockSize.toFloat(),
+            onValueChange = {
+                val value = it.toInt()
+                if (isPhoto) vm.setBuiltInPhotoClockSize(value) else vm.setBuiltInVideoClockSize(value)
+            },
+            valueRange = 28f..92f,
+            steps = 15,
+            colors = SliderDefaults.colors(
+                thumbColor = WatchColors.ActiveCyan,
+                activeTrackColor = WatchColors.ActiveCyan
+            )
+        )
+
+        if (!isPhoto) {
+            Spacer(modifier = Modifier.height(8.dp))
+            ToggleRow(
+                label = "\u89C6\u9891\u94FA\u6EE1\u5168\u5C4F",
+                enabled = videoFillScreen,
+                onToggle = { vm.setBuiltInVideoFillScreen(!videoFillScreen) }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(18.dp))
 
         ActionButton(
             text = if (currentPath.isNullOrBlank()) {
@@ -199,4 +272,111 @@ private fun handlePickedMedia(
         viewModel.setBuiltInVideoPath(savedPath)
     }
     onMessage("\u8868\u76D8\u5A92\u4F53\u5DF2\u66F4\u65B0")
+}
+
+@Composable
+private fun PositionPickerRow(
+    current: WatchClockPosition,
+    onSelect: (WatchClockPosition) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        listOf(
+            listOf(
+                WatchClockPosition.TOP_LEFT to "\u5DE6\u4E0A",
+                WatchClockPosition.TOP_RIGHT to "\u53F3\u4E0A",
+                WatchClockPosition.CENTER to "\u4E2D\u95F4"
+            ),
+            listOf(
+                WatchClockPosition.BOTTOM_LEFT to "\u5DE6\u4E0B",
+                WatchClockPosition.BOTTOM_RIGHT to "\u53F3\u4E0B"
+            )
+        ).forEach { rowItems ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                rowItems.forEach { (position, label) ->
+                    SmallChoiceChip(
+                        label = label,
+                        selected = position == current,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        onSelect(position)
+                    }
+                }
+                repeat(3 - rowItems.size) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SmallChoiceChip(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (selected) WatchColors.ActiveCyan.copy(alpha = 0.22f) else WatchColors.SurfaceGlass)
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            color = if (selected) WatchColors.ActiveCyan else Color.White,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+@Composable
+private fun ToggleRow(
+    label: String,
+    enabled: Boolean,
+    onToggle: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(WatchColors.SurfaceGlass)
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = Color.White,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium
+        )
+        Box(
+            modifier = Modifier
+                .width(46.dp)
+                .height(26.dp)
+                .clip(RoundedCornerShape(13.dp))
+                .background(if (enabled) WatchColors.ActiveGreen else Color.White.copy(alpha = 0.18f)),
+            contentAlignment = if (enabled) Alignment.CenterEnd else Alignment.CenterStart
+        ) {
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 3.dp)
+                    .width(20.dp)
+                    .height(20.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color.White)
+            )
+        }
+    }
 }

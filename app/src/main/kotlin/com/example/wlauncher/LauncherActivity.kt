@@ -60,6 +60,7 @@ import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
+import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceHost
 import com.flue.launcher.watchface.LunchWatchFaceRuntime
 import kotlinx.coroutines.delay
@@ -140,8 +141,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val watchFaceLastError by vm.watchFaceLastError.collectAsState()
     val builtInPhotoPath by vm.builtInPhotoPath.collectAsState()
     val builtInVideoPath by vm.builtInVideoPath.collectAsState()
+    val builtInPhotoClockPosition by vm.builtInPhotoClockPosition.collectAsState()
+    val builtInVideoClockPosition by vm.builtInVideoClockPosition.collectAsState()
+    val builtInPhotoClockSize by vm.builtInPhotoClockSize.collectAsState()
+    val builtInVideoClockSize by vm.builtInVideoClockSize.collectAsState()
+    val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
     val layerBlurEnabled = blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
+    val notificationsEnabled = false
     val openWatchFaceChooser = remember(context) {
         {
             context.startActivity(Intent(context, WatchFaceChooserActivity::class.java))
@@ -177,7 +184,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         GestureHost(
             screenState = screenState,
             onStateChange = { vm.setState(it) },
-            showNotification = showNotification,
+            showNotification = notificationsEnabled,
             showControlCenter = false,
             modifier = Modifier.fillMaxSize()
         ) {
@@ -216,6 +223,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             photoPath = builtInPhotoPath,
                             videoPath = builtInVideoPath,
                             isFaceVisible = screenState == ScreenState.Face,
+                            photoOptions = BuiltInWatchFaceOptions(
+                                clockPosition = builtInPhotoClockPosition,
+                                clockSizeSp = builtInPhotoClockSize
+                            ),
+                            videoOptions = BuiltInWatchFaceOptions(
+                                clockPosition = builtInVideoClockPosition,
+                                clockSizeSp = builtInVideoClockSize,
+                                cropToFill = builtInVideoFillScreen
+                            ),
                             onLongPress = null
                         )
                     } else {
@@ -344,7 +360,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     )
             ) { SmartStackLayer() }
 
-            if (showNotification) {
+            if (notificationsEnabled && showNotification) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -395,7 +411,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                     .putExtra(EXTRA_INTERNAL_WATCHFACE_ID, descriptor.id)
                             )
                         } else if (!LunchWatchFaceRuntime.openSettings(context, descriptor)) {
-                            Toast.makeText(context, "没有可用的表盘设置", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "\u6CA1\u6709\u53EF\u7528\u7684\u8868\u76D8\u8BBE\u7F6E", Toast.LENGTH_SHORT).show()
                         }
                     },
                     onRefreshWatchFaces = { vm.refreshWatchFaces() },
@@ -410,4 +426,3 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
     }
 }
-
