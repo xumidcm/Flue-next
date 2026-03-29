@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,6 +31,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -77,11 +80,19 @@ private fun InternalWatchFaceConfigScreen(
     val videoClockPosition by vm.builtInVideoClockPosition.collectAsState()
     val photoClockSize by vm.builtInPhotoClockSize.collectAsState()
     val videoClockSize by vm.builtInVideoClockSize.collectAsState()
+    val photoClockBold by vm.builtInPhotoClockBold.collectAsState()
+    val videoClockBold by vm.builtInVideoClockBold.collectAsState()
     val videoFillScreen by vm.builtInVideoFillScreen.collectAsState()
     val isPhoto = watchFaceId == BUILT_IN_PHOTO_WATCHFACE_ID
     val currentPath = if (isPhoto) photoPath else videoPath
     val activeClockPosition = if (isPhoto) photoClockPosition else videoClockPosition
     val activeClockSize = if (isPhoto) photoClockSize else videoClockSize
+    val activeClockBold = if (isPhoto) photoClockBold else videoClockBold
+    var localClockSize by remember(watchFaceId) { mutableFloatStateOf(activeClockSize.toFloat()) }
+
+    androidx.compose.runtime.LaunchedEffect(activeClockSize, watchFaceId) {
+        localClockSize = activeClockSize.toFloat()
+    }
 
     val picker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
@@ -121,7 +132,7 @@ private fun InternalWatchFaceConfigScreen(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(420.dp)
+                .aspectRatio(1f)
                 .clip(RoundedCornerShape(30.dp))
                 .background(Color(0xFF10141D)),
             contentAlignment = Alignment.Center
@@ -132,11 +143,13 @@ private fun InternalWatchFaceConfigScreen(
                 videoPath = videoPath,
                 photoOptions = BuiltInWatchFaceOptions(
                     clockPosition = photoClockPosition,
-                    clockSizeSp = photoClockSize
+                    clockSizeSp = localClockSize.toInt(),
+                    boldClock = photoClockBold
                 ),
                 videoOptions = BuiltInWatchFaceOptions(
                     clockPosition = videoClockPosition,
-                    clockSizeSp = videoClockSize,
+                    clockSizeSp = localClockSize.toInt(),
+                    boldClock = videoClockBold,
                     cropToFill = videoFillScreen
                 ),
                 clockOverride = FIXED_PREVIEW_CLOCK,
@@ -166,16 +179,19 @@ private fun InternalWatchFaceConfigScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "\u65F6\u95F4\u5927\u5C0F  ${activeClockSize}sp",
+            text = "\u65F6\u95F4\u5927\u5C0F  ${localClockSize.toInt()}sp",
             color = Color.White,
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.fillMaxWidth()
         )
         Slider(
-            value = activeClockSize.toFloat(),
+            value = localClockSize,
             onValueChange = {
-                val value = it.toInt()
+                localClockSize = it
+            },
+            onValueChangeFinished = {
+                val value = localClockSize.toInt()
                 if (isPhoto) vm.setBuiltInPhotoClockSize(value) else vm.setBuiltInVideoClockSize(value)
             },
             valueRange = 28f..92f,
@@ -184,6 +200,15 @@ private fun InternalWatchFaceConfigScreen(
                 thumbColor = WatchColors.ActiveCyan,
                 activeTrackColor = WatchColors.ActiveCyan
             )
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+        ToggleRow(
+            label = "\u7C97\u4F53\u65F6\u949F",
+            enabled = activeClockBold,
+            onToggle = {
+                if (isPhoto) vm.setBuiltInPhotoClockBold(!photoClockBold) else vm.setBuiltInVideoClockBold(!videoClockBold)
+            }
         )
 
         if (!isPhoto) {
@@ -290,11 +315,17 @@ private fun PositionPickerRow(
         listOf(
             listOf(
                 WatchClockPosition.TOP_LEFT to "\u5DE6\u4E0A",
-                WatchClockPosition.TOP_RIGHT to "\u53F3\u4E0A",
-                WatchClockPosition.CENTER to "\u4E2D\u95F4"
+                null,
+                WatchClockPosition.TOP_RIGHT to "\u53F3\u4E0A"
+            ),
+            listOf(
+                WatchClockPosition.LEFT_CENTER to "\u5DE6\u4E2D",
+                WatchClockPosition.CENTER to "\u4E2D\u95F4",
+                WatchClockPosition.RIGHT_CENTER to "\u53F3\u4E2D"
             ),
             listOf(
                 WatchClockPosition.BOTTOM_LEFT to "\u5DE6\u4E0B",
+                null,
                 WatchClockPosition.BOTTOM_RIGHT to "\u53F3\u4E0B"
             )
         ).forEach { rowItems ->
@@ -302,23 +333,25 @@ private fun PositionPickerRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center
             ) {
-                rowItems.forEach { (position, label) ->
-                    SmallChoiceChip(
-                        label = label,
-                        selected = position == current,
-                        modifier = Modifier
-                            .width(92.dp)
-                            .padding(horizontal = 4.dp)
-                    ) {
-                        onSelect(position)
+                rowItems.forEach { item ->
+                    if (item == null) {
+                        Spacer(
+                            modifier = Modifier
+                                .width(92.dp)
+                                .padding(horizontal = 4.dp)
+                        )
+                    } else {
+                        val (position, label) = item
+                        SmallChoiceChip(
+                            label = label,
+                            selected = position == current,
+                            modifier = Modifier
+                                .width(92.dp)
+                                .padding(horizontal = 4.dp)
+                        ) {
+                            onSelect(position)
+                        }
                     }
-                }
-                repeat(3 - rowItems.size) {
-                    Spacer(
-                        modifier = Modifier
-                            .width(92.dp)
-                            .padding(horizontal = 4.dp)
-                    )
                 }
             }
         }

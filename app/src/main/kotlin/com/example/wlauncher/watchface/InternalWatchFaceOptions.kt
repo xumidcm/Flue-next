@@ -2,6 +2,8 @@ package com.flue.launcher.watchface
 
 enum class WatchClockPosition {
     CENTER,
+    LEFT_CENTER,
+    RIGHT_CENTER,
     TOP_LEFT,
     TOP_RIGHT,
     BOTTOM_LEFT,
@@ -11,5 +13,6 @@ enum class WatchClockPosition {
 data class BuiltInWatchFaceOptions(
     val clockPosition: WatchClockPosition = WatchClockPosition.CENTER,
     val clockSizeSp: Int = 64,
+    val boldClock: Boolean = false,
     val cropToFill: Boolean = true
 )

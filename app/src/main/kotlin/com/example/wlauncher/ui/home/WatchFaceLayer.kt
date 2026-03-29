@@ -201,6 +201,11 @@ private fun BuiltInWatchFaceSurface(
                     BUILT_IN_VIDEO_WATCHFACE_ID -> videoOptions.clockSizeSp
                     else -> 64
                 },
+                boldClock = when (watchFaceId) {
+                    BUILT_IN_PHOTO_WATCHFACE_ID -> photoOptions.boldClock
+                    BUILT_IN_VIDEO_WATCHFACE_ID -> videoOptions.boldClock
+                    else -> false
+                },
                 palette = clockPalette,
                 fallbackTitle = when (watchFaceId) {
                     BUILT_IN_PHOTO_WATCHFACE_ID -> if (photoPath.isNullOrBlank()) "\u672A\u8BBE\u7F6E\u56FE\u7247" else null
@@ -254,6 +259,7 @@ fun ClockOverlayPreview(
     clock: ClockSnapshot,
     clockPosition: WatchClockPosition,
     clockSizeSp: Int,
+    boldClock: Boolean = false,
     palette: ClockPalette,
     fallbackTitle: String? = null,
     fallbackSubtitle: String? = null
@@ -263,6 +269,7 @@ fun ClockOverlayPreview(
         compact = false,
         clockPosition = clockPosition,
         clockSizeSp = clockSizeSp,
+        boldClock = boldClock,
         palette = palette,
         fallbackTitle = fallbackTitle,
         fallbackSubtitle = fallbackSubtitle
@@ -275,6 +282,7 @@ private fun ClockOverlay(
     compact: Boolean,
     clockPosition: WatchClockPosition,
     clockSizeSp: Int,
+    boldClock: Boolean,
     palette: ClockPalette,
     fallbackTitle: String? = null,
     fallbackSubtitle: String? = null
@@ -289,7 +297,7 @@ private fun ClockOverlay(
             Text(
                 text = clock.time,
                 fontSize = if (compact) 32.sp else clockSizeSp.sp,
-                fontWeight = FontWeight.W200,
+                fontWeight = if (boldClock) FontWeight.Bold else FontWeight.W200,
                 color = palette.timeColor,
                 letterSpacing = 2.sp
             )
@@ -427,6 +435,8 @@ private suspend fun sampleClockPalette(
 
 private fun clockAlignment(position: WatchClockPosition): Alignment = when (position) {
     WatchClockPosition.CENTER -> Alignment.Center
+    WatchClockPosition.LEFT_CENTER -> Alignment.CenterStart
+    WatchClockPosition.RIGHT_CENTER -> Alignment.CenterEnd
     WatchClockPosition.TOP_LEFT -> Alignment.TopStart
     WatchClockPosition.TOP_RIGHT -> Alignment.TopEnd
     WatchClockPosition.BOTTOM_LEFT -> Alignment.BottomStart
@@ -435,6 +445,7 @@ private fun clockAlignment(position: WatchClockPosition): Alignment = when (posi
 
 private fun horizontalAlignment(position: WatchClockPosition): Alignment.Horizontal = when (position) {
     WatchClockPosition.CENTER -> Alignment.CenterHorizontally
+    WatchClockPosition.RIGHT_CENTER -> Alignment.End
     WatchClockPosition.TOP_RIGHT, WatchClockPosition.BOTTOM_RIGHT -> Alignment.End
     else -> Alignment.Start
 }

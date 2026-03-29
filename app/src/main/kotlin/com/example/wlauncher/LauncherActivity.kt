@@ -145,6 +145,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val builtInVideoClockPosition by vm.builtInVideoClockPosition.collectAsState()
     val builtInPhotoClockSize by vm.builtInPhotoClockSize.collectAsState()
     val builtInVideoClockSize by vm.builtInVideoClockSize.collectAsState()
+    val builtInPhotoClockBold by vm.builtInPhotoClockBold.collectAsState()
+    val builtInVideoClockBold by vm.builtInVideoClockBold.collectAsState()
     val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
     val layerBlurEnabled = blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
@@ -225,11 +227,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             isFaceVisible = screenState == ScreenState.Face,
                             photoOptions = BuiltInWatchFaceOptions(
                                 clockPosition = builtInPhotoClockPosition,
-                                clockSizeSp = builtInPhotoClockSize
+                                clockSizeSp = builtInPhotoClockSize,
+                                boldClock = builtInPhotoClockBold
                             ),
                             videoOptions = BuiltInWatchFaceOptions(
                                 clockPosition = builtInVideoClockPosition,
                                 clockSizeSp = builtInVideoClockSize,
+                                boldClock = builtInVideoClockBold,
                                 cropToFill = builtInVideoFillScreen
                             ),
                             onLongPress = null

@@ -63,6 +63,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_VIDEO_CLOCK_POSITION = stringPreferencesKey("video_clock_position")
         val KEY_PHOTO_CLOCK_SIZE = intPreferencesKey("photo_clock_size")
         val KEY_VIDEO_CLOCK_SIZE = intPreferencesKey("video_clock_size")
+        val KEY_PHOTO_CLOCK_BOLD = booleanPreferencesKey("photo_clock_bold")
+        val KEY_VIDEO_CLOCK_BOLD = booleanPreferencesKey("video_clock_bold")
         val KEY_VIDEO_FILL_SCREEN = booleanPreferencesKey("video_fill_screen")
     }
 
@@ -162,6 +164,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _builtInVideoClockSize = MutableStateFlow(64)
     val builtInVideoClockSize: StateFlow<Int> = _builtInVideoClockSize.asStateFlow()
 
+    private val _builtInPhotoClockBold = MutableStateFlow(false)
+    val builtInPhotoClockBold: StateFlow<Boolean> = _builtInPhotoClockBold.asStateFlow()
+
+    private val _builtInVideoClockBold = MutableStateFlow(false)
+    val builtInVideoClockBold: StateFlow<Boolean> = _builtInVideoClockBold.asStateFlow()
+
     private val _builtInVideoFillScreen = MutableStateFlow(true)
     val builtInVideoFillScreen: StateFlow<Boolean> = _builtInVideoFillScreen.asStateFlow()
 
@@ -228,6 +236,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     ?: WatchClockPosition.CENTER
                 _builtInPhotoClockSize.value = (prefs[KEY_PHOTO_CLOCK_SIZE] ?: 64).coerceIn(28, 92)
                 _builtInVideoClockSize.value = (prefs[KEY_VIDEO_CLOCK_SIZE] ?: 64).coerceIn(28, 92)
+                _builtInPhotoClockBold.value = prefs[KEY_PHOTO_CLOCK_BOLD] ?: false
+                _builtInVideoClockBold.value = prefs[KEY_VIDEO_CLOCK_BOLD] ?: false
                 _builtInVideoFillScreen.value = prefs[KEY_VIDEO_FILL_SCREEN] ?: true
                 if (refreshIconsNeeded) {
                     refreshIcons()
@@ -497,6 +507,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { store.edit { it[KEY_VIDEO_CLOCK_SIZE] = _builtInVideoClockSize.value } }
     }
 
+    fun setBuiltInPhotoClockBold(enabled: Boolean) {
+        _builtInPhotoClockBold.value = enabled
+        viewModelScope.launch { store.edit { it[KEY_PHOTO_CLOCK_BOLD] = enabled } }
+    }
+
+    fun setBuiltInVideoClockBold(enabled: Boolean) {
+        _builtInVideoClockBold.value = enabled
+        viewModelScope.launch { store.edit { it[KEY_VIDEO_CLOCK_BOLD] = enabled } }
+    }
+
     fun setBuiltInVideoFillScreen(fillScreen: Boolean) {
         _builtInVideoFillScreen.value = fillScreen
         viewModelScope.launch { store.edit { it[KEY_VIDEO_FILL_SCREEN] = fillScreen } }
@@ -538,6 +558,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _builtInVideoClockPosition.value = WatchClockPosition.CENTER
         _builtInPhotoClockSize.value = 64
         _builtInVideoClockSize.value = 64
+        _builtInPhotoClockBold.value = false
+        _builtInVideoClockBold.value = false
         _builtInVideoFillScreen.value = true
         appRepository.setHiddenComponents(emptySet())
         appRepository.setIconPackPackage(null)
@@ -565,6 +587,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_VIDEO_CLOCK_POSITION] = WatchClockPosition.CENTER.name
                 it[KEY_PHOTO_CLOCK_SIZE] = 64
                 it[KEY_VIDEO_CLOCK_SIZE] = 64
+                it[KEY_PHOTO_CLOCK_BOLD] = false
+                it[KEY_VIDEO_CLOCK_BOLD] = false
                 it[KEY_VIDEO_FILL_SCREEN] = true
                 it.remove(KEY_LAST_WATCHFACE_ERROR)
             }

@@ -23,10 +23,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -95,6 +93,8 @@ private fun WatchFaceChooserScreen(
     val builtInVideoClockPosition by vm.builtInVideoClockPosition.collectAsState()
     val builtInPhotoClockSize by vm.builtInPhotoClockSize.collectAsState()
     val builtInVideoClockSize by vm.builtInVideoClockSize.collectAsState()
+    val builtInPhotoClockBold by vm.builtInPhotoClockBold.collectAsState()
+    val builtInVideoClockBold by vm.builtInVideoClockBold.collectAsState()
     val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
 
     LaunchedEffect(watchFaces.isEmpty()) {
@@ -144,7 +144,9 @@ private fun WatchFaceChooserScreen(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        val previewHeight = (maxHeight - 248.dp).coerceIn(220.dp, 420.dp)
+        val previewHeight = (maxHeight - 282.dp).coerceIn(170.dp, 420.dp)
+        val previewWidth = (maxWidth - 28.dp).coerceAtLeast(170.dp)
+        val previewSize = if (previewWidth < previewHeight) previewWidth else previewHeight
         val topSpacing = if (maxHeight < 420.dp) 14.dp else 20.dp
         val bottomSpacing = if (maxHeight < 420.dp) 12.dp else 18.dp
 
@@ -160,7 +162,6 @@ private fun WatchFaceChooserScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 18.dp, vertical = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -185,26 +186,28 @@ private fun WatchFaceChooserScreen(
                     builtInVideoPath = builtInVideoPath,
                     photoOptions = BuiltInWatchFaceOptions(
                         clockPosition = builtInPhotoClockPosition,
-                        clockSizeSp = builtInPhotoClockSize
+                        clockSizeSp = builtInPhotoClockSize,
+                        boldClock = builtInPhotoClockBold
                     ),
                     videoOptions = BuiltInWatchFaceOptions(
                         clockPosition = builtInVideoClockPosition,
                         clockSizeSp = builtInVideoClockSize,
+                        boldClock = builtInVideoClockBold,
                         cropToFill = builtInVideoFillScreen
                     ),
                     clockOverride = FIXED_PREVIEW_CLOCK,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(previewHeight)
+                        .height(previewSize)
                 )
             } else {
                 HorizontalPager(
                     state = pagerState,
-                    contentPadding = PaddingValues(horizontal = 26.dp),
-                    pageSpacing = 18.dp,
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    pageSpacing = 12.dp,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(previewHeight)
+                        .height(previewSize)
                 ) { page ->
                     val descriptor = watchFaces.getOrNull(page) ?: return@HorizontalPager
                     val pageOffset = ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction).absoluteValue
@@ -223,11 +226,13 @@ private fun WatchFaceChooserScreen(
                             builtInVideoPath = builtInVideoPath,
                             photoOptions = BuiltInWatchFaceOptions(
                                 clockPosition = builtInPhotoClockPosition,
-                                clockSizeSp = builtInPhotoClockSize
+                                clockSizeSp = builtInPhotoClockSize,
+                                boldClock = builtInPhotoClockBold
                             ),
                             videoOptions = BuiltInWatchFaceOptions(
                                 clockPosition = builtInVideoClockPosition,
                                 clockSizeSp = builtInVideoClockSize,
+                                boldClock = builtInVideoClockBold,
                                 cropToFill = builtInVideoFillScreen
                             ),
                             clockOverride = FIXED_PREVIEW_CLOCK,
@@ -302,24 +307,35 @@ private fun WatchFacePreviewCard(
     modifier: Modifier = Modifier
 ) {
     Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(32.dp))
-            .background(Color(0xFF10141D))
-            .height(400.dp),
+        modifier = modifier.height(400.dp),
         contentAlignment = Alignment.Center
     ) {
-        if (descriptor.isBuiltin) {
-            BuiltInChooserPreview(
-                watchFaceId = descriptor.id,
-                photoPath = builtInPhotoPath,
-                videoPath = builtInVideoPath,
-                photoOptions = photoOptions,
-                videoOptions = videoOptions,
-                clockOverride = clockOverride,
-                modifier = Modifier.fillMaxSize()
-            )
-        } else {
-            WatchFacePreviewDrawable(descriptor)
+        BoxWithConstraints(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            val cardSize = min(maxWidth, maxHeight)
+            val cardModifier = Modifier
+                .size(cardSize)
+                .clip(RoundedCornerShape(32.dp))
+                .background(Color(0xFF10141D))
+
+            if (descriptor.isBuiltin) {
+                BuiltInChooserPreview(
+                    watchFaceId = descriptor.id,
+                    photoPath = builtInPhotoPath,
+                    videoPath = builtInVideoPath,
+                    photoOptions = photoOptions,
+                    videoOptions = videoOptions,
+                    clockOverride = clockOverride,
+                    modifier = cardModifier
+                )
+            } else {
+                WatchFacePreviewDrawable(
+                    descriptor = descriptor,
+                    modifier = cardModifier
+                )
+            }
         }
     }
 }
@@ -372,6 +388,11 @@ private fun BuiltInChooserPreview(
         BUILT_IN_VIDEO_WATCHFACE_ID -> videoOptions.clockSizeSp
         else -> 64
     }
+    val boldClock = when (watchFaceId) {
+        BUILT_IN_PHOTO_WATCHFACE_ID -> photoOptions.boldClock
+        BUILT_IN_VIDEO_WATCHFACE_ID -> videoOptions.boldClock
+        else -> false
+    }
     val palette = rememberClockPaletteForPreview(
         watchFaceId = watchFaceId,
         photoPath = photoPath,
@@ -411,6 +432,7 @@ private fun BuiltInChooserPreview(
             clock = clock,
             clockPosition = clockPosition,
             clockSizeSp = clockSizeSp,
+            boldClock = boldClock,
             palette = palette,
             fallbackTitle = when (watchFaceId) {
                 BUILT_IN_PHOTO_WATCHFACE_ID -> if (photoPath.isNullOrBlank()) "\u672A\u8BBE\u7F6E\u56FE\u7247" else null
@@ -427,7 +449,10 @@ private fun BuiltInChooserPreview(
 }
 
 @Composable
-private fun WatchFacePreviewDrawable(descriptor: LunchWatchFaceDescriptor) {
+private fun WatchFacePreviewDrawable(
+    descriptor: LunchWatchFaceDescriptor,
+    modifier: Modifier = Modifier
+) {
     val context = LocalContext.current
     val previewBitmap by produceState<ImageBitmap?>(initialValue = null, key1 = descriptor.stableKey) {
         value = withContext(Dispatchers.Default) {
@@ -441,12 +466,12 @@ private fun WatchFacePreviewDrawable(descriptor: LunchWatchFaceDescriptor) {
         androidx.compose.foundation.Image(
             bitmap = bitmap,
             contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
+            modifier = modifier.fillMaxSize(),
             contentScale = androidx.compose.ui.layout.ContentScale.Crop
         )
     } else {
         Box(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxSize()
                 .background(Color(0xFF151922)),
             contentAlignment = Alignment.Center
