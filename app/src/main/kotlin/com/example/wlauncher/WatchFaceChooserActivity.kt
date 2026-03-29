@@ -572,6 +572,7 @@ private fun drawChooserClock(
     val height = canvas.height.toFloat()
     val horizontalPadding = width * 0.1f
     val verticalPadding = height * 0.12f
+    val clockSizePx = clockSizeSp * 2.6f
     val paintAlign = when (clockPosition) {
         WatchClockPosition.TOP_LEFT,
         WatchClockPosition.BOTTOM_LEFT,
@@ -592,46 +593,46 @@ private fun drawChooserClock(
     }
     val anchorY = when (clockPosition) {
         WatchClockPosition.TOP_LEFT,
-        WatchClockPosition.TOP_RIGHT -> verticalPadding + clockSizeSp * 2.7f
+        WatchClockPosition.TOP_RIGHT -> verticalPadding + clockSizePx * 0.85f
         WatchClockPosition.LEFT_CENTER,
         WatchClockPosition.CENTER,
         WatchClockPosition.RIGHT_CENTER -> height * 0.46f
         WatchClockPosition.BOTTOM_LEFT,
-        WatchClockPosition.BOTTOM_RIGHT -> height - verticalPadding - clockSizeSp * 1.1f
+        WatchClockPosition.BOTTOM_RIGHT -> height - verticalPadding - clockSizePx * 0.2f
     }
     val timePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = timeColor
         textAlign = paintAlign
-        textSize = clockSizeSp * 5.2f
+        textSize = clockSizePx
         typeface = if (boldClock) Typeface.DEFAULT_BOLD else Typeface.create(Typeface.DEFAULT, 300, false)
         isSubpixelText = true
     }
     val datePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = dateColor
         textAlign = paintAlign
-        textSize = clockSizeSp * 1.25f
+        textSize = clockSizePx * 0.24f
         typeface = Typeface.DEFAULT_BOLD
         alpha = 220
     }
     canvas.drawText(clock.time, anchorX, anchorY, timePaint)
-    canvas.drawText(clock.date, anchorX, anchorY + clockSizeSp * 1.7f, datePaint)
+    canvas.drawText(clock.date, anchorX, anchorY + clockSizePx * 0.34f, datePaint)
 
     fallbackTitle?.let { title ->
         val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = timeColor
             textAlign = paintAlign
-            textSize = clockSizeSp * 1.45f
+            textSize = clockSizePx * 0.28f
             typeface = Typeface.DEFAULT_BOLD
         }
-        canvas.drawText(title, anchorX, anchorY + clockSizeSp * 3.7f, titlePaint)
+        canvas.drawText(title, anchorX, anchorY + clockSizePx * 0.72f, titlePaint)
         fallbackSubtitle?.let { subtitle ->
             val subtitlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = timeColor
                 textAlign = paintAlign
-                textSize = clockSizeSp * 0.92f
+                textSize = clockSizePx * 0.18f
                 alpha = 196
             }
-            canvas.drawText(subtitle, anchorX, anchorY + clockSizeSp * 5.05f, subtitlePaint)
+            canvas.drawText(subtitle, anchorX, anchorY + clockSizePx * 0.96f, subtitlePaint)
         }
     }
 }

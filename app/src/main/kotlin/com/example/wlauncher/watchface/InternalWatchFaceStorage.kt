@@ -26,7 +26,7 @@ object InternalWatchFaceStorage {
             }
 
             val extension = resolveExtension(context, uri, fallbackExtension)
-            val target = File(root, "current.$extension")
+            val target = File(root, "current_${System.currentTimeMillis()}.$extension")
             context.contentResolver.openInputStream(uri)?.use { input ->
                 target.outputStream().use { output -> input.copyTo(output) }
             } ?: return null

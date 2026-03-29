@@ -184,12 +184,6 @@ fun HoneycombScreen(
         }
 
         val currentScroll = scrollOffset.value
-        val lastItemCenterY = screenCenterY + maxGridY + currentScroll
-        val bottomFlattenProgress = computeHoneycombBottomFlattenProgress(
-            lastItemCenterY = lastItemCenterY,
-            safeBottom = safeBottom,
-            iconSizePx = iconSizePx
-        )
 
         Box(
             modifier = Modifier
@@ -604,14 +598,7 @@ fun HoneycombScreen(
                                 val dx = actualCenterX - screenCenterX
                                 val dy = actualCenterY - screenCenterY
                                 val dist = sqrt(dx * dx + dy * dy)
-                                val scale = honeycombDisplayScale(
-                                    distance = dist,
-                                    actualCenterY = actualCenterY,
-                                    screenCenterY = screenCenterY,
-                                    screenHeightPx = screenHeightPx,
-                                    screenRadius = screenRadius,
-                                    bottomFlattenProgress = bottomFlattenProgress
-                                )
+                                val scale = fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
                                 scaleX = scale * animatedNeighborScale
                                 scaleY = scale * animatedNeighborScale
                                 alpha = when {
@@ -641,14 +628,7 @@ fun HoneycombScreen(
                 val dragDx = scalePointer.x - screenCenterX
                 val dragDy = scalePointer.y - screenCenterY
                 val dragDist = sqrt(dragDx * dragDx + dragDy * dragDy)
-                val dragScale = honeycombDisplayScale(
-                    distance = dragDist,
-                    actualCenterY = scalePointer.y,
-                    screenCenterY = screenCenterY,
-                    screenHeightPx = screenHeightPx,
-                    screenRadius = screenRadius,
-                    bottomFlattenProgress = bottomFlattenProgress
-                )
+                val dragScale = fisheyeScale(dragDist, screenRadius * 1.65f, minScale = 0.58f)
                 AppBubble(
                     icon = if (blurEnabled && effectiveEdgeBlur && dragOverlayBlur > 0.5f && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
                         dragOverlayApp.cachedBlurredIcon
@@ -715,14 +695,7 @@ fun HoneycombScreen(
                         val dx = settlingX.value - screenCenterX
                         val dy = settlingY.value - screenCenterY
                         val dist = sqrt(dx * dx + dy * dy)
-                        val scale = honeycombDisplayScale(
-                            distance = dist,
-                            actualCenterY = settlingY.value,
-                            screenCenterY = screenCenterY,
-                            screenHeightPx = screenHeightPx,
-                            screenRadius = screenRadius,
-                            bottomFlattenProgress = bottomFlattenProgress
-                        )
+                        val scale = fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
                         scaleX = scale
                         scaleY = scale
                         alpha = scale.coerceIn(0.24f, 1f)
@@ -870,32 +843,6 @@ private fun computeHoneycombEdgeBlur(
         (1f - (bottomDistance / bottomBlurZonePx)).coerceIn(0f, 1f)
     }
     return maxOf(topStrength * topBlurDp, bottomStrength * bottomBlurDp)
-}
-
-private fun computeHoneycombBottomFlattenProgress(
-    lastItemCenterY: Float,
-    safeBottom: Float,
-    iconSizePx: Float
-): Float {
-    val flattenStart = safeBottom - iconSizePx * 0.9f
-    return ((lastItemCenterY - flattenStart) / (safeBottom - flattenStart).coerceAtLeast(1f))
-        .coerceIn(0f, 1f)
-}
-
-private fun honeycombDisplayScale(
-    distance: Float,
-    actualCenterY: Float,
-    screenCenterY: Float,
-    screenHeightPx: Float,
-    screenRadius: Float,
-    bottomFlattenProgress: Float
-): Float {
-    val baseScale = fisheyeScale(distance, screenRadius * 1.65f, minScale = 0.58f)
-    if (bottomFlattenProgress <= 0f) return baseScale
-    val lowerHalfProgress = ((actualCenterY - screenCenterY) / (screenHeightPx * 0.5f)).coerceIn(0f, 1f)
-    if (lowerHalfProgress <= 0f) return baseScale
-    val flatten = bottomFlattenProgress * lowerHalfProgress
-    return 1f - (1f - baseScale) * (1f - flatten)
 }
 
 private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awaitLongPressByTimeoutOrCancel(

@@ -138,6 +138,12 @@ private fun InternalWatchFaceConfigScreen(
                 }
             )
             if (!savedPath.isNullOrBlank()) {
+                localPath = null
+                if (isPhoto) {
+                    vm.setBuiltInPhotoPath(null)
+                } else {
+                    vm.setBuiltInVideoPath(null)
+                }
                 localPath = savedPath
                 if (isPhoto) {
                     vm.setBuiltInPhotoPath(savedPath)

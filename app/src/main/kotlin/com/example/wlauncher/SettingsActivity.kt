@@ -600,19 +600,31 @@ private fun SettingsPageScaffold(
             override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: NestedScrollSource): androidx.compose.ui.geometry.Offset {
                 if (source != NestedScrollSource.Drag) return androidx.compose.ui.geometry.Offset.Zero
                 val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+                val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+                val atBottom = lastVisible != null &&
+                    lastVisible.index >= listState.layoutInfo.totalItemsCount - 1 &&
+                    lastVisible.offset + lastVisible.size <= listState.layoutInfo.viewportEndOffset
                 if (available.y > 0f && atTop) {
                     scope.launch { overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtMost(140f)) }
+                    return androidx.compose.ui.geometry.Offset(0f, available.y)
+                }
+                if (available.y < 0f && atBottom) {
+                    scope.launch { overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtLeast(-140f)) }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 if (overscroll.value > 0f && available.y < 0f) {
                     scope.launch { overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(0f)) }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
+                if (overscroll.value < 0f && available.y > 0f) {
+                    scope.launch { overscroll.snapTo((overscroll.value + available.y).coerceAtMost(0f)) }
+                    return androidx.compose.ui.geometry.Offset(0f, available.y)
+                }
                 return androidx.compose.ui.geometry.Offset.Zero
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (overscroll.value > 0f) {
+                if (overscroll.value != 0f) {
                     overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
                     return available
                 }
@@ -1101,7 +1113,18 @@ private fun itemFisheye(
     if (itemCenterY <= screenCenterY) return 1f
     val distance = kotlin.math.abs(itemCenterY - screenCenterY)
     val normalized = (distance / (screenHeight / 2f)).coerceIn(0f, 1f)
-    return 1f - 0.14f * normalized
+    val baseScale = 1f - 0.14f * normalized
+    val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+    val bottomFlattenProgress = if (
+        lastVisible != null &&
+        lastVisible.index >= listState.layoutInfo.totalItemsCount - 1
+    ) {
+        val bottomGap = (listState.layoutInfo.viewportEndOffset - (lastVisible.offset + lastVisible.size)).coerceAtLeast(0)
+        (1f - (bottomGap / (screenHeight * 0.12f)).coerceIn(0f, 1f)).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    return androidx.compose.ui.util.lerp(baseScale, 1f, bottomFlattenProgress)
 }
 
 private fun exportLog(context: android.content.Context) {
