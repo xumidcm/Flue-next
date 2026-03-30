@@ -2,6 +2,8 @@ package com.flue.launcher.watchface
 
 enum class WatchClockPosition {
     CENTER,
+    TOP_CENTER,
+    BOTTOM_CENTER,
     LEFT_CENTER,
     RIGHT_CENTER,
     TOP_LEFT,
