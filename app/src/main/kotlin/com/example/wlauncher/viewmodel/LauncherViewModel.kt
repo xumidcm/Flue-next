@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "launcher_settings")
 
@@ -184,6 +185,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private var launchJob: Job? = null
     private var watchFacePrefsHydrated = false
     private var watchFaceScanHydrated = false
+    private val pendingWriteJobs = ConcurrentHashMap<String, Job>()
     init {
         refreshIconPacks()
         viewModelScope.launch {
@@ -307,13 +309,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setLayoutMode(mode: LayoutMode) {
         _layoutMode.value = mode
-        viewModelScope.launch { store.edit { it[KEY_LAYOUT] = mode.name } }
+        persist { store.edit { it[KEY_LAYOUT] = mode.name } }
     }
 
     fun setBlurEnabled(enabled: Boolean) {
         _blurEnabled.value = enabled
         if (!enabled) _edgeBlurEnabled.value = false
-        viewModelScope.launch {
+        persist {
             store.edit {
                 it[KEY_BLUR] = enabled
                 if (!enabled) it[KEY_EDGE_BLUR] = false
@@ -324,64 +326,70 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setEdgeBlurEnabled(enabled: Boolean) {
         val value = enabled && _blurEnabled.value
         _edgeBlurEnabled.value = value
-        viewModelScope.launch { store.edit { it[KEY_EDGE_BLUR] = value } }
+        persist { store.edit { it[KEY_EDGE_BLUR] = value } }
     }
 
     fun setLowResIcons(enabled: Boolean) {
         _lowResIcons.value = enabled
         refreshIcons()
-        viewModelScope.launch { store.edit { it[KEY_LOW_RES] = enabled } }
+        persist { store.edit { it[KEY_LOW_RES] = enabled } }
     }
 
     fun setAnimationOverrideEnabled(enabled: Boolean) {
         _animationOverrideEnabled.value = enabled
-        viewModelScope.launch { store.edit { it[KEY_ANIMATION_OVERRIDE] = enabled } }
+        persist { store.edit { it[KEY_ANIMATION_OVERRIDE] = enabled } }
     }
 
     fun setSplashIcon(enabled: Boolean) {
         _splashIcon.value = enabled
-        viewModelScope.launch { store.edit { it[KEY_SPLASH_ICON] = enabled } }
+        persist { store.edit { it[KEY_SPLASH_ICON] = enabled } }
     }
 
     fun setSplashDelay(ms: Int) {
         _splashDelay.value = ms.coerceIn(300, 1500)
-        viewModelScope.launch { store.edit { it[KEY_SPLASH_DELAY] = _splashDelay.value } }
+        val value = _splashDelay.value
+        persistDebounced("splash_delay") { store.edit { it[KEY_SPLASH_DELAY] = value } }
     }
 
     fun setAppOrder(order: List<String>) {
         _appOrder.value = order
         appRepository.setCustomOrder(order)
-        viewModelScope.launch { store.edit { it[KEY_APP_ORDER] = order.joinToString(",") } }
+        persist { store.edit { it[KEY_APP_ORDER] = order.joinToString(",") } }
     }
 
     fun setHoneycombCols(cols: Int) {
         _honeycombCols.value = cols.coerceIn(3, 6)
-        viewModelScope.launch { store.edit { it[KEY_HONEYCOMB_COLS] = _honeycombCols.value } }
+        val savedValue = _honeycombCols.value
+        persistDebounced("key_honeycomb_cols") { store.edit { it[KEY_HONEYCOMB_COLS] = savedValue } }
     }
 
     fun setHoneycombTopBlur(value: Int) {
         _honeycombTopBlur.value = value.coerceIn(0, 48)
-        viewModelScope.launch { store.edit { it[KEY_HONEYCOMB_TOP_BLUR] = _honeycombTopBlur.value } }
+        val savedValue = _honeycombTopBlur.value
+        persistDebounced("key_honeycomb_top_blur") { store.edit { it[KEY_HONEYCOMB_TOP_BLUR] = savedValue } }
     }
 
     fun setHoneycombBottomBlur(value: Int) {
         _honeycombBottomBlur.value = value.coerceIn(0, 48)
-        viewModelScope.launch { store.edit { it[KEY_HONEYCOMB_BOTTOM_BLUR] = _honeycombBottomBlur.value } }
+        val savedValue = _honeycombBottomBlur.value
+        persistDebounced("key_honeycomb_bottom_blur") { store.edit { it[KEY_HONEYCOMB_BOTTOM_BLUR] = savedValue } }
     }
 
     fun setHoneycombTopFade(value: Int) {
         _honeycombTopFade.value = value.coerceIn(0, 160)
-        viewModelScope.launch { store.edit { it[KEY_HONEYCOMB_TOP_FADE] = _honeycombTopFade.value } }
+        val savedValue = _honeycombTopFade.value
+        persistDebounced("key_honeycomb_top_fade") { store.edit { it[KEY_HONEYCOMB_TOP_FADE] = savedValue } }
     }
 
     fun setHoneycombBottomFade(value: Int) {
         _honeycombBottomFade.value = value.coerceIn(0, 160)
-        viewModelScope.launch { store.edit { it[KEY_HONEYCOMB_BOTTOM_FADE] = _honeycombBottomFade.value } }
+        val savedValue = _honeycombBottomFade.value
+        persistDebounced("key_honeycomb_bottom_fade") { store.edit { it[KEY_HONEYCOMB_BOTTOM_FADE] = savedValue } }
     }
 
     fun setShowNotification(show: Boolean) {
         _showNotification.value = show
-        viewModelScope.launch { store.edit { it[KEY_SHOW_NOTIFICATION] = show } }
+        persist { store.edit { it[KEY_SHOW_NOTIFICATION] = show } }
     }
 
     fun setAppHidden(componentKey: String, hidden: Boolean) {
@@ -395,7 +403,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val next = components.filter(String::isNotBlank).toSet()
         _hiddenApps.value = next
         appRepository.setHiddenComponents(next)
-        viewModelScope.launch {
+        persist {
             store.edit {
                 if (next.isEmpty()) it.remove(KEY_HIDDEN_APPS)
                 else it[KEY_HIDDEN_APPS] = next.joinToString(",")
@@ -415,7 +423,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setIconPackPackage(packageName: String?) {
         _selectedIconPackPackage.value = packageName?.takeIf { it.isNotBlank() }
         appRepository.setIconPackPackage(_selectedIconPackPackage.value)
-        viewModelScope.launch {
+        persist {
             store.edit {
                 if (_selectedIconPackPackage.value.isNullOrBlank()) {
                     it.remove(KEY_ICON_PACK_PACKAGE)
@@ -442,14 +450,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _selectedWatchFaceId.value = id
         syncSelectedWatchFace()
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
-        viewModelScope.launch { store.edit { it[KEY_SELECTED_WATCHFACE_ID] = id } }
+        persist { store.edit { it[KEY_SELECTED_WATCHFACE_ID] = id } }
     }
 
     fun fallbackToBuiltIn(error: String? = null) {
         _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
         _watchFaceLastError.value = error
         syncSelectedWatchFace()
-        viewModelScope.launch {
+        persist {
             store.edit {
                 it[KEY_SELECTED_WATCHFACE_ID] = BUILT_IN_WATCHFACE_ID
                 if (error.isNullOrBlank()) {
@@ -463,13 +471,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun clearWatchFaceError() {
         _watchFaceLastError.value = null
-        viewModelScope.launch { store.edit { it.remove(KEY_LAST_WATCHFACE_ERROR) } }
+        persist { store.edit { it.remove(KEY_LAST_WATCHFACE_ERROR) } }
     }
 
     fun setBuiltInPhotoPath(path: String?) {
         _builtInPhotoPath.value = path
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
-        viewModelScope.launch {
+        persist {
             store.edit {
                 if (path.isNullOrBlank()) it.remove(KEY_BUILTIN_PHOTO_PATH)
                 else it[KEY_BUILTIN_PHOTO_PATH] = path
@@ -480,7 +488,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setBuiltInVideoPath(path: String?) {
         _builtInVideoPath.value = path
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
-        viewModelScope.launch {
+        persist {
             store.edit {
                 if (path.isNullOrBlank()) it.remove(KEY_BUILTIN_VIDEO_PATH)
                 else it[KEY_BUILTIN_VIDEO_PATH] = path
@@ -490,37 +498,39 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setBuiltInPhotoClockPosition(position: WatchClockPosition) {
         _builtInPhotoClockPosition.value = position
-        viewModelScope.launch { store.edit { it[KEY_PHOTO_CLOCK_POSITION] = position.name } }
+        persist { store.edit { it[KEY_PHOTO_CLOCK_POSITION] = position.name } }
     }
 
     fun setBuiltInVideoClockPosition(position: WatchClockPosition) {
         _builtInVideoClockPosition.value = position
-        viewModelScope.launch { store.edit { it[KEY_VIDEO_CLOCK_POSITION] = position.name } }
+        persist { store.edit { it[KEY_VIDEO_CLOCK_POSITION] = position.name } }
     }
 
     fun setBuiltInPhotoClockSize(sizeSp: Int) {
         _builtInPhotoClockSize.value = sizeSp.coerceIn(28, 92)
-        viewModelScope.launch { store.edit { it[KEY_PHOTO_CLOCK_SIZE] = _builtInPhotoClockSize.value } }
+        val value = _builtInPhotoClockSize.value
+        persistDebounced("photo_clock_size") { store.edit { it[KEY_PHOTO_CLOCK_SIZE] = value } }
     }
 
     fun setBuiltInVideoClockSize(sizeSp: Int) {
         _builtInVideoClockSize.value = sizeSp.coerceIn(28, 92)
-        viewModelScope.launch { store.edit { it[KEY_VIDEO_CLOCK_SIZE] = _builtInVideoClockSize.value } }
+        val value = _builtInVideoClockSize.value
+        persistDebounced("video_clock_size") { store.edit { it[KEY_VIDEO_CLOCK_SIZE] = value } }
     }
 
     fun setBuiltInPhotoClockBold(enabled: Boolean) {
         _builtInPhotoClockBold.value = enabled
-        viewModelScope.launch { store.edit { it[KEY_PHOTO_CLOCK_BOLD] = enabled } }
+        persist { store.edit { it[KEY_PHOTO_CLOCK_BOLD] = enabled } }
     }
 
     fun setBuiltInVideoClockBold(enabled: Boolean) {
         _builtInVideoClockBold.value = enabled
-        viewModelScope.launch { store.edit { it[KEY_VIDEO_CLOCK_BOLD] = enabled } }
+        persist { store.edit { it[KEY_VIDEO_CLOCK_BOLD] = enabled } }
     }
 
     fun setBuiltInVideoFillScreen(fillScreen: Boolean) {
         _builtInVideoFillScreen.value = fillScreen
-        viewModelScope.launch { store.edit { it[KEY_VIDEO_FILL_SCREEN] = fillScreen } }
+        persist { store.edit { it[KEY_VIDEO_FILL_SCREEN] = fillScreen } }
     }
 
     fun requestWatchFaceRefresh() {
@@ -566,7 +576,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         appRepository.setIconPackPackage(null)
         LunchWatchFaceRegistry.setCurrentSelectedId(BUILT_IN_WATCHFACE_ID)
         refreshIcons()
-        viewModelScope.launch {
+        persist {
             store.edit {
                 it[KEY_LAYOUT] = LayoutMode.Honeycomb.name
                 it[KEY_BLUR] = true
@@ -596,6 +606,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    private fun persist(block: suspend () -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            block()
+        }
+    }
+
+    private fun persistDebounced(tag: String, delayMs: Long = 120, block: suspend () -> Unit) {
+        pendingWriteJobs.remove(tag)?.cancel()
+        pendingWriteJobs[tag] = viewModelScope.launch(Dispatchers.IO) {
+            delay(delayMs)
+            block()
+            pendingWriteJobs.remove(tag)
+        }
+    }
+
     private fun parseClockPosition(value: String): WatchClockPosition =
         runCatching { WatchClockPosition.valueOf(value) }.getOrDefault(WatchClockPosition.CENTER)
 
@@ -617,7 +642,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 _selectedWatchFaceId.value = fallback.id
                 LunchWatchFaceRegistry.setCurrentSelectedId(fallback.id)
                 if (watchFacePrefsHydrated && requestedId != fallback.id) {
-                    viewModelScope.launch {
+                    persist {
                         store.edit { it[KEY_SELECTED_WATCHFACE_ID] = fallback.id }
                     }
                 }
@@ -636,6 +661,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     override fun onCleared() {
+        pendingWriteJobs.values.forEach(Job::cancel)
+        pendingWriteJobs.clear()
         super.onCleared()
         appRepository.destroy()
     }
