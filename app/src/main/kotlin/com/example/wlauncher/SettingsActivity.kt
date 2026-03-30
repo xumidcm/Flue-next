@@ -1157,6 +1157,7 @@ private fun AboutCard(scale: Float) {
     }
 }
 
+@Composable
 private fun itemFisheye(
     listState: LazyListState,
     key: String,
@@ -1185,8 +1186,20 @@ private fun itemFisheye(
     } else {
         0f
     }
-    val bottomFlattenProgress = (nearBottomProgress * 0.6f + edgeProgress * 0.4f).coerceIn(0f, 1f)
-    return androidx.compose.ui.util.lerp(baseScale, 1f, bottomFlattenProgress)
+    val rawFlattenProgress = (nearBottomProgress * 0.6f + edgeProgress * 0.4f).coerceIn(0f, 1f)
+    val flattenProgress by animateFloatAsState(
+        targetValue = rawFlattenProgress,
+        animationSpec = tween(durationMillis = 260),
+        label = "settings_fisheye_flatten_progress"
+    )
+
+    val visibleItems = layoutInfo.visibleItemsInfo
+    val currentVisibleOrder = visibleItems.indexOfFirst { it.key == key }.coerceAtLeast(0)
+    val fromBottomOrder = (visibleItems.lastIndex - currentVisibleOrder).coerceAtLeast(0)
+    val stagger = (fromBottomOrder * 0.075f).coerceAtMost(0.32f)
+    val stagedFlatten = ((flattenProgress - stagger) / (1f - stagger)).coerceIn(0f, 1f)
+
+    return androidx.compose.ui.util.lerp(baseScale, 1f, stagedFlatten)
 }
 
 private fun exportLog(context: android.content.Context) {
