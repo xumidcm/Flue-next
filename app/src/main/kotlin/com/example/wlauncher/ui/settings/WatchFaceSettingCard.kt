@@ -3,6 +3,8 @@ package com.flue.launcher.ui.settings
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,8 +20,11 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,13 +57,25 @@ fun WatchFaceSettingCard(
     onSelect: () -> Unit,
     onOpenSettings: (() -> Unit)? = null
 ) {
+    val cardInteraction = remember { MutableInteractionSource() }
+    val cardPressed by cardInteraction.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (cardPressed) 0.965f else 1f,
+        animationSpec = spring(stiffness = 780f, dampingRatio = 0.72f),
+        label = "watchface_card_press_scale"
+    )
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .graphicsLayer { scaleX = scale; scaleY = scale; alpha = scale.coerceIn(0.3f, 1f) }
+            .graphicsLayer {
+                scaleX = scale * pressScale
+                scaleY = scale * pressScale
+                alpha = scale.coerceIn(0.3f, 1f)
+            }
             .clip(RoundedCornerShape(18.dp))
             .background(if (selected) WatchColors.ActiveCyan.copy(alpha = 0.16f) else WatchColors.SurfaceGlass)
-            .clickable(onClick = onSelect)
+            .clickable(interactionSource = cardInteraction, indication = null, onClick = onSelect)
             .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)

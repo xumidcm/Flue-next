@@ -1,5 +1,6 @@
 package com.flue.launcher
 
+import android.app.Activity
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -293,8 +294,11 @@ private fun WatchFaceChooserScreen(
                                 Intent(context, InternalWatchFaceConfigActivity::class.java)
                                     .putExtra(EXTRA_INTERNAL_WATCHFACE_ID, currentDescriptor.id)
                             )
+                            (context as? Activity)?.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
                         } else if (!LunchWatchFaceRuntime.openSettings(context, currentDescriptor)) {
                             Toast.makeText(context, "\u6CA1\u6709\u53EF\u7528\u7684\u8868\u76D8\u8BBE\u7F6E", Toast.LENGTH_SHORT).show()
+                        } else {
+                            (context as? Activity)?.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
                         }
                     }
                 }
