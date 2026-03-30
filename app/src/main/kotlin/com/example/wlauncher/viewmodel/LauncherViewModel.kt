@@ -186,65 +186,127 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private var watchFacePrefsHydrated = false
     private var watchFaceScanHydrated = false
     private val pendingWriteJobs = ConcurrentHashMap<String, Job>()
+    private var refreshIconsJob: Job? = null
     init {
         refreshIconPacks()
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             store.data.collect { prefs ->
-                var refreshIconsNeeded = false
-                prefs[KEY_LAYOUT]?.let {
-                    _layoutMode.value = try {
+                val loadedLayout = prefs[KEY_LAYOUT]?.let {
+                    try {
                         LayoutMode.valueOf(it)
                     } catch (_: Exception) {
                         LayoutMode.Honeycomb
                     }
+                } ?: LayoutMode.Honeycomb
+                if (_layoutMode.value != loadedLayout) _layoutMode.value = loadedLayout
+
+                val loadedBlur = prefs[KEY_BLUR] ?: (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                if (_blurEnabled.value != loadedBlur) _blurEnabled.value = loadedBlur
+
+                val loadedEdgeBlur = prefs[KEY_EDGE_BLUR] ?: false
+                if (_edgeBlurEnabled.value != loadedEdgeBlur) _edgeBlurEnabled.value = loadedEdgeBlur
+
+                val loadedLowRes = prefs[KEY_LOW_RES] ?: false
+                if (_lowResIcons.value != loadedLowRes) {
+                    _lowResIcons.value = loadedLowRes
+                    refreshIcons()
                 }
-                prefs[KEY_BLUR]?.let { _blurEnabled.value = it }
-                prefs[KEY_EDGE_BLUR]?.let { _edgeBlurEnabled.value = it }
-                prefs[KEY_LOW_RES]?.let {
-                    _lowResIcons.value = it
-                    refreshIconsNeeded = true
+
+                val loadedAnimationOverride = prefs[KEY_ANIMATION_OVERRIDE] ?: true
+                if (_animationOverrideEnabled.value != loadedAnimationOverride) {
+                    _animationOverrideEnabled.value = loadedAnimationOverride
                 }
-                prefs[KEY_ANIMATION_OVERRIDE]?.let { _animationOverrideEnabled.value = it }
-                prefs[KEY_SPLASH_ICON]?.let { _splashIcon.value = it }
-                prefs[KEY_SPLASH_DELAY]?.let { _splashDelay.value = it.coerceIn(300, 1500) }
-                prefs[KEY_APP_ORDER]?.let { orderStr ->
-                    val order = if (orderStr.isNotEmpty()) orderStr.split(",") else emptyList()
-                    _appOrder.value = order
-                    appRepository.setCustomOrder(order)
+
+                val loadedSplashIcon = prefs[KEY_SPLASH_ICON] ?: true
+                if (_splashIcon.value != loadedSplashIcon) _splashIcon.value = loadedSplashIcon
+
+                val loadedSplashDelay = (prefs[KEY_SPLASH_DELAY] ?: 500).coerceIn(300, 1500)
+                if (_splashDelay.value != loadedSplashDelay) _splashDelay.value = loadedSplashDelay
+
+                val loadedOrder = prefs[KEY_APP_ORDER]
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.split(",")
+                    ?: emptyList()
+                if (_appOrder.value != loadedOrder) {
+                    _appOrder.value = loadedOrder
+                    appRepository.setCustomOrder(loadedOrder)
                 }
-                prefs[KEY_HONEYCOMB_COLS]?.let { _honeycombCols.value = it.coerceIn(3, 6) }
-                prefs[KEY_HONEYCOMB_TOP_BLUR]?.let { _honeycombTopBlur.value = it.coerceIn(0, 48) }
-                prefs[KEY_HONEYCOMB_BOTTOM_BLUR]?.let { _honeycombBottomBlur.value = it.coerceIn(0, 48) }
-                prefs[KEY_HONEYCOMB_TOP_FADE]?.let { _honeycombTopFade.value = it.coerceIn(0, 160) }
-                prefs[KEY_HONEYCOMB_BOTTOM_FADE]?.let { _honeycombBottomFade.value = it.coerceIn(0, 160) }
-                prefs[KEY_SHOW_NOTIFICATION]?.let { _showNotification.value = it }
+
+                val loadedHoneycombCols = (prefs[KEY_HONEYCOMB_COLS] ?: 4).coerceIn(3, 6)
+                if (_honeycombCols.value != loadedHoneycombCols) _honeycombCols.value = loadedHoneycombCols
+
+                val loadedTopBlur = (prefs[KEY_HONEYCOMB_TOP_BLUR] ?: 4).coerceIn(0, 48)
+                if (_honeycombTopBlur.value != loadedTopBlur) _honeycombTopBlur.value = loadedTopBlur
+
+                val loadedBottomBlur = (prefs[KEY_HONEYCOMB_BOTTOM_BLUR] ?: 4).coerceIn(0, 48)
+                if (_honeycombBottomBlur.value != loadedBottomBlur) _honeycombBottomBlur.value = loadedBottomBlur
+
+                val loadedTopFade = (prefs[KEY_HONEYCOMB_TOP_FADE] ?: 56).coerceIn(0, 160)
+                if (_honeycombTopFade.value != loadedTopFade) _honeycombTopFade.value = loadedTopFade
+
+                val loadedBottomFade = (prefs[KEY_HONEYCOMB_BOTTOM_FADE] ?: 56).coerceIn(0, 160)
+                if (_honeycombBottomFade.value != loadedBottomFade) _honeycombBottomFade.value = loadedBottomFade
+
+                val loadedShowNotification = prefs[KEY_SHOW_NOTIFICATION] ?: false
+                if (_showNotification.value != loadedShowNotification) _showNotification.value = loadedShowNotification
+
                 val hidden = prefs[KEY_HIDDEN_APPS]
                     ?.split(",")
                     ?.filter(String::isNotBlank)
                     ?.toSet()
                     ?: emptySet()
-                _hiddenApps.value = hidden
-                appRepository.setHiddenComponents(hidden)
-                _selectedIconPackPackage.value = prefs[KEY_ICON_PACK_PACKAGE]
-                appRepository.setIconPackPackage(_selectedIconPackPackage.value)
-                prefs[KEY_SELECTED_WATCHFACE_ID]?.let { _selectedWatchFaceId.value = it }
-                _watchFaceLastError.value = prefs[KEY_LAST_WATCHFACE_ERROR]
-                _builtInPhotoPath.value = prefs[KEY_BUILTIN_PHOTO_PATH]
-                _builtInVideoPath.value = prefs[KEY_BUILTIN_VIDEO_PATH]
-                _builtInPhotoClockPosition.value = prefs[KEY_PHOTO_CLOCK_POSITION]
-                    ?.let(::parseClockPosition)
-                    ?: WatchClockPosition.CENTER
-                _builtInVideoClockPosition.value = prefs[KEY_VIDEO_CLOCK_POSITION]
-                    ?.let(::parseClockPosition)
-                    ?: WatchClockPosition.CENTER
-                _builtInPhotoClockSize.value = (prefs[KEY_PHOTO_CLOCK_SIZE] ?: 64).coerceIn(28, 92)
-                _builtInVideoClockSize.value = (prefs[KEY_VIDEO_CLOCK_SIZE] ?: 64).coerceIn(28, 92)
-                _builtInPhotoClockBold.value = prefs[KEY_PHOTO_CLOCK_BOLD] ?: false
-                _builtInVideoClockBold.value = prefs[KEY_VIDEO_CLOCK_BOLD] ?: false
-                _builtInVideoFillScreen.value = prefs[KEY_VIDEO_FILL_SCREEN] ?: true
-                if (refreshIconsNeeded) {
-                    refreshIcons()
+                if (_hiddenApps.value != hidden) {
+                    _hiddenApps.value = hidden
+                    appRepository.setHiddenComponents(hidden)
                 }
+
+                val selectedPack = prefs[KEY_ICON_PACK_PACKAGE]
+                if (_selectedIconPackPackage.value != selectedPack) {
+                    _selectedIconPackPackage.value = selectedPack
+                    appRepository.setIconPackPackage(selectedPack)
+                }
+
+                val loadedWatchFaceId = prefs[KEY_SELECTED_WATCHFACE_ID] ?: BUILT_IN_WATCHFACE_ID
+                if (_selectedWatchFaceId.value != loadedWatchFaceId) _selectedWatchFaceId.value = loadedWatchFaceId
+
+                val loadedWatchFaceError = prefs[KEY_LAST_WATCHFACE_ERROR]
+                if (_watchFaceLastError.value != loadedWatchFaceError) _watchFaceLastError.value = loadedWatchFaceError
+
+                val loadedPhotoPath = prefs[KEY_BUILTIN_PHOTO_PATH]
+                if (_builtInPhotoPath.value != loadedPhotoPath) _builtInPhotoPath.value = loadedPhotoPath
+
+                val loadedVideoPath = prefs[KEY_BUILTIN_VIDEO_PATH]
+                if (_builtInVideoPath.value != loadedVideoPath) _builtInVideoPath.value = loadedVideoPath
+
+                val loadedPhotoClockPosition = prefs[KEY_PHOTO_CLOCK_POSITION]
+                    ?.let(::parseClockPosition)
+                    ?: WatchClockPosition.CENTER
+                if (_builtInPhotoClockPosition.value != loadedPhotoClockPosition) {
+                    _builtInPhotoClockPosition.value = loadedPhotoClockPosition
+                }
+
+                val loadedVideoClockPosition = prefs[KEY_VIDEO_CLOCK_POSITION]
+                    ?.let(::parseClockPosition)
+                    ?: WatchClockPosition.CENTER
+                if (_builtInVideoClockPosition.value != loadedVideoClockPosition) {
+                    _builtInVideoClockPosition.value = loadedVideoClockPosition
+                }
+
+                val loadedPhotoClockSize = (prefs[KEY_PHOTO_CLOCK_SIZE] ?: 64).coerceIn(28, 92)
+                if (_builtInPhotoClockSize.value != loadedPhotoClockSize) _builtInPhotoClockSize.value = loadedPhotoClockSize
+
+                val loadedVideoClockSize = (prefs[KEY_VIDEO_CLOCK_SIZE] ?: 64).coerceIn(28, 92)
+                if (_builtInVideoClockSize.value != loadedVideoClockSize) _builtInVideoClockSize.value = loadedVideoClockSize
+
+                val loadedPhotoClockBold = prefs[KEY_PHOTO_CLOCK_BOLD] ?: false
+                if (_builtInPhotoClockBold.value != loadedPhotoClockBold) _builtInPhotoClockBold.value = loadedPhotoClockBold
+
+                val loadedVideoClockBold = prefs[KEY_VIDEO_CLOCK_BOLD] ?: false
+                if (_builtInVideoClockBold.value != loadedVideoClockBold) _builtInVideoClockBold.value = loadedVideoClockBold
+
+                val loadedVideoFillScreen = prefs[KEY_VIDEO_FILL_SCREEN] ?: true
+                if (_builtInVideoFillScreen.value != loadedVideoFillScreen) _builtInVideoFillScreen.value = loadedVideoFillScreen
+
                 watchFacePrefsHydrated = true
                 syncSelectedWatchFace()
             }
@@ -353,7 +415,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setAppOrder(order: List<String>) {
         _appOrder.value = order
-        appRepository.setCustomOrder(order)
+        viewModelScope.launch(Dispatchers.IO) {
+            appRepository.setCustomOrder(order)
+        }
         persist { store.edit { it[KEY_APP_ORDER] = order.joinToString(",") } }
     }
 
@@ -402,7 +466,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setHiddenApps(components: Set<String>) {
         val next = components.filter(String::isNotBlank).toSet()
         _hiddenApps.value = next
-        appRepository.setHiddenComponents(next)
+        viewModelScope.launch(Dispatchers.IO) {
+            appRepository.setHiddenComponents(next)
+        }
         persist {
             store.edit {
                 if (next.isEmpty()) it.remove(KEY_HIDDEN_APPS)
@@ -422,7 +488,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setIconPackPackage(packageName: String?) {
         _selectedIconPackPackage.value = packageName?.takeIf { it.isNotBlank() }
-        appRepository.setIconPackPackage(_selectedIconPackPackage.value)
+        viewModelScope.launch(Dispatchers.IO) {
+            appRepository.setIconPackPackage(_selectedIconPackPackage.value)
+        }
         persist {
             store.edit {
                 if (_selectedIconPackPackage.value.isNullOrBlank()) {
@@ -657,10 +725,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun refreshIcons() {
-        appRepository.refresh(if (_lowResIcons.value) 64 else 128)
+        refreshIconsJob?.cancel()
+        refreshIconsJob = viewModelScope.launch(Dispatchers.IO) {
+            appRepository.refresh(if (_lowResIcons.value) 64 else 128)
+        }
     }
 
     override fun onCleared() {
+        refreshIconsJob?.cancel()
         pendingWriteJobs.values.forEach(Job::cancel)
         pendingWriteJobs.clear()
         super.onCleared()
