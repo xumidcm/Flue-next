@@ -1,5 +1,6 @@
 package com.flue.launcher
 
+import android.app.Activity
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -87,6 +88,11 @@ class WatchFaceChooserActivity : ComponentActivity() {
                 WatchFaceChooserScreen(onDismiss = { finish() })
             }
         }
+    }
+
+    override fun finish() {
+        super.finish()
+        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
     }
 }
 
@@ -293,8 +299,11 @@ private fun WatchFaceChooserScreen(
                                 Intent(context, InternalWatchFaceConfigActivity::class.java)
                                     .putExtra(EXTRA_INTERNAL_WATCHFACE_ID, currentDescriptor.id)
                             )
+                            (context as? Activity)?.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
                         } else if (!LunchWatchFaceRuntime.openSettings(context, currentDescriptor)) {
                             Toast.makeText(context, "\u6CA1\u6709\u53EF\u7528\u7684\u8868\u76D8\u8BBE\u7F6E", Toast.LENGTH_SHORT).show()
+                        } else {
+                            (context as? Activity)?.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
                         }
                     }
                 }
@@ -580,7 +589,9 @@ private fun drawChooserClock(
         WatchClockPosition.TOP_RIGHT,
         WatchClockPosition.BOTTOM_RIGHT,
         WatchClockPosition.RIGHT_CENTER -> Paint.Align.RIGHT
-        WatchClockPosition.CENTER -> Paint.Align.CENTER
+        WatchClockPosition.CENTER,
+        WatchClockPosition.TOP_CENTER,
+        WatchClockPosition.BOTTOM_CENTER -> Paint.Align.CENTER
     }
     val anchorX = when (clockPosition) {
         WatchClockPosition.TOP_LEFT,
@@ -589,16 +600,20 @@ private fun drawChooserClock(
         WatchClockPosition.TOP_RIGHT,
         WatchClockPosition.BOTTOM_RIGHT,
         WatchClockPosition.RIGHT_CENTER -> width - horizontalPadding
-        WatchClockPosition.CENTER -> width / 2f
+        WatchClockPosition.CENTER,
+        WatchClockPosition.TOP_CENTER,
+        WatchClockPosition.BOTTOM_CENTER -> width / 2f
     }
     val anchorY = when (clockPosition) {
         WatchClockPosition.TOP_LEFT,
-        WatchClockPosition.TOP_RIGHT -> verticalPadding + clockSizePx * 0.85f
+        WatchClockPosition.TOP_RIGHT,
+        WatchClockPosition.TOP_CENTER -> verticalPadding + clockSizePx * 0.85f
         WatchClockPosition.LEFT_CENTER,
         WatchClockPosition.CENTER,
         WatchClockPosition.RIGHT_CENTER -> height * 0.46f
         WatchClockPosition.BOTTOM_LEFT,
-        WatchClockPosition.BOTTOM_RIGHT -> height - verticalPadding - clockSizePx * 0.2f
+        WatchClockPosition.BOTTOM_RIGHT,
+        WatchClockPosition.BOTTOM_CENTER -> height - verticalPadding - clockSizePx * 0.2f
     }
     val timePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = timeColor

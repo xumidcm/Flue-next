@@ -1,5 +1,6 @@
-﻿package com.flue.launcher
+package com.flue.launcher
 
+import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
@@ -59,9 +60,11 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
@@ -93,12 +96,13 @@ import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceRuntime
 import java.text.SimpleDateFormat
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.Date
 import java.util.Locale
 
-private const val ABOUT_VERSION = "beta0.5"
+private const val ABOUT_VERSION = "beta0.6"
 
 enum class SettingsDestination {
     ROOT,
@@ -110,6 +114,11 @@ enum class SettingsDestination {
     TOOLS,
     ABOUT
 }
+
+private data class SavedScrollPosition(
+    val index: Int = 0,
+    val offset: Int = 0
+)
 
 class SettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -160,6 +169,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
     var destination by remember { mutableStateOf(SettingsDestination.ROOT) }
     var hiddenAppsDraft by remember { mutableStateOf(hiddenApps) }
     var hiddenAppsDirty by remember { mutableStateOf(false) }
+    val pageScrollPositions = remember { mutableStateMapOf<SettingsDestination, SavedScrollPosition>() }
 
     LaunchedEffect(hiddenApps) {
         if (!hiddenAppsDirty) {
@@ -190,6 +200,12 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
     }
 
     val selectedIconPackLabel = availableIconPacks.firstOrNull { it.packageName == selectedIconPackPackage }?.label
+    val scrollFor: (SettingsDestination) -> SavedScrollPosition = { target ->
+        pageScrollPositions[target] ?: SavedScrollPosition()
+    }
+    val updateScroll: (SettingsDestination, Int, Int) -> Unit = { target, index, offset ->
+        pageScrollPositions[target] = SavedScrollPosition(index = index, offset = offset)
+    }
 
     AnimatedContent(
         targetState = destination,
@@ -206,7 +222,10 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                     commitHiddenAppsDraft()
                     onFinish()
                 },
-                headerTime = headerTime
+                headerTime = headerTime,
+                initialFirstVisibleItemIndex = scrollFor(SettingsDestination.ROOT).index,
+                initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.ROOT).offset,
+                onScrollChanged = { index, offset -> updateScroll(SettingsDestination.ROOT, index, offset) }
             ) { listState, screenCenterY, screenHeightPx, _ ->
                 item("watchfaces") {
                     SettingsCategoryCard(
@@ -269,7 +288,10 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
             SettingsDestination.HIDDEN_APPS -> SettingsPageScaffold(
                 title = "\u9690\u85cf\u5e94\u7528",
                 onBack = { navigateTo(SettingsDestination.ROOT) },
-                headerTime = headerTime
+                headerTime = headerTime,
+                initialFirstVisibleItemIndex = scrollFor(SettingsDestination.HIDDEN_APPS).index,
+                initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.HIDDEN_APPS).offset,
+                onScrollChanged = { index, offset -> updateScroll(SettingsDestination.HIDDEN_APPS, index, offset) }
             ) { listState, screenCenterY, screenHeightPx, visibleItemKeys ->
                 item("hidden_summary") {
                     MessageCard(
@@ -299,7 +321,10 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
             SettingsDestination.ICON_PACKS -> SettingsPageScaffold(
                 title = "\u56fe\u6807\u5305",
                 onBack = { navigateTo(SettingsDestination.ROOT) },
-                headerTime = headerTime
+                headerTime = headerTime,
+                initialFirstVisibleItemIndex = scrollFor(SettingsDestination.ICON_PACKS).index,
+                initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.ICON_PACKS).offset,
+                onScrollChanged = { index, offset -> updateScroll(SettingsDestination.ICON_PACKS, index, offset) }
             ) { listState, screenCenterY, screenHeightPx, _ ->
                 item("icon_pack_default") {
                     SettingsChoiceRow(
@@ -333,8 +358,11 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
             SettingsDestination.WATCH_FACES -> SettingsPageScaffold(
             title = "\u8868\u76d8",
             onBack = { navigateTo(SettingsDestination.ROOT) },
-            headerTime = headerTime
-        ) { _, _, _, _ ->
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.WATCH_FACES).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.WATCH_FACES).offset,
+            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.WATCH_FACES, index, offset) }
+        ) { listState, screenCenterY, screenHeightPx, _ ->
             if (!watchFaceLastError.isNullOrBlank()) {
                 item("watchface_error") {
                     MessageCard(
@@ -348,7 +376,6 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                 WatchFaceSettingCard(
                     descriptor = descriptor,
                     selected = descriptor.id == selectedWatchFaceId,
-                    scale = 1f,
                     builtInPhotoPath = builtInPhotoPath,
                     builtInVideoPath = builtInVideoPath,
                     photoOptions = BuiltInWatchFaceOptions(
@@ -370,20 +397,24 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                                     Intent(context, InternalWatchFaceConfigActivity::class.java)
                                         .putExtra(EXTRA_INTERNAL_WATCHFACE_ID, descriptor.id)
                                 )
+                                (context as? Activity)?.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
                             } else if (!LunchWatchFaceRuntime.openSettings(context, descriptor)) {
                                 Toast.makeText(context, "\u6CA1\u6709\u53EF\u7528\u7684\u8868\u76D8\u8BBE\u7F6E", Toast.LENGTH_SHORT).show()
+                            } else {
+                                (context as? Activity)?.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
                             }
                         }
                     } else {
                         null
-                    }
+                    },
+                    scale = itemFisheye(listState, descriptor.id, screenCenterY, screenHeightPx)
                 )
             }
             item("watchface_refresh") {
                 ActionCard(
                     title = "\u91cd\u65b0\u626b\u63cf\u8868\u76d8",
                     subtitle = "\u5237\u65b0\u5df2\u5b89\u88c5\u7684 Lunch \u517c\u5bb9\u8868\u76d8",
-                    scale = 1f,
+                    scale = itemFisheye(listState, "watchface_refresh", screenCenterY, screenHeightPx),
                     icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
                     onClick = { vm.refreshWatchFaces() }
                 )
@@ -393,7 +424,10 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
             SettingsDestination.APPEARANCE -> SettingsPageScaffold(
             title = "\u663e\u793a\u4e0e\u5916\u89c2",
             onBack = { navigateTo(SettingsDestination.ROOT) },
-            headerTime = headerTime
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.APPEARANCE).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.APPEARANCE).offset,
+            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.APPEARANCE, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("layout_header") { SectionTitle("\u5e03\u5c40", itemFisheye(listState, "layout_header", screenCenterY, screenHeightPx)) }
             item("layout_honeycomb") {
@@ -519,7 +553,10 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
             SettingsDestination.PERFORMANCE -> SettingsPageScaffold(
             title = "\u6027\u80fd\u4e0e\u52a8\u753b",
             onBack = { navigateTo(SettingsDestination.ROOT) },
-            headerTime = headerTime
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.PERFORMANCE).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.PERFORMANCE).offset,
+            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.PERFORMANCE, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("low_res") {
                 SettingsSwitchRow(
@@ -544,7 +581,10 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
             SettingsDestination.TOOLS -> SettingsPageScaffold(
             title = "\u5de5\u5177",
             onBack = { navigateTo(SettingsDestination.ROOT) },
-            headerTime = headerTime
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.TOOLS).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.TOOLS).offset,
+            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.TOOLS, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("export_log") {
                 ActionCard(
@@ -567,7 +607,10 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
             SettingsDestination.ABOUT -> SettingsPageScaffold(
                 title = "\u5173\u4e8e",
                 onBack = { navigateTo(SettingsDestination.ROOT) },
-                headerTime = headerTime
+                headerTime = headerTime,
+                initialFirstVisibleItemIndex = scrollFor(SettingsDestination.ABOUT).index,
+                initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.ABOUT).offset,
+                onScrollChanged = { index, offset -> updateScroll(SettingsDestination.ABOUT, index, offset) }
             ) { listState, screenCenterY, screenHeightPx, _ ->
                 item("about_card") {
                     AboutCard(
@@ -584,9 +627,15 @@ private fun SettingsPageScaffold(
     title: String,
     onBack: () -> Unit,
     headerTime: String,
+    initialFirstVisibleItemIndex: Int = 0,
+    initialFirstVisibleItemScrollOffset: Int = 0,
+    onScrollChanged: (Int, Int) -> Unit = { _, _ -> },
     content: LazyListScope.(LazyListState, Float, Float, Set<Any>) -> Unit
 ) {
-    val listState = rememberLazyListState()
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = initialFirstVisibleItemIndex,
+        initialFirstVisibleItemScrollOffset = initialFirstVisibleItemScrollOffset
+    )
     val overscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = rememberCoroutineScope()
     val visibleItemKeys by remember(listState) {
@@ -631,6 +680,12 @@ private fun SettingsPageScaffold(
                 return Velocity.Zero
             }
         }
+    }
+
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+            .distinctUntilChanged()
+            .collect { (index, offset) -> onScrollChanged(index, offset) }
     }
 
     BoxWithConstraints(
@@ -1102,29 +1157,49 @@ private fun AboutCard(scale: Float) {
     }
 }
 
+@Composable
 private fun itemFisheye(
     listState: LazyListState,
     key: String,
     screenCenterY: Float,
     screenHeight: Float
 ): Float {
-    val info = listState.layoutInfo.visibleItemsInfo.find { it.key == key } ?: return 0.92f
+    val layoutInfo = listState.layoutInfo
+    val info = layoutInfo.visibleItemsInfo.find { it.key == key } ?: return 0.92f
     val itemCenterY = info.offset + info.size / 2f
     if (itemCenterY <= screenCenterY) return 1f
     val distance = kotlin.math.abs(itemCenterY - screenCenterY)
     val normalized = (distance / (screenHeight / 2f)).coerceIn(0f, 1f)
     val baseScale = 1f - 0.14f * normalized
-    val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-    val bottomFlattenProgress = if (
-        lastVisible != null &&
-        lastVisible.index >= listState.layoutInfo.totalItemsCount - 1
-    ) {
-        val bottomGap = (listState.layoutInfo.viewportEndOffset - (lastVisible.offset + lastVisible.size)).coerceAtLeast(0)
-        (1f - (bottomGap / (screenHeight * 0.12f)).coerceIn(0f, 1f)).coerceIn(0f, 1f)
+    val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()
+    val totalCount = layoutInfo.totalItemsCount.coerceAtLeast(1)
+    val flattenWindow = 4
+    val startFlattenIndex = (totalCount - flattenWindow).coerceAtLeast(0)
+    val nearBottomProgress = if (lastVisible == null) {
+        0f
+    } else {
+        ((lastVisible.index - startFlattenIndex).toFloat() / flattenWindow.toFloat()).coerceIn(0f, 1f)
+    }
+    val edgeProgress = if (lastVisible != null && lastVisible.index >= totalCount - 1) {
+        val bottomGap = (layoutInfo.viewportEndOffset - (lastVisible.offset + lastVisible.size)).coerceAtLeast(0)
+        (1f - (bottomGap / (screenHeight * 0.16f)).coerceIn(0f, 1f)).coerceIn(0f, 1f)
     } else {
         0f
     }
-    return androidx.compose.ui.util.lerp(baseScale, 1f, bottomFlattenProgress)
+    val rawFlattenProgress = (nearBottomProgress * 0.6f + edgeProgress * 0.4f).coerceIn(0f, 1f)
+    val flattenProgress by animateFloatAsState(
+        targetValue = rawFlattenProgress,
+        animationSpec = tween(durationMillis = 260),
+        label = "settings_fisheye_flatten_progress"
+    )
+
+    val visibleItems = layoutInfo.visibleItemsInfo
+    val currentVisibleOrder = visibleItems.indexOfFirst { it.key == key }.coerceAtLeast(0)
+    val fromBottomOrder = (visibleItems.lastIndex - currentVisibleOrder).coerceAtLeast(0)
+    val stagger = (fromBottomOrder * 0.075f).coerceAtMost(0.32f)
+    val stagedFlatten = ((flattenProgress - stagger) / (1f - stagger)).coerceIn(0f, 1f)
+
+    return androidx.compose.ui.util.lerp(baseScale, 1f, stagedFlatten)
 }
 
 private fun exportLog(context: android.content.Context) {

@@ -225,6 +225,11 @@ private fun InternalWatchFaceConfigScreen(
             current = localClockPosition,
             onSelect = {
                 localClockPosition = it
+                if (isPhoto) {
+                    vm.setBuiltInPhotoClockPosition(it)
+                } else {
+                    vm.setBuiltInVideoClockPosition(it)
+                }
             }
         )
 
@@ -260,6 +265,11 @@ private fun InternalWatchFaceConfigScreen(
             enabled = localClockBold,
             onToggle = {
                 localClockBold = !localClockBold
+                if (isPhoto) {
+                    vm.setBuiltInPhotoClockBold(localClockBold)
+                } else {
+                    vm.setBuiltInVideoClockBold(localClockBold)
+                }
             }
         )
 
@@ -268,7 +278,10 @@ private fun InternalWatchFaceConfigScreen(
             ToggleRow(
                 label = "\u89C6\u9891\u94FA\u6EE1\u5168\u5C4F",
                 enabled = localVideoFillScreen,
-                onToggle = { localVideoFillScreen = !localVideoFillScreen }
+                onToggle = {
+                    localVideoFillScreen = !localVideoFillScreen
+                    vm.setBuiltInVideoFillScreen(localVideoFillScreen)
+                }
             )
         }
 
@@ -370,7 +383,7 @@ private fun PositionPickerRow(
         listOf(
             listOf(
                 WatchClockPosition.TOP_LEFT to "\u5DE6\u4E0A",
-                null,
+                WatchClockPosition.TOP_CENTER to "\u4E2D\u4E0A",
                 WatchClockPosition.TOP_RIGHT to "\u53F3\u4E0A"
             ),
             listOf(
@@ -380,7 +393,7 @@ private fun PositionPickerRow(
             ),
             listOf(
                 WatchClockPosition.BOTTOM_LEFT to "\u5DE6\u4E0B",
-                null,
+                WatchClockPosition.BOTTOM_CENTER to "\u4E2D\u4E0B",
                 WatchClockPosition.BOTTOM_RIGHT to "\u53F3\u4E0B"
             )
         ).forEach { rowItems ->

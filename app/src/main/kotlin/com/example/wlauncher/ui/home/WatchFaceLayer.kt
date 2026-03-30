@@ -400,11 +400,14 @@ private suspend fun sampleClockPalette(
             WatchClockPosition.TOP_RIGHT, WatchClockPosition.BOTTOM_RIGHT -> (bitmap.width * 6 / 10).coerceAtMost(bitmap.width - 1) until bitmap.width
             WatchClockPosition.LEFT_CENTER -> 0 until (bitmap.width * 4 / 10).coerceAtLeast(1)
             WatchClockPosition.RIGHT_CENTER -> (bitmap.width * 6 / 10).coerceAtMost(bitmap.width - 1) until bitmap.width
-            WatchClockPosition.CENTER -> (bitmap.width * 3 / 10).coerceAtMost(bitmap.width - 1) until (bitmap.width * 7 / 10).coerceAtLeast(1)
+            WatchClockPosition.CENTER, WatchClockPosition.TOP_CENTER, WatchClockPosition.BOTTOM_CENTER ->
+                (bitmap.width * 3 / 10).coerceAtMost(bitmap.width - 1) until (bitmap.width * 7 / 10).coerceAtLeast(1)
         }
         val yRange = when (position) {
-            WatchClockPosition.TOP_LEFT, WatchClockPosition.TOP_RIGHT -> 0 until (bitmap.height * 4 / 10).coerceAtLeast(1)
-            WatchClockPosition.BOTTOM_LEFT, WatchClockPosition.BOTTOM_RIGHT -> (bitmap.height * 6 / 10).coerceAtMost(bitmap.height - 1) until bitmap.height
+            WatchClockPosition.TOP_LEFT, WatchClockPosition.TOP_RIGHT, WatchClockPosition.TOP_CENTER ->
+                0 until (bitmap.height * 4 / 10).coerceAtLeast(1)
+            WatchClockPosition.BOTTOM_LEFT, WatchClockPosition.BOTTOM_RIGHT, WatchClockPosition.BOTTOM_CENTER ->
+                (bitmap.height * 6 / 10).coerceAtMost(bitmap.height - 1) until bitmap.height
             WatchClockPosition.LEFT_CENTER, WatchClockPosition.RIGHT_CENTER -> (bitmap.height * 3 / 10).coerceAtMost(bitmap.height - 1) until (bitmap.height * 7 / 10).coerceAtLeast(1)
             WatchClockPosition.CENTER -> (bitmap.height * 3 / 10).coerceAtMost(bitmap.height - 1) until (bitmap.height * 7 / 10).coerceAtLeast(1)
         }
@@ -438,6 +441,8 @@ private suspend fun sampleClockPalette(
 
 private fun clockAlignment(position: WatchClockPosition): Alignment = when (position) {
     WatchClockPosition.CENTER -> Alignment.Center
+    WatchClockPosition.TOP_CENTER -> Alignment.TopCenter
+    WatchClockPosition.BOTTOM_CENTER -> Alignment.BottomCenter
     WatchClockPosition.LEFT_CENTER -> Alignment.CenterStart
     WatchClockPosition.RIGHT_CENTER -> Alignment.CenterEnd
     WatchClockPosition.TOP_LEFT -> Alignment.TopStart
@@ -447,7 +452,7 @@ private fun clockAlignment(position: WatchClockPosition): Alignment = when (posi
 }
 
 private fun horizontalAlignment(position: WatchClockPosition): Alignment.Horizontal = when (position) {
-    WatchClockPosition.CENTER -> Alignment.CenterHorizontally
+    WatchClockPosition.CENTER, WatchClockPosition.TOP_CENTER, WatchClockPosition.BOTTOM_CENTER -> Alignment.CenterHorizontally
     WatchClockPosition.RIGHT_CENTER -> Alignment.End
     WatchClockPosition.TOP_RIGHT, WatchClockPosition.BOTTOM_RIGHT -> Alignment.End
     else -> Alignment.Start
