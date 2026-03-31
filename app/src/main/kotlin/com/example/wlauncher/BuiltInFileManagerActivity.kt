@@ -2,6 +2,7 @@ package com.flue.launcher
 
 import android.Manifest
 import android.content.ContentUris
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -99,8 +100,9 @@ private fun BuiltInFileManagerScreen(
     onPick: (Uri) -> Unit,
     onBack: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val mediaList by produceState<List<MediaItem>>(initialValue = emptyList(), mode, hasPermission) {
-        value = if (hasPermission) queryMedia(mode) else emptyList()
+        value = if (hasPermission) queryMedia(context, mode) else emptyList()
     }
 
     Column(
@@ -123,9 +125,9 @@ private fun BuiltInFileManagerScreen(
                 fontSize = 13.sp
             )
             Spacer(modifier = Modifier.height(12.dp))
-            ActionButton(text = "申请权限", onClick = onRequestPermission)
+            FileManagerActionButton(text = "申请权限", onClick = onRequestPermission)
             Spacer(modifier = Modifier.height(8.dp))
-            ActionButton(text = "返回", onClick = onBack)
+            FileManagerActionButton(text = "返回", onClick = onBack)
             return
         }
 
@@ -162,7 +164,7 @@ private fun BuiltInFileManagerScreen(
         }
 
         Spacer(modifier = Modifier.height(8.dp))
-        ActionButton(text = "返回", onClick = onBack)
+        FileManagerActionButton(text = "返回", onClick = onBack)
     }
 }
 
@@ -172,8 +174,8 @@ private data class MediaItem(
     val path: String
 )
 
-private fun ComponentActivity.queryMedia(mode: String): List<MediaItem> {
-    val resolver = contentResolver
+private fun queryMedia(context: Context, mode: String): List<MediaItem> {
+    val resolver = context.contentResolver
     val baseUri = if (mode == FILE_MANAGER_MODE_VIDEO) {
         MediaStore.Video.Media.EXTERNAL_CONTENT_URI
     } else {
@@ -202,4 +204,26 @@ private fun ComponentActivity.queryMedia(mode: String): List<MediaItem> {
         }
     }
     return items
+}
+
+@Composable
+private fun FileManagerActionButton(
+    text: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(if (enabled) WatchColors.SurfaceGlass else Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = text,
+            color = if (enabled) WatchColors.ActiveCyan else WatchColors.TextTertiary,
+            fontSize = 14.sp
+        )
+    }
 }

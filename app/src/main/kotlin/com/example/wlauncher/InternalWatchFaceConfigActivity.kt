@@ -313,7 +313,7 @@ private fun InternalWatchFaceConfigScreen(
                 if (isPhoto) "\u9009\u62E9\u56FE\u7247" else "\u9009\u62E9\u89C6\u9891"
             } else {
                 if (isPhoto) "\u66F4\u6362\u56FE\u7247" else "\u66F4\u6362\u89C6\u9891"
-            }
+            },
             onLongClick = {
                 val intent = Intent(vm.getApplication(), BuiltInFileManagerActivity::class.java).apply {
                     putExtra(
