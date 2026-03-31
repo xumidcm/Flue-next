@@ -435,6 +435,16 @@ fun HoneycombScreen(
             val visibleTop = -iconSizePx * 1.5f
             val visibleBottom = screenHeightPx + iconSizePx * 1.5f
             val dragOverlayApp = dragApp
+            val menuPressedKey = longPressedApp?.componentKey
+            val menuPressedIndex = menuPressedKey?.let { key ->
+                apps.indexOfFirst { it.componentKey == key }.takeIf { it >= 0 }
+            }
+            val droppedPressedSlotIndex = dropPressedIndex
+            val pressedAnchor = when {
+                dragFromIndex == null && menuPressedIndex != null && menuPressedIndex in positions.indices -> positions[menuPressedIndex]
+                dragFromIndex == null && droppedPressedSlotIndex != null && droppedPressedSlotIndex in positions.indices -> positions[droppedPressedSlotIndex]
+                else -> null
+            }
             val dragOverlayPointer = dragPointer?.let {
                 clampHoneycombDisplayPointer(
                     pointer = it,
@@ -485,16 +495,6 @@ fun HoneycombScreen(
                     bottomBlurDp = bottomBlurRadiusDp.toFloat()
                 )
                 val isGlidePressed = glidePressedKey == appKey
-                val menuPressedKey = longPressedApp?.componentKey
-                val menuPressedIndex = menuPressedKey?.let { key ->
-                    apps.indexOfFirst { it.componentKey == key }.takeIf { it >= 0 }
-                }
-                val droppedPressedSlotIndex = dropPressedIndex
-                val pressedAnchor = when {
-                    dragFromIndex == null && menuPressedIndex != null && menuPressedIndex in positions.indices -> positions[menuPressedIndex]
-                    dragFromIndex == null && droppedPressedSlotIndex != null && droppedPressedSlotIndex in positions.indices -> positions[droppedPressedSlotIndex]
-                    else -> null
-                }
                 val motion = neighborPressMotion(
                     current = visualPos,
                     pressedAnchor = pressedAnchor,
@@ -775,12 +775,13 @@ private fun findNearestHoneycombIndex(
 ): Int? {
     var bestIndex: Int? = null
     var bestDistance = Float.MAX_VALUE
+    val maxDistanceSq = maxDistance * maxDistance
     positions.forEachIndexed { index, position ->
         val dx = pointer.x - (screenCenterX + position.x)
         val dy = pointer.y - (screenCenterY + position.y)
-        val distance = sqrt(dx * dx + dy * dy)
-        if (distance < bestDistance && distance <= maxDistance) {
-            bestDistance = distance
+        val distanceSq = dx * dx + dy * dy
+        if (distanceSq < bestDistance && distanceSq <= maxDistanceSq) {
+            bestDistance = distanceSq
             bestIndex = index
         }
     }
