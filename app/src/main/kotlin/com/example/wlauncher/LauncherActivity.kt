@@ -58,9 +58,7 @@ import com.flue.launcher.ui.settings.LauncherSettingsSheet
 import com.flue.launcher.ui.smartstack.SmartStackLayer
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.viewmodel.LauncherViewModel
-import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
-import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceHost
 import com.flue.launcher.watchface.LunchWatchFaceRuntime
@@ -158,7 +156,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
             (context as? Activity)?.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
         }
     }
-
     var prevState by remember { mutableStateOf(screenState) }
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
     LaunchedEffect(screenState) { prevState = screenState }
