@@ -11,6 +11,7 @@ import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Shader
+import android.graphics.drawable.Drawable
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
 import com.flue.launcher.data.model.AppInfo
@@ -99,7 +100,10 @@ class AppRepository(private val context: Context) {
                 val iconBitmap = if (packedIcon != null) {
                     iconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
                 } else {
-                    createCircularBitmap(iconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888))
+                    createCircularBitmap(
+                        drawableToBitmap(iconDrawable, iconSize),
+                        edgeInsetPx = iconSize * 0.015f
+                    )
                 }
                 val blurredBitmap = createSoftenedBitmap(iconBitmap)
                 AppInfo(
@@ -136,13 +140,23 @@ class AppRepository(private val context: Context) {
         }
     }
 
-    private fun createCircularBitmap(source: Bitmap): Bitmap {
+    private fun drawableToBitmap(drawable: Drawable, size: Int): Bitmap {
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        drawable.setBounds(0, 0, size, size)
+        drawable.draw(canvas)
+        return bitmap
+    }
+
+    private fun createCircularBitmap(source: Bitmap, edgeInsetPx: Float = 0f): Bitmap {
         val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG).apply {
             shader = BitmapShader(source, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            isFilterBitmap = true
+            isDither = true
         }
-        val radius = minOf(source.width, source.height) / 2f
+        val radius = (minOf(source.width, source.height) / 2f - edgeInsetPx).coerceAtLeast(0f)
         canvas.drawCircle(source.width / 2f, source.height / 2f, radius, paint)
         return output
     }
