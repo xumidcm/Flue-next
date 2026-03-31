@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -86,6 +87,7 @@ fun AppBubble(
         Image(
             bitmap = icon,
             contentDescription = null,
+            filterQuality = FilterQuality.Medium,
             modifier = Modifier
                 .size(size)
                 .clip(CircleShape),
