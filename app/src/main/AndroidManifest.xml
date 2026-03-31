@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
 
     <application
         android:allowBackup="false"
@@ -62,6 +65,12 @@
 
         <activity
             android:name=".InternalWatchFaceConfigActivity"
+            android:exported="false"
+            android:label="@string/internal_watchface_config_title"
+            android:theme="@style/Theme.WatchLauncher"
+            android:screenOrientation="portrait" />
+        <activity
+            android:name=".BuiltInFileManagerActivity"
             android:exported="false"
             android:label="@string/internal_watchface_config_title"
             android:theme="@style/Theme.WatchLauncher"

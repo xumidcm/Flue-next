@@ -1,6 +1,7 @@
 package com.flue.launcher
 
 import android.app.Application
+import android.app.Activity.RESULT_OK
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -9,9 +10,12 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -153,6 +157,23 @@ private fun InternalWatchFaceConfigScreen(
             }
         }
     }
+    val fileManagerPicker = rememberLauncherForActivityResult(StartActivityForResult()) { result ->
+        if (result.resultCode != RESULT_OK) return@rememberLauncherForActivityResult
+        val uriText = result.data?.getStringExtra(EXTRA_FILE_MANAGER_RESULT_URI).orEmpty()
+        val uri = uriText.takeIf { it.isNotBlank() }?.let(Uri::parse) ?: return@rememberLauncherForActivityResult
+        val savedPath = handlePickedMedia(
+            application = vm.getApplication(),
+            watchFaceId = watchFaceId,
+            sourceUri = uri,
+            onMessage = { message ->
+                Toast.makeText(vm.getApplication(), message, Toast.LENGTH_SHORT).show()
+            }
+        )
+        if (!savedPath.isNullOrBlank()) {
+            localPath = savedPath
+            if (isPhoto) vm.setBuiltInPhotoPath(savedPath) else vm.setBuiltInVideoPath(savedPath)
+        }
+    }
 
     BackHandler {
         persistPendingChanges()
@@ -292,6 +313,15 @@ private fun InternalWatchFaceConfigScreen(
                 if (isPhoto) "\u9009\u62E9\u56FE\u7247" else "\u9009\u62E9\u89C6\u9891"
             } else {
                 if (isPhoto) "\u66F4\u6362\u56FE\u7247" else "\u66F4\u6362\u89C6\u9891"
+            },
+            onLongClick = {
+                val intent = Intent(vm.getApplication(), BuiltInFileManagerActivity::class.java).apply {
+                    putExtra(
+                        EXTRA_FILE_MANAGER_MODE,
+                        if (isPhoto) FILE_MANAGER_MODE_IMAGE else FILE_MANAGER_MODE_VIDEO
+                    )
+                }
+                fileManagerPicker.launch(intent)
             }
         ) {
             picker.launch(arrayOf(if (isPhoto) "image/*" else "video/*"))
@@ -321,9 +351,11 @@ private fun InternalWatchFaceConfigScreen(
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun ActionButton(
     text: String,
     enabled: Boolean = true,
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     Box(
@@ -331,7 +363,11 @@ private fun ActionButton(
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
             .background(if (enabled) WatchColors.SurfaceGlass else Color.White.copy(alpha = 0.05f))
-            .clickable(enabled = enabled, onClick = onClick)
+            .combinedClickable(
+                enabled = enabled,
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
             .padding(vertical = 16.dp),
         contentAlignment = Alignment.Center
     ) {

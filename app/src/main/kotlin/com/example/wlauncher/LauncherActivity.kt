@@ -158,7 +158,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
             (context as? Activity)?.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
         }
     }
-
     var prevState by remember { mutableStateOf(screenState) }
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
     LaunchedEffect(screenState) { prevState = screenState }
