@@ -5,6 +5,7 @@ import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.database.sqlite.SQLiteException
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -181,26 +182,57 @@ private fun queryMedia(context: Context, mode: String): List<MediaItem> {
     } else {
         MediaStore.Images.Media.EXTERNAL_CONTENT_URI
     }
+    val pathColumn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        MediaStore.MediaColumns.RELATIVE_PATH
+    } else {
+        MediaStore.MediaColumns.DATA
+    }
     val projection = arrayOf(
         MediaStore.MediaColumns._ID,
         MediaStore.MediaColumns.DISPLAY_NAME,
-        MediaStore.MediaColumns.RELATIVE_PATH
+        pathColumn
     )
     val sortOrder = "${MediaStore.MediaColumns.DATE_ADDED} DESC LIMIT 300"
     val items = mutableListOf<MediaItem>()
-    resolver.query(baseUri, projection, null, null, sortOrder)?.use { cursor ->
-        val idIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
-        val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
-        val pathIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
-        while (cursor.moveToNext()) {
-            val id = cursor.getLong(idIndex)
-            val name = cursor.getString(nameIndex).orEmpty()
-            val path = cursor.getString(pathIndex).orEmpty()
-            items += MediaItem(
-                uri = ContentUris.withAppendedId(baseUri, id),
-                displayName = name.ifBlank { "未命名文件" },
-                path = path.ifBlank { "未知路径" }
-            )
+    runCatching {
+        resolver.query(baseUri, projection, null, null, sortOrder)?.use { cursor ->
+            val idIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+            val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+            val pathIndex = cursor.getColumnIndex(pathColumn)
+            while (cursor.moveToNext()) {
+                val id = cursor.getLong(idIndex)
+                val name = cursor.getString(nameIndex).orEmpty()
+                val path = if (pathIndex >= 0) cursor.getString(pathIndex).orEmpty() else ""
+                items += MediaItem(
+                    uri = ContentUris.withAppendedId(baseUri, id),
+                    displayName = name.ifBlank { "未命名文件" },
+                    path = path.ifBlank { "未知路径" }
+                )
+            }
+        }
+    }.recoverCatching {
+        if (it is SQLiteException || it is IllegalArgumentException) {
+            resolver.query(
+                baseUri,
+                arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME),
+                null,
+                null,
+                sortOrder
+            )?.use { cursor ->
+                val idIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idIndex)
+                    val name = cursor.getString(nameIndex).orEmpty()
+                    items += MediaItem(
+                        uri = ContentUris.withAppendedId(baseUri, id),
+                        displayName = name.ifBlank { "未命名文件" },
+                        path = "未知路径"
+                    )
+                }
+            }
+        } else {
+            throw it
         }
     }
     return items
