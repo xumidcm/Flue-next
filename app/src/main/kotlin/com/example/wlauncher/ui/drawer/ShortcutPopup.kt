@@ -52,6 +52,8 @@ import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
 import kotlinx.coroutines.delay
 
+private const val EXTRA_UNINSTALL_ALL_USERS = "android.intent.extra.UNINSTALL_ALL_USERS"
+
 @Composable
 fun AppShortcutOverlay(
     app: AppInfo,
@@ -146,7 +148,7 @@ fun AppShortcutOverlay(
                             )
                             data = packageUri
                             putExtra(Intent.EXTRA_RETURN_RESULT, false)
-                            putExtra(Intent.EXTRA_UNINSTALL_ALL_USERS, false)
+                            putExtra(EXTRA_UNINSTALL_ALL_USERS, false)
                             if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         val googlePackageInstallerIntent = Intent(Intent.ACTION_DELETE).apply {
@@ -156,7 +158,7 @@ fun AppShortcutOverlay(
                             )
                             data = packageUri
                             putExtra(Intent.EXTRA_RETURN_RESULT, false)
-                            putExtra(Intent.EXTRA_UNINSTALL_ALL_USERS, false)
+                            putExtra(EXTRA_UNINSTALL_ALL_USERS, false)
                             if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         val deleteIntent = Intent(Intent.ACTION_DELETE).apply {
