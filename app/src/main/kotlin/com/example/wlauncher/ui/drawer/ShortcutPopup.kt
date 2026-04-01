@@ -164,8 +164,7 @@ fun AppShortcutOverlay(
                         }
                         try {
                             when {
-                                Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
-                                    android9UninstallActivityIntent.resolveActivity(context.packageManager) != null -> {
+                                android9UninstallActivityIntent.resolveActivity(context.packageManager) != null -> {
                                     context.startActivity(android9UninstallActivityIntent)
                                 }
                                 Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
