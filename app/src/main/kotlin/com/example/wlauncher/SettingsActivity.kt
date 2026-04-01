@@ -104,7 +104,7 @@ import java.io.File
 import java.util.Date
 import java.util.Locale
 
-private const val ABOUT_VERSION = "beta0.6"
+private const val ABOUT_VERSION = "beta0.7"
 
 enum class SettingsDestination {
     ROOT,
@@ -1118,6 +1118,7 @@ private fun ActionCard(
 
 @Composable
 private fun AboutCard(scale: Float) {
+    val context = LocalContext.current
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -1163,6 +1164,20 @@ private fun AboutCard(scale: Float) {
                 Spacer(modifier = Modifier.width(10.dp))
                 Text("\u67da\u5b50\u67da\u5b50\u76ae", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             }
+            Spacer(modifier = Modifier.height(18.dp))
+            ActionCard(
+                title = "感谢以下开源项目",
+                subtitle = "dudu-Dev0/Lunch",
+                onClick = {
+                    context.startActivity(
+                        Intent(
+                            Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://github.com/dudu-Dev0/Lunch")
+                        )
+                    )
+                },
+                scale = 1f
+            )
         }
     }
 }

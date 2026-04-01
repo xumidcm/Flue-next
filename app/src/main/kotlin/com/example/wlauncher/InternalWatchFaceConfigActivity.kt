@@ -503,12 +503,23 @@ private fun SmallChoiceChip(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.95f else 1f,
+        animationSpec = spring(stiffness = 860f, dampingRatio = 0.74f),
+        label = "clock_position_chip_press_scale"
+    )
     Box(
         modifier = modifier
             .fishtailScale()
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
             .clip(RoundedCornerShape(16.dp))
             .background(if (selected) WatchColors.ActiveCyan.copy(alpha = 0.22f) else WatchColors.SurfaceGlass)
-            .clickable(onClick = onClick)
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(vertical = 12.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -527,13 +538,24 @@ private fun ToggleRow(
     enabled: Boolean,
     onToggle: () -> Unit
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.965f else 1f,
+        animationSpec = spring(stiffness = 860f, dampingRatio = 0.76f),
+        label = "toggle_row_press_scale"
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .fishtailScale()
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
             .clip(RoundedCornerShape(18.dp))
             .background(WatchColors.SurfaceGlass)
-            .clickable(onClick = onToggle)
+            .clickable(interactionSource = interaction, indication = null, onClick = onToggle)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically

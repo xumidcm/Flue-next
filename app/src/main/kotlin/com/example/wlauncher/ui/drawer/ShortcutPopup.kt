@@ -1,6 +1,7 @@
 ﻿package com.flue.launcher.ui.drawer
 
 import android.content.Context
+import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -138,6 +139,13 @@ fun AppShortcutOverlay(
                     Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
                     ShortcutMenuItem("卸载", Color(0xFFFF453A)) {
                         val packageUri = Uri.fromParts("package", app.packageName, null)
+                        val android9UninstallActivityIntent = Intent(Intent.ACTION_DELETE, packageUri).apply {
+                            component = ComponentName(
+                                "com.android.packageinstaller",
+                                "com.android.packageinstaller.UninstallerActivity"
+                            )
+                            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
                         val deleteIntent = Intent(Intent.ACTION_DELETE).apply {
                             data = packageUri
                             putExtra(Intent.EXTRA_RETURN_RESULT, false)
@@ -156,6 +164,10 @@ fun AppShortcutOverlay(
                         }
                         try {
                             when {
+                                Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+                                    android9UninstallActivityIntent.resolveActivity(context.packageManager) != null -> {
+                                    context.startActivity(android9UninstallActivityIntent)
+                                }
                                 Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
                                     deleteIntent.resolveActivity(context.packageManager) != null -> {
                                     context.startActivity(deleteIntent)
