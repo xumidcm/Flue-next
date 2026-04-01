@@ -419,7 +419,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             Toast.makeText(context, "\u6CA1\u6709\u53EF\u7528\u7684\u8868\u76D8\u8BBE\u7F6E", Toast.LENGTH_SHORT).show()
                         }
                     },
-                    onRefreshWatchFaces = { vm.refreshWatchFaces() },
+                    onRefreshWatchFaces = { vm.refreshWatchFaces(force = true) },
                     onClearWatchFaceError = { vm.clearWatchFaceError() },
                     builtInPhotoPath = builtInPhotoPath,
                     builtInVideoPath = builtInVideoPath,

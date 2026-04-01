@@ -60,7 +60,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.viewmodel.LauncherViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 const val EXTRA_FILE_MANAGER_MODE = "file_manager_mode"
 const val EXTRA_FILE_MANAGER_RESULT_URI = "file_manager_result_uri"
@@ -126,7 +128,7 @@ private fun BuiltInFileManagerScreen(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val mediaList by produceState<List<MediaItem>?>(initialValue = null, mode, hasPermission) {
-        value = if (hasPermission) queryMedia(context, mode) else emptyList()
+        value = if (hasPermission) withContext(Dispatchers.IO) { queryMedia(context, mode) } else emptyList()
     }
 
     Column(
@@ -237,15 +239,15 @@ private fun BuiltInFileManagerScreen(
 private fun MediaThumb(uri: Uri, isVideo: Boolean) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val thumbnail by produceState<android.graphics.Bitmap?>(initialValue = null, uri, isVideo) {
-        value = runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                context.contentResolver.loadThumbnail(uri, Size(88, 88), null)
-            } else {
-                context.contentResolver.openInputStream(uri)?.use { stream ->
-                    android.graphics.BitmapFactory.decodeStream(stream)
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    context.contentResolver.loadThumbnail(uri, Size(88, 88), null)
+                } else {
+                    decodeSampledBitmap(context, uri, 96)
                 }
-            }
-        }.getOrNull()
+            }.getOrNull()
+        }
     }
     if (thumbnail != null) {
         Image(
@@ -262,6 +264,24 @@ private fun MediaThumb(uri: Uri, isVideo: Boolean) {
                 .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(10.dp))
         )
     }
+}
+
+private fun decodeSampledBitmap(context: Context, uri: Uri, reqSize: Int): android.graphics.Bitmap? {
+    val resolver = context.contentResolver
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+    var sampleSize = 1
+    while (bounds.outWidth / sampleSize >= reqSize * 2 && bounds.outHeight / sampleSize >= reqSize * 2) {
+        sampleSize *= 2
+    }
+
+    val opts = android.graphics.BitmapFactory.Options().apply {
+        inSampleSize = sampleSize.coerceAtLeast(1)
+        inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+    }
+    return resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
 }
 
 @Composable

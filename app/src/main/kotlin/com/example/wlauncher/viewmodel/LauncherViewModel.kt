@@ -3,6 +3,7 @@ package com.flue.launcher.viewmodel
 import android.app.Application
 import android.content.Context
 import android.os.Build
+import android.os.SystemClock
 import androidx.compose.ui.geometry.Offset
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -189,6 +190,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private var launchJob: Job? = null
     private var watchFacePrefsHydrated = false
     private var watchFaceScanHydrated = false
+    private var lastWatchFaceRefreshAt = 0L
     private val pendingWriteJobs = ConcurrentHashMap<String, Job>()
     private var refreshIconsJob: Job? = null
     init {
@@ -509,7 +511,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun refreshWatchFaces() {
+    fun refreshWatchFaces(force: Boolean = false) {
+        val now = SystemClock.elapsedRealtime()
+        if (!force && now - lastWatchFaceRefreshAt < 25_000L) return
+        lastWatchFaceRefreshAt = now
         viewModelScope.launch {
             val scanned = withContext(Dispatchers.IO) {
                 LunchWatchFaceScanner.builtInDescriptors() + LunchWatchFaceScanner.scanInstalled(getApplication())

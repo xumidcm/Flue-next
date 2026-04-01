@@ -419,7 +419,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                     subtitle = "\u5237\u65b0\u5df2\u5b89\u88c5\u7684 Lunch \u517c\u5bb9\u8868\u76d8",
                     scale = itemFisheye(listState, "watchface_refresh", screenCenterY, screenHeightPx),
                     icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
-                    onClick = { vm.refreshWatchFaces() }
+                    onClick = { vm.refreshWatchFaces(force = true) }
                 )
             }
         }
