@@ -198,8 +198,8 @@ class AppRepository(private val context: Context) {
     private fun createSoftenedBitmap(source: Bitmap): Bitmap {
         val downscaled = Bitmap.createScaledBitmap(
             source,
-            (source.width * 0.18f).toInt().coerceAtLeast(1),
-            (source.height * 0.18f).toInt().coerceAtLeast(1),
+            (source.width * 0.25f).toInt().coerceAtLeast(1),
+            (source.height * 0.25f).toInt().coerceAtLeast(1),
             true
         )
         return Bitmap.createScaledBitmap(downscaled, source.width, source.height, true)
