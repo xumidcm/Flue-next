@@ -17,9 +17,14 @@ import androidx.core.graphics.drawable.toBitmap
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.iconpack.IconPackMapping
 import com.flue.launcher.iconpack.IconPackScanner
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 class AppRepository(private val context: Context) {
 
@@ -34,15 +39,21 @@ class AppRepository(private val context: Context) {
     private var currentIconSize = 128
     private var iconPackPackage: String? = null
     private var iconPackMapping: IconPackMapping? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val iconCache = object : LinkedHashMap<String, Pair<Bitmap, Bitmap>>(180, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Bitmap, Bitmap>>?): Boolean {
+            return size > 180
+        }
+    }
 
     private val packageReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
-            refresh()
+            refreshAsync()
         }
     }
 
     init {
-        refresh()
+        refreshAsync()
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_PACKAGE_ADDED)
             addAction(Intent.ACTION_PACKAGE_REMOVED)
@@ -65,7 +76,7 @@ class AppRepository(private val context: Context) {
     fun setIconPackPackage(packageName: String?) {
         iconPackPackage = packageName?.takeIf { it.isNotBlank() }
         iconPackMapping = iconPackPackage?.let { IconPackScanner.loadMapping(context, it) }
-        refresh(currentIconSize)
+        refreshAsync(currentIconSize)
     }
 
     private fun reorder() {
@@ -96,21 +107,30 @@ class AppRepository(private val context: Context) {
                 val packageName = ri.activityInfo.packageName
                 val componentKey = "$packageName/${ri.activityInfo.name}"
                 val packedIcon = iconPackMapping?.let { IconPackScanner.loadIconDrawable(context, it, componentKey) }
-                val iconDrawable = packedIcon ?: ri.loadIcon(pm)
-                val iconBitmap = if (packedIcon != null) {
-                    iconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
-                } else {
-                    createCircularBitmap(
-                        drawableToBitmap(iconDrawable, iconSize),
-                        edgeInsetPx = iconSize * 0.015f
-                    )
+                val resolvedIconDrawable = packedIcon ?: ri.loadIcon(pm)
+                val iconCacheKey = "${iconPackPackage ?: "sys"}|$componentKey|$iconSize"
+                val (iconBitmap, blurredBitmap) = synchronized(iconCache) {
+                    iconCache[iconCacheKey]
+                } ?: run {
+                    val createdIconBitmap = if (packedIcon != null) {
+                        resolvedIconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
+                    } else {
+                        createCircularBitmap(
+                            drawableToBitmap(resolvedIconDrawable, iconSize),
+                            edgeInsetPx = iconSize * 0.015f
+                        )
+                    }
+                    val createdBlurredBitmap = createSoftenedBitmap(createdIconBitmap)
+                    synchronized(iconCache) {
+                        iconCache[iconCacheKey] = createdIconBitmap to createdBlurredBitmap
+                    }
+                    createdIconBitmap to createdBlurredBitmap
                 }
-                val blurredBitmap = createSoftenedBitmap(iconBitmap)
                 AppInfo(
                     label = ri.loadLabel(pm).toString(),
                     packageName = packageName,
                     activityName = ri.activityInfo.name,
-                    icon = iconDrawable,
+                    icon = resolvedIconDrawable,
                     cachedIcon = iconBitmap.asImageBitmap(),
                     cachedBlurredIcon = blurredBitmap.asImageBitmap()
                 )
@@ -134,9 +154,17 @@ class AppRepository(private val context: Context) {
     }
 
     fun destroy() {
+        scope.cancel()
+        synchronized(iconCache) { iconCache.clear() }
         try {
             context.unregisterReceiver(packageReceiver)
         } catch (_: Exception) {
+        }
+    }
+
+    private fun refreshAsync(iconSize: Int = currentIconSize) {
+        scope.launch {
+            refresh(iconSize)
         }
     }
 
