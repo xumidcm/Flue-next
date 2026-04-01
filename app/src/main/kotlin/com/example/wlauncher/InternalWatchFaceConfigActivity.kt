@@ -69,6 +69,7 @@ import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.InternalWatchFaceStorage
+import com.flue.launcher.watchface.WatchClockColorMode
 import com.flue.launcher.watchface.WatchClockPosition
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -105,6 +106,7 @@ private fun InternalWatchFaceConfigScreen(
     val photoClockBold by vm.builtInPhotoClockBold.collectAsState()
     val videoClockBold by vm.builtInVideoClockBold.collectAsState()
     val videoFillScreen by vm.builtInVideoFillScreen.collectAsState()
+    val videoClockColorMode by vm.builtInVideoClockColorMode.collectAsState()
     val isPhoto = watchFaceId == BUILT_IN_PHOTO_WATCHFACE_ID
     val currentPath = if (isPhoto) photoPath else videoPath
     val activeClockPosition = if (isPhoto) photoClockPosition else videoClockPosition
@@ -115,6 +117,7 @@ private fun InternalWatchFaceConfigScreen(
     var localClockSize by remember(watchFaceId) { mutableFloatStateOf(activeClockSize.toFloat()) }
     var localClockBold by remember(watchFaceId) { mutableStateOf(activeClockBold) }
     var localVideoFillScreen by remember(watchFaceId) { mutableStateOf(videoFillScreen) }
+    var localVideoClockColorMode by remember(watchFaceId) { mutableStateOf(videoClockColorMode) }
 
     androidx.compose.runtime.LaunchedEffect(
         watchFaceId,
@@ -122,13 +125,15 @@ private fun InternalWatchFaceConfigScreen(
         activeClockPosition,
         activeClockSize,
         activeClockBold,
-        videoFillScreen
+        videoFillScreen,
+        videoClockColorMode
     ) {
         localPath = currentPath
         localClockPosition = activeClockPosition
         localClockSize = activeClockSize.toFloat()
         localClockBold = activeClockBold
         localVideoFillScreen = videoFillScreen
+        localVideoClockColorMode = videoClockColorMode
     }
 
     fun persistPendingChanges() {
@@ -143,6 +148,7 @@ private fun InternalWatchFaceConfigScreen(
             if (localClockSize.toInt() != videoClockSize) vm.setBuiltInVideoClockSize(localClockSize.toInt())
             if (localClockBold != videoClockBold) vm.setBuiltInVideoClockBold(localClockBold)
             if (localVideoFillScreen != videoFillScreen) vm.setBuiltInVideoFillScreen(localVideoFillScreen)
+            if (localVideoClockColorMode != videoClockColorMode) vm.setBuiltInVideoClockColorMode(localVideoClockColorMode)
         }
     }
 
@@ -246,7 +252,8 @@ private fun InternalWatchFaceConfigScreen(
                     clockPosition = if (isPhoto) videoClockPosition else localClockPosition,
                     clockSizeSp = localClockSize.toInt(),
                     boldClock = if (isPhoto) videoClockBold else localClockBold,
-                    cropToFill = if (isPhoto) videoFillScreen else localVideoFillScreen
+                    cropToFill = if (isPhoto) videoFillScreen else localVideoFillScreen,
+                    clockColorMode = if (isPhoto) videoClockColorMode else localVideoClockColorMode
                 ),
                 clockOverride = FIXED_PREVIEW_CLOCK,
                 showClock = true,
@@ -325,6 +332,22 @@ private fun InternalWatchFaceConfigScreen(
                 onToggle = {
                     localVideoFillScreen = !localVideoFillScreen
                     vm.setBuiltInVideoFillScreen(localVideoFillScreen)
+                }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "\u65F6\u949F\u989C\u8272",
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            ClockColorPickerRow(
+                current = localVideoClockColorMode,
+                onSelect = {
+                    localVideoClockColorMode = it
+                    vm.setBuiltInVideoClockColorMode(it)
                 }
             )
         }
@@ -498,6 +521,28 @@ private fun PositionPickerRow(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ClockColorPickerRow(
+    current: WatchClockColorMode,
+    onSelect: (WatchClockColorMode) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+    ) {
+        SmallChoiceChip(
+            label = "\u767D\u8272",
+            selected = current == WatchClockColorMode.WHITE,
+            modifier = Modifier.width(120.dp)
+        ) { onSelect(WatchClockColorMode.WHITE) }
+        SmallChoiceChip(
+            label = "\u9ED1\u8272",
+            selected = current == WatchClockColorMode.BLACK,
+            modifier = Modifier.width(120.dp)
+        ) { onSelect(WatchClockColorMode.BLACK) }
     }
 }
 

@@ -24,6 +24,8 @@ import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.WatchClockPosition
+import com.flue.launcher.watchface.WatchClockColorMode
+import com.flue.launcher.watchface.InternalWatchFaceStorage
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceRegistry
 import com.flue.launcher.watchface.LunchWatchFaceScanner
@@ -69,6 +71,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_PHOTO_CLOCK_BOLD = booleanPreferencesKey("photo_clock_bold")
         val KEY_VIDEO_CLOCK_BOLD = booleanPreferencesKey("video_clock_bold")
         val KEY_VIDEO_FILL_SCREEN = booleanPreferencesKey("video_fill_screen")
+        val KEY_VIDEO_CLOCK_COLOR_MODE = stringPreferencesKey("video_clock_color_mode")
         val KEY_BUILTIN_MANAGER_THUMBNAILS = booleanPreferencesKey("builtin_manager_thumbnails")
     }
 
@@ -176,6 +179,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _builtInVideoFillScreen = MutableStateFlow(true)
     val builtInVideoFillScreen: StateFlow<Boolean> = _builtInVideoFillScreen.asStateFlow()
+    private val _builtInVideoClockColorMode = MutableStateFlow(WatchClockColorMode.AUTO)
+    val builtInVideoClockColorMode: StateFlow<WatchClockColorMode> = _builtInVideoClockColorMode.asStateFlow()
 
     private val _builtInManagerThumbnails = MutableStateFlow(true)
     val builtInManagerThumbnails: StateFlow<Boolean> = _builtInManagerThumbnails.asStateFlow()
@@ -312,6 +317,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 val loadedVideoFillScreen = prefs[KEY_VIDEO_FILL_SCREEN] ?: true
                 if (_builtInVideoFillScreen.value != loadedVideoFillScreen) _builtInVideoFillScreen.value = loadedVideoFillScreen
+                val loadedVideoClockColorMode = prefs[KEY_VIDEO_CLOCK_COLOR_MODE]
+                    ?.let(::parseClockColorMode)
+                    ?: WatchClockColorMode.AUTO
+                if (_builtInVideoClockColorMode.value != loadedVideoClockColorMode) {
+                    _builtInVideoClockColorMode.value = loadedVideoClockColorMode
+                }
 
                 val loadedManagerThumbnails = prefs[KEY_BUILTIN_MANAGER_THUMBNAILS] ?: true
                 if (_builtInManagerThumbnails.value != loadedManagerThumbnails) _builtInManagerThumbnails.value = loadedManagerThumbnails
@@ -557,6 +568,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setBuiltInPhotoPath(path: String?) {
         _builtInPhotoPath.value = path
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
+        if (path.isNullOrBlank()) InternalWatchFaceStorage.clearPhoto(getApplication())
         persist {
             store.edit {
                 if (path.isNullOrBlank()) it.remove(KEY_BUILTIN_PHOTO_PATH)
@@ -568,6 +580,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setBuiltInVideoPath(path: String?) {
         _builtInVideoPath.value = path
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
+        if (path.isNullOrBlank()) InternalWatchFaceStorage.clearVideo(getApplication())
         persist {
             store.edit {
                 if (path.isNullOrBlank()) it.remove(KEY_BUILTIN_VIDEO_PATH)
@@ -611,6 +624,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setBuiltInVideoFillScreen(fillScreen: Boolean) {
         _builtInVideoFillScreen.value = fillScreen
         persist { store.edit { it[KEY_VIDEO_FILL_SCREEN] = fillScreen } }
+    }
+
+    fun setBuiltInVideoClockColorMode(mode: WatchClockColorMode) {
+        _builtInVideoClockColorMode.value = mode
+        persist { store.edit { it[KEY_VIDEO_CLOCK_COLOR_MODE] = mode.name } }
     }
 
     fun setBuiltInManagerThumbnails(enabled: Boolean) {
@@ -657,6 +675,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _builtInPhotoClockBold.value = false
         _builtInVideoClockBold.value = false
         _builtInVideoFillScreen.value = true
+        _builtInVideoClockColorMode.value = WatchClockColorMode.AUTO
         _builtInManagerThumbnails.value = true
         appRepository.setHiddenComponents(emptySet())
         appRepository.setIconPackPackage(null)
@@ -687,10 +706,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_PHOTO_CLOCK_BOLD] = false
                 it[KEY_VIDEO_CLOCK_BOLD] = false
                 it[KEY_VIDEO_FILL_SCREEN] = true
+                it[KEY_VIDEO_CLOCK_COLOR_MODE] = WatchClockColorMode.AUTO.name
                 it[KEY_BUILTIN_MANAGER_THUMBNAILS] = true
                 it.remove(KEY_LAST_WATCHFACE_ERROR)
             }
         }
+    }
+
+    private fun parseClockColorMode(raw: String): WatchClockColorMode {
+        return runCatching { WatchClockColorMode.valueOf(raw) }.getOrDefault(WatchClockColorMode.AUTO)
     }
 
     private fun persist(block: suspend () -> Unit) {

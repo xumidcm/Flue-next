@@ -187,6 +187,7 @@ private fun SettingsRootScreen(
     val builtInPhotoClockBold by vm.builtInPhotoClockBold.collectAsState()
     val builtInVideoClockBold by vm.builtInVideoClockBold.collectAsState()
     val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
+    val builtInVideoClockColorMode by vm.builtInVideoClockColorMode.collectAsState()
     val builtInManagerThumbnails by vm.builtInManagerThumbnails.collectAsState()
     val headerTime = rememberSettingsHeaderTime()
 
@@ -415,7 +416,8 @@ private fun SettingsRootScreen(
                         clockPosition = builtInVideoClockPosition,
                         clockSizeSp = builtInVideoClockSize,
                         boldClock = builtInVideoClockBold,
-                        cropToFill = builtInVideoFillScreen
+                        cropToFill = builtInVideoFillScreen,
+                        clockColorMode = builtInVideoClockColorMode
                     ),
                     onSelect = { vm.selectWatchFace(descriptor.id) },
                     onOpenSettings = if (descriptor.supportsSettings) {

@@ -2,6 +2,7 @@ package com.flue.launcher.ui.home
 
 import android.content.Context
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
@@ -21,10 +22,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -35,6 +38,7 @@ import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
+import com.flue.launcher.watchface.WatchClockColorMode
 import com.flue.launcher.watchface.WatchClockPosition
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -132,7 +136,8 @@ private fun BuiltInWatchFaceSurface(
             BUILT_IN_PHOTO_WATCHFACE_ID -> photoOptions.clockPosition
             BUILT_IN_VIDEO_WATCHFACE_ID -> videoOptions.clockPosition
             else -> WatchClockPosition.CENTER
-        }
+        },
+        videoClockColorMode = videoOptions.clockColorMode
     )
     val backgroundModifier = modifier
         .fillMaxSize()
@@ -245,6 +250,10 @@ private fun MediaImageBackground(path: String?) {
 @Composable
 private fun MediaVideoBackground(path: String?, isFaceVisible: Boolean, fillScreen: Boolean) {
     val filePath = path?.takeIf { File(it).exists() }
+    if (!isFaceVisible) {
+        MediaVideoThumbnail(filePath)
+        return
+    }
     AndroidView(
         factory = { context -> InternalLoopingVideoView(context) },
         update = { view ->
@@ -252,6 +261,32 @@ private fun MediaVideoBackground(path: String?, isFaceVisible: Boolean, fillScre
         },
         modifier = Modifier.fillMaxSize()
     )
+}
+
+@Composable
+private fun MediaVideoThumbnail(path: String?) {
+    val frameBitmap by produceState<android.graphics.Bitmap?>(initialValue = null, path) {
+        value = runCatching {
+            if (path.isNullOrBlank()) return@runCatching null
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(path)
+                retriever.frameAtTime
+            } finally {
+                runCatching { retriever.release() }
+            }
+        }.getOrNull()
+    }
+    if (frameBitmap != null) {
+        androidx.compose.foundation.Image(
+            bitmap = frameBitmap!!.asImageBitmap(),
+            contentDescription = null,
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
+    } else {
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black))
+    }
 }
 
 @Composable
@@ -358,20 +393,32 @@ fun rememberClockPaletteForPreview(
     watchFaceId: String,
     photoPath: String?,
     clockPosition: WatchClockPosition
-): ClockPalette = rememberClockPalette(watchFaceId, photoPath, clockPosition)
+): ClockPalette = rememberClockPalette(
+    watchFaceId = watchFaceId,
+    photoPath = photoPath,
+    clockPosition = clockPosition,
+    videoClockColorMode = WatchClockColorMode.AUTO
+)
 
 @Composable
 private fun rememberClockPalette(
     watchFaceId: String,
     photoPath: String?,
-    clockPosition: WatchClockPosition
+    clockPosition: WatchClockPosition,
+    videoClockColorMode: WatchClockColorMode
 ): ClockPalette {
-    var palette by remember(watchFaceId, photoPath, clockPosition) {
+    var palette by remember(watchFaceId, photoPath, clockPosition, videoClockColorMode) {
         mutableStateOf(defaultClockPalette(watchFaceId))
     }
-    LaunchedEffect(watchFaceId, photoPath, clockPosition) {
+    LaunchedEffect(watchFaceId, photoPath, clockPosition, videoClockColorMode) {
         palette = if (watchFaceId == BUILT_IN_PHOTO_WATCHFACE_ID && !photoPath.isNullOrBlank()) {
             sampleClockPalette(photoPath, clockPosition) ?: defaultClockPalette(watchFaceId)
+        } else if (watchFaceId == BUILT_IN_VIDEO_WATCHFACE_ID) {
+            when (videoClockColorMode) {
+                WatchClockColorMode.WHITE -> ClockPalette(timeColor = Color.White, dateColor = Color.White.copy(alpha = 0.82f))
+                WatchClockColorMode.BLACK -> ClockPalette(timeColor = Color(0xFF101318), dateColor = Color(0xCC101318))
+                WatchClockColorMode.AUTO -> defaultClockPalette(watchFaceId)
+            }
         } else {
             defaultClockPalette(watchFaceId)
         }
@@ -501,10 +548,12 @@ private class InternalLoopingVideoView(context: Context) : FrameLayout(context) 
         shouldPlay = play
         this.fillScreen = fillScreen
         placeholder.visibility = if (path == null) VISIBLE else GONE
+        videoView.visibility = if (path == null) INVISIBLE else VISIBLE
         if (path != currentPath) {
             currentPath = path
             if (path == null) {
                 videoView.stopPlayback()
+                runCatching { videoView.setVideoURI(null) }
             } else {
                 videoView.setVideoPath(path)
             }

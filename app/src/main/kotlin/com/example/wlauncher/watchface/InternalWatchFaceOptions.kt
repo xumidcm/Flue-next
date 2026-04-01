@@ -12,9 +12,16 @@ enum class WatchClockPosition {
     BOTTOM_RIGHT
 }
 
+enum class WatchClockColorMode {
+    AUTO,
+    WHITE,
+    BLACK
+}
+
 data class BuiltInWatchFaceOptions(
     val clockPosition: WatchClockPosition = WatchClockPosition.CENTER,
     val clockSizeSp: Int = 64,
     val boldClock: Boolean = false,
-    val cropToFill: Boolean = true
+    val cropToFill: Boolean = true,
+    val clockColorMode: WatchClockColorMode = WatchClockColorMode.AUTO
 )
