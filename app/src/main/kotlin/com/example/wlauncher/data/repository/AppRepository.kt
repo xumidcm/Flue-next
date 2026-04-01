@@ -97,13 +97,15 @@ class AppRepository(private val context: Context) {
 
         iconPackMapping = iconPackPackage?.let { IconPackScanner.loadMapping(context, it) }
 
-        val loadedApps = resolveInfos
+        val resolveList = resolveInfos
             .filter { ri ->
                 !(ri.activityInfo.packageName == myPackage &&
                     ri.activityInfo.name == "com.flue.launcher.LauncherActivity")
             }
             .distinctBy { "${it.activityInfo.packageName}/${it.activityInfo.name}" }
-            .map { ri ->
+        val loadedApps = ArrayList<AppInfo>(resolveList.size)
+
+        resolveList.forEachIndexed { index, ri ->
                 val packageName = ri.activityInfo.packageName
                 val componentKey = "$packageName/${ri.activityInfo.name}"
                 val packedIcon = iconPackMapping?.let { IconPackScanner.loadIconDrawable(context, it, componentKey) }
@@ -126,7 +128,7 @@ class AppRepository(private val context: Context) {
                     }
                     createdIconBitmap to createdBlurredBitmap
                 }
-                AppInfo(
+                loadedApps += AppInfo(
                     label = ri.loadLabel(pm).toString(),
                     packageName = packageName,
                     activityName = ri.activityInfo.name,
@@ -134,6 +136,10 @@ class AppRepository(private val context: Context) {
                     cachedIcon = iconBitmap.asImageBitmap(),
                     cachedBlurredIcon = blurredBitmap.asImageBitmap()
                 )
+                if ((index + 1) % 24 == 0) {
+                    _allApps.value = sortApps(loadedApps.toList(), installTimeCache)
+                    applyFilters()
+                }
             }
         _allApps.value = sortApps(loadedApps, installTimeCache)
         applyFilters()
@@ -192,8 +198,8 @@ class AppRepository(private val context: Context) {
     private fun createSoftenedBitmap(source: Bitmap): Bitmap {
         val downscaled = Bitmap.createScaledBitmap(
             source,
-            (source.width * 0.25f).toInt().coerceAtLeast(1),
-            (source.height * 0.25f).toInt().coerceAtLeast(1),
+            (source.width * 0.18f).toInt().coerceAtLeast(1),
+            (source.height * 0.18f).toInt().coerceAtLeast(1),
             true
         )
         return Bitmap.createScaledBitmap(downscaled, source.width, source.height, true)
