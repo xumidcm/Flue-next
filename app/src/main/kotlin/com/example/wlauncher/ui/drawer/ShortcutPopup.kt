@@ -139,11 +139,24 @@ fun AppShortcutOverlay(
                     Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
                     ShortcutMenuItem("卸载", Color(0xFFFF453A)) {
                         val packageUri = Uri.fromParts("package", app.packageName, null)
-                        val android9UninstallActivityIntent = Intent(Intent.ACTION_DELETE, packageUri).apply {
+                        val androidPackageInstallerIntent = Intent(Intent.ACTION_DELETE).apply {
                             component = ComponentName(
                                 "com.android.packageinstaller",
                                 "com.android.packageinstaller.UninstallerActivity"
                             )
+                            data = packageUri
+                            putExtra(Intent.EXTRA_RETURN_RESULT, false)
+                            putExtra(Intent.EXTRA_UNINSTALL_ALL_USERS, false)
+                            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        val googlePackageInstallerIntent = Intent(Intent.ACTION_DELETE).apply {
+                            component = ComponentName(
+                                "com.google.android.packageinstaller",
+                                "com.google.android.packageinstaller.UninstallerActivity"
+                            )
+                            data = packageUri
+                            putExtra(Intent.EXTRA_RETURN_RESULT, false)
+                            putExtra(Intent.EXTRA_UNINSTALL_ALL_USERS, false)
                             if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         val deleteIntent = Intent(Intent.ACTION_DELETE).apply {
@@ -164,8 +177,11 @@ fun AppShortcutOverlay(
                         }
                         try {
                             when {
-                                android9UninstallActivityIntent.resolveActivity(context.packageManager) != null -> {
-                                    context.startActivity(android9UninstallActivityIntent)
+                                androidPackageInstallerIntent.resolveActivity(context.packageManager) != null -> {
+                                    context.startActivity(androidPackageInstallerIntent)
+                                }
+                                googlePackageInstallerIntent.resolveActivity(context.packageManager) != null -> {
+                                    context.startActivity(googlePackageInstallerIntent)
                                 }
                                 Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
                                     deleteIntent.resolveActivity(context.packageManager) != null -> {
