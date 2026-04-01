@@ -21,6 +21,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.Image
@@ -77,6 +78,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -688,6 +690,8 @@ private fun SettingsPageScaffold(
             .collect { (index, offset) -> onScrollChanged(index, offset) }
     }
 
+    val rotaryScrollMultiplier = 1.18f
+
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
@@ -700,6 +704,12 @@ private fun SettingsPageScaffold(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
+                .onRotaryScrollEvent {
+                    scope.launch {
+                        listState.scrollBy(-it.verticalScrollPixels * rotaryScrollMultiplier)
+                    }
+                    true
+                }
                 .nestedScroll(nestedScrollConnection)
                 .graphicsLayer { translationY = overscroll.value }
                 .padding(horizontal = 16.dp, vertical = 18.dp),

@@ -15,6 +15,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,7 +26,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
@@ -33,15 +37,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
+import kotlinx.coroutines.launch
 
 const val EXTRA_FILE_MANAGER_MODE = "file_manager_mode"
 const val EXTRA_FILE_MANAGER_RESULT_URI = "file_manager_result_uri"
@@ -102,6 +110,8 @@ private fun BuiltInFileManagerScreen(
     onBack: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     val mediaList by produceState<List<MediaItem>?>(initialValue = null, mode, hasPermission) {
         value = if (hasPermission) queryMedia(context, mode) else emptyList()
     }
@@ -111,6 +121,11 @@ private fun BuiltInFileManagerScreen(
             .fillMaxSize()
             .background(Color.Black)
             .padding(16.dp)
+            .focusable()
+            .onRotaryScrollEvent {
+                scope.launch { listState.scrollBy(-it.verticalScrollPixels * 1.15f) }
+                true
+            }
     ) {
         Text(
             text = if (mode == FILE_MANAGER_MODE_VIDEO) "内置文件管理器（视频）" else "内置文件管理器（图片）",
@@ -158,14 +173,21 @@ private fun BuiltInFileManagerScreen(
             }
         } else {
             LazyColumn(
+                state = listState,
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(mediaList!!) { item ->
+                items(mediaList!!, key = { it.uri.toString() }) { item ->
                     val subTitle = remember(item) { "${item.displayName}\n${item.path}" }
+                    val scale = itemFisheye(listState, item.uri.toString())
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .graphicsLayer {
+                                scaleX = scale
+                                scaleY = scale
+                                alpha = scale.coerceIn(0.6f, 1f)
+                            }
                             .background(WatchColors.SurfaceGlass, RoundedCornerShape(12.dp))
                             .clickable { onPick(item.uri) }
                             .padding(horizontal = 14.dp, vertical = 12.dp)
@@ -181,6 +203,15 @@ private fun BuiltInFileManagerScreen(
         Spacer(modifier = Modifier.height(8.dp))
         FileManagerActionButton(text = "返回", onClick = onBack)
     }
+}
+
+@Composable
+private fun itemFisheye(state: LazyListState, key: Any): Float {
+    val info = state.layoutInfo.visibleItemsInfo.find { it.key == key } ?: return 0.9f
+    val center = state.layoutInfo.viewportEndOffset / 2f
+    val itemCenter = info.offset + info.size / 2f
+    val normalized = ((itemCenter - center) / center).coerceIn(-1f, 1f)
+    return (1f - kotlin.math.abs(normalized) * 0.13f).coerceIn(0.86f, 1f)
 }
 
 private data class MediaItem(
