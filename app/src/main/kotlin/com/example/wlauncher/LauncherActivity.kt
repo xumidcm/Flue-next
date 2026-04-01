@@ -154,7 +154,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val notificationsEnabled = false
     val openWatchFaceChooser = remember(context) {
         {
-            context.startActivity(Intent(context, WatchFaceChooserActivity::class.java))
+            context.startActivity(
+                Intent(context, SettingsActivity::class.java)
+                    .putExtra(EXTRA_SETTINGS_DESTINATION, SETTINGS_DESTINATION_WATCH_FACES)
+                    .putExtra(EXTRA_SETTINGS_RETURN_TO_FACE, true)
+            )
             (context as? Activity)?.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
         }
     }

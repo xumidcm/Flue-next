@@ -105,6 +105,9 @@ import java.util.Date
 import java.util.Locale
 
 private const val ABOUT_VERSION = "beta0.7"
+const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
+const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
+const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
 
 enum class SettingsDestination {
     ROOT,
@@ -125,16 +128,34 @@ private data class SavedScrollPosition(
 class SettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val initialDestination = when (intent.getStringExtra(EXTRA_SETTINGS_DESTINATION)) {
+            SETTINGS_DESTINATION_WATCH_FACES -> SettingsDestination.WATCH_FACES
+            else -> SettingsDestination.ROOT
+        }
+        val returnToFaceOnBack = intent.getBooleanExtra(EXTRA_SETTINGS_RETURN_TO_FACE, false)
         setContent {
             WatchLauncherTheme {
-                SettingsRootScreen(onFinish = { finish() })
+                SettingsRootScreen(
+                    onFinish = { finish() },
+                    initialDestination = initialDestination,
+                    returnToFaceOnBack = returnToFaceOnBack
+                )
             }
         }
+    }
+
+    override fun finish() {
+        super.finish()
+        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
     }
 }
 
 @Composable
-private fun SettingsRootScreen(onFinish: () -> Unit) {
+private fun SettingsRootScreen(
+    onFinish: () -> Unit,
+    initialDestination: SettingsDestination = SettingsDestination.ROOT,
+    returnToFaceOnBack: Boolean = false
+) {
     val context = LocalContext.current
     val vm: LauncherViewModel = viewModel()
     val watchFaces by vm.availableWatchFaces.collectAsState()
@@ -169,7 +190,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
     val builtInManagerThumbnails by vm.builtInManagerThumbnails.collectAsState()
     val headerTime = rememberSettingsHeaderTime()
 
-    var destination by remember { mutableStateOf(SettingsDestination.ROOT) }
+    var destination by remember(initialDestination) { mutableStateOf(initialDestination) }
     var hiddenAppsDraft by remember { mutableStateOf(hiddenApps) }
     var hiddenAppsDirty by remember { mutableStateOf(false) }
     val pageScrollPositions = remember { mutableStateMapOf<SettingsDestination, SavedScrollPosition>() }
@@ -198,8 +219,12 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
         destination = next
     }
 
-    BackHandler(enabled = destination != SettingsDestination.ROOT) {
-        navigateTo(SettingsDestination.ROOT)
+    val handleBack: () -> Unit = {
+        if (returnToFaceOnBack) onFinish() else navigateTo(SettingsDestination.ROOT)
+    }
+
+    BackHandler(enabled = destination != SettingsDestination.ROOT || returnToFaceOnBack) {
+        handleBack()
     }
 
     val selectedIconPackLabel = availableIconPacks.firstOrNull { it.packageName == selectedIconPackPackage }?.label
@@ -290,7 +315,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
             SettingsDestination.HIDDEN_APPS -> SettingsPageScaffold(
                 title = "\u9690\u85cf\u5e94\u7528",
-                onBack = { navigateTo(SettingsDestination.ROOT) },
+                onBack = { handleBack() },
                 headerTime = headerTime,
                 initialFirstVisibleItemIndex = scrollFor(SettingsDestination.HIDDEN_APPS).index,
                 initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.HIDDEN_APPS).offset,
@@ -323,7 +348,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
             SettingsDestination.ICON_PACKS -> SettingsPageScaffold(
                 title = "\u56fe\u6807\u5305",
-                onBack = { navigateTo(SettingsDestination.ROOT) },
+                onBack = { handleBack() },
                 headerTime = headerTime,
                 initialFirstVisibleItemIndex = scrollFor(SettingsDestination.ICON_PACKS).index,
                 initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.ICON_PACKS).offset,
@@ -360,7 +385,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
             SettingsDestination.WATCH_FACES -> SettingsPageScaffold(
             title = "\u8868\u76d8",
-            onBack = { navigateTo(SettingsDestination.ROOT) },
+            onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.WATCH_FACES).index,
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.WATCH_FACES).offset,
@@ -426,7 +451,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
             SettingsDestination.APPEARANCE -> SettingsPageScaffold(
             title = "\u663e\u793a\u4e0e\u5916\u89c2",
-            onBack = { navigateTo(SettingsDestination.ROOT) },
+            onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.APPEARANCE).index,
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.APPEARANCE).offset,
@@ -555,7 +580,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
             SettingsDestination.PERFORMANCE -> SettingsPageScaffold(
             title = "\u6027\u80fd\u4e0e\u52a8\u753b",
-            onBack = { navigateTo(SettingsDestination.ROOT) },
+            onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.PERFORMANCE).index,
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.PERFORMANCE).offset,
@@ -592,7 +617,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
             SettingsDestination.TOOLS -> SettingsPageScaffold(
             title = "\u5de5\u5177",
-            onBack = { navigateTo(SettingsDestination.ROOT) },
+            onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.TOOLS).index,
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.TOOLS).offset,
@@ -618,7 +643,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
 
             SettingsDestination.ABOUT -> SettingsPageScaffold(
                 title = "\u5173\u4e8e",
-                onBack = { navigateTo(SettingsDestination.ROOT) },
+                onBack = { handleBack() },
                 headerTime = headerTime,
                 initialFirstVisibleItemIndex = scrollFor(SettingsDestination.ABOUT).index,
                 initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.ABOUT).offset,

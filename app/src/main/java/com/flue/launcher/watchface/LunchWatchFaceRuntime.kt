@@ -11,7 +11,10 @@ import android.os.Build
 import android.view.View
 import com.dudu.wearlauncher.model.WatchFaceBridge
 import com.dudu.wearlauncher.ui.WatchSurfaceBaseActivity
-import com.flue.launcher.WatchFaceChooserActivity
+import com.flue.launcher.EXTRA_SETTINGS_DESTINATION
+import com.flue.launcher.EXTRA_SETTINGS_RETURN_TO_FACE
+import com.flue.launcher.SETTINGS_DESTINATION_WATCH_FACES
+import com.flue.launcher.SettingsActivity
 import dalvik.system.DexClassLoader
 
 object LunchWatchFaceRuntime {
@@ -178,7 +181,9 @@ object LunchWatchFaceRuntime {
                 }
             }
 
-            return Intent(hostContext, WatchFaceChooserActivity::class.java).apply {
+            return Intent(hostContext, SettingsActivity::class.java).apply {
+                putExtra(EXTRA_SETTINGS_DESTINATION, SETTINGS_DESTINATION_WATCH_FACES)
+                putExtra(EXTRA_SETTINGS_RETURN_TO_FACE, true)
                 if (hostContext !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
         }
