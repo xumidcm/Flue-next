@@ -5,10 +5,14 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Process
+import android.os.UserHandle
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.Settings
+import android.util.Log
+import android.content.pm.LauncherApps
+import android.os.UserManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -141,7 +145,10 @@ fun AppShortcutOverlay(
                         val packageUri = Uri.fromParts("package", app.packageName, null)
                         val uninstallIntent = Intent(Intent.ACTION_DELETE, packageUri).apply {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
-                                putExtra(Intent.EXTRA_USER, Process.myUserHandle())
+                                val uninstallUser =
+                                    resolveUninstallUserHandle(context, app.packageName, app.activityName)
+                                        ?: Process.myUserHandle()
+                                putExtra(Intent.EXTRA_USER, uninstallUser)
                             }
                         }
                         val activity = context as? android.app.Activity
@@ -151,6 +158,8 @@ fun AppShortcutOverlay(
                             } else {
                                 context.startActivity(uninstallIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                             }
+                        }.onFailure {
+                            Log.w("ShortcutPopup", "Failed to launch uninstall for ${app.packageName}", it)
                         }
                         onDismiss()
                     }
@@ -184,6 +193,27 @@ private fun ShortcutMenuItem(text: String, color: Color = Color.White, onClick: 
     ) {
         Text(text, color = color, fontSize = 15.sp, fontWeight = FontWeight.W500)
     }
+}
+
+private fun resolveUninstallUserHandle(
+    context: Context,
+    packageName: String,
+    activityName: String
+): UserHandle? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return null
+    val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps ?: return null
+    val userManager = context.getSystemService(Context.USER_SERVICE) as? UserManager ?: return null
+    val profiles = userManager.userProfiles ?: return null
+    for (profile in profiles) {
+        val apps = runCatching { launcherApps.getActivityList(packageName, profile) }.getOrNull() ?: continue
+        if (apps.any { it.componentName.className == activityName }) {
+            return profile
+        }
+        if (apps.isNotEmpty()) {
+            return profile
+        }
+    }
+    return null
 }
 
 fun vibrateHaptic(context: Context) {
