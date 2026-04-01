@@ -102,7 +102,7 @@ private fun BuiltInFileManagerScreen(
     onBack: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val mediaList by produceState<List<MediaItem>>(initialValue = emptyList(), mode, hasPermission) {
+    val mediaList by produceState<List<MediaItem>?>(initialValue = null, mode, hasPermission) {
         value = if (hasPermission) queryMedia(context, mode) else emptyList()
     }
 
@@ -132,7 +132,7 @@ private fun BuiltInFileManagerScreen(
             return
         }
 
-        if (mediaList.isEmpty()) {
+        if (mediaList == null) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -142,12 +142,26 @@ private fun BuiltInFileManagerScreen(
             ) {
                 CircularProgressIndicator(color = WatchColors.ActiveCyan)
             }
+        } else if (mediaList!!.isEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (mode == FILE_MANAGER_MODE_VIDEO) "未发现可用视频" else "未发现可用图片",
+                    color = WatchColors.TextTertiary,
+                    fontSize = 13.sp
+                )
+            }
         } else {
             LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(mediaList) { item ->
+                items(mediaList!!) { item ->
                     val subTitle = remember(item) { "${item.displayName}\n${item.path}" }
                     Column(
                         modifier = Modifier
@@ -187,19 +201,15 @@ private fun queryMedia(context: Context, mode: String): List<MediaItem> {
     } else {
         MediaStore.MediaColumns.DATA
     }
-    val projection = arrayOf(
-        MediaStore.MediaColumns._ID,
-        MediaStore.MediaColumns.DISPLAY_NAME,
-        pathColumn
-    )
-    val sortOrder = "${MediaStore.MediaColumns.DATE_ADDED} DESC LIMIT 300"
+    val sortOrder = "${MediaStore.MediaColumns.DATE_ADDED} DESC"
     val items = mutableListOf<MediaItem>()
-    runCatching {
+
+    fun collectItems(projection: Array<String>) {
         resolver.query(baseUri, projection, null, null, sortOrder)?.use { cursor ->
             val idIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
             val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
             val pathIndex = cursor.getColumnIndex(pathColumn)
-            while (cursor.moveToNext()) {
+            while (cursor.moveToNext() && items.size < 300) {
                 val id = cursor.getLong(idIndex)
                 val name = cursor.getString(nameIndex).orEmpty()
                 val path = if (pathIndex >= 0) cursor.getString(pathIndex).orEmpty() else ""
@@ -210,31 +220,24 @@ private fun queryMedia(context: Context, mode: String): List<MediaItem> {
                 )
             }
         }
-    }.recoverCatching {
-        if (it is SQLiteException || it is IllegalArgumentException) {
-            resolver.query(
-                baseUri,
-                arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME),
-                null,
-                null,
-                sortOrder
-            )?.use { cursor ->
-                val idIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
-                val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
-                while (cursor.moveToNext()) {
-                    val id = cursor.getLong(idIndex)
-                    val name = cursor.getString(nameIndex).orEmpty()
-                    items += MediaItem(
-                        uri = ContentUris.withAppendedId(baseUri, id),
-                        displayName = name.ifBlank { "未命名文件" },
-                        path = "未知路径"
-                    )
-                }
-            }
-        } else {
-            throw it
-        }
     }
+
+    try {
+        collectItems(
+            arrayOf(
+                MediaStore.MediaColumns._ID,
+                MediaStore.MediaColumns.DISPLAY_NAME,
+                pathColumn
+            )
+        )
+    } catch (_: SQLiteException) {
+        items.clear()
+        collectItems(arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME))
+    } catch (_: IllegalArgumentException) {
+        items.clear()
+        collectItems(arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME))
+    }
+
     return items
 }
 
