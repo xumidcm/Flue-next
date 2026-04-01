@@ -21,6 +21,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.Image
@@ -77,6 +78,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -102,7 +104,7 @@ import java.io.File
 import java.util.Date
 import java.util.Locale
 
-private const val ABOUT_VERSION = "beta0.6"
+private const val ABOUT_VERSION = "beta0.7"
 
 enum class SettingsDestination {
     ROOT,
@@ -164,6 +166,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
     val builtInPhotoClockBold by vm.builtInPhotoClockBold.collectAsState()
     val builtInVideoClockBold by vm.builtInVideoClockBold.collectAsState()
     val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
+    val builtInManagerThumbnails by vm.builtInManagerThumbnails.collectAsState()
     val headerTime = rememberSettingsHeaderTime()
 
     var destination by remember { mutableStateOf(SettingsDestination.ROOT) }
@@ -416,7 +419,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                     subtitle = "\u5237\u65b0\u5df2\u5b89\u88c5\u7684 Lunch \u517c\u5bb9\u8868\u76d8",
                     scale = itemFisheye(listState, "watchface_refresh", screenCenterY, screenHeightPx),
                     icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
-                    onClick = { vm.refreshWatchFaces() }
+                    onClick = { vm.refreshWatchFaces(force = true) }
                 )
             }
         }
@@ -576,6 +579,15 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                     scale = itemFisheye(listState, "anim_override", screenCenterY, screenHeightPx)
                 )
             }
+            item("builtin_manager_thumbnails") {
+                SettingsSwitchRow(
+                    title = "\u5185\u7f6e\u7ba1\u7406\u5668\u7f29\u7565\u56fe",
+                    subtitle = "\u5728\u56fe\u7247/\u89c6\u9891\u5217\u8868\u5de6\u4fa7\u663e\u793a\u9884\u89c8\u56fe",
+                    checked = builtInManagerThumbnails,
+                    onToggle = { vm.setBuiltInManagerThumbnails(it) },
+                    scale = itemFisheye(listState, "builtin_manager_thumbnails", screenCenterY, screenHeightPx)
+                )
+            }
         }
 
             SettingsDestination.TOOLS -> SettingsPageScaffold(
@@ -688,6 +700,8 @@ private fun SettingsPageScaffold(
             .collect { (index, offset) -> onScrollChanged(index, offset) }
     }
 
+    val rotaryScrollMultiplier = 1.18f
+
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
@@ -700,6 +714,12 @@ private fun SettingsPageScaffold(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
+                .onRotaryScrollEvent {
+                    scope.launch {
+                        listState.scrollBy(-it.verticalScrollPixels * rotaryScrollMultiplier)
+                    }
+                    true
+                }
                 .nestedScroll(nestedScrollConnection)
                 .graphicsLayer { translationY = overscroll.value }
                 .padding(horizontal = 16.dp, vertical = 18.dp),
@@ -1108,6 +1128,7 @@ private fun ActionCard(
 
 @Composable
 private fun AboutCard(scale: Float) {
+    val context = LocalContext.current
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -1153,6 +1174,20 @@ private fun AboutCard(scale: Float) {
                 Spacer(modifier = Modifier.width(10.dp))
                 Text("\u67da\u5b50\u67da\u5b50\u76ae", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             }
+            Spacer(modifier = Modifier.height(18.dp))
+            ActionCard(
+                title = "感谢以下开源项目",
+                subtitle = "dudu-Dev0/Lunch",
+                onClick = {
+                    context.startActivity(
+                        Intent(
+                            Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://github.com/dudu-Dev0/Lunch")
+                        )
+                    )
+                },
+                scale = 1f
+            )
         }
     }
 }

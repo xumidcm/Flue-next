@@ -10,11 +10,17 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.util.Size
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,25 +29,40 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
+import com.flue.launcher.viewmodel.LauncherViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 const val EXTRA_FILE_MANAGER_MODE = "file_manager_mode"
 const val EXTRA_FILE_MANAGER_RESULT_URI = "file_manager_result_uri"
@@ -102,8 +123,12 @@ private fun BuiltInFileManagerScreen(
     onBack: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val vm: LauncherViewModel = viewModel()
+    val showThumbnails by vm.builtInManagerThumbnails.collectAsState()
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     val mediaList by produceState<List<MediaItem>?>(initialValue = null, mode, hasPermission) {
-        value = if (hasPermission) queryMedia(context, mode) else emptyList()
+        value = if (hasPermission) withContext(Dispatchers.IO) { queryMedia(context, mode) } else emptyList()
     }
 
     Column(
@@ -111,6 +136,11 @@ private fun BuiltInFileManagerScreen(
             .fillMaxSize()
             .background(Color.Black)
             .padding(16.dp)
+            .focusable()
+            .onRotaryScrollEvent {
+                scope.launch { listState.scrollBy(-it.verticalScrollPixels * 1.15f) }
+                true
+            }
     ) {
         Text(
             text = if (mode == FILE_MANAGER_MODE_VIDEO) "内置文件管理器（视频）" else "内置文件管理器（图片）",
@@ -158,21 +188,43 @@ private fun BuiltInFileManagerScreen(
             }
         } else {
             LazyColumn(
+                state = listState,
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(mediaList!!) { item ->
+                items(mediaList!!, key = { it.uri.toString() }) { item ->
                     val subTitle = remember(item) { "${item.displayName}\n${item.path}" }
+                    val scale = itemFisheye(listState, item.uri.toString())
+                    val interaction = remember(item.uri) { MutableInteractionSource() }
+                    val pressed by interaction.collectIsPressedAsState()
+                    val pressScale by animateFloatAsState(
+                        if (pressed) 0.96f else 1f,
+                        animationSpec = spring(stiffness = 860f, dampingRatio = 0.74f),
+                        label = "manager_item_press_scale"
+                    )
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .graphicsLayer {
+                                scaleX = scale * pressScale
+                                scaleY = scale * pressScale
+                                alpha = scale.coerceIn(0.6f, 1f)
+                            }
                             .background(WatchColors.SurfaceGlass, RoundedCornerShape(12.dp))
-                            .clickable { onPick(item.uri) }
+                            .clickable(interactionSource = interaction, indication = null) { onPick(item.uri) }
                             .padding(horizontal = 14.dp, vertical = 12.dp)
                     ) {
-                        Text(text = item.displayName, color = Color.White, fontSize = 14.sp)
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(text = subTitle, color = WatchColors.TextTertiary, fontSize = 11.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (showThumbnails) {
+                                MediaThumb(uri = item.uri, isVideo = mode == FILE_MANAGER_MODE_VIDEO)
+                                Spacer(modifier = Modifier.size(10.dp))
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(text = item.displayName, color = Color.White, fontSize = 14.sp)
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(text = subTitle, color = WatchColors.TextTertiary, fontSize = 11.sp)
+                            }
+                        }
                     }
                 }
             }
@@ -181,6 +233,64 @@ private fun BuiltInFileManagerScreen(
         Spacer(modifier = Modifier.height(8.dp))
         FileManagerActionButton(text = "返回", onClick = onBack)
     }
+}
+
+@Composable
+private fun MediaThumb(uri: Uri, isVideo: Boolean) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val thumbnail by produceState<android.graphics.Bitmap?>(initialValue = null, uri, isVideo) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    context.contentResolver.loadThumbnail(uri, Size(88, 88), null)
+                } else {
+                    decodeSampledBitmap(context, uri, 96)
+                }
+            }.getOrNull()
+        }
+    }
+    if (thumbnail != null) {
+        Image(
+            bitmap = thumbnail!!.asImageBitmap(),
+            contentDescription = null,
+            modifier = Modifier
+                .size(42.dp)
+                .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(10.dp))
+        )
+    } else {
+        Spacer(
+            modifier = Modifier
+                .size(42.dp)
+                .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(10.dp))
+        )
+    }
+}
+
+private fun decodeSampledBitmap(context: Context, uri: Uri, reqSize: Int): android.graphics.Bitmap? {
+    val resolver = context.contentResolver
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+    var sampleSize = 1
+    while (bounds.outWidth / sampleSize >= reqSize * 2 && bounds.outHeight / sampleSize >= reqSize * 2) {
+        sampleSize *= 2
+    }
+
+    val opts = android.graphics.BitmapFactory.Options().apply {
+        inSampleSize = sampleSize.coerceAtLeast(1)
+        inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+    }
+    return resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
+}
+
+@Composable
+private fun itemFisheye(state: LazyListState, key: Any): Float {
+    val info = state.layoutInfo.visibleItemsInfo.find { it.key == key } ?: return 0.9f
+    val center = state.layoutInfo.viewportEndOffset / 2f
+    val itemCenter = info.offset + info.size / 2f
+    val normalized = ((itemCenter - center) / center).coerceIn(-1f, 1f)
+    return (1f - kotlin.math.abs(normalized) * 0.13f).coerceIn(0.86f, 1f)
 }
 
 private data class MediaItem(
@@ -247,11 +357,19 @@ private fun FileManagerActionButton(
     enabled: Boolean = true,
     onClick: () -> Unit
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        if (pressed) 0.96f else 1f,
+        animationSpec = spring(stiffness = 820f, dampingRatio = 0.74f),
+        label = "manager_action_press_scale"
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer { scaleX = pressScale; scaleY = pressScale }
             .background(if (enabled) WatchColors.SurfaceGlass else Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-            .clickable(enabled = enabled, onClick = onClick)
+            .clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick)
             .padding(vertical = 12.dp),
         horizontalArrangement = Arrangement.Center
     ) {

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Process
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -102,7 +103,9 @@ fun AppShortcutOverlay(
         contentAlignment = Alignment.Center
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val panelWidth = (maxWidth * 0.76f).coerceIn(220.dp, 312.dp)
+            val densityDpi = context.resources.displayMetrics.densityDpi.toFloat()
+            val dpiScale = (densityDpi / 320f).coerceIn(0.76f, 1f)
+            val panelWidth = ((maxWidth * 0.76f) * dpiScale).coerceIn(180.dp, 312.dp)
             val panelMaxHeight = maxHeight * 0.86f
 
             Column(
@@ -137,35 +140,40 @@ fun AppShortcutOverlay(
                     ShortcutMenuItem("卸载", Color(0xFFFF453A)) {
                         val packageUri = Uri.fromParts("package", app.packageName, null)
                         val deleteIntent = Intent(Intent.ACTION_DELETE, packageUri).apply {
-                            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            putExtra(Intent.EXTRA_RETURN_RESULT, false)
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+                                putExtra(Intent.EXTRA_USER, Process.myUserHandle())
+                            }
                         }
                         val uninstallIntent = Intent(Intent.ACTION_UNINSTALL_PACKAGE, packageUri).apply {
-                            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            putExtra(Intent.EXTRA_RETURN_RESULT, false)
                         }
                         val detailsIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                             data = packageUri
-                            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
-                        try {
-                            when {
-                                Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
-                                    deleteIntent.resolveActivity(context.packageManager) != null -> {
-                                    context.startActivity(deleteIntent)
+                        val intents = listOf(deleteIntent, uninstallIntent, detailsIntent)
+                        val activity = context as? android.app.Activity
+                        var launched = false
+                        for (intent in intents) {
+                            launched = runCatching {
+                                if (activity != null) {
+                                    activity.startActivity(intent)
+                                } else {
+                                    context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                                 }
-                                uninstallIntent.resolveActivity(context.packageManager) != null -> {
-                                    context.startActivity(uninstallIntent)
-                                }
-                                deleteIntent.resolveActivity(context.packageManager) != null -> {
-                                    context.startActivity(deleteIntent)
-                                }
-                                else -> {
-                                    context.startActivity(detailsIntent)
-                                }
-                            }
-                        } catch (_: Exception) {
-                            context.startActivity(detailsIntent)
+                                true
+                            }.getOrDefault(false)
+                            if (launched) break
                         }
-                        onDismiss()
+                        if (!launched) {
+                            runCatching { context.startActivity(detailsIntent) }
+                        }
+                        if (launched) {
+                            onDismiss()
+                        } else {
+                            // 即使无法拉起卸载页，也关闭菜单避免卡住交互
+                            onDismiss()
+                        }
                     }
                 }
 

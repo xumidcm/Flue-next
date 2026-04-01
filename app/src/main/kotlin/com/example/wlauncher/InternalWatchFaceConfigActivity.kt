@@ -14,8 +14,9 @@ import androidx.activity.result.contract.ActivityResultContracts.StartActivityFo
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +31,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -39,11 +46,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -57,6 +70,8 @@ import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.InternalWatchFaceStorage
 import com.flue.launcher.watchface.WatchClockPosition
+import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 const val EXTRA_INTERNAL_WATCHFACE_ID = "internal_watchface_id"
 
@@ -180,11 +195,19 @@ private fun InternalWatchFaceConfigScreen(
         onBack()
     }
 
+    val scrollState = rememberScrollState()
+    val scope = rememberCoroutineScope()
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .verticalScroll(rememberScrollState())
+            .focusable()
+            .onRotaryScrollEvent {
+                scope.launch { scrollState.scrollBy(-it.verticalScrollPixels * 1.12f) }
+                true
+            }
+            .verticalScroll(scrollState)
             .padding(horizontal = 18.dp, vertical = 22.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -351,23 +374,39 @@ private fun InternalWatchFaceConfigScreen(
 }
 
 @Composable
-@OptIn(ExperimentalFoundationApi::class)
 private fun ActionButton(
     text: String,
     enabled: Boolean = true,
     onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
+    var pressed by remember { mutableStateOf(false) }
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.958f else 1f,
+        animationSpec = spring(stiffness = 820f, dampingRatio = 0.74f),
+        label = "internal_action_press_scale"
+    )
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
             .clip(RoundedCornerShape(18.dp))
             .background(if (enabled) WatchColors.SurfaceGlass else Color.White.copy(alpha = 0.05f))
-            .combinedClickable(
-                enabled = enabled,
-                onClick = onClick,
-                onLongClick = onLongClick
-            )
+            .pointerInput(enabled, onLongClick) {
+                if (!enabled) return@pointerInput
+                detectTapGestures(
+                    onPress = {
+                        pressed = true
+                        tryAwaitRelease()
+                        pressed = false
+                    },
+                    onLongPress = { onLongClick?.invoke() },
+                    onTap = { onClick() }
+                )
+            }
             .padding(vertical = 16.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -469,11 +508,23 @@ private fun SmallChoiceChip(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.95f else 1f,
+        animationSpec = spring(stiffness = 860f, dampingRatio = 0.74f),
+        label = "clock_position_chip_press_scale"
+    )
     Box(
         modifier = modifier
+            .fishtailScale()
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
             .clip(RoundedCornerShape(16.dp))
             .background(if (selected) WatchColors.ActiveCyan.copy(alpha = 0.22f) else WatchColors.SurfaceGlass)
-            .clickable(onClick = onClick)
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(vertical = 12.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -492,12 +543,33 @@ private fun ToggleRow(
     enabled: Boolean,
     onToggle: () -> Unit
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.965f else 1f,
+        animationSpec = spring(stiffness = 860f, dampingRatio = 0.76f),
+        label = "toggle_row_press_scale"
+    )
+    val knobOffset by animateDpAsState(
+        targetValue = if (enabled) 23.dp else 3.dp,
+        animationSpec = spring(stiffness = 760f, dampingRatio = 0.82f),
+        label = "clock_toggle_knob_offset"
+    )
+    val trackColor by animateColorAsState(
+        targetValue = if (enabled) WatchColors.ActiveGreen else Color.White.copy(alpha = 0.18f),
+        label = "clock_toggle_track_color"
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .fishtailScale()
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
             .clip(RoundedCornerShape(18.dp))
             .background(WatchColors.SurfaceGlass)
-            .clickable(onClick = onToggle)
+            .clickable(interactionSource = interaction, indication = null, onClick = onToggle)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -513,12 +585,12 @@ private fun ToggleRow(
                 .width(46.dp)
                 .height(26.dp)
                 .clip(RoundedCornerShape(13.dp))
-                .background(if (enabled) WatchColors.ActiveGreen else Color.White.copy(alpha = 0.18f)),
-            contentAlignment = if (enabled) Alignment.CenterEnd else Alignment.CenterStart
+                .background(trackColor),
+            contentAlignment = Alignment.CenterStart
         ) {
             Box(
                 modifier = Modifier
-                    .padding(horizontal = 3.dp)
+                    .padding(start = knobOffset)
                     .width(20.dp)
                     .height(20.dp)
                     .clip(RoundedCornerShape(10.dp))
@@ -526,4 +598,24 @@ private fun ToggleRow(
             )
         }
     }
+}
+
+@Composable
+private fun Modifier.fishtailScale(): Modifier {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val screenCenter = with(density) {
+        androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp.toPx() / 2f
+    }
+    var itemCenter by remember { mutableFloatStateOf(screenCenter) }
+    val normalized = ((itemCenter - screenCenter) / screenCenter).coerceIn(-1f, 1f)
+    val scale = (1f - abs(normalized) * 0.12f).coerceIn(0.88f, 1f)
+    return this
+        .onGloballyPositioned { coords ->
+            itemCenter = coords.positionInWindow().y + coords.size.height / 2f
+        }
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+            alpha = scale.coerceIn(0.65f, 1f)
+        }
 }
