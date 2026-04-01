@@ -166,6 +166,7 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
     val builtInPhotoClockBold by vm.builtInPhotoClockBold.collectAsState()
     val builtInVideoClockBold by vm.builtInVideoClockBold.collectAsState()
     val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
+    val builtInManagerThumbnails by vm.builtInManagerThumbnails.collectAsState()
     val headerTime = rememberSettingsHeaderTime()
 
     var destination by remember { mutableStateOf(SettingsDestination.ROOT) }
@@ -576,6 +577,15 @@ private fun SettingsRootScreen(onFinish: () -> Unit) {
                     checked = animationOverrideEnabled,
                     onToggle = { vm.setAnimationOverrideEnabled(it) },
                     scale = itemFisheye(listState, "anim_override", screenCenterY, screenHeightPx)
+                )
+            }
+            item("builtin_manager_thumbnails") {
+                SettingsSwitchRow(
+                    title = "\u5185\u7f6e\u7ba1\u7406\u5668\u7f29\u7565\u56fe",
+                    subtitle = "\u5728\u56fe\u7247/\u89c6\u9891\u5217\u8868\u5de6\u4fa7\u663e\u793a\u9884\u89c8\u56fe",
+                    checked = builtInManagerThumbnails,
+                    onToggle = { vm.setBuiltInManagerThumbnails(it) },
+                    scale = itemFisheye(listState, "builtin_manager_thumbnails", screenCenterY, screenHeightPx)
                 )
             }
         }

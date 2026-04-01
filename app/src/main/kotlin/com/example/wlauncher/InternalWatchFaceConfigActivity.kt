@@ -34,6 +34,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -548,6 +550,15 @@ private fun ToggleRow(
         animationSpec = spring(stiffness = 860f, dampingRatio = 0.76f),
         label = "toggle_row_press_scale"
     )
+    val knobOffset by animateDpAsState(
+        targetValue = if (enabled) 23.dp else 3.dp,
+        animationSpec = spring(stiffness = 760f, dampingRatio = 0.82f),
+        label = "clock_toggle_knob_offset"
+    )
+    val trackColor by animateColorAsState(
+        targetValue = if (enabled) WatchColors.ActiveGreen else Color.White.copy(alpha = 0.18f),
+        label = "clock_toggle_track_color"
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -574,12 +585,12 @@ private fun ToggleRow(
                 .width(46.dp)
                 .height(26.dp)
                 .clip(RoundedCornerShape(13.dp))
-                .background(if (enabled) WatchColors.ActiveGreen else Color.White.copy(alpha = 0.18f)),
-            contentAlignment = if (enabled) Alignment.CenterEnd else Alignment.CenterStart
+                .background(trackColor),
+            contentAlignment = Alignment.CenterStart
         ) {
             Box(
                 modifier = Modifier
-                    .padding(horizontal = 3.dp)
+                    .padding(start = knobOffset)
                     .width(20.dp)
                     .height(20.dp)
                     .clip(RoundedCornerShape(10.dp))

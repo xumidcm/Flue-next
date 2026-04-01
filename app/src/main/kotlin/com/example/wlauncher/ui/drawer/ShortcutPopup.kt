@@ -149,7 +149,7 @@ fun AppShortcutOverlay(
                             data = packageUri
                             putExtra(Intent.EXTRA_RETURN_RESULT, false)
                             putExtra(EXTRA_UNINSTALL_ALL_USERS, false)
-                            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         val googlePackageInstallerIntent = Intent(Intent.ACTION_DELETE).apply {
                             component = ComponentName(
@@ -159,27 +159,39 @@ fun AppShortcutOverlay(
                             data = packageUri
                             putExtra(Intent.EXTRA_RETURN_RESULT, false)
                             putExtra(EXTRA_UNINSTALL_ALL_USERS, false)
-                            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        val androidDeleteByPackageIntent = Intent(Intent.ACTION_DELETE, packageUri).apply {
+                            setPackage("com.android.packageinstaller")
+                            putExtra(Intent.EXTRA_RETURN_RESULT, false)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        val googleDeleteByPackageIntent = Intent(Intent.ACTION_DELETE, packageUri).apply {
+                            setPackage("com.google.android.packageinstaller")
+                            putExtra(Intent.EXTRA_RETURN_RESULT, false)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         val deleteIntent = Intent(Intent.ACTION_DELETE).apply {
                             data = packageUri
                             putExtra(Intent.EXTRA_RETURN_RESULT, false)
-                            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         val uninstallIntent = Intent(Intent.ACTION_UNINSTALL_PACKAGE, packageUri).apply {
                             putExtra(Intent.EXTRA_RETURN_RESULT, false)
-                            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         val legacyWearIntent = Intent("com.android.packageinstaller.action.UNINSTALL_PKG", packageUri).apply {
-                            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         val detailsIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                             data = packageUri
-                            if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         val intents = buildList {
                             add(androidPackageInstallerIntent)
                             add(googlePackageInstallerIntent)
+                            add(androidDeleteByPackageIntent)
+                            add(googleDeleteByPackageIntent)
                             if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) add(deleteIntent)
                             add(uninstallIntent)
                             add(deleteIntent)

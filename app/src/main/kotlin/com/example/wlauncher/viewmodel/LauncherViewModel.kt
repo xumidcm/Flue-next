@@ -68,6 +68,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_PHOTO_CLOCK_BOLD = booleanPreferencesKey("photo_clock_bold")
         val KEY_VIDEO_CLOCK_BOLD = booleanPreferencesKey("video_clock_bold")
         val KEY_VIDEO_FILL_SCREEN = booleanPreferencesKey("video_fill_screen")
+        val KEY_BUILTIN_MANAGER_THUMBNAILS = booleanPreferencesKey("builtin_manager_thumbnails")
     }
 
     private val store = application.dataStore
@@ -174,6 +175,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _builtInVideoFillScreen = MutableStateFlow(true)
     val builtInVideoFillScreen: StateFlow<Boolean> = _builtInVideoFillScreen.asStateFlow()
+
+    private val _builtInManagerThumbnails = MutableStateFlow(true)
+    val builtInManagerThumbnails: StateFlow<Boolean> = _builtInManagerThumbnails.asStateFlow()
 
     private val _appOpenOrigin = MutableStateFlow(Offset(0.5f, 0.5f))
     val appOpenOrigin: StateFlow<Offset> = _appOpenOrigin.asStateFlow()
@@ -306,6 +310,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 val loadedVideoFillScreen = prefs[KEY_VIDEO_FILL_SCREEN] ?: true
                 if (_builtInVideoFillScreen.value != loadedVideoFillScreen) _builtInVideoFillScreen.value = loadedVideoFillScreen
+
+                val loadedManagerThumbnails = prefs[KEY_BUILTIN_MANAGER_THUMBNAILS] ?: true
+                if (_builtInManagerThumbnails.value != loadedManagerThumbnails) _builtInManagerThumbnails.value = loadedManagerThumbnails
 
                 watchFacePrefsHydrated = true
                 syncSelectedWatchFace()
@@ -601,6 +608,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_VIDEO_FILL_SCREEN] = fillScreen } }
     }
 
+    fun setBuiltInManagerThumbnails(enabled: Boolean) {
+        _builtInManagerThumbnails.value = enabled
+        persist { store.edit { it[KEY_BUILTIN_MANAGER_THUMBNAILS] = enabled } }
+    }
+
     fun requestWatchFaceRefresh() {
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
     }
@@ -640,6 +652,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _builtInPhotoClockBold.value = false
         _builtInVideoClockBold.value = false
         _builtInVideoFillScreen.value = true
+        _builtInManagerThumbnails.value = true
         appRepository.setHiddenComponents(emptySet())
         appRepository.setIconPackPackage(null)
         LunchWatchFaceRegistry.setCurrentSelectedId(BUILT_IN_WATCHFACE_ID)
@@ -669,6 +682,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_PHOTO_CLOCK_BOLD] = false
                 it[KEY_VIDEO_CLOCK_BOLD] = false
                 it[KEY_VIDEO_FILL_SCREEN] = true
+                it[KEY_BUILTIN_MANAGER_THUMBNAILS] = true
                 it.remove(KEY_LAST_WATCHFACE_ERROR)
             }
         }
