@@ -14,9 +14,8 @@ import androidx.activity.result.contract.ActivityResultContracts.StartActivityFo
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -52,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
@@ -372,15 +372,13 @@ private fun InternalWatchFaceConfigScreen(
 }
 
 @Composable
-@OptIn(ExperimentalFoundationApi::class)
 private fun ActionButton(
     text: String,
     enabled: Boolean = true,
     onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
+    var pressed by remember { mutableStateOf(false) }
     val pressScale by animateFloatAsState(
         targetValue = if (pressed) 0.958f else 1f,
         animationSpec = spring(stiffness = 820f, dampingRatio = 0.74f),
@@ -395,13 +393,18 @@ private fun ActionButton(
             }
             .clip(RoundedCornerShape(18.dp))
             .background(if (enabled) WatchColors.SurfaceGlass else Color.White.copy(alpha = 0.05f))
-            .combinedClickable(
-                interactionSource = interaction,
-                indication = null,
-                enabled = enabled,
-                onClick = onClick,
-                onLongClick = onLongClick
-            )
+            .pointerInput(enabled, onLongClick) {
+                if (!enabled) return@pointerInput
+                detectTapGestures(
+                    onPress = {
+                        pressed = true
+                        tryAwaitRelease()
+                        pressed = false
+                    },
+                    onLongPress = { onLongClick?.invoke() },
+                    onTap = { onClick() }
+                )
+            }
             .padding(vertical = 16.dp),
         contentAlignment = Alignment.Center
     ) {

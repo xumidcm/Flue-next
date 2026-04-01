@@ -177,35 +177,32 @@ fun AppShortcutOverlay(
                             data = packageUri
                             if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
-                        try {
-                            when {
-                                androidPackageInstallerIntent.resolveActivity(context.packageManager) != null -> {
-                                    context.startActivity(androidPackageInstallerIntent)
-                                }
-                                googlePackageInstallerIntent.resolveActivity(context.packageManager) != null -> {
-                                    context.startActivity(googlePackageInstallerIntent)
-                                }
-                                Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
-                                    deleteIntent.resolveActivity(context.packageManager) != null -> {
-                                    context.startActivity(deleteIntent)
-                                }
-                                uninstallIntent.resolveActivity(context.packageManager) != null -> {
-                                    context.startActivity(uninstallIntent)
-                                }
-                                deleteIntent.resolveActivity(context.packageManager) != null -> {
-                                    context.startActivity(deleteIntent)
-                                }
-                                legacyWearIntent.resolveActivity(context.packageManager) != null -> {
-                                    context.startActivity(legacyWearIntent)
-                                }
-                                else -> {
-                                    context.startActivity(detailsIntent)
-                                }
-                            }
-                        } catch (_: Exception) {
-                            context.startActivity(detailsIntent)
+                        val intents = buildList {
+                            add(androidPackageInstallerIntent)
+                            add(googlePackageInstallerIntent)
+                            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) add(deleteIntent)
+                            add(uninstallIntent)
+                            add(deleteIntent)
+                            add(legacyWearIntent)
+                            add(detailsIntent)
                         }
-                        onDismiss()
+                        var launched = false
+                        for (intent in intents) {
+                            launched = runCatching {
+                                context.startActivity(intent)
+                                true
+                            }.getOrDefault(false)
+                            if (launched) break
+                        }
+                        if (!launched) {
+                            runCatching { context.startActivity(detailsIntent) }
+                        }
+                        if (launched) {
+                            onDismiss()
+                        } else {
+                            // 即使无法拉起卸载页，也关闭菜单避免卡住交互
+                            onDismiss()
+                        }
                     }
                 }
 
