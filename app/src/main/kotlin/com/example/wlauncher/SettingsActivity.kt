@@ -104,7 +104,7 @@ import java.io.File
 import java.util.Date
 import java.util.Locale
 
-private const val ABOUT_VERSION = "beta0.7"
+private const val ABOUT_VERSION = "beta0.8"
 const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
 const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
@@ -231,10 +231,16 @@ private fun SettingsRootScreen(
 
     val selectedIconPackLabel = availableIconPacks.firstOrNull { it.packageName == selectedIconPackPackage }?.label
     val scrollFor: (SettingsDestination) -> SavedScrollPosition = { target ->
-        pageScrollPositions[target] ?: SavedScrollPosition()
+        if (target == SettingsDestination.ROOT) {
+            pageScrollPositions[target] ?: SavedScrollPosition()
+        } else {
+            SavedScrollPosition()
+        }
     }
     val updateScroll: (SettingsDestination, Int, Int) -> Unit = { target, index, offset ->
-        pageScrollPositions[target] = SavedScrollPosition(index = index, offset = offset)
+        if (target == SettingsDestination.ROOT) {
+            pageScrollPositions[target] = SavedScrollPosition(index = index, offset = offset)
+        }
     }
 
     AnimatedContent(
@@ -1238,13 +1244,14 @@ private fun itemFisheye(
 ): Float {
     val layoutInfo = listState.layoutInfo
     val info = layoutInfo.visibleItemsInfo.find { it.key == key } ?: return 0.92f
+    val totalCount = layoutInfo.totalItemsCount.coerceAtLeast(1)
+    val isTailItem = info.index >= (totalCount - 2).coerceAtLeast(0)
     val itemCenterY = info.offset + info.size / 2f
-    if (itemCenterY <= screenCenterY) return 1f
+    if (itemCenterY <= screenCenterY && !isTailItem) return 1f
     val distance = kotlin.math.abs(itemCenterY - screenCenterY)
     val normalized = (distance / (screenHeight / 2f)).coerceIn(0f, 1f)
     val baseScale = 1f - 0.14f * normalized
     val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()
-    val totalCount = layoutInfo.totalItemsCount.coerceAtLeast(1)
     val flattenWindow = 4
     val startFlattenIndex = (totalCount - flattenWindow).coerceAtLeast(0)
     val nearBottomProgress = if (lastVisible == null) {
@@ -1268,7 +1275,7 @@ private fun itemFisheye(
     val visibleItems = layoutInfo.visibleItemsInfo
     val currentVisibleOrder = visibleItems.indexOfFirst { it.key == key }.coerceAtLeast(0)
     val fromBottomOrder = (visibleItems.lastIndex - currentVisibleOrder).coerceAtLeast(0)
-    val stagger = (fromBottomOrder * 0.075f).coerceAtMost(0.32f)
+    val stagger = ((fromBottomOrder + 1) * 0.075f).coerceAtMost(0.32f)
     val stagedFlatten = ((flattenProgress - stagger) / (1f - stagger)).coerceIn(0f, 1f)
 
     return androidx.compose.ui.util.lerp(baseScale, 1f, stagedFlatten)
