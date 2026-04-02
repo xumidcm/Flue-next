@@ -40,9 +40,9 @@ class AppRepository(private val context: Context) {
     private var iconPackPackage: String? = null
     private var iconPackMapping: IconPackMapping? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val iconCache = object : LinkedHashMap<String, Pair<Bitmap, Bitmap>>(180, 0.75f, true) {
+    private val iconCache = object : LinkedHashMap<String, Pair<Bitmap, Bitmap>>(120, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Bitmap, Bitmap>>?): Boolean {
-            return size > 180
+            return size > 120
         }
     }
 
@@ -76,6 +76,7 @@ class AppRepository(private val context: Context) {
     fun setIconPackPackage(packageName: String?) {
         iconPackPackage = packageName?.takeIf { it.isNotBlank() }
         iconPackMapping = iconPackPackage?.let { IconPackScanner.loadMapping(context, it) }
+        synchronized(iconCache) { iconCache.clear() }
         refreshAsync(currentIconSize)
     }
 
@@ -86,7 +87,11 @@ class AppRepository(private val context: Context) {
     }
 
     fun refresh(iconSize: Int = 128) {
+        val previousIconSize = currentIconSize
         currentIconSize = iconSize
+        if (previousIconSize != iconSize) {
+            synchronized(iconCache) { iconCache.clear() }
+        }
         val pm = context.packageManager
         val installTimeCache = mutableMapOf<String, Long>()
         val mainIntent = Intent(Intent.ACTION_MAIN).apply {

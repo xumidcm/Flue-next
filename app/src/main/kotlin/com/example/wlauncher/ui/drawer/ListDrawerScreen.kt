@@ -327,6 +327,9 @@ fun ListDrawerScreen(
             val centeredPadding = 8.dp
             val dragRowShift = dragFromIndex?.let { itemHeights[it] } ?: with(density) { estimatedItemHeight.toPx() }
             val dragOverlayHeightPx = dragFromIndex?.let { itemHeights[it] } ?: with(density) { (iconSize + 20.dp).toPx() }
+            val visibleInfoByIndex = remember(listState.layoutInfo.visibleItemsInfo) {
+                listState.layoutInfo.visibleItemsInfo.associateBy { it.index }
+            }
 
             LaunchedEffect(dragFromIndex, screenHeightPx) {
                 var previousFrameNanos = 0L
@@ -385,7 +388,7 @@ fun ListDrawerScreen(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 itemsIndexed(apps, key = { _, app -> app.componentKey }) { index, app ->
-                    val itemInfo = listState.layoutInfo.visibleItemsInfo.find { it.index == index }
+                    val itemInfo = visibleInfoByIndex[index]
                     val itemScale = computeItemScale(itemInfo, screenCenterY, screenHeightPx)
                     val itemBlur = computeVerticalEdgeBlur(
                         centerY = itemInfo?.let { it.offset + it.size / 2f } ?: screenCenterY,
