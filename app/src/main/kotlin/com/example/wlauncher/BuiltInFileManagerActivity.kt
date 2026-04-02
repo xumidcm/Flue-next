@@ -6,11 +6,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.database.sqlite.SQLiteException
+import android.graphics.Bitmap
 import android.net.Uri
+import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Size
+import android.util.LruCache
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -238,15 +241,19 @@ private fun BuiltInFileManagerScreen(
 @Composable
 private fun MediaThumb(uri: Uri, isVideo: Boolean) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val thumbnail by produceState<android.graphics.Bitmap?>(initialValue = null, uri, isVideo) {
+    val cacheKey = remember(uri, isVideo) { "${if (isVideo) "v" else "i"}:${uri}" }
+    val thumbnail by produceState<Bitmap?>(initialValue = MediaThumbCache.get(cacheKey), cacheKey, uri, isVideo) {
+        if (value != null) return@produceState
         value = withContext(Dispatchers.IO) {
             runCatching {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     context.contentResolver.loadThumbnail(uri, Size(88, 88), null)
+                } else if (isVideo) {
+                    decodeVideoFrameThumbnail(context, uri, 96)
                 } else {
                     decodeSampledBitmap(context, uri, 96)
                 }
-            }.getOrNull()
+            }.getOrNull()?.also { MediaThumbCache.put(cacheKey, it) }
         }
     }
     if (thumbnail != null) {
@@ -263,6 +270,27 @@ private fun MediaThumb(uri: Uri, isVideo: Boolean) {
                 .size(42.dp)
                 .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(10.dp))
         )
+    }
+}
+
+private object MediaThumbCache {
+    private val cache = object : LruCache<String, Bitmap>(90) {}
+
+    fun get(key: String): Bitmap? = synchronized(cache) { cache.get(key) }
+
+    fun put(key: String, bitmap: Bitmap) {
+        synchronized(cache) { cache.put(key, bitmap) }
+    }
+}
+
+private fun decodeVideoFrameThumbnail(context: Context, uri: Uri, reqSize: Int): Bitmap? {
+    val retriever = MediaMetadataRetriever()
+    return runCatching {
+        retriever.setDataSource(context, uri)
+        val raw = retriever.frameAtTime ?: return null
+        Bitmap.createScaledBitmap(raw, reqSize, reqSize, true)
+    }.getOrNull().also {
+        runCatching { retriever.release() }
     }
 }
 

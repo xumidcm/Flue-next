@@ -24,6 +24,8 @@ import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.WatchClockPosition
+import com.flue.launcher.watchface.WatchClockColorMode
+import com.flue.launcher.watchface.InternalWatchFaceStorage
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceRegistry
 import com.flue.launcher.watchface.LunchWatchFaceScanner
@@ -46,6 +48,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_BLUR = booleanPreferencesKey("blur_enabled")
         val KEY_EDGE_BLUR = booleanPreferencesKey("edge_blur_enabled")
         val KEY_LOW_RES = booleanPreferencesKey("low_res_icons")
+        val KEY_LEGACY_CIRCULAR_ICONS = booleanPreferencesKey("legacy_circular_icons")
         val KEY_ANIMATION_OVERRIDE = booleanPreferencesKey("animation_override_enabled")
         val KEY_SPLASH_ICON = booleanPreferencesKey("splash_icon")
         val KEY_SPLASH_DELAY = intPreferencesKey("splash_delay")
@@ -69,6 +72,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_PHOTO_CLOCK_BOLD = booleanPreferencesKey("photo_clock_bold")
         val KEY_VIDEO_CLOCK_BOLD = booleanPreferencesKey("video_clock_bold")
         val KEY_VIDEO_FILL_SCREEN = booleanPreferencesKey("video_fill_screen")
+        val KEY_VIDEO_CLOCK_COLOR_MODE = stringPreferencesKey("video_clock_color_mode")
         val KEY_BUILTIN_MANAGER_THUMBNAILS = booleanPreferencesKey("builtin_manager_thumbnails")
     }
 
@@ -102,8 +106,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _appOrder = MutableStateFlow<List<String>>(emptyList())
     val appOrder: StateFlow<List<String>> = _appOrder.asStateFlow()
 
-    private val _honeycombCols = MutableStateFlow(4)
+    private val _honeycombCols = MutableStateFlow(3)
     val honeycombCols: StateFlow<Int> = _honeycombCols.asStateFlow()
+    private val _legacyCircularIcons = MutableStateFlow(false)
+    val legacyCircularIcons: StateFlow<Boolean> = _legacyCircularIcons.asStateFlow()
 
     private val _honeycombTopBlur = MutableStateFlow(4)
     val honeycombTopBlur: StateFlow<Int> = _honeycombTopBlur.asStateFlow()
@@ -176,6 +182,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _builtInVideoFillScreen = MutableStateFlow(true)
     val builtInVideoFillScreen: StateFlow<Boolean> = _builtInVideoFillScreen.asStateFlow()
+    private val _builtInVideoClockColorMode = MutableStateFlow(WatchClockColorMode.AUTO)
+    val builtInVideoClockColorMode: StateFlow<WatchClockColorMode> = _builtInVideoClockColorMode.asStateFlow()
 
     private val _builtInManagerThumbnails = MutableStateFlow(true)
     val builtInManagerThumbnails: StateFlow<Boolean> = _builtInManagerThumbnails.asStateFlow()
@@ -218,6 +226,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     refreshIcons()
                 }
 
+                val loadedLegacyCircularIcons = prefs[KEY_LEGACY_CIRCULAR_ICONS] ?: false
+                if (_legacyCircularIcons.value != loadedLegacyCircularIcons) {
+                    _legacyCircularIcons.value = loadedLegacyCircularIcons
+                    appRepository.setLegacyCircularIconsEnabled(loadedLegacyCircularIcons)
+                }
+
                 val loadedAnimationOverride = prefs[KEY_ANIMATION_OVERRIDE] ?: true
                 if (_animationOverrideEnabled.value != loadedAnimationOverride) {
                     _animationOverrideEnabled.value = loadedAnimationOverride
@@ -238,7 +252,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     appRepository.setCustomOrder(loadedOrder)
                 }
 
-                val loadedHoneycombCols = (prefs[KEY_HONEYCOMB_COLS] ?: 4).coerceIn(3, 6)
+                val loadedHoneycombCols = (prefs[KEY_HONEYCOMB_COLS] ?: 3).coerceIn(3, 6)
                 if (_honeycombCols.value != loadedHoneycombCols) _honeycombCols.value = loadedHoneycombCols
 
                 val loadedTopBlur = (prefs[KEY_HONEYCOMB_TOP_BLUR] ?: 4).coerceIn(0, 48)
@@ -312,6 +326,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 val loadedVideoFillScreen = prefs[KEY_VIDEO_FILL_SCREEN] ?: true
                 if (_builtInVideoFillScreen.value != loadedVideoFillScreen) _builtInVideoFillScreen.value = loadedVideoFillScreen
+                val loadedVideoClockColorMode = prefs[KEY_VIDEO_CLOCK_COLOR_MODE]
+                    ?.let(::parseClockColorMode)
+                    ?: WatchClockColorMode.AUTO
+                if (_builtInVideoClockColorMode.value != loadedVideoClockColorMode) {
+                    _builtInVideoClockColorMode.value = loadedVideoClockColorMode
+                }
 
                 val loadedManagerThumbnails = prefs[KEY_BUILTIN_MANAGER_THUMBNAILS] ?: true
                 if (_builtInManagerThumbnails.value != loadedManagerThumbnails) _builtInManagerThumbnails.value = loadedManagerThumbnails
@@ -404,6 +424,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _lowResIcons.value = enabled
         refreshIcons()
         persist { store.edit { it[KEY_LOW_RES] = enabled } }
+    }
+
+    fun setLegacyCircularIconsEnabled(enabled: Boolean) {
+        _legacyCircularIcons.value = enabled
+        appRepository.setLegacyCircularIconsEnabled(enabled)
+        persist { store.edit { it[KEY_LEGACY_CIRCULAR_ICONS] = enabled } }
     }
 
     fun setAnimationOverrideEnabled(enabled: Boolean) {
@@ -557,6 +583,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setBuiltInPhotoPath(path: String?) {
         _builtInPhotoPath.value = path
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
+        if (path.isNullOrBlank()) InternalWatchFaceStorage.clearPhoto(getApplication())
         persist {
             store.edit {
                 if (path.isNullOrBlank()) it.remove(KEY_BUILTIN_PHOTO_PATH)
@@ -568,6 +595,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setBuiltInVideoPath(path: String?) {
         _builtInVideoPath.value = path
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
+        if (path.isNullOrBlank()) InternalWatchFaceStorage.clearVideo(getApplication())
         persist {
             store.edit {
                 if (path.isNullOrBlank()) it.remove(KEY_BUILTIN_VIDEO_PATH)
@@ -613,6 +641,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_VIDEO_FILL_SCREEN] = fillScreen } }
     }
 
+    fun setBuiltInVideoClockColorMode(mode: WatchClockColorMode) {
+        _builtInVideoClockColorMode.value = mode
+        persist { store.edit { it[KEY_VIDEO_CLOCK_COLOR_MODE] = mode.name } }
+    }
+
     fun setBuiltInManagerThumbnails(enabled: Boolean) {
         _builtInManagerThumbnails.value = enabled
         persist { store.edit { it[KEY_BUILTIN_MANAGER_THUMBNAILS] = enabled } }
@@ -639,7 +672,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _animationOverrideEnabled.value = true
         _splashIcon.value = true
         _splashDelay.value = 500
-        _honeycombCols.value = 4
+        _honeycombCols.value = 3
+        _legacyCircularIcons.value = false
         _honeycombTopBlur.value = 4
         _honeycombBottomBlur.value = 4
         _honeycombTopFade.value = 56
@@ -657,9 +691,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _builtInPhotoClockBold.value = false
         _builtInVideoClockBold.value = false
         _builtInVideoFillScreen.value = true
+        _builtInVideoClockColorMode.value = WatchClockColorMode.AUTO
         _builtInManagerThumbnails.value = true
         appRepository.setHiddenComponents(emptySet())
         appRepository.setIconPackPackage(null)
+        appRepository.setLegacyCircularIconsEnabled(false)
         LunchWatchFaceRegistry.setCurrentSelectedId(BUILT_IN_WATCHFACE_ID)
         refreshIcons()
         persist {
@@ -671,11 +707,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_ANIMATION_OVERRIDE] = true
                 it[KEY_SPLASH_ICON] = true
                 it[KEY_SPLASH_DELAY] = 500
-                it[KEY_HONEYCOMB_COLS] = 4
+                it[KEY_HONEYCOMB_COLS] = 3
                 it[KEY_HONEYCOMB_TOP_BLUR] = 4
                 it[KEY_HONEYCOMB_BOTTOM_BLUR] = 4
                 it[KEY_HONEYCOMB_TOP_FADE] = 56
                 it[KEY_HONEYCOMB_BOTTOM_FADE] = 56
+                it[KEY_LEGACY_CIRCULAR_ICONS] = false
                 it[KEY_SHOW_NOTIFICATION] = false
                 it.remove(KEY_HIDDEN_APPS)
                 it.remove(KEY_ICON_PACK_PACKAGE)
@@ -687,10 +724,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_PHOTO_CLOCK_BOLD] = false
                 it[KEY_VIDEO_CLOCK_BOLD] = false
                 it[KEY_VIDEO_FILL_SCREEN] = true
+                it[KEY_VIDEO_CLOCK_COLOR_MODE] = WatchClockColorMode.AUTO.name
                 it[KEY_BUILTIN_MANAGER_THUMBNAILS] = true
                 it.remove(KEY_LAST_WATCHFACE_ERROR)
             }
         }
+    }
+
+    private fun parseClockColorMode(raw: String): WatchClockColorMode {
+        return runCatching { WatchClockColorMode.valueOf(raw) }.getOrDefault(WatchClockColorMode.AUTO)
     }
 
     private fun persist(block: suspend () -> Unit) {

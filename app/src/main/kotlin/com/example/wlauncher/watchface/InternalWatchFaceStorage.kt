@@ -13,6 +13,10 @@ object InternalWatchFaceStorage {
 
     fun copyVideo(context: Context, uri: Uri): String? = copyMedia(context, uri, VIDEO_DIR, "video")
 
+    fun clearPhoto(context: Context) = clearMedia(context, PHOTO_DIR)
+
+    fun clearVideo(context: Context) = clearMedia(context, VIDEO_DIR)
+
     private fun copyMedia(
         context: Context,
         uri: Uri,
@@ -40,5 +44,14 @@ object InternalWatchFaceStorage {
         if (!fromMime.isNullOrBlank()) return fromMime
         val fromPath = MimeTypeMap.getFileExtensionFromUrl(uri.toString())
         return fromPath.ifBlank { fallbackExtension }
+    }
+
+    private fun clearMedia(context: Context, folderName: String) {
+        runCatching {
+            val root = File(context.filesDir, "internal_watchfaces/$folderName")
+            root.listFiles()?.forEach { existing ->
+                if (existing.isFile) existing.delete()
+            }
+        }
     }
 }

@@ -122,6 +122,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val layoutMode by vm.layoutMode.collectAsState()
     val blurEnabled by vm.blurEnabled.collectAsState()
     val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsState()
+    val legacyCircularIcons by vm.legacyCircularIcons.collectAsState()
     val animationOverrideEnabled by vm.animationOverrideEnabled.collectAsState()
     val apps by vm.apps.collectAsState()
     val appOpenOrigin by vm.appOpenOrigin.collectAsState()
@@ -149,12 +150,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val builtInPhotoClockBold by vm.builtInPhotoClockBold.collectAsState()
     val builtInVideoClockBold by vm.builtInVideoClockBold.collectAsState()
     val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
+    val builtInVideoClockColorMode by vm.builtInVideoClockColorMode.collectAsState()
     val layerBlurEnabled = blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
     val notificationsEnabled = false
     val openWatchFaceChooser = remember(context) {
         {
-            context.startActivity(Intent(context, WatchFaceChooserActivity::class.java))
+            context.startActivity(
+                Intent(context, SettingsActivity::class.java)
+                    .putExtra(EXTRA_SETTINGS_DESTINATION, SETTINGS_DESTINATION_WATCH_FACES)
+                    .putExtra(EXTRA_SETTINGS_RETURN_TO_FACE, true)
+            )
             (context as? Activity)?.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
         }
     }
@@ -235,7 +241,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 clockPosition = builtInVideoClockPosition,
                                 clockSizeSp = builtInVideoClockSize,
                                 boldClock = builtInVideoClockBold,
-                                cropToFill = builtInVideoFillScreen
+                                cropToFill = builtInVideoFillScreen,
+                                clockColorMode = builtInVideoClockColorMode
                             ),
                             onLongPress = null
                         )
@@ -298,6 +305,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         blurEnabled = blurEnabled,
                         edgeBlurEnabled = edgeBlurEnabled,
                         suppressHeavyEffects = reduceLegacyDrawerEffects,
+                        topFadeRangeDp = honeycombTopFade,
+                        bottomFadeRangeDp = honeycombBottomFade,
                         onAppClick = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
                             vm.openApp(appInfo, origin, launchDelay)
@@ -383,6 +392,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     blurEnabled = blurEnabled,
                     edgeBlurEnabled = edgeBlurEnabled,
                     lowResIcons = vm.lowResIcons.collectAsState().value,
+                    legacyCircularIcons = legacyCircularIcons,
                     animationOverrideEnabled = animationOverrideEnabled,
                     splashIcon = splashIcon,
                     splashDelay = splashDelay,
@@ -399,6 +409,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     onBlurToggle = { vm.setBlurEnabled(it) },
                     onEdgeBlurToggle = { vm.setEdgeBlurEnabled(it) },
                     onLowResToggle = { vm.setLowResIcons(it) },
+                    onLegacyCircularIconsToggle = { vm.setLegacyCircularIconsEnabled(it) },
                     onAnimationOverrideToggle = { vm.setAnimationOverrideEnabled(it) },
                     onSplashToggle = { vm.setSplashIcon(it) },
                     onSplashDelayChange = { vm.setSplashDelay(it) },
