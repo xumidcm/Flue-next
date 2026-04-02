@@ -104,7 +104,7 @@ import java.io.File
 import java.util.Date
 import java.util.Locale
 
-private const val ABOUT_VERSION = "beta0.7"
+private const val ABOUT_VERSION = "beta0.8"
 const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
 const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
@@ -1268,7 +1268,8 @@ private fun itemFisheye(
     val visibleItems = layoutInfo.visibleItemsInfo
     val currentVisibleOrder = visibleItems.indexOfFirst { it.key == key }.coerceAtLeast(0)
     val fromBottomOrder = (visibleItems.lastIndex - currentVisibleOrder).coerceAtLeast(0)
-    val stagger = (fromBottomOrder * 0.075f).coerceAtMost(0.32f)
+    val tailOrder = (2 - fromBottomOrder).coerceAtLeast(0)
+    val stagger = (tailOrder * 0.075f).coerceAtMost(0.32f)
     val stagedFlatten = ((flattenProgress - stagger) / (1f - stagger)).coerceIn(0f, 1f)
 
     return androidx.compose.ui.util.lerp(baseScale, 1f, stagedFlatten)
