@@ -122,6 +122,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val layoutMode by vm.layoutMode.collectAsState()
     val blurEnabled by vm.blurEnabled.collectAsState()
     val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsState()
+    val legacyCircularIcons by vm.legacyCircularIcons.collectAsState()
     val animationOverrideEnabled by vm.animationOverrideEnabled.collectAsState()
     val apps by vm.apps.collectAsState()
     val appOpenOrigin by vm.appOpenOrigin.collectAsState()
@@ -391,6 +392,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     blurEnabled = blurEnabled,
                     edgeBlurEnabled = edgeBlurEnabled,
                     lowResIcons = vm.lowResIcons.collectAsState().value,
+                    legacyCircularIcons = legacyCircularIcons,
                     animationOverrideEnabled = animationOverrideEnabled,
                     splashIcon = splashIcon,
                     splashDelay = splashDelay,
@@ -407,6 +409,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     onBlurToggle = { vm.setBlurEnabled(it) },
                     onEdgeBlurToggle = { vm.setEdgeBlurEnabled(it) },
                     onLowResToggle = { vm.setLowResIcons(it) },
+                    onLegacyCircularIconsToggle = { vm.setLegacyCircularIconsEnabled(it) },
                     onAnimationOverrideToggle = { vm.setAnimationOverrideEnabled(it) },
                     onSplashToggle = { vm.setSplashIcon(it) },
                     onSplashDelayChange = { vm.setSplashDelay(it) },

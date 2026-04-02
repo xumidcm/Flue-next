@@ -7,6 +7,11 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ResolveInfo
 import android.graphics.Bitmap
+import android.graphics.BitmapShader
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Shader
+import android.graphics.drawable.Drawable
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
 import com.flue.launcher.data.model.AppInfo
@@ -34,6 +39,7 @@ class AppRepository(private val context: Context) {
     private var currentIconSize = 128
     private var iconPackPackage: String? = null
     private var iconPackMapping: IconPackMapping? = null
+    private var useLegacyCircularIcons = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val iconCache = object : LinkedHashMap<String, Pair<Bitmap, Bitmap>>(120, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Bitmap, Bitmap>>?): Boolean {
@@ -75,6 +81,13 @@ class AppRepository(private val context: Context) {
         refreshAsync(currentIconSize)
     }
 
+    fun setLegacyCircularIconsEnabled(enabled: Boolean) {
+        if (useLegacyCircularIcons == enabled) return
+        useLegacyCircularIcons = enabled
+        synchronized(iconCache) { iconCache.clear() }
+        refreshAsync(currentIconSize)
+    }
+
     private fun reorder() {
         val current = _allApps.value
         _allApps.value = sortApps(current)
@@ -110,11 +123,18 @@ class AppRepository(private val context: Context) {
                 val componentKey = "$packageName/${ri.activityInfo.name}"
                 val packedIcon = iconPackMapping?.let { IconPackScanner.loadIconDrawable(context, it, componentKey) }
                 val resolvedIconDrawable = packedIcon ?: ri.loadIcon(pm)
-                val iconCacheKey = "${iconPackPackage ?: "sys"}|$componentKey|$iconSize"
+                val iconCacheKey = "${iconPackPackage ?: "sys"}|$componentKey|$iconSize|${if (useLegacyCircularIcons) "legacy" else "plain"}"
                 val (iconBitmap, blurredBitmap) = synchronized(iconCache) {
                     iconCache[iconCacheKey]
                 } ?: run {
-                    val createdIconBitmap = resolvedIconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
+                    val createdIconBitmap = if (useLegacyCircularIcons && packedIcon == null) {
+                        createCircularBitmap(
+                            drawableToBitmap(resolvedIconDrawable, iconSize),
+                            edgeInsetPx = iconSize * 0.015f
+                        )
+                    } else {
+                        resolvedIconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
+                    }
                     val createdBlurredBitmap = createSoftenedBitmap(createdIconBitmap)
                     synchronized(iconCache) {
                         iconCache[iconCacheKey] = createdIconBitmap to createdBlurredBitmap
@@ -171,6 +191,27 @@ class AppRepository(private val context: Context) {
             true
         )
         return Bitmap.createScaledBitmap(downscaled, source.width, source.height, true)
+    }
+
+    private fun drawableToBitmap(drawable: Drawable, size: Int): Bitmap {
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        drawable.setBounds(0, 0, size, size)
+        drawable.draw(canvas)
+        return bitmap
+    }
+
+    private fun createCircularBitmap(source: Bitmap, edgeInsetPx: Float = 0f): Bitmap {
+        val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG).apply {
+            shader = BitmapShader(source, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            isFilterBitmap = true
+            isDither = true
+        }
+        val radius = (minOf(source.width, source.height) / 2f - edgeInsetPx).coerceAtLeast(0f)
+        canvas.drawCircle(source.width / 2f, source.height / 2f, radius, paint)
+        return output
     }
 
     private fun orderRank(app: AppInfo): Int {

@@ -170,6 +170,7 @@ private fun SettingsRootScreen(
     val blurEnabled by vm.blurEnabled.collectAsState()
     val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsState()
     val lowResIcons by vm.lowResIcons.collectAsState()
+    val legacyCircularIcons by vm.legacyCircularIcons.collectAsState()
     val animationOverrideEnabled by vm.animationOverrideEnabled.collectAsState()
     val splashIcon by vm.splashIcon.collectAsState()
     val splashDelay by vm.splashDelay.collectAsState()
@@ -595,6 +596,15 @@ private fun SettingsRootScreen(
                     checked = lowResIcons,
                     onToggle = { vm.setLowResIcons(it) },
                     scale = itemFisheye(listState, "low_res", screenCenterY, screenHeightPx)
+                )
+            }
+            item("legacy_icon_pipeline") {
+                SettingsSwitchRow(
+                    title = "\u7ecf\u5178\u56fe\u6807\u6e32\u67d3",
+                    subtitle = "\u5f00\u542f\u540e\u4f7f\u7528\u65e7\u7248\u5706\u5f62\u88c1\u526a\uff0c\u5173\u95ed\u5219\u4f7f\u7528\u65b0\u7248\u76f4\u63a5 Bitmap \u6e32\u67d3",
+                    checked = legacyCircularIcons,
+                    onToggle = { vm.setLegacyCircularIconsEnabled(it) },
+                    scale = itemFisheye(listState, "legacy_icon_pipeline", screenCenterY, screenHeightPx)
                 )
             }
             item("anim_override") {
