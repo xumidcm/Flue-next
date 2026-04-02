@@ -588,20 +588,24 @@ fun ListDrawerScreen(
                     .platformBlur(LIST_EDGE_ITEM_BLUR_DP, true)
             )
         }
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .height(56.dp)
-                .background(Brush.verticalGradient(listOf(Color.Black, Color.Transparent)))
-        )
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .height(60.dp)
-                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
-        )
+        if (topFadeRangeDp > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(topFadeRangeDp.dp)
+                    .background(Brush.verticalGradient(listOf(Color.Black, Color.Transparent)))
+            )
+        }
+        if (bottomFadeRangeDp > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(bottomFadeRangeDp.dp)
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
+            )
+        }
     }
 
     longPressedApp?.let { app ->

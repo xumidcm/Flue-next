@@ -80,6 +80,7 @@ fun HoneycombScreen(
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
     var dragPointer by remember { mutableStateOf<Offset?>(null) }
     var dragApp by remember { mutableStateOf<AppInfo?>(null) }
+    var initializedAtTop by remember { mutableStateOf(false) }
     var settlingApp by remember { mutableStateOf<AppInfo?>(null) }
     var settlingKey by remember { mutableStateOf<String?>(null) }
     var dropPressedIndex by remember { mutableStateOf<Int?>(null) }
@@ -123,10 +124,16 @@ fun HoneycombScreen(
         val maxScroll = -minGridY
         val minScroll = -maxGridY
 
-        val scrollOffset = remember(maxScroll) { Animatable(maxScroll) }
+        val scrollOffset = remember { Animatable(0f) }
         val scope = rememberCoroutineScope()
         val overlayBlurActive = longPressedApp != null && blurEnabled && !suppressHeavyEffects
         val honeycombAutoScrollEdgePx = with(density) { HONEYCOMB_AUTO_SCROLL_EDGE_DP.dp.toPx() }
+        LaunchedEffect(maxScroll, apps.size) {
+            if (!initializedAtTop && apps.isNotEmpty()) {
+                scrollOffset.snapTo(maxScroll)
+                initializedAtTop = true
+            }
+        }
         LaunchedEffect(dragFromIndex, minScroll, maxScroll, screenHeightPx) {
             var previousFrameNanos = 0L
             while (dragFromIndex != null) {
