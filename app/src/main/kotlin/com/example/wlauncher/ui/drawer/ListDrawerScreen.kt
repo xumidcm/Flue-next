@@ -87,6 +87,8 @@ fun ListDrawerScreen(
     edgeBlurEnabled: Boolean = false,
     suppressHeavyEffects: Boolean = false,
     iconSize: Dp = 48.dp,
+    topFadeRangeDp: Int = 56,
+    bottomFadeRangeDp: Int = 56,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
     onLongClick: (AppInfo) -> Unit = {},
@@ -319,8 +321,8 @@ fun ListDrawerScreen(
             val screenHeightPx = with(density) { maxHeight.toPx() }
             val screenCenterY = screenHeightPx / 2f
             val autoScrollEdgePx = with(density) { LIST_AUTO_SCROLL_EDGE_DP.dp.toPx() }
-            val topEdgeBlurZonePx = with(density) { 72.dp.toPx() }
-            val bottomEdgeBlurZonePx = with(density) { 78.dp.toPx() }
+            val topEdgeBlurZonePx = with(density) { topFadeRangeDp.coerceIn(0, 220).dp.toPx() }
+            val bottomEdgeBlurZonePx = with(density) { bottomFadeRangeDp.coerceIn(0, 220).dp.toPx() }
             val estimatedItemHeight = iconSize.coerceAtLeast(48.dp) + 20.dp
             val centeredPadding = 8.dp
             val dragRowShift = dragFromIndex?.let { itemHeights[it] } ?: with(density) { estimatedItemHeight.toPx() }
@@ -554,7 +556,7 @@ fun ListDrawerScreen(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
-                    .height(72.dp)
+                    .height(topFadeRangeDp.coerceAtLeast(0).dp)
                     .background(
                         Brush.verticalGradient(
                             listOf(
@@ -570,7 +572,7 @@ fun ListDrawerScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .height(78.dp)
+                    .height(bottomFadeRangeDp.coerceAtLeast(0).dp)
                     .background(
                         Brush.verticalGradient(
                             listOf(

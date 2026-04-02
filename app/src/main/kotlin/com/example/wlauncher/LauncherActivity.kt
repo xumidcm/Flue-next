@@ -304,6 +304,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         blurEnabled = blurEnabled,
                         edgeBlurEnabled = edgeBlurEnabled,
                         suppressHeavyEffects = reduceLegacyDrawerEffects,
+                        topFadeRangeDp = honeycombTopFade,
+                        bottomFadeRangeDp = honeycombBottomFade,
                         onAppClick = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
                             vm.openApp(appInfo, origin, launchDelay)
