@@ -104,7 +104,7 @@ import java.io.File
 import java.util.Date
 import java.util.Locale
 
-private const val ABOUT_VERSION = "beta0.7"
+private const val ABOUT_VERSION = "beta0.8"
 const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
 const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
@@ -231,10 +231,13 @@ private fun SettingsRootScreen(
 
     val selectedIconPackLabel = availableIconPacks.firstOrNull { it.packageName == selectedIconPackPackage }?.label
     val scrollFor: (SettingsDestination) -> SavedScrollPosition = { target ->
-        pageScrollPositions[target] ?: SavedScrollPosition()
+        if (target == SettingsDestination.ROOT) pageScrollPositions[target] ?: SavedScrollPosition()
+        else SavedScrollPosition()
     }
     val updateScroll: (SettingsDestination, Int, Int) -> Unit = { target, index, offset ->
-        pageScrollPositions[target] = SavedScrollPosition(index = index, offset = offset)
+        if (target == SettingsDestination.ROOT) {
+            pageScrollPositions[target] = SavedScrollPosition(index = index, offset = offset)
+        }
     }
 
     AnimatedContent(
@@ -790,6 +793,9 @@ private fun SettingsPageScaffold(
                 )
             }
             content(listState, screenCenterY, screenHeightPx, visibleItemKeys)
+            item("tail_spacer") {
+                Spacer(modifier = Modifier.height(56.dp))
+            }
         }
     }
 }
@@ -1267,7 +1273,7 @@ private fun itemFisheye(
 
     val visibleItems = layoutInfo.visibleItemsInfo
     val currentVisibleOrder = visibleItems.indexOfFirst { it.key == key }.coerceAtLeast(0)
-    val fromBottomOrder = (visibleItems.lastIndex - currentVisibleOrder).coerceAtLeast(0)
+    val fromBottomOrder = (visibleItems.lastIndex - currentVisibleOrder + 1).coerceAtLeast(0)
     val stagger = (fromBottomOrder * 0.075f).coerceAtMost(0.32f)
     val stagedFlatten = ((flattenProgress - stagger) / (1f - stagger)).coerceIn(0f, 1f)
 
