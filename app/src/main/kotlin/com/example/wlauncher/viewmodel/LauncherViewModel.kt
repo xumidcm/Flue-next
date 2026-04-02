@@ -331,7 +331,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 syncSelectedWatchFace()
             }
         }
-        refreshWatchFaces()
+        refreshWatchFaces(includeInstalled = false)
     }
 
     fun setState(state: ScreenState) {
@@ -522,13 +522,22 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun refreshWatchFaces(force: Boolean = false) {
+    fun refreshWatchFaces(force: Boolean = false, includeInstalled: Boolean = true) {
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastWatchFaceRefreshAt < 25_000L) return
         lastWatchFaceRefreshAt = now
+        val shouldScanInstalled = includeInstalled || _selectedWatchFaceId.value !in setOf(
+            BUILT_IN_WATCHFACE_ID,
+            BUILT_IN_PHOTO_WATCHFACE_ID,
+            BUILT_IN_VIDEO_WATCHFACE_ID
+        )
         viewModelScope.launch {
             val scanned = withContext(Dispatchers.IO) {
-                LunchWatchFaceScanner.builtInDescriptors() + LunchWatchFaceScanner.scanInstalled(getApplication())
+                if (shouldScanInstalled) {
+                    LunchWatchFaceScanner.builtInDescriptors() + LunchWatchFaceScanner.scanInstalled(getApplication())
+                } else {
+                    LunchWatchFaceScanner.builtInDescriptors()
+                }
             }
             _availableWatchFaces.value = scanned
             LunchWatchFaceRegistry.update(scanned)

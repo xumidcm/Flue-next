@@ -102,7 +102,7 @@ class LauncherActivity : ComponentActivity() {
         }
         if (::vm.isInitialized) {
             vm.onReturnToLauncher()
-            vm.refreshWatchFaces()
+            vm.refreshWatchFaces(includeInstalled = false)
         }
     }
 
