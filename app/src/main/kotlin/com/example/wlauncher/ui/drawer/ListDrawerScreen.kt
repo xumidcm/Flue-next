@@ -87,6 +87,8 @@ fun ListDrawerScreen(
     edgeBlurEnabled: Boolean = false,
     suppressHeavyEffects: Boolean = false,
     iconSize: Dp = 48.dp,
+    topFadeRangeDp: Int = 56,
+    bottomFadeRangeDp: Int = 56,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
     onLongClick: (AppInfo) -> Unit = {},
@@ -319,12 +321,15 @@ fun ListDrawerScreen(
             val screenHeightPx = with(density) { maxHeight.toPx() }
             val screenCenterY = screenHeightPx / 2f
             val autoScrollEdgePx = with(density) { LIST_AUTO_SCROLL_EDGE_DP.dp.toPx() }
-            val topEdgeBlurZonePx = with(density) { 72.dp.toPx() }
-            val bottomEdgeBlurZonePx = with(density) { 78.dp.toPx() }
+            val topEdgeBlurZonePx = with(density) { topFadeRangeDp.coerceIn(0, 220).dp.toPx() }
+            val bottomEdgeBlurZonePx = with(density) { bottomFadeRangeDp.coerceIn(0, 220).dp.toPx() }
             val estimatedItemHeight = iconSize.coerceAtLeast(48.dp) + 20.dp
             val centeredPadding = 8.dp
             val dragRowShift = dragFromIndex?.let { itemHeights[it] } ?: with(density) { estimatedItemHeight.toPx() }
             val dragOverlayHeightPx = dragFromIndex?.let { itemHeights[it] } ?: with(density) { (iconSize + 20.dp).toPx() }
+            val visibleInfoByIndex = remember(listState.layoutInfo.visibleItemsInfo) {
+                listState.layoutInfo.visibleItemsInfo.associateBy { it.index }
+            }
 
             LaunchedEffect(dragFromIndex, screenHeightPx) {
                 var previousFrameNanos = 0L
@@ -383,7 +388,7 @@ fun ListDrawerScreen(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 itemsIndexed(apps, key = { _, app -> app.componentKey }) { index, app ->
-                    val itemInfo = listState.layoutInfo.visibleItemsInfo.find { it.index == index }
+                    val itemInfo = visibleInfoByIndex[index]
                     val itemScale = computeItemScale(itemInfo, screenCenterY, screenHeightPx)
                     val itemBlur = computeVerticalEdgeBlur(
                         centerY = itemInfo?.let { it.offset + it.size / 2f } ?: screenCenterY,
@@ -554,7 +559,7 @@ fun ListDrawerScreen(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
-                    .height(72.dp)
+                    .height(topFadeRangeDp.coerceAtLeast(0).dp)
                     .background(
                         Brush.verticalGradient(
                             listOf(
@@ -570,7 +575,7 @@ fun ListDrawerScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .height(78.dp)
+                    .height(bottomFadeRangeDp.coerceAtLeast(0).dp)
                     .background(
                         Brush.verticalGradient(
                             listOf(
@@ -583,20 +588,24 @@ fun ListDrawerScreen(
                     .platformBlur(LIST_EDGE_ITEM_BLUR_DP, true)
             )
         }
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .height(56.dp)
-                .background(Brush.verticalGradient(listOf(Color.Black, Color.Transparent)))
-        )
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .height(60.dp)
-                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
-        )
+        if (topFadeRangeDp > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(topFadeRangeDp.dp)
+                    .background(Brush.verticalGradient(listOf(Color.Black, Color.Transparent)))
+            )
+        }
+        if (bottomFadeRangeDp > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(bottomFadeRangeDp.dp)
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
+            )
+        }
     }
 
     longPressedApp?.let { app ->

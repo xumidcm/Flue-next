@@ -2,13 +2,13 @@
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
-import android.os.Process
+import android.net.Uri
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -139,41 +139,18 @@ fun AppShortcutOverlay(
                     Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
                     ShortcutMenuItem("卸载", Color(0xFFFF453A)) {
                         val packageUri = Uri.fromParts("package", app.packageName, null)
-                        val deleteIntent = Intent(Intent.ACTION_DELETE, packageUri).apply {
-                            putExtra(Intent.EXTRA_RETURN_RESULT, false)
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
-                                putExtra(Intent.EXTRA_USER, Process.myUserHandle())
-                            }
-                        }
-                        val uninstallIntent = Intent(Intent.ACTION_UNINSTALL_PACKAGE, packageUri).apply {
-                            putExtra(Intent.EXTRA_RETURN_RESULT, false)
-                        }
-                        val detailsIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                            data = packageUri
-                        }
-                        val intents = listOf(deleteIntent, uninstallIntent, detailsIntent)
+                        val uninstallIntent = Intent(Intent.ACTION_DELETE, packageUri)
                         val activity = context as? android.app.Activity
-                        var launched = false
-                        for (intent in intents) {
-                            launched = runCatching {
-                                if (activity != null) {
-                                    activity.startActivity(intent)
-                                } else {
-                                    context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                                }
-                                true
-                            }.getOrDefault(false)
-                            if (launched) break
+                        runCatching {
+                            if (activity != null) {
+                                activity.startActivity(uninstallIntent)
+                            } else {
+                                context.startActivity(uninstallIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }
+                        }.onFailure {
+                            Log.w("ShortcutPopup", "Failed to launch uninstall for ${app.packageName}", it)
                         }
-                        if (!launched) {
-                            runCatching { context.startActivity(detailsIntent) }
-                        }
-                        if (launched) {
-                            onDismiss()
-                        } else {
-                            // 即使无法拉起卸载页，也关闭菜单避免卡住交互
-                            onDismiss()
-                        }
+                        onDismiss()
                     }
                 }
 

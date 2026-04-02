@@ -17,9 +17,14 @@ import androidx.core.graphics.drawable.toBitmap
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.iconpack.IconPackMapping
 import com.flue.launcher.iconpack.IconPackScanner
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 class AppRepository(private val context: Context) {
 
@@ -34,15 +39,22 @@ class AppRepository(private val context: Context) {
     private var currentIconSize = 128
     private var iconPackPackage: String? = null
     private var iconPackMapping: IconPackMapping? = null
+    private var useLegacyCircularIcons = false
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val iconCache = object : LinkedHashMap<String, Pair<Bitmap, Bitmap>>(120, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Bitmap, Bitmap>>?): Boolean {
+            return size > 120
+        }
+    }
 
     private val packageReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
-            refresh()
+            refreshAsync()
         }
     }
 
     init {
-        refresh()
+        refreshAsync()
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_PACKAGE_ADDED)
             addAction(Intent.ACTION_PACKAGE_REMOVED)
@@ -65,7 +77,15 @@ class AppRepository(private val context: Context) {
     fun setIconPackPackage(packageName: String?) {
         iconPackPackage = packageName?.takeIf { it.isNotBlank() }
         iconPackMapping = iconPackPackage?.let { IconPackScanner.loadMapping(context, it) }
-        refresh(currentIconSize)
+        synchronized(iconCache) { iconCache.clear() }
+        refreshAsync(currentIconSize)
+    }
+
+    fun setLegacyCircularIconsEnabled(enabled: Boolean) {
+        if (useLegacyCircularIcons == enabled) return
+        useLegacyCircularIcons = enabled
+        synchronized(iconCache) { iconCache.clear() }
+        refreshAsync(currentIconSize)
     }
 
     private fun reorder() {
@@ -75,7 +95,11 @@ class AppRepository(private val context: Context) {
     }
 
     fun refresh(iconSize: Int = 128) {
+        val previousIconSize = currentIconSize
         currentIconSize = iconSize
+        if (previousIconSize != iconSize) {
+            synchronized(iconCache) { iconCache.clear() }
+        }
         val pm = context.packageManager
         val installTimeCache = mutableMapOf<String, Long>()
         val mainIntent = Intent(Intent.ACTION_MAIN).apply {
@@ -86,31 +110,42 @@ class AppRepository(private val context: Context) {
 
         iconPackMapping = iconPackPackage?.let { IconPackScanner.loadMapping(context, it) }
 
-        val loadedApps = resolveInfos
+        val resolveList = resolveInfos
             .filter { ri ->
                 !(ri.activityInfo.packageName == myPackage &&
                     ri.activityInfo.name == "com.flue.launcher.LauncherActivity")
             }
             .distinctBy { "${it.activityInfo.packageName}/${it.activityInfo.name}" }
-            .map { ri ->
+        val loadedApps = ArrayList<AppInfo>(resolveList.size)
+
+        resolveList.forEach { ri ->
                 val packageName = ri.activityInfo.packageName
                 val componentKey = "$packageName/${ri.activityInfo.name}"
                 val packedIcon = iconPackMapping?.let { IconPackScanner.loadIconDrawable(context, it, componentKey) }
-                val iconDrawable = packedIcon ?: ri.loadIcon(pm)
-                val iconBitmap = if (packedIcon != null) {
-                    iconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
-                } else {
-                    createCircularBitmap(
-                        drawableToBitmap(iconDrawable, iconSize),
-                        edgeInsetPx = iconSize * 0.015f
-                    )
+                val resolvedIconDrawable = packedIcon ?: ri.loadIcon(pm)
+                val iconCacheKey = "${iconPackPackage ?: "sys"}|$componentKey|$iconSize|${if (useLegacyCircularIcons) "legacy" else "plain"}"
+                val (iconBitmap, blurredBitmap) = synchronized(iconCache) {
+                    iconCache[iconCacheKey]
+                } ?: run {
+                    val createdIconBitmap = if (useLegacyCircularIcons && packedIcon == null) {
+                        createCircularBitmap(
+                            drawableToBitmap(resolvedIconDrawable, iconSize),
+                            edgeInsetPx = iconSize * 0.015f
+                        )
+                    } else {
+                        resolvedIconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
+                    }
+                    val createdBlurredBitmap = createSoftenedBitmap(createdIconBitmap)
+                    synchronized(iconCache) {
+                        iconCache[iconCacheKey] = createdIconBitmap to createdBlurredBitmap
+                    }
+                    createdIconBitmap to createdBlurredBitmap
                 }
-                val blurredBitmap = createSoftenedBitmap(iconBitmap)
-                AppInfo(
+                loadedApps += AppInfo(
                     label = ri.loadLabel(pm).toString(),
                     packageName = packageName,
                     activityName = ri.activityInfo.name,
-                    icon = iconDrawable,
+                    icon = resolvedIconDrawable,
                     cachedIcon = iconBitmap.asImageBitmap(),
                     cachedBlurredIcon = blurredBitmap.asImageBitmap()
                 )
@@ -134,10 +169,28 @@ class AppRepository(private val context: Context) {
     }
 
     fun destroy() {
+        scope.cancel()
+        synchronized(iconCache) { iconCache.clear() }
         try {
             context.unregisterReceiver(packageReceiver)
         } catch (_: Exception) {
         }
+    }
+
+    private fun refreshAsync(iconSize: Int = currentIconSize) {
+        scope.launch {
+            refresh(iconSize)
+        }
+    }
+
+    private fun createSoftenedBitmap(source: Bitmap): Bitmap {
+        val downscaled = Bitmap.createScaledBitmap(
+            source,
+            (source.width * 0.25f).toInt().coerceAtLeast(1),
+            (source.height * 0.25f).toInt().coerceAtLeast(1),
+            true
+        )
+        return Bitmap.createScaledBitmap(downscaled, source.width, source.height, true)
     }
 
     private fun drawableToBitmap(drawable: Drawable, size: Int): Bitmap {
@@ -159,16 +212,6 @@ class AppRepository(private val context: Context) {
         val radius = (minOf(source.width, source.height) / 2f - edgeInsetPx).coerceAtLeast(0f)
         canvas.drawCircle(source.width / 2f, source.height / 2f, radius, paint)
         return output
-    }
-
-    private fun createSoftenedBitmap(source: Bitmap): Bitmap {
-        val downscaled = Bitmap.createScaledBitmap(
-            source,
-            (source.width * 0.25f).toInt().coerceAtLeast(1),
-            (source.height * 0.25f).toInt().coerceAtLeast(1),
-            true
-        )
-        return Bitmap.createScaledBitmap(downscaled, source.width, source.height, true)
     }
 
     private fun orderRank(app: AppInfo): Int {

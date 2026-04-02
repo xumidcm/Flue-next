@@ -61,10 +61,11 @@ fun LauncherSettingsSheet(
     blurEnabled: Boolean,
     edgeBlurEnabled: Boolean = false,
     lowResIcons: Boolean = false,
+    legacyCircularIcons: Boolean = false,
     animationOverrideEnabled: Boolean = true,
     splashIcon: Boolean = true,
     splashDelay: Int = 500,
-    honeycombCols: Int = 4,
+    honeycombCols: Int = 3,
     honeycombTopBlur: Int = 4,
     honeycombBottomBlur: Int = 4,
     honeycombTopFade: Int = 56,
@@ -79,6 +80,7 @@ fun LauncherSettingsSheet(
     onBlurToggle: (Boolean) -> Unit,
     onEdgeBlurToggle: (Boolean) -> Unit = {},
     onLowResToggle: (Boolean) -> Unit = {},
+    onLegacyCircularIconsToggle: (Boolean) -> Unit = {},
     onAnimationOverrideToggle: (Boolean) -> Unit = {},
     onSplashToggle: (Boolean) -> Unit = {},
     onSplashDelayChange: (Int) -> Unit = {},
@@ -262,6 +264,16 @@ fun LauncherSettingsSheet(
             item("low_res_toggle") {
                 val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "low_res_toggle" }, screenCenterY, screenHeightPx)
                 SettingToggle(tr(isZh, "低分辨率图标", "Low-res Icons"), tr(isZh, "使用更小的缓存图标来提升滚动流畅度", "Use smaller cached icons for smoother scrolling"), lowResIcons, onLowResToggle, scale = scale)
+            }
+            item("legacy_icon_pipeline") {
+                val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "legacy_icon_pipeline" }, screenCenterY, screenHeightPx)
+                SettingToggle(
+                    tr(isZh, "经典图标渲染", "Classic Icon Rendering"),
+                    tr(isZh, "切换旧版圆形裁剪与新版直接 Bitmap 渲染", "Switch between legacy circular crop and modern direct bitmap rendering"),
+                    legacyCircularIcons,
+                    onLegacyCircularIconsToggle,
+                    scale = scale
+                )
             }
 
             if (currentLayout == LayoutMode.Honeycomb) {
