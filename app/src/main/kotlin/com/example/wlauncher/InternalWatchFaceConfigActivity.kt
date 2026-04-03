@@ -72,7 +72,6 @@ import com.flue.launcher.watchface.InternalWatchFaceStorage
 import com.flue.launcher.watchface.WatchClockColorMode
 import com.flue.launcher.watchface.WatchClockPosition
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 
 const val EXTRA_INTERNAL_WATCHFACE_ID = "internal_watchface_id"
 
@@ -406,6 +405,7 @@ private fun ActionButton(
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .fishtailScale()
             .graphicsLayer {
                 scaleX = pressScale
                 scaleY = pressScale
@@ -550,8 +550,8 @@ private fun SmallChoiceChip(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
-        targetValue = if (pressed) 0.95f else 1f,
-        animationSpec = spring(stiffness = 860f, dampingRatio = 0.74f),
+        targetValue = if (pressed) 0.958f else 1f,
+        animationSpec = spring(stiffness = 820f, dampingRatio = 0.74f),
         label = "clock_position_chip_press_scale"
     )
     Box(
@@ -585,8 +585,8 @@ private fun ToggleRow(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
-        targetValue = if (pressed) 0.965f else 1f,
-        animationSpec = spring(stiffness = 860f, dampingRatio = 0.76f),
+        targetValue = if (pressed) 0.958f else 1f,
+        animationSpec = spring(stiffness = 820f, dampingRatio = 0.74f),
         label = "toggle_row_press_scale"
     )
     val knobOffset by animateDpAsState(
@@ -646,8 +646,12 @@ private fun Modifier.fishtailScale(): Modifier {
         androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp.toPx() / 2f
     }
     var itemCenter by remember { mutableFloatStateOf(screenCenter) }
-    val normalized = ((itemCenter - screenCenter) / screenCenter).coerceIn(-1f, 1f)
-    val scale = (1f - abs(normalized) * 0.12f).coerceIn(0.88f, 1f)
+    val scale = if (itemCenter <= screenCenter) {
+        1f
+    } else {
+        val normalized = ((itemCenter - screenCenter) / screenCenter).coerceIn(0f, 1f)
+        (1f - normalized * 0.14f).coerceIn(0.86f, 1f)
+    }
     return this
         .onGloballyPositioned { coords ->
             itemCenter = coords.positionInWindow().y + coords.size.height / 2f

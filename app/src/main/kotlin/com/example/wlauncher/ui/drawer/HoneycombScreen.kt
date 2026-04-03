@@ -80,6 +80,10 @@ fun HoneycombScreen(
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
     var dragPointer by remember { mutableStateOf<Offset?>(null) }
     var dragApp by remember { mutableStateOf<AppInfo?>(null) }
+    var settlingApp by remember { mutableStateOf<AppInfo?>(null) }
+    var settlingKey by remember { mutableStateOf<String?>(null) }
+    val settlingX = remember { Animatable(0f) }
+    val settlingY = remember { Animatable(0f) }
     val effectiveEdgeBlur = edgeBlurEnabled && !suppressHeavyEffects
     var focusReady by remember { mutableStateOf(false) }
 
@@ -281,12 +285,40 @@ fun HoneycombScreen(
 
                             val from = dragFromIndex
                             val to = dragCurrentIndex
+                            val releasePointer = dragPointer
+                            val releaseScroll = scrollOffset.value
                             if (dragActive && from != null && to != null && from != to && hasDragged) {
+                                val droppedApp = apps.getOrNull(from)
+                                val targetSlot = positions.getOrNull(to)
                                 dragFromIndex = null
                                 dragCurrentIndex = null
                                 dragPointer = null
                                 dragApp = null
                                 glidePressedKey = null
+                                if (droppedApp != null && releasePointer != null && targetSlot != null) {
+                                    settlingApp = droppedApp
+                                    settlingKey = droppedApp.componentKey
+                                    scope.launch {
+                                        settlingX.snapTo(releasePointer.x.coerceIn(iconSizePx * 0.5f, screenWidthPx - iconSizePx * 0.5f))
+                                        settlingY.snapTo(releasePointer.y.coerceIn(iconSizePx * 0.5f, screenHeightPx - iconSizePx * 0.5f))
+                                        launch {
+                                            settlingX.animateTo(screenCenterX + targetSlot.x, tween(durationMillis = 130))
+                                        }
+                                        launch {
+                                            settlingY.animateTo(
+                                                (screenCenterY + targetSlot.y + releaseScroll).coerceIn(
+                                                    iconSizePx * 0.5f,
+                                                    screenHeightPx - iconSizePx * 0.5f
+                                                ),
+                                                tween(durationMillis = 130)
+                                            )
+                                        }
+                                        settlingApp = null
+                                        settlingKey = null
+                                        settlingX.snapTo(0f)
+                                        settlingY.snapTo(0f)
+                                    }
+                                }
                                 onReorder(from, to)
                             } else {
                                 dragFromIndex = null
@@ -294,6 +326,8 @@ fun HoneycombScreen(
                                 dragPointer = null
                                 dragApp = null
                                 glidePressedKey = null
+                                settlingApp = null
+                                settlingKey = null
                             }
                         }
                     } finally {
@@ -539,6 +573,7 @@ fun HoneycombScreen(
                                 scaleY = scale * animatedNeighborScale
                                 alpha = when {
                                     isDragged -> 0f
+                                    settlingKey == app.componentKey -> 0f
                                     else -> scale.coerceIn(0.24f, 1f)
                                 }
                             }
@@ -593,6 +628,49 @@ fun HoneycombScreen(
                         }
                 )
             }
+        }
+
+        val settlingOverlayApp = settlingApp
+        if (settlingOverlayApp != null) {
+            val settlingBlur = computeHoneycombEdgeBlur(
+                centerY = settlingY.value,
+                screenHeight = screenHeightPx,
+                topBlurZonePx = topFadePx,
+                bottomBlurZonePx = bottomFadePx,
+                topBlurDp = topBlurRadiusDp.toFloat(),
+                bottomBlurDp = bottomBlurRadiusDp.toFloat()
+            )
+            AppBubble(
+                icon = if (blurEnabled && effectiveEdgeBlur && settlingBlur > 0.5f && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                    settlingOverlayApp.cachedBlurredIcon
+                } else {
+                    settlingOverlayApp.cachedIcon
+                },
+                size = iconSizeDp,
+                onClick = {},
+                forcePressed = false,
+                pressScaleTarget = 1f,
+                pressAnimationDelayMillis = 0,
+                pressAnimationDurationMillis = HONEYCOMB_PRESS_DURATION_MS,
+                onPressedChange = {},
+                modifier = Modifier
+                    .zIndex(14f)
+                    .platformBlur(
+                        settlingBlur,
+                        blurEnabled && effectiveEdgeBlur && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                    )
+                    .graphicsLayer {
+                        translationX = settlingX.value - iconSizePx / 2f
+                        translationY = settlingY.value - iconSizePx / 2f
+                        val dx = settlingX.value - screenCenterX
+                        val dy = settlingY.value - screenCenterY
+                        val dist = sqrt(dx * dx + dy * dy)
+                        val scale = fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = scale.coerceIn(0.24f, 1f)
+                    }
+            )
         }
 
         if (topFadeRangeDp > 0) {
