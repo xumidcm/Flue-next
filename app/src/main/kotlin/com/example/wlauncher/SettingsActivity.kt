@@ -1,4 +1,4 @@
-package com.flue.launcher
+﻿package com.flue.launcher
 
 import android.app.Activity
 import android.content.Intent
@@ -19,6 +19,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
@@ -79,12 +80,14 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.navigation.LayoutMode
@@ -117,7 +120,8 @@ enum class SettingsDestination {
     APPEARANCE,
     PERFORMANCE,
     TOOLS,
-    ABOUT
+    ABOUT,
+    DONATE
 }
 
 private data class SavedScrollPosition(
@@ -195,6 +199,7 @@ private fun SettingsRootScreen(
     var destination by remember(initialDestination) { mutableStateOf(initialDestination) }
     var hiddenAppsDraft by remember { mutableStateOf(hiddenApps) }
     var hiddenAppsDirty by remember { mutableStateOf(false) }
+    var donatePreviewResId by remember { mutableStateOf<Int?>(null) }
     val pageScrollPositions = remember { mutableStateMapOf<SettingsDestination, SavedScrollPosition>() }
 
     LaunchedEffect(hiddenApps) {
@@ -222,7 +227,15 @@ private fun SettingsRootScreen(
     }
 
     val handleBack: () -> Unit = {
-        if (returnToFaceOnBack) onFinish() else navigateTo(SettingsDestination.ROOT)
+        when (destination) {
+            SettingsDestination.HIDDEN_APPS -> {
+                commitHiddenAppsDraft()
+                if (returnToFaceOnBack) onFinish() else navigateTo(SettingsDestination.ROOT)
+            }
+            SettingsDestination.DONATE -> navigateTo(SettingsDestination.ABOUT)
+            SettingsDestination.ROOT -> onFinish()
+            else -> if (returnToFaceOnBack) onFinish() else navigateTo(SettingsDestination.ROOT)
+        }
     }
 
     BackHandler(enabled = destination != SettingsDestination.ROOT || returnToFaceOnBack) {
@@ -669,11 +682,50 @@ private fun SettingsRootScreen(
             ) { listState, screenCenterY, screenHeightPx, _ ->
                 item("about_card") {
                     AboutCard(
+                        onDonateClick = { navigateTo(SettingsDestination.DONATE) },
                         scale = itemFisheye(listState, "about_card", screenCenterY, screenHeightPx)
                     )
                 }
             }
+            SettingsDestination.DONATE -> SettingsPageScaffold(
+                title = "鎹愯禒鏀寔",
+                onBack = { handleBack() },
+                headerTime = headerTime,
+                initialFirstVisibleItemIndex = scrollFor(SettingsDestination.DONATE).index,
+                initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.DONATE).offset,
+                onScrollChanged = { index, offset -> updateScroll(SettingsDestination.DONATE, index, offset) }
+            ) { listState, screenCenterY, screenHeightPx, _ ->
+                item("donate_tip") {
+                    MessageCard(
+                        text = "鎰熻阿鏀寔 Flue銆傜偣寮€涓嬫柟浜岀淮鐮佸彲鍏ㄥ睆鏌ョ湅骞舵壂鐮佹崘璧犮€?,
+                        background = Color(0xFF1A2233),
+                        onClick = {}
+                    )
+                }
+                item("donate_wechat") {
+                    DonateMethodCard(
+                        title = "寰俊璧炲姪鐮?,
+                        subtitle = "鐐瑰嚮棰勮鍥惧叏灞忔煡鐪?,
+                        resId = R.drawable.donate_wechat,
+                        scale = itemFisheye(listState, "donate_wechat", screenCenterY, screenHeightPx),
+                        onPreviewClick = { donatePreviewResId = R.drawable.donate_wechat }
+                    )
+                }
+                item("donate_alipay") {
+                    DonateMethodCard(
+                        title = "鏀粯瀹濇敹娆剧爜",
+                        subtitle = "鐐瑰嚮棰勮鍥惧叏灞忔煡鐪?,
+                        resId = R.drawable.donate_alipay,
+                        scale = itemFisheye(listState, "donate_alipay", screenCenterY, screenHeightPx),
+                        onPreviewClick = { donatePreviewResId = R.drawable.donate_alipay }
+                    )
+                }
+            }
         }
+    }
+
+    donatePreviewResId?.let { resId ->
+        DonatePreviewDialog(resId = resId, onDismiss = { donatePreviewResId = null })
     }
 }
 
@@ -1173,7 +1225,7 @@ private fun ActionCard(
 }
 
 @Composable
-private fun AboutCard(scale: Float) {
+private fun AboutCard(scale: Float, onDonateClick: () -> Unit) {
     val context = LocalContext.current
     Box(
         modifier = Modifier
@@ -1218,9 +1270,20 @@ private fun AboutCard(scale: Float) {
                         .clip(CircleShape)
                 )
                 Spacer(modifier = Modifier.width(10.dp))
-                Text("\u67da\u5b50\u67da\u5b50\u76ae", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Column {
+                    Text("柚子柚子皮", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text("QQ：3513903055", color = WatchColors.TextTertiary, fontSize = 11.sp)
+                }
             }
             Spacer(modifier = Modifier.height(18.dp))
+            ActionCard(
+                title = "捐赠支持",
+                subtitle = "微信 / 支付宝",
+                onClick = onDonateClick,
+                scale = 1f
+            )
+            Spacer(modifier = Modifier.height(10.dp))
             ActionCard(
                 title = "感谢以下开源项目",
                 subtitle = "dudu-Dev0/Lunch",
@@ -1233,6 +1296,76 @@ private fun AboutCard(scale: Float) {
                     )
                 },
                 scale = 1f
+            )
+        }
+    }
+}
+
+@Composable
+private fun DonateMethodCard(
+    title: String,
+    subtitle: String,
+    resId: Int,
+    scale: Float,
+    onPreviewClick: () -> Unit
+) {
+    val pressedState = rememberPressedState()
+    val pressed by pressedState
+    val pressedScale by animateFloatAsState(
+        if (pressed) 0.962f else 1f,
+        animationSpec = spring(stiffness = 820f, dampingRatio = 0.74f),
+        label = "donate_card_scale"
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale * pressedScale
+                scaleY = scale * pressedScale
+                alpha = scale.coerceIn(0.55f, 1f)
+            }
+            .clip(RoundedCornerShape(24.dp))
+            .background(WatchColors.SurfaceGlass)
+            .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(24.dp))
+            .instantPressGesture(pressedState, onClick = onPreviewClick)
+            .padding(horizontal = 18.dp, vertical = 18.dp)
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(subtitle, color = WatchColors.TextTertiary, fontSize = 12.sp)
+            Spacer(modifier = Modifier.height(16.dp))
+            Image(
+                painter = painterResource(id = resId),
+                contentDescription = title,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(Color.Black.copy(alpha = 0.14f))
+            )
+        }
+    }
+}
+
+@Composable
+private fun DonatePreviewDialog(resId: Int, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.96f))
+                .clickable(onClick = onDismiss),
+            contentAlignment = Alignment.Center
+        ) {
+            Image(
+                painter = painterResource(id = resId),
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp)
+                    .clip(RoundedCornerShape(28.dp))
             )
         }
     }
@@ -1317,3 +1450,4 @@ private fun rememberSettingsHeaderTime(): String {
     }
     return time
 }
+

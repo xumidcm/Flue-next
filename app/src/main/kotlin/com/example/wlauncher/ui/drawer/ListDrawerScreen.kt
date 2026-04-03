@@ -302,13 +302,15 @@ fun ListDrawerScreen(
                                 scope.launch {
                                     settlingCenterY.snapTo(releaseCenter)
                                     settlingCenterY.animateTo(targetCenter, tween(durationMillis = 170))
-                                    delay(220)
+                                    onReorder(from, to)
+                                    delay(48)
                                     settlingApp = null
                                     settlingKey = null
                                     settlingCenterY.snapTo(0f)
                                 }
+                            } else {
+                                onReorder(from, to)
                             }
-                            onReorder(from, to)
                         } else {
                             dragFromIndex = null
                             dragCurrentIndex = null
