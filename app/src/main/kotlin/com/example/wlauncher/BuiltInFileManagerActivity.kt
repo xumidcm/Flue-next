@@ -49,8 +49,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
@@ -60,6 +63,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
+import com.flue.launcher.ui.input.tunedRotaryScrollDelta
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.viewmodel.LauncherViewModel
@@ -133,18 +138,25 @@ private fun BuiltInFileManagerScreen(
     val showThumbnails by vm.builtInManagerThumbnails.collectAsState()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val focusRequester = remember { FocusRequester() }
     val mediaList by produceState<List<MediaItem>?>(initialValue = null, mode, hasPermission) {
         value = if (hasPermission) withContext(Dispatchers.IO) { queryMedia(context, mode) } else emptyList()
+    }
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocusAfterFirstFrame()
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .focusRequester(focusRequester)
             .padding(16.dp)
             .focusable()
             .onRotaryScrollEvent {
-                scope.launch { listState.scrollBy(-it.verticalScrollPixels * 1.15f) }
+                val rotaryDelta = tunedRotaryScrollDelta(it.verticalScrollPixels, 1.15f)
+                scope.launch { listState.scrollBy(-rotaryDelta) }
                 true
             }
     ) {

@@ -41,7 +41,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -69,6 +68,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.platformBlur
+import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
+import com.flue.launcher.ui.input.tunedRotaryScrollDelta
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
@@ -120,8 +121,7 @@ fun ListDrawerScreen(
 
     LaunchedEffect(focusReady) {
         if (focusReady) {
-            withFrameNanos { }
-            runCatching { focusRequester.requestFocus() }
+            focusRequester.requestFocusAfterFirstFrame()
         }
     }
     LaunchedEffect(apps.size) {
@@ -141,7 +141,8 @@ fun ListDrawerScreen(
                     if (!focusReady) focusReady = true
                 }
                 .onRotaryScrollEvent {
-                    scope.launch { listState.scrollBy(-it.verticalScrollPixels) }
+                    val rotaryDelta = tunedRotaryScrollDelta(it.verticalScrollPixels)
+                    scope.launch { listState.scrollBy(-rotaryDelta) }
                     true
                 }
                 .pointerInput(listState) {

@@ -53,6 +53,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -63,6 +65,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.home.BuiltInWatchFacePreview
 import com.flue.launcher.ui.home.FIXED_PREVIEW_CLOCK
+import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
+import com.flue.launcher.ui.input.tunedRotaryScrollDelta
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.viewmodel.LauncherViewModel
@@ -196,14 +200,21 @@ private fun InternalWatchFaceConfigScreen(
 
     val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocusAfterFirstFrame()
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .focusRequester(focusRequester)
             .focusable()
             .onRotaryScrollEvent {
-                scope.launch { scrollState.scrollBy(-it.verticalScrollPixels * 1.12f) }
+                val rotaryDelta = tunedRotaryScrollDelta(it.verticalScrollPixels, 1.12f)
+                scope.launch { scrollState.scrollBy(-rotaryDelta) }
                 true
             }
             .verticalScroll(scrollState)

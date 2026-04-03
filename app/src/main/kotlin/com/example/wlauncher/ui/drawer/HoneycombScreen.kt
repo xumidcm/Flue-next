@@ -23,7 +23,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -43,6 +42,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.platformBlur
+import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
+import com.flue.launcher.ui.input.tunedRotaryScrollDelta
 import com.flue.launcher.util.fisheyeScale
 import com.flue.launcher.util.generateHoneycombRows
 import kotlinx.coroutines.launch
@@ -90,8 +91,7 @@ fun HoneycombScreen(
 
     LaunchedEffect(focusReady) {
         if (focusReady) {
-            withFrameNanos { }
-            runCatching { focusRequester.requestFocus() }
+            focusRequester.requestFocusAfterFirstFrame()
         }
     }
 
@@ -185,7 +185,8 @@ fun HoneycombScreen(
                     if (!focusReady) focusReady = true
                 }
                 .onRotaryScrollEvent {
-                    val next = (scrollOffset.value - it.verticalScrollPixels).coerceIn(minScroll, maxScroll)
+                    val rotaryDelta = tunedRotaryScrollDelta(it.verticalScrollPixels)
+                    val next = (scrollOffset.value - rotaryDelta).coerceIn(minScroll, maxScroll)
                     scope.launch { scrollOffset.snapTo(next) }
                     true
                 }

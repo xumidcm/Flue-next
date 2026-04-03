@@ -79,6 +79,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -95,6 +97,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
+import com.flue.launcher.ui.input.tunedRotaryScrollDelta
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.settings.WatchFaceSettingCard
 import com.flue.launcher.ui.theme.WatchColors
@@ -748,6 +752,7 @@ private fun SettingsPageScaffold(
         initialFirstVisibleItemIndex = initialFirstVisibleItemIndex,
         initialFirstVisibleItemScrollOffset = initialFirstVisibleItemScrollOffset
     )
+    val focusRequester = remember { FocusRequester() }
     val overscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = rememberCoroutineScope()
     val visibleItemKeys by remember(listState) {
@@ -800,6 +805,10 @@ private fun SettingsPageScaffold(
             .collect { (index, offset) -> onScrollChanged(index, offset) }
     }
 
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocusAfterFirstFrame()
+    }
+
     val rotaryScrollMultiplier = 1.18f
 
     BoxWithConstraints(
@@ -814,9 +823,12 @@ private fun SettingsPageScaffold(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
+                .focusRequester(focusRequester)
+                .focusable()
                 .onRotaryScrollEvent {
+                    val rotaryDelta = tunedRotaryScrollDelta(it.verticalScrollPixels, rotaryScrollMultiplier)
                     scope.launch {
-                        listState.scrollBy(-it.verticalScrollPixels * rotaryScrollMultiplier)
+                        listState.scrollBy(-rotaryDelta)
                     }
                     true
                 }
