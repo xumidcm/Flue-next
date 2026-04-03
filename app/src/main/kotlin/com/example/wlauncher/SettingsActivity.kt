@@ -1,4 +1,4 @@
-﻿package com.flue.launcher
+package com.flue.launcher
 
 import android.app.Activity
 import android.content.Intent
@@ -688,7 +688,7 @@ private fun SettingsRootScreen(
                 }
             }
             SettingsDestination.DONATE -> SettingsPageScaffold(
-                title = "鎹愯禒鏀寔",
+                title = "捐赠支持",
                 onBack = { handleBack() },
                 headerTime = headerTime,
                 initialFirstVisibleItemIndex = scrollFor(SettingsDestination.DONATE).index,
@@ -697,15 +697,15 @@ private fun SettingsRootScreen(
             ) { listState, screenCenterY, screenHeightPx, _ ->
                 item("donate_tip") {
                     MessageCard(
-                        text = "鎰熻阿鏀寔 Flue銆傜偣寮€涓嬫柟浜岀淮鐮佸彲鍏ㄥ睆鏌ョ湅骞舵壂鐮佹崘璧犮€?,
+                        text = "感谢支持 Flue。点开下方二维码可全屏查看并扫码捐赠。",
                         background = Color(0xFF1A2233),
                         onClick = {}
                     )
                 }
                 item("donate_wechat") {
                     DonateMethodCard(
-                        title = "寰俊璧炲姪鐮?,
-                        subtitle = "鐐瑰嚮棰勮鍥惧叏灞忔煡鐪?,
+                        title = "微信赞助码",
+                        subtitle = "点击预览图全屏查看",
                         resId = R.drawable.donate_wechat,
                         scale = itemFisheye(listState, "donate_wechat", screenCenterY, screenHeightPx),
                         onPreviewClick = { donatePreviewResId = R.drawable.donate_wechat }
@@ -713,8 +713,8 @@ private fun SettingsRootScreen(
                 }
                 item("donate_alipay") {
                     DonateMethodCard(
-                        title = "鏀粯瀹濇敹娆剧爜",
-                        subtitle = "鐐瑰嚮棰勮鍥惧叏灞忔煡鐪?,
+                        title = "支付宝收款码",
+                        subtitle = "点击预览图全屏查看",
                         resId = R.drawable.donate_alipay,
                         scale = itemFisheye(listState, "donate_alipay", screenCenterY, screenHeightPx),
                         onPreviewClick = { donatePreviewResId = R.drawable.donate_alipay }
