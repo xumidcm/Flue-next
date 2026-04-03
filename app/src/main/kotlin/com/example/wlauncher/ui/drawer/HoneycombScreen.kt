@@ -46,6 +46,7 @@ import com.flue.launcher.ui.anim.platformBlur
 import com.flue.launcher.util.fisheyeScale
 import com.flue.launcher.util.generateHoneycombRows
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.sqrt
 
@@ -302,7 +303,7 @@ fun HoneycombScreen(
                                         settlingX.snapTo(releasePointer.x.coerceIn(iconSizePx * 0.5f, screenWidthPx - iconSizePx * 0.5f))
                                         settlingY.snapTo(releasePointer.y.coerceIn(iconSizePx * 0.5f, screenHeightPx - iconSizePx * 0.5f))
                                         launch {
-                                            settlingX.animateTo(screenCenterX + targetSlot.x, tween(durationMillis = 130))
+                                            settlingX.animateTo(screenCenterX + targetSlot.x, tween(durationMillis = 170))
                                         }
                                         launch {
                                             settlingY.animateTo(
@@ -310,9 +311,10 @@ fun HoneycombScreen(
                                                     iconSizePx * 0.5f,
                                                     screenHeightPx - iconSizePx * 0.5f
                                                 ),
-                                                tween(durationMillis = 130)
+                                                tween(durationMillis = 170)
                                             )
                                         }
+                                        delay(220)
                                         settlingApp = null
                                         settlingKey = null
                                         settlingX.snapTo(0f)

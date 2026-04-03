@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.platformBlur
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
@@ -300,7 +301,8 @@ fun ListDrawerScreen(
                                 settlingKey = droppedApp.componentKey
                                 scope.launch {
                                     settlingCenterY.snapTo(releaseCenter)
-                                    settlingCenterY.animateTo(targetCenter, tween(durationMillis = 130))
+                                    settlingCenterY.animateTo(targetCenter, tween(durationMillis = 170))
+                                    delay(220)
                                     settlingApp = null
                                     settlingKey = null
                                     settlingCenterY.snapTo(0f)
