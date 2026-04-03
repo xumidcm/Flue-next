@@ -231,8 +231,11 @@ private fun SettingsRootScreen(
 
     val selectedIconPackLabel = availableIconPacks.firstOrNull { it.packageName == selectedIconPackPackage }?.label
     val scrollFor: (SettingsDestination) -> SavedScrollPosition = { target ->
-        if (target == SettingsDestination.ROOT) pageScrollPositions[target] ?: SavedScrollPosition()
-        else SavedScrollPosition()
+        if (target == SettingsDestination.ROOT) {
+            pageScrollPositions[target] ?: SavedScrollPosition()
+        } else {
+            SavedScrollPosition()
+        }
     }
     val updateScroll: (SettingsDestination, Int, Int) -> Unit = { target, index, offset ->
         if (target == SettingsDestination.ROOT) {
@@ -1244,13 +1247,14 @@ private fun itemFisheye(
 ): Float {
     val layoutInfo = listState.layoutInfo
     val info = layoutInfo.visibleItemsInfo.find { it.key == key } ?: return 0.92f
+    val totalCount = layoutInfo.totalItemsCount.coerceAtLeast(1)
+    val isTailItem = info.index >= (totalCount - 2).coerceAtLeast(0)
     val itemCenterY = info.offset + info.size / 2f
-    if (itemCenterY <= screenCenterY) return 1f
+    if (itemCenterY <= screenCenterY && !isTailItem) return 1f
     val distance = kotlin.math.abs(itemCenterY - screenCenterY)
     val normalized = (distance / (screenHeight / 2f)).coerceIn(0f, 1f)
     val baseScale = 1f - 0.14f * normalized
     val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()
-    val totalCount = layoutInfo.totalItemsCount.coerceAtLeast(1)
     val flattenWindow = 4
     val startFlattenIndex = (totalCount - flattenWindow).coerceAtLeast(0)
     val nearBottomProgress = if (lastVisible == null) {
@@ -1273,8 +1277,8 @@ private fun itemFisheye(
 
     val visibleItems = layoutInfo.visibleItemsInfo
     val currentVisibleOrder = visibleItems.indexOfFirst { it.key == key }.coerceAtLeast(0)
-    val fromBottomOrder = (visibleItems.lastIndex - currentVisibleOrder + 1).coerceAtLeast(0)
-    val stagger = (fromBottomOrder * 0.075f).coerceAtMost(0.32f)
+    val fromBottomOrder = (visibleItems.lastIndex - currentVisibleOrder).coerceAtLeast(0)
+    val stagger = ((fromBottomOrder + 1) * 0.075f).coerceAtMost(0.32f)
     val stagedFlatten = ((flattenProgress - stagger) / (1f - stagger)).coerceIn(0f, 1f)
 
     return androidx.compose.ui.util.lerp(baseScale, 1f, stagedFlatten)
