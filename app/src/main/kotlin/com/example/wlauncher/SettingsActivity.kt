@@ -21,8 +21,11 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.Image
@@ -75,6 +78,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -88,6 +92,7 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.navigation.LayoutMode
@@ -1350,12 +1355,29 @@ private fun DonateMethodCard(
 
 @Composable
 private fun DonatePreviewDialog(resId: Int, onDismiss: () -> Unit) {
-    Dialog(onDismissRequest = onDismiss) {
+    var scale by remember { mutableStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+        val newScale = (scale * zoomChange).coerceIn(1f, 4f)
+        scale = newScale
+        offset = if (newScale <= 1.02f) {
+            Offset.Zero
+        } else {
+            offset + panChange
+        }
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.96f))
-                .clickable(onClick = onDismiss),
+                .background(Color.Black.copy(alpha = 0.98f)),
             contentAlignment = Alignment.Center
         ) {
             Image(
@@ -1363,9 +1385,37 @@ private fun DonatePreviewDialog(resId: Int, onDismiss: () -> Unit) {
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 18.dp)
-                    .clip(RoundedCornerShape(28.dp))
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offset.x
+                        translationY = offset.y
+                    }
+                    .transformable(transformState)
+                    .pointerInput(scale) {
+                        detectTapGestures(
+                            onDoubleTap = {
+                                if (scale > 1.05f) {
+                                    scale = 1f
+                                    offset = Offset.Zero
+                                } else {
+                                    scale = 2.2f
+                                    offset = Offset.Zero
+                                }
+                            }
+                        )
+                    }
+                    .pointerInput(scale) {
+                        detectDragGesturesAfterLongPress(
+                            onDrag = { change, dragAmount ->
+                                if (scale > 1.02f) {
+                                    change.consume()
+                                    offset += Offset(dragAmount.x, dragAmount.y)
+                                }
+                            }
+                        )
+                    }
             )
         }
     }

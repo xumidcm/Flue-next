@@ -302,30 +302,26 @@ fun HoneycombScreen(
                                     scope.launch {
                                         settlingX.snapTo(releasePointer.x.coerceIn(iconSizePx * 0.5f, screenWidthPx - iconSizePx * 0.5f))
                                         settlingY.snapTo(releasePointer.y.coerceIn(iconSizePx * 0.5f, screenHeightPx - iconSizePx * 0.5f))
-                                        val settleXJob = launch {
-                                            settlingX.animateTo(screenCenterX + targetSlot.x, tween(durationMillis = 170))
+                                        launch {
+                                            settlingX.animateTo(screenCenterX + targetSlot.x, tween(durationMillis = 120))
                                         }
-                                        val settleYJob = launch {
+                                        launch {
                                             settlingY.animateTo(
                                                 (screenCenterY + targetSlot.y + releaseScroll).coerceIn(
                                                     iconSizePx * 0.5f,
                                                     screenHeightPx - iconSizePx * 0.5f
                                                 ),
-                                                tween(durationMillis = 170)
+                                                tween(durationMillis = 120)
                                             )
                                         }
-                                        settleXJob.join()
-                                        settleYJob.join()
-                                        onReorder(from, to)
-                                        delay(48)
+                                        delay(180)
                                         settlingApp = null
                                         settlingKey = null
                                         settlingX.snapTo(0f)
                                         settlingY.snapTo(0f)
                                     }
-                                } else {
-                                    onReorder(from, to)
                                 }
+                                onReorder(from, to)
                             } else {
                                 dragFromIndex = null
                                 dragCurrentIndex = null
