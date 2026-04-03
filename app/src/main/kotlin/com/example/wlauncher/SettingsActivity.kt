@@ -796,6 +796,9 @@ private fun SettingsPageScaffold(
                 )
             }
             content(listState, screenCenterY, screenHeightPx, visibleItemKeys)
+            item("tail_spacer") {
+                Spacer(modifier = Modifier.height(56.dp))
+            }
         }
     }
 }

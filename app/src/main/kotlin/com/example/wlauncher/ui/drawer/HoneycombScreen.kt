@@ -46,6 +46,7 @@ import com.flue.launcher.ui.anim.platformBlur
 import com.flue.launcher.util.fisheyeScale
 import com.flue.launcher.util.generateHoneycombRows
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.sqrt
 
@@ -82,7 +83,6 @@ fun HoneycombScreen(
     var dragApp by remember { mutableStateOf<AppInfo?>(null) }
     var settlingApp by remember { mutableStateOf<AppInfo?>(null) }
     var settlingKey by remember { mutableStateOf<String?>(null) }
-    var dropPressedIndex by remember { mutableStateOf<Int?>(null) }
     val settlingX = remember { Animatable(0f) }
     val settlingY = remember { Animatable(0f) }
     val effectiveEdgeBlur = edgeBlurEnabled && !suppressHeavyEffects
@@ -303,10 +303,7 @@ fun HoneycombScreen(
                                         settlingX.snapTo(releasePointer.x.coerceIn(iconSizePx * 0.5f, screenWidthPx - iconSizePx * 0.5f))
                                         settlingY.snapTo(releasePointer.y.coerceIn(iconSizePx * 0.5f, screenHeightPx - iconSizePx * 0.5f))
                                         launch {
-                                            settlingX.animateTo(
-                                                screenCenterX + targetSlot.x,
-                                                tween(durationMillis = 120)
-                                            )
+                                            settlingX.animateTo(screenCenterX + targetSlot.x, tween(durationMillis = 170))
                                         }
                                         launch {
                                             settlingY.animateTo(
@@ -314,21 +311,17 @@ fun HoneycombScreen(
                                                     iconSizePx * 0.5f,
                                                     screenHeightPx - iconSizePx * 0.5f
                                                 ),
-                                                tween(durationMillis = 120)
+                                                tween(durationMillis = 170)
                                             )
                                         }
+                                        delay(220)
+                                        settlingApp = null
+                                        settlingKey = null
+                                        settlingX.snapTo(0f)
+                                        settlingY.snapTo(0f)
                                     }
                                 }
                                 onReorder(from, to)
-                                dropPressedIndex = to
-                                scope.launch {
-                                    kotlinx.coroutines.delay(180)
-                                    dropPressedIndex = null
-                                    settlingApp = null
-                                    settlingKey = null
-                                    settlingX.snapTo(0f)
-                                    settlingY.snapTo(0f)
-                                }
                             } else {
                                 dragFromIndex = null
                                 dragCurrentIndex = null
@@ -337,10 +330,6 @@ fun HoneycombScreen(
                                 glidePressedKey = null
                                 settlingApp = null
                                 settlingKey = null
-                                scope.launch {
-                                    settlingX.snapTo(0f)
-                                    settlingY.snapTo(0f)
-                                }
                             }
                         }
                     } finally {
@@ -432,10 +421,8 @@ fun HoneycombScreen(
             val menuPressedIndex = menuPressedKey?.let { key ->
                 apps.indexOfFirst { it.componentKey == key }.takeIf { it >= 0 }
             }
-            val droppedPressedSlotIndex = dropPressedIndex
             val pressedAnchor = when {
                 dragFromIndex == null && menuPressedIndex != null && menuPressedIndex in positions.indices -> positions[menuPressedIndex]
-                dragFromIndex == null && droppedPressedSlotIndex != null && droppedPressedSlotIndex in positions.indices -> positions[droppedPressedSlotIndex]
                 else -> null
             }
             val dragOverlayPointer = dragPointer?.let {
@@ -561,14 +548,8 @@ fun HoneycombScreen(
                             .zIndex(0f)
                             .graphicsLayer {
                                 val sy = scrollOffset.value
-                                val baseX = when {
-                                    settlingKey == appKey -> visualPos.x
-                                    else -> animatedSlotX
-                                }
-                                val baseY = when {
-                                    settlingKey == appKey -> visualPos.y
-                                    else -> animatedSlotY
-                                }
+                                val baseX = animatedSlotX
+                                val baseY = animatedSlotY
                                 val posX = screenCenterX + baseX
                                 val pY = screenCenterY + baseY + sy
                                 var actualCenterX = posX
@@ -669,8 +650,8 @@ fun HoneycombScreen(
                 },
                 size = iconSizeDp,
                 onClick = {},
-                forcePressed = true,
-                pressScaleTarget = 1.12f,
+                forcePressed = false,
+                pressScaleTarget = 1f,
                 pressAnimationDelayMillis = 0,
                 pressAnimationDurationMillis = HONEYCOMB_PRESS_DURATION_MS,
                 onPressedChange = {},

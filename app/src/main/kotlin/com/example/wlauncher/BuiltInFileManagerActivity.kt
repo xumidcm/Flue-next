@@ -66,6 +66,9 @@ import com.flue.launcher.viewmodel.LauncherViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 const val EXTRA_FILE_MANAGER_MODE = "file_manager_mode"
 const val EXTRA_FILE_MANAGER_RESULT_URI = "file_manager_result_uri"
@@ -196,13 +199,16 @@ private fun BuiltInFileManagerScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(mediaList!!, key = { it.uri.toString() }) { item ->
-                    val subTitle = remember(item) { "${item.displayName}\n${item.path}" }
+                    val subTitle = remember(item) {
+                        val createdLabel = item.createdAtMillis?.let(::formatMediaCreatedAt) ?: "未知时间"
+                        "$createdLabel\n${item.path}"
+                    }
                     val scale = itemFisheye(listState, item.uri.toString())
                     val interaction = remember(item.uri) { MutableInteractionSource() }
                     val pressed by interaction.collectIsPressedAsState()
                     val pressScale by animateFloatAsState(
-                        if (pressed) 0.96f else 1f,
-                        animationSpec = spring(stiffness = 860f, dampingRatio = 0.74f),
+                        if (pressed) 0.958f else 1f,
+                        animationSpec = androidx.compose.animation.core.tween(durationMillis = 170),
                         label = "manager_item_press_scale"
                     )
                     Column(
@@ -317,13 +323,15 @@ private fun itemFisheye(state: LazyListState, key: Any): Float {
     val info = state.layoutInfo.visibleItemsInfo.find { it.key == key } ?: return 0.9f
     val center = state.layoutInfo.viewportEndOffset / 2f
     val itemCenter = info.offset + info.size / 2f
-    val normalized = ((itemCenter - center) / center).coerceIn(-1f, 1f)
-    return (1f - kotlin.math.abs(normalized) * 0.13f).coerceIn(0.86f, 1f)
+    if (itemCenter <= center) return 1f
+    val normalized = ((itemCenter - center) / center).coerceIn(0f, 1f)
+    return (1f - normalized * 0.14f).coerceIn(0.86f, 1f)
 }
 
 private data class MediaItem(
     val uri: Uri,
     val displayName: String,
+    val createdAtMillis: Long?,
     val path: String
 )
 
@@ -346,14 +354,17 @@ private fun queryMedia(context: Context, mode: String): List<MediaItem> {
         resolver.query(baseUri, projection, null, null, sortOrder)?.use { cursor ->
             val idIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
             val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+            val dateAddedIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_ADDED)
             val pathIndex = cursor.getColumnIndex(pathColumn)
             while (cursor.moveToNext() && items.size < 300) {
                 val id = cursor.getLong(idIndex)
                 val name = cursor.getString(nameIndex).orEmpty()
+                val dateAddedSeconds = if (dateAddedIndex >= 0) cursor.getLong(dateAddedIndex) else 0L
                 val path = if (pathIndex >= 0) cursor.getString(pathIndex).orEmpty() else ""
                 items += MediaItem(
                     uri = ContentUris.withAppendedId(baseUri, id),
                     displayName = name.ifBlank { "未命名文件" },
+                    createdAtMillis = dateAddedSeconds.takeIf { it > 0L }?.times(1000L),
                     path = path.ifBlank { "未知路径" }
                 )
             }
@@ -365,18 +376,36 @@ private fun queryMedia(context: Context, mode: String): List<MediaItem> {
             arrayOf(
                 MediaStore.MediaColumns._ID,
                 MediaStore.MediaColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.DATE_ADDED,
                 pathColumn
             )
         )
     } catch (_: SQLiteException) {
         items.clear()
-        collectItems(arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME))
+        collectItems(
+            arrayOf(
+                MediaStore.MediaColumns._ID,
+                MediaStore.MediaColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.DATE_ADDED
+            )
+        )
     } catch (_: IllegalArgumentException) {
         items.clear()
-        collectItems(arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME))
+        collectItems(
+            arrayOf(
+                MediaStore.MediaColumns._ID,
+                MediaStore.MediaColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.DATE_ADDED
+            )
+        )
     }
 
     return items
+}
+
+private fun formatMediaCreatedAt(timestampMillis: Long): String {
+    val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+    return formatter.format(Date(timestampMillis))
 }
 
 @Composable
@@ -388,8 +417,8 @@ private fun FileManagerActionButton(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
-        if (pressed) 0.96f else 1f,
-        animationSpec = spring(stiffness = 820f, dampingRatio = 0.74f),
+        if (pressed) 0.958f else 1f,
+        animationSpec = androidx.compose.animation.core.tween(durationMillis = 170),
         label = "manager_action_press_scale"
     )
     Row(

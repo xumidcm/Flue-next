@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.platformBlur
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
@@ -206,7 +207,6 @@ fun ListDrawerScreen(
                     val maxDistancePx = with(density) { 72.dp.toPx() }
                     val menuDragStartPx = with(density) { LIST_MENU_DRAG_START_DP.dp.toPx() }
                     awaitEachGesture {
-                        val releaseScreenHeightPx = size.height.toFloat()
                         val releaseOverlayHeightPx = dragFromIndex?.let { itemHeights[it] }
                             ?: with(density) { (iconSize + 20.dp).toPx() }
                         val down = awaitPrimaryDown()
@@ -283,23 +283,26 @@ fun ListDrawerScreen(
                         val to = dragCurrentIndex
                         if (dragActive && from != null && to != null && from != to && hasDragged) {
                             val droppedApp = apps.getOrNull(from)
-                            val currentCenter = dragPointerY.coerceIn(
+                            val releaseCenter = dragPointerY.coerceIn(
                                 releaseOverlayHeightPx * 0.5f,
-                                releaseScreenHeightPx - releaseOverlayHeightPx * 0.5f
+                                size.height.toFloat() - releaseOverlayHeightPx * 0.5f
                             )
-                            val targetCenter = (itemCenters[to] ?: currentCenter).coerceIn(
+                            val targetCenter = (itemCenters[to] ?: releaseCenter).coerceIn(
                                 releaseOverlayHeightPx * 0.5f,
-                                releaseScreenHeightPx - releaseOverlayHeightPx * 0.5f
+                                size.height.toFloat() - releaseOverlayHeightPx * 0.5f
                             )
+                            dragFromIndex = null
+                            dragCurrentIndex = null
+                            dragOffsetY = 0f
+                            dragPointerY = Float.NaN
+                            glidePressedIndex = null
                             if (droppedApp != null) {
                                 settlingApp = droppedApp
                                 settlingKey = droppedApp.componentKey
                                 scope.launch {
-                                    settlingCenterY.snapTo(currentCenter)
-                                    settlingCenterY.animateTo(
-                                        targetCenter,
-                                        tween(durationMillis = 110)
-                                    )
+                                    settlingCenterY.snapTo(releaseCenter)
+                                    settlingCenterY.animateTo(targetCenter, tween(durationMillis = 170))
+                                    delay(220)
                                     settlingApp = null
                                     settlingKey = null
                                     settlingCenterY.snapTo(0f)
@@ -307,14 +310,14 @@ fun ListDrawerScreen(
                             }
                             onReorder(from, to)
                         } else {
+                            dragFromIndex = null
+                            dragCurrentIndex = null
+                            dragOffsetY = 0f
+                            dragPointerY = Float.NaN
+                            glidePressedIndex = null
                             settlingApp = null
                             settlingKey = null
                         }
-                        dragFromIndex = null
-                        dragCurrentIndex = null
-                        dragOffsetY = 0f
-                        dragPointerY = Float.NaN
-                        glidePressedIndex = null
                     }
                 }
         ) {

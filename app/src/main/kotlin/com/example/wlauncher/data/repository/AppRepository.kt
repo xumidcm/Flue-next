@@ -38,8 +38,8 @@ class AppRepository(private val context: Context) {
     private var hiddenComponents: Set<String> = emptySet()
     private var currentIconSize = 128
     private var iconPackPackage: String? = null
-    private var iconPackMapping: IconPackMapping? = null
     private var useLegacyCircularIcons = false
+    private var refreshGeneration = 0
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val iconCache = object : LinkedHashMap<String, Pair<Bitmap, Bitmap>>(120, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Bitmap, Bitmap>>?): Boolean {
@@ -76,7 +76,6 @@ class AppRepository(private val context: Context) {
 
     fun setIconPackPackage(packageName: String?) {
         iconPackPackage = packageName?.takeIf { it.isNotBlank() }
-        iconPackMapping = iconPackPackage?.let { IconPackScanner.loadMapping(context, it) }
         synchronized(iconCache) { iconCache.clear() }
         refreshAsync(currentIconSize)
     }
@@ -95,11 +94,17 @@ class AppRepository(private val context: Context) {
     }
 
     fun refresh(iconSize: Int = 128) {
+        val generation = synchronized(this) {
+            refreshGeneration += 1
+            refreshGeneration
+        }
         val previousIconSize = currentIconSize
         currentIconSize = iconSize
         if (previousIconSize != iconSize) {
             synchronized(iconCache) { iconCache.clear() }
         }
+        val iconPackPackageSnapshot = iconPackPackage
+        val useLegacyCircularIconsSnapshot = useLegacyCircularIcons
         val pm = context.packageManager
         val installTimeCache = mutableMapOf<String, Long>()
         val mainIntent = Intent(Intent.ACTION_MAIN).apply {
@@ -108,7 +113,7 @@ class AppRepository(private val context: Context) {
         val resolveInfos: List<ResolveInfo> = pm.queryIntentActivities(mainIntent, 0)
         val myPackage = context.packageName
 
-        iconPackMapping = iconPackPackage?.let { IconPackScanner.loadMapping(context, it) }
+        val iconPackMapping: IconPackMapping? = iconPackPackageSnapshot?.let { IconPackScanner.loadMapping(context, it) }
 
         val resolveList = resolveInfos
             .filter { ri ->
@@ -123,11 +128,11 @@ class AppRepository(private val context: Context) {
                 val componentKey = "$packageName/${ri.activityInfo.name}"
                 val packedIcon = iconPackMapping?.let { IconPackScanner.loadIconDrawable(context, it, componentKey) }
                 val resolvedIconDrawable = packedIcon ?: ri.loadIcon(pm)
-                val iconCacheKey = "${iconPackPackage ?: "sys"}|$componentKey|$iconSize|${if (useLegacyCircularIcons) "legacy" else "plain"}"
+                val iconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|$componentKey|$iconSize|${if (useLegacyCircularIconsSnapshot) "legacy" else "plain"}"
                 val (iconBitmap, blurredBitmap) = synchronized(iconCache) {
                     iconCache[iconCacheKey]
                 } ?: run {
-                    val createdIconBitmap = if (useLegacyCircularIcons && packedIcon == null) {
+                    val createdIconBitmap = if (useLegacyCircularIconsSnapshot && packedIcon == null) {
                         createCircularBitmap(
                             drawableToBitmap(resolvedIconDrawable, iconSize),
                             edgeInsetPx = iconSize * 0.015f
@@ -150,6 +155,7 @@ class AppRepository(private val context: Context) {
                     cachedBlurredIcon = blurredBitmap.asImageBitmap()
                 )
             }
+        if (synchronized(this) { generation != refreshGeneration }) return
         _allApps.value = sortApps(loadedApps, installTimeCache)
         applyFilters()
     }
