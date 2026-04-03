@@ -399,7 +399,7 @@ private fun ActionButton(
     var pressed by remember { mutableStateOf(false) }
     val pressScale by animateFloatAsState(
         targetValue = if (pressed) 0.958f else 1f,
-        animationSpec = spring(stiffness = 820f, dampingRatio = 0.74f),
+        animationSpec = androidx.compose.animation.core.tween(durationMillis = 170),
         label = "internal_action_press_scale"
     )
     Box(
@@ -551,7 +551,7 @@ private fun SmallChoiceChip(
     val pressed by interaction.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
         targetValue = if (pressed) 0.958f else 1f,
-        animationSpec = spring(stiffness = 820f, dampingRatio = 0.74f),
+        animationSpec = androidx.compose.animation.core.tween(durationMillis = 170),
         label = "clock_position_chip_press_scale"
     )
     Box(
@@ -586,7 +586,7 @@ private fun ToggleRow(
     val pressed by interaction.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
         targetValue = if (pressed) 0.958f else 1f,
-        animationSpec = spring(stiffness = 820f, dampingRatio = 0.74f),
+        animationSpec = androidx.compose.animation.core.tween(durationMillis = 170),
         label = "toggle_row_press_scale"
     )
     val knobOffset by animateDpAsState(

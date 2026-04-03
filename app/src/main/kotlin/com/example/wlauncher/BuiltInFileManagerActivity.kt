@@ -201,14 +201,14 @@ private fun BuiltInFileManagerScreen(
                 items(mediaList!!, key = { it.uri.toString() }) { item ->
                     val subTitle = remember(item) {
                         val createdLabel = item.createdAtMillis?.let(::formatMediaCreatedAt) ?: "未知时间"
-                        "${item.displayName}\n$createdLabel"
+                        "$createdLabel\n${item.path}"
                     }
                     val scale = itemFisheye(listState, item.uri.toString())
                     val interaction = remember(item.uri) { MutableInteractionSource() }
                     val pressed by interaction.collectIsPressedAsState()
                     val pressScale by animateFloatAsState(
                         if (pressed) 0.958f else 1f,
-                        animationSpec = spring(stiffness = 860f, dampingRatio = 0.74f),
+                        animationSpec = androidx.compose.animation.core.tween(durationMillis = 170),
                         label = "manager_item_press_scale"
                     )
                     Column(
@@ -331,7 +331,8 @@ private fun itemFisheye(state: LazyListState, key: Any): Float {
 private data class MediaItem(
     val uri: Uri,
     val displayName: String,
-    val createdAtMillis: Long?
+    val createdAtMillis: Long?,
+    val path: String
 )
 
 private fun queryMedia(context: Context, mode: String): List<MediaItem> {
@@ -354,14 +355,17 @@ private fun queryMedia(context: Context, mode: String): List<MediaItem> {
             val idIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
             val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
             val dateAddedIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_ADDED)
+            val pathIndex = cursor.getColumnIndex(pathColumn)
             while (cursor.moveToNext() && items.size < 300) {
                 val id = cursor.getLong(idIndex)
                 val name = cursor.getString(nameIndex).orEmpty()
                 val dateAddedSeconds = if (dateAddedIndex >= 0) cursor.getLong(dateAddedIndex) else 0L
+                val path = if (pathIndex >= 0) cursor.getString(pathIndex).orEmpty() else ""
                 items += MediaItem(
                     uri = ContentUris.withAppendedId(baseUri, id),
                     displayName = name.ifBlank { "未命名文件" },
-                    createdAtMillis = dateAddedSeconds.takeIf { it > 0L }?.times(1000L)
+                    createdAtMillis = dateAddedSeconds.takeIf { it > 0L }?.times(1000L),
+                    path = path.ifBlank { "未知路径" }
                 )
             }
         }
@@ -414,7 +418,7 @@ private fun FileManagerActionButton(
     val pressed by interaction.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
         if (pressed) 0.958f else 1f,
-        animationSpec = spring(stiffness = 820f, dampingRatio = 0.74f),
+        animationSpec = androidx.compose.animation.core.tween(durationMillis = 170),
         label = "manager_action_press_scale"
     )
     Row(
