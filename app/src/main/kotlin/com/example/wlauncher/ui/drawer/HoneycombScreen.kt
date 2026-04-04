@@ -7,7 +7,6 @@ import androidx.compose.animation.core.exponentialDecay
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
@@ -35,7 +34,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.util.VelocityTracker
-import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -43,8 +41,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.platformBlur
+import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
-import com.flue.launcher.ui.input.tunedRotaryScrollDelta
 import com.flue.launcher.util.fisheyeScale
 import com.flue.launcher.util.generateHoneycombRows
 import kotlinx.coroutines.launch
@@ -180,16 +178,12 @@ fun HoneycombScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .focusRequester(focusRequester)
-                .focusable()
-                .onGloballyPositioned {
-                    if (!focusReady) focusReady = true
-                }
-                .onRotaryScrollEvent {
-                    val rotaryDelta = tunedRotaryScrollDelta(it.verticalScrollPixels)
+                .flueRotaryScrollable(focusRequester, 0.9f) { rotaryDelta ->
                     val next = (scrollOffset.value - rotaryDelta).coerceIn(minScroll, maxScroll)
                     scope.launch { scrollOffset.snapTo(next) }
-                    true
+                }
+                .onGloballyPositioned {
+                    if (!focusReady) focusReady = true
                 }
                 .pointerInput(minScroll, maxScroll) {
                     awaitPointerEventScope {

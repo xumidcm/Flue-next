@@ -10,7 +10,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -56,7 +55,6 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -69,8 +67,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.platformBlur
+import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
-import com.flue.launcher.ui.input.tunedRotaryScrollDelta
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
@@ -134,19 +132,15 @@ fun ListDrawerScreen(
 
     Box(modifier = modifier.fillMaxSize()) {
         BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxSize()
-                .focusRequester(focusRequester)
-                .focusable()
-                .onGloballyPositioned {
-                    if (!focusReady) focusReady = true
-                }
-                .onRotaryScrollEvent {
-                    val rotaryDelta = tunedRotaryScrollDelta(it.verticalScrollPixels)
-                    scope.launch { listState.scrollBy(-rotaryDelta) }
-                    true
-                }
-                .pointerInput(listState) {
+                modifier = Modifier
+                    .fillMaxSize()
+                    .flueRotaryScrollable(focusRequester, 0.95f) { rotaryDelta ->
+                        scope.launch { listState.scrollBy(-rotaryDelta) }
+                    }
+                    .onGloballyPositioned {
+                        if (!focusReady) focusReady = true
+                    }
+                    .pointerInput(listState) {
                     awaitPointerEventScope {
                         while (true) {
                             val event = awaitPointerEvent()
