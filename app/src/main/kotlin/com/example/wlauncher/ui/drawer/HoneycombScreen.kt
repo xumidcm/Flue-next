@@ -145,14 +145,14 @@ fun HoneycombScreen(
                     scrollOffset.stop()
                 }
                 scrollOffset.snapTo((scrollOffset.value + delta).coerceIn(minScroll, maxScroll))
-                scrollOffset.animateDecay(delta * 18f, exponentialDecay()) {
-                    if (value < minScroll || value > maxScroll) {
-                        cancelAnimation()
-                    }
-                }
-                val clamped = scrollOffset.value.coerceIn(minScroll, maxScroll)
-                if (clamped != scrollOffset.value) {
-                    scrollOffset.animateTo(clamped, spring(dampingRatio = 0.64f, stiffness = 360f))
+                var tail = delta * 0.55f
+                repeat(6) {
+                    withFrameNanos { }
+                    if (abs(tail) < 0.5f) return@launch
+                    val next = (scrollOffset.value + tail).coerceIn(minScroll, maxScroll)
+                    scrollOffset.snapTo(next)
+                    if (next == minScroll || next == maxScroll) return@launch
+                    tail *= 0.55f
                 }
             }
         }
