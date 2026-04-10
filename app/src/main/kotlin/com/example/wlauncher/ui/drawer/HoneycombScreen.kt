@@ -18,7 +18,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -49,9 +48,7 @@ import com.flue.launcher.ui.input.normalizeDrawerScrollDelta
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.util.fisheyeScale
 import com.flue.launcher.util.generateHoneycombRows
-import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
@@ -95,10 +92,8 @@ fun HoneycombScreen(
     val settlingY = remember { Animatable(0f) }
     val effectiveEdgeBlur = edgeBlurEnabled && !suppressHeavyEffects
     var focusReady by remember { mutableStateOf(false) }
-    var pendingInputScrollDelta by remember { mutableFloatStateOf(0f) }
-    val inputScrollSignals = remember {
-        MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
-    }
+    var wheelMomentumJob by remember { mutableStateOf<Job?>(null) }
+    var initialScrollPositionResolved by remember { mutableStateOf(false) }
 
     LaunchedEffect(focusReady) {
         if (focusReady) {
@@ -142,20 +137,29 @@ fun HoneycombScreen(
         val scope = rememberCoroutineScope()
         val overlayBlurActive = longPressedApp != null && blurEnabled && !suppressHeavyEffects
         val honeycombAutoScrollEdgePx = with(density) { HONEYCOMB_AUTO_SCROLL_EDGE_DP.dp.toPx() }
-        fun enqueueInputScroll(delta: Float) {
+        fun launchWheelScroll(delta: Float) {
             if (delta == 0f) return
-            pendingInputScrollDelta += delta
-            inputScrollSignals.tryEmit(Unit)
-        }
-        LaunchedEffect(inputScrollSignals, minScroll, maxScroll) {
-            inputScrollSignals.collect {
-                val delta = pendingInputScrollDelta
-                pendingInputScrollDelta = 0f
-                if (delta == 0f) return@collect
+            wheelMomentumJob?.cancel()
+            wheelMomentumJob = scope.launch {
                 if (scrollOffset.isRunning) {
                     scrollOffset.stop()
                 }
                 scrollOffset.snapTo((scrollOffset.value + delta).coerceIn(minScroll, maxScroll))
+                scrollOffset.animateDecay(delta * 18f, exponentialDecay()) {
+                    if (value < minScroll || value > maxScroll) {
+                        cancelAnimation()
+                    }
+                }
+                val clamped = scrollOffset.value.coerceIn(minScroll, maxScroll)
+                if (clamped != scrollOffset.value) {
+                    scrollOffset.animateTo(clamped, spring(dampingRatio = 0.64f, stiffness = 360f))
+                }
+            }
+        }
+        LaunchedEffect(apps.size, maxScroll) {
+            if (!initialScrollPositionResolved && apps.isNotEmpty()) {
+                scrollOffset.snapTo(maxScroll)
+                initialScrollPositionResolved = true
             }
         }
         LaunchedEffect(minScroll, maxScroll) {
@@ -217,7 +221,7 @@ fun HoneycombScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .flueDrawerRotaryScrollable(focusRequester, DrawerInputMode.Honeycomb) { rotaryDelta ->
-                    enqueueInputScroll(-rotaryDelta)
+                    launchWheelScroll(-rotaryDelta)
                 }
                 .onGloballyPositioned {
                     if (!focusReady) focusReady = true
@@ -233,7 +237,7 @@ fun HoneycombScreen(
                                     mode = DrawerInputMode.Honeycomb
                                 )
                                 if (delta != 0f) {
-                                    enqueueInputScroll(delta)
+                                    launchWheelScroll(delta)
                                     event.changes.forEach { it.consume() }
                                 }
                             }
@@ -381,6 +385,7 @@ fun HoneycombScreen(
                     detectDragGestures(
                         onDragStart = { startOffset ->
                             if (dragFromIndex != null || longPressedApp != null) return@detectDragGestures
+                            wheelMomentumJob?.cancel()
                             scope.launch { scrollOffset.stop() }
                             velocityTracker.resetTracking()
                             val hoverIndex = findNearestHoneycombIndex(
@@ -412,7 +417,7 @@ fun HoneycombScreen(
                                 else -> 0f
                             }
                             val dampedDrag = if (overscroll != 0f) dragAmount.y * 0.28f else dragAmount.y
-                            enqueueInputScroll(dampedDrag)
+                            scope.launch { scrollOffset.snapTo(current + dampedDrag) }
                         },
                         onDragEnd = {
                             val velocity = velocityTracker.calculateVelocity().y

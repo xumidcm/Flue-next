@@ -72,9 +72,7 @@ import com.flue.launcher.ui.input.DrawerInputSource
 import com.flue.launcher.ui.input.flueDrawerRotaryScrollable
 import com.flue.launcher.ui.input.normalizeDrawerScrollDelta
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
-import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
@@ -123,11 +121,7 @@ fun ListDrawerScreen(
     var settlingKey by remember { mutableStateOf<String?>(null) }
     val settlingCenterY = remember { Animatable(0f) }
     var focusReady by remember { mutableStateOf(false) }
-    var representativeItemHeightPx by remember { mutableFloatStateOf(Float.NaN) }
-    var pendingInputScrollDelta by remember { mutableFloatStateOf(0f) }
-    val inputScrollSignals = remember {
-        MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
-    }
+    var wheelMomentumJob by remember { mutableStateOf<Job?>(null) }
     val visibleIndexes = remember(listState.layoutInfo.visibleItemsInfo) {
         listState.layoutInfo.visibleItemsInfo.map { it.index }
     }
@@ -147,17 +141,18 @@ fun ListDrawerScreen(
             focusRequester.requestFocusAfterFirstFrame()
         }
     }
-    fun enqueueInputScroll(delta: Float) {
+    fun launchWheelScroll(delta: Float) {
         if (delta == 0f) return
-        pendingInputScrollDelta += delta
-        inputScrollSignals.tryEmit(Unit)
-    }
-    LaunchedEffect(inputScrollSignals, listState) {
-        inputScrollSignals.collect {
-            val delta = pendingInputScrollDelta
-            pendingInputScrollDelta = 0f
-            if (delta == 0f) return@collect
+        wheelMomentumJob?.cancel()
+        wheelMomentumJob = scope.launch {
             listState.scrollBy(delta)
+            var tail = delta * 0.55f
+            repeat(5) {
+                withFrameNanos { }
+                if (abs(tail) < 0.5f) return@launch
+                listState.scrollBy(tail)
+                tail *= 0.55f
+            }
         }
     }
     LaunchedEffect(apps.size) {
@@ -172,7 +167,8 @@ fun ListDrawerScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .flueDrawerRotaryScrollable(focusRequester, DrawerInputMode.List) { rotaryDelta ->
-                        enqueueInputScroll(-rotaryDelta)
+                        wheelMomentumJob?.cancel()
+                        scope.launch { listState.scrollBy(-rotaryDelta) }
                     }
                     .onGloballyPositioned {
                         if (!focusReady) focusReady = true
@@ -188,7 +184,7 @@ fun ListDrawerScreen(
                                     mode = DrawerInputMode.List
                                 )
                                 if (delta != 0f) {
-                                    enqueueInputScroll(delta)
+                                    launchWheelScroll(delta)
                                     event.changes.forEach { it.consume() }
                                 }
                             }
@@ -231,7 +227,7 @@ fun ListDrawerScreen(
                                     return available
                                 }
                                 if (overscroll.value != 0f) {
-                                    overscroll.animateTo(0f, spring(dampingRatio = 0.64f, stiffness = 360f))
+                                    overscroll.animateTo(0f, spring(dampingRatio = 0.75f, stiffness = 460f))
                                     return available
                                 }
                                 return Velocity.Zero
@@ -366,13 +362,7 @@ fun ListDrawerScreen(
             val topEdgeBlurZonePx = with(density) { topFadeRangeDp.coerceIn(0, 220).dp.toPx() }
             val bottomEdgeBlurZonePx = with(density) { bottomFadeRangeDp.coerceIn(0, 220).dp.toPx() }
             val estimatedItemHeight = iconSize.coerceAtLeast(48.dp) + 20.dp
-            val estimatedItemHeightPx = with(density) { estimatedItemHeight.toPx() }
-            val effectiveItemHeightPx = representativeItemHeightPx
-                .takeIf { !it.isNaN() && it > 0f }
-                ?: estimatedItemHeightPx
-            val centeredPadding = with(density) {
-                ((screenHeightPx - effectiveItemHeightPx) / 2f).coerceAtLeast(0f).toDp()
-            }
+            val centeredPadding = 8.dp
             val dragRowShift = dragFromIndex?.let { itemHeights[it] } ?: with(density) { estimatedItemHeight.toPx() }
             val dragOverlayHeightPx = dragFromIndex?.let { itemHeights[it] } ?: with(density) { (iconSize + 20.dp).toPx() }
             val visibleInfoByIndex = remember(listState.layoutInfo.visibleItemsInfo) {
@@ -437,6 +427,24 @@ fun ListDrawerScreen(
             ) {
                 itemsIndexed(apps, key = { _, app -> app.componentKey }) { index, app ->
                     val itemInfo = visibleInfoByIndex[index]
+                    val itemScale = computeItemScale(itemInfo, screenCenterY, screenHeightPx)
+                    val itemBlur = computeVerticalEdgeBlur(
+                        centerY = itemInfo?.let { it.offset + it.size / 2f } ?: screenCenterY,
+                        screenHeight = screenHeightPx,
+                        topBlurZonePx = topEdgeBlurZonePx,
+                        bottomBlurZonePx = bottomEdgeBlurZonePx,
+                        maxBlurDp = LIST_EDGE_ITEM_BLUR_DP
+                    )
+                    val displayIcon = if (
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
+                        blurEnabled &&
+                        edgeBlurEnabled &&
+                        itemBlur > 0.5f
+                    ) {
+                        app.cachedBlurredIcon
+                    } else {
+                        app.cachedIcon
+                    }
                     val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
                     val isPressed by interactionSource.collectIsPressedAsState()
                     val isDragged = dragFromIndex == index
@@ -454,26 +462,6 @@ fun ListDrawerScreen(
                         label = "list_drag_displacement"
                     )
                     val displayDisplacement = if (isDragged) dragOffsetY else animatedDisplacement
-                    val baseCenterY = itemInfo?.let { it.offset + it.size / 2f } ?: screenCenterY
-                    val displayedCenterY = baseCenterY + overscroll.value + if (isDragged) 0f else displayDisplacement
-                    val itemScale = computeItemScale(displayedCenterY, screenCenterY, screenHeightPx)
-                    val itemBlur = computeVerticalEdgeBlur(
-                        centerY = displayedCenterY,
-                        screenHeight = screenHeightPx,
-                        topBlurZonePx = topEdgeBlurZonePx,
-                        bottomBlurZonePx = bottomEdgeBlurZonePx,
-                        maxBlurDp = LIST_EDGE_ITEM_BLUR_DP
-                    )
-                    val displayIcon = if (
-                        Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
-                        blurEnabled &&
-                        edgeBlurEnabled &&
-                        itemBlur > 0.5f
-                    ) {
-                        app.cachedBlurredIcon
-                    } else {
-                        app.cachedIcon
-                    }
                     val pressedScale by animateFloatAsState(
                         targetValue = when {
                             isDragged -> 0.965f
@@ -502,9 +490,6 @@ fun ListDrawerScreen(
                                 val posY = coords.positionInRoot().y
                                 itemCenters[index] = posY + coords.size.height / 2f
                                 itemHeights[index] = coords.size.height.toFloat()
-                                if (representativeItemHeightPx.isNaN() || abs(representativeItemHeightPx - coords.size.height.toFloat()) > 0.5f) {
-                                    representativeItemHeightPx = coords.size.height.toFloat()
-                                }
                             }
                             .graphicsLayer {
                                 val targetScale = itemScale * pressedScale
@@ -520,7 +505,8 @@ fun ListDrawerScreen(
                                 indication = null,
                                 onClick = {
                                     if (longPressedApp != null || dragFromIndex != null) return@combinedClickable
-                                    onAppClick(app, Offset(0.15f, displayedCenterY / screenHeightPx))
+                                    val centerY = itemCenters[index] ?: screenCenterY
+                                    onAppClick(app, Offset(0.15f, centerY / screenHeightPx))
                                 }
                             )
                             .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -675,8 +661,8 @@ private fun consumeListOverscroll(
     val atBottom = !listState.canScrollForward
     val current = overscroll.value
     val next = when {
-        availableY > 0f && atTop -> (current + availableY * 0.28f).coerceAtMost(180f)
-        availableY < 0f && atBottom -> (current + availableY * 0.28f).coerceAtLeast(-180f)
+        availableY > 0f && atTop -> (current + availableY * 0.35f).coerceAtMost(180f)
+        availableY < 0f && atBottom -> (current + availableY * 0.35f).coerceAtLeast(-180f)
         current > 0f && availableY < 0f -> (current + availableY).coerceAtLeast(0f)
         current < 0f && availableY > 0f -> (current + availableY).coerceAtMost(0f)
         else -> current
@@ -718,11 +704,13 @@ private fun findNearestListIndex(
 }
 
 private fun computeItemScale(
-    centerY: Float,
+    itemInfo: androidx.compose.foundation.lazy.LazyListItemInfo?,
     screenCenterY: Float,
     screenHeight: Float
 ): Float {
-    val dist = abs(centerY - screenCenterY)
+    if (itemInfo == null) return 0.85f
+    val itemCenterY = itemInfo.offset + itemInfo.size / 2f
+    val dist = abs(itemCenterY - screenCenterY)
     val maxDist = screenHeight / 2f
     val t = (dist / maxDist).coerceIn(0f, 1f)
     return 1f - 0.2f * t
