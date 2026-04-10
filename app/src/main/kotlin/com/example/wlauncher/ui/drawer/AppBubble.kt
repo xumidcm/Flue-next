@@ -38,7 +38,7 @@ fun AppBubble(
     pressScaleTarget: Float = 0.9f,
     pressAnimationDelayMillis: Int = 0,
     pressAnimationDurationMillis: Int = 180,
-    shadowElevation: Dp = 8.dp,
+    bubbleShadowElevation: Dp = 8.dp,
     onPressedChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -70,7 +70,7 @@ fun AppBubble(
         modifier = modifier
             .size(size)
             .graphicsLayer {
-                shadowElevation = shadowElevation.toPx()
+                shadowElevation = bubbleShadowElevation.toPx()
                 shape = CircleShape
                 clip = true
                 scaleX = pressedScale
