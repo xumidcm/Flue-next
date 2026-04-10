@@ -133,7 +133,10 @@ fun HoneycombScreen(
         val maxScroll = -minGridY
         val minScroll = -maxGridY
 
-        val scrollOffset = remember { Animatable(maxScroll) }
+        val scrollOffset = remember(
+            initialScrollPositionResolved,
+            if (initialScrollPositionResolved) 0f else maxScroll
+        ) { Animatable(maxScroll) }
         val scope = rememberCoroutineScope()
         val overlayBlurActive = longPressedApp != null && blurEnabled && !suppressHeavyEffects
         val honeycombAutoScrollEdgePx = with(density) { HONEYCOMB_AUTO_SCROLL_EDGE_DP.dp.toPx() }
@@ -157,8 +160,9 @@ fun HoneycombScreen(
             }
         }
         LaunchedEffect(apps.size, maxScroll) {
-            if (!initialScrollPositionResolved && apps.isNotEmpty()) {
-                scrollOffset.snapTo(maxScroll)
+            if (apps.isEmpty()) {
+                initialScrollPositionResolved = false
+            } else if (!initialScrollPositionResolved) {
                 initialScrollPositionResolved = true
             }
         }
