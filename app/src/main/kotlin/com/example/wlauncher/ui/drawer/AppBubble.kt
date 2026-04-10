@@ -38,6 +38,7 @@ fun AppBubble(
     pressScaleTarget: Float = 0.9f,
     pressAnimationDelayMillis: Int = 0,
     pressAnimationDurationMillis: Int = 180,
+    shadowElevation: Dp = 8.dp,
     onPressedChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -68,9 +69,8 @@ fun AppBubble(
     Box(
         modifier = modifier
             .size(size)
-            .clip(CircleShape)
             .graphicsLayer {
-                shadowElevation = 8.dp.toPx()
+                shadowElevation = shadowElevation.toPx()
                 shape = CircleShape
                 clip = true
                 scaleX = pressedScale
@@ -88,16 +88,13 @@ fun AppBubble(
             bitmap = icon,
             contentDescription = null,
             filterQuality = FilterQuality.Medium,
-            modifier = Modifier
-                .size(size)
-                .clip(CircleShape),
+            modifier = Modifier.size(size),
             contentScale = ContentScale.Crop
         )
         if (pressedOverlayAlpha > 0f) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .clip(CircleShape)
                     .background(Color.Black.copy(alpha = pressedOverlayAlpha))
             )
         }
