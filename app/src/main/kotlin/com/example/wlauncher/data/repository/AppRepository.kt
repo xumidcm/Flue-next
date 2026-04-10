@@ -1,5 +1,6 @@
 package com.flue.launcher.data.repository
 
+import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
@@ -160,7 +161,7 @@ class AppRepository(private val context: Context) {
         applyFilters()
     }
 
-    fun launchApp(appInfo: AppInfo) {
+    fun launchApp(appInfo: AppInfo): Boolean {
         val intent = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
             component = ComponentName(appInfo.packageName, appInfo.activityName)
@@ -171,7 +172,16 @@ class AppRepository(private val context: Context) {
             android.R.anim.fade_in,
             android.R.anim.fade_out
         )
-        context.startActivity(intent, options.toBundle())
+        return try {
+            context.startActivity(intent, options.toBundle())
+            true
+        } catch (_: ActivityNotFoundException) {
+            refreshAsync()
+            false
+        } catch (_: SecurityException) {
+            refreshAsync()
+            false
+        }
     }
 
     fun destroy() {

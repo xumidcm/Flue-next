@@ -117,6 +117,19 @@ fun ListDrawerScreen(
     var settlingKey by remember { mutableStateOf<String?>(null) }
     val settlingCenterY = remember { Animatable(0f) }
     var focusReady by remember { mutableStateOf(false) }
+    val visibleIndexes = remember(listState.layoutInfo.visibleItemsInfo) {
+        listState.layoutInfo.visibleItemsInfo.map { it.index }
+    }
+
+    LaunchedEffect(visibleIndexes, dragFromIndex, dragCurrentIndex, apps.size) {
+        val retain = buildSet {
+            addAll(visibleIndexes)
+            dragFromIndex?.let(::add)
+            dragCurrentIndex?.let(::add)
+        }
+        itemCenters.keys.retainAll(retain)
+        itemHeights.keys.retainAll(retain)
+    }
 
     LaunchedEffect(focusReady) {
         if (focusReady) {

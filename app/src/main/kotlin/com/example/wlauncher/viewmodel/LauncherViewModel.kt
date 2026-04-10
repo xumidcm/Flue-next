@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.os.Build
 import android.os.SystemClock
+import android.widget.Toast
 import androidx.compose.ui.geometry.Offset
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -355,8 +356,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         launchJob?.cancel()
         launchJob = viewModelScope.launch {
             delay(launchDelayMs)
-            launchingExternalApp = true
-            appRepository.launchApp(appInfo)
+            val launched = appRepository.launchApp(appInfo)
+            if (launched) {
+                launchingExternalApp = true
+            } else {
+                launchingExternalApp = false
+                _currentApp.value = null
+                _screenState.value = ScreenState.Apps
+                Toast.makeText(getApplication(), "应用无法启动，已刷新列表", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -665,8 +673,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun resetSettings() {
+        val defaultBlurEnabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         _layoutMode.value = LayoutMode.Honeycomb
-        _blurEnabled.value = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+        _blurEnabled.value = defaultBlurEnabled
         _edgeBlurEnabled.value = false
         _lowResIcons.value = false
         _animationOverrideEnabled.value = true
@@ -701,7 +710,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist {
             store.edit {
                 it[KEY_LAYOUT] = LayoutMode.Honeycomb.name
-                it[KEY_BLUR] = true
+                it[KEY_BLUR] = defaultBlurEnabled
                 it[KEY_EDGE_BLUR] = false
                 it[KEY_LOW_RES] = false
                 it[KEY_ANIMATION_OVERRIDE] = true
