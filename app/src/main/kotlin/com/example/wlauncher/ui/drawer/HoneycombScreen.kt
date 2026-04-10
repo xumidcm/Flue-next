@@ -669,7 +669,7 @@ fun HoneycombScreen(
                     pressScaleTarget = 1f,
                     pressAnimationDelayMillis = 0,
                     pressAnimationDurationMillis = HONEYCOMB_PRESS_DURATION_MS,
-                    shadowElevation = 12.dp,
+                    bubbleShadowElevation = 12.dp,
                     onPressedChange = {},
                     modifier = Modifier
                         .zIndex(13f)
@@ -710,7 +710,7 @@ fun HoneycombScreen(
                 pressScaleTarget = 1f,
                 pressAnimationDelayMillis = 0,
                 pressAnimationDurationMillis = HONEYCOMB_PRESS_DURATION_MS,
-                shadowElevation = 12.dp,
+                bubbleShadowElevation = 12.dp,
                 onPressedChange = {},
                 modifier = Modifier
                     .zIndex(14f)
