@@ -29,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -192,10 +193,22 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val showLaunchBackdrop = screenState == ScreenState.App && currentLaunchIcon != null
     var startupGateReleased by remember { mutableStateOf(false) }
     var showSplash by remember { mutableStateOf(false) }
+    var notificationOpenPullProgress by remember { mutableFloatStateOf(0f) }
+    var notificationDismissPullProgress by remember { mutableFloatStateOf(0f) }
     LaunchedEffect(appDrawerReady) {
         if (appDrawerReady) {
             delay(120)
             startupGateReleased = true
+        }
+    }
+    LaunchedEffect(screenState) {
+        when (screenState) {
+            ScreenState.Stack -> notificationDismissPullProgress = 0f
+            ScreenState.Notifications -> notificationOpenPullProgress = 0f
+            else -> {
+                notificationOpenPullProgress = 0f
+                notificationDismissPullProgress = 0f
+            }
         }
     }
     LaunchedEffect(screenState, splashIcon, splashDelay, currentLaunchIcon) {
@@ -221,12 +234,41 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val screenHeightPx = with(density) { maxHeight.toPx() }
         val launchingFromStack = screenState == ScreenState.App && launchSourceState == ScreenState.Stack
         val launchingFromNotifications = screenState == ScreenState.App && launchSourceState == ScreenState.Notifications
+        val notificationTransitionInteractive = notificationOpenPullProgress > 0f || notificationDismissPullProgress > 0f
+        val notificationSheetProgress = when (screenState) {
+            ScreenState.Stack -> notificationOpenPullProgress
+            ScreenState.Notifications -> (1f - notificationDismissPullProgress).coerceIn(0f, 1f)
+            else -> 0f
+        }.coerceIn(0f, 1f)
+        val faceNotificationTarget = faceLayerValues(ScreenState.Notifications).copy(
+            translationY = 0.055f,
+            blur = maxOf(faceLayerValues(ScreenState.Notifications).blur, 14f)
+        )
+        val faceTargetValues = when (screenState) {
+            ScreenState.Stack, ScreenState.Notifications -> interpolateLayerValues(
+                start = faceLayerValues(ScreenState.Stack),
+                end = faceNotificationTarget,
+                progress = notificationSheetProgress
+            )
+            else -> faceLayerValues(screenState)
+        }
         val stackTargetValues = when {
             launchingFromStack -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f)
+            screenState == ScreenState.Stack || screenState == ScreenState.Notifications -> interpolateLayerValues(
+                start = stackLayerValues(ScreenState.Stack),
+                end = stackLayerValues(ScreenState.Notifications),
+                progress = notificationSheetProgress
+            )
             else -> stackLayerValues(screenState)
         }
         val notificationTargetValues = when {
             launchingFromNotifications -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f, translationY = 0f)
+            screenState == ScreenState.Stack -> interpolateLayerValues(
+                start = LayerAnimValues(scale = 1f, blur = 0f, alpha = 0f, translationY = 1f),
+                end = notificationLayerValues(ScreenState.Notifications),
+                progress = notificationSheetProgress
+            )
+            screenState == ScreenState.Notifications -> notificationLayerValues(ScreenState.Notifications)
             else -> notificationLayerValues(screenState)
         }
 
@@ -243,10 +285,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .fillMaxSize()
                     .zIndex(0f)
                     .scaleBlurAlpha(
-                        targetValues = faceLayerValues(screenState),
+                        targetValues = faceTargetValues,
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
-                        blurEnabled = layerBlurEnabled
+                        blurEnabled = layerBlurEnabled,
+                        animate = !notificationTransitionInteractive
                     )
             ) {
                 AnimatedContent(
@@ -423,7 +466,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled,
-                        origin = if (launchingFromStack) appOpenOrigin else null
+                        origin = if (launchingFromStack) appOpenOrigin else null,
+                        animate = !notificationTransitionInteractive
                     )
             ) {
                 if (screenState == ScreenState.Stack || screenState == ScreenState.Notifications || launchingFromStack) {
@@ -436,6 +480,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         revealedNotificationTarget = revealedNotificationTarget,
                         onRevealTargetChange = vm::setRevealedNotificationTarget,
                         onOpenNotifications = { vm.setState(ScreenState.Notifications) },
+                        onNotificationPullProgress = { notificationOpenPullProgress = it },
                         onLaunchApp = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
                             vm.openApp(appInfo, origin, launchDelay, ScreenState.Stack)
@@ -459,16 +504,18 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             screenWidth = screenWidthPx,
                             screenHeight = screenHeightPx,
                             blurEnabled = layerBlurEnabled,
-                            origin = if (launchingFromNotifications) appOpenOrigin else null
+                            origin = if (launchingFromNotifications) appOpenOrigin else null,
+                            animate = !notificationTransitionInteractive
                         )
                 ) {
-                    if (screenState == ScreenState.Notifications || launchingFromNotifications) {
+                    if (screenState == ScreenState.Notifications || launchingFromNotifications || notificationOpenPullProgress > 0f) {
                         NotificationLayer(
                             notificationGroups = notificationGroups,
                             notificationAccessGranted = notificationAccessGranted,
                             revealedNotificationTarget = revealedNotificationTarget,
                             onRevealTargetChange = vm::setRevealedNotificationTarget,
                             onDismissToStack = { vm.setState(ScreenState.Stack) },
+                            onDismissPullProgress = { notificationDismissPullProgress = it },
                             onToggleGroup = vm::toggleNotificationGroup,
                             onDismissGroup = vm::dismissNotificationGroup,
                             onDismissNotification = vm::dismissNotification,
@@ -537,4 +584,20 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
 
     }
+}
+
+private fun interpolateLayerValues(
+    start: LayerAnimValues,
+    end: LayerAnimValues,
+    progress: Float
+): LayerAnimValues {
+    val t = progress.coerceIn(0f, 1f)
+    fun lerp(a: Float, b: Float): Float = a + (b - a) * t
+    return LayerAnimValues(
+        scale = lerp(start.scale, end.scale),
+        blur = lerp(start.blur, end.blur),
+        alpha = lerp(start.alpha, end.alpha),
+        translationX = lerp(start.translationX, end.translationX),
+        translationY = lerp(start.translationY, end.translationY)
+    )
 }

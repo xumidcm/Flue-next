@@ -83,6 +83,7 @@ fun NotificationLayer(
     revealedNotificationTarget: NotificationRevealTarget?,
     onRevealTargetChange: (NotificationRevealTarget?) -> Unit,
     onDismissToStack: () -> Unit,
+    onDismissPullProgress: (Float) -> Unit,
     onToggleGroup: (String) -> Unit,
     onDismissGroup: (String) -> Unit,
     onDismissNotification: (String) -> Unit,
@@ -101,11 +102,15 @@ fun NotificationLayer(
                 if (source != NestedScrollSource.Drag) return androidx.compose.ui.geometry.Offset.Zero
                 val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
                 if (available.y > 0f && atTop) {
-                    scope.launch { overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtMost(180f)) }
+                    val nextOverscroll = (overscroll.value + available.y * 0.35f).coerceAtMost(180f)
+                    onDismissPullProgress((nextOverscroll / 120f).coerceIn(0f, 1f))
+                    scope.launch { overscroll.snapTo(nextOverscroll) }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 if (overscroll.value > 0f && available.y < 0f) {
-                    scope.launch { overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(0f)) }
+                    val nextOverscroll = (overscroll.value + available.y).coerceAtLeast(0f)
+                    onDismissPullProgress((nextOverscroll / 120f).coerceIn(0f, 1f))
+                    scope.launch { overscroll.snapTo(nextOverscroll) }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 return androidx.compose.ui.geometry.Offset.Zero
@@ -114,12 +119,14 @@ fun NotificationLayer(
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (overscroll.value > 80f) {
                     overscroll.snapTo(0f)
+                    onDismissPullProgress(0f)
                     onRevealTargetChange(null)
                     onDismissToStack()
                     return available
                 }
                 if (overscroll.value != 0f) {
                     overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                    onDismissPullProgress(0f)
                     return available
                 }
                 return Velocity.Zero

@@ -16,8 +16,27 @@ fun Modifier.scaleBlurAlpha(
     screenWidth: Float = 0f,
     screenHeight: Float = 0f,
     blurEnabled: Boolean = true,
-    origin: Offset? = null
+    origin: Offset? = null,
+    animate: Boolean = true
 ): Modifier {
+    if (!animate) {
+        return this
+            .graphicsLayer {
+                scaleX = targetValues.scale
+                scaleY = targetValues.scale
+                alpha = targetValues.alpha
+                translationX = targetValues.translationX * screenWidth
+                translationY = targetValues.translationY * screenHeight
+                if (origin != null) {
+                    transformOrigin = TransformOrigin(origin.x, origin.y)
+                }
+            }
+            .platformBlur(
+                blurRadiusDp = targetValues.blur,
+                enabled = blurEnabled
+            )
+    }
+
     val animScale = remember { Animatable(targetValues.scale) }
     val animAlpha = remember { Animatable(targetValues.alpha) }
     val animBlur = remember { Animatable(targetValues.blur) }

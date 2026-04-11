@@ -104,6 +104,7 @@ fun SmartStackLayer(
     revealedNotificationTarget: NotificationRevealTarget?,
     onRevealTargetChange: (NotificationRevealTarget?) -> Unit,
     onOpenNotifications: () -> Unit,
+    onNotificationPullProgress: (Float) -> Unit,
     onLaunchApp: (AppInfo, Offset) -> Unit,
     onSetShortcut: (Int, String?) -> Unit,
     onRemoveShortcut: (Int) -> Unit,
@@ -142,19 +143,25 @@ fun SmartStackLayer(
                         dragDy += dragAmount.y
                         if (abs(dragDx) > abs(dragDy)) {
                             if (dragDx < -SIDE_SCREEN_DISMISS_THRESHOLD) {
-                                change.consume(); onRevealTargetChange(null); onDismissToFace()
+                                change.consume(); onRevealTargetChange(null); onNotificationPullProgress(0f); onDismissToFace()
                             }
                         } else {
                             change.consume()
                             overscrollTarget = (overscrollTarget + dragAmount.y * 0.35f).coerceIn(-180f, 120f)
+                            onNotificationPullProgress(
+                                (-overscrollTarget / SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD).coerceIn(0f, 1f)
+                            )
                         }
                     },
                     onDragEnd = {
                         if (notificationsEnabled && dragDy < -SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD) {
-                            onRevealTargetChange(null); overscrollTarget = 0f; onOpenNotifications()
-                        } else overscrollTarget = 0f
+                            onRevealTargetChange(null); overscrollTarget = 0f; onNotificationPullProgress(0f); onOpenNotifications()
+                        } else {
+                            overscrollTarget = 0f
+                            onNotificationPullProgress(0f)
+                        }
                     },
-                    onDragCancel = { overscrollTarget = 0f }
+                    onDragCancel = { overscrollTarget = 0f; onNotificationPullProgress(0f) }
                 )
             }
     ) {
