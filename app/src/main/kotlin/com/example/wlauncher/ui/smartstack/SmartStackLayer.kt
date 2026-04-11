@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -39,13 +38,13 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.awaitDispose
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -55,6 +54,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -347,24 +347,26 @@ private fun rememberSideScreenClockSnapshot(): SideScreenClockSnapshot {
 @Composable
 private fun rememberBatterySnapshot(): BatterySnapshot {
     val context = LocalContext.current
-    return produceState(initialValue = BatterySnapshot(0), context) {
-        fun loadBattery(): BatterySnapshot {
+    var batteryLevel by remember(context) { mutableIntStateOf(0) }
+    DisposableEffect(context) {
+        fun loadBattery(): Int {
             val batteryManager = context.getSystemService(BatteryManager::class.java)
-            val level = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0
-            return BatterySnapshot(level.coerceIn(0, 100))
+            return (batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0).coerceIn(0, 100)
         }
-        value = loadBattery()
+
+        batteryLevel = loadBattery()
         val receiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(ctx: android.content.Context?, intent: Intent?) {
-                value = loadBattery()
+                batteryLevel = loadBattery()
             }
         }
         val filter = android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED)
         context.registerReceiver(receiver, filter)
-        awaitDispose {
+        onDispose {
             runCatching { context.unregisterReceiver(receiver) }
         }
-    }.value
+    }
+    return BatterySnapshot(batteryLevel)
 }
 
 @Composable
