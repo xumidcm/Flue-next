@@ -918,6 +918,7 @@ fun HoneycombScreen(
             }
         }
 
+        val settlingOverlayApp = settlingApp
         if (settlingOverlayApp != null) {
             val settlingBlur = computeHoneycombEdgeBlur(
                 centerY = settlingY.value,

@@ -496,7 +496,7 @@ fun ListDrawerScreen(
                         blurEnabled &&
                         effectiveEdgeBlur &&
                         itemBlur > 0.5f
-                    }
+                    )
                     val sharpIcon = rememberLauncherIcon(
                         componentKey = app.componentKey,
                         blurred = false,
