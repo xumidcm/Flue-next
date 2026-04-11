@@ -22,17 +22,17 @@ internal fun LazyListScope.addDisplaySettingsToggleItems(
     ) -> Unit
 ) {
     addToggleItem(
-        key = "side_screen_toggle",
-        label = displayText(isZh, "副一屏", "Side Screen"),
-        description = displayText(isZh, "从表盘右滑进入快捷启动与通知页", "Swipe right from the watch face to open the side screen"),
-        checked = sideScreenEnabled,
-        enabled = true,
-        onToggle = onSideScreenToggle
+        "side_screen_toggle",
+        displayText(isZh, "副一屏", "Side Screen"),
+        displayText(isZh, "从表盘右滑进入快捷启动与通知页", "Swipe right from the watch face to open the side screen"),
+        sideScreenEnabled,
+        true,
+        onSideScreenToggle
     )
     addToggleItem(
-        key = "notification_center_toggle",
-        label = displayText(isZh, "通知中心", "Notification Center"),
-        description = if (showNotification) {
+        "notification_center_toggle",
+        displayText(isZh, "通知中心", "Notification Center"),
+        if (showNotification) {
             displayText(
                 isZh,
                 "显示通知横幅，并允许从副一屏上滑进入通知中心",
@@ -45,29 +45,29 @@ internal fun LazyListScope.addDisplaySettingsToggleItems(
                 "Hide notification banners and the notification center, and expand quick launch to 3x3"
             )
         },
-        checked = showNotification,
-        enabled = sideScreenEnabled,
-        onToggle = onShowNotificationChange
+        showNotification,
+        sideScreenEnabled,
+        onShowNotificationChange
     )
     addToggleItem(
-        key = "blur_toggle",
-        label = displayText(isZh, "模糊", "Blur"),
-        description = displayText(isZh, "在支持的 Android 版本上启用模糊", "Enable blur on supported Android versions"),
-        checked = blurEnabled,
-        enabled = true,
-        onToggle = onBlurToggle
+        "blur_toggle",
+        displayText(isZh, "模糊", "Blur"),
+        displayText(isZh, "在支持的 Android 版本上启用模糊", "Enable blur on supported Android versions"),
+        blurEnabled,
+        true,
+        onBlurToggle
     )
     addToggleItem(
-        key = "edge_blur_toggle",
-        label = displayText(isZh, "边缘模糊（实验）", "Edge Blur (Experimental)"),
-        description = if (blurEnabled) {
+        "edge_blur_toggle",
+        displayText(isZh, "边缘模糊（实验）", "Edge Blur (Experimental)"),
+        if (blurEnabled) {
             displayText(isZh, "在顶部和底部边缘增加模糊", "Apply extra blur near the top and bottom edges")
         } else {
             displayText(isZh, "请先开启模糊", "Enable Blur first")
         },
-        checked = edgeBlurEnabled,
-        enabled = blurEnabled,
-        onToggle = onEdgeBlurToggle
+        edgeBlurEnabled,
+        blurEnabled,
+        onEdgeBlurToggle
     )
 }
 
