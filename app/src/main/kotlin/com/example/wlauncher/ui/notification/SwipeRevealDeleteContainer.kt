@@ -6,9 +6,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
@@ -42,6 +44,7 @@ internal fun SwipeRevealDeleteContainer(
     enabled: Boolean,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
+    actionHeight: androidx.compose.ui.unit.Dp? = null,
     content: @Composable () -> Unit
 ) {
     val revealWidthPx = with(androidx.compose.ui.platform.LocalDensity.current) { RevealActionWidth.toPx() }
@@ -59,7 +62,9 @@ internal fun SwipeRevealDeleteContainer(
     Box(modifier = modifier.fillMaxWidth()) {
         Box(
             modifier = Modifier
-                .fillMaxSize()
+                .align(if (actionHeight == null) Alignment.CenterEnd else Alignment.TopEnd)
+                .width(RevealActionWidth)
+                .then(if (actionHeight == null) Modifier.fillMaxHeight() else Modifier.height(actionHeight))
                 .clip(RevealShape)
                 .background(Color(0xFF8E4F64))
                 .padding(end = 18.dp),
@@ -81,6 +86,7 @@ internal fun SwipeRevealDeleteContainer(
 
         Box(
             modifier = Modifier
+                .clip(RevealShape)
                 .graphicsLayer { translationX = offsetX.value }
                 .pointerInput(target, enabled, revealWidthPx, touchSlop) {
                     if (!enabled) return@pointerInput

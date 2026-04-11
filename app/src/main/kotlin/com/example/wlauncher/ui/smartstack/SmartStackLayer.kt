@@ -194,7 +194,8 @@ fun SmartStackLayer(
                                 revealedTarget = revealedNotificationTarget,
                                 onRevealTargetChange = onRevealTargetChange,
                                 enabled = preview.group.entries.any(NotificationEntryUi::isClearable),
-                                onDelete = { onDismissGroup(preview.group.packageName) }
+                                onDelete = { onDismissGroup(preview.group.packageName) },
+                                actionHeight = 72.dp
                             ) { StackedPreviewCard(preview.entries.first(), preview.hiddenCount, onOpenNotifications) }
                         } else {
                             preview.entries.forEach { entry ->
@@ -287,19 +288,19 @@ fun SmartStackLayer(
                 Modifier
                     .align(Alignment.TopCenter)
                     .graphicsLayer {
-                        translationY = (index + 1) * 9f * stackStrength
-                        scaleX = 1f - (index + 1) * 0.02f * stackStrength
-                        scaleY = 1f - (index + 1) * 0.02f * stackStrength
-                        alpha = 0.28f + (0.2f / (index + 1))
+                        translationY = (index + 1) * 12f * stackStrength
+                        scaleX = 1f - (index + 1) * 0.025f * stackStrength
+                        scaleY = 1f - (index + 1) * 0.025f * stackStrength
+                        alpha = 0.34f + (0.24f / (index + 1))
                     }
-                    .padding(start = 12.dp, end = 12.dp)
+                    .padding(start = 14.dp, end = 14.dp)
                     .fillMaxWidth()
                     .height(72.dp)
                     .clip(RoundedCornerShape(28.dp))
                     .background(if (index == 0) Color(0xFF404040) else Color(0xFF2E2E2E))
             )
         }
-        Column(modifier = Modifier.graphicsLayer { translationY = 4f * stackStrength }) {
+        Column {
             PreviewPill(entry, onClick)
             Text("+${hiddenCount}条新消息", color = WatchColors.TextTertiary, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 6.dp))
         }

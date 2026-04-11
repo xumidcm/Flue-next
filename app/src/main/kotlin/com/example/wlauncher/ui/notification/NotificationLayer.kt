@@ -52,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
@@ -85,7 +86,7 @@ fun NotificationLayer(
     onToggleGroup: (String) -> Unit,
     onDismissGroup: (String) -> Unit,
     onDismissNotification: (String) -> Unit,
-    onOpenNotification: (String) -> Boolean,
+    onOpenNotification: (String, Offset) -> Boolean,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -203,7 +204,7 @@ private fun NotificationGroupSection(
     onToggleGroup: () -> Unit,
     onDismissGroup: () -> Unit,
     onDismissNotification: (String) -> Unit,
-    onOpenNotification: (String) -> Boolean
+    onOpenNotification: (String, Offset) -> Boolean
 ) {
     val hasMultipleEntries = group.entries.size > 1
     Column(modifier.width(width).animateContentSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -237,7 +238,7 @@ private fun NotificationGroupSection(
                                 entry = entry,
                                 subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
                                 trailing = formatNotificationTime(entry.time),
-                                onClick = { onOpenNotification(entry.key) }
+                                onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) }
                             )
                         }
                     }
@@ -249,7 +250,8 @@ private fun NotificationGroupSection(
                         revealedTarget = revealedTarget,
                         onRevealTargetChange = onRevealTargetChange,
                         enabled = group.entries.any(NotificationEntryUi::isClearable),
-                        onDelete = onDismissGroup
+                        onDelete = onDismissGroup,
+                        actionHeight = 72.dp
                     ) {
                         CollapsedStackCard(width, group.entries.first(), group.entries.size - 1, onToggleGroup)
                     }
@@ -267,7 +269,7 @@ private fun NotificationGroupSection(
                             entry = entry,
                             subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
                             trailing = formatNotificationTime(entry.time),
-                            onClick = { onOpenNotification(entry.key) }
+                            onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) }
                         )
                     }
                 }
@@ -326,20 +328,17 @@ private fun CollapsedStackCard(width: androidx.compose.ui.unit.Dp, leadEntry: No
                     .fillMaxWidth()
                     .height(72.dp)
                     .graphicsLayer {
-                        translationY = (index + 1) * 10f * stackStrength
-                        scaleX = 1f - (index + 1) * 0.018f * stackStrength
-                        scaleY = 1f - (index + 1) * 0.018f * stackStrength
-                        alpha = 0.28f + (0.22f / (index + 1))
+                        translationY = (index + 1) * 13f * stackStrength
+                        scaleX = 1f - (index + 1) * 0.024f * stackStrength
+                        scaleY = 1f - (index + 1) * 0.024f * stackStrength
+                        alpha = 0.34f + (0.24f / (index + 1))
                     }
-                    .padding(start = 12.dp, end = 12.dp)
+                    .padding(start = 14.dp, end = 14.dp)
                     .clip(RoundedCornerShape(28.dp))
                     .background(if (index == 0) Color(0xFF404040) else Color(0xFF2E2E2E))
             )
         }
-        Column(
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.graphicsLayer { translationY = 4f * stackStrength }
-        ) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             NotificationCard(width, leadEntry, leadEntry.text.ifBlank { leadEntry.title.ifBlank { leadEntry.appLabel } }, formatNotificationTime(leadEntry.time), onClick)
             Text("+${hiddenCount}条新消息", color = WatchColors.TextTertiary, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
         }

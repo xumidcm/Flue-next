@@ -38,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -135,6 +136,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val splashIcon by vm.splashIcon.collectAsState()
     val splashDelay by vm.splashDelay.collectAsState()
     val currentApp by vm.currentApp.collectAsState()
+    val currentLaunchIcon by vm.currentLaunchIcon.collectAsState()
     val honeycombCols by vm.honeycombCols.collectAsState()
     val honeycombTopBlur by vm.honeycombTopBlur.collectAsState()
     val honeycombBottomBlur by vm.honeycombBottomBlur.collectAsState()
@@ -186,10 +188,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
     }
 
-    val showLaunchBackdrop = screenState == ScreenState.App && currentApp != null
+    val showLaunchBackdrop = screenState == ScreenState.App && currentLaunchIcon != null
     var showSplash by remember { mutableStateOf(false) }
-    LaunchedEffect(screenState, splashIcon, splashDelay, currentApp) {
-        if (screenState == ScreenState.App && splashIcon && currentApp != null) {
+    LaunchedEffect(screenState, splashIcon, splashDelay, currentLaunchIcon) {
+        if (screenState == ScreenState.App && splashIcon && currentLaunchIcon != null) {
             showSplash = false
             delay(BASE_LAUNCH_MASK_DELAY_MS)
             showSplash = true
@@ -222,6 +224,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
             label = "notification_scene_progress"
         )
         val faceOffsetX = screenWidthPx * 0.08f * stackProgress
+        val launchingFromStack = screenState == ScreenState.App && launchSourceState == ScreenState.Stack
+        val launchingFromNotifications = screenState == ScreenState.App && launchSourceState == ScreenState.Notifications
 
         GestureHost(
             screenState = screenState,
@@ -237,7 +241,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .zIndex(0f)
                     .then(
                         if (screenState == ScreenState.Stack || screenState == ScreenState.Notifications) {
-                            Modifier.graphicsLayer { translationX = -faceOffsetX }
+                            Modifier.graphicsLayer { translationX = faceOffsetX }
                         } else {
                             Modifier.scaleBlurAlpha(
                                 targetValues = faceLayerValues(screenState),
@@ -386,13 +390,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     contentAlignment = Alignment.Center
                 ) {
                     AnimatedVisibility(
-                        visible = showSplash && splashIcon && currentApp != null,
+                        visible = showSplash && splashIcon && currentLaunchIcon != null,
                         enter = fadeIn() + scaleIn(initialScale = 0.5f),
                         exit = fadeOut() + scaleOut(targetScale = 0.3f)
                     ) {
-                        currentApp?.let { app ->
+                        currentLaunchIcon?.let { icon ->
                             Image(
-                                bitmap = app.cachedIcon,
+                                bitmap = icon,
                                 contentDescription = null,
                                 modifier = Modifier
                                     .size(96.dp)
@@ -412,9 +416,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .fillMaxSize()
                     .zIndex(if (stackProgress > 0f) 4f else 2f)
                     .graphicsLayer {
-                        translationX = screenWidthPx * (1f - stackProgress)
-                        translationY = -screenHeightPx * 0.035f * notificationProgress
-                        alpha = (stackProgress * (1f - 0.18f * notificationProgress)).coerceIn(0f, 1f)
+                        transformOrigin = TransformOrigin(appOpenOrigin.x, appOpenOrigin.y)
+                        translationX = if (launchingFromStack) 0f else -screenWidthPx * (1f - stackProgress)
+                        translationY = if (launchingFromStack) 0f else -screenHeightPx * 0.035f * notificationProgress
+                        scaleX = if (launchingFromStack) 4f else 1f
+                        scaleY = if (launchingFromStack) 4f else 1f
+                        alpha = if (launchingFromStack) 0f else (stackProgress * (1f - 0.18f * notificationProgress)).coerceIn(0f, 1f)
                     }
             ) {
                 if (stackProgress > 0.001f || keepStackLayer) {
@@ -445,10 +452,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         .fillMaxSize()
                         .zIndex(if (notificationProgress > 0f) 5f else 3f)
                         .graphicsLayer {
-                            translationY = screenHeightPx * 0.08f * (1f - notificationProgress)
-                            scaleX = 0.2f + 0.8f * notificationProgress
-                            scaleY = 0.2f + 0.8f * notificationProgress
-                            alpha = notificationProgress.coerceIn(0f, 1f)
+                            transformOrigin = TransformOrigin(appOpenOrigin.x, appOpenOrigin.y)
+                            translationY = if (launchingFromNotifications) 0f else screenHeightPx * 0.08f * (1f - notificationProgress)
+                            scaleX = if (launchingFromNotifications) 4f else 0.2f + 0.8f * notificationProgress
+                            scaleY = if (launchingFromNotifications) 4f else 0.2f + 0.8f * notificationProgress
+                            alpha = if (launchingFromNotifications) 0f else notificationProgress.coerceIn(0f, 1f)
                         }
                 ) {
                     if (notificationProgress > 0.001f || keepNotificationLayer) {
@@ -461,7 +469,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             onToggleGroup = vm::toggleNotificationGroup,
                             onDismissGroup = vm::dismissNotificationGroup,
                             onDismissNotification = vm::dismissNotification,
-                            onOpenNotification = { key -> vm.openNotification(key, ScreenState.Stack) }
+                            onOpenNotification = { key, origin -> vm.openNotification(key, origin, ScreenState.Notifications) }
                         )
                     }
                 }

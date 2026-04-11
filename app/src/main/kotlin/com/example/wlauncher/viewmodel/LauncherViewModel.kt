@@ -8,6 +8,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -221,6 +222,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _currentApp = MutableStateFlow<AppInfo?>(null)
     val currentApp: StateFlow<AppInfo?> = _currentApp.asStateFlow()
+    private val _currentLaunchIcon = MutableStateFlow<ImageBitmap?>(null)
+    val currentLaunchIcon: StateFlow<ImageBitmap?> = _currentLaunchIcon.asStateFlow()
     private val _launchSourceState = MutableStateFlow(ScreenState.Apps)
     val launchSourceState: StateFlow<ScreenState> = _launchSourceState.asStateFlow()
 
@@ -425,6 +428,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         returnStateAfterExternalLaunch = returnState
         _launchSourceState.value = returnState
         _currentApp.value = appInfo
+        _currentLaunchIcon.value = appInfo.cachedIcon
         _appOpenOrigin.value = origin
         _screenState.value = ScreenState.App
         _revealedNotificationTarget.value = null
@@ -438,19 +442,30 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             } else {
                 launchingExternalApp = false
                 _currentApp.value = null
+                _currentLaunchIcon.value = null
                 _screenState.value = returnStateAfterExternalLaunch
                 Toast.makeText(getApplication(), "应用无法启动，已刷新列表", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
-    fun openNotification(key: String, returnState: ScreenState = ScreenState.Stack): Boolean {
+    fun openNotification(
+        key: String,
+        origin: Offset = Offset(0.5f, 0.5f),
+        returnState: ScreenState = ScreenState.Stack
+    ): Boolean {
         val opened = WLauncherNotificationListener.openNotification(key)
         if (opened) {
             launchingExternalApp = true
             returnStateAfterExternalLaunch = returnState
             _launchSourceState.value = returnState
             _currentApp.value = null
+            _currentLaunchIcon.value = _notificationGroups.value
+                .asSequence()
+                .flatMap { it.entries.asSequence() }
+                .firstOrNull { it.key == key }
+                ?.icon
+            _appOpenOrigin.value = origin
             _screenState.value = ScreenState.App
             _revealedNotificationTarget.value = null
         }
@@ -460,6 +475,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun onReturnToLauncher() {
         if (launchingExternalApp) {
             launchingExternalApp = false
+            _currentLaunchIcon.value = null
             _screenState.value = returnStateAfterExternalLaunch
             _revealedNotificationTarget.value = null
         }
@@ -473,6 +489,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 launchJob?.cancel()
                 launchJob = null
                 launchingExternalApp = false
+                _currentLaunchIcon.value = null
                 _screenState.value = returnStateAfterExternalLaunch
                 _revealedNotificationTarget.value = null
             }
@@ -488,6 +505,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 launchJob?.cancel()
                 launchJob = null
                 launchingExternalApp = false
+                _currentLaunchIcon.value = null
                 _screenState.value = returnStateAfterExternalLaunch
                 _revealedNotificationTarget.value = null
             }
