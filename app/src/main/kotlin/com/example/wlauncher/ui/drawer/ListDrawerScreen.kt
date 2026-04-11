@@ -49,6 +49,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -67,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.platformBlur
+import com.flue.launcher.ui.icon.rememberLauncherIcon
 import com.flue.launcher.ui.input.DrawerInputMode
 import com.flue.launcher.ui.input.DrawerInputSource
 import com.flue.launcher.ui.input.flueDrawerRotaryScrollable
@@ -88,6 +90,9 @@ private const val LIST_EDGE_ITEM_BLUR_DP = 4f
 @Composable
 fun ListDrawerScreen(
     apps: List<AppInfo>,
+    iconVersion: Long,
+    iconProvider: (String, Boolean) -> ImageBitmap?,
+    onPrefetchIcons: (List<String>, Set<String>) -> Unit,
     blurEnabled: Boolean = true,
     edgeBlurEnabled: Boolean = false,
     suppressHeavyEffects: Boolean = false,
@@ -369,6 +374,56 @@ fun ListDrawerScreen(
             val visibleInfoByIndex = remember(listState.layoutInfo.visibleItemsInfo) {
                 listState.layoutInfo.visibleItemsInfo.associateBy { it.index }
             }
+            val prefetchComponentKeys = remember(
+                visibleIndexes,
+                dragFromIndex,
+                dragCurrentIndex,
+                settlingKey,
+                longPressedApp,
+                apps
+            ) {
+                buildList {
+                    visibleIndexes.forEach { index ->
+                        apps.getOrNull(index)?.componentKey?.let(::add)
+                    }
+                    dragFromIndex?.let { apps.getOrNull(it)?.componentKey?.let(::add) }
+                    dragCurrentIndex?.let { apps.getOrNull(it)?.componentKey?.let(::add) }
+                    settlingKey?.let(::add)
+                    longPressedApp?.componentKey?.let(::add)
+                }.distinct()
+            }
+            val blurredPrefetchKeys = remember(
+                visibleIndexes,
+                visibleInfoByIndex,
+                screenHeightPx,
+                topEdgeBlurZonePx,
+                bottomEdgeBlurZonePx,
+                blurEnabled,
+                effectiveEdgeBlur,
+                apps
+            ) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || !blurEnabled || !effectiveEdgeBlur) {
+                    emptySet()
+                } else {
+                    visibleIndexes.mapNotNullTo(linkedSetOf()) { index ->
+                        val itemInfo = visibleInfoByIndex[index] ?: return@mapNotNullTo null
+                        val itemBlur = computeVerticalEdgeBlur(
+                            centerY = itemInfo.offset + itemInfo.size / 2f,
+                            screenHeight = screenHeightPx,
+                            topBlurZonePx = topEdgeBlurZonePx,
+                            bottomBlurZonePx = bottomEdgeBlurZonePx,
+                            maxBlurDp = LIST_EDGE_ITEM_BLUR_DP
+                        )
+                        apps.getOrNull(index)
+                            ?.takeIf { itemBlur > 0.5f }
+                            ?.componentKey
+                    }
+                }
+            }
+
+            LaunchedEffect(prefetchComponentKeys, blurredPrefetchKeys) {
+                onPrefetchIcons(prefetchComponentKeys, blurredPrefetchKeys)
+            }
 
             LaunchedEffect(dragFromIndex, screenHeightPx) {
                 var previousFrameNanos = 0L
@@ -436,16 +491,29 @@ fun ListDrawerScreen(
                         bottomBlurZonePx = bottomEdgeBlurZonePx,
                         maxBlurDp = LIST_EDGE_ITEM_BLUR_DP
                     )
-                    val displayIcon = if (
+                    val useBlurredIcon = (
                         Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
                         blurEnabled &&
-                        edgeBlurEnabled &&
+                        effectiveEdgeBlur &&
                         itemBlur > 0.5f
-                    ) {
-                        app.cachedBlurredIcon
-                    } else {
-                        app.cachedIcon
                     }
+                    val sharpIcon = rememberLauncherIcon(
+                        componentKey = app.componentKey,
+                        blurred = false,
+                        iconVersion = iconVersion,
+                        iconProvider = iconProvider
+                    )
+                    val blurredIcon = if (useBlurredIcon) {
+                        rememberLauncherIcon(
+                            componentKey = app.componentKey,
+                            blurred = true,
+                            iconVersion = iconVersion,
+                            iconProvider = iconProvider
+                        )
+                    } else {
+                        null
+                    }
+                    val displayIcon = if (useBlurredIcon) blurredIcon ?: sharpIcon else sharpIcon
                     val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
                     val isPressed by interactionSource.collectIsPressedAsState()
                     val isDragged = dragFromIndex == index
@@ -499,7 +567,7 @@ fun ListDrawerScreen(
                                 scaleY = targetScale
                                 alpha = if (isDragged || isSettling) 0f else itemScale.coerceIn(0.3f, 1f)
                             }
-                            .platformBlur(itemBlur, blurEnabled && edgeBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                            .platformBlur(itemBlur, blurEnabled && effectiveEdgeBlur && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                             .background(Color.Black.copy(alpha = pressedOverlay), RoundedCornerShape(18.dp))
                             .combinedClickable(
                                 interactionSource = interactionSource,
@@ -513,14 +581,23 @@ fun ListDrawerScreen(
                             .padding(horizontal = 16.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Image(
-                            bitmap = displayIcon,
-                            contentDescription = app.label,
-                            modifier = Modifier
-                                .size(iconSize)
-                                .clip(CircleShape),
-                            contentScale = ContentScale.Crop
-                        )
+                        if (displayIcon != null) {
+                            Image(
+                                bitmap = displayIcon,
+                                contentDescription = app.label,
+                                modifier = Modifier
+                                    .size(iconSize)
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(iconSize)
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.06f))
+                            )
+                        }
                         Spacer(modifier = Modifier.width(14.dp))
                         Text(
                             text = app.label,
@@ -553,7 +630,7 @@ fun ListDrawerScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .platformBlur(draggedBlur, blurEnabled && edgeBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                        .platformBlur(draggedBlur, blurEnabled && effectiveEdgeBlur && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                         .graphicsLayer {
                             translationY = overlayCenterY - dragOverlayHeightPx / 2f
                             scaleX = 0.965f
@@ -565,23 +642,46 @@ fun ListDrawerScreen(
                         .padding(horizontal = 28.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Image(
-                        bitmap = if (
-                            Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
+                    val overlayUseBlurredIcon = (
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
                             blurEnabled &&
-                            edgeBlurEnabled &&
+                            effectiveEdgeBlur &&
                             draggedBlur > 0.5f
-                        ) {
-                            draggedApp.cachedBlurredIcon
-                        } else {
-                            draggedApp.cachedIcon
-                        },
-                        contentDescription = draggedApp.label,
-                        modifier = Modifier
-                            .size(iconSize)
-                            .clip(CircleShape),
-                        contentScale = ContentScale.Crop
+                        )
+                    val overlaySharpIcon = rememberLauncherIcon(
+                        componentKey = draggedApp.componentKey,
+                        blurred = false,
+                        iconVersion = iconVersion,
+                        iconProvider = iconProvider
                     )
+                    val overlayBlurredIcon = if (overlayUseBlurredIcon) {
+                        rememberLauncherIcon(
+                            componentKey = draggedApp.componentKey,
+                            blurred = true,
+                            iconVersion = iconVersion,
+                            iconProvider = iconProvider
+                        )
+                    } else {
+                        null
+                    }
+                    val overlayIcon = if (overlayUseBlurredIcon) overlayBlurredIcon ?: overlaySharpIcon else overlaySharpIcon
+                    if (overlayIcon != null) {
+                        Image(
+                            bitmap = overlayIcon,
+                            contentDescription = draggedApp.label,
+                            modifier = Modifier
+                                .size(iconSize)
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(iconSize)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.06f))
+                        )
+                    }
                     Spacer(modifier = Modifier.width(14.dp))
                     Text(
                         text = draggedApp.label,
@@ -648,7 +748,13 @@ fun ListDrawerScreen(
     }
 
     longPressedApp?.let { app ->
-        AppShortcutOverlay(app = app, blurEnabled = blurEnabled, onDismiss = { longPressedApp = null })
+        AppShortcutOverlay(
+            app = app,
+            iconVersion = iconVersion,
+            iconProvider = iconProvider,
+            blurEnabled = blurEnabled,
+            onDismiss = { longPressedApp = null }
+        )
     }
 }
 

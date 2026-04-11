@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.dp
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun AppBubble(
-    icon: ImageBitmap,
+    icon: ImageBitmap?,
     size: Dp = 54.dp,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
@@ -38,7 +38,6 @@ fun AppBubble(
     pressScaleTarget: Float = 0.9f,
     pressAnimationDelayMillis: Int = 0,
     pressAnimationDurationMillis: Int = 180,
-    bubbleShadowElevation: Dp = 8.dp,
     onPressedChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -69,13 +68,16 @@ fun AppBubble(
     Box(
         modifier = modifier
             .size(size)
-            .graphicsLayer {
-                shadowElevation = bubbleShadowElevation.toPx()
-                shape = CircleShape
-                clip = true
-                scaleX = pressedScale
-                scaleY = pressedScale
-            }
+            .then(
+                if (activePressed || pressedScale != 1f) {
+                    Modifier.graphicsLayer {
+                        scaleX = pressedScale
+                        scaleY = pressedScale
+                    }
+                } else {
+                    Modifier
+                }
+            )
             .combinedClickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -84,17 +86,29 @@ fun AppBubble(
             ),
         contentAlignment = Alignment.Center
     ) {
-        Image(
-            bitmap = icon,
-            contentDescription = null,
-            filterQuality = FilterQuality.Medium,
-            modifier = Modifier.size(size),
-            contentScale = ContentScale.Crop
-        )
+        if (icon != null) {
+            Image(
+                bitmap = icon,
+                contentDescription = null,
+                filterQuality = FilterQuality.Medium,
+                modifier = Modifier
+                    .size(size)
+                    .clip(CircleShape),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(size)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.06f))
+            )
+        }
         if (pressedOverlayAlpha > 0f) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .clip(CircleShape)
                     .background(Color.Black.copy(alpha = pressedOverlayAlpha))
             )
         }
