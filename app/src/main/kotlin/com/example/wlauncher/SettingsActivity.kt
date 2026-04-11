@@ -191,6 +191,7 @@ private fun SettingsRootScreen(
     val honeycombBottomBlur by vm.honeycombBottomBlur.collectAsState()
     val honeycombTopFade by vm.honeycombTopFade.collectAsState()
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsState()
+    val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsState()
     val builtInPhotoPath by vm.builtInPhotoPath.collectAsState()
     val builtInVideoPath by vm.builtInVideoPath.collectAsState()
     val builtInPhotoClockPosition by vm.builtInPhotoClockPosition.collectAsState()
@@ -632,6 +633,15 @@ private fun SettingsRootScreen(
                     checked = legacyCircularIcons,
                     onToggle = { vm.setLegacyCircularIconsEnabled(it) },
                     scale = itemFisheye(listState, "legacy_icon_pipeline", screenCenterY, screenHeightPx)
+                )
+            }
+            item("honeycomb_fast_scroll_opt") {
+                SettingsSwitchRow(
+                    title = "\u8702\u7a9d\u9ad8\u901f\u6ed1\u52a8\u4f18\u5316",
+                    subtitle = "\u9ad8\u901f\u6ed1\u52a8\u65f6\u4e34\u65f6\u964d\u4f4e\u666e\u901a\u56fe\u6807\u7684\u6a21\u7cca\u4e0e\u9634\u5f71\u8d1f\u8f7d\uff0c\u505c\u4e0b\u540e\u6062\u590d\u5b8c\u6574\u6548\u679c",
+                    checked = honeycombFastScrollOptimization,
+                    onToggle = { vm.setHoneycombFastScrollOptimization(it) },
+                    scale = itemFisheye(listState, "honeycomb_fast_scroll_opt", screenCenterY, screenHeightPx)
                 )
             }
             item("anim_override") {

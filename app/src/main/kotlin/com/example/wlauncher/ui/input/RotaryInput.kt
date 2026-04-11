@@ -51,7 +51,7 @@ fun normalizeDrawerScrollDelta(
 ): Float {
     val signedInput = when (source) {
         DrawerInputSource.Rotary -> verticalScrollPixels
-        DrawerInputSource.MouseWheel -> -verticalScrollPixels
+        DrawerInputSource.MouseWheel -> verticalScrollPixels
     }
     val magnitude = abs(signedInput)
     if (magnitude < 0.01f) return 0f

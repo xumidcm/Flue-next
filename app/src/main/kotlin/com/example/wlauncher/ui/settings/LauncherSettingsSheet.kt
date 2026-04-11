@@ -70,6 +70,7 @@ fun LauncherSettingsSheet(
     honeycombBottomBlur: Int = 4,
     honeycombTopFade: Int = 56,
     honeycombBottomFade: Int = 56,
+    honeycombFastScrollOptimization: Boolean = true,
     showNotification: Boolean = true,
     watchFaces: List<LunchWatchFaceDescriptor> = emptyList(),
     selectedWatchFaceId: String = "",
@@ -89,6 +90,7 @@ fun LauncherSettingsSheet(
     onHoneycombBottomBlurChange: (Int) -> Unit = {},
     onHoneycombTopFadeChange: (Int) -> Unit = {},
     onHoneycombBottomFadeChange: (Int) -> Unit = {},
+    onHoneycombFastScrollOptimizationChange: (Boolean) -> Unit = {},
     onShowNotificationChange: (Boolean) -> Unit = {},
     onWatchFaceSelect: (String) -> Unit = {},
     onOpenWatchFaceSettings: (LunchWatchFaceDescriptor) -> Unit = {},
@@ -338,6 +340,20 @@ fun LauncherSettingsSheet(
                         steps = 15,
                         scale = scale,
                         onValueCommitted = { onHoneycombBottomFadeChange(it.toInt()) }
+                    )
+                }
+                item("honeycomb_fast_scroll_optimization") {
+                    val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "honeycomb_fast_scroll_optimization" }, screenCenterY, screenHeightPx)
+                    SettingToggle(
+                        tr(isZh, "蜂窝高速滑动优化", "Honeycomb Fast Scroll Optimization"),
+                        tr(
+                            isZh,
+                            "高速滑动时临时降低普通图标的模糊与阴影负载，停下后恢复完整效果",
+                            "Temporarily reduce blur and shadow work on regular icons during fast scrolling, then restore full visuals when motion settles"
+                        ),
+                        honeycombFastScrollOptimization,
+                        onHoneycombFastScrollOptimizationChange,
+                        scale = scale
                     )
                 }
             }

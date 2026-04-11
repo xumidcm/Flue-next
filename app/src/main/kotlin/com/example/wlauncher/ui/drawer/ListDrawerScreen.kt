@@ -145,13 +145,14 @@ fun ListDrawerScreen(
         if (delta == 0f) return
         wheelMomentumJob?.cancel()
         wheelMomentumJob = scope.launch {
-            listState.scrollBy(delta)
-            var tail = delta * 0.55f
-            repeat(5) {
+            val baseDelta = delta.coerceIn(-96f, 96f)
+            listState.scrollBy(baseDelta)
+            var tail = baseDelta * 0.35f
+            repeat(3) {
                 withFrameNanos { }
-                if (abs(tail) < 0.5f) return@launch
+                if (abs(tail) < 1f) return@launch
                 listState.scrollBy(tail)
-                tail *= 0.55f
+                tail *= 0.45f
             }
         }
     }

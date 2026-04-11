@@ -134,6 +134,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val honeycombBottomBlur by vm.honeycombBottomBlur.collectAsState()
     val honeycombTopFade by vm.honeycombTopFade.collectAsState()
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsState()
+    val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsState()
     val showNotification by vm.showNotification.collectAsState()
     val watchFaces by vm.availableWatchFaces.collectAsState()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsState()
@@ -293,6 +294,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         bottomBlurRadiusDp = honeycombBottomBlur,
                         topFadeRangeDp = honeycombTopFade,
                         bottomFadeRangeDp = honeycombBottomFade,
+                        fastScrollOptimizationEnabled = honeycombFastScrollOptimization,
                         onAppClick = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
                             vm.openApp(appInfo, origin, launchDelay)
@@ -401,6 +403,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     honeycombBottomBlur = honeycombBottomBlur,
                     honeycombTopFade = honeycombTopFade,
                     honeycombBottomFade = honeycombBottomFade,
+                    honeycombFastScrollOptimization = honeycombFastScrollOptimization,
                     showNotification = showNotification,
                     watchFaces = watchFaces,
                     selectedWatchFaceId = selectedWatchFaceId,
@@ -418,6 +421,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     onHoneycombBottomBlurChange = { vm.setHoneycombBottomBlur(it) },
                     onHoneycombTopFadeChange = { vm.setHoneycombTopFade(it) },
                     onHoneycombBottomFadeChange = { vm.setHoneycombBottomFade(it) },
+                    onHoneycombFastScrollOptimizationChange = { vm.setHoneycombFastScrollOptimization(it) },
                     onShowNotificationChange = { vm.setShowNotification(it) },
                     onWatchFaceSelect = { vm.selectWatchFace(it) },
                     onOpenWatchFaceSettings = { descriptor ->
