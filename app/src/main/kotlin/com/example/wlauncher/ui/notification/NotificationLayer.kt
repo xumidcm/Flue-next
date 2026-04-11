@@ -143,7 +143,7 @@ fun NotificationLayer(
     ) {
         val contentWidth = maxWidth * NOTIFICATION_CARD_WIDTH_RATIO
         Column(
-            modifier = Modifier.fillMaxSize().graphicsLayer { translationY = overscroll.value }.padding(top = 14.dp, bottom = 10.dp),
+            modifier = Modifier.fillMaxSize().padding(top = 14.dp, bottom = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             when {

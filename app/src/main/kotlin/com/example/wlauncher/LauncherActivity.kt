@@ -234,8 +234,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val screenHeightPx = with(density) { maxHeight.toPx() }
         val launchingFromStack = screenState == ScreenState.App && launchSourceState == ScreenState.Stack
         val launchingFromNotifications = screenState == ScreenState.App && launchSourceState == ScreenState.Notifications
-        val notificationTransitionInteractive = notificationOpenPullProgress > 0f || notificationDismissPullProgress > 0f
-        val notificationSheetProgress = when (screenState) {
+        val notificationOpenInteractive = screenState == ScreenState.Stack && notificationOpenPullProgress > 0f
+        val notificationDismissInteractive = screenState == ScreenState.Notifications && notificationDismissPullProgress > 0f
+        val notificationTransitionInteractive = notificationOpenInteractive || notificationDismissInteractive
+        val notificationSheetVisibilityProgress = when (screenState) {
             ScreenState.Stack -> notificationOpenPullProgress
             ScreenState.Notifications -> (1f - notificationDismissPullProgress).coerceIn(0f, 1f)
             else -> 0f
@@ -244,12 +246,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
             translationY = 0.055f,
             blur = maxOf(faceLayerValues(ScreenState.Notifications).blur, 14f)
         )
-        val faceTargetValues = when (screenState) {
-            ScreenState.Stack, ScreenState.Notifications -> interpolateLayerValues(
+        val faceTargetValues = when {
+            notificationOpenInteractive -> interpolateLayerValues(
                 start = faceLayerValues(ScreenState.Stack),
                 end = faceNotificationTarget,
-                progress = notificationSheetProgress
+                progress = notificationOpenPullProgress
             )
+            screenState == ScreenState.Notifications -> faceNotificationTarget
             else -> faceLayerValues(screenState)
         }
         val stackTargetValues = when {
@@ -257,16 +260,22 @@ fun LauncherScreen(vm: LauncherViewModel) {
             screenState == ScreenState.Stack || screenState == ScreenState.Notifications -> interpolateLayerValues(
                 start = stackLayerValues(ScreenState.Stack),
                 end = stackLayerValues(ScreenState.Notifications),
-                progress = notificationSheetProgress
+                progress = notificationSheetVisibilityProgress
             )
             else -> stackLayerValues(screenState)
         }
+        val notificationHiddenValues = notificationLayerValues(ScreenState.Stack)
         val notificationTargetValues = when {
             launchingFromNotifications -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f, translationY = 0f)
             screenState == ScreenState.Stack -> interpolateLayerValues(
-                start = LayerAnimValues(scale = 1f, blur = 0f, alpha = 0f, translationY = 1f),
+                start = notificationHiddenValues,
                 end = notificationLayerValues(ScreenState.Notifications),
-                progress = notificationSheetProgress
+                progress = notificationOpenPullProgress
+            )
+            notificationDismissInteractive -> interpolateLayerValues(
+                start = notificationLayerValues(ScreenState.Notifications),
+                end = notificationHiddenValues.copy(alpha = 1f),
+                progress = notificationDismissPullProgress
             )
             screenState == ScreenState.Notifications -> notificationLayerValues(ScreenState.Notifications)
             else -> notificationLayerValues(screenState)
