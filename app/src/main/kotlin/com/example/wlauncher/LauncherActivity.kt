@@ -12,10 +12,12 @@ import androidx.activity.addCallback
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -36,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -45,9 +48,7 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.anim.appListLayerValues
 import com.flue.launcher.ui.anim.faceLayerValues
-import com.flue.launcher.ui.anim.notificationLayerValues
 import com.flue.launcher.ui.anim.scaleBlurAlpha
-import com.flue.launcher.ui.anim.stackLayerValues
 import com.flue.launcher.ui.drawer.HoneycombScreen
 import com.flue.launcher.ui.drawer.ListDrawerScreen
 import com.flue.launcher.ui.home.WatchFaceLayer
@@ -205,6 +206,22 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val density = LocalDensity.current
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
+        val keepStackLayer = screenState == ScreenState.Stack ||
+            screenState == ScreenState.Notifications ||
+            (screenState == ScreenState.App && launchSourceState == ScreenState.Stack)
+        val keepNotificationLayer = screenState == ScreenState.Notifications ||
+            (screenState == ScreenState.App && launchSourceState == ScreenState.Notifications)
+        val stackProgress by animateFloatAsState(
+            targetValue = if (keepStackLayer) 1f else 0f,
+            animationSpec = spring(dampingRatio = 0.88f, stiffness = 520f),
+            label = "stack_scene_progress"
+        )
+        val notificationProgress by animateFloatAsState(
+            targetValue = if (keepNotificationLayer) 1f else 0f,
+            animationSpec = spring(dampingRatio = 0.9f, stiffness = 560f),
+            label = "notification_scene_progress"
+        )
+        val faceOffsetX = screenWidthPx * 0.08f * stackProgress
 
         GestureHost(
             screenState = screenState,
@@ -217,12 +234,18 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(if (screenState == ScreenState.Face) 5f else 0f)
-                    .scaleBlurAlpha(
-                        targetValues = faceLayerValues(screenState),
-                        screenWidth = screenWidthPx,
-                        screenHeight = screenHeightPx,
-                        blurEnabled = layerBlurEnabled
+                    .zIndex(0f)
+                    .then(
+                        if (screenState == ScreenState.Stack || screenState == ScreenState.Notifications) {
+                            Modifier.graphicsLayer { translationX = -faceOffsetX }
+                        } else {
+                            Modifier.scaleBlurAlpha(
+                                targetValues = faceLayerValues(screenState),
+                                screenWidth = screenWidthPx,
+                                screenHeight = screenHeightPx,
+                                blurEnabled = layerBlurEnabled
+                            )
+                        }
                     )
             ) {
                 AnimatedContent(
@@ -292,7 +315,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(if (screenState == ScreenState.Apps) 4f else 1f)
+                    .zIndex(1f)
                     .scaleBlurAlpha(
                         targetValues = appListLayerValues(screenState),
                         screenWidth = screenWidthPx,
@@ -387,71 +410,60 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(
-                        when (screenState) {
-                            ScreenState.Stack -> 6f
-                            ScreenState.Notifications -> 5f
-                            else -> 2f
-                        }
-                    )
-                    .scaleBlurAlpha(
-                        targetValues = if (screenState == ScreenState.App && launchSourceState == ScreenState.Stack) {
-                            stackLayerValues(ScreenState.Stack)
-                        } else {
-                            stackLayerValues(screenState)
-                        },
-                        screenWidth = screenWidthPx,
-                        screenHeight = screenHeightPx,
-                        blurEnabled = layerBlurEnabled
-                    )
+                    .zIndex(if (stackProgress > 0f) 4f else 2f)
+                    .graphicsLayer {
+                        translationX = screenWidthPx * (1f - stackProgress)
+                        translationY = -screenHeightPx * 0.035f * notificationProgress
+                        alpha = (stackProgress * (1f - 0.18f * notificationProgress)).coerceIn(0f, 1f)
+                    }
             ) {
-                SmartStackLayer(
-                    apps = apps,
-                    sideScreenShortcuts = sideScreenShortcuts,
-                    previewGroups = sideScreenPreviewGroups,
-                    notificationAccessGranted = notificationAccessGranted,
-                    revealedNotificationTarget = revealedNotificationTarget,
-                    onRevealTargetChange = vm::setRevealedNotificationTarget,
-                    onOpenNotifications = { vm.setState(ScreenState.Notifications) },
-                    onLaunchApp = { appInfo, origin ->
-                        val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
-                        vm.openApp(appInfo, origin, launchDelay, ScreenState.Stack)
-                    },
-                    onSetShortcut = vm::setSideScreenShortcut,
-                    onRemoveShortcut = vm::removeSideScreenShortcut,
-                    onDismissGroup = vm::dismissNotificationGroup,
-                    onDismissNotification = vm::dismissNotification,
-                    onDismissToFace = { vm.setState(ScreenState.Face) }
-                )
+                if (stackProgress > 0.001f || keepStackLayer) {
+                    SmartStackLayer(
+                        apps = apps,
+                        sideScreenShortcuts = sideScreenShortcuts,
+                        previewGroups = sideScreenPreviewGroups,
+                        notificationAccessGranted = notificationAccessGranted,
+                        revealedNotificationTarget = revealedNotificationTarget,
+                        onRevealTargetChange = vm::setRevealedNotificationTarget,
+                        onOpenNotifications = { vm.setState(ScreenState.Notifications) },
+                        onLaunchApp = { appInfo, origin ->
+                            val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
+                            vm.openApp(appInfo, origin, launchDelay, ScreenState.Stack)
+                        },
+                        onSetShortcut = vm::setSideScreenShortcut,
+                        onRemoveShortcut = vm::removeSideScreenShortcut,
+                        onDismissGroup = vm::dismissNotificationGroup,
+                        onDismissNotification = vm::dismissNotification,
+                        onDismissToFace = { vm.setState(ScreenState.Face) }
+                    )
+                }
             }
 
             if (notificationsLayerEnabled) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .zIndex(if (screenState == ScreenState.Notifications) 7f else 3f)
-                        .scaleBlurAlpha(
-                            targetValues = if (screenState == ScreenState.App && launchSourceState == ScreenState.Notifications) {
-                                notificationLayerValues(ScreenState.Notifications)
-                            } else {
-                                notificationLayerValues(screenState)
-                            },
-                            screenWidth = screenWidthPx,
-                            screenHeight = screenHeightPx,
-                            blurEnabled = layerBlurEnabled
-                        )
+                        .zIndex(if (notificationProgress > 0f) 5f else 3f)
+                        .graphicsLayer {
+                            translationY = screenHeightPx * 0.08f * (1f - notificationProgress)
+                            scaleX = 0.2f + 0.8f * notificationProgress
+                            scaleY = 0.2f + 0.8f * notificationProgress
+                            alpha = notificationProgress.coerceIn(0f, 1f)
+                        }
                 ) {
-                    NotificationLayer(
-                        notificationGroups = notificationGroups,
-                        notificationAccessGranted = notificationAccessGranted,
-                        revealedNotificationTarget = revealedNotificationTarget,
-                        onRevealTargetChange = vm::setRevealedNotificationTarget,
-                        onDismissToStack = { vm.setState(ScreenState.Stack) },
-                        onToggleGroup = vm::toggleNotificationGroup,
-                        onDismissGroup = vm::dismissNotificationGroup,
-                        onDismissNotification = vm::dismissNotification,
-                        onOpenNotification = { key -> vm.openNotification(key, ScreenState.Stack) }
-                    )
+                    if (notificationProgress > 0.001f || keepNotificationLayer) {
+                        NotificationLayer(
+                            notificationGroups = notificationGroups,
+                            notificationAccessGranted = notificationAccessGranted,
+                            revealedNotificationTarget = revealedNotificationTarget,
+                            onRevealTargetChange = vm::setRevealedNotificationTarget,
+                            onDismissToStack = { vm.setState(ScreenState.Stack) },
+                            onToggleGroup = vm::toggleNotificationGroup,
+                            onDismissGroup = vm::dismissNotificationGroup,
+                            onDismissNotification = vm::dismissNotification,
+                            onOpenNotification = { key -> vm.openNotification(key, ScreenState.Stack) }
+                        )
+                    }
                 }
             }
 

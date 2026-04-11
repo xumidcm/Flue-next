@@ -7,7 +7,6 @@ import android.os.BatteryManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -35,7 +34,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -74,9 +72,9 @@ import com.flue.launcher.ui.drawer.AppBubble
 import com.flue.launcher.ui.notification.NotificationEntryUi
 import com.flue.launcher.ui.notification.NotificationGroupUi
 import com.flue.launcher.ui.notification.NotificationRevealTarget
+import com.flue.launcher.ui.notification.SwipeRevealDeleteContainer
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -86,8 +84,6 @@ import kotlin.math.floor
 private const val SIDE_SCREEN_CONTENT_WIDTH_RATIO = 0.884f
 private const val SIDE_SCREEN_DISMISS_THRESHOLD = 86f
 private const val SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD = 110f
-private const val SIDE_SCREEN_REVEAL_WIDTH_DP = 74f
-
 private sealed interface SideScreenModalState {
     data object None : SideScreenModalState
     data class Picker(val slotIndex: Int) : SideScreenModalState
@@ -193,7 +189,7 @@ fun SmartStackLayer(
                     previewLayout.isEmpty() -> PreviewInfoCard("暂无通知", "副一屏上滑可打开通知中心", onOpenNotifications)
                     else -> previewLayout.forEach { preview ->
                         if (preview.hiddenCount > 0) {
-                            RevealDeleteCard(
+                            SwipeRevealDeleteContainer(
                                 target = NotificationRevealTarget.Group(preview.group.packageName),
                                 revealedTarget = revealedNotificationTarget,
                                 onRevealTargetChange = onRevealTargetChange,
@@ -202,7 +198,7 @@ fun SmartStackLayer(
                             ) { StackedPreviewCard(preview.entries.first(), preview.hiddenCount, onOpenNotifications) }
                         } else {
                             preview.entries.forEach { entry ->
-                                RevealDeleteCard(
+                                SwipeRevealDeleteContainer(
                                     target = NotificationRevealTarget.Entry(entry.key),
                                     revealedTarget = revealedNotificationTarget,
                                     onRevealTargetChange = onRevealTargetChange,
@@ -280,19 +276,30 @@ fun SmartStackLayer(
 }
 
 @Composable private fun StackedPreviewCard(entry: NotificationEntryUi, hiddenCount: Int, onClick: () -> Unit) {
+    val stackStrength by animateFloatAsState(
+        targetValue = if (hiddenCount > 0) 1f else 0f,
+        animationSpec = spring(stiffness = 620f, dampingRatio = 0.82f),
+        label = "preview_stack_strength"
+    )
     Box(Modifier.fillMaxWidth()) {
         repeat(minOf(hiddenCount, 2)) { index ->
             Box(
                 Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = ((index + 1) * 7).dp, start = 10.dp, end = 10.dp)
+                    .graphicsLayer {
+                        translationY = (index + 1) * 9f * stackStrength
+                        scaleX = 1f - (index + 1) * 0.02f * stackStrength
+                        scaleY = 1f - (index + 1) * 0.02f * stackStrength
+                        alpha = 0.28f + (0.2f / (index + 1))
+                    }
+                    .padding(start = 12.dp, end = 12.dp)
                     .fillMaxWidth()
                     .height(72.dp)
                     .clip(RoundedCornerShape(28.dp))
-                    .background(Color(0xFF2E2E2E))
+                    .background(if (index == 0) Color(0xFF404040) else Color(0xFF2E2E2E))
             )
         }
-        Column {
+        Column(modifier = Modifier.graphicsLayer { translationY = 4f * stackStrength }) {
             PreviewPill(entry, onClick)
             Text("+${hiddenCount}条新消息", color = WatchColors.TextTertiary, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 6.dp))
         }
@@ -303,27 +310,6 @@ fun SmartStackLayer(
     Box(Modifier.size(46.dp).clip(CircleShape).background(Color(0xFFD9D9D9)), contentAlignment = Alignment.Center) {
         if (icon != null) Image(icon, null, modifier = Modifier.fillMaxSize().clip(CircleShape), filterQuality = FilterQuality.Medium, contentScale = ContentScale.Crop)
         else Icon(Icons.Filled.Notifications, null, tint = Color(0xFF2B2B2B), modifier = Modifier.size(24.dp))
-    }
-}
-
-@Composable private fun RevealDeleteCard(target: NotificationRevealTarget, revealedTarget: NotificationRevealTarget?, onRevealTargetChange: (NotificationRevealTarget?) -> Unit, enabled: Boolean, onDelete: () -> Unit, content: @Composable () -> Unit) {
-    val actionWidthPx = with(LocalDensity.current) { SIDE_SCREEN_REVEAL_WIDTH_DP.dp.toPx() }
-    val offsetX = remember(target) { androidx.compose.animation.core.Animatable(0f) }
-    val scope = rememberCoroutineScope()
-    LaunchedEffect(revealedTarget, actionWidthPx) { offsetX.animateTo(if (enabled && revealedTarget == target) -actionWidthPx else 0f, tween(180)) }
-    Box(Modifier.fillMaxWidth()) {
-        Box(Modifier.align(Alignment.CenterEnd).width(SIDE_SCREEN_REVEAL_WIDTH_DP.dp).height(72.dp).clip(CircleShape).background(Color(0xFF8E4F64)), contentAlignment = Alignment.Center) {
-            Icon(Icons.Filled.Delete, null, tint = Color(0xFF2B1824), modifier = Modifier.size(24.dp).clickable(enabled = enabled) { onRevealTargetChange(null); onDelete() })
-        }
-        Box(Modifier.graphicsLayer { translationX = offsetX.value }.pointerInput(target, enabled) {
-            if (!enabled) return@pointerInput
-            detectDragGestures(
-                onDragStart = { onRevealTargetChange(target) },
-                onDrag = { change, dragAmount -> if (abs(dragAmount.x) > abs(dragAmount.y)) { change.consume(); scope.launch { offsetX.snapTo((offsetX.value + dragAmount.x).coerceIn(-actionWidthPx, 0f)) } } },
-                onDragEnd = { scope.launch { onRevealTargetChange(if (abs(offsetX.value) > actionWidthPx * 0.45f) target else null) } },
-                onDragCancel = { scope.launch { onRevealTargetChange(null) } }
-            )
-        }) { content() }
     }
 }
 
@@ -411,19 +397,15 @@ fun SmartStackLayer(
 }
 
 private fun buildPreviewGroups(groups: List<NotificationGroupUi>, maxRows: Int): List<PreviewGroup> {
-    var remaining = maxRows
-    val result = mutableListOf<PreviewGroup>()
-    for (group in groups) {
-        if (remaining <= 0) break
-        if (group.entries.size <= remaining) {
-            result += PreviewGroup(group, group.entries, 0)
-            remaining -= group.entries.size
-        } else {
-            result += PreviewGroup(group, listOf(group.entries.first()), group.entries.size - 1)
-            break
+    return groups
+        .take(maxRows.coerceAtLeast(0))
+        .map { group ->
+            if (group.entries.size > 1) {
+                PreviewGroup(group, listOf(group.entries.first()), group.entries.size - 1)
+            } else {
+                PreviewGroup(group, group.entries, 0)
+            }
         }
-    }
-    return result
 }
 
 private fun formatClockTime(timestamp: Long): String = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
