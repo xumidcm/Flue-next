@@ -152,6 +152,8 @@ fun HoneycombScreen(
             directScrollOffset = directScrollOffset,
             animatedScrollOffset = scrollOffset.value
         )
+        fun reducedMotionPhase(): Boolean =
+            fastScrollOptimizationEnabled && (fastScrollActive || scrollOffset.isRunning)
         fun markFastScrollActive(durationMs: Long = 180L) {
             if (!fastScrollOptimizationEnabled) return
             fastScrollActive = true
@@ -534,7 +536,7 @@ fun HoneycombScreen(
                     screenCenterY = screenCenterY,
                     screenHeightPx = screenHeightPx,
                     iconSizePx = iconSizePx,
-                    bufferRows = if (fastScrollOptimizationEnabled && fastScrollActive) 1 else 2,
+                    bufferRows = if (reducedMotionPhase()) 1 else 2,
                     pinnedIndexes = listOfNotNull(menuPressedIndex, dragFromIndex, dragCurrentIndex)
                 )
             }
@@ -596,8 +598,7 @@ fun HoneycombScreen(
                     iconSizePx = iconSizePx,
                     cellSize = cellSize
                 )
-                val reduceVisualLoad = fastScrollOptimizationEnabled &&
-                    fastScrollActive &&
+                val reduceVisualLoad = reducedMotionPhase() &&
                     !isDragged &&
                     settlingKey != app.componentKey &&
                     menuPressedKey != appKey &&
