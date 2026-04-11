@@ -218,6 +218,7 @@ fun LauncherSettingsSheet(
                 val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "layout_list" }, screenCenterY, screenHeightPx)
                 SettingOption(tr(isZh, "列表布局", "List"), tr(isZh, "纵向应用列表", "Vertical app list"), currentLayout == LayoutMode.List, { onLayoutChange(LayoutMode.List) }, scale)
             }
+            item("display_header") { ScaledSectionHeader(tr(isZh, "显示设置", "Display"), listState, "display_header", screenCenterY, screenHeightPx) }
             item("side_screen_toggle") {
                 val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "side_screen_toggle" }, screenCenterY, screenHeightPx)
                 SettingToggle(
@@ -225,6 +226,21 @@ fun LauncherSettingsSheet(
                     tr(isZh, "从表盘右滑进入快捷启动与通知页", "Swipe right from the watch face to open the side screen"),
                     sideScreenEnabled,
                     onSideScreenToggle,
+                    scale = scale
+                )
+            }
+            item("notification_center_toggle") {
+                val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "notification_center_toggle" }, screenCenterY, screenHeightPx)
+                SettingToggle(
+                    tr(isZh, "通知中心", "Notification Center"),
+                    if (showNotification) {
+                        tr(isZh, "显示通知横幅，并允许从副一屏上滑进入通知中心", "Show notification banners and allow swipe-up from the side screen into the notification center")
+                    } else {
+                        tr(isZh, "隐藏通知横幅与通知中心，并把快捷启动扩展为 3×3", "Hide notification banners and the notification center, and expand quick launch to 3x3")
+                    },
+                    showNotification,
+                    onShowNotificationChange,
+                    enabled = sideScreenEnabled,
                     scale = scale
                 )
             }

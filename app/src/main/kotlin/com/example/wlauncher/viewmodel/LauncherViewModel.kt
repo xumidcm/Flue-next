@@ -71,6 +71,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_HONEYCOMB_BOTTOM_FADE = intPreferencesKey("honeycomb_bottom_fade")
         val KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION = booleanPreferencesKey("honeycomb_fast_scroll_optimization")
         val KEY_SHOW_NOTIFICATION = booleanPreferencesKey("show_notification")
+        val KEY_NOTIFICATION_SETTING_MIGRATED = booleanPreferencesKey("notification_setting_migrated")
         val KEY_HIDDEN_APPS = stringPreferencesKey("hidden_apps")
         val KEY_ICON_PACK_PACKAGE = stringPreferencesKey("icon_pack_package")
         val KEY_SELECTED_WATCHFACE_ID = stringPreferencesKey("selected_watchface_id")
@@ -86,7 +87,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_VIDEO_FILL_SCREEN = booleanPreferencesKey("video_fill_screen")
         val KEY_VIDEO_CLOCK_COLOR_MODE = stringPreferencesKey("video_clock_color_mode")
         val KEY_BUILTIN_MANAGER_THUMBNAILS = booleanPreferencesKey("builtin_manager_thumbnails")
-        private const val SIDE_SCREEN_SLOT_COUNT = 6
+        private const val SIDE_SCREEN_SLOT_COUNT = 9
     }
 
     private val store = application.dataStore
@@ -146,7 +147,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _splashIcon = MutableStateFlow(true)
     val splashIcon: StateFlow<Boolean> = _splashIcon.asStateFlow()
 
-    private val _showNotification = MutableStateFlow(false)
+    private val _showNotification = MutableStateFlow(true)
     val showNotification: StateFlow<Boolean> = _showNotification.asStateFlow()
     private val _notificationAccessGranted = MutableStateFlow(false)
     val notificationAccessGranted: StateFlow<Boolean> = _notificationAccessGranted.asStateFlow()
@@ -338,8 +339,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _honeycombFastScrollOptimization.value = loadedFastScrollOptimization
                 }
 
-                val loadedShowNotification = prefs[KEY_SHOW_NOTIFICATION] ?: false
+                val notificationSettingMigrated = prefs[KEY_NOTIFICATION_SETTING_MIGRATED] ?: false
+                val loadedShowNotification = if (notificationSettingMigrated) {
+                    prefs[KEY_SHOW_NOTIFICATION] ?: true
+                } else {
+                    true
+                }
                 if (_showNotification.value != loadedShowNotification) _showNotification.value = loadedShowNotification
+                if (!notificationSettingMigrated) {
+                    store.edit {
+                        it[KEY_SHOW_NOTIFICATION] = true
+                        it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
+                    }
+                }
 
                 val hidden = prefs[KEY_HIDDEN_APPS]
                     ?.split(",")
@@ -619,7 +631,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setShowNotification(show: Boolean) {
         _showNotification.value = show
-        persist { store.edit { it[KEY_SHOW_NOTIFICATION] = show } }
+        if (!show && _screenState.value == ScreenState.Notifications) {
+            _screenState.value = if (_sideScreenEnabled.value) ScreenState.Stack else ScreenState.Face
+        }
+        persist {
+            store.edit {
+                it[KEY_SHOW_NOTIFICATION] = show
+                it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
+            }
+        }
     }
 
     fun setAppHidden(componentKey: String, hidden: Boolean) {
@@ -881,7 +901,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _honeycombTopFade.value = 56
         _honeycombBottomFade.value = 56
         _honeycombFastScrollOptimization.value = true
-        _showNotification.value = false
+        _showNotification.value = true
         _hiddenApps.value = emptySet()
         _selectedIconPackPackage.value = null
         _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
@@ -918,7 +938,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_HONEYCOMB_BOTTOM_FADE] = 56
                 it[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION] = true
                 it[KEY_LEGACY_CIRCULAR_ICONS] = false
-                it[KEY_SHOW_NOTIFICATION] = false
+                it[KEY_SHOW_NOTIFICATION] = true
+                it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
                 it.remove(KEY_SIDE_SCREEN_SHORTCUTS)
                 it.remove(KEY_HIDDEN_APPS)
                 it.remove(KEY_ICON_PACK_PACKAGE)
