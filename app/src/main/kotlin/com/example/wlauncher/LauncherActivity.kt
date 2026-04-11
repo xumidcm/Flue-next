@@ -131,6 +131,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val legacyCircularIcons by vm.legacyCircularIcons.collectAsState()
     val animationOverrideEnabled by vm.animationOverrideEnabled.collectAsState()
     val apps by vm.apps.collectAsState()
+    val appDrawerReady by vm.appDrawerReady.collectAsState()
     val appOpenOrigin by vm.appOpenOrigin.collectAsState()
     val splashIcon by vm.splashIcon.collectAsState()
     val splashDelay by vm.splashDelay.collectAsState()
@@ -189,7 +190,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
 
     val showLaunchBackdrop = screenState == ScreenState.App && currentLaunchIcon != null
+    var startupGateReleased by remember { mutableStateOf(false) }
     var showSplash by remember { mutableStateOf(false) }
+    LaunchedEffect(appDrawerReady) {
+        if (appDrawerReady) {
+            delay(120)
+            startupGateReleased = true
+        }
+    }
     LaunchedEffect(screenState, splashIcon, splashDelay, currentLaunchIcon) {
         if (screenState == ScreenState.App && splashIcon && currentLaunchIcon != null) {
             showSplash = false
@@ -205,6 +213,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
             .fillMaxSize()
             .background(Color.Black)
     ) {
+        if (!startupGateReleased) {
+            return@BoxWithConstraints
+        }
         val density = LocalDensity.current
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
