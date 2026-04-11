@@ -58,7 +58,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun LauncherSettingsSheet(
     currentLayout: LayoutMode,
-    sideScreenEnabled: Boolean = false,
+    sideScreenEnabled: Boolean = true,
     blurEnabled: Boolean,
     edgeBlurEnabled: Boolean = false,
     lowResIcons: Boolean = false,

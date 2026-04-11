@@ -179,6 +179,7 @@ private fun SettingsRootScreen(
     val selectedIconPackPackage by vm.selectedIconPackPackage.collectAsState()
     val watchFaceLastError by vm.watchFaceLastError.collectAsState()
     val layoutMode by vm.layoutMode.collectAsState()
+    val sideScreenEnabled by vm.sideScreenEnabled.collectAsState()
     val blurEnabled by vm.blurEnabled.collectAsState()
     val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsState()
     val lowResIcons by vm.lowResIcons.collectAsState()
@@ -505,6 +506,15 @@ private fun SettingsRootScreen(
                     selected = layoutMode == LayoutMode.List,
                     onClick = { vm.setLayoutMode(LayoutMode.List) },
                     scale = itemFisheye(listState, "layout_list", screenCenterY, screenHeightPx)
+                )
+            }
+            item("side_screen_toggle") {
+                SettingsSwitchRow(
+                    title = "\u526f\u4e00\u5c4f",
+                    subtitle = "\u4ece\u8868\u76d8\u5411\u53f3\u6ed1\u8fdb\u5165\u5feb\u6377\u542f\u52a8\u4e0e\u901a\u77e5\u9875",
+                    checked = sideScreenEnabled,
+                    onToggle = { vm.setSideScreenEnabled(it) },
+                    scale = itemFisheye(listState, "side_screen_toggle", screenCenterY, screenHeightPx)
                 )
             }
             item("visual_header") { SectionTitle("\u89c6\u89c9", itemFisheye(listState, "visual_header", screenCenterY, screenHeightPx)) }

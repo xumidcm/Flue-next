@@ -98,7 +98,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _layoutMode = MutableStateFlow(LayoutMode.Honeycomb)
     val layoutMode: StateFlow<LayoutMode> = _layoutMode.asStateFlow()
-    private val _sideScreenEnabled = MutableStateFlow(false)
+    private val _sideScreenEnabled = MutableStateFlow(true)
     val sideScreenEnabled: StateFlow<Boolean> = _sideScreenEnabled.asStateFlow()
     private val _sideScreenShortcuts = MutableStateFlow(List(SIDE_SCREEN_SLOT_COUNT) { null as String? })
     val sideScreenShortcuts: StateFlow<List<String?>> = _sideScreenShortcuts.asStateFlow()
@@ -251,7 +251,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 } ?: LayoutMode.Honeycomb
                 if (_layoutMode.value != loadedLayout) _layoutMode.value = loadedLayout
 
-                val loadedSideScreenEnabled = prefs[KEY_SIDE_SCREEN_ENABLED] ?: false
+                val loadedSideScreenEnabled = prefs[KEY_SIDE_SCREEN_ENABLED] ?: true
                 if (_sideScreenEnabled.value != loadedSideScreenEnabled) _sideScreenEnabled.value = loadedSideScreenEnabled
 
                 val loadedSideScreenShortcuts = parseSideScreenShortcuts(prefs[KEY_SIDE_SCREEN_SHORTCUTS])
@@ -813,7 +813,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun resetSettings() {
         val defaultBlurEnabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         _layoutMode.value = LayoutMode.Honeycomb
-        _sideScreenEnabled.value = false
+        _sideScreenEnabled.value = true
         _sideScreenShortcuts.value = List(SIDE_SCREEN_SLOT_COUNT) { null }
         _blurEnabled.value = defaultBlurEnabled
         _edgeBlurEnabled.value = false
@@ -851,7 +851,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist {
             store.edit {
                 it[KEY_LAYOUT] = LayoutMode.Honeycomb.name
-                it[KEY_SIDE_SCREEN_ENABLED] = false
+                it[KEY_SIDE_SCREEN_ENABLED] = true
                 it[KEY_BLUR] = defaultBlurEnabled
                 it[KEY_EDGE_BLUR] = false
                 it[KEY_LOW_RES] = false
