@@ -283,8 +283,10 @@ private fun CollapsedStackCard(width: androidx.compose.ui.unit.Dp, leadEntry: No
     Box(Modifier.width(width)) {
         repeat(minOf(hiddenCount, 2)) { index ->
             Box(
-                Modifier.matchParentSize()
-                    .padding(top = (index + 1) * 8.dp, start = 10.dp, end = 10.dp)
+                Modifier
+                    .fillMaxWidth()
+                    .height(72.dp)
+                    .padding(top = ((index + 1) * 8).dp, start = 10.dp, end = 10.dp)
                     .clip(RoundedCornerShape(28.dp))
                     .background(Color(0xFF2E2E2E))
             )

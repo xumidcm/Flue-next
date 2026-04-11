@@ -7,6 +7,7 @@ import android.os.BatteryManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -284,7 +285,7 @@ fun SmartStackLayer(
             Box(
                 Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = (index + 1) * 7.dp, start = 10.dp, end = 10.dp)
+                    .padding(top = ((index + 1) * 7).dp, start = 10.dp, end = 10.dp)
                     .fillMaxWidth()
                     .height(72.dp)
                     .clip(RoundedCornerShape(28.dp))
