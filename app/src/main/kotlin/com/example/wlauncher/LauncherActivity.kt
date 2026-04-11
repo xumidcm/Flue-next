@@ -124,6 +124,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val layoutMode by vm.layoutMode.collectAsState()
     val sideScreenEnabled by vm.sideScreenEnabled.collectAsState()
     val sideScreenShortcuts by vm.sideScreenShortcuts.collectAsState()
+    val sideScreenPreviewGroups by vm.sideScreenPreviewGroups.collectAsState()
     val blurEnabled by vm.blurEnabled.collectAsState()
     val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsState()
     val legacyCircularIcons by vm.legacyCircularIcons.collectAsState()
@@ -141,6 +142,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsState()
     val notificationAccessGranted by vm.notificationAccessGranted.collectAsState()
     val notificationGroups by vm.notificationGroups.collectAsState()
+    val revealedNotificationTarget by vm.revealedNotificationTarget.collectAsState()
+    val launchSourceState by vm.launchSourceState.collectAsState()
     val watchFaces by vm.availableWatchFaces.collectAsState()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsState()
     val selectedWatchFace by vm.selectedWatchFace.collectAsState()
@@ -392,7 +395,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         }
                     )
                     .scaleBlurAlpha(
-                        targetValues = stackLayerValues(screenState),
+                        targetValues = if (screenState == ScreenState.App && launchSourceState == ScreenState.Stack) {
+                            stackLayerValues(ScreenState.Stack)
+                        } else {
+                            stackLayerValues(screenState)
+                        },
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled
@@ -401,8 +408,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 SmartStackLayer(
                     apps = apps,
                     sideScreenShortcuts = sideScreenShortcuts,
-                    latestNotificationGroup = notificationGroups.firstOrNull(),
+                    previewGroups = sideScreenPreviewGroups,
                     notificationAccessGranted = notificationAccessGranted,
+                    revealedNotificationTarget = revealedNotificationTarget,
+                    onRevealTargetChange = vm::setRevealedNotificationTarget,
                     onOpenNotifications = { vm.setState(ScreenState.Notifications) },
                     onLaunchApp = { appInfo, origin ->
                         val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
@@ -410,6 +419,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     },
                     onSetShortcut = vm::setSideScreenShortcut,
                     onRemoveShortcut = vm::removeSideScreenShortcut,
+                    onDismissGroup = vm::dismissNotificationGroup,
+                    onDismissNotification = vm::dismissNotification,
                     onDismissToFace = { vm.setState(ScreenState.Face) }
                 )
             }
@@ -420,7 +431,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         .fillMaxSize()
                         .zIndex(if (screenState == ScreenState.Notifications) 7f else 3f)
                         .scaleBlurAlpha(
-                            targetValues = notificationLayerValues(screenState),
+                            targetValues = if (screenState == ScreenState.App && launchSourceState == ScreenState.Notifications) {
+                                notificationLayerValues(ScreenState.Notifications)
+                            } else {
+                                notificationLayerValues(screenState)
+                            },
                             screenWidth = screenWidthPx,
                             screenHeight = screenHeightPx,
                             blurEnabled = layerBlurEnabled
@@ -429,6 +444,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     NotificationLayer(
                         notificationGroups = notificationGroups,
                         notificationAccessGranted = notificationAccessGranted,
+                        revealedNotificationTarget = revealedNotificationTarget,
+                        onRevealTargetChange = vm::setRevealedNotificationTarget,
                         onDismissToStack = { vm.setState(ScreenState.Stack) },
                         onToggleGroup = vm::toggleNotificationGroup,
                         onDismissGroup = vm::dismissNotificationGroup,

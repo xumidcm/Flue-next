@@ -34,6 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -46,6 +47,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,6 +61,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -67,89 +70,76 @@ import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.drawer.AppBubble
+import com.flue.launcher.ui.notification.NotificationEntryUi
 import com.flue.launcher.ui.notification.NotificationGroupUi
+import com.flue.launcher.ui.notification.NotificationRevealTarget
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.floor
 
 private const val SIDE_SCREEN_CONTENT_WIDTH_RATIO = 0.884f
 private const val SIDE_SCREEN_DISMISS_THRESHOLD = 86f
 private const val SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD = 110f
+private const val SIDE_SCREEN_REVEAL_WIDTH_DP = 74f
 
-private val SideScreenFrameShape = RoundedCornerShape(40.dp)
-private val SideScreenPanelShape = RoundedCornerShape(28.dp)
-private val SideScreenCardShape = RoundedCornerShape(28.dp)
-
-private data class SideScreenClockSnapshot(
-    val time: String,
-    val date: String
-)
-
-private data class BatterySnapshot(
-    val level: Int = 0
-) {
-    val isLow: Boolean
-        get() = level <= 20
+private sealed interface SideScreenModalState {
+    data object None : SideScreenModalState
+    data class Picker(val slotIndex: Int) : SideScreenModalState
+    data class Remove(val slotIndex: Int) : SideScreenModalState
 }
+
+private data class SideScreenClockSnapshot(val time: String, val date: String)
+private data class BatterySnapshot(val level: Int = 0)
+private data class PreviewGroup(val group: NotificationGroupUi, val entries: List<NotificationEntryUi>, val hiddenCount: Int)
 
 @Composable
 fun SmartStackLayer(
     apps: List<AppInfo>,
     sideScreenShortcuts: List<String?>,
-    latestNotificationGroup: NotificationGroupUi?,
+    previewGroups: List<NotificationGroupUi>,
     notificationAccessGranted: Boolean,
+    revealedNotificationTarget: NotificationRevealTarget?,
+    onRevealTargetChange: (NotificationRevealTarget?) -> Unit,
     onOpenNotifications: () -> Unit,
     onLaunchApp: (AppInfo, Offset) -> Unit,
     onSetShortcut: (Int, String?) -> Unit,
     onRemoveShortcut: (Int) -> Unit,
+    onDismissGroup: (String) -> Unit,
+    onDismissNotification: (String) -> Unit,
     onDismissToFace: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val clock = rememberSideScreenClockSnapshot()
+    val density = LocalDensity.current
+    val clock = rememberClockSnapshot()
     val battery = rememberBatterySnapshot()
     val slotCenters = remember { mutableStateMapOf<Int, Offset>() }
-    val shortcutApps = remember(apps, sideScreenShortcuts) {
-        List(sideScreenShortcuts.size) { index ->
-            sideScreenShortcuts.getOrNull(index)?.let { key ->
-                apps.firstOrNull { it.componentKey == key }
-            }
-        }
-    }
+    val shortcuts = remember(apps, sideScreenShortcuts) { sideScreenShortcuts.map { key -> key?.let { k -> apps.firstOrNull { it.componentKey == k } } } }
+    var modalState by remember { mutableStateOf<SideScreenModalState>(SideScreenModalState.None) }
     var dragDx by remember { mutableFloatStateOf(0f) }
     var dragDy by remember { mutableFloatStateOf(0f) }
     var overscrollTarget by remember { mutableFloatStateOf(0f) }
-    val overscrollY by animateFloatAsState(
-        targetValue = overscrollTarget,
-        animationSpec = spring(stiffness = 440f, dampingRatio = 0.78f),
-        label = "side_screen_overscroll"
-    )
-    var pickerSlot by remember { mutableStateOf<Int?>(null) }
-    var removeSlot by remember { mutableStateOf<Int?>(null) }
-    val modalVisible = pickerSlot != null || removeSlot != null
+    val overscrollY by animateFloatAsState(overscrollTarget, spring(stiffness = 440f, dampingRatio = 0.78f), label = "side_overscroll")
 
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            .clip(SideScreenFrameShape)
+            .clip(RoundedCornerShape(40.dp))
             .background(WatchColors.Black)
-            .pointerInput(notificationAccessGranted, modalVisible) {
-                if (modalVisible) return@pointerInput
+            .pointerInput(notificationAccessGranted, modalState) {
+                if (modalState != SideScreenModalState.None) return@pointerInput
                 detectDragGestures(
-                    onDragStart = {
-                        dragDx = 0f
-                        dragDy = 0f
-                    },
+                    onDragStart = { dragDx = 0f; dragDy = 0f },
                     onDrag = { change, dragAmount ->
                         dragDx += dragAmount.x
                         dragDy += dragAmount.y
-                        val horizontalDominant = abs(dragDx) > abs(dragDy)
-                        if (horizontalDominant) {
+                        if (abs(dragDx) > abs(dragDy)) {
                             if (dragDx < -SIDE_SCREEN_DISMISS_THRESHOLD) {
-                                change.consume()
-                                onDismissToFace()
+                                change.consume(); onRevealTargetChange(null); onDismissToFace()
                             }
                         } else {
                             change.consume()
@@ -158,156 +148,196 @@ fun SmartStackLayer(
                     },
                     onDragEnd = {
                         if (dragDy < -SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD) {
-                            overscrollTarget = 0f
-                            onOpenNotifications()
-                        } else {
-                            overscrollTarget = 0f
-                        }
+                            onRevealTargetChange(null); overscrollTarget = 0f; onOpenNotifications()
+                        } else overscrollTarget = 0f
                     },
                     onDragCancel = { overscrollTarget = 0f }
                 )
             }
     ) {
-        val screenWidthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
-        val screenHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+        val widthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+        val heightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
         val contentWidth = maxWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
-        val quickPanelHeight = (contentWidth * 0.58f).coerceAtLeast(152.dp)
+        val quickHeight = (contentWidth * 0.58f).coerceAtLeast(152.dp)
+        val previewCapacity = remember(contentWidth, maxHeight) {
+            val headerPx = with(density) { 112.dp.toPx() }
+            val footerPx = with(density) { 38.dp.toPx() }
+            val quickPx = with(density) { quickHeight.toPx() }
+            val rowPx = with(density) { 76.dp.toPx() + 10.dp.toPx() }
+            floor(((heightPx - headerPx - footerPx - quickPx).coerceAtLeast(rowPx)) / rowPx).toInt().coerceAtLeast(1)
+        }
+        val previewLayout = remember(previewGroups, previewCapacity) { buildPreviewGroups(previewGroups, previewCapacity) }
 
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer { translationY = overscrollY }
-                .padding(top = 10.dp, bottom = 10.dp),
+            modifier = Modifier.fillMaxSize().graphicsLayer { translationY = overscrollY }.padding(top = 10.dp, bottom = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(
-                text = clock.time,
-                color = Color.White,
-                fontSize = 31.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = clock.date,
-                color = WatchColors.TextSecondary,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Medium
-            )
-            Spacer(modifier = Modifier.height(14.dp))
-
-            QuickLaunchPanel(
-                modifier = Modifier
-                    .width(contentWidth)
-                    .height(quickPanelHeight),
-                apps = shortcutApps,
-                slotCenters = slotCenters,
-                onAddShortcut = { pickerSlot = it },
-                onLongPressShortcut = { removeSlot = it },
-                onLaunchShortcut = { slotIndex, app ->
-                    val center = slotCenters[slotIndex] ?: Offset(screenWidthPx / 2f, screenHeightPx / 2f)
-                    onLaunchApp(
-                        app,
-                        Offset(
-                            x = center.x / screenWidthPx,
-                            y = center.y / screenHeightPx
-                        )
-                    )
+            Text(clock.time, color = Color.White, fontSize = 31.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(6.dp))
+            Text(clock.date, color = WatchColors.TextSecondary, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(14.dp))
+            QuickPanel(contentWidth, quickHeight, shortcuts, slotCenters,
+                onAdd = { onRevealTargetChange(null); modalState = SideScreenModalState.Picker(it) },
+                onLongPress = { onRevealTargetChange(null); modalState = SideScreenModalState.Remove(it) },
+                onClick = { slot, app ->
+                    val center = slotCenters[slot] ?: Offset(widthPx / 2f, heightPx / 2f)
+                    onRevealTargetChange(null)
+                    onLaunchApp(app, Offset(center.x / widthPx, center.y / heightPx))
                 }
             )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            SideScreenNotificationPreview(
-                modifier = Modifier.width(contentWidth),
-                latestNotificationGroup = latestNotificationGroup,
-                notificationAccessGranted = notificationAccessGranted,
-                onClick = onOpenNotifications
-            )
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            BatteryPill(
-                battery = battery,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
-        }
-    }
-
-    pickerSlot?.let { activeSlot ->
-        SideScreenPickerOverlay(
-            apps = apps,
-            onSelect = { app ->
-                onSetShortcut(activeSlot, app.componentKey)
-            },
-            onDismiss = { pickerSlot = null }
-        )
-    }
-
-    removeSlot?.let { slotIndex ->
-        shortcutApps.getOrNull(slotIndex)?.let { app ->
-            SideScreenRemoveOverlay(
-                app = app,
-                onRemove = {
-                    onRemoveShortcut(slotIndex)
-                },
-                onDismiss = { removeSlot = null }
-            )
-        }
-    }
-}
-
-@Composable
-private fun QuickLaunchPanel(
-    modifier: Modifier,
-    apps: List<AppInfo?>,
-    slotCenters: MutableMap<Int, Offset>,
-    onAddShortcut: (Int) -> Unit,
-    onLongPressShortcut: (Int) -> Unit,
-    onLaunchShortcut: (Int, AppInfo) -> Unit
-) {
-    Box(
-        modifier = modifier
-            .clip(SideScreenPanelShape)
-            .background(Color(0xFF353535))
-            .padding(horizontal = 14.dp, vertical = 14.dp)
-    ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            apps.chunked(3).forEachIndexed { rowIndex, row ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    row.forEachIndexed { columnIndex, app ->
-                        val slotIndex = rowIndex * 3 + columnIndex
-                        Box(
-                            modifier = Modifier.onGloballyPositioned { coords ->
-                                val pos = coords.positionInRoot()
-                                slotCenters[slotIndex] = Offset(
-                                    x = pos.x + coords.size.width / 2f,
-                                    y = pos.y + coords.size.height / 2f
-                                )
-                            },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (app == null) {
-                                AddShortcutBubble { onAddShortcut(slotIndex) }
-                            } else {
-                                AppBubble(
-                                    icon = app.cachedIcon,
-                                    size = 58.dp,
-                                    onClick = { onLaunchShortcut(slotIndex, app) },
-                                    onLongClick = { onLongPressShortcut(slotIndex) },
-                                    pressScaleTarget = 0.9f,
-                                    pressAnimationDurationMillis = 200
-                                )
+            Spacer(Modifier.height(16.dp))
+            Column(Modifier.width(contentWidth), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                when {
+                    !notificationAccessGranted -> PreviewInfoCard("开启通知访问", "副一屏上滑进入通知中心后完成授权", onOpenNotifications)
+                    previewLayout.isEmpty() -> PreviewInfoCard("暂无通知", "副一屏上滑可打开通知中心", onOpenNotifications)
+                    else -> previewLayout.forEach { preview ->
+                        if (preview.hiddenCount > 0) {
+                            RevealDeleteCard(
+                                target = NotificationRevealTarget.Group(preview.group.packageName),
+                                revealedTarget = revealedNotificationTarget,
+                                onRevealTargetChange = onRevealTargetChange,
+                                enabled = preview.group.entries.any(NotificationEntryUi::isClearable),
+                                onDelete = { onDismissGroup(preview.group.packageName) }
+                            ) { StackedPreviewCard(preview.entries.first(), preview.hiddenCount, onOpenNotifications) }
+                        } else {
+                            preview.entries.forEach { entry ->
+                                RevealDeleteCard(
+                                    target = NotificationRevealTarget.Entry(entry.key),
+                                    revealedTarget = revealedNotificationTarget,
+                                    onRevealTargetChange = onRevealTargetChange,
+                                    enabled = entry.isClearable,
+                                    onDelete = { onDismissNotification(entry.key) }
+                                ) { PreviewPill(entry, onOpenNotifications) }
                             }
                         }
                     }
-                    repeat(3 - row.size) {
-                        Spacer(modifier = Modifier.size(58.dp))
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            BatteryPill(battery.level, Modifier.padding(bottom = 4.dp))
+        }
+    }
+
+    when (val state = modalState) {
+        is SideScreenModalState.Picker -> PickerOverlay(apps, onSelect = { onSetShortcut(state.slotIndex, it.componentKey) }, onDismiss = { modalState = SideScreenModalState.None })
+        is SideScreenModalState.Remove -> shortcuts.getOrNull(state.slotIndex)?.let { app ->
+            RemoveOverlay(app, onRemove = { onRemoveShortcut(state.slotIndex) }, onDismiss = { modalState = SideScreenModalState.None })
+        } ?: LaunchedEffect(state) { modalState = SideScreenModalState.None }
+        SideScreenModalState.None -> Unit
+    }
+}
+
+@Composable private fun QuickPanel(width: androidx.compose.ui.unit.Dp, height: androidx.compose.ui.unit.Dp, apps: List<AppInfo?>, slotCenters: MutableMap<Int, Offset>, onAdd: (Int) -> Unit, onLongPress: (Int) -> Unit, onClick: (Int, AppInfo) -> Unit) {
+    Box(Modifier.width(width).height(height).clip(RoundedCornerShape(28.dp)).background(Color(0xFF353535)).padding(14.dp)) {
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
+            apps.chunked(3).forEachIndexed { rowIndex, row ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    row.forEachIndexed { colIndex, app ->
+                        val slot = rowIndex * 3 + colIndex
+                        Box(Modifier.onGloballyPositioned { c -> val p = c.positionInRoot(); slotCenters[slot] = Offset(p.x + c.size.width / 2f, p.y + c.size.height / 2f) }, contentAlignment = Alignment.Center) {
+                            if (app == null) AddBubble { onAdd(slot) } else AppBubble(app.cachedIcon, 58.dp, onClick = { onClick(slot, app) }, onLongClick = { onLongPress(slot) }, pressScaleTarget = 0.9f, pressAnimationDurationMillis = 200)
+                        }
+                    }
+                    repeat(3 - row.size) { Spacer(Modifier.size(58.dp)) }
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun AddBubble(onClick: () -> Unit) {
+    val pressed = rememberPressedState(); val isPressed by pressed
+    val scale by animateFloatAsState(if (isPressed) 0.958f else 1f, spring(stiffness = 860f, dampingRatio = 0.72f), label = "side_add")
+    Box(Modifier.size(58.dp).graphicsLayer { scaleX = scale; scaleY = scale }.clip(CircleShape).background(Color.White.copy(alpha = 0.10f)).instantPressGesture(pressed, onClick = onClick), contentAlignment = Alignment.Center) {
+        Icon(Icons.Filled.Add, null, tint = Color.White.copy(alpha = 0.86f), modifier = Modifier.size(24.dp))
+    }
+}
+
+@Composable private fun PreviewInfoCard(title: String, subtitle: String, onClick: () -> Unit) {
+    val fake = NotificationEntryUi("info", "", null, title, title, subtitle, 0L, null, false, false, false, false)
+    PreviewPill(fake, onClick)
+}
+
+@Composable private fun PreviewPill(entry: NotificationEntryUi, onClick: () -> Unit) {
+    val pressed = rememberPressedState(); val isPressed by pressed
+    val scale by animateFloatAsState(if (isPressed) 0.968f else 1f, spring(stiffness = 860f, dampingRatio = 0.72f), label = "preview_scale")
+    Box(Modifier.fillMaxWidth().graphicsLayer { scaleX = scale; scaleY = scale }.clip(RoundedCornerShape(28.dp)).background(Color(0xFF353535)).instantPressGesture(pressed, onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            NotificationIcon(entry.icon)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(entry.title.ifBlank { entry.appLabel }, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(2.dp))
+                Text(entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } }, color = WatchColors.TextSecondary, fontSize = 13.sp, maxLines = 2)
+            }
+            if (entry.time > 0L) {
+                Spacer(Modifier.width(10.dp))
+                Text(formatClockTime(entry.time), color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            }
+        }
+    }
+}
+
+@Composable private fun StackedPreviewCard(entry: NotificationEntryUi, hiddenCount: Int, onClick: () -> Unit) {
+    Box(Modifier.fillMaxWidth()) {
+        repeat(minOf(hiddenCount, 2)) { index ->
+            Box(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = (index + 1) * 7.dp, start = 10.dp, end = 10.dp)
+                    .fillMaxWidth()
+                    .height(72.dp)
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(Color(0xFF2E2E2E))
+            )
+        }
+        Column {
+            PreviewPill(entry, onClick)
+            Text("+${hiddenCount}条新消息", color = WatchColors.TextTertiary, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 6.dp))
+        }
+    }
+}
+
+@Composable private fun NotificationIcon(icon: ImageBitmap?) {
+    Box(Modifier.size(46.dp).clip(CircleShape).background(Color(0xFFD9D9D9)), contentAlignment = Alignment.Center) {
+        if (icon != null) Image(icon, null, modifier = Modifier.fillMaxSize().clip(CircleShape), filterQuality = FilterQuality.Medium, contentScale = ContentScale.Crop)
+        else Icon(Icons.Filled.Notifications, null, tint = Color(0xFF2B2B2B), modifier = Modifier.size(24.dp))
+    }
+}
+
+@Composable private fun RevealDeleteCard(target: NotificationRevealTarget, revealedTarget: NotificationRevealTarget?, onRevealTargetChange: (NotificationRevealTarget?) -> Unit, enabled: Boolean, onDelete: () -> Unit, content: @Composable () -> Unit) {
+    val actionWidthPx = with(LocalDensity.current) { SIDE_SCREEN_REVEAL_WIDTH_DP.dp.toPx() }
+    val offsetX = remember(target) { androidx.compose.animation.core.Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(revealedTarget, actionWidthPx) { offsetX.animateTo(if (enabled && revealedTarget == target) -actionWidthPx else 0f, tween(180)) }
+    Box(Modifier.fillMaxWidth()) {
+        Box(Modifier.align(Alignment.CenterEnd).width(SIDE_SCREEN_REVEAL_WIDTH_DP.dp).height(72.dp).clip(CircleShape).background(Color(0xFF8E4F64)), contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.Delete, null, tint = Color(0xFF2B1824), modifier = Modifier.size(24.dp).clickable(enabled = enabled) { onRevealTargetChange(null); onDelete() })
+        }
+        Box(Modifier.graphicsLayer { translationX = offsetX.value }.pointerInput(target, enabled) {
+            if (!enabled) return@pointerInput
+            detectDragGestures(
+                onDragStart = { onRevealTargetChange(target) },
+                onDrag = { change, dragAmount -> if (abs(dragAmount.x) > abs(dragAmount.y)) { change.consume(); scope.launch { offsetX.snapTo((offsetX.value + dragAmount.x).coerceIn(-actionWidthPx, 0f)) } } },
+                onDragEnd = { scope.launch { onRevealTargetChange(if (abs(offsetX.value) > actionWidthPx * 0.45f) target else null) } },
+                onDragCancel = { scope.launch { onRevealTargetChange(null) } }
+            )
+        }) { content() }
+    }
+}
+
+@Composable private fun PickerOverlay(apps: List<AppInfo>, onSelect: (AppInfo) -> Unit, onDismiss: () -> Unit) {
+    ModalShell(onDismiss) { dismiss ->
+        Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFF1E1E1E)).padding(vertical = 12.dp)) {
+            Text("添加快捷启动", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 10.dp))
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                items(apps, key = { it.componentKey }) { app ->
+                    val pressed = rememberPressedState(); val isPressed by pressed
+                    val scale by animateFloatAsState(if (isPressed) 0.97f else 1f, spring(stiffness = 840f, dampingRatio = 0.74f), label = "picker_row")
+                    Row(Modifier.fillMaxWidth().graphicsLayer { scaleX = scale; scaleY = scale }.clip(RoundedCornerShape(18.dp)).background(if (isPressed) Color(0xFF303030) else Color.Transparent).instantPressGesture(pressed) { onSelect(app); dismiss() }.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Image(app.cachedIcon, null, modifier = Modifier.size(42.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+                        Spacer(Modifier.width(12.dp))
+                        Column { Text(app.label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold); Text(app.packageName, color = WatchColors.TextTertiary, fontSize = 11.sp) }
                     }
                 }
             }
@@ -315,458 +345,84 @@ private fun QuickLaunchPanel(
     }
 }
 
-@Composable
-private fun SideScreenNotificationPreview(
-    modifier: Modifier,
-    latestNotificationGroup: NotificationGroupUi?,
-    notificationAccessGranted: Boolean,
-    onClick: () -> Unit
-) {
-    val pressedState = rememberPressedState()
-    val pressed by pressedState
-    val pressScale by animateFloatAsState(
-        targetValue = if (pressed) 0.964f else 1f,
-        animationSpec = spring(stiffness = 860f, dampingRatio = 0.72f),
-        label = "side_preview_press_scale"
-    )
-    val title = when {
-        !notificationAccessGranted -> "开启通知访问"
-        latestNotificationGroup == null -> "暂无通知"
-        else -> latestNotificationGroup.appLabel
-    }
-    val subtitle = when {
-        !notificationAccessGranted -> "下滑进入通知中心后完成授权"
-        latestNotificationGroup == null -> "副一屏上滑可打开通知中心"
-        else -> latestNotificationGroup.latestSummary
-    }
-    val trailing = latestNotificationGroup?.let { formatClockTime(it.latestTime) }.orEmpty()
-
-    Box(
-        modifier = modifier
-            .graphicsLayer {
-                scaleX = pressScale
-                scaleY = pressScale
-            }
-            .instantPressGesture(pressedState, onClick = onClick)
-    ) {
-        NotificationPreviewBubble(
-            modifier = Modifier.fillMaxWidth(),
-            icon = latestNotificationGroup?.icon,
-            title = title,
-            subtitle = subtitle,
-            trailing = trailing
-        )
-    }
-}
-
-@Composable
-private fun NotificationPreviewBubble(
-    modifier: Modifier,
-    icon: ImageBitmap?,
-    title: String,
-    subtitle: String,
-    trailing: String
-) {
-    Box(
-        modifier = modifier
-            .heightIn(min = 74.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 22.dp)
-                .clip(SideScreenCardShape)
-                .background(Color(0xFF353535))
-                .padding(start = 36.dp, end = 18.dp, top = 12.dp, bottom = 12.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = title,
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = subtitle,
-                        color = WatchColors.TextSecondary,
-                        fontSize = 13.sp,
-                        maxLines = 2
-                    )
-                }
-                if (trailing.isNotBlank()) {
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = trailing,
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+@Composable private fun RemoveOverlay(app: AppInfo, onRemove: () -> Unit, onDismiss: () -> Unit) {
+    ModalShell(onDismiss) { dismiss ->
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth(0.74f).verticalScroll(rememberScrollState())) {
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xFF2C2C2E))) {
+                Box(Modifier.fillMaxWidth().clickable { onRemove(); dismiss() }.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                    Text("移除", color = Color(0xFFFF453A), fontSize = 15.sp, fontWeight = FontWeight.W500)
                 }
             }
-        }
-
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(Color(0xFFD9D9D9)),
-            contentAlignment = Alignment.Center
-        ) {
-            if (icon != null) {
-                Image(
-                    bitmap = icon,
-                    contentDescription = null,
-                    filterQuality = FilterQuality.Medium,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clip(CircleShape),
-                    contentScale = ContentScale.Crop
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Filled.Notifications,
-                    contentDescription = null,
-                    tint = Color(0xFF2B2B2B),
-                    modifier = Modifier.size(24.dp)
-                )
-            }
+            Spacer(Modifier.height(16.dp))
+            Image(app.cachedIcon, null, modifier = Modifier.size(88.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+            Spacer(Modifier.height(6.dp))
+            Text(app.label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.W600)
         }
     }
 }
 
-@Composable
-private fun AddShortcutBubble(onClick: () -> Unit) {
-    val pressedState = rememberPressedState()
-    val pressed by pressedState
-    val pressScale by animateFloatAsState(
-        targetValue = if (pressed) 0.958f else 1f,
-        animationSpec = spring(stiffness = 860f, dampingRatio = 0.72f),
-        label = "side_add_press_scale"
-    )
-    Box(
-        modifier = Modifier
-            .size(58.dp)
-            .graphicsLayer {
-                scaleX = pressScale
-                scaleY = pressScale
-            }
-            .clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.10f))
-            .instantPressGesture(pressedState, onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            imageVector = Icons.Filled.Add,
-            contentDescription = null,
-            tint = Color.Black,
-            modifier = Modifier.size(24.dp)
-        )
-    }
-}
-
-@Composable
-private fun SideScreenPickerOverlay(
-    apps: List<AppInfo>,
-    onSelect: (AppInfo) -> Unit,
-    onDismiss: () -> Unit
-) {
-    SideScreenModal(
-        onDismissRequest = onDismiss
-    ) { dismiss ->
-        Column(
-            modifier = Modifier
-                .fillMaxWidth(0.82f)
-                .heightIn(max = 420.dp)
-                .clip(RoundedCornerShape(24.dp))
-                .background(Color(0xFF1E1E1E))
-                .padding(vertical = 12.dp)
-        ) {
-            Text(
-                text = "添加快捷启动",
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier
-                    .align(Alignment.CenterHorizontally)
-                    .padding(bottom = 10.dp)
-            )
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(apps, key = { it.componentKey }) { app ->
-                    SideScreenPickerRow(
-                        app = app,
-                        onClick = {
-                            onSelect(app)
-                            dismiss()
-                        }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SideScreenPickerRow(
-    app: AppInfo,
-    onClick: () -> Unit
-) {
-    val pressedState = rememberPressedState()
-    val pressed by pressedState
-    val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.97f else 1f,
-        animationSpec = spring(stiffness = 840f, dampingRatio = 0.74f),
-        label = "side_picker_item_scale"
-    )
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
-            .clip(RoundedCornerShape(18.dp))
-            .background(if (pressed) Color(0xFF303030) else Color.Transparent)
-            .instantPressGesture(pressedState, onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Image(
-            bitmap = app.cachedIcon,
-            contentDescription = null,
-            modifier = Modifier
-                .size(42.dp)
-                .clip(CircleShape),
-            contentScale = ContentScale.Crop
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Column {
-            Text(
-                text = app.label,
-                color = Color.White,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-            Text(
-                text = app.packageName,
-                color = WatchColors.TextTertiary,
-                fontSize = 11.sp
-            )
-        }
-    }
-}
-
-@Composable
-private fun SideScreenRemoveOverlay(
-    app: AppInfo,
-    onRemove: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    SideScreenModal(
-        onDismissRequest = onDismiss
-    ) { dismiss ->
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier
-                .fillMaxWidth(0.74f)
-                .verticalScroll(rememberScrollState())
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF2C2C2E))
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            onRemove()
-                            dismiss()
-                        }
-                        .padding(horizontal = 16.dp, vertical = 14.dp)
-                ) {
-                    Text(
-                        text = "移除",
-                        color = Color(0xFFFF453A),
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.W500
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-            Image(
-                bitmap = app.cachedIcon,
-                contentDescription = null,
-                modifier = Modifier
-                    .size(88.dp)
-                    .clip(CircleShape),
-                contentScale = ContentScale.Crop
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = app.label,
-                color = Color.White,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.W600
-            )
-        }
-    }
-}
-
-@Composable
-private fun SideScreenModal(
-    onDismissRequest: () -> Unit,
-    content: @Composable (dismiss: () -> Unit) -> Unit
-) {
+@Composable private fun ModalShell(onDismissRequest: () -> Unit, content: @Composable (dismiss: () -> Unit) -> Unit) {
     val dismissInteraction = remember { MutableInteractionSource() }
     val blockInteraction = remember { MutableInteractionSource() }
     var visible by remember { mutableStateOf(false) }
-
-    fun dismiss() {
-        visible = false
-    }
-
-    LaunchedEffect(Unit) {
-        visible = true
-    }
-
-    BackHandler {
-        dismiss()
-    }
-
-    LaunchedEffect(visible) {
-        if (!visible) {
-            delay(220)
-            onDismissRequest()
-        }
-    }
-
-    val modalAlpha by animateFloatAsState(
-        targetValue = if (visible) 1f else 0f,
-        animationSpec = spring(stiffness = 720f, dampingRatio = 0.85f),
-        label = "side_modal_alpha"
-    )
-    val scale by animateFloatAsState(
-        targetValue = if (visible) 1f else 0.84f,
-        animationSpec = spring(stiffness = 700f, dampingRatio = 0.8f),
-        label = "side_modal_scale"
-    )
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .graphicsLayer { alpha = modalAlpha }
-            .background(Color.Black.copy(alpha = 0.72f))
-            .clickable(
-                indication = null,
-                interactionSource = dismissInteraction,
-                onClick = { dismiss() }
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        Box(
-            modifier = Modifier
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                }
-                .clickable(
-                    indication = null,
-                    interactionSource = blockInteraction,
-                    onClick = {}
-                )
-        ) {
-            content(::dismiss)
-        }
+    fun dismiss() { visible = false }
+    LaunchedEffect(Unit) { visible = true }
+    BackHandler { dismiss() }
+    LaunchedEffect(visible) { if (!visible) { delay(220); onDismissRequest() } }
+    val alpha by animateFloatAsState(if (visible) 1f else 0f, spring(stiffness = 720f, dampingRatio = 0.85f), label = "modal_alpha")
+    val scale by animateFloatAsState(if (visible) 1f else 0.84f, spring(stiffness = 700f, dampingRatio = 0.8f), label = "modal_scale")
+    Box(Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha }.background(Color.Black.copy(alpha = 0.72f)).clickable(indication = null, interactionSource = dismissInteraction) { dismiss() }, contentAlignment = Alignment.Center) {
+        Box(Modifier.graphicsLayer { scaleX = scale; scaleY = scale }.clickable(indication = null, interactionSource = blockInteraction) {}) { content(::dismiss) }
     }
 }
 
-@Composable
-private fun rememberSideScreenClockSnapshot(): SideScreenClockSnapshot {
-    var snapshot by remember {
-        mutableStateOf(SideScreenClockSnapshot(time = "--:--", date = "--"))
-    }
+@Composable private fun rememberClockSnapshot(): SideScreenClockSnapshot {
+    var snapshot by remember { mutableStateOf(SideScreenClockSnapshot("--:--", "--")) }
     LaunchedEffect(Unit) {
         while (true) {
-            val now = Date()
-            val locale = Locale.getDefault()
-            val timeFormatter = SimpleDateFormat("HH:mm", locale)
-            val dateFormatter = if (locale.language.startsWith("zh")) {
-                SimpleDateFormat("M月d日 EEEE", Locale.CHINA)
-            } else {
-                SimpleDateFormat("MMM d, EEEE", locale)
-            }
-            snapshot = SideScreenClockSnapshot(
-                time = timeFormatter.format(now),
-                date = dateFormatter.format(now)
-            )
+            val now = Date(); val locale = Locale.getDefault()
+            snapshot = SideScreenClockSnapshot(SimpleDateFormat("HH:mm", locale).format(now), if (locale.language.startsWith("zh")) SimpleDateFormat("M月d日 EEEE", Locale.CHINA).format(now) else SimpleDateFormat("MMM d, EEEE", locale).format(now))
             delay(1000)
         }
     }
     return snapshot
 }
 
-@Composable
-private fun rememberBatterySnapshot(): BatterySnapshot {
+@Composable private fun rememberBatterySnapshot(): BatterySnapshot {
     val context = LocalContext.current
-    var batteryLevel by remember(context) { mutableIntStateOf(0) }
+    var level by remember(context) { mutableIntStateOf(0) }
     DisposableEffect(context) {
-        fun readBatteryLevel(): Int {
-            val batteryManager = context.getSystemService(BatteryManager::class.java)
-            return (batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0).coerceIn(0, 100)
-        }
-
-        batteryLevel = readBatteryLevel()
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: android.content.Context?, intent: Intent?) {
-                batteryLevel = readBatteryLevel()
-            }
-        }
+        fun readLevel(): Int = (context.getSystemService(BatteryManager::class.java)?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0).coerceIn(0, 100)
+        level = readLevel()
+        val receiver = object : BroadcastReceiver() { override fun onReceive(context: android.content.Context?, intent: Intent?) { level = readLevel() } }
         context.registerReceiver(receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        onDispose {
-            runCatching { context.unregisterReceiver(receiver) }
+        onDispose { runCatching { context.unregisterReceiver(receiver) } }
+    }
+    return BatterySnapshot(level)
+}
+
+@Composable private fun BatteryPill(level: Int, modifier: Modifier = Modifier) {
+    val tint = when { level <= 10 -> WatchColors.ActiveRed; level <= 20 -> WatchColors.ActiveOrange; else -> WatchColors.ActiveGreen }
+    Box(modifier.width(56.dp).height(24.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF141414)).padding(2.dp)) {
+        Box(Modifier.fillMaxWidth((level / 100f).coerceIn(0f, 1f)).fillMaxHeight().clip(RoundedCornerShape(12.dp)).background(tint.copy(alpha = 0.24f)))
+        Text("${level}%", color = tint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Center))
+    }
+}
+
+private fun buildPreviewGroups(groups: List<NotificationGroupUi>, maxRows: Int): List<PreviewGroup> {
+    var remaining = maxRows
+    val result = mutableListOf<PreviewGroup>()
+    for (group in groups) {
+        if (remaining <= 0) break
+        if (group.entries.size <= remaining) {
+            result += PreviewGroup(group, group.entries, 0)
+            remaining -= group.entries.size
+        } else {
+            result += PreviewGroup(group, listOf(group.entries.first()), group.entries.size - 1)
+            break
         }
     }
-    return BatterySnapshot(batteryLevel)
+    return result
 }
 
-@Composable
-private fun BatteryPill(
-    battery: BatterySnapshot,
-    modifier: Modifier = Modifier
-) {
-    val tint = if (battery.isLow) WatchColors.ActiveRed else WatchColors.ActiveGreen
-    Box(
-        modifier = modifier
-            .width(56.dp)
-            .height(24.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color(0xFF141414))
-            .padding(2.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth((battery.level / 100f).coerceIn(0f, 1f))
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(12.dp))
-                .background(tint.copy(alpha = 0.24f))
-        )
-        Text(
-            text = "${battery.level}%",
-            color = tint,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.align(Alignment.Center)
-        )
-    }
-}
-
-private fun formatClockTime(timestamp: Long): String {
-    return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
-}
+private fun formatClockTime(timestamp: Long): String = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))

@@ -25,6 +25,7 @@ import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.navigation.ScreenState
 import com.flue.launcher.ui.notification.NotificationEntryUi
 import com.flue.launcher.ui.notification.NotificationGroupUi
+import com.flue.launcher.ui.notification.NotificationRevealTarget
 import com.flue.launcher.service.WLauncherNotificationListener
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
@@ -149,8 +150,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _notificationAccessGranted = MutableStateFlow(false)
     val notificationAccessGranted: StateFlow<Boolean> = _notificationAccessGranted.asStateFlow()
     private val _expandedNotificationGroups = MutableStateFlow<Set<String>>(emptySet())
+    private val _sideScreenPreviewGroups = MutableStateFlow<List<NotificationGroupUi>>(emptyList())
+    val sideScreenPreviewGroups: StateFlow<List<NotificationGroupUi>> = _sideScreenPreviewGroups.asStateFlow()
     private val _notificationGroups = MutableStateFlow<List<NotificationGroupUi>>(emptyList())
     val notificationGroups: StateFlow<List<NotificationGroupUi>> = _notificationGroups.asStateFlow()
+    private val _revealedNotificationTarget = MutableStateFlow<NotificationRevealTarget?>(null)
+    val revealedNotificationTarget: StateFlow<NotificationRevealTarget?> = _revealedNotificationTarget.asStateFlow()
 
     private val _hiddenApps = MutableStateFlow<Set<String>>(emptySet())
     val hiddenApps: StateFlow<Set<String>> = _hiddenApps.asStateFlow()
@@ -216,6 +221,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _currentApp = MutableStateFlow<AppInfo?>(null)
     val currentApp: StateFlow<AppInfo?> = _currentApp.asStateFlow()
+    private val _launchSourceState = MutableStateFlow(ScreenState.Apps)
+    val launchSourceState: StateFlow<ScreenState> = _launchSourceState.asStateFlow()
 
     private var launchingExternalApp = false
     private var returnStateAfterExternalLaunch = ScreenState.Apps
@@ -232,11 +239,22 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 WLauncherNotificationListener.notifications,
                 _expandedNotificationGroups
             ) { notifications, expandedPackages ->
-                buildNotificationGroups(notifications, expandedPackages)
-            }.collect { groups ->
+                buildNotificationGroups(notifications, emptySet()) to
+                    buildNotificationGroups(notifications, expandedPackages)
+            }.collect { (previewGroups, groups) ->
+                _sideScreenPreviewGroups.value = previewGroups
                 _notificationGroups.value = groups
                 _expandedNotificationGroups.value =
                     _expandedNotificationGroups.value.intersect(groups.map(NotificationGroupUi::packageName).toSet())
+                val currentRevealTarget = _revealedNotificationTarget.value
+                val validRevealTarget = when (currentRevealTarget) {
+                    is NotificationRevealTarget.Group -> groups.any { it.packageName == currentRevealTarget.packageName }
+                    is NotificationRevealTarget.Entry -> groups.any { group -> group.entries.any { it.key == currentRevealTarget.key } }
+                    null -> true
+                }
+                if (!validRevealTarget) {
+                    _revealedNotificationTarget.value = null
+                }
             }
         }
         refreshIconPacks()
@@ -395,6 +413,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setState(state: ScreenState) {
         _screenState.value = state
+        _revealedNotificationTarget.value = null
     }
 
     fun openApp(
@@ -404,9 +423,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         returnState: ScreenState = ScreenState.Apps
     ) {
         returnStateAfterExternalLaunch = returnState
+        _launchSourceState.value = returnState
         _currentApp.value = appInfo
         _appOpenOrigin.value = origin
         _screenState.value = ScreenState.App
+        _revealedNotificationTarget.value = null
 
         launchJob?.cancel()
         launchJob = viewModelScope.launch {
@@ -428,6 +449,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (opened) {
             launchingExternalApp = true
             returnStateAfterExternalLaunch = returnState
+            _launchSourceState.value = returnState
+            _currentApp.value = null
+            _screenState.value = ScreenState.App
+            _revealedNotificationTarget.value = null
         }
         return opened
     }
@@ -436,6 +461,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (launchingExternalApp) {
             launchingExternalApp = false
             _screenState.value = returnStateAfterExternalLaunch
+            _revealedNotificationTarget.value = null
         }
     }
 
@@ -448,6 +474,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 launchJob = null
                 launchingExternalApp = false
                 _screenState.value = returnStateAfterExternalLaunch
+                _revealedNotificationTarget.value = null
             }
             else -> _screenState.value = ScreenState.Face
         }
@@ -462,6 +489,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 launchJob = null
                 launchingExternalApp = false
                 _screenState.value = returnStateAfterExternalLaunch
+                _revealedNotificationTarget.value = null
             }
             ScreenState.Settings -> _screenState.value = ScreenState.Apps
             ScreenState.Stack -> _screenState.value = ScreenState.Face
@@ -767,12 +795,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _expandedNotificationGroups.value = _expandedNotificationGroups.value.toMutableSet().apply {
             if (!add(packageName)) remove(packageName)
         }
+        _revealedNotificationTarget.value = null
     }
 
     fun dismissNotificationGroup(packageName: String) {
         val keys = _notificationGroups.value
             .firstOrNull { it.packageName == packageName }
-            ?.children
+            ?.entries
             ?.filter(NotificationEntryUi::isClearable)
             ?.map(NotificationEntryUi::key)
             .orEmpty()
@@ -780,11 +809,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             WLauncherNotificationListener.dismissNotifications(keys)
         }
         _expandedNotificationGroups.value = _expandedNotificationGroups.value - packageName
+        _revealedNotificationTarget.value = null
     }
 
     fun dismissNotification(key: String) {
         if (key.isBlank()) return
         WLauncherNotificationListener.dismissNotification(key)
+        _revealedNotificationTarget.value = null
+    }
+
+    fun setRevealedNotificationTarget(target: NotificationRevealTarget?) {
+        _revealedNotificationTarget.value = target
     }
 
     fun refreshNotificationAccess() {
@@ -974,24 +1009,29 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                         NotificationEntryUi(
                             key = item.key,
                             packageName = item.packageName,
+                            groupKey = item.groupKey,
                             appLabel = item.appLabel,
                             title = item.title,
                             text = item.text,
                             time = item.time,
                             icon = item.icon,
                             isClearable = item.isClearable,
-                            contentIntentAvailable = item.contentIntentAvailable
+                            contentIntentAvailable = item.contentIntentAvailable,
+                            isOngoing = item.isOngoing,
+                            isForegroundService = item.isForegroundService
                         )
                     }
                 val latest = children.first()
                 NotificationGroupUi(
                     packageName = latest.packageName,
                     appLabel = latest.appLabel,
+                    headerTitle = latest.appLabel,
                     icon = latest.icon,
                     latestTime = latest.time,
                     latestSummary = latest.text.ifBlank { latest.title.ifBlank { latest.appLabel } },
-                    count = children.size,
-                    children = children,
+                    entries = children,
+                    visiblePreviewEntries = children.take(1),
+                    hiddenPreviewCount = (children.size - 1).coerceAtLeast(0),
                     expanded = latest.packageName in expandedPackages
                 )
             }

@@ -24,23 +24,23 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
@@ -48,6 +48,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -66,6 +67,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
@@ -80,22 +82,14 @@ import java.util.Locale
 import kotlin.math.abs
 
 private const val NOTIFICATION_CARD_WIDTH_RATIO = 0.884f
-private const val NOTIFICATION_DISMISS_THRESHOLD = 88f
-
-private val NotificationFrameShape = RoundedCornerShape(40.dp)
-private val NotificationCardShape = RoundedCornerShape(28.dp)
-
-private data class NotificationBatterySnapshot(
-    val level: Int = 0
-) {
-    val isLow: Boolean
-        get() = level <= 20
-}
+private const val NOTIFICATION_REVEAL_WIDTH_DP = 74f
 
 @Composable
 fun NotificationLayer(
     notificationGroups: List<NotificationGroupUi>,
     notificationAccessGranted: Boolean,
+    revealedNotificationTarget: NotificationRevealTarget?,
+    onRevealTargetChange: (NotificationRevealTarget?) -> Unit,
     onDismissToStack: () -> Unit,
     onToggleGroup: (String) -> Unit,
     onDismissGroup: (String) -> Unit,
@@ -104,29 +98,22 @@ fun NotificationLayer(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val battery = rememberNotificationBatterySnapshot()
+    val batteryLevel = rememberBatteryLevel()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val overscroll = remember { Animatable(0f) }
 
-    val nestedScrollConnection = remember(listState) {
+    val nestedScroll = remember(listState) {
         object : NestedScrollConnection {
-            override fun onPreScroll(
-                available: androidx.compose.ui.geometry.Offset,
-                source: NestedScrollSource
-            ): androidx.compose.ui.geometry.Offset {
+            override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: NestedScrollSource): androidx.compose.ui.geometry.Offset {
                 if (source != NestedScrollSource.Drag) return androidx.compose.ui.geometry.Offset.Zero
                 val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
                 if (available.y > 0f && atTop) {
-                    scope.launch {
-                        overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtMost(180f))
-                    }
+                    scope.launch { overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtMost(180f)) }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 if (overscroll.value > 0f && available.y < 0f) {
-                    scope.launch {
-                        overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(0f))
-                    }
+                    scope.launch { overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(0f)) }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 return androidx.compose.ui.geometry.Offset.Zero
@@ -135,6 +122,7 @@ fun NotificationLayer(
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (overscroll.value > 80f) {
                     overscroll.snapTo(0f)
+                    onRevealTargetChange(null)
                     onDismissToStack()
                     return available
                 }
@@ -150,665 +138,255 @@ fun NotificationLayer(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            .clip(NotificationFrameShape)
+            .clip(RoundedCornerShape(40.dp))
             .background(WatchColors.Black)
-            .nestedScroll(nestedScrollConnection)
+            .nestedScroll(nestedScroll)
     ) {
         val contentWidth = maxWidth * NOTIFICATION_CARD_WIDTH_RATIO
-        val screenHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
-        val screenCenterY = screenHeightPx / 2f
-
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer { translationY = overscroll.value }
-                .padding(top = 12.dp, bottom = 10.dp),
+            modifier = Modifier.fillMaxSize().graphicsLayer { translationY = overscroll.value }.padding(top = 14.dp, bottom = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (!notificationAccessGranted) {
-                Box(
-                    modifier = Modifier.weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    NotificationPermissionCard(
-                        modifier = Modifier.width(contentWidth),
-                        onOpenSettings = {
-                            context.startActivity(
-                                Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                            )
-                        }
-                    )
+            when {
+                !notificationAccessGranted -> PermissionCard(contentWidth) {
+                    context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
                 }
-            } else if (notificationGroups.isEmpty()) {
-                Box(
-                    modifier = Modifier.weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    NotificationEmptyCard(modifier = Modifier.width(contentWidth))
-                }
-            } else {
-                LazyColumn(
+
+                notificationGroups.isEmpty() -> EmptyCard(contentWidth)
+
+                else -> LazyColumn(
                     state = listState,
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 8.dp, bottom = 8.dp)
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    contentPadding = PaddingValues(top = 4.dp, bottom = 12.dp)
                 ) {
-                    itemsIndexed(notificationGroups, key = { _, group -> group.packageName }) { index, group ->
-                        val itemInfo = listState.layoutInfo.visibleItemsInfo.find { it.index == index }
-                        val scale = notificationItemScale(itemInfo, screenCenterY, screenHeightPx)
-                        Box(
+                    items(notificationGroups, key = { it.packageName }) { group ->
+                        NotificationGroupSection(
                             modifier = Modifier.fillMaxWidth(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            NotificationGroupSection(
-                                modifier = Modifier.width(contentWidth),
-                                group = group,
-                                scale = scale,
-                                onToggleExpand = { onToggleGroup(group.packageName) },
-                                onDismissGroup = { onDismissGroup(group.packageName) },
-                                onDismissNotification = onDismissNotification,
-                                onOpenNotification = onOpenNotification
-                            )
-                        }
+                            width = contentWidth,
+                            group = group,
+                            revealedTarget = revealedNotificationTarget,
+                            onRevealTargetChange = onRevealTargetChange,
+                            onToggleGroup = { onToggleGroup(group.packageName) },
+                            onDismissGroup = { onDismissGroup(group.packageName) },
+                            onDismissNotification = onDismissNotification,
+                            onOpenNotification = onOpenNotification
+                        )
                     }
                 }
             }
-
-            BatteryPill(
-                battery = battery,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
+            BatteryPill(batteryLevel, Modifier.padding(bottom = 4.dp))
         }
     }
 }
 
 @Composable
-private fun NotificationPermissionCard(
-    modifier: Modifier,
-    onOpenSettings: () -> Unit
-) {
-    val pressedState = rememberPressedState()
-    val pressed by pressedState
-    val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.964f else 1f,
-        animationSpec = spring(stiffness = 860f, dampingRatio = 0.72f),
-        label = "notification_permission_scale"
-    )
-    Box(
-        modifier = modifier
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
-            .clip(NotificationCardShape)
-            .background(Color(0xFF353535))
-            .instantPressGesture(pressedState, onClick = onOpenSettings)
-            .padding(horizontal = 18.dp, vertical = 18.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFFD9D9D9)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Settings,
-                    contentDescription = null,
-                    tint = Color(0xFF2B2B2B),
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-            Spacer(modifier = Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "开启通知访问",
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "完成授权后，这里会按应用分组显示通知",
-                    color = WatchColors.TextSecondary,
-                    fontSize = 13.sp
-                )
-            }
-        }
-    }
+private fun PermissionCard(width: androidx.compose.ui.unit.Dp, onClick: () -> Unit) {
+    val fake = NotificationEntryUi("perm", "", null, "开启通知访问", "开启通知访问", "完成授权后这里会显示真实通知", 0L, null, false, false, false, false)
+    NotificationCard(width, fake, "完成授权后这里会显示真实通知", "", onClick)
 }
 
 @Composable
-private fun NotificationEmptyCard(modifier: Modifier) {
-    Box(
-        modifier = modifier
-            .clip(NotificationCardShape)
-            .background(Color(0xFF353535))
-            .padding(horizontal = 18.dp, vertical = 18.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFFD9D9D9)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Notifications,
-                    contentDescription = null,
-                    tint = Color(0xFF2B2B2B),
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-            Spacer(modifier = Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "暂无通知",
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "有新消息时会按应用堆叠显示在这里",
-                    color = WatchColors.TextSecondary,
-                    fontSize = 13.sp
-                )
-            }
-        }
-    }
+private fun EmptyCard(width: androidx.compose.ui.unit.Dp) {
+    val fake = NotificationEntryUi("empty", "", null, "暂无通知", "暂无通知", "有新消息时会显示在这里", 0L, null, false, false, false, false)
+    NotificationCard(width, fake, "有新消息时会显示在这里", "", onClick = {})
 }
 
 @Composable
 private fun NotificationGroupSection(
     modifier: Modifier,
+    width: androidx.compose.ui.unit.Dp,
     group: NotificationGroupUi,
-    scale: Float,
-    onToggleExpand: () -> Unit,
+    revealedTarget: NotificationRevealTarget?,
+    onRevealTargetChange: (NotificationRevealTarget?) -> Unit,
+    onToggleGroup: () -> Unit,
     onDismissGroup: () -> Unit,
     onDismissNotification: (String) -> Unit,
     onOpenNotification: (String) -> Boolean
 ) {
-    AnimatedContent(
-        targetState = group.expanded,
-        transitionSpec = {
-            (fadeIn(animationSpec = tween(220)) + slideInVertically(animationSpec = tween(220)) { it / 4 }) togetherWith
-                (fadeOut(animationSpec = tween(160)) + slideOutVertically(animationSpec = tween(160)) { -it / 6 })
-        },
-        label = "notification_group_expand"
-    ) { expanded ->
-        if (expanded) {
-            ExpandedNotificationGroup(
-                modifier = modifier,
-                group = group,
-                scale = scale,
-                onCollapse = onToggleExpand,
-                onDismissNotification = onDismissNotification,
-                onOpenNotification = onOpenNotification
-            )
-        } else {
-            CollapsedNotificationGroup(
-                modifier = modifier,
-                group = group,
-                scale = scale,
-                onExpand = onToggleExpand,
-                onDismissGroup = onDismissGroup
-            )
-        }
-    }
-}
-
-@Composable
-private fun CollapsedNotificationGroup(
-    modifier: Modifier,
-    group: NotificationGroupUi,
-    scale: Float,
-    onExpand: () -> Unit,
-    onDismissGroup: () -> Unit
-) {
-    val content: @Composable () -> Unit = {
-        Column(
-            modifier = modifier
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                    alpha = scale.coerceIn(0.35f, 1f)
-                }
-        ) {
-            NotificationSummaryBubble(
-                modifier = Modifier.fillMaxWidth(),
-                icon = group.icon,
-                title = group.appLabel,
-                subtitle = group.latestSummary,
-                trailing = formatNotificationTime(group.latestTime),
-                onClick = onExpand
-            )
-            if (group.count > 1) {
-                Text(
-                    text = "+${group.count}条新消息",
-                    color = WatchColors.TextTertiary,
-                    fontSize = 12.sp,
-                    modifier = Modifier
-                        .align(Alignment.CenterHorizontally)
-                        .padding(top = 4.dp)
-                )
-            }
-        }
-    }
-
-    if (group.children.any(NotificationEntryUi::isClearable)) {
-        SwipeRevealDelete(
-            modifier = Modifier.fillMaxWidth(),
-            enabled = true,
-            onDelete = onDismissGroup,
-            content = content
-        )
-    } else {
-        content()
-    }
-}
-
-@Composable
-private fun ExpandedNotificationGroup(
-    modifier: Modifier,
-    group: NotificationGroupUi,
-    scale: Float,
-    onCollapse: () -> Unit,
-    onDismissNotification: (String) -> Unit,
-    onOpenNotification: (String) -> Boolean
-) {
-    Column(
-        modifier = modifier
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                alpha = scale.coerceIn(0.35f, 1f)
-            }
-            .animateContentSize()
-    ) {
-        NotificationExpandedHeader(
-            appLabel = group.appLabel,
-            count = group.count,
-            onClick = onCollapse
-        )
-        Spacer(modifier = Modifier.height(10.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            group.children.forEach { entry ->
-                SwipeRevealDelete(
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = entry.isClearable,
-                    onDelete = { onDismissNotification(entry.key) }
-                ) {
-                    NotificationEntryBubble(
-                        modifier = Modifier.fillMaxWidth(),
-                        entry = entry,
-                        onClick = { onOpenNotification(entry.key) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NotificationExpandedHeader(
-    appLabel: String,
-    count: Int,
-    onClick: () -> Unit
-) {
-    val pressedState = rememberPressedState()
-    val pressed by pressedState
-    val pressScale by animateFloatAsState(
-        targetValue = if (pressed) 0.97f else 1f,
-        animationSpec = spring(stiffness = 840f, dampingRatio = 0.74f),
-        label = "notification_header_press_scale"
-    )
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .graphicsLayer {
-                scaleX = pressScale
-                scaleY = pressScale
-            }
-            .instantPressGesture(pressedState, onClick = onClick),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = appLabel,
-            color = Color.White,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-        Spacer(modifier = Modifier.width(10.dp))
-        Box(
-            modifier = Modifier
-                .size(26.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.10f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Filled.KeyboardArrowDown,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-        Spacer(modifier = Modifier.width(10.dp))
-        Text(
-            text = "${groupCountLabel(count)}",
-            color = Color.White,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-    }
-}
-
-@Composable
-private fun NotificationSummaryBubble(
-    modifier: Modifier,
-    icon: ImageBitmap?,
-    title: String,
-    subtitle: String,
-    trailing: String,
-    onClick: () -> Unit
-) {
-    val pressedState = rememberPressedState()
-    val pressed by pressedState
-    val pressScale by animateFloatAsState(
-        targetValue = if (pressed) 0.97f else 1f,
-        animationSpec = spring(stiffness = 840f, dampingRatio = 0.74f),
-        label = "notification_summary_press_scale"
-    )
-    Box(
-        modifier = modifier
-            .graphicsLayer {
-                scaleX = pressScale
-                scaleY = pressScale
-            }
-            .instantPressGesture(pressedState, onClick = onClick)
-    ) {
-        NotificationBubbleChrome(
-            modifier = Modifier.fillMaxWidth(),
-            icon = icon,
-            title = title,
-            subtitle = subtitle,
-            trailing = trailing
-        )
-    }
-}
-
-@Composable
-private fun NotificationEntryBubble(
-    modifier: Modifier,
-    entry: NotificationEntryUi,
-    onClick: () -> Unit
-) {
-    val pressedState = rememberPressedState()
-    val pressed by pressedState
-    val pressScale by animateFloatAsState(
-        targetValue = if (pressed) 0.97f else 1f,
-        animationSpec = spring(stiffness = 840f, dampingRatio = 0.74f),
-        label = "notification_entry_press_scale"
-    )
-    Box(
-        modifier = modifier
-            .graphicsLayer {
-                scaleX = pressScale
-                scaleY = pressScale
-            }
-            .instantPressGesture(
-                pressedState,
-                enabled = entry.contentIntentAvailable,
-                onClick = onClick
-            )
-    ) {
-        NotificationBubbleChrome(
-            modifier = Modifier.fillMaxWidth(),
-            icon = entry.icon,
-            title = entry.title.ifBlank { entry.appLabel },
-            subtitle = entry.text.ifBlank { "打开通知" },
-            trailing = formatNotificationTime(entry.time)
-        )
-    }
-}
-
-@Composable
-private fun NotificationBubbleChrome(
-    modifier: Modifier,
-    icon: ImageBitmap?,
-    title: String,
-    subtitle: String,
-    trailing: String,
-    badgeCount: Int? = null
-) {
-    Box(
-        modifier = modifier
-            .heightIn(min = 74.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 22.dp)
-                .clip(NotificationCardShape)
-                .background(Color(0xFF353535))
-                .padding(start = 36.dp, end = 18.dp, top = 12.dp, bottom = 12.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = title,
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        badgeCount?.let {
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(Color.White.copy(alpha = 0.10f))
-                                    .padding(horizontal = 8.dp, vertical = 3.dp)
-                            ) {
-                                Text(
-                                    text = it.toString(),
-                                    color = Color.White,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
+    Column(modifier.width(width).animateContentSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        GroupHeader(group.headerTitle, group.entries.size, group.expanded, onToggleGroup)
+        AnimatedContent(
+            targetState = group.expanded,
+            transitionSpec = {
+                (fadeIn(animationSpec = tween(220)) + slideInVertically(animationSpec = tween(220)) { it / 5 }) togetherWith
+                    (fadeOut(animationSpec = tween(160)) + slideOutVertically(animationSpec = tween(160)) { -it / 8 })
+            },
+            label = "notification_group_expand"
+        ) { expanded ->
+            if (expanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    group.entries.forEach { entry ->
+                        RevealDeleteCard(
+                            target = NotificationRevealTarget.Entry(entry.key),
+                            revealedTarget = revealedTarget,
+                            onRevealTargetChange = onRevealTargetChange,
+                            enabled = entry.isClearable,
+                            onDelete = { onDismissNotification(entry.key) }
+                        ) {
+                            NotificationCard(
+                                width = width,
+                                entry = entry,
+                                subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
+                                trailing = formatNotificationTime(entry.time),
+                                onClick = { onOpenNotification(entry.key) }
+                            )
                         }
                     }
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = subtitle,
-                        color = WatchColors.TextSecondary,
-                        fontSize = 13.sp,
-                        maxLines = 2
-                    )
                 }
-                if (trailing.isNotBlank()) {
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = trailing,
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-        }
-
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(Color(0xFFD9D9D9)),
-            contentAlignment = Alignment.Center
-        ) {
-            if (icon != null) {
-                Image(
-                    bitmap = icon,
-                    contentDescription = null,
-                    filterQuality = FilterQuality.Medium,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clip(CircleShape),
-                    contentScale = ContentScale.Crop
-                )
             } else {
-                Icon(
-                    imageVector = Icons.Filled.Notifications,
-                    contentDescription = null,
-                    tint = Color(0xFF2B2B2B),
-                    modifier = Modifier.size(24.dp)
-                )
+                RevealDeleteCard(
+                    target = NotificationRevealTarget.Group(group.packageName),
+                    revealedTarget = revealedTarget,
+                    onRevealTargetChange = onRevealTargetChange,
+                    enabled = group.entries.any(NotificationEntryUi::isClearable),
+                    onDelete = onDismissGroup
+                ) {
+                    if (group.entries.size > 1) {
+                        CollapsedStackCard(width, group.entries.first(), group.entries.size - 1, onToggleGroup)
+                    } else {
+                        NotificationCard(
+                            width = width,
+                            entry = group.entries.first(),
+                            subtitle = group.entries.first().text.ifBlank { group.entries.first().title.ifBlank { group.entries.first().appLabel } },
+                            trailing = formatNotificationTime(group.entries.first().time),
+                            onClick = onToggleGroup
+                        )
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun SwipeRevealDelete(
-    modifier: Modifier,
+private fun GroupHeader(title: String, count: Int, expanded: Boolean, onClick: () -> Unit) {
+    val pressed = rememberPressedState()
+    val isPressed by pressed
+    val scale by animateFloatAsState(if (isPressed) 0.97f else 1f, spring(stiffness = 840f, dampingRatio = 0.74f), label = "group_header")
+    Row(
+        modifier = Modifier.fillMaxWidth().graphicsLayer { scaleX = scale; scaleY = scale }.instantPressGesture(pressed, onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.weight(1f))
+        Text("${count}条通知", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.size(28.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.10f)), contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.KeyboardArrowDown, null, tint = Color.White, modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = if (expanded) 180f else 0f })
+        }
+    }
+}
+
+@Composable
+private fun CollapsedStackCard(width: androidx.compose.ui.unit.Dp, leadEntry: NotificationEntryUi, hiddenCount: Int, onClick: () -> Unit) {
+    Box(Modifier.width(width)) {
+        repeat(minOf(hiddenCount, 2)) { index ->
+            Box(
+                Modifier.matchParentSize()
+                    .padding(top = (index + 1) * 8.dp, start = 10.dp, end = 10.dp)
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(Color(0xFF2E2E2E))
+            )
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            NotificationCard(width, leadEntry, leadEntry.text.ifBlank { leadEntry.title.ifBlank { leadEntry.appLabel } }, formatNotificationTime(leadEntry.time), onClick)
+            Text("+${hiddenCount}条新消息", color = WatchColors.TextTertiary, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
+        }
+    }
+}
+
+@Composable
+private fun NotificationCard(width: androidx.compose.ui.unit.Dp, entry: NotificationEntryUi, subtitle: String, trailing: String, onClick: () -> Unit) {
+    val pressed = rememberPressedState()
+    val isPressed by pressed
+    val scale by animateFloatAsState(if (isPressed) 0.968f else 1f, spring(stiffness = 860f, dampingRatio = 0.72f), label = "notif_card")
+    Box(
+        Modifier.width(width).graphicsLayer { scaleX = scale; scaleY = scale }.clip(RoundedCornerShape(28.dp)).background(Color(0xFF353535))
+            .instantPressGesture(pressed, enabled = entry.key == "perm" || entry.key == "empty" || entry.contentIntentAvailable, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            NotificationIcon(entry.icon)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(entry.title.ifBlank { entry.appLabel }, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(2.dp))
+                Text(subtitle, color = WatchColors.TextSecondary, fontSize = 13.sp, maxLines = 2)
+            }
+            if (trailing.isNotBlank()) {
+                Spacer(Modifier.width(10.dp))
+                Text(trailing, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun NotificationIcon(icon: ImageBitmap?) {
+    Box(Modifier.size(46.dp).clip(CircleShape).background(Color(0xFFD9D9D9)), contentAlignment = Alignment.Center) {
+        if (icon != null) Image(icon, null, modifier = Modifier.fillMaxSize().clip(CircleShape), filterQuality = FilterQuality.Medium, contentScale = ContentScale.Crop)
+        else Icon(Icons.Filled.Notifications, null, tint = Color(0xFF2B2B2B), modifier = Modifier.size(24.dp))
+    }
+}
+
+@Composable
+private fun RevealDeleteCard(
+    target: NotificationRevealTarget,
+    revealedTarget: NotificationRevealTarget?,
+    onRevealTargetChange: (NotificationRevealTarget?) -> Unit,
     enabled: Boolean,
     onDelete: () -> Unit,
     content: @Composable () -> Unit
 ) {
-    val offsetX = remember { Animatable(0f) }
+    val widthPx = with(LocalDensity.current) { NOTIFICATION_REVEAL_WIDTH_DP.dp.toPx() }
+    val offsetX = remember(target) { Animatable(0f) }
     val scope = rememberCoroutineScope()
-    Box(modifier = modifier) {
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 2.dp)
-                .size(62.dp)
-                .clip(CircleShape)
-                .background(Color(0xFF8E4F64))
-                .clickable(enabled = enabled, onClick = onDelete),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Close,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(26.dp)
-            )
+    LaunchedEffect(revealedTarget, widthPx) { offsetX.animateTo(if (enabled && revealedTarget == target) -widthPx else 0f, tween(180)) }
+    Box(Modifier.fillMaxWidth()) {
+        Box(Modifier.align(Alignment.CenterEnd).width(NOTIFICATION_REVEAL_WIDTH_DP.dp).height(72.dp).clip(CircleShape).background(Color(0xFF8E4F64)), contentAlignment = Alignment.Center) {
+            Icon(Icons.Filled.Delete, null, tint = Color(0xFF2B1824), modifier = Modifier.size(24.dp).clickable(enabled = enabled) { onRevealTargetChange(null); onDelete() })
         }
-
         Box(
-            modifier = Modifier
-                .graphicsLayer { translationX = offsetX.value }
-                .pointerInput(enabled) {
-                    if (!enabled) return@pointerInput
-                    detectDragGestures(
-                        onDrag = { change, dragAmount ->
-                            if (abs(dragAmount.x) <= abs(dragAmount.y)) return@detectDragGestures
+            Modifier.graphicsLayer { translationX = offsetX.value }.pointerInput(target, enabled) {
+                if (!enabled) return@pointerInput
+                detectDragGestures(
+                    onDragStart = { onRevealTargetChange(target) },
+                    onDrag = { change, dragAmount ->
+                        if (abs(dragAmount.x) > abs(dragAmount.y)) {
                             change.consume()
-                            scope.launch {
-                                offsetX.snapTo((offsetX.value + dragAmount.x).coerceIn(-124f, 0f))
-                            }
-                        },
-                        onDragEnd = {
-                            scope.launch {
-                                if (offsetX.value < -NOTIFICATION_DISMISS_THRESHOLD) {
-                                    offsetX.animateTo(-124f, tween(180))
-                                    onDelete()
-                                } else {
-                                    offsetX.animateTo(0f, tween(180))
-                                }
-                            }
+                            scope.launch { offsetX.snapTo((offsetX.value + dragAmount.x).coerceIn(-widthPx, 0f)) }
                         }
-                    )
-                }
-        ) {
-            content()
-        }
-    }
-}
-
-@Composable
-private fun rememberNotificationBatterySnapshot(): NotificationBatterySnapshot {
-    val context = LocalContext.current
-    var batteryLevel by remember(context) { mutableIntStateOf(0) }
-    DisposableEffect(context) {
-        fun readBatteryLevel(): Int {
-            val batteryManager = context.getSystemService(BatteryManager::class.java)
-            return (batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0).coerceIn(0, 100)
-        }
-
-        batteryLevel = readBatteryLevel()
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: android.content.Context?, intent: Intent?) {
-                batteryLevel = readBatteryLevel()
+                    },
+                    onDragEnd = { scope.launch { onRevealTargetChange(if (abs(offsetX.value) > widthPx * 0.45f) target else null) } },
+                    onDragCancel = { scope.launch { onRevealTargetChange(null) } }
+                )
             }
-        }
-        context.registerReceiver(receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        onDispose {
-            runCatching { context.unregisterReceiver(receiver) }
-        }
+        ) { content() }
     }
-    return NotificationBatterySnapshot(batteryLevel)
 }
 
 @Composable
-private fun BatteryPill(
-    battery: NotificationBatterySnapshot,
-    modifier: Modifier = Modifier
-) {
-    val tint = if (battery.isLow) WatchColors.ActiveRed else WatchColors.ActiveGreen
-    Box(
-        modifier = modifier
-            .width(56.dp)
-            .height(24.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color(0xFF141414))
-            .padding(2.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth((battery.level / 100f).coerceIn(0f, 1f))
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(12.dp))
-                .background(tint.copy(alpha = 0.24f))
-        )
-        Text(
-            text = "${battery.level}%",
-            color = tint,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.align(Alignment.Center)
-        )
+private fun rememberBatteryLevel(): Int {
+    val context = LocalContext.current
+    var level by remember(context) { mutableIntStateOf(0) }
+    DisposableEffect(context) {
+        fun readLevel(): Int = (context.getSystemService(BatteryManager::class.java)?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0).coerceIn(0, 100)
+        level = readLevel()
+        val receiver = object : BroadcastReceiver() { override fun onReceive(context: android.content.Context?, intent: Intent?) { level = readLevel() } }
+        context.registerReceiver(receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        onDispose { runCatching { context.unregisterReceiver(receiver) } }
+    }
+    return level
+}
+
+@Composable
+private fun BatteryPill(level: Int, modifier: Modifier = Modifier) {
+    val tint = when { level <= 10 -> WatchColors.ActiveRed; level <= 20 -> WatchColors.ActiveOrange; else -> WatchColors.ActiveGreen }
+    Box(modifier.width(56.dp).height(24.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF141414)).padding(2.dp)) {
+        Box(Modifier.fillMaxWidth((level / 100f).coerceIn(0f, 1f)).fillMaxHeight().clip(RoundedCornerShape(12.dp)).background(tint.copy(alpha = 0.24f)))
+        Text("${level}%", color = tint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Center))
     }
 }
 
-private fun notificationItemScale(
-    itemInfo: androidx.compose.foundation.lazy.LazyListItemInfo?,
-    screenCenterY: Float,
-    screenHeight: Float
-): Float {
-    if (itemInfo == null) return 0.92f
-    val itemCenterY = itemInfo.offset + itemInfo.size / 2f
-    val distance = abs(itemCenterY - screenCenterY)
-    val maxDistance = screenHeight / 2f
-    val progress = (distance / maxDistance).coerceIn(0f, 1f)
-    return 1f - 0.14f * progress
-}
-
-private fun formatNotificationTime(timestamp: Long): String {
-    return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
-}
-
-private fun groupCountLabel(count: Int): String = "${count}条通知"
+private fun formatNotificationTime(timestamp: Long): String = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
