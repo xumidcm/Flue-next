@@ -12,10 +12,12 @@ import androidx.activity.addCallback
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -29,7 +31,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -37,6 +38,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -44,12 +47,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.flue.launcher.ui.anim.LayerAnimValues
 import com.flue.launcher.ui.anim.appListLayerValues
 import com.flue.launcher.ui.anim.faceLayerValues
-import com.flue.launcher.ui.anim.notificationLayerValues
 import com.flue.launcher.ui.anim.scaleBlurAlpha
-import com.flue.launcher.ui.anim.stackLayerValues
 import com.flue.launcher.ui.drawer.HoneycombScreen
 import com.flue.launcher.ui.drawer.ListDrawerScreen
 import com.flue.launcher.ui.home.WatchFaceLayer
@@ -193,22 +193,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val showLaunchBackdrop = screenState == ScreenState.App && currentLaunchIcon != null
     var startupGateReleased by remember { mutableStateOf(false) }
     var showSplash by remember { mutableStateOf(false) }
-    var notificationOpenPullProgress by remember { mutableFloatStateOf(0f) }
-    var notificationDismissPullProgress by remember { mutableFloatStateOf(0f) }
     LaunchedEffect(appDrawerReady) {
         if (appDrawerReady) {
             delay(120)
             startupGateReleased = true
-        }
-    }
-    LaunchedEffect(screenState) {
-        when (screenState) {
-            ScreenState.Stack -> notificationDismissPullProgress = 0f
-            ScreenState.Notifications -> notificationOpenPullProgress = 0f
-            else -> {
-                notificationOpenPullProgress = 0f
-                notificationDismissPullProgress = 0f
-            }
         }
     }
     LaunchedEffect(screenState, splashIcon, splashDelay, currentLaunchIcon) {
@@ -232,54 +220,24 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val density = LocalDensity.current
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
+        val keepStackLayer = screenState == ScreenState.Stack ||
+            screenState == ScreenState.Notifications ||
+            (screenState == ScreenState.App && launchSourceState == ScreenState.Stack)
+        val keepNotificationLayer = screenState == ScreenState.Notifications ||
+            (screenState == ScreenState.App && launchSourceState == ScreenState.Notifications)
+        val stackProgress by animateFloatAsState(
+            targetValue = if (keepStackLayer) 1f else 0f,
+            animationSpec = spring(dampingRatio = 0.88f, stiffness = 520f),
+            label = "stack_scene_progress"
+        )
+        val notificationProgress by animateFloatAsState(
+            targetValue = if (keepNotificationLayer) 1f else 0f,
+            animationSpec = spring(dampingRatio = 0.9f, stiffness = 560f),
+            label = "notification_scene_progress"
+        )
+        val faceOffsetX = screenWidthPx * 0.08f * stackProgress
         val launchingFromStack = screenState == ScreenState.App && launchSourceState == ScreenState.Stack
         val launchingFromNotifications = screenState == ScreenState.App && launchSourceState == ScreenState.Notifications
-        val notificationOpenInteractive = screenState == ScreenState.Stack && notificationOpenPullProgress > 0f
-        val notificationDismissInteractive = screenState == ScreenState.Notifications && notificationDismissPullProgress > 0f
-        val notificationTransitionInteractive = notificationOpenInteractive || notificationDismissInteractive
-        val notificationSheetVisibilityProgress = when (screenState) {
-            ScreenState.Stack -> notificationOpenPullProgress
-            ScreenState.Notifications -> (1f - notificationDismissPullProgress).coerceIn(0f, 1f)
-            else -> 0f
-        }.coerceIn(0f, 1f)
-        val faceNotificationTarget = faceLayerValues(ScreenState.Notifications).copy(
-            translationY = 0.055f,
-            blur = maxOf(faceLayerValues(ScreenState.Notifications).blur, 14f)
-        )
-        val faceTargetValues = when {
-            notificationOpenInteractive -> interpolateLayerValues(
-                start = faceLayerValues(ScreenState.Stack),
-                end = faceNotificationTarget,
-                progress = notificationOpenPullProgress
-            )
-            screenState == ScreenState.Notifications -> faceNotificationTarget
-            else -> faceLayerValues(screenState)
-        }
-        val stackTargetValues = when {
-            launchingFromStack -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f)
-            screenState == ScreenState.Stack || screenState == ScreenState.Notifications -> interpolateLayerValues(
-                start = stackLayerValues(ScreenState.Stack),
-                end = stackLayerValues(ScreenState.Notifications),
-                progress = notificationSheetVisibilityProgress
-            )
-            else -> stackLayerValues(screenState)
-        }
-        val notificationHiddenValues = notificationLayerValues(ScreenState.Stack)
-        val notificationTargetValues = when {
-            launchingFromNotifications -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f, translationY = 0f)
-            screenState == ScreenState.Stack -> interpolateLayerValues(
-                start = notificationHiddenValues,
-                end = notificationLayerValues(ScreenState.Notifications),
-                progress = notificationOpenPullProgress
-            )
-            notificationDismissInteractive -> interpolateLayerValues(
-                start = notificationLayerValues(ScreenState.Notifications),
-                end = notificationHiddenValues.copy(alpha = 1f),
-                progress = notificationDismissPullProgress
-            )
-            screenState == ScreenState.Notifications -> notificationLayerValues(ScreenState.Notifications)
-            else -> notificationLayerValues(screenState)
-        }
 
         GestureHost(
             screenState = screenState,
@@ -293,12 +251,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 modifier = Modifier
                     .fillMaxSize()
                     .zIndex(0f)
-                    .scaleBlurAlpha(
-                        targetValues = faceTargetValues,
-                        screenWidth = screenWidthPx,
-                        screenHeight = screenHeightPx,
-                        blurEnabled = layerBlurEnabled,
-                        animate = !notificationTransitionInteractive
+                    .then(
+                        if (screenState == ScreenState.Stack || screenState == ScreenState.Notifications) {
+                            Modifier.graphicsLayer { translationX = faceOffsetX }
+                        } else {
+                            Modifier.scaleBlurAlpha(
+                                targetValues = faceLayerValues(screenState),
+                                screenWidth = screenWidthPx,
+                                screenHeight = screenHeightPx,
+                                blurEnabled = layerBlurEnabled
+                            )
+                        }
                     )
             ) {
                 AnimatedContent(
@@ -463,23 +426,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(
-                        when (screenState) {
-                            ScreenState.Stack -> 6f
-                            ScreenState.Notifications -> 5f
-                            else -> 2f
-                        }
-                    )
-                    .scaleBlurAlpha(
-                        targetValues = stackTargetValues,
-                        screenWidth = screenWidthPx,
-                        screenHeight = screenHeightPx,
-                        blurEnabled = layerBlurEnabled,
-                        origin = if (launchingFromStack) appOpenOrigin else null,
-                        animate = !notificationTransitionInteractive
-                    )
+                    .zIndex(if (stackProgress > 0f) 4f else 2f)
+                    .graphicsLayer {
+                        transformOrigin = TransformOrigin(appOpenOrigin.x, appOpenOrigin.y)
+                        translationX = if (launchingFromStack) 0f else -screenWidthPx * (1f - stackProgress)
+                        translationY = if (launchingFromStack) 0f else -screenHeightPx * 0.035f * notificationProgress
+                        scaleX = if (launchingFromStack) 4f else 1f
+                        scaleY = if (launchingFromStack) 4f else 1f
+                        alpha = if (launchingFromStack) 0f else (stackProgress * (1f - 0.18f * notificationProgress)).coerceIn(0f, 1f)
+                    }
             ) {
-                if (screenState == ScreenState.Stack || screenState == ScreenState.Notifications || launchingFromStack) {
+                if (stackProgress > 0.001f || keepStackLayer) {
                     SmartStackLayer(
                         apps = apps,
                         sideScreenShortcuts = sideScreenShortcuts,
@@ -489,7 +446,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         revealedNotificationTarget = revealedNotificationTarget,
                         onRevealTargetChange = vm::setRevealedNotificationTarget,
                         onOpenNotifications = { vm.setState(ScreenState.Notifications) },
-                        onNotificationPullProgress = { notificationOpenPullProgress = it },
                         onLaunchApp = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
                             vm.openApp(appInfo, origin, launchDelay, ScreenState.Stack)
@@ -507,24 +463,22 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .zIndex(if (screenState == ScreenState.Notifications) 7f else 3f)
-                        .scaleBlurAlpha(
-                            targetValues = notificationTargetValues,
-                            screenWidth = screenWidthPx,
-                            screenHeight = screenHeightPx,
-                            blurEnabled = layerBlurEnabled,
-                            origin = if (launchingFromNotifications) appOpenOrigin else null,
-                            animate = !notificationTransitionInteractive
-                        )
+                        .zIndex(if (notificationProgress > 0f) 5f else 3f)
+                        .graphicsLayer {
+                            transformOrigin = TransformOrigin(appOpenOrigin.x, appOpenOrigin.y)
+                            translationY = if (launchingFromNotifications) 0f else screenHeightPx * 0.08f * (1f - notificationProgress)
+                            scaleX = if (launchingFromNotifications) 4f else 0.2f + 0.8f * notificationProgress
+                            scaleY = if (launchingFromNotifications) 4f else 0.2f + 0.8f * notificationProgress
+                            alpha = if (launchingFromNotifications) 0f else notificationProgress.coerceIn(0f, 1f)
+                        }
                 ) {
-                    if (screenState == ScreenState.Notifications || launchingFromNotifications || notificationOpenPullProgress > 0f) {
+                    if (notificationProgress > 0.001f || keepNotificationLayer) {
                         NotificationLayer(
                             notificationGroups = notificationGroups,
                             notificationAccessGranted = notificationAccessGranted,
                             revealedNotificationTarget = revealedNotificationTarget,
                             onRevealTargetChange = vm::setRevealedNotificationTarget,
                             onDismissToStack = { vm.setState(ScreenState.Stack) },
-                            onDismissPullProgress = { notificationDismissPullProgress = it },
                             onToggleGroup = vm::toggleNotificationGroup,
                             onDismissGroup = vm::dismissNotificationGroup,
                             onDismissNotification = vm::dismissNotification,
@@ -593,20 +547,4 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
 
     }
-}
-
-private fun interpolateLayerValues(
-    start: LayerAnimValues,
-    end: LayerAnimValues,
-    progress: Float
-): LayerAnimValues {
-    val t = progress.coerceIn(0f, 1f)
-    fun lerp(a: Float, b: Float): Float = a + (b - a) * t
-    return LayerAnimValues(
-        scale = lerp(start.scale, end.scale),
-        blur = lerp(start.blur, end.blur),
-        alpha = lerp(start.alpha, end.alpha),
-        translationX = lerp(start.translationX, end.translationX),
-        translationY = lerp(start.translationY, end.translationY)
-    )
 }

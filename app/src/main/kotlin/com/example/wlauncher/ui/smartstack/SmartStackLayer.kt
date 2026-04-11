@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Image
@@ -104,7 +105,6 @@ fun SmartStackLayer(
     revealedNotificationTarget: NotificationRevealTarget?,
     onRevealTargetChange: (NotificationRevealTarget?) -> Unit,
     onOpenNotifications: () -> Unit,
-    onNotificationPullProgress: (Float) -> Unit,
     onLaunchApp: (AppInfo, Offset) -> Unit,
     onSetShortcut: (Int, String?) -> Unit,
     onRemoveShortcut: (Int) -> Unit,
@@ -143,25 +143,21 @@ fun SmartStackLayer(
                         dragDy += dragAmount.y
                         if (abs(dragDx) > abs(dragDy)) {
                             if (dragDx < -SIDE_SCREEN_DISMISS_THRESHOLD) {
-                                change.consume(); onRevealTargetChange(null); onNotificationPullProgress(0f); onDismissToFace()
+                                change.consume(); onRevealTargetChange(null); onDismissToFace()
                             }
                         } else {
                             change.consume()
                             overscrollTarget = (overscrollTarget + dragAmount.y * 0.35f).coerceIn(-180f, 120f)
-                            onNotificationPullProgress(
-                                (-overscrollTarget / SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD).coerceIn(0f, 1f)
-                            )
                         }
                     },
                     onDragEnd = {
                         if (notificationsEnabled && dragDy < -SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD) {
-                            onRevealTargetChange(null); overscrollTarget = 0f; onNotificationPullProgress(0f); onOpenNotifications()
+                            onRevealTargetChange(null); overscrollTarget = 0f; onOpenNotifications()
                         } else {
                             overscrollTarget = 0f
-                            onNotificationPullProgress(0f)
                         }
                     },
-                    onDragCancel = { overscrollTarget = 0f; onNotificationPullProgress(0f) }
+                    onDragCancel = { overscrollTarget = 0f }
                 )
             }
     ) {
@@ -202,7 +198,12 @@ fun SmartStackLayer(
             )
             if (notificationsEnabled) {
                 Spacer(Modifier.height(16.dp))
-                Column(Modifier.width(contentWidth), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    Modifier
+                        .width(contentWidth)
+                        .animateContentSize(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     when {
                         !notificationAccessGranted -> PreviewInfoCard("开启通知访问", "副一屏上滑进入通知中心后完成授权", onOpenNotifications)
                         previewLayout.isEmpty() -> PreviewInfoCard("暂无通知", "副一屏上滑可打开通知中心", onOpenNotifications)
@@ -308,19 +309,19 @@ fun SmartStackLayer(
                 Modifier
                     .align(Alignment.TopCenter)
                     .graphicsLayer {
-                        translationY = (index + 1) * 12f * stackStrength
-                        scaleX = 1f - (index + 1) * 0.025f * stackStrength
-                        scaleY = 1f - (index + 1) * 0.025f * stackStrength
-                        alpha = 0.34f + (0.24f / (index + 1))
+                        translationY = (index + 1) * 18f * stackStrength
+                        scaleX = 1f - (index + 1) * 0.02f * stackStrength
+                        scaleY = 1f - (index + 1) * 0.02f * stackStrength
+                        alpha = 0.4f + (0.22f / (index + 1))
                     }
-                    .padding(start = 14.dp, end = 14.dp)
+                    .padding(start = 10.dp, end = 10.dp)
                     .fillMaxWidth()
                     .height(72.dp)
                     .clip(RoundedCornerShape(28.dp))
                     .background(if (index == 0) Color(0xFF404040) else Color(0xFF2E2E2E))
             )
         }
-        Column {
+        Column(modifier = Modifier.padding(bottom = 2.dp)) {
             PreviewPill(entry, onClick)
             Text("+${hiddenCount}条新消息", color = WatchColors.TextTertiary, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 6.dp))
         }

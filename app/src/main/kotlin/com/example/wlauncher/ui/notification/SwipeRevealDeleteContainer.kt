@@ -123,9 +123,9 @@ internal fun SwipeRevealDeleteContainer(
                             }
                             scope.launch {
                                 launch { scale.animateTo(0.9f, tween(180)) }
-                                offsetX.animateTo(direction * widthPx * 1.2f, tween(220))
+                                offsetX.animateTo(direction * widthPx * 1.35f, tween(240))
                                 dismissed = true
-                                delay(90)
+                                delay(140)
                                 onDelete()
                             }
                         } else {

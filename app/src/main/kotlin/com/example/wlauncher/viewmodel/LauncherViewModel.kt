@@ -153,6 +153,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _notificationAccessGranted = MutableStateFlow(false)
     val notificationAccessGranted: StateFlow<Boolean> = _notificationAccessGranted.asStateFlow()
     private val _expandedNotificationGroups = MutableStateFlow<Set<String>>(emptySet())
+    private val _pendingDismissedNotificationKeys = MutableStateFlow<Set<String>>(emptySet())
     private val _sideScreenPreviewGroups = MutableStateFlow<List<NotificationGroupUi>>(emptyList())
     val sideScreenPreviewGroups: StateFlow<List<NotificationGroupUi>> = _sideScreenPreviewGroups.asStateFlow()
     private val _notificationGroups = MutableStateFlow<List<NotificationGroupUi>>(emptyList())
@@ -242,13 +243,22 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             combine(
                 WLauncherNotificationListener.notifications,
-                _expandedNotificationGroups
-            ) { notifications, expandedPackages ->
-                buildNotificationGroups(notifications, emptySet()) to
-                    buildNotificationGroups(notifications, expandedPackages)
-            }.collect { (previewGroups, groups) ->
+                _expandedNotificationGroups,
+                _pendingDismissedNotificationKeys
+            ) { notifications, expandedPackages, pendingDismissedKeys ->
+                val filteredNotifications = notifications.filterNot { it.key in pendingDismissedKeys }
+                val activeNotificationKeys = notifications.asSequence().map { it.key }.toSet()
+                Triple(
+                    buildNotificationGroups(filteredNotifications, emptySet()),
+                    buildNotificationGroups(filteredNotifications, expandedPackages),
+                    pendingDismissedKeys.intersect(activeNotificationKeys)
+                )
+            }.collect { (previewGroups, groups, remainingPendingDismissedKeys) ->
                 _sideScreenPreviewGroups.value = previewGroups
                 _notificationGroups.value = groups
+                if (_pendingDismissedNotificationKeys.value != remainingPendingDismissedKeys) {
+                    _pendingDismissedNotificationKeys.value = remainingPendingDismissedKeys
+                }
                 _expandedNotificationGroups.value =
                     _expandedNotificationGroups.value.intersect(groups.map(NotificationGroupUi::packageName).toSet())
                 val currentRevealTarget = _revealedNotificationTarget.value
@@ -845,6 +855,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             ?.map(NotificationEntryUi::key)
             .orEmpty()
         if (keys.isNotEmpty()) {
+            markNotificationsDismissed(keys)
             WLauncherNotificationListener.dismissNotifications(keys)
         }
         _expandedNotificationGroups.value = _expandedNotificationGroups.value - packageName
@@ -853,6 +864,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun dismissNotification(key: String) {
         if (key.isBlank()) return
+        markNotificationsDismissed(listOf(key))
         WLauncherNotificationListener.dismissNotification(key)
         _revealedNotificationTarget.value = null
     }
@@ -873,6 +885,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             ?.any { it.packageName == component.packageName && it.className == component.className }
             ?: false
         _notificationAccessGranted.value = granted || WLauncherNotificationListener.isConnected()
+    }
+
+    private fun markNotificationsDismissed(keys: Collection<String>) {
+        if (keys.isEmpty()) return
+        _pendingDismissedNotificationKeys.value = _pendingDismissedNotificationKeys.value + keys
     }
 
     fun swapApps(fromIndex: Int, toIndex: Int) {

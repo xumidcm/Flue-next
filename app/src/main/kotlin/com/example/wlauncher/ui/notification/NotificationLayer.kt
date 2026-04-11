@@ -61,6 +61,9 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.findRootCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Velocity
@@ -83,7 +86,6 @@ fun NotificationLayer(
     revealedNotificationTarget: NotificationRevealTarget?,
     onRevealTargetChange: (NotificationRevealTarget?) -> Unit,
     onDismissToStack: () -> Unit,
-    onDismissPullProgress: (Float) -> Unit,
     onToggleGroup: (String) -> Unit,
     onDismissGroup: (String) -> Unit,
     onDismissNotification: (String) -> Unit,
@@ -102,15 +104,11 @@ fun NotificationLayer(
                 if (source != NestedScrollSource.Drag) return androidx.compose.ui.geometry.Offset.Zero
                 val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
                 if (available.y > 0f && atTop) {
-                    val nextOverscroll = (overscroll.value + available.y * 0.35f).coerceAtMost(180f)
-                    onDismissPullProgress((nextOverscroll / 120f).coerceIn(0f, 1f))
-                    scope.launch { overscroll.snapTo(nextOverscroll) }
+                    scope.launch { overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtMost(180f)) }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 if (overscroll.value > 0f && available.y < 0f) {
-                    val nextOverscroll = (overscroll.value + available.y).coerceAtLeast(0f)
-                    onDismissPullProgress((nextOverscroll / 120f).coerceIn(0f, 1f))
-                    scope.launch { overscroll.snapTo(nextOverscroll) }
+                    scope.launch { overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(0f)) }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 return androidx.compose.ui.geometry.Offset.Zero
@@ -119,14 +117,12 @@ fun NotificationLayer(
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (overscroll.value > 80f) {
                     overscroll.snapTo(0f)
-                    onDismissPullProgress(0f)
                     onRevealTargetChange(null)
                     onDismissToStack()
                     return available
                 }
                 if (overscroll.value != 0f) {
                     overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-                    onDismissPullProgress(0f)
                     return available
                 }
                 return Velocity.Zero
@@ -143,7 +139,7 @@ fun NotificationLayer(
     ) {
         val contentWidth = maxWidth * NOTIFICATION_CARD_WIDTH_RATIO
         Column(
-            modifier = Modifier.fillMaxSize().padding(top = 14.dp, bottom = 10.dp),
+            modifier = Modifier.fillMaxSize().graphicsLayer { translationY = overscroll.value }.padding(top = 14.dp, bottom = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             when {
@@ -192,7 +188,7 @@ fun NotificationLayer(
 @Composable
 private fun PermissionCard(width: androidx.compose.ui.unit.Dp, onClick: () -> Unit) {
     val fake = NotificationEntryUi("perm", "", null, "开启通知访问", "开启通知访问", "完成授权后这里会显示真实通知", 0L, null, false, false, false, false)
-    NotificationCard(width, fake, "完成授权后这里会显示真实通知", "", onClick)
+    NotificationCard(width, fake, "完成授权后这里会显示真实通知", "", onClick = { onClick() })
 }
 
 @Composable
@@ -245,7 +241,7 @@ private fun NotificationGroupSection(
                                 entry = entry,
                                 subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
                                 trailing = formatNotificationTime(entry.time),
-                                onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) }
+                                onClick = { origin -> onOpenNotification(entry.key, origin) }
                             )
                         }
                     }
@@ -276,7 +272,7 @@ private fun NotificationGroupSection(
                             entry = entry,
                             subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
                             trailing = formatNotificationTime(entry.time),
-                            onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) }
+                            onClick = { origin -> onOpenNotification(entry.key, origin) }
                         )
                     }
                 }
@@ -335,35 +331,52 @@ private fun CollapsedStackCard(width: androidx.compose.ui.unit.Dp, leadEntry: No
                     .fillMaxWidth()
                     .height(72.dp)
                     .graphicsLayer {
-                        translationY = (index + 1) * 13f * stackStrength
-                        scaleX = 1f - (index + 1) * 0.024f * stackStrength
-                        scaleY = 1f - (index + 1) * 0.024f * stackStrength
-                        alpha = 0.34f + (0.24f / (index + 1))
+                        translationY = (index + 1) * 18f * stackStrength
+                        scaleX = 1f - (index + 1) * 0.02f * stackStrength
+                        scaleY = 1f - (index + 1) * 0.02f * stackStrength
+                        alpha = 0.38f + (0.22f / (index + 1))
                     }
-                    .padding(start = 14.dp, end = 14.dp)
+                    .padding(start = 10.dp, end = 10.dp)
                     .clip(RoundedCornerShape(28.dp))
                     .background(if (index == 0) Color(0xFF404040) else Color(0xFF2E2E2E))
             )
         }
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            NotificationCard(width, leadEntry, leadEntry.text.ifBlank { leadEntry.title.ifBlank { leadEntry.appLabel } }, formatNotificationTime(leadEntry.time), onClick)
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 2.dp)) {
+            NotificationCard(width, leadEntry, leadEntry.text.ifBlank { leadEntry.title.ifBlank { leadEntry.appLabel } }, formatNotificationTime(leadEntry.time), onClick = { onClick() })
             Text("+${hiddenCount}条新消息", color = WatchColors.TextTertiary, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
         }
     }
 }
 
 @Composable
-private fun NotificationCard(width: androidx.compose.ui.unit.Dp, entry: NotificationEntryUi, subtitle: String, trailing: String, onClick: () -> Unit) {
+private fun NotificationCard(width: androidx.compose.ui.unit.Dp, entry: NotificationEntryUi, subtitle: String, trailing: String, onClick: (Offset) -> Unit) {
     val pressed = rememberPressedState()
     val isPressed by pressed
+    var launchOrigin by remember(entry.key) { mutableStateOf(Offset(0.5f, 0.5f)) }
     val scale by animateFloatAsState(if (isPressed) 0.968f else 1f, spring(stiffness = 860f, dampingRatio = 0.72f), label = "notif_card")
     Box(
         Modifier.width(width).graphicsLayer { scaleX = scale; scaleY = scale }.clip(RoundedCornerShape(28.dp)).background(Color(0xFF353535))
-            .instantPressGesture(pressed, enabled = entry.key == "perm" || entry.key == "empty" || entry.contentIntentAvailable, onClick = onClick)
+            .instantPressGesture(
+                pressed,
+                enabled = entry.key == "perm" || entry.key == "empty" || entry.contentIntentAvailable,
+                onClick = { onClick(launchOrigin) }
+            )
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            NotificationIcon(entry.icon)
+            NotificationIcon(
+                entry.icon,
+                modifier = Modifier.onGloballyPositioned { coordinates ->
+                    val root = coordinates.findRootCoordinates()
+                    val rootWidth = root.size.width.toFloat().coerceAtLeast(1f)
+                    val rootHeight = root.size.height.toFloat().coerceAtLeast(1f)
+                    val position = coordinates.positionInRoot()
+                    launchOrigin = Offset(
+                        x = ((position.x + coordinates.size.width / 2f) / rootWidth).coerceIn(0f, 1f),
+                        y = ((position.y + coordinates.size.height / 2f) / rootHeight).coerceIn(0f, 1f)
+                    )
+                }
+            )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(entry.title.ifBlank { entry.appLabel }, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
@@ -379,8 +392,8 @@ private fun NotificationCard(width: androidx.compose.ui.unit.Dp, entry: Notifica
 }
 
 @Composable
-private fun NotificationIcon(icon: ImageBitmap?) {
-    Box(Modifier.size(46.dp).clip(CircleShape).background(Color(0xFFD9D9D9)), contentAlignment = Alignment.Center) {
+private fun NotificationIcon(icon: ImageBitmap?, modifier: Modifier = Modifier) {
+    Box(modifier.size(46.dp).clip(CircleShape).background(Color(0xFFD9D9D9)), contentAlignment = Alignment.Center) {
         if (icon != null) Image(icon, null, modifier = Modifier.fillMaxSize().clip(CircleShape), filterQuality = FilterQuality.Medium, contentScale = ContentScale.Crop)
         else Icon(Icons.Filled.Notifications, null, tint = Color(0xFF2B2B2B), modifier = Modifier.size(24.dp))
     }
