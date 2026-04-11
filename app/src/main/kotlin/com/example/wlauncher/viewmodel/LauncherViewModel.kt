@@ -1,9 +1,11 @@
 package com.flue.launcher.viewmodel
 
 import android.app.Application
+import android.content.ComponentName
 import android.content.Context
 import android.os.Build
 import android.os.SystemClock
+import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.ui.geometry.Offset
 import androidx.datastore.core.DataStore
@@ -21,6 +23,9 @@ import com.flue.launcher.iconpack.IconPackDescriptor
 import com.flue.launcher.iconpack.IconPackScanner
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.navigation.ScreenState
+import com.flue.launcher.ui.notification.NotificationEntryUi
+import com.flue.launcher.ui.notification.NotificationGroupUi
+import com.flue.launcher.service.WLauncherNotificationListener
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
@@ -36,6 +41,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
@@ -46,6 +52,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     companion object {
         val KEY_LAYOUT = stringPreferencesKey("layout_mode")
+        val KEY_SIDE_SCREEN_ENABLED = booleanPreferencesKey("side_screen_enabled")
+        val KEY_SIDE_SCREEN_SHORTCUTS = stringPreferencesKey("side_screen_shortcuts")
         val KEY_BLUR = booleanPreferencesKey("blur_enabled")
         val KEY_EDGE_BLUR = booleanPreferencesKey("edge_blur_enabled")
         val KEY_LOW_RES = booleanPreferencesKey("low_res_icons")
@@ -76,6 +84,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_VIDEO_FILL_SCREEN = booleanPreferencesKey("video_fill_screen")
         val KEY_VIDEO_CLOCK_COLOR_MODE = stringPreferencesKey("video_clock_color_mode")
         val KEY_BUILTIN_MANAGER_THUMBNAILS = booleanPreferencesKey("builtin_manager_thumbnails")
+        private const val SIDE_SCREEN_SLOT_COUNT = 6
     }
 
     private val store = application.dataStore
@@ -89,6 +98,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _layoutMode = MutableStateFlow(LayoutMode.Honeycomb)
     val layoutMode: StateFlow<LayoutMode> = _layoutMode.asStateFlow()
+    private val _sideScreenEnabled = MutableStateFlow(false)
+    val sideScreenEnabled: StateFlow<Boolean> = _sideScreenEnabled.asStateFlow()
+    private val _sideScreenShortcuts = MutableStateFlow(List(SIDE_SCREEN_SLOT_COUNT) { null as String? })
+    val sideScreenShortcuts: StateFlow<List<String?>> = _sideScreenShortcuts.asStateFlow()
 
     private val _blurEnabled = MutableStateFlow(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
     val blurEnabled: StateFlow<Boolean> = _blurEnabled.asStateFlow()
@@ -133,6 +146,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _showNotification = MutableStateFlow(false)
     val showNotification: StateFlow<Boolean> = _showNotification.asStateFlow()
+    private val _notificationAccessGranted = MutableStateFlow(false)
+    val notificationAccessGranted: StateFlow<Boolean> = _notificationAccessGranted.asStateFlow()
+    private val _expandedNotificationGroups = MutableStateFlow<Set<String>>(emptySet())
+    private val _notificationGroups = MutableStateFlow<List<NotificationGroupUi>>(emptyList())
+    val notificationGroups: StateFlow<List<NotificationGroupUi>> = _notificationGroups.asStateFlow()
 
     private val _hiddenApps = MutableStateFlow<Set<String>>(emptySet())
     val hiddenApps: StateFlow<Set<String>> = _hiddenApps.asStateFlow()
@@ -200,6 +218,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val currentApp: StateFlow<AppInfo?> = _currentApp.asStateFlow()
 
     private var launchingExternalApp = false
+    private var returnStateAfterExternalLaunch = ScreenState.Apps
     private var launchJob: Job? = null
     private var watchFacePrefsHydrated = false
     private var watchFaceScanHydrated = false
@@ -207,6 +226,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val pendingWriteJobs = ConcurrentHashMap<String, Job>()
     private var refreshIconsJob: Job? = null
     init {
+        refreshNotificationAccess()
+        viewModelScope.launch {
+            combine(
+                WLauncherNotificationListener.notifications,
+                _expandedNotificationGroups
+            ) { notifications, expandedPackages ->
+                buildNotificationGroups(notifications, expandedPackages)
+            }.collect { groups ->
+                _notificationGroups.value = groups
+                _expandedNotificationGroups.value =
+                    _expandedNotificationGroups.value.intersect(groups.map(NotificationGroupUi::packageName).toSet())
+            }
+        }
         refreshIconPacks()
         viewModelScope.launch(Dispatchers.IO) {
             store.data.collect { prefs ->
@@ -218,6 +250,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     }
                 } ?: LayoutMode.Honeycomb
                 if (_layoutMode.value != loadedLayout) _layoutMode.value = loadedLayout
+
+                val loadedSideScreenEnabled = prefs[KEY_SIDE_SCREEN_ENABLED] ?: false
+                if (_sideScreenEnabled.value != loadedSideScreenEnabled) _sideScreenEnabled.value = loadedSideScreenEnabled
+
+                val loadedSideScreenShortcuts = parseSideScreenShortcuts(prefs[KEY_SIDE_SCREEN_SHORTCUTS])
+                if (_sideScreenShortcuts.value != loadedSideScreenShortcuts) {
+                    _sideScreenShortcuts.value = loadedSideScreenShortcuts
+                }
 
                 val loadedBlur = prefs[KEY_BLUR] ?: (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                 if (_blurEnabled.value != loadedBlur) _blurEnabled.value = loadedBlur
@@ -357,7 +397,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _screenState.value = state
     }
 
-    fun openApp(appInfo: AppInfo, origin: Offset = Offset(0.5f, 0.5f), launchDelayMs: Long = _splashDelay.value.toLong()) {
+    fun openApp(
+        appInfo: AppInfo,
+        origin: Offset = Offset(0.5f, 0.5f),
+        launchDelayMs: Long = _splashDelay.value.toLong(),
+        returnState: ScreenState = ScreenState.Apps
+    ) {
+        returnStateAfterExternalLaunch = returnState
         _currentApp.value = appInfo
         _appOpenOrigin.value = origin
         _screenState.value = ScreenState.App
@@ -371,16 +417,25 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             } else {
                 launchingExternalApp = false
                 _currentApp.value = null
-                _screenState.value = ScreenState.Apps
+                _screenState.value = returnStateAfterExternalLaunch
                 Toast.makeText(getApplication(), "应用无法启动，已刷新列表", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
+    fun openNotification(key: String, returnState: ScreenState = ScreenState.Stack): Boolean {
+        val opened = WLauncherNotificationListener.openNotification(key)
+        if (opened) {
+            launchingExternalApp = true
+            returnStateAfterExternalLaunch = returnState
+        }
+        return opened
+    }
+
     fun onReturnToLauncher() {
         if (launchingExternalApp) {
             launchingExternalApp = false
-            _screenState.value = ScreenState.Apps
+            _screenState.value = returnStateAfterExternalLaunch
         }
     }
 
@@ -392,7 +447,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 launchJob?.cancel()
                 launchJob = null
                 launchingExternalApp = false
-                _screenState.value = ScreenState.Apps
+                _screenState.value = returnStateAfterExternalLaunch
             }
             else -> _screenState.value = ScreenState.Face
         }
@@ -406,11 +461,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 launchJob?.cancel()
                 launchJob = null
                 launchingExternalApp = false
-                _screenState.value = ScreenState.Apps
+                _screenState.value = returnStateAfterExternalLaunch
             }
             ScreenState.Settings -> _screenState.value = ScreenState.Apps
             ScreenState.Stack -> _screenState.value = ScreenState.Face
-            ScreenState.Notifications -> _screenState.value = ScreenState.Face
+            ScreenState.Notifications -> _screenState.value = if (_sideScreenEnabled.value) ScreenState.Stack else ScreenState.Face
             ScreenState.ControlCenter -> _screenState.value = ScreenState.Face
         }
     }
@@ -418,6 +473,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setLayoutMode(mode: LayoutMode) {
         _layoutMode.value = mode
         persist { store.edit { it[KEY_LAYOUT] = mode.name } }
+    }
+
+    fun setSideScreenEnabled(enabled: Boolean) {
+        _sideScreenEnabled.value = enabled
+        if (!enabled && _screenState.value == ScreenState.Stack) {
+            _screenState.value = ScreenState.Face
+        }
+        persist { store.edit { it[KEY_SIDE_SCREEN_ENABLED] = enabled } }
     }
 
     fun setBlurEnabled(enabled: Boolean) {
@@ -677,6 +740,67 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
     }
 
+    fun setSideScreenShortcut(slotIndex: Int, componentKey: String?) {
+        if (slotIndex !in 0 until SIDE_SCREEN_SLOT_COUNT) return
+        val next = _sideScreenShortcuts.value.toMutableList().apply {
+            this[slotIndex] = componentKey?.takeIf { it.isNotBlank() }
+        }
+        _sideScreenShortcuts.value = next
+        persist {
+            store.edit { prefs ->
+                val serialized = serializeSideScreenShortcuts(next)
+                if (serialized.isEmpty()) {
+                    prefs.remove(KEY_SIDE_SCREEN_SHORTCUTS)
+                } else {
+                    prefs[KEY_SIDE_SCREEN_SHORTCUTS] = serialized
+                }
+            }
+        }
+    }
+
+    fun removeSideScreenShortcut(slotIndex: Int) {
+        setSideScreenShortcut(slotIndex, null)
+    }
+
+    fun toggleNotificationGroup(packageName: String) {
+        if (packageName.isBlank()) return
+        _expandedNotificationGroups.value = _expandedNotificationGroups.value.toMutableSet().apply {
+            if (!add(packageName)) remove(packageName)
+        }
+    }
+
+    fun dismissNotificationGroup(packageName: String) {
+        val keys = _notificationGroups.value
+            .firstOrNull { it.packageName == packageName }
+            ?.children
+            ?.filter(NotificationEntryUi::isClearable)
+            ?.map(NotificationEntryUi::key)
+            .orEmpty()
+        if (keys.isNotEmpty()) {
+            WLauncherNotificationListener.dismissNotifications(keys)
+        }
+        _expandedNotificationGroups.value = _expandedNotificationGroups.value - packageName
+    }
+
+    fun dismissNotification(key: String) {
+        if (key.isBlank()) return
+        WLauncherNotificationListener.dismissNotification(key)
+    }
+
+    fun refreshNotificationAccess() {
+        val component = ComponentName(getApplication(), WLauncherNotificationListener::class.java)
+        val enabledListeners = Settings.Secure.getString(
+            getApplication<Application>().contentResolver,
+            "enabled_notification_listeners"
+        )
+        val granted = enabledListeners
+            ?.split(':')
+            ?.mapNotNull { ComponentName.unflattenFromString(it) }
+            ?.any { it.packageName == component.packageName && it.className == component.className }
+            ?: false
+        _notificationAccessGranted.value = granted || WLauncherNotificationListener.isConnected()
+    }
+
     fun swapApps(fromIndex: Int, toIndex: Int) {
         val current = apps.value.toMutableList()
         if (fromIndex in current.indices && toIndex in current.indices) {
@@ -689,6 +813,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun resetSettings() {
         val defaultBlurEnabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         _layoutMode.value = LayoutMode.Honeycomb
+        _sideScreenEnabled.value = false
+        _sideScreenShortcuts.value = List(SIDE_SCREEN_SLOT_COUNT) { null }
         _blurEnabled.value = defaultBlurEnabled
         _edgeBlurEnabled.value = false
         _lowResIcons.value = false
@@ -725,6 +851,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist {
             store.edit {
                 it[KEY_LAYOUT] = LayoutMode.Honeycomb.name
+                it[KEY_SIDE_SCREEN_ENABLED] = false
                 it[KEY_BLUR] = defaultBlurEnabled
                 it[KEY_EDGE_BLUR] = false
                 it[KEY_LOW_RES] = false
@@ -739,6 +866,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION] = true
                 it[KEY_LEGACY_CIRCULAR_ICONS] = false
                 it[KEY_SHOW_NOTIFICATION] = false
+                it.remove(KEY_SIDE_SCREEN_SHORTCUTS)
                 it.remove(KEY_HIDDEN_APPS)
                 it.remove(KEY_ICON_PACK_PACKAGE)
                 it[KEY_SELECTED_WATCHFACE_ID] = BUILT_IN_WATCHFACE_ID
@@ -815,6 +943,59 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         refreshIconsJob = viewModelScope.launch(Dispatchers.IO) {
             appRepository.refresh(if (_lowResIcons.value) 64 else 128)
         }
+    }
+
+    private fun parseSideScreenShortcuts(raw: String?): List<String?> {
+        val parts = raw
+            ?.split('|')
+            ?.map { it.ifBlank { null } }
+            .orEmpty()
+        return List(SIDE_SCREEN_SLOT_COUNT) { index -> parts.getOrNull(index) }
+    }
+
+    private fun serializeSideScreenShortcuts(shortcuts: List<String?>): String {
+        val normalized = List(SIDE_SCREEN_SLOT_COUNT) { index ->
+            shortcuts.getOrNull(index)?.takeIf { it.isNotBlank() } ?: ""
+        }
+        return if (normalized.all(String::isEmpty)) "" else normalized.joinToString("|")
+    }
+
+    private fun buildNotificationGroups(
+        notifications: List<com.flue.launcher.service.NotifData>,
+        expandedPackages: Set<String>
+    ): List<NotificationGroupUi> {
+        return notifications
+            .groupBy { it.packageName }
+            .values
+            .map { group ->
+                val children = group
+                    .sortedByDescending { it.time }
+                    .map { item ->
+                        NotificationEntryUi(
+                            key = item.key,
+                            packageName = item.packageName,
+                            appLabel = item.appLabel,
+                            title = item.title,
+                            text = item.text,
+                            time = item.time,
+                            icon = item.icon,
+                            isClearable = item.isClearable,
+                            contentIntentAvailable = item.contentIntentAvailable
+                        )
+                    }
+                val latest = children.first()
+                NotificationGroupUi(
+                    packageName = latest.packageName,
+                    appLabel = latest.appLabel,
+                    icon = latest.icon,
+                    latestTime = latest.time,
+                    latestSummary = latest.text.ifBlank { latest.title.ifBlank { latest.appLabel } },
+                    count = children.size,
+                    children = children,
+                    expanded = latest.packageName in expandedPackages
+                )
+            }
+            .sortedByDescending { it.latestTime }
     }
 
     override fun onCleared() {

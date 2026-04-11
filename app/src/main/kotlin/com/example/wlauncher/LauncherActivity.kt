@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import android.os.Build
+import android.provider.Settings
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -103,6 +104,7 @@ class LauncherActivity : ComponentActivity() {
         if (::vm.isInitialized) {
             vm.onReturnToLauncher()
             vm.refreshWatchFaces()
+            vm.refreshNotificationAccess()
         }
     }
 
@@ -120,6 +122,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val context = LocalContext.current
     val screenState by vm.screenState.collectAsState()
     val layoutMode by vm.layoutMode.collectAsState()
+    val sideScreenEnabled by vm.sideScreenEnabled.collectAsState()
+    val sideScreenShortcuts by vm.sideScreenShortcuts.collectAsState()
     val blurEnabled by vm.blurEnabled.collectAsState()
     val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsState()
     val legacyCircularIcons by vm.legacyCircularIcons.collectAsState()
@@ -136,6 +140,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsState()
     val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsState()
     val showNotification by vm.showNotification.collectAsState()
+    val notificationAccessGranted by vm.notificationAccessGranted.collectAsState()
+    val notificationGroups by vm.notificationGroups.collectAsState()
     val watchFaces by vm.availableWatchFaces.collectAsState()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsState()
     val selectedWatchFace by vm.selectedWatchFace.collectAsState()
@@ -154,7 +160,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val builtInVideoClockColorMode by vm.builtInVideoClockColorMode.collectAsState()
     val layerBlurEnabled = blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
-    val notificationsEnabled = false
+    val notificationsEnabled = notificationAccessGranted
     val openWatchFaceChooser = remember(context) {
         {
             context.startActivity(
@@ -170,6 +176,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
     LaunchedEffect(screenState) { prevState = screenState }
 
     val useOrigin = screenState == ScreenState.App || isReturningFromApp
+
+    LaunchedEffect(sideScreenEnabled, notificationAccessGranted, screenState) {
+        if (!sideScreenEnabled && (screenState == ScreenState.Stack || screenState == ScreenState.Notifications)) {
+            vm.setState(ScreenState.Face)
+        } else if (!notificationAccessGranted && screenState == ScreenState.Notifications) {
+            vm.setState(if (sideScreenEnabled) ScreenState.Stack else ScreenState.Face)
+        }
+    }
 
     val showLaunchBackdrop = screenState == ScreenState.App && currentApp != null
     var showSplash by remember { mutableStateOf(false) }
@@ -189,11 +203,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
             .background(Color.Black)
     ) {
         val density = LocalDensity.current
+        val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
 
         GestureHost(
             screenState = screenState,
             onStateChange = { vm.setState(it) },
+            sideScreenEnabled = sideScreenEnabled,
             showNotification = notificationsEnabled,
             showControlCenter = false,
             modifier = Modifier.fillMaxSize()
@@ -204,6 +220,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .zIndex(if (screenState == ScreenState.Face) 3f else 1f)
                     .scaleBlurAlpha(
                         targetValues = faceLayerValues(screenState),
+                        screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled
                     )
@@ -278,6 +295,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .zIndex(if (screenState == ScreenState.Apps) 3f else 0f)
                     .scaleBlurAlpha(
                         targetValues = appListLayerValues(screenState),
+                        screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled,
                         origin = if (useOrigin) appOpenOrigin else null
@@ -297,7 +315,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         fastScrollOptimizationEnabled = honeycombFastScrollOptimization,
                         onAppClick = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
-                            vm.openApp(appInfo, origin, launchDelay)
+                            vm.openApp(appInfo, origin, launchDelay, ScreenState.Apps)
                         },
                         onReorder = { from, to -> vm.swapApps(from, to) },
                         onScrollToTop = { vm.setState(ScreenState.Face) }
@@ -311,7 +329,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         bottomFadeRangeDp = honeycombBottomFade,
                         onAppClick = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
-                            vm.openApp(appInfo, origin, launchDelay)
+                            vm.openApp(appInfo, origin, launchDelay, ScreenState.Apps)
                         },
                         onReorder = { from, to -> vm.swapApps(from, to) },
                         onScrollToTop = { vm.setState(ScreenState.Face) }
@@ -371,26 +389,54 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .fillMaxSize()
                     .scaleBlurAlpha(
                         targetValues = stackLayerValues(screenState),
+                        screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled
                     )
-            ) { SmartStackLayer() }
+            ) {
+                SmartStackLayer(
+                    apps = apps,
+                    sideScreenShortcuts = sideScreenShortcuts,
+                    latestNotificationGroup = notificationGroups.firstOrNull(),
+                    notificationAccessGranted = notificationAccessGranted,
+                    onOpenNotifications = { vm.setState(ScreenState.Notifications) },
+                    onLaunchApp = { appInfo, origin ->
+                        val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
+                        vm.openApp(appInfo, origin, launchDelay, ScreenState.Stack)
+                    },
+                    onSetShortcut = vm::setSideScreenShortcut,
+                    onRemoveShortcut = vm::removeSideScreenShortcut,
+                    onDismissToFace = { vm.setState(ScreenState.Face) }
+                )
+            }
 
-            if (notificationsEnabled && showNotification) {
+            if (notificationsEnabled) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .scaleBlurAlpha(
                             targetValues = notificationLayerValues(screenState),
+                            screenWidth = screenWidthPx,
                             screenHeight = screenHeightPx,
                             blurEnabled = layerBlurEnabled
                         )
-                ) { NotificationLayer() }
+                ) {
+                    NotificationLayer(
+                        notificationGroups = notificationGroups,
+                        notificationAccessGranted = notificationAccessGranted,
+                        onDismissToStack = { vm.setState(ScreenState.Stack) },
+                        onToggleGroup = vm::toggleNotificationGroup,
+                        onDismissGroup = vm::dismissNotificationGroup,
+                        onDismissNotification = vm::dismissNotification,
+                        onOpenNotification = { key -> vm.openNotification(key, ScreenState.Stack) }
+                    )
+                }
             }
 
             if (screenState == ScreenState.Settings) {
                 LauncherSettingsSheet(
                     currentLayout = layoutMode,
+                    sideScreenEnabled = sideScreenEnabled,
                     blurEnabled = blurEnabled,
                     edgeBlurEnabled = edgeBlurEnabled,
                     lowResIcons = vm.lowResIcons.collectAsState().value,
@@ -409,6 +455,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     selectedWatchFaceId = selectedWatchFaceId,
                     watchFaceLastError = watchFaceLastError,
                     onLayoutChange = { vm.setLayoutMode(it) },
+                    onSideScreenToggle = { vm.setSideScreenEnabled(it) },
                     onBlurToggle = { vm.setBlurEnabled(it) },
                     onEdgeBlurToggle = { vm.setEdgeBlurEnabled(it) },
                     onLowResToggle = { vm.setLowResIcons(it) },

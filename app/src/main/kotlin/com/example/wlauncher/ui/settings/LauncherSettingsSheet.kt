@@ -58,6 +58,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun LauncherSettingsSheet(
     currentLayout: LayoutMode,
+    sideScreenEnabled: Boolean = false,
     blurEnabled: Boolean,
     edgeBlurEnabled: Boolean = false,
     lowResIcons: Boolean = false,
@@ -78,6 +79,7 @@ fun LauncherSettingsSheet(
     builtInPhotoPath: String? = null,
     builtInVideoPath: String? = null,
     onLayoutChange: (LayoutMode) -> Unit,
+    onSideScreenToggle: (Boolean) -> Unit = {},
     onBlurToggle: (Boolean) -> Unit,
     onEdgeBlurToggle: (Boolean) -> Unit = {},
     onLowResToggle: (Boolean) -> Unit = {},
@@ -215,6 +217,16 @@ fun LauncherSettingsSheet(
             item("layout_list") {
                 val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "layout_list" }, screenCenterY, screenHeightPx)
                 SettingOption(tr(isZh, "列表布局", "List"), tr(isZh, "纵向应用列表", "Vertical app list"), currentLayout == LayoutMode.List, { onLayoutChange(LayoutMode.List) }, scale)
+            }
+            item("side_screen_toggle") {
+                val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "side_screen_toggle" }, screenCenterY, screenHeightPx)
+                SettingToggle(
+                    tr(isZh, "副一屏", "Side Screen"),
+                    tr(isZh, "从表盘右滑进入快捷启动与通知页", "Swipe right from the watch face to open the side screen"),
+                    sideScreenEnabled,
+                    onSideScreenToggle,
+                    scale = scale
+                )
             }
 
             item("effects_header") { ScaledSectionHeader(tr(isZh, "效果", "Effects"), listState, "effects_header", screenCenterY, screenHeightPx) }

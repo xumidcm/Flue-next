@@ -1,8 +1,7 @@
 package com.flue.launcher.service
 
 import android.app.Notification
-import android.content.pm.PackageManager
-import android.graphics.drawable.Icon
+import android.app.PendingIntent
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import androidx.compose.ui.graphics.ImageBitmap
@@ -14,11 +13,14 @@ import kotlinx.coroutines.flow.asStateFlow
 
 data class NotifData(
     val key: String,
+    val packageName: String,
     val appLabel: String,
     val title: String,
     val text: String,
     val time: Long,
-    val icon: ImageBitmap?
+    val icon: ImageBitmap?,
+    val isClearable: Boolean,
+    val contentIntentAvailable: Boolean
 )
 
 class WLauncherNotificationListener : NotificationListenerService() {
@@ -28,11 +30,24 @@ class WLauncherNotificationListener : NotificationListenerService() {
         val notifications: StateFlow<List<NotifData>> = _notifications.asStateFlow()
 
         private var instance: WLauncherNotificationListener? = null
+        private val pendingIntentMap = mutableMapOf<String, PendingIntent?>()
 
         fun isConnected() = instance != null
 
         fun dismissNotification(key: String) {
             instance?.cancelNotification(key)
+        }
+
+        fun dismissNotifications(keys: List<String>) {
+            val service = instance ?: return
+            keys.forEach(service::cancelNotification)
+        }
+
+        fun openNotification(key: String): Boolean {
+            val pendingIntent = synchronized(pendingIntentMap) { pendingIntentMap[key] } ?: return false
+            return runCatching {
+                pendingIntent.send()
+            }.isSuccess
         }
     }
 
@@ -43,6 +58,8 @@ class WLauncherNotificationListener : NotificationListenerService() {
 
     override fun onListenerDisconnected() {
         instance = null
+        _notifications.value = emptyList()
+        synchronized(pendingIntentMap) { pendingIntentMap.clear() }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
@@ -75,12 +92,22 @@ class WLauncherNotificationListener : NotificationListenerService() {
 
                     NotifData(
                         key = sbn.key,
+                        packageName = sbn.packageName,
                         appLabel = appLabel,
                         title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: "",
                         text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: "",
                         time = sbn.postTime,
-                        icon = iconBitmap
+                        icon = iconBitmap,
+                        isClearable = sbn.isClearable,
+                        contentIntentAvailable = n.contentIntent != null
                     )
+                }.also { notifications ->
+                    synchronized(pendingIntentMap) {
+                        pendingIntentMap.clear()
+                        sbns.forEach { sbn ->
+                            pendingIntentMap[sbn.key] = sbn.notification.contentIntent
+                        }
+                    }
                 }
         } catch (_: Exception) {}
     }

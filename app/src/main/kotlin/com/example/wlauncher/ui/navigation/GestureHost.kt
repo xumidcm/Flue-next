@@ -12,6 +12,7 @@ fun GestureHost(
     screenState: ScreenState,
     onStateChange: (ScreenState) -> Unit,
     modifier: Modifier = Modifier,
+    sideScreenEnabled: Boolean = false,
     showNotification: Boolean = true,
     showControlCenter: Boolean = false,
     content: @Composable () -> Unit
@@ -43,26 +44,17 @@ fun GestureHost(
                                     if (isVertical && totalDy < -80) {
                                         onStateChange(ScreenState.Apps)
                                         change.consume()
-                                    } else if (isVertical && totalDy > 80 && showNotification) {
-                                        onStateChange(ScreenState.Notifications)
+                                    } else if (isHorizontal && totalDx > 80 && sideScreenEnabled) {
+                                        onStateChange(ScreenState.Stack)
                                         change.consume()
                                     } else if (isHorizontal && totalDx < -80 && showControlCenter) {
-                                        // 左滑 → 控制中心
                                         onStateChange(ScreenState.ControlCenter)
-                                        change.consume()
-                                    }
-                                }
-
-                                ScreenState.Notifications -> {
-                                    if (isVertical && totalDy < -80) {
-                                        onStateChange(ScreenState.Face)
                                         change.consume()
                                     }
                                 }
 
                                 ScreenState.ControlCenter -> {
                                     if (isHorizontal && totalDx > 80) {
-                                        // 右滑返回表盘
                                         onStateChange(ScreenState.Face)
                                         change.consume()
                                     }
@@ -71,9 +63,8 @@ fun GestureHost(
                                 ScreenState.Apps -> { /* 留给子层 */ }
                                 ScreenState.App -> { /* 不拦截 */ }
                                 ScreenState.Settings -> { /* 不拦截 */ }
-                                ScreenState.Stack -> {
-                                    onStateChange(ScreenState.Apps)
-                                }
+                                ScreenState.Stack -> { /* 留给子层 */ }
+                                ScreenState.Notifications -> { /* 留给子层 */ }
                             }
                         }
                     },

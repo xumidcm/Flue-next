@@ -13,6 +13,7 @@ data class LayerAnimValues(
     val scale: Float = 1f,
     val blur: Float = 0f,    // dp
     val alpha: Float = 1f,
+    val translationX: Float = 0f,  // 占屏幕宽度比例 (-1f = 向左移出, 1f = 向右移出)
     val translationY: Float = 0f  // 占屏幕高度比例 (-1f = 向上移出, 1f = 向下移出)
 )
 
@@ -24,8 +25,8 @@ fun faceLayerValues(state: ScreenState): LayerAnimValues = when (state) {
     ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
     ScreenState.Apps, ScreenState.Settings -> LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f)
     ScreenState.App -> LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f)
-    ScreenState.Stack -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
-    ScreenState.Notifications -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
+    ScreenState.Stack -> LayerAnimValues(scale = 0.93f, blur = 7f, alpha = 0.38f, translationX = -0.08f)
+    ScreenState.Notifications -> LayerAnimValues(scale = 0.90f, blur = 8f, alpha = 0.28f, translationX = -0.08f)
     ScreenState.ControlCenter -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.5f)
 }
 
@@ -36,7 +37,7 @@ fun faceLayerValues(state: ScreenState): LayerAnimValues = when (state) {
 fun appListLayerValues(state: ScreenState): LayerAnimValues = when (state) {
     ScreenState.Face -> LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f)
     ScreenState.Apps -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
-    ScreenState.Settings -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.3f)
+    ScreenState.Settings -> LayerAnimValues(scale = 0.95f, blur = 8f, alpha = 0f)
     ScreenState.App -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f)
     else -> LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f)
 }
@@ -55,9 +56,11 @@ fun appViewLayerValues(state: ScreenState): LayerAnimValues = when (state) {
  * 获取"智能叠放层"在各状态下的动画目标值。
  */
 fun stackLayerValues(state: ScreenState): LayerAnimValues = when (state) {
-    ScreenState.Stack -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f, translationY = 0f)
-    ScreenState.Apps -> LayerAnimValues(scale = 1.5f, blur = 12f, alpha = 0f, translationY = -0.5f)
-    else -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 0f, translationY = 1f)
+    ScreenState.Stack -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f, translationX = 0f, translationY = 0f)
+    ScreenState.Notifications -> LayerAnimValues(scale = 0.98f, blur = 0f, alpha = 0.35f, translationX = 0f, translationY = -0.08f)
+    ScreenState.Settings -> LayerAnimValues(scale = 0.98f, blur = 6f, alpha = 0f, translationX = 0f, translationY = 0f)
+    ScreenState.Apps -> LayerAnimValues(scale = 1.03f, blur = 10f, alpha = 0f, translationX = 0.12f, translationY = 0f)
+    else -> LayerAnimValues(scale = 0.98f, blur = 0f, alpha = 0f, translationX = 1f, translationY = 0f)
 }
 
 /**
