@@ -6,7 +6,6 @@ import android.os.Build
 import android.os.SystemClock
 import android.widget.Toast
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -17,7 +16,6 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.flue.launcher.data.model.AppInfo
-import com.flue.launcher.data.repository.AppIconStoreStats
 import com.flue.launcher.data.repository.AppRepository
 import com.flue.launcher.iconpack.IconPackDescriptor
 import com.flue.launcher.iconpack.IconPackScanner
@@ -43,11 +41,6 @@ import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "launcher_settings")
-
-data class HoneycombRenderMetrics(
-    val renderWindowSize: Int = 0,
-    val blurItemCount: Int = 0
-)
 
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -90,7 +83,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     val allApps: StateFlow<List<AppInfo>> = appRepository.allApps
     val apps: StateFlow<List<AppInfo>> = appRepository.apps
-    val appIconDebugStats: StateFlow<AppIconStoreStats> = appRepository.iconStore.debugStats
 
     private val _screenState = MutableStateFlow(ScreenState.Face)
     val screenState: StateFlow<ScreenState> = _screenState.asStateFlow()
@@ -206,8 +198,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _currentApp = MutableStateFlow<AppInfo?>(null)
     val currentApp: StateFlow<AppInfo?> = _currentApp.asStateFlow()
-    private val _honeycombRenderMetrics = MutableStateFlow(HoneycombRenderMetrics())
-    val honeycombRenderMetrics: StateFlow<HoneycombRenderMetrics> = _honeycombRenderMetrics.asStateFlow()
 
     private var launchingExternalApp = false
     private var launchJob: Job? = null
@@ -368,7 +358,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun openApp(appInfo: AppInfo, origin: Offset = Offset(0.5f, 0.5f), launchDelayMs: Long = _splashDelay.value.toLong()) {
-        prefetchAppIcons(listOf(appInfo.componentKey))
         _currentApp.value = appInfo
         _appOpenOrigin.value = origin
         _screenState.value = ScreenState.App
@@ -688,26 +677,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
     }
 
-    fun getAppIcon(componentKey: String, blurred: Boolean = false): ImageBitmap? {
-        return appRepository.getIcon(componentKey, blurred)
-    }
-
-    fun observeAppIcon(componentKey: String, blurred: Boolean = false): StateFlow<ImageBitmap?> {
-        return appRepository.observeIcon(componentKey, blurred)
-    }
-
-    fun prefetchAppIcons(componentKeys: List<String>, blurredKeys: Set<String> = emptySet()) {
-        if (componentKeys.isEmpty()) return
-        appRepository.prefetchIcons(componentKeys, blurredKeys)
-    }
-
-    fun updateHoneycombRenderMetrics(renderWindowSize: Int, blurItemCount: Int) {
-        _honeycombRenderMetrics.value = HoneycombRenderMetrics(
-            renderWindowSize = renderWindowSize.coerceAtLeast(0),
-            blurItemCount = blurItemCount.coerceAtLeast(0)
-        )
-    }
-
     fun swapApps(fromIndex: Int, toIndex: Int) {
         val current = apps.value.toMutableList()
         if (fromIndex in current.indices && toIndex in current.indices) {
@@ -844,7 +813,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private fun refreshIcons() {
         refreshIconsJob?.cancel()
         refreshIconsJob = viewModelScope.launch(Dispatchers.IO) {
-            appRepository.setIconSize(if (_lowResIcons.value) 64 else 128)
+            appRepository.refresh(if (_lowResIcons.value) 64 else 128)
         }
     }
 

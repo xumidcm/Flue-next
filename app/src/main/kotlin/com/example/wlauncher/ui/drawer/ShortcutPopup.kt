@@ -50,23 +50,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
-import com.flue.launcher.ui.icon.rememberLauncherIcon
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.delay
 
 @Composable
 fun AppShortcutOverlay(
     app: AppInfo,
-    iconFlowProvider: (String, Boolean) -> StateFlow<androidx.compose.ui.graphics.ImageBitmap?>,
     blurEnabled: Boolean = true,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val appIcon = rememberLauncherIcon(
-        componentKey = app.componentKey,
-        blurred = false,
-        iconFlowProvider = iconFlowProvider
-    )
 
     var showing by remember { mutableStateOf(false) }
     var dismissing by remember { mutableStateOf(false) }
@@ -164,23 +156,14 @@ fun AppShortcutOverlay(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                if (appIcon != null) {
-                    Image(
-                        bitmap = appIcon,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .size(88.dp)
-                            .clip(CircleShape),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(88.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.06f))
-                    )
-                }
+                Image(
+                    bitmap = app.cachedIcon,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(88.dp)
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(app.label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.W600)
                 Spacer(modifier = Modifier.height(12.dp))

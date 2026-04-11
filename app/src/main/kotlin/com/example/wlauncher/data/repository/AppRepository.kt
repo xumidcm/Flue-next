@@ -7,8 +7,18 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ResolveInfo
+import android.graphics.Bitmap
+import android.graphics.BitmapShader
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Shader
+import android.graphics.drawable.Drawable
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.graphics.drawable.toBitmap
 import com.flue.launcher.data.model.AppInfo
+import com.flue.launcher.iconpack.IconPackMapping
+import com.flue.launcher.iconpack.IconPackScanner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -26,8 +36,6 @@ class AppRepository(private val context: Context) {
     private val _apps = MutableStateFlow<List<AppInfo>>(emptyList())
     val apps: StateFlow<List<AppInfo>> = _apps.asStateFlow()
 
-    val iconStore = AppIconStore(context)
-
     private var customOrder: List<String> = emptyList()
     private var customOrderIndexMap: Map<String, Int> = emptyMap()
     private var hiddenComponents: Set<String> = emptySet()
@@ -37,6 +45,11 @@ class AppRepository(private val context: Context) {
     private var refreshGeneration = 0
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val installTimeCache = mutableMapOf<String, Long>()
+    private val iconCache = object : LinkedHashMap<String, Pair<ImageBitmap, ImageBitmap>>(160, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<ImageBitmap, ImageBitmap>>?): Boolean {
+            return size > 160
+        }
+    }
 
     private val packageReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -45,11 +58,6 @@ class AppRepository(private val context: Context) {
     }
 
     init {
-        iconStore.updateConfig(
-            iconSize = currentIconSize,
-            iconPackPackage = iconPackPackage,
-            useLegacyCircularIcons = useLegacyCircularIcons
-        )
         refreshAsync()
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_PACKAGE_ADDED)
@@ -69,60 +77,24 @@ class AppRepository(private val context: Context) {
     fun setHiddenComponents(components: Set<String>) {
         hiddenComponents = components
         applyFilters()
-        warmVisibleIcons()
     }
 
     fun setIconPackPackage(packageName: String?) {
-        val normalized = packageName?.takeIf { it.isNotBlank() }
-        if (iconPackPackage == normalized) return
-        iconPackPackage = normalized
-        iconStore.updateConfig(
-            iconSize = currentIconSize,
-            iconPackPackage = iconPackPackage,
-            useLegacyCircularIcons = useLegacyCircularIcons
-        )
-        warmVisibleIcons()
+        iconPackPackage = packageName?.takeIf { it.isNotBlank() }
+        synchronized(iconCache) { iconCache.clear() }
+        refreshAsync(currentIconSize)
     }
 
     fun setLegacyCircularIconsEnabled(enabled: Boolean) {
         if (useLegacyCircularIcons == enabled) return
         useLegacyCircularIcons = enabled
-        iconStore.updateConfig(
-            iconSize = currentIconSize,
-            iconPackPackage = iconPackPackage,
-            useLegacyCircularIcons = useLegacyCircularIcons
-        )
-        warmVisibleIcons()
-    }
-
-    fun setIconSize(iconSize: Int) {
-        val normalizedSize = iconSize.coerceAtLeast(32)
-        if (currentIconSize == normalizedSize) return
-        currentIconSize = normalizedSize
-        iconStore.updateConfig(
-            iconSize = currentIconSize,
-            iconPackPackage = iconPackPackage,
-            useLegacyCircularIcons = useLegacyCircularIcons
-        )
-        warmVisibleIcons()
-    }
-
-    fun getIcon(componentKey: String, blurred: Boolean): ImageBitmap? {
-        return iconStore.get(componentKey, blurred)
-    }
-
-    fun observeIcon(componentKey: String, blurred: Boolean): StateFlow<ImageBitmap?> {
-        return iconStore.observe(componentKey, blurred)
-    }
-
-    fun prefetchIcons(componentKeys: List<String>, blurredKeys: Set<String> = emptySet()) {
-        iconStore.prefetch(componentKeys, blurredKeys, currentIconSize)
+        synchronized(iconCache) { iconCache.clear() }
+        refreshAsync(currentIconSize)
     }
 
     private fun reorder() {
         _allApps.value = sortApps(_allApps.value)
         applyFilters()
-        warmVisibleIcons()
     }
 
     fun refresh(iconSize: Int = currentIconSize) {
@@ -130,7 +102,13 @@ class AppRepository(private val context: Context) {
             refreshGeneration += 1
             refreshGeneration
         }
-        setIconSize(iconSize)
+        val previousIconSize = currentIconSize
+        currentIconSize = iconSize
+        if (previousIconSize != iconSize) {
+            synchronized(iconCache) { iconCache.clear() }
+        }
+        val iconPackPackageSnapshot = iconPackPackage
+        val useLegacyCircularIconsSnapshot = useLegacyCircularIcons
         val pm = context.packageManager
         val mainIntent = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
@@ -138,19 +116,44 @@ class AppRepository(private val context: Context) {
         val resolveInfos: List<ResolveInfo> = pm.queryIntentActivities(mainIntent, 0)
         val myPackage = context.packageName
 
+        val iconPackMapping: IconPackMapping? = iconPackPackageSnapshot?.let { IconPackScanner.loadMapping(context, it) }
+
         val resolveList = resolveInfos
             .filter { ri ->
                 !(ri.activityInfo.packageName == myPackage &&
                     ri.activityInfo.name == "com.flue.launcher.LauncherActivity")
             }
             .distinctBy { "${it.activityInfo.packageName}/${it.activityInfo.name}" }
-
         val loadedApps = ArrayList<AppInfo>(resolveList.size)
+
         resolveList.forEach { ri ->
+            val packageName = ri.activityInfo.packageName
+            val componentKey = "$packageName/${ri.activityInfo.name}"
+            val iconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|$componentKey|$iconSize|${if (useLegacyCircularIconsSnapshot) "legacy" else "plain"}"
+            val cachedIcons = synchronized(iconCache) { iconCache[iconCacheKey] } ?: run {
+                val packedIcon = iconPackMapping?.let { IconPackScanner.loadIconDrawable(context, it, componentKey) }
+                val resolvedIconDrawable = packedIcon ?: ri.loadIcon(pm)
+                val baseBitmap = if (useLegacyCircularIconsSnapshot && packedIcon == null) {
+                    createCircularBitmap(
+                        drawableToBitmap(resolvedIconDrawable, iconSize),
+                        edgeInsetPx = iconSize * 0.015f
+                    )
+                } else {
+                    resolvedIconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
+                }
+                val sharp = baseBitmap.asImageBitmap()
+                val softened = createSoftenedBitmap(baseBitmap).asImageBitmap()
+                synchronized(iconCache) {
+                    iconCache[iconCacheKey] = sharp to softened
+                }
+                sharp to softened
+            }
             loadedApps += AppInfo(
                 label = ri.loadLabel(pm).toString(),
-                packageName = ri.activityInfo.packageName,
-                activityName = ri.activityInfo.name
+                packageName = packageName,
+                activityName = ri.activityInfo.name,
+                cachedIcon = cachedIcons.first,
+                cachedBlurredIcon = cachedIcons.second
             )
         }
 
@@ -163,7 +166,6 @@ class AppRepository(private val context: Context) {
 
         _allApps.value = sortApps(loadedApps)
         applyFilters()
-        warmVisibleIcons()
     }
 
     fun launchApp(appInfo: AppInfo): Boolean {
@@ -191,7 +193,7 @@ class AppRepository(private val context: Context) {
 
     fun destroy() {
         scope.cancel()
-        iconStore.destroy()
+        synchronized(iconCache) { iconCache.clear() }
         try {
             context.unregisterReceiver(packageReceiver)
         } catch (_: Exception) {
@@ -202,6 +204,37 @@ class AppRepository(private val context: Context) {
         scope.launch {
             refresh(iconSize)
         }
+    }
+
+    private fun createSoftenedBitmap(source: Bitmap): Bitmap {
+        val downscaled = Bitmap.createScaledBitmap(
+            source,
+            (source.width * 0.25f).toInt().coerceAtLeast(1),
+            (source.height * 0.25f).toInt().coerceAtLeast(1),
+            true
+        )
+        return Bitmap.createScaledBitmap(downscaled, source.width, source.height, true)
+    }
+
+    private fun drawableToBitmap(drawable: Drawable, size: Int): Bitmap {
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        drawable.setBounds(0, 0, size, size)
+        drawable.draw(canvas)
+        return bitmap
+    }
+
+    private fun createCircularBitmap(source: Bitmap, edgeInsetPx: Float = 0f): Bitmap {
+        val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG).apply {
+            shader = BitmapShader(source, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            isFilterBitmap = true
+            isDither = true
+        }
+        val radius = (minOf(source.width, source.height) / 2f - edgeInsetPx).coerceAtLeast(0f)
+        canvas.drawCircle(source.width / 2f, source.height / 2f, radius, paint)
+        return output
     }
 
     private fun orderRank(app: AppInfo): Int {
@@ -245,17 +278,6 @@ class AppRepository(private val context: Context) {
     private fun applyFilters() {
         _apps.value = _allApps.value.filterNot { app ->
             hiddenComponents.contains(app.componentKey) || hiddenComponents.contains(app.packageName)
-        }
-    }
-
-    private fun warmVisibleIcons() {
-        val visibleKeys = _apps.value
-            .asSequence()
-            .take(24)
-            .map(AppInfo::componentKey)
-            .toList()
-        if (visibleKeys.isNotEmpty()) {
-            prefetchIcons(visibleKeys)
         }
     }
 }

@@ -49,7 +49,6 @@ import com.flue.launcher.ui.anim.scaleBlurAlpha
 import com.flue.launcher.ui.anim.stackLayerValues
 import com.flue.launcher.ui.drawer.HoneycombScreen
 import com.flue.launcher.ui.drawer.ListDrawerScreen
-import com.flue.launcher.ui.icon.rememberLauncherIcon
 import com.flue.launcher.ui.home.WatchFaceLayer
 import com.flue.launcher.ui.navigation.GestureHost
 import com.flue.launcher.ui.navigation.LayoutMode
@@ -173,13 +172,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val useOrigin = screenState == ScreenState.App || isReturningFromApp
 
     val showLaunchBackdrop = screenState == ScreenState.App && currentApp != null
-    val currentAppIcon = currentApp?.let { app ->
-        rememberLauncherIcon(
-            componentKey = app.componentKey,
-            blurred = false,
-            iconFlowProvider = vm::observeAppIcon
-        )
-    }
     var showSplash by remember { mutableStateOf(false) }
     LaunchedEffect(screenState, splashIcon, splashDelay, currentApp) {
         if (screenState == ScreenState.App && splashIcon && currentApp != null) {
@@ -294,8 +286,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 when (layoutMode) {
                     LayoutMode.Honeycomb -> HoneycombScreen(
                         apps = apps,
-                        iconFlowProvider = vm::observeAppIcon,
-                        onPrefetchIcons = vm::prefetchAppIcons,
                         blurEnabled = blurEnabled,
                         edgeBlurEnabled = edgeBlurEnabled,
                         suppressHeavyEffects = reduceLegacyDrawerEffects,
@@ -310,13 +300,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             vm.openApp(appInfo, origin, launchDelay)
                         },
                         onReorder = { from, to -> vm.swapApps(from, to) },
-                        onRenderMetricsChanged = vm::updateHoneycombRenderMetrics,
                         onScrollToTop = { vm.setState(ScreenState.Face) }
                     )
                     LayoutMode.List -> ListDrawerScreen(
                         apps = apps,
-                        iconFlowProvider = vm::observeAppIcon,
-                        onPrefetchIcons = vm::prefetchAppIcons,
                         blurEnabled = blurEnabled,
                         edgeBlurEnabled = edgeBlurEnabled,
                         suppressHeavyEffects = reduceLegacyDrawerEffects,
@@ -362,9 +349,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         enter = fadeIn() + scaleIn(initialScale = 0.5f),
                         exit = fadeOut() + scaleOut(targetScale = 0.3f)
                     ) {
-                        if (currentAppIcon != null) {
+                        currentApp?.let { app ->
                             Image(
-                                bitmap = currentAppIcon,
+                                bitmap = app.cachedIcon,
                                 contentDescription = null,
                                 modifier = Modifier
                                     .size(96.dp)

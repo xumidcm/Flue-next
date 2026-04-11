@@ -96,7 +96,6 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.flue.launcher.ui.icon.rememberLauncherIcon
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.navigation.LayoutMode
@@ -350,17 +349,7 @@ private fun SettingsRootScreen(
                 headerTime = headerTime,
                 initialFirstVisibleItemIndex = scrollFor(SettingsDestination.HIDDEN_APPS).index,
                 initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.HIDDEN_APPS).offset,
-                onScrollChanged = { index, offset -> updateScroll(SettingsDestination.HIDDEN_APPS, index, offset) },
-                onVisibleKeysChanged = { keys ->
-                    val visibleAppKeys = keys
-                        .asSequence()
-                        .map(Any::toString)
-                        .filter { it.startsWith("app_") }
-                        .map { it.removePrefix("app_") }
-                        .filter(String::isNotBlank)
-                        .toList()
-                    vm.prefetchAppIcons(visibleAppKeys)
-                }
+                onScrollChanged = { index, offset -> updateScroll(SettingsDestination.HIDDEN_APPS, index, offset) }
             ) { listState, screenCenterY, screenHeightPx, visibleItemKeys ->
                 item("hidden_summary") {
                     MessageCard(
@@ -381,15 +370,7 @@ private fun SettingsRootScreen(
                             hiddenAppsDirty = true
                         },
                         scale = itemFisheye(listState, "app_${app.componentKey}", screenCenterY, screenHeightPx),
-                        leadingIcon = if (visibleItemKeys.contains("app_${app.componentKey}")) {
-                            rememberLauncherIcon(
-                                componentKey = app.componentKey,
-                                blurred = false,
-                                iconFlowProvider = vm::observeAppIcon
-                            )
-                        } else {
-                            null
-                        },
+                        leadingIcon = app.cachedIcon.takeIf { visibleItemKeys.contains("app_${app.componentKey}") },
                         reserveLeadingIconSpace = true
                     )
                 }
@@ -774,7 +755,6 @@ private fun SettingsPageScaffold(
     initialFirstVisibleItemIndex: Int = 0,
     initialFirstVisibleItemScrollOffset: Int = 0,
     onScrollChanged: (Int, Int) -> Unit = { _, _ -> },
-    onVisibleKeysChanged: (Set<Any>) -> Unit = {},
     content: LazyListScope.(LazyListState, Float, Float, Set<Any>) -> Unit
 ) {
     val listState = rememberLazyListState(
@@ -832,10 +812,6 @@ private fun SettingsPageScaffold(
         snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
             .distinctUntilChanged()
             .collect { (index, offset) -> onScrollChanged(index, offset) }
-    }
-
-    LaunchedEffect(visibleItemKeys) {
-        onVisibleKeysChanged(visibleItemKeys)
     }
 
     LaunchedEffect(Unit) {

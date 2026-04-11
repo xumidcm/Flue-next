@@ -49,7 +49,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -68,7 +67,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.platformBlur
-import com.flue.launcher.ui.icon.rememberLauncherIcon
 import com.flue.launcher.ui.input.DrawerInputMode
 import com.flue.launcher.ui.input.DrawerInputSource
 import com.flue.launcher.ui.input.flueDrawerRotaryScrollable
@@ -77,7 +75,6 @@ import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
@@ -91,8 +88,6 @@ private const val LIST_EDGE_ITEM_BLUR_DP = 4f
 @Composable
 fun ListDrawerScreen(
     apps: List<AppInfo>,
-    iconFlowProvider: (String, Boolean) -> StateFlow<ImageBitmap?>,
-    onPrefetchIcons: (List<String>, Set<String>) -> Unit,
     blurEnabled: Boolean = true,
     edgeBlurEnabled: Boolean = false,
     suppressHeavyEffects: Boolean = false,
@@ -374,57 +369,6 @@ fun ListDrawerScreen(
             val visibleInfoByIndex = remember(listState.layoutInfo.visibleItemsInfo) {
                 listState.layoutInfo.visibleItemsInfo.associateBy { it.index }
             }
-            val prefetchComponentKeys = remember(
-                visibleIndexes,
-                dragFromIndex,
-                dragCurrentIndex,
-                settlingKey,
-                longPressedApp,
-                apps
-            ) {
-                buildList {
-                    visibleIndexes.forEach { index ->
-                        apps.getOrNull(index)?.componentKey?.let(::add)
-                    }
-                    dragFromIndex?.let { apps.getOrNull(it)?.componentKey?.let(::add) }
-                    dragCurrentIndex?.let { apps.getOrNull(it)?.componentKey?.let(::add) }
-                    settlingKey?.let(::add)
-                    longPressedApp?.componentKey?.let(::add)
-                }.distinct()
-            }
-            val blurredPrefetchKeys = remember(
-                visibleIndexes,
-                visibleInfoByIndex,
-                screenHeightPx,
-                topEdgeBlurZonePx,
-                bottomEdgeBlurZonePx,
-                blurEnabled,
-                effectiveEdgeBlur,
-                apps
-            ) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || !blurEnabled || !effectiveEdgeBlur) {
-                    emptySet()
-                } else {
-                    visibleIndexes.mapNotNullTo(linkedSetOf()) { index ->
-                        val itemInfo = visibleInfoByIndex[index] ?: return@mapNotNullTo null
-                        val itemBlur = computeVerticalEdgeBlur(
-                            centerY = itemInfo.offset + itemInfo.size / 2f,
-                            screenHeight = screenHeightPx,
-                            topBlurZonePx = topEdgeBlurZonePx,
-                            bottomBlurZonePx = bottomEdgeBlurZonePx,
-                            maxBlurDp = LIST_EDGE_ITEM_BLUR_DP
-                        )
-                        apps.getOrNull(index)
-                            ?.takeIf { itemBlur > 0.5f }
-                            ?.componentKey
-                    }
-                }
-            }
-
-            LaunchedEffect(prefetchComponentKeys, blurredPrefetchKeys) {
-                onPrefetchIcons(prefetchComponentKeys, blurredPrefetchKeys)
-            }
-
             LaunchedEffect(dragFromIndex, screenHeightPx) {
                 var previousFrameNanos = 0L
                 while (dragFromIndex != null) {
@@ -497,21 +441,7 @@ fun ListDrawerScreen(
                         effectiveEdgeBlur &&
                         itemBlur > 0.5f
                     )
-                    val sharpIcon = rememberLauncherIcon(
-                        componentKey = app.componentKey,
-                        blurred = false,
-                        iconFlowProvider = iconFlowProvider
-                    )
-                    val blurredIcon = if (useBlurredIcon) {
-                        rememberLauncherIcon(
-                            componentKey = app.componentKey,
-                            blurred = true,
-                            iconFlowProvider = iconFlowProvider
-                        )
-                    } else {
-                        null
-                    }
-                    val displayIcon = if (useBlurredIcon) blurredIcon ?: sharpIcon else sharpIcon
+                    val displayIcon = if (useBlurredIcon) app.cachedBlurredIcon else app.cachedIcon
                     val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
                     val isPressed by interactionSource.collectIsPressedAsState()
                     val isDragged = dragFromIndex == index
@@ -579,23 +509,14 @@ fun ListDrawerScreen(
                             .padding(horizontal = 16.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (displayIcon != null) {
-                            Image(
-                                bitmap = displayIcon,
-                                contentDescription = app.label,
-                                modifier = Modifier
-                                    .size(iconSize)
-                                    .clip(CircleShape),
-                                contentScale = ContentScale.Crop
-                            )
-                        } else {
-                            Box(
-                                modifier = Modifier
-                                    .size(iconSize)
-                                    .clip(CircleShape)
-                                    .background(Color.White.copy(alpha = 0.06f))
-                            )
-                        }
+                        Image(
+                            bitmap = displayIcon,
+                            contentDescription = app.label,
+                            modifier = Modifier
+                                .size(iconSize)
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
                         Spacer(modifier = Modifier.width(14.dp))
                         Text(
                             text = app.label,
@@ -646,38 +567,14 @@ fun ListDrawerScreen(
                             effectiveEdgeBlur &&
                             draggedBlur > 0.5f
                         )
-                    val overlaySharpIcon = rememberLauncherIcon(
-                        componentKey = draggedApp.componentKey,
-                        blurred = false,
-                        iconFlowProvider = iconFlowProvider
+                    Image(
+                        bitmap = if (overlayUseBlurredIcon) draggedApp.cachedBlurredIcon else draggedApp.cachedIcon,
+                        contentDescription = draggedApp.label,
+                        modifier = Modifier
+                            .size(iconSize)
+                            .clip(CircleShape),
+                        contentScale = ContentScale.Crop
                     )
-                    val overlayBlurredIcon = if (overlayUseBlurredIcon) {
-                        rememberLauncherIcon(
-                            componentKey = draggedApp.componentKey,
-                            blurred = true,
-                            iconFlowProvider = iconFlowProvider
-                        )
-                    } else {
-                        null
-                    }
-                    val overlayIcon = if (overlayUseBlurredIcon) overlayBlurredIcon ?: overlaySharpIcon else overlaySharpIcon
-                    if (overlayIcon != null) {
-                        Image(
-                            bitmap = overlayIcon,
-                            contentDescription = draggedApp.label,
-                            modifier = Modifier
-                                .size(iconSize)
-                                .clip(CircleShape),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .size(iconSize)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.06f))
-                        )
-                    }
                     Spacer(modifier = Modifier.width(14.dp))
                     Text(
                         text = draggedApp.label,
@@ -746,7 +643,6 @@ fun ListDrawerScreen(
     longPressedApp?.let { app ->
         AppShortcutOverlay(
             app = app,
-            iconFlowProvider = iconFlowProvider,
             blurEnabled = blurEnabled,
             onDismiss = { longPressedApp = null }
         )

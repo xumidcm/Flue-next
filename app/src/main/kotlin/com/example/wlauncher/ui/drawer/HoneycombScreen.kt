@@ -33,7 +33,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -45,7 +44,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.platformBlur
-import com.flue.launcher.ui.icon.rememberLauncherIcon
 import com.flue.launcher.ui.input.DrawerInputMode
 import com.flue.launcher.ui.input.DrawerInputSource
 import com.flue.launcher.ui.input.flueDrawerRotaryScrollable
@@ -56,7 +54,6 @@ import com.flue.launcher.util.generateHoneycombRows
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 import kotlin.math.sqrt
@@ -70,8 +67,6 @@ private const val HONEYCOMB_AUTO_SCROLL_MAX_PX = 26f
 @Composable
 fun HoneycombScreen(
     apps: List<AppInfo>,
-    iconFlowProvider: (String, Boolean) -> StateFlow<ImageBitmap?>,
-    onPrefetchIcons: (List<String>, Set<String>) -> Unit,
     blurEnabled: Boolean = true,
     edgeBlurEnabled: Boolean = false,
     suppressHeavyEffects: Boolean = false,
@@ -84,7 +79,6 @@ fun HoneycombScreen(
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
     onLongClick: (AppInfo) -> Unit = {},
-    onRenderMetricsChanged: (Int, Int) -> Unit = { _, _ -> },
     onScrollToTop: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -544,7 +538,6 @@ fun HoneycombScreen(
                     pinnedIndexes = listOfNotNull(menuPressedIndex, dragFromIndex, dragCurrentIndex)
                 )
             }
-            val settlingOverlayApp = settlingApp
             val dragOverlayPointer = dragPointer?.let {
                 clampHoneycombDisplayPointer(
                     pointer = it,
@@ -553,296 +546,170 @@ fun HoneycombScreen(
                     iconSizePx = iconSizePx
                 )
             }
-            val renderItems = remember(
-                apps,
-                renderIndexes,
-                positions,
-                dragFromIndex,
-                dragCurrentIndex,
-                dragPointer,
-                currentScroll,
-                screenCenterX,
-                screenCenterY,
-                screenWidthPx,
-                screenHeightPx,
-                iconSizePx,
-                cellSize,
-                pressedAnchor,
-                glidePressedKey,
-                fastScrollOptimizationEnabled,
-                fastScrollActive,
-                settlingKey,
-                menuPressedIndex,
-                menuPressedKey,
-                visibleTop,
-                visibleBottom,
-                topFadePx,
-                bottomFadePx,
-                topBlurRadiusDp,
-                bottomBlurRadiusDp
-            ) {
-                buildHoneycombRenderItems(
-                    apps = apps,
-                    renderIndexes = renderIndexes,
-                    positions = positions,
-                    dragFromIndex = dragFromIndex,
-                    dragCurrentIndex = dragCurrentIndex,
-                    dragPointer = dragPointer,
-                    currentScroll = currentScroll,
-                    screenCenterX = screenCenterX,
-                    screenCenterY = screenCenterY,
-                    screenWidthPx = screenWidthPx,
-                    screenHeightPx = screenHeightPx,
-                    iconSizePx = iconSizePx,
-                    cellSize = cellSize,
-                    pressedAnchor = pressedAnchor,
-                    glidePressedKey = glidePressedKey,
-                    fastScrollOptimizationEnabled = fastScrollOptimizationEnabled,
-                    fastScrollActive = fastScrollActive,
-                    settlingKey = settlingKey,
-                    menuPressedIndex = menuPressedIndex,
-                    menuPressedKey = menuPressedKey,
-                    visibleTop = visibleTop,
-                    visibleBottom = visibleBottom,
-                    topFadePx = topFadePx,
-                    bottomFadePx = bottomFadePx,
-                    topBlurRadiusDp = topBlurRadiusDp,
-                    bottomBlurRadiusDp = bottomBlurRadiusDp
+            val dragScalePointer = dragPointer
+
+            renderIndexes.forEach { index ->
+                val app = apps.getOrNull(index) ?: return@forEach
+                val visualSlotIndex = honeycombVisualSlotIndex(index, dragFromIndex, dragCurrentIndex)
+                val gridPos = positions[index]
+                val visualPos = positions.getOrNull(visualSlotIndex) ?: gridPos
+                val appKey = app.componentKey
+                val isDragged = dragFromIndex == index
+                val slotCenter = Offset(
+                    x = screenCenterX + visualPos.x,
+                    y = screenCenterY + visualPos.y + currentScroll
                 )
-            }
-            val overlayBlurCandidates = remember(
-                renderItems,
-                dragOverlayApp,
-                dragOverlayPointer,
-                settlingOverlayApp,
-                settlingY.value,
-                blurEnabled,
-                effectiveEdgeBlur
-            ) {
-                if (!blurEnabled || !effectiveEdgeBlur) {
-                    0
+                val dragDisplayPointer = if (isDragged) {
+                    clampHoneycombDisplayPointer(
+                        pointer = dragPointer ?: Offset(
+                            screenCenterX + gridPos.x,
+                            screenCenterY + gridPos.y + currentScroll
+                        ),
+                        screenWidthPx = screenWidthPx,
+                        screenHeightPx = screenHeightPx,
+                        iconSizePx = iconSizePx
+                    )
                 } else {
-                    var blurCount = renderItems.count {
-                        reduceHoneycombBlurForFastScroll(it.itemBlur, it.reduceVisualLoad) > 0.5f
-                    }
-                    if (dragOverlayApp != null && dragOverlayPointer != null) {
-                        val overlayBlur = computeHoneycombEdgeBlur(
-                            centerY = dragOverlayPointer.y,
-                            screenHeight = screenHeightPx,
-                            topBlurZonePx = topFadePx,
-                            bottomBlurZonePx = bottomFadePx,
-                            topBlurDp = topBlurRadiusDp.toFloat(),
-                            bottomBlurDp = bottomBlurRadiusDp.toFloat()
-                        )
-                        if (overlayBlur > 0.5f) blurCount += 1
-                    }
-                    if (settlingOverlayApp != null) {
-                        val overlayBlur = computeHoneycombEdgeBlur(
-                            centerY = settlingY.value,
-                            screenHeight = screenHeightPx,
-                            topBlurZonePx = topFadePx,
-                            bottomBlurZonePx = bottomFadePx,
-                            topBlurDp = topBlurRadiusDp.toFloat(),
-                            bottomBlurDp = bottomBlurRadiusDp.toFloat()
-                        )
-                        if (overlayBlur > 0.5f) blurCount += 1
-                    }
-                    blurCount
+                    null
                 }
-            }
-            val prefetchComponentKeys = remember(renderItems, dragOverlayApp, settlingOverlayApp, longPressedApp) {
-                buildList {
-                    renderItems.forEach { add(it.appKey) }
-                    dragOverlayApp?.componentKey?.let(::add)
-                    settlingOverlayApp?.componentKey?.let(::add)
-                    longPressedApp?.componentKey?.let(::add)
-                }.distinct()
-            }
-            val prefetchBlurredKeys = remember(
-                renderItems,
-                dragOverlayApp,
-                dragOverlayPointer,
-                settlingOverlayApp,
-                blurEnabled,
-                effectiveEdgeBlur
-            ) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || !blurEnabled || !effectiveEdgeBlur) {
-                    emptySet()
+                val currentDragScalePointer = if (isDragged) {
+                    dragScalePointer ?: dragDisplayPointer ?: slotCenter
                 } else {
-                    buildSet {
-                        renderItems.forEach { item ->
-                            if (reduceHoneycombBlurForFastScroll(item.itemBlur, item.reduceVisualLoad) > 0.5f) {
-                                add(item.appKey)
-                            }
-                        }
-                        if (dragOverlayApp != null && dragOverlayPointer != null) {
-                            val overlayBlur = computeHoneycombEdgeBlur(
-                                centerY = dragOverlayPointer.y,
-                                screenHeight = screenHeightPx,
-                                topBlurZonePx = topFadePx,
-                                bottomBlurZonePx = bottomFadePx,
-                                topBlurDp = topBlurRadiusDp.toFloat(),
-                                bottomBlurDp = bottomBlurRadiusDp.toFloat()
-                            )
-                            if (overlayBlur > 0.5f) add(dragOverlayApp.componentKey)
-                        }
-                        if (settlingOverlayApp != null) {
-                            val overlayBlur = computeHoneycombEdgeBlur(
-                                centerY = settlingY.value,
-                                screenHeight = screenHeightPx,
-                                topBlurZonePx = topFadePx,
-                                bottomBlurZonePx = bottomFadePx,
-                                topBlurDp = topBlurRadiusDp.toFloat(),
-                                bottomBlurDp = bottomBlurRadiusDp.toFloat()
-                            )
-                            if (overlayBlur > 0.5f) add(settlingOverlayApp.componentKey)
-                        }
-                    }
+                    null
                 }
-            }
+                val visibilityY = dragDisplayPointer?.y ?: slotCenter.y
+                if (!isDragged && index != menuPressedIndex && (visibilityY < visibleTop || visibilityY > visibleBottom)) {
+                    return@forEach
+                }
+                val itemBlur = computeHoneycombEdgeBlur(
+                    centerY = visibilityY,
+                    screenHeight = screenHeightPx,
+                    topBlurZonePx = topFadePx,
+                    bottomBlurZonePx = bottomFadePx,
+                    topBlurDp = topBlurRadiusDp.toFloat(),
+                    bottomBlurDp = bottomBlurRadiusDp.toFloat()
+                )
+                val isGlidePressed = glidePressedKey == appKey
+                val motion = neighborPressMotion(
+                    current = visualPos,
+                    pressedAnchor = pressedAnchor,
+                    iconSizePx = iconSizePx,
+                    cellSize = cellSize
+                )
+                val reduceVisualLoad = fastScrollOptimizationEnabled &&
+                    fastScrollActive &&
+                    !isDragged &&
+                    settlingKey != app.componentKey &&
+                    menuPressedKey != appKey &&
+                    !isGlidePressed
 
-            LaunchedEffect(prefetchComponentKeys, prefetchBlurredKeys) {
-                onPrefetchIcons(prefetchComponentKeys, prefetchBlurredKeys)
-            }
-            LaunchedEffect(renderItems.size, overlayBlurCandidates) {
-                onRenderMetricsChanged(renderItems.size, overlayBlurCandidates)
-            }
-
-            renderItems.forEach { renderItem ->
-                key(renderItem.appKey) {
+                key(appKey) {
                     val neighborScale = animateOrSnapFloat(
-                        animate = !renderItem.reduceVisualLoad,
-                        targetValue = 1f - renderItem.motion.scaleReduction,
+                        animate = !reduceVisualLoad,
+                        targetValue = 1f - motion.scaleReduction,
                         animationSpec = tween(
                             durationMillis = 260,
-                            delayMillis = if (renderItem.motion.scaleReduction > 0f) 180 else 0
+                            delayMillis = if (motion.scaleReduction > 0f) 180 else 0
                         ),
                         label = "neighbor_scale"
                     )
                     val neighborShiftX = animateOrSnapFloat(
-                        animate = !renderItem.reduceVisualLoad,
-                        targetValue = renderItem.motion.shiftX,
+                        animate = !reduceVisualLoad,
+                        targetValue = motion.shiftX,
                         animationSpec = tween(
                             durationMillis = 280,
-                            delayMillis = if (renderItem.motion.shiftX != 0f) 180 else 0
+                            delayMillis = if (motion.shiftX != 0f) 180 else 0
                         ),
                         label = "neighbor_shift_x"
                     )
                     val neighborShiftY = animateOrSnapFloat(
-                        animate = !renderItem.reduceVisualLoad,
-                        targetValue = renderItem.motion.shiftY,
+                        animate = !reduceVisualLoad,
+                        targetValue = motion.shiftY,
                         animationSpec = tween(
                             durationMillis = 280,
-                            delayMillis = if (renderItem.motion.shiftY != 0f) 180 else 0
+                            delayMillis = if (motion.shiftY != 0f) 180 else 0
                         ),
                         label = "neighbor_shift_y"
                     )
                     val slotX = animateOrSnapFloat(
-                        animate = !renderItem.reduceVisualLoad,
-                        targetValue = renderItem.visualPos.x,
+                        animate = !reduceVisualLoad,
+                        targetValue = visualPos.x,
                         animationSpec = spring(dampingRatio = 0.80f, stiffness = 360f),
                         label = "honeycomb_slot_x"
                     )
                     val slotY = animateOrSnapFloat(
-                        animate = !renderItem.reduceVisualLoad,
-                        targetValue = renderItem.visualPos.y,
+                        animate = !reduceVisualLoad,
+                        targetValue = visualPos.y,
                         animationSpec = spring(dampingRatio = 0.80f, stiffness = 360f),
                         label = "honeycomb_slot_y"
                     )
-                    val sharpIcon = rememberLauncherIcon(
-                        componentKey = renderItem.appKey,
-                        blurred = false,
-                        iconFlowProvider = iconFlowProvider
-                    )
-                    val effectiveItemBlur = reduceHoneycombBlurForFastScroll(
-                        renderItem.itemBlur,
-                        renderItem.reduceVisualLoad
-                    )
-                    val useBlurredIcon = (
-                        Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
+                    val effectiveItemBlur = reduceHoneycombBlurForFastScroll(itemBlur, reduceVisualLoad)
+                    AppBubble(
+                        icon = if (
                             blurEnabled &&
                             effectiveEdgeBlur &&
-                            effectiveItemBlur > 0.5f
-                        )
-                    val blurredIcon = if (useBlurredIcon) {
-                        rememberLauncherIcon(
-                            componentKey = renderItem.appKey,
-                            blurred = true,
-                            iconFlowProvider = iconFlowProvider
-                        )
-                    } else {
-                        null
-                    }
-                    val displayIcon = if (useBlurredIcon) blurredIcon ?: sharpIcon else sharpIcon
-                    val iconModifier = Modifier
-                        .zIndex(0f)
-                        .graphicsLayer {
-                            val baseX = slotX
-                            val baseY = slotY
-                            val posX = screenCenterX + baseX
-                            val pY = screenCenterY + baseY + currentScroll
-                            var actualCenterX = posX
-                            var actualCenterY = pY
-                            translationX = posX - iconSizePx / 2f
-                            translationY = pY - iconSizePx / 2f
-                            if (!renderItem.isDragged) {
-                                translationX += neighborShiftX
-                                translationY += neighborShiftY
-                                actualCenterX += neighborShiftX
-                                actualCenterY += neighborShiftY
-                            } else {
-                                val scalePointer = renderItem.currentDragScalePointer
-                                    ?: renderItem.dragDisplayPointer
-                                    ?: Offset(posX, pY)
-                                actualCenterX = scalePointer.x
-                                actualCenterY = scalePointer.y
-                            }
-
-                            val dx = actualCenterX - screenCenterX
-                            val dy = actualCenterY - screenCenterY
-                            val dist = sqrt(dx * dx + dy * dy)
-                            val scale = fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
-                            scaleX = scale * neighborScale
-                            scaleY = scale * neighborScale
-                            alpha = when {
-                                renderItem.isDragged -> 0f
-                                settlingKey == renderItem.appKey -> 0f
-                                else -> scale.coerceIn(0.24f, 1f)
-                            }
-                            shadowElevation = if (renderItem.reduceVisualLoad) 0f else 8.dp.toPx()
-                            shape = CircleShape
-                        }
-                    AppBubble(
-                        icon = displayIcon,
+                            effectiveItemBlur > 0.5f &&
+                            Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+                        ) {
+                            app.cachedBlurredIcon
+                        } else {
+                            app.cachedIcon
+                        },
                         size = iconSizeDp,
                         onClick = {
                             if (longPressedApp == null && dragFromIndex == null) {
-                                val clickPos = if (renderItem.isDragged) {
-                                    positions[renderItem.index]
-                                } else {
-                                    renderItem.visualPos
-                                }
+                                val clickPos = if (isDragged) gridPos else visualPos
                                 val sx = screenCenterX + clickPos.x
                                 val syPos = screenCenterY + clickPos.y + currentScroll
-                                onAppClick(renderItem.app, Offset(sx / screenWidthPx, syPos / screenHeightPx))
+                                onAppClick(app, Offset(sx / screenWidthPx, syPos / screenHeightPx))
                             }
                         },
                         onLongClick = null,
-                        forcePressed = renderItem.isGlidePressed || menuPressedKey == renderItem.appKey,
+                        forcePressed = isGlidePressed || menuPressedKey == appKey,
                         pressScaleTarget = 0.9f,
                         pressAnimationDelayMillis = 0,
                         pressAnimationDurationMillis = HONEYCOMB_PRESS_DURATION_MS,
                         onPressedChange = {},
-                        modifier = if (
-                            blurEnabled &&
-                            effectiveEdgeBlur &&
-                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                            effectiveItemBlur > 0.5f
-                        ) {
-                            iconModifier.platformBlur(effectiveItemBlur, true)
-                        } else {
-                            iconModifier
-                        }
+                        modifier = Modifier
+                            .zIndex(0f)
+                            .graphicsLayer {
+                                val baseX = slotX
+                                val baseY = slotY
+                                val posX = screenCenterX + baseX
+                                val pY = screenCenterY + baseY + currentScroll
+                                var actualCenterX = posX
+                                var actualCenterY = pY
+                                translationX = posX - iconSizePx / 2f
+                                translationY = pY - iconSizePx / 2f
+                                if (!isDragged) {
+                                    translationX += neighborShiftX
+                                    translationY += neighborShiftY
+                                    actualCenterX += neighborShiftX
+                                    actualCenterY += neighborShiftY
+                                } else {
+                                    val scalePointer = currentDragScalePointer ?: dragDisplayPointer ?: Offset(posX, pY)
+                                    actualCenterX = scalePointer.x
+                                    actualCenterY = scalePointer.y
+                                }
+
+                                val dx = actualCenterX - screenCenterX
+                                val dy = actualCenterY - screenCenterY
+                                val dist = sqrt(dx * dx + dy * dy)
+                                val scale = fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
+                                scaleX = scale * neighborScale
+                                scaleY = scale * neighborScale
+                                alpha = when {
+                                    isDragged -> 0f
+                                    settlingKey == app.componentKey -> 0f
+                                    else -> scale.coerceIn(0.24f, 1f)
+                                }
+                                shadowElevation = if (reduceVisualLoad) 0f else 8.dp.toPx()
+                                shape = CircleShape
+                            }
+                            .platformBlur(
+                                effectiveItemBlur,
+                                blurEnabled && effectiveEdgeBlur && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                            )
                     )
                 }
             }
@@ -861,28 +728,12 @@ fun HoneycombScreen(
                 val dragDy = scalePointer.y - screenCenterY
                 val dragDist = sqrt(dragDx * dragDx + dragDy * dragDy)
                 val dragScale = fisheyeScale(dragDist, screenRadius * 1.65f, minScale = 0.58f)
-                val dragOverlayUseBlurredIcon = (
-                    Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
-                        blurEnabled &&
-                        effectiveEdgeBlur &&
-                        dragOverlayBlur > 0.5f
-                    )
-                val dragOverlaySharpIcon = rememberLauncherIcon(
-                    componentKey = dragOverlayApp.componentKey,
-                    blurred = false,
-                    iconFlowProvider = iconFlowProvider
-                )
-                val dragOverlayBlurredIcon = if (dragOverlayUseBlurredIcon) {
-                    rememberLauncherIcon(
-                        componentKey = dragOverlayApp.componentKey,
-                        blurred = true,
-                        iconFlowProvider = iconFlowProvider
-                    )
-                } else {
-                    null
-                }
                 AppBubble(
-                    icon = if (dragOverlayUseBlurredIcon) dragOverlayBlurredIcon ?: dragOverlaySharpIcon else dragOverlaySharpIcon,
+                    icon = if (blurEnabled && effectiveEdgeBlur && dragOverlayBlur > 0.5f && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                        dragOverlayApp.cachedBlurredIcon
+                    } else {
+                        dragOverlayApp.cachedIcon
+                    },
                     size = iconSizeDp,
                     onClick = {},
                     onLongClick = null,
@@ -924,28 +775,12 @@ fun HoneycombScreen(
                 topBlurDp = topBlurRadiusDp.toFloat(),
                 bottomBlurDp = bottomBlurRadiusDp.toFloat()
             )
-            val settlingUseBlurredIcon = (
-                Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
-                    blurEnabled &&
-                    effectiveEdgeBlur &&
-                    settlingBlur > 0.5f
-                )
-            val settlingSharpIcon = rememberLauncherIcon(
-                componentKey = settlingOverlayApp.componentKey,
-                blurred = false,
-                iconFlowProvider = iconFlowProvider
-            )
-            val settlingBlurredIcon = if (settlingUseBlurredIcon) {
-                rememberLauncherIcon(
-                    componentKey = settlingOverlayApp.componentKey,
-                    blurred = true,
-                    iconFlowProvider = iconFlowProvider
-                )
-            } else {
-                null
-            }
             AppBubble(
-                icon = if (settlingUseBlurredIcon) settlingBlurredIcon ?: settlingSharpIcon else settlingSharpIcon,
+                icon = if (blurEnabled && effectiveEdgeBlur && settlingBlur > 0.5f && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                    settlingOverlayApp.cachedBlurredIcon
+                } else {
+                    settlingOverlayApp.cachedIcon
+                },
                 size = iconSizeDp,
                 onClick = {},
                 forcePressed = false,
@@ -1016,7 +851,6 @@ fun HoneycombScreen(
     longPressedApp?.let { app ->
         AppShortcutOverlay(
             app = app,
-            iconFlowProvider = iconFlowProvider,
             blurEnabled = blurEnabled,
             onDismiss = { longPressedApp = null }
         )
@@ -1104,123 +938,6 @@ private data class HoneycombNeighborMotion(
     val shiftX: Float = 0f,
     val shiftY: Float = 0f
 )
-
-private data class HoneycombRenderItem(
-    val index: Int,
-    val app: AppInfo,
-    val appKey: String,
-    val visualPos: Offset,
-    val dragDisplayPointer: Offset?,
-    val currentDragScalePointer: Offset?,
-    val visibilityY: Float,
-    val itemBlur: Float,
-    val motion: HoneycombNeighborMotion,
-    val isDragged: Boolean,
-    val isGlidePressed: Boolean,
-    val reduceVisualLoad: Boolean
-)
-
-private fun buildHoneycombRenderItems(
-    apps: List<AppInfo>,
-    renderIndexes: IntArray,
-    positions: List<Offset>,
-    dragFromIndex: Int?,
-    dragCurrentIndex: Int?,
-    dragPointer: Offset?,
-    currentScroll: Float,
-    screenCenterX: Float,
-    screenCenterY: Float,
-    screenWidthPx: Float,
-    screenHeightPx: Float,
-    iconSizePx: Float,
-    cellSize: Float,
-    pressedAnchor: Offset?,
-    glidePressedKey: String?,
-    fastScrollOptimizationEnabled: Boolean,
-    fastScrollActive: Boolean,
-    settlingKey: String?,
-    menuPressedIndex: Int?,
-    menuPressedKey: String?,
-    visibleTop: Float,
-    visibleBottom: Float,
-    topFadePx: Float,
-    bottomFadePx: Float,
-    topBlurRadiusDp: Int,
-    bottomBlurRadiusDp: Int
-): List<HoneycombRenderItem> {
-    if (renderIndexes.isEmpty()) return emptyList()
-    val renderItems = ArrayList<HoneycombRenderItem>(renderIndexes.size)
-    renderIndexes.forEach { index ->
-        val app = apps.getOrNull(index) ?: return@forEach
-        val visualSlotIndex = honeycombVisualSlotIndex(index, dragFromIndex, dragCurrentIndex)
-        val gridPos = positions.getOrNull(index) ?: return@forEach
-        val visualPos = positions.getOrNull(visualSlotIndex) ?: gridPos
-        val appKey = app.componentKey
-        val isDragged = dragFromIndex == index
-        val slotCenter = Offset(
-            x = screenCenterX + visualPos.x,
-            y = screenCenterY + visualPos.y + currentScroll
-        )
-        val dragDisplayPointer = if (isDragged) {
-            clampHoneycombDisplayPointer(
-                pointer = dragPointer ?: Offset(
-                    screenCenterX + gridPos.x,
-                    screenCenterY + gridPos.y + currentScroll
-                ),
-                screenWidthPx = screenWidthPx,
-                screenHeightPx = screenHeightPx,
-                iconSizePx = iconSizePx
-            )
-        } else {
-            null
-        }
-        val currentDragScalePointer = if (isDragged) {
-            dragPointer ?: dragDisplayPointer ?: slotCenter
-        } else {
-            null
-        }
-        val visibilityY = dragDisplayPointer?.y ?: slotCenter.y
-        if (!isDragged && index != menuPressedIndex && (visibilityY < visibleTop || visibilityY > visibleBottom)) {
-            return@forEach
-        }
-        val itemBlur = computeHoneycombEdgeBlur(
-            centerY = visibilityY,
-            screenHeight = screenHeightPx,
-            topBlurZonePx = topFadePx,
-            bottomBlurZonePx = bottomFadePx,
-            topBlurDp = topBlurRadiusDp.toFloat(),
-            bottomBlurDp = bottomBlurRadiusDp.toFloat()
-        )
-        val isGlidePressed = glidePressedKey == appKey
-        val reduceVisualLoad = fastScrollOptimizationEnabled &&
-            fastScrollActive &&
-            !isDragged &&
-            settlingKey != app.componentKey &&
-            menuPressedKey != appKey &&
-            !isGlidePressed
-
-        renderItems += HoneycombRenderItem(
-            index = index,
-            app = app,
-            appKey = appKey,
-            visualPos = visualPos,
-            dragDisplayPointer = dragDisplayPointer,
-            currentDragScalePointer = currentDragScalePointer,
-            visibilityY = visibilityY,
-            itemBlur = itemBlur,
-            motion = neighborPressMotion(
-                current = visualPos,
-                pressedAnchor = pressedAnchor,
-                iconSizePx = iconSizePx,
-                cellSize = cellSize
-            ),
-            isDragged = isDragged,
-            isGlidePressed = isGlidePressed,
-            reduceVisualLoad = reduceVisualLoad
-        )
-    }
-    return renderItems
-}
 
 @Composable
 private fun animateOrSnapFloat(
