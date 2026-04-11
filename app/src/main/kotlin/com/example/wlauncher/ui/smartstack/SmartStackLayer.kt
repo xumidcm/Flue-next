@@ -153,11 +153,11 @@ fun SmartStackLayer(
                             }
                         } else {
                             change.consume()
-                            overscrollTarget = (overscrollTarget + dragAmount.y * 0.35f).coerceIn(-120f, 180f)
+                            overscrollTarget = (overscrollTarget + dragAmount.y * 0.35f).coerceIn(-180f, 120f)
                         }
                     },
                     onDragEnd = {
-                        if (dragDy > SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD) {
+                        if (dragDy < -SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD) {
                             overscrollTarget = 0f
                             onOpenNotifications()
                         } else {
@@ -336,7 +336,7 @@ private fun SideScreenNotificationPreview(
     }
     val subtitle = when {
         !notificationAccessGranted -> "下滑进入通知中心后完成授权"
-        latestNotificationGroup == null -> "副一屏下滑可打开通知中心"
+        latestNotificationGroup == null -> "副一屏上滑可打开通知中心"
         else -> latestNotificationGroup.latestSummary
     }
     val trailing = latestNotificationGroup?.let { formatClockTime(it.latestTime) }.orEmpty()

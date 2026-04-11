@@ -214,7 +214,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(if (screenState == ScreenState.Face) 3f else 1f)
+                    .zIndex(if (screenState == ScreenState.Face) 5f else 0f)
                     .scaleBlurAlpha(
                         targetValues = faceLayerValues(screenState),
                         screenWidth = screenWidthPx,
@@ -289,7 +289,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(if (screenState == ScreenState.Apps) 3f else 0f)
+                    .zIndex(if (screenState == ScreenState.Apps) 4f else 1f)
                     .scaleBlurAlpha(
                         targetValues = appListLayerValues(screenState),
                         screenWidth = screenWidthPx,
@@ -384,6 +384,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .zIndex(
+                        when (screenState) {
+                            ScreenState.Stack -> 6f
+                            ScreenState.Notifications -> 5f
+                            else -> 2f
+                        }
+                    )
                     .scaleBlurAlpha(
                         targetValues = stackLayerValues(screenState),
                         screenWidth = screenWidthPx,
@@ -411,6 +418,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
+                        .zIndex(if (screenState == ScreenState.Notifications) 7f else 3f)
                         .scaleBlurAlpha(
                             targetValues = notificationLayerValues(screenState),
                             screenWidth = screenWidthPx,

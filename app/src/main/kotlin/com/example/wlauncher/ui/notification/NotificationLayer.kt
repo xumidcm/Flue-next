@@ -11,6 +11,11 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -36,6 +41,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
@@ -111,15 +117,15 @@ fun NotificationLayer(
             ): androidx.compose.ui.geometry.Offset {
                 if (source != NestedScrollSource.Drag) return androidx.compose.ui.geometry.Offset.Zero
                 val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
-                if (available.y < 0f && atTop) {
+                if (available.y > 0f && atTop) {
                     scope.launch {
-                        overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtLeast(-180f))
+                        overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtMost(180f))
                     }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
-                if (overscroll.value < 0f && available.y > 0f) {
+                if (overscroll.value > 0f && available.y < 0f) {
                     scope.launch {
-                        overscroll.snapTo((overscroll.value + available.y).coerceAtMost(0f))
+                        overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(0f))
                     }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
@@ -127,7 +133,7 @@ fun NotificationLayer(
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (overscroll.value < -80f) {
+                if (overscroll.value > 80f) {
                     overscroll.snapTo(0f)
                     onDismissToStack()
                     return available
@@ -327,6 +333,94 @@ private fun NotificationGroupSection(
     onDismissNotification: (String) -> Unit,
     onOpenNotification: (String) -> Boolean
 ) {
+    AnimatedContent(
+        targetState = group.expanded,
+        transitionSpec = {
+            (fadeIn(animationSpec = tween(220)) + slideInVertically(animationSpec = tween(220)) { it / 4 }) togetherWith
+                (fadeOut(animationSpec = tween(160)) + slideOutVertically(animationSpec = tween(160)) { -it / 6 })
+        },
+        label = "notification_group_expand"
+    ) { expanded ->
+        if (expanded) {
+            ExpandedNotificationGroup(
+                modifier = modifier,
+                group = group,
+                scale = scale,
+                onCollapse = onToggleExpand,
+                onDismissNotification = onDismissNotification,
+                onOpenNotification = onOpenNotification
+            )
+        } else {
+            CollapsedNotificationGroup(
+                modifier = modifier,
+                group = group,
+                scale = scale,
+                onExpand = onToggleExpand,
+                onDismissGroup = onDismissGroup
+            )
+        }
+    }
+}
+
+@Composable
+private fun CollapsedNotificationGroup(
+    modifier: Modifier,
+    group: NotificationGroupUi,
+    scale: Float,
+    onExpand: () -> Unit,
+    onDismissGroup: () -> Unit
+) {
+    val content: @Composable () -> Unit = {
+        Column(
+            modifier = modifier
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    alpha = scale.coerceIn(0.35f, 1f)
+                }
+        ) {
+            NotificationSummaryBubble(
+                modifier = Modifier.fillMaxWidth(),
+                icon = group.icon,
+                title = group.appLabel,
+                subtitle = group.latestSummary,
+                trailing = formatNotificationTime(group.latestTime),
+                onClick = onExpand
+            )
+            if (group.count > 1) {
+                Text(
+                    text = "+${group.count}条新消息",
+                    color = WatchColors.TextTertiary,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .padding(top = 4.dp)
+                )
+            }
+        }
+    }
+
+    if (group.children.any(NotificationEntryUi::isClearable)) {
+        SwipeRevealDelete(
+            modifier = Modifier.fillMaxWidth(),
+            enabled = true,
+            onDelete = onDismissGroup,
+            content = content
+        )
+    } else {
+        content()
+    }
+}
+
+@Composable
+private fun ExpandedNotificationGroup(
+    modifier: Modifier,
+    group: NotificationGroupUi,
+    scale: Float,
+    onCollapse: () -> Unit,
+    onDismissNotification: (String) -> Unit,
+    onOpenNotification: (String) -> Boolean
+) {
     Column(
         modifier = modifier
             .graphicsLayer {
@@ -336,56 +430,81 @@ private fun NotificationGroupSection(
             }
             .animateContentSize()
     ) {
-        val headerBubble: @Composable () -> Unit = {
-            NotificationSummaryBubble(
-                modifier = Modifier.fillMaxWidth(),
-                icon = group.icon,
-                title = group.appLabel,
-                subtitle = group.latestSummary,
-                trailing = formatNotificationTime(group.latestTime),
-                badgeCount = group.count.takeIf { it > 1 },
-                onClick = onToggleExpand
-            )
-        }
-
-        if (!group.expanded && group.children.any(NotificationEntryUi::isClearable)) {
-            SwipeRevealDelete(
-                modifier = Modifier.fillMaxWidth(),
-                enabled = true,
-                onDelete = onDismissGroup,
-                content = headerBubble
-            )
-        } else {
-            headerBubble()
-        }
-
-        AnimatedContent(
-            targetState = group.expanded,
-            label = "notification_group_expand"
-        ) { expanded ->
-            if (expanded) {
-                Column(
-                    modifier = Modifier.padding(top = 10.dp, start = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+        NotificationExpandedHeader(
+            appLabel = group.appLabel,
+            count = group.count,
+            onClick = onCollapse
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            group.children.forEach { entry ->
+                SwipeRevealDelete(
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = entry.isClearable,
+                    onDelete = { onDismissNotification(entry.key) }
                 ) {
-                    group.children.forEach { entry ->
-                        SwipeRevealDelete(
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = entry.isClearable,
-                            onDelete = { onDismissNotification(entry.key) }
-                        ) {
-                            NotificationEntryBubble(
-                                modifier = Modifier.fillMaxWidth(),
-                                entry = entry,
-                                onClick = { onOpenNotification(entry.key) }
-                            )
-                        }
-                    }
+                    NotificationEntryBubble(
+                        modifier = Modifier.fillMaxWidth(),
+                        entry = entry,
+                        onClick = { onOpenNotification(entry.key) }
+                    )
                 }
-            } else {
-                Spacer(modifier = Modifier.height(0.dp))
             }
         }
+    }
+}
+
+@Composable
+private fun NotificationExpandedHeader(
+    appLabel: String,
+    count: Int,
+    onClick: () -> Unit
+) {
+    val pressedState = rememberPressedState()
+    val pressed by pressedState
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.97f else 1f,
+        animationSpec = spring(stiffness = 840f, dampingRatio = 0.74f),
+        label = "notification_header_press_scale"
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
+            .instantPressGesture(pressedState, onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = appLabel,
+            color = Color.White,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Box(
+            modifier = Modifier
+                .size(26.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.10f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Filled.KeyboardArrowDown,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = "${groupCountLabel(count)}",
+            color = Color.White,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 
@@ -396,7 +515,6 @@ private fun NotificationSummaryBubble(
     title: String,
     subtitle: String,
     trailing: String,
-    badgeCount: Int? = null,
     onClick: () -> Unit
 ) {
     val pressedState = rememberPressedState()
@@ -419,8 +537,7 @@ private fun NotificationSummaryBubble(
             icon = icon,
             title = title,
             subtitle = subtitle,
-            trailing = trailing,
-            badgeCount = badgeCount
+            trailing = trailing
         )
     }
 }
@@ -693,3 +810,5 @@ private fun notificationItemScale(
 private fun formatNotificationTime(timestamp: Long): String {
     return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
 }
+
+private fun groupCountLabel(count: Int): String = "${count}条通知"
