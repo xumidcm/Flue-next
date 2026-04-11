@@ -139,7 +139,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val honeycombTopFade by vm.honeycombTopFade.collectAsState()
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsState()
     val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsState()
-    val showNotification by vm.showNotification.collectAsState()
     val notificationAccessGranted by vm.notificationAccessGranted.collectAsState()
     val notificationGroups by vm.notificationGroups.collectAsState()
     val watchFaces by vm.availableWatchFaces.collectAsState()
@@ -160,7 +159,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val builtInVideoClockColorMode by vm.builtInVideoClockColorMode.collectAsState()
     val layerBlurEnabled = blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
-    val notificationsEnabled = notificationAccessGranted
+    val notificationsLayerEnabled = true
     val openWatchFaceChooser = remember(context) {
         {
             context.startActivity(
@@ -177,11 +176,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
     val useOrigin = screenState == ScreenState.App || isReturningFromApp
 
-    LaunchedEffect(sideScreenEnabled, notificationAccessGranted, screenState) {
+    LaunchedEffect(sideScreenEnabled, screenState) {
         if (!sideScreenEnabled && (screenState == ScreenState.Stack || screenState == ScreenState.Notifications)) {
             vm.setState(ScreenState.Face)
-        } else if (!notificationAccessGranted && screenState == ScreenState.Notifications) {
-            vm.setState(if (sideScreenEnabled) ScreenState.Stack else ScreenState.Face)
         }
     }
 
@@ -210,7 +207,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             screenState = screenState,
             onStateChange = { vm.setState(it) },
             sideScreenEnabled = sideScreenEnabled,
-            showNotification = notificationsEnabled,
+            showNotification = notificationsLayerEnabled,
             showControlCenter = false,
             modifier = Modifier.fillMaxSize()
         ) {
@@ -410,7 +407,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 )
             }
 
-            if (notificationsEnabled) {
+            if (notificationsLayerEnabled) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()

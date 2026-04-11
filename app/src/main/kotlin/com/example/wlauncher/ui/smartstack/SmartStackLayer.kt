@@ -1,13 +1,12 @@
 package com.flue.launcher.ui.smartstack
 
+import android.content.BroadcastReceiver
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.BatteryManager
-import android.provider.Settings
-import androidx.compose.animation.AnimatedVisibility
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -35,6 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -51,8 +51,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -72,13 +73,19 @@ import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 
+private const val SIDE_SCREEN_CONTENT_WIDTH_RATIO = 0.884f
+private const val SIDE_SCREEN_DISMISS_THRESHOLD = 86f
 private const val SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD = 110f
 
+private val SideScreenFrameShape = RoundedCornerShape(40.dp)
+private val SideScreenPanelShape = RoundedCornerShape(28.dp)
+private val SideScreenCardShape = RoundedCornerShape(28.dp)
+
 private data class SideScreenClockSnapshot(
-    val date: String,
     val time: String,
-    val greeting: String
+    val date: String
 )
 
 private data class BatterySnapshot(
@@ -88,7 +95,6 @@ private data class BatterySnapshot(
         get() = level <= 20
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SmartStackLayer(
     apps: List<AppInfo>,
@@ -102,11 +108,10 @@ fun SmartStackLayer(
     onDismissToFace: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
     val clock = rememberSideScreenClockSnapshot()
     val battery = rememberBatterySnapshot()
     val slotCenters = remember { mutableStateMapOf<Int, Offset>() }
-    val quickApps = remember(apps, sideScreenShortcuts) {
+    val shortcutApps = remember(apps, sideScreenShortcuts) {
         List(sideScreenShortcuts.size) { index ->
             sideScreenShortcuts.getOrNull(index)?.let { key ->
                 apps.firstOrNull { it.componentKey == key }
@@ -118,16 +123,20 @@ fun SmartStackLayer(
     var overscrollTarget by remember { mutableFloatStateOf(0f) }
     val overscrollY by animateFloatAsState(
         targetValue = overscrollTarget,
-        animationSpec = spring(stiffness = 430f, dampingRatio = 0.78f),
+        animationSpec = spring(stiffness = 440f, dampingRatio = 0.78f),
         label = "side_screen_overscroll"
     )
     var pickerSlot by remember { mutableStateOf<Int?>(null) }
     var removeSlot by remember { mutableStateOf<Int?>(null) }
+    val modalVisible = pickerSlot != null || removeSlot != null
 
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(notificationAccessGranted) {
+            .clip(SideScreenFrameShape)
+            .background(WatchColors.Black)
+            .pointerInput(notificationAccessGranted, modalVisible) {
+                if (modalVisible) return@pointerInput
                 detectDragGestures(
                     onDragStart = {
                         dragDx = 0f
@@ -136,19 +145,19 @@ fun SmartStackLayer(
                     onDrag = { change, dragAmount ->
                         dragDx += dragAmount.x
                         dragDy += dragAmount.y
-                        val horizontalDominant = kotlin.math.abs(dragDx) > kotlin.math.abs(dragDy)
+                        val horizontalDominant = abs(dragDx) > abs(dragDy)
                         if (horizontalDominant) {
-                            if (dragDx < -86f) {
+                            if (dragDx < -SIDE_SCREEN_DISMISS_THRESHOLD) {
                                 change.consume()
                                 onDismissToFace()
                             }
                         } else {
                             change.consume()
-                            overscrollTarget = (overscrollTarget + dragAmount.y * 0.34f).coerceIn(-140f, 180f)
+                            overscrollTarget = (overscrollTarget + dragAmount.y * 0.35f).coerceIn(-120f, 180f)
                         }
                     },
                     onDragEnd = {
-                        if (dragDy > SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD && notificationAccessGranted) {
+                        if (dragDy > SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD) {
                             overscrollTarget = 0f
                             onOpenNotifications()
                         } else {
@@ -161,259 +170,162 @@ fun SmartStackLayer(
     ) {
         val screenWidthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
         val screenHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+        val contentWidth = maxWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
+        val quickPanelHeight = (contentWidth * 0.58f).coerceAtLeast(152.dp)
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer { translationY = overscrollY }
-                .padding(top = 24.dp, start = 18.dp, end = 18.dp, bottom = 20.dp),
+                .padding(top = 10.dp, bottom = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = clock.date,
-                color = WatchColors.TextTertiary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Text(
-                    text = clock.time,
-                    color = Color.White,
-                    fontSize = 30.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                BatteryPill(battery = battery)
-            }
-            Spacer(modifier = Modifier.height(10.dp))
-            Text(
-                text = clock.greeting,
-                color = Color.White.copy(alpha = 0.92f),
-                fontSize = 20.sp,
+                text = clock.time,
+                color = Color.White,
+                fontSize = 31.sp,
                 fontWeight = FontWeight.SemiBold
             )
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = clock.date,
+                color = WatchColors.TextSecondary,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Spacer(modifier = Modifier.height(14.dp))
 
-            Box(
+            QuickLaunchPanel(
                 modifier = Modifier
-                    .fillMaxWidth(0.86f)
-                    .clip(RoundedCornerShape(28.dp))
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                Color(0xFF232338).copy(alpha = 0.96f),
-                                Color(0xFF191A27).copy(alpha = 0.98f)
-                            )
+                    .width(contentWidth)
+                    .height(quickPanelHeight),
+                apps = shortcutApps,
+                slotCenters = slotCenters,
+                onAddShortcut = { pickerSlot = it },
+                onLongPressShortcut = { removeSlot = it },
+                onLaunchShortcut = { slotIndex, app ->
+                    val center = slotCenters[slotIndex] ?: Offset(screenWidthPx / 2f, screenHeightPx / 2f)
+                    onLaunchApp(
+                        app,
+                        Offset(
+                            x = center.x / screenWidthPx,
+                            y = center.y / screenHeightPx
                         )
                     )
-                    .padding(horizontal = 16.dp, vertical = 18.dp)
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    quickApps.chunked(3).forEachIndexed { rowIndex, row ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly
-                        ) {
-                            row.forEachIndexed { colIndex, app ->
-                                val slotIndex = rowIndex * 3 + colIndex
-                                Box(
-                                    modifier = Modifier
-                                        .onGloballyPositioned { coords ->
-                                            val pos = coords.positionInRoot()
-                                            slotCenters[slotIndex] = Offset(
-                                                x = pos.x + coords.size.width / 2f,
-                                                y = pos.y + coords.size.height / 2f
-                                            )
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    if (app == null) {
-                                        AddShortcutBubble(onClick = { pickerSlot = slotIndex })
-                                    } else {
-                                        AppBubble(
-                                            icon = app.cachedIcon,
-                                            size = 58.dp,
-                                            onClick = {
-                                                val center = slotCenters[slotIndex]
-                                                    ?: Offset(screenWidthPx / 2f, screenHeightPx / 2f)
-                                                onLaunchApp(
-                                                    app,
-                                                    Offset(
-                                                        center.x / screenWidthPx,
-                                                        center.y / screenHeightPx
-                                                    )
-                                                )
-                                            },
-                                            onLongClick = { removeSlot = slotIndex },
-                                            pressScaleTarget = 0.9f,
-                                            pressAnimationDurationMillis = 200
-                                        )
-                                    }
-                                }
-                            }
-                            repeat(3 - row.size) {
-                                Spacer(modifier = Modifier.size(58.dp))
-                            }
-                        }
-                    }
                 }
-            }
+            )
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            NotificationPreviewCard(
+            SideScreenNotificationPreview(
+                modifier = Modifier.width(contentWidth),
                 latestNotificationGroup = latestNotificationGroup,
                 notificationAccessGranted = notificationAccessGranted,
-                onOpenNotifications = onOpenNotifications,
-                onOpenNotificationSettings = {
-                    context.startActivity(
-                        Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                    )
-                }
+                onClick = onOpenNotifications
             )
 
             Spacer(modifier = Modifier.weight(1f))
-        }
 
-        AnimatedVisibility(visible = pickerSlot != null) {
-            val activeSlot = pickerSlot
-            if (activeSlot != null) {
-                SideScreenAppPickerOverlay(
-                    apps = apps,
-                    onSelect = { app ->
-                        onSetShortcut(activeSlot, app.componentKey)
-                        pickerSlot = null
-                    },
-                    onDismiss = { pickerSlot = null }
-                )
-            }
-        }
-
-        AnimatedVisibility(visible = removeSlot != null) {
-            val slot = removeSlot
-            val selectedApp = slot?.let { quickApps.getOrNull(it) }
-            if (slot != null && selectedApp != null) {
-                SideScreenRemoveOverlay(
-                    app = selectedApp,
-                    onRemove = {
-                        onRemoveShortcut(slot)
-                        removeSlot = null
-                    },
-                    onDismiss = { removeSlot = null }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun rememberSideScreenClockSnapshot(): SideScreenClockSnapshot {
-    var snapshot by remember {
-        mutableStateOf(SideScreenClockSnapshot(date = "--", time = "--:--", greeting = "早好~"))
-    }
-    LaunchedEffect(Unit) {
-        while (true) {
-            val locale = Locale.getDefault()
-            val now = Date()
-            val hour = java.util.Calendar.getInstance().apply { time = now }.get(java.util.Calendar.HOUR_OF_DAY)
-            val greeting = when (hour) {
-                in 5..10 -> "早好~"
-                in 11..17 -> "午好~"
-                else -> "晚好~"
-            }
-            val timeFmt = SimpleDateFormat("HH:mm", locale)
-            val dateFmt = if (locale.language.startsWith("zh")) {
-                SimpleDateFormat("M月d日 EEE", Locale.CHINA)
-            } else {
-                SimpleDateFormat("MMM d, EEE", locale)
-            }
-            snapshot = SideScreenClockSnapshot(
-                date = dateFmt.format(now),
-                time = timeFmt.format(now),
-                greeting = greeting
+            BatteryPill(
+                battery = battery,
+                modifier = Modifier.padding(bottom = 4.dp)
             )
-            delay(1000)
         }
     }
-    return snapshot
+
+    pickerSlot?.let { activeSlot ->
+        SideScreenPickerOverlay(
+            apps = apps,
+            onSelect = { app ->
+                onSetShortcut(activeSlot, app.componentKey)
+            },
+            onDismiss = { pickerSlot = null }
+        )
+    }
+
+    removeSlot?.let { slotIndex ->
+        shortcutApps.getOrNull(slotIndex)?.let { app ->
+            SideScreenRemoveOverlay(
+                app = app,
+                onRemove = {
+                    onRemoveShortcut(slotIndex)
+                },
+                onDismiss = { removeSlot = null }
+            )
+        }
+    }
 }
 
 @Composable
-private fun rememberBatterySnapshot(): BatterySnapshot {
-    val context = LocalContext.current
-    var batteryLevel by remember(context) { mutableIntStateOf(0) }
-    DisposableEffect(context) {
-        fun loadBattery(): Int {
-            val batteryManager = context.getSystemService(BatteryManager::class.java)
-            return (batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0).coerceIn(0, 100)
-        }
-
-        batteryLevel = loadBattery()
-        val receiver = object : android.content.BroadcastReceiver() {
-            override fun onReceive(ctx: android.content.Context?, intent: Intent?) {
-                batteryLevel = loadBattery()
+private fun QuickLaunchPanel(
+    modifier: Modifier,
+    apps: List<AppInfo?>,
+    slotCenters: MutableMap<Int, Offset>,
+    onAddShortcut: (Int) -> Unit,
+    onLongPressShortcut: (Int) -> Unit,
+    onLaunchShortcut: (Int, AppInfo) -> Unit
+) {
+    Box(
+        modifier = modifier
+            .clip(SideScreenPanelShape)
+            .background(Color(0xFF353535))
+            .padding(horizontal = 14.dp, vertical = 14.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            apps.chunked(3).forEachIndexed { rowIndex, row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    row.forEachIndexed { columnIndex, app ->
+                        val slotIndex = rowIndex * 3 + columnIndex
+                        Box(
+                            modifier = Modifier.onGloballyPositioned { coords ->
+                                val pos = coords.positionInRoot()
+                                slotCenters[slotIndex] = Offset(
+                                    x = pos.x + coords.size.width / 2f,
+                                    y = pos.y + coords.size.height / 2f
+                                )
+                            },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (app == null) {
+                                AddShortcutBubble { onAddShortcut(slotIndex) }
+                            } else {
+                                AppBubble(
+                                    icon = app.cachedIcon,
+                                    size = 58.dp,
+                                    onClick = { onLaunchShortcut(slotIndex, app) },
+                                    onLongClick = { onLongPressShortcut(slotIndex) },
+                                    pressScaleTarget = 0.9f,
+                                    pressAnimationDurationMillis = 200
+                                )
+                            }
+                        }
+                    }
+                    repeat(3 - row.size) {
+                        Spacer(modifier = Modifier.size(58.dp))
+                    }
+                }
             }
         }
-        val filter = android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-        context.registerReceiver(receiver, filter)
-        onDispose {
-            runCatching { context.unregisterReceiver(receiver) }
-        }
-    }
-    return BatterySnapshot(batteryLevel)
-}
-
-@Composable
-private fun BatteryPill(battery: BatterySnapshot) {
-    val fillColor = if (battery.isLow) Color(0xFFFF4D4F) else Color(0xFF30D158)
-    Box(
-        modifier = Modifier
-            .width(56.dp)
-            .height(28.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(Color.White.copy(alpha = 0.10f))
-            .padding(2.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color(0xFF2B2D34))
-        )
-        Box(
-            modifier = Modifier
-                .fillMaxWidth((battery.level / 100f).coerceIn(0f, 1f))
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(16.dp))
-                .background(fillColor)
-        )
-        Text(
-            text = "${battery.level}%",
-            color = Color.White,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.align(Alignment.Center)
-        )
     }
 }
 
 @Composable
-private fun NotificationPreviewCard(
+private fun SideScreenNotificationPreview(
+    modifier: Modifier,
     latestNotificationGroup: NotificationGroupUi?,
     notificationAccessGranted: Boolean,
-    onOpenNotifications: () -> Unit,
-    onOpenNotificationSettings: () -> Unit
+    onClick: () -> Unit
 ) {
     val pressedState = rememberPressedState()
     val pressed by pressedState
     val pressScale by animateFloatAsState(
-        targetValue = if (pressed) 0.958f else 1f,
+        targetValue = if (pressed) 0.964f else 1f,
         animationSpec = spring(stiffness = 860f, dampingRatio = 0.72f),
         label = "side_preview_press_scale"
     )
@@ -423,61 +335,107 @@ private fun NotificationPreviewCard(
         else -> latestNotificationGroup.appLabel
     }
     val subtitle = when {
-        !notificationAccessGranted -> "下滑通知中心前，先授予通知使用权"
+        !notificationAccessGranted -> "下滑进入通知中心后完成授权"
         latestNotificationGroup == null -> "副一屏下滑可打开通知中心"
         else -> latestNotificationGroup.latestSummary
     }
-    val trailing = latestNotificationGroup?.let { formatNotificationTime(it.latestTime) }
-        ?: if (notificationAccessGranted) "" else "去开启"
+    val trailing = latestNotificationGroup?.let { formatClockTime(it.latestTime) }.orEmpty()
 
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
+        modifier = modifier
             .graphicsLayer {
                 scaleX = pressScale
                 scaleY = pressScale
             }
-            .clip(RoundedCornerShape(24.dp))
-            .background(
-                Brush.horizontalGradient(
-                    listOf(
-                        Color(0xFF111827).copy(alpha = 0.96f),
-                        Color(0xFF362156).copy(alpha = 0.92f)
-                    )
-                )
-            )
-            .instantPressGesture(pressedState) {
-                if (notificationAccessGranted) onOpenNotifications() else onOpenNotificationSettings()
-            }
-            .padding(horizontal = 16.dp, vertical = 14.dp)
+            .instantPressGesture(pressedState, onClick = onClick)
     ) {
-        Column {
+        NotificationPreviewBubble(
+            modifier = Modifier.fillMaxWidth(),
+            icon = latestNotificationGroup?.icon,
+            title = title,
+            subtitle = subtitle,
+            trailing = trailing
+        )
+    }
+}
+
+@Composable
+private fun NotificationPreviewBubble(
+    modifier: Modifier,
+    icon: ImageBitmap?,
+    title: String,
+    subtitle: String,
+    trailing: String
+) {
+    Box(
+        modifier = modifier
+            .heightIn(min = 74.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 22.dp)
+                .clip(SideScreenCardShape)
+                .background(Color(0xFF353535))
+                .padding(start = 36.dp, end = 18.dp, top = 12.dp, bottom = 12.dp)
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = title,
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = subtitle,
+                        color = WatchColors.TextSecondary,
+                        fontSize = 13.sp,
+                        maxLines = 2
+                    )
+                }
                 if (trailing.isNotBlank()) {
+                    Spacer(modifier = Modifier.width(10.dp))
                     Text(
                         text = trailing,
-                        color = WatchColors.TextSecondary,
-                        fontSize = 12.sp
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = subtitle,
-                color = Color.White.copy(alpha = 0.84f),
-                fontSize = 13.sp,
-                maxLines = 2
-            )
+        }
+
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .size(48.dp)
+                .clip(CircleShape)
+                .background(Color(0xFFD9D9D9)),
+            contentAlignment = Alignment.Center
+        ) {
+            if (icon != null) {
+                Image(
+                    bitmap = icon,
+                    contentDescription = null,
+                    filterQuality = FilterQuality.Medium,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Filled.Notifications,
+                    contentDescription = null,
+                    tint = Color(0xFF2B2B2B),
+                    modifier = Modifier.size(24.dp)
+                )
+            }
         }
     }
 }
@@ -506,34 +464,27 @@ private fun AddShortcutBubble(onClick: () -> Unit) {
         Icon(
             imageVector = Icons.Filled.Add,
             contentDescription = null,
-            tint = Color.White.copy(alpha = 0.86f),
+            tint = Color.Black,
             modifier = Modifier.size(24.dp)
         )
     }
 }
 
 @Composable
-private fun SideScreenAppPickerOverlay(
+private fun SideScreenPickerOverlay(
     apps: List<AppInfo>,
     onSelect: (AppInfo) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val dismissInteraction = remember { MutableInteractionSource() }
-    val blockInteraction = remember { MutableInteractionSource() }
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.74f))
-            .clickable(indication = null, interactionSource = dismissInteraction, onClick = onDismiss),
-        contentAlignment = Alignment.Center
-    ) {
+    SideScreenModal(
+        onDismissRequest = onDismiss
+    ) { dismiss ->
         Column(
             modifier = Modifier
                 .fillMaxWidth(0.82f)
                 .heightIn(max = 420.dp)
-                .clip(RoundedCornerShape(22.dp))
-                .background(Color(0xFF1B1C28))
-                .clickable(indication = null, interactionSource = blockInteraction) {}
+                .clip(RoundedCornerShape(24.dp))
+                .background(Color(0xFF1E1E1E))
                 .padding(vertical = 12.dp)
         ) {
             Text(
@@ -547,42 +498,65 @@ private fun SideScreenAppPickerOverlay(
             )
             LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 items(apps, key = { it.componentKey }) { app ->
-                    val pressedState = rememberPressedState()
-                    val pressed by pressedState
-                    val scale by animateFloatAsState(
-                        targetValue = if (pressed) 0.97f else 1f,
-                        animationSpec = spring(stiffness = 840f, dampingRatio = 0.74f),
-                        label = "side_picker_item_scale"
-                    )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .graphicsLayer {
-                                scaleX = scale
-                                scaleY = scale
-                            }
-                            .clip(RoundedCornerShape(18.dp))
-                            .background(if (pressed) Color(0xFF232534) else Color.Transparent)
-                            .instantPressGesture(pressedState) { onSelect(app) }
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Image(
-                            bitmap = app.cachedIcon,
-                            contentDescription = null,
-                            modifier = Modifier
-                                .size(42.dp)
-                                .clip(CircleShape),
-                            contentScale = ContentScale.Crop
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(app.label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                            Text(app.packageName, color = WatchColors.TextTertiary, fontSize = 11.sp)
+                    SideScreenPickerRow(
+                        app = app,
+                        onClick = {
+                            onSelect(app)
+                            dismiss()
                         }
-                    }
+                    )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SideScreenPickerRow(
+    app: AppInfo,
+    onClick: () -> Unit
+) {
+    val pressedState = rememberPressedState()
+    val pressed by pressedState
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.97f else 1f,
+        animationSpec = spring(stiffness = 840f, dampingRatio = 0.74f),
+        label = "side_picker_item_scale"
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (pressed) Color(0xFF303030) else Color.Transparent)
+            .instantPressGesture(pressedState, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Image(
+            bitmap = app.cachedIcon,
+            contentDescription = null,
+            modifier = Modifier
+                .size(42.dp)
+                .clip(CircleShape),
+            contentScale = ContentScale.Crop
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column {
+            Text(
+                text = app.label,
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = app.packageName,
+                color = WatchColors.TextTertiary,
+                fontSize = 11.sp
+            )
         }
     }
 }
@@ -593,62 +567,206 @@ private fun SideScreenRemoveOverlay(
     onRemove: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val dismissInteraction = remember { MutableInteractionSource() }
-    val blockInteraction = remember { MutableInteractionSource() }
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.72f))
-            .clickable(indication = null, interactionSource = dismissInteraction, onClick = onDismiss),
-        contentAlignment = Alignment.Center
-    ) {
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val panelWidth = (maxWidth * 0.74f).coerceIn(180.dp, 312.dp)
+    SideScreenModal(
+        onDismissRequest = onDismiss
+    ) { dismiss ->
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .fillMaxWidth(0.74f)
+                .verticalScroll(rememberScrollState())
+        ) {
             Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
-                    .align(Alignment.Center)
-                    .width(panelWidth)
-                    .padding(horizontal = 8.dp, vertical = 12.dp)
-                    .verticalScroll(rememberScrollState())
-                    .clickable(indication = null, interactionSource = blockInteraction) {}
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFF2C2C2E))
             ) {
-                Column(
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFF2C2C2E))
+                        .clickable {
+                            onRemove()
+                            dismiss()
+                        }
+                        .padding(horizontal = 16.dp, vertical = 14.dp)
                 ) {
-                    SideScreenMenuItem("移除", Color(0xFFFF453A), onClick = onRemove)
+                    Text(
+                        text = "移除",
+                        color = Color(0xFFFF453A),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.W500
+                    )
                 }
-                Spacer(modifier = Modifier.height(16.dp))
-                Image(
-                    bitmap = app.cachedIcon,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(88.dp)
-                        .clip(CircleShape),
-                    contentScale = ContentScale.Crop
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(app.label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.W600)
             }
+            Spacer(modifier = Modifier.height(16.dp))
+            Image(
+                bitmap = app.cachedIcon,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(88.dp)
+                    .clip(CircleShape),
+                contentScale = ContentScale.Crop
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = app.label,
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.W600
+            )
         }
     }
 }
 
 @Composable
-private fun SideScreenMenuItem(text: String, color: Color, onClick: () -> Unit) {
+private fun SideScreenModal(
+    onDismissRequest: () -> Unit,
+    content: @Composable (dismiss: () -> Unit) -> Unit
+) {
+    val dismissInteraction = remember { MutableInteractionSource() }
+    val blockInteraction = remember { MutableInteractionSource() }
+    var visible by remember { mutableStateOf(false) }
+
+    fun dismiss() {
+        visible = false
+    }
+
+    LaunchedEffect(Unit) {
+        visible = true
+    }
+
+    BackHandler {
+        dismiss()
+    }
+
+    LaunchedEffect(visible) {
+        if (!visible) {
+            delay(220)
+            onDismissRequest()
+        }
+    }
+
+    val alpha by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = spring(stiffness = 720f, dampingRatio = 0.85f),
+        label = "side_modal_alpha"
+    )
+    val scale by animateFloatAsState(
+        targetValue = if (visible) 1f else 0.84f,
+        animationSpec = spring(stiffness = 700f, dampingRatio = 0.8f),
+        label = "side_modal_scale"
+    )
+
     Box(
         modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp)
+            .fillMaxSize()
+            .graphicsLayer { alpha = alpha }
+            .background(Color.Black.copy(alpha = 0.72f))
+            .clickable(
+                indication = null,
+                interactionSource = dismissInteraction,
+                onClick = { dismiss() }
+            ),
+        contentAlignment = Alignment.Center
     ) {
-        Text(text, color = color, fontSize = 15.sp, fontWeight = FontWeight.W500)
+        Box(
+            modifier = Modifier
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }
+                .clickable(
+                    indication = null,
+                    interactionSource = blockInteraction,
+                    onClick = {}
+                )
+        ) {
+            content(::dismiss)
+        }
     }
 }
 
-private fun formatNotificationTime(timestamp: Long): String {
+@Composable
+private fun rememberSideScreenClockSnapshot(): SideScreenClockSnapshot {
+    var snapshot by remember {
+        mutableStateOf(SideScreenClockSnapshot(time = "--:--", date = "--"))
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            val now = Date()
+            val locale = Locale.getDefault()
+            val timeFormatter = SimpleDateFormat("HH:mm", locale)
+            val dateFormatter = if (locale.language.startsWith("zh")) {
+                SimpleDateFormat("M月d日 EEEE", Locale.CHINA)
+            } else {
+                SimpleDateFormat("MMM d, EEEE", locale)
+            }
+            snapshot = SideScreenClockSnapshot(
+                time = timeFormatter.format(now),
+                date = dateFormatter.format(now)
+            )
+            delay(1000)
+        }
+    }
+    return snapshot
+}
+
+@Composable
+private fun rememberBatterySnapshot(): BatterySnapshot {
+    val context = LocalContext.current
+    var batteryLevel by remember(context) { mutableIntStateOf(0) }
+    DisposableEffect(context) {
+        fun readBatteryLevel(): Int {
+            val batteryManager = context.getSystemService(BatteryManager::class.java)
+            return (batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0).coerceIn(0, 100)
+        }
+
+        batteryLevel = readBatteryLevel()
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: Intent?) {
+                batteryLevel = readBatteryLevel()
+            }
+        }
+        context.registerReceiver(receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        onDispose {
+            runCatching { context.unregisterReceiver(receiver) }
+        }
+    }
+    return BatterySnapshot(batteryLevel)
+}
+
+@Composable
+private fun BatteryPill(
+    battery: BatterySnapshot,
+    modifier: Modifier = Modifier
+) {
+    val tint = if (battery.isLow) WatchColors.ActiveRed else WatchColors.ActiveGreen
+    Box(
+        modifier = modifier
+            .width(56.dp)
+            .height(24.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFF141414))
+            .padding(2.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth((battery.level / 100f).coerceIn(0f, 1f))
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(12.dp))
+                .background(tint.copy(alpha = 0.24f))
+        )
+        Text(
+            text = "${battery.level}%",
+            color = tint,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.align(Alignment.Center)
+        )
+    }
+}
+
+private fun formatClockTime(timestamp: Long): String {
     return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
 }
