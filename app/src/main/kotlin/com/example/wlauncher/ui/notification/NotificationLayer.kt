@@ -47,7 +47,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -62,9 +61,6 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.findRootCoordinates
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Velocity
@@ -211,14 +207,20 @@ private fun NotificationGroupSection(
     onOpenNotification: (String, Offset) -> Boolean
 ) {
     val hasMultipleEntries = group.entries.size > 1
-    Column(modifier.width(width).animateContentSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        GroupHeader(
-            title = group.headerTitle,
-            count = group.entries.size,
-            showMeta = hasMultipleEntries && group.expanded,
-            expanded = group.expanded,
-            onClick = onToggleGroup
-        )
+    Column(
+        modifier = modifier.animateContentSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Box(Modifier.width(width)) {
+            GroupHeader(
+                title = group.headerTitle,
+                count = group.entries.size,
+                showMeta = hasMultipleEntries && group.expanded,
+                expanded = group.expanded,
+                onClick = onToggleGroup
+            )
+        }
         AnimatedContent(
             targetState = group.expanded,
             transitionSpec = {
@@ -228,7 +230,10 @@ private fun NotificationGroupSection(
             label = "notification_group_expand"
         ) { expanded ->
             if (expanded) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier.width(width),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     group.entries.forEach { entry ->
                         SwipeRevealDeleteContainer(
                             target = NotificationRevealTarget.Entry(entry.key),
@@ -242,7 +247,7 @@ private fun NotificationGroupSection(
                                 entry = entry,
                                 subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
                                 trailing = formatNotificationTime(entry.time),
-                                onClick = { origin -> onOpenNotification(entry.key, origin) }
+                                onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) }
                             )
                         }
                     }
@@ -273,7 +278,7 @@ private fun NotificationGroupSection(
                             entry = entry,
                             subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
                             trailing = formatNotificationTime(entry.time),
-                            onClick = { origin -> onOpenNotification(entry.key, origin) }
+                            onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) }
                         )
                     }
                 }
@@ -332,12 +337,12 @@ private fun CollapsedStackCard(width: androidx.compose.ui.unit.Dp, leadEntry: No
                     .fillMaxWidth()
                     .height(72.dp)
                     .graphicsLayer {
-                        translationY = (index + 1) * 18f * stackStrength
-                        scaleX = 1f - (index + 1) * 0.02f * stackStrength
-                        scaleY = 1f - (index + 1) * 0.02f * stackStrength
-                        alpha = 0.38f + (0.22f / (index + 1))
+                        translationY = (index + 1) * 30f * stackStrength
+                        scaleX = 1f - (index + 1) * 0.016f * stackStrength
+                        scaleY = 1f - (index + 1) * 0.016f * stackStrength
+                        alpha = 0.42f + (0.18f / (index + 1))
                     }
-                    .padding(start = 10.dp, end = 10.dp)
+                    .padding(start = 6.dp, end = 6.dp)
                     .clip(RoundedCornerShape(28.dp))
                     .background(if (index == 0) Color(0xFF404040) else Color(0xFF2E2E2E))
             )
@@ -350,34 +355,21 @@ private fun CollapsedStackCard(width: androidx.compose.ui.unit.Dp, leadEntry: No
 }
 
 @Composable
-private fun NotificationCard(width: androidx.compose.ui.unit.Dp, entry: NotificationEntryUi, subtitle: String, trailing: String, onClick: (Offset) -> Unit) {
+private fun NotificationCard(width: androidx.compose.ui.unit.Dp, entry: NotificationEntryUi, subtitle: String, trailing: String, onClick: () -> Unit) {
     val pressed = rememberPressedState()
     val isPressed by pressed
-    var launchOrigin by remember(entry.key) { mutableStateOf(Offset(0.5f, 0.5f)) }
     val scale by animateFloatAsState(if (isPressed) 0.968f else 1f, spring(stiffness = 860f, dampingRatio = 0.72f), label = "notif_card")
     Box(
         Modifier.width(width).graphicsLayer { scaleX = scale; scaleY = scale }.clip(RoundedCornerShape(28.dp)).background(Color(0xFF353535))
             .instantPressGesture(
                 pressed,
                 enabled = entry.key == "perm" || entry.key == "empty" || entry.contentIntentAvailable,
-                onClick = { onClick(launchOrigin) }
+                onClick = onClick
             )
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            NotificationIcon(
-                entry.icon,
-                modifier = Modifier.onGloballyPositioned { coordinates ->
-                    val root = coordinates.findRootCoordinates()
-                    val rootWidth = root.size.width.toFloat().coerceAtLeast(1f)
-                    val rootHeight = root.size.height.toFloat().coerceAtLeast(1f)
-                    val position = coordinates.positionInRoot()
-                    launchOrigin = Offset(
-                        x = ((position.x + coordinates.size.width / 2f) / rootWidth).coerceIn(0f, 1f),
-                        y = ((position.y + coordinates.size.height / 2f) / rootHeight).coerceIn(0f, 1f)
-                    )
-                }
-            )
+            NotificationIcon(entry.icon)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(entry.title.ifBlank { entry.appLabel }, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
@@ -393,8 +385,8 @@ private fun NotificationCard(width: androidx.compose.ui.unit.Dp, entry: Notifica
 }
 
 @Composable
-private fun NotificationIcon(icon: ImageBitmap?, modifier: Modifier = Modifier) {
-    Box(modifier.size(46.dp).clip(CircleShape).background(Color(0xFFD9D9D9)), contentAlignment = Alignment.Center) {
+private fun NotificationIcon(icon: ImageBitmap?) {
+    Box(Modifier.size(46.dp).clip(CircleShape).background(Color(0xFFD9D9D9)), contentAlignment = Alignment.Center) {
         if (icon != null) Image(icon, null, modifier = Modifier.fillMaxSize().clip(CircleShape), filterQuality = FilterQuality.Medium, contentScale = ContentScale.Crop)
         else Icon(Icons.Filled.Notifications, null, tint = Color(0xFF2B2B2B), modifier = Modifier.size(24.dp))
     }

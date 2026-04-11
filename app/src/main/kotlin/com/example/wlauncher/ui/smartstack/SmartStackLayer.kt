@@ -309,12 +309,12 @@ fun SmartStackLayer(
                 Modifier
                     .align(Alignment.TopCenter)
                     .graphicsLayer {
-                        translationY = (index + 1) * 18f * stackStrength
-                        scaleX = 1f - (index + 1) * 0.02f * stackStrength
-                        scaleY = 1f - (index + 1) * 0.02f * stackStrength
-                        alpha = 0.4f + (0.22f / (index + 1))
+                        translationY = (index + 1) * 30f * stackStrength
+                        scaleX = 1f - (index + 1) * 0.016f * stackStrength
+                        scaleY = 1f - (index + 1) * 0.016f * stackStrength
+                        alpha = 0.44f + (0.18f / (index + 1))
                     }
-                    .padding(start = 10.dp, end = 10.dp)
+                    .padding(start = 6.dp, end = 6.dp)
                     .fillMaxWidth()
                     .height(72.dp)
                     .clip(RoundedCornerShape(28.dp))

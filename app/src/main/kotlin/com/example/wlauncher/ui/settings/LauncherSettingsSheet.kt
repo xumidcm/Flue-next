@@ -219,48 +219,31 @@ fun LauncherSettingsSheet(
                 SettingOption(tr(isZh, "列表布局", "List"), tr(isZh, "纵向应用列表", "Vertical app list"), currentLayout == LayoutMode.List, { onLayoutChange(LayoutMode.List) }, scale)
             }
             item("display_header") { ScaledSectionHeader(tr(isZh, "显示设置", "Display"), listState, "display_header", screenCenterY, screenHeightPx) }
-            item("side_screen_toggle") {
-                val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "side_screen_toggle" }, screenCenterY, screenHeightPx)
-                SettingToggle(
-                    tr(isZh, "副一屏", "Side Screen"),
-                    tr(isZh, "从表盘右滑进入快捷启动与通知页", "Swipe right from the watch face to open the side screen"),
-                    sideScreenEnabled,
-                    onSideScreenToggle,
-                    scale = scale
-                )
-            }
-            item("notification_center_toggle") {
-                val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "notification_center_toggle" }, screenCenterY, screenHeightPx)
-                SettingToggle(
-                    tr(isZh, "通知中心", "Notification Center"),
-                    if (showNotification) {
-                        tr(isZh, "显示通知横幅，并允许从副一屏上滑进入通知中心", "Show notification banners and allow swipe-up from the side screen into the notification center")
-                    } else {
-                        tr(isZh, "隐藏通知横幅与通知中心，并把快捷启动扩展为 3×3", "Hide notification banners and the notification center, and expand quick launch to 3x3")
-                    },
-                    showNotification,
-                    onShowNotificationChange,
-                    enabled = sideScreenEnabled,
-                    scale = scale
-                )
+            addDisplaySettingsToggleItems(
+                isZh = isZh,
+                sideScreenEnabled = sideScreenEnabled,
+                showNotification = showNotification,
+                blurEnabled = blurEnabled,
+                edgeBlurEnabled = edgeBlurEnabled,
+                onSideScreenToggle = onSideScreenToggle,
+                onShowNotificationChange = onShowNotificationChange,
+                onBlurToggle = onBlurToggle,
+                onEdgeBlurToggle = onEdgeBlurToggle
+            ) { key, label, description, checked, enabled, onToggle ->
+                item(key) {
+                    val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == key }, screenCenterY, screenHeightPx)
+                    SettingToggle(
+                        label = label,
+                        description = description,
+                        isOn = checked,
+                        onToggle = onToggle,
+                        enabled = enabled,
+                        scale = scale
+                    )
+                }
             }
 
             item("effects_header") { ScaledSectionHeader(tr(isZh, "效果", "Effects"), listState, "effects_header", screenCenterY, screenHeightPx) }
-            item("blur_toggle") {
-                val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "blur_toggle" }, screenCenterY, screenHeightPx)
-                SettingToggle(tr(isZh, "模糊", "Blur"), tr(isZh, "在支持的 Android 版本上启用模糊", "Enable blur on supported Android versions"), blurEnabled, onBlurToggle, scale = scale)
-            }
-            item("edge_blur_toggle") {
-                val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "edge_blur_toggle" }, screenCenterY, screenHeightPx)
-                SettingToggle(
-                    label = tr(isZh, "边缘模糊（实验）", "Edge Blur (Experimental)"),
-                    description = if (blurEnabled) tr(isZh, "在顶部和底部边缘增加模糊", "Apply extra blur near the top and bottom edges") else tr(isZh, "请先开启模糊", "Enable Blur first"),
-                    isOn = edgeBlurEnabled,
-                    onToggle = onEdgeBlurToggle,
-                    enabled = blurEnabled,
-                    scale = scale
-                )
-            }
             item("splash_toggle") {
                 val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "splash_toggle" }, screenCenterY, screenHeightPx)
                 SettingToggle(tr(isZh, "启动遮罩", "Launch Overlay"), tr(isZh, "启动应用时显示居中图标", "Show the centered app icon while launching"), splashIcon, onSplashToggle, scale = scale)

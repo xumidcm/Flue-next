@@ -252,7 +252,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .fillMaxSize()
                     .zIndex(0f)
                     .then(
-                        if (screenState == ScreenState.Stack || screenState == ScreenState.Notifications) {
+                        if (screenState == ScreenState.Stack || screenState == ScreenState.Notifications || (screenState == ScreenState.Face && stackProgress > 0.001f)) {
                             Modifier.graphicsLayer { translationX = faceOffsetX }
                         } else {
                             Modifier.scaleBlurAlpha(
@@ -466,9 +466,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         .zIndex(if (notificationProgress > 0f) 5f else 3f)
                         .graphicsLayer {
                             transformOrigin = TransformOrigin(appOpenOrigin.x, appOpenOrigin.y)
-                            translationY = if (launchingFromNotifications) 0f else screenHeightPx * 0.08f * (1f - notificationProgress)
-                            scaleX = if (launchingFromNotifications) 4f else 0.2f + 0.8f * notificationProgress
-                            scaleY = if (launchingFromNotifications) 4f else 0.2f + 0.8f * notificationProgress
+                            translationY = if (launchingFromNotifications) 0f else screenHeightPx * 0.16f * (1f - notificationProgress)
+                            scaleX = if (launchingFromNotifications) 4f else 1f
+                            scaleY = if (launchingFromNotifications) 4f else 1f
                             alpha = if (launchingFromNotifications) 0f else notificationProgress.coerceIn(0f, 1f)
                         }
                 ) {

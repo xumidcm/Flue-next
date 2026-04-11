@@ -99,6 +99,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.navigation.LayoutMode
+import com.flue.launcher.ui.settings.addDisplaySettingsToggleItems
 import com.flue.launcher.ui.settings.WatchFaceSettingCard
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
@@ -204,7 +205,11 @@ private fun SettingsRootScreen(
     val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
     val builtInVideoClockColorMode by vm.builtInVideoClockColorMode.collectAsState()
     val builtInManagerThumbnails by vm.builtInManagerThumbnails.collectAsState()
+    val showNotification by vm.showNotification.collectAsState()
     val headerTime = rememberSettingsHeaderTime()
+    val isZh = remember(context.resources.configuration) {
+        context.resources.configuration.locales[0]?.language?.startsWith("zh") == true
+    }
 
     var destination by remember(initialDestination) { mutableStateOf(initialDestination) }
     var hiddenAppsDraft by remember { mutableStateOf(hiddenApps) }
@@ -297,7 +302,7 @@ private fun SettingsRootScreen(
                 item("appearance") {
                     SettingsCategoryCard(
                         title = "\u663e\u793a\u4e0e\u5916\u89c2",
-                        subtitle = "\u5e03\u5c40\u3001\u6a21\u7cca\u4e0e\u542f\u52a8\u56fe\u6807",
+                        subtitle = "\u5e03\u5c40\u3001\u901a\u77e5\u4e2d\u5fc3\u4e0e\u6a21\u7cca",
                         onClick = { navigateTo(SettingsDestination.APPEARANCE) },
                         scale = itemFisheye(listState, "appearance", screenCenterY, screenHeightPx)
                     )
@@ -508,34 +513,28 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "layout_list", screenCenterY, screenHeightPx)
                 )
             }
-            item("side_screen_toggle") {
-                SettingsSwitchRow(
-                    title = "\u526f\u4e00\u5c4f",
-                    subtitle = "\u4ece\u8868\u76d8\u5411\u53f3\u6ed1\u8fdb\u5165\u5feb\u6377\u542f\u52a8\u4e0e\u901a\u77e5\u9875",
-                    checked = sideScreenEnabled,
-                    onToggle = { vm.setSideScreenEnabled(it) },
-                    scale = itemFisheye(listState, "side_screen_toggle", screenCenterY, screenHeightPx)
-                )
-            }
-            item("visual_header") { SectionTitle("\u89c6\u89c9", itemFisheye(listState, "visual_header", screenCenterY, screenHeightPx)) }
-            item("blur_enabled") {
-                SettingsSwitchRow(
-                    title = "\u80cc\u666f\u6a21\u7cca",
-                    subtitle = "\u5728\u62bd\u5c49\u4e0e\u5c42\u7ea7\u5207\u6362\u4e2d\u542f\u7528\u6a21\u7cca",
-                    checked = blurEnabled,
-                    onToggle = { vm.setBlurEnabled(it) },
-                    scale = itemFisheye(listState, "blur_enabled", screenCenterY, screenHeightPx)
-                )
-            }
-            item("edge_blur") {
-                SettingsSwitchRow(
-                    title = "\u8fb9\u7f18\u6a21\u7cca",
-                    subtitle = if (blurEnabled) "\u4e3a\u9876\u90e8\u548c\u5e95\u90e8\u6dfb\u52a0\u6e10\u53d8\u6a21\u7cca" else "\u5f00\u542f\u80cc\u666f\u6a21\u7cca\u540e\u53ef\u7528",
-                    checked = edgeBlurEnabled,
-                    enabled = blurEnabled,
-                    onToggle = { vm.setEdgeBlurEnabled(it) },
-                    scale = itemFisheye(listState, "edge_blur", screenCenterY, screenHeightPx)
-                )
+            item("display_header") { SectionTitle(if (isZh) "\u663e\u793a\u8bbe\u7f6e" else "Display", itemFisheye(listState, "display_header", screenCenterY, screenHeightPx)) }
+            addDisplaySettingsToggleItems(
+                isZh = isZh,
+                sideScreenEnabled = sideScreenEnabled,
+                showNotification = showNotification,
+                blurEnabled = blurEnabled,
+                edgeBlurEnabled = edgeBlurEnabled,
+                onSideScreenToggle = vm::setSideScreenEnabled,
+                onShowNotificationChange = vm::setShowNotification,
+                onBlurToggle = vm::setBlurEnabled,
+                onEdgeBlurToggle = vm::setEdgeBlurEnabled
+            ) { key, label, description, checked, enabled, onToggle ->
+                item(key) {
+                    SettingsSwitchRow(
+                        title = label,
+                        subtitle = description,
+                        checked = checked,
+                        enabled = enabled,
+                        onToggle = onToggle,
+                        scale = itemFisheye(listState, key, screenCenterY, screenHeightPx)
+                    )
+                }
             }
             item("honeycomb_cols") {
                 SettingsSliderRow(

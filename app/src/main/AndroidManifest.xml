@@ -24,6 +24,7 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:clearTaskOnLaunch="true"
+            android:excludeFromRecents="true"
             android:stateNotNeeded="true"
             android:taskAffinity=""
             android:screenOrientation="portrait"
@@ -50,6 +51,7 @@
             android:exported="true"
             android:label="@string/settings_title"
             android:icon="@mipmap/ic_settings_launcher"
+            android:excludeFromRecents="true"
             android:theme="@style/Theme.WatchLauncher"
             android:screenOrientation="portrait">
             <intent-filter>
@@ -62,24 +64,28 @@
             android:name=".InternalWatchFaceConfigActivity"
             android:exported="false"
             android:label="@string/internal_watchface_config_title"
+            android:excludeFromRecents="true"
             android:theme="@style/Theme.WatchLauncher"
             android:screenOrientation="portrait" />
         <activity
             android:name=".BuiltInFileManagerActivity"
             android:exported="false"
             android:label="@string/internal_watchface_config_title"
+            android:excludeFromRecents="true"
             android:theme="@style/Theme.WatchLauncher"
             android:screenOrientation="portrait" />
 
         <activity
             android:name=".CrashActivity"
             android:exported="false"
+            android:excludeFromRecents="true"
             android:theme="@style/Theme.WatchLauncher"
             android:screenOrientation="portrait" />
 
         <activity
             android:name="com.dudu.wearlauncher.ui.WatchSurfaceBaseActivity"
             android:exported="false"
+            android:excludeFromRecents="true"
             android:theme="@style/Theme.WatchLauncher"
             android:screenOrientation="portrait" />
 
