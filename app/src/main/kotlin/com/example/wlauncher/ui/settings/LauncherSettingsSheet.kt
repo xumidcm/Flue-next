@@ -228,21 +228,6 @@ fun LauncherSettingsSheet(
                     scale = scale
                 )
             }
-            item("notification_center_toggle") {
-                val scale = itemFisheye(listState.layoutInfo.visibleItemsInfo.find { it.key == "notification_center_toggle" }, screenCenterY, screenHeightPx)
-                SettingToggle(
-                    tr(isZh, "通知中心", "Notification Center"),
-                    if (showNotification) {
-                        tr(isZh, "开启后副一屏显示通知横幅，并可上滑进入通知中心", "Show notification banners on the side screen and allow swipe-up into the notification center")
-                    } else {
-                        tr(isZh, "关闭后隐藏通知横幅与通知中心，快捷启动切换为 3x3", "Hide notification banners and the notification center, and expand quick launch to 3x3")
-                    },
-                    showNotification,
-                    onShowNotificationChange,
-                    enabled = sideScreenEnabled,
-                    scale = scale
-                )
-            }
 
             item("effects_header") { ScaledSectionHeader(tr(isZh, "效果", "Effects"), listState, "effects_header", screenCenterY, screenHeightPx) }
             item("blur_toggle") {

@@ -99,7 +99,6 @@ fun SmartStackLayer(
     apps: List<AppInfo>,
     sideScreenShortcuts: List<String?>,
     previewGroups: List<NotificationGroupUi>,
-    notificationsEnabled: Boolean,
     notificationAccessGranted: Boolean,
     revealedNotificationTarget: NotificationRevealTarget?,
     onRevealTargetChange: (NotificationRevealTarget?) -> Unit,
@@ -116,12 +115,7 @@ fun SmartStackLayer(
     val clock = rememberClockSnapshot()
     val battery = rememberBatterySnapshot()
     val slotCenters = remember { mutableStateMapOf<Int, Offset>() }
-    val visibleShortcutCount = if (notificationsEnabled) 6 else 9
-    val shortcuts = remember(apps, sideScreenShortcuts, visibleShortcutCount) {
-        sideScreenShortcuts
-            .take(visibleShortcutCount)
-            .map { key -> key?.let { k -> apps.firstOrNull { it.componentKey == k } } }
-    }
+    val shortcuts = remember(apps, sideScreenShortcuts) { sideScreenShortcuts.map { key -> key?.let { k -> apps.firstOrNull { it.componentKey == k } } } }
     var modalState by remember { mutableStateOf<SideScreenModalState>(SideScreenModalState.None) }
     var dragDx by remember { mutableFloatStateOf(0f) }
     var dragDy by remember { mutableFloatStateOf(0f) }
@@ -133,7 +127,7 @@ fun SmartStackLayer(
             .fillMaxSize()
             .clip(RoundedCornerShape(40.dp))
             .background(WatchColors.Black)
-            .pointerInput(notificationAccessGranted, notificationsEnabled, modalState) {
+            .pointerInput(notificationAccessGranted, modalState) {
                 if (modalState != SideScreenModalState.None) return@pointerInput
                 detectDragGestures(
                     onDragStart = { dragDx = 0f; dragDy = 0f },
@@ -150,7 +144,7 @@ fun SmartStackLayer(
                         }
                     },
                     onDragEnd = {
-                        if (notificationsEnabled && dragDy < -SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD) {
+                        if (dragDy < -SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD) {
                             onRevealTargetChange(null); overscrollTarget = 0f; onOpenNotifications()
                         } else overscrollTarget = 0f
                     },
@@ -161,13 +155,8 @@ fun SmartStackLayer(
         val widthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
         val heightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
         val contentWidth = maxWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
-        val quickHeight = if (notificationsEnabled) {
-            (contentWidth * 0.58f).coerceAtLeast(152.dp)
-        } else {
-            (contentWidth * 0.88f).coerceAtLeast(226.dp)
-        }
-        val previewCapacity = remember(contentWidth, maxHeight, notificationsEnabled) {
-            if (!notificationsEnabled) return@remember 0
+        val quickHeight = (contentWidth * 0.58f).coerceAtLeast(152.dp)
+        val previewCapacity = remember(contentWidth, maxHeight) {
             val headerPx = with(density) { 112.dp.toPx() }
             val footerPx = with(density) { 38.dp.toPx() }
             val quickPx = with(density) { quickHeight.toPx() }
@@ -193,32 +182,30 @@ fun SmartStackLayer(
                     onLaunchApp(app, Offset(center.x / widthPx, center.y / heightPx))
                 }
             )
-            if (notificationsEnabled) {
-                Spacer(Modifier.height(16.dp))
-                Column(Modifier.width(contentWidth), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    when {
-                        !notificationAccessGranted -> PreviewInfoCard("开启通知访问", "副一屏上滑进入通知中心后完成授权", onOpenNotifications)
-                        previewLayout.isEmpty() -> PreviewInfoCard("暂无通知", "副一屏上滑可打开通知中心", onOpenNotifications)
-                        else -> previewLayout.forEach { preview ->
-                            if (preview.hiddenCount > 0) {
+            Spacer(Modifier.height(16.dp))
+            Column(Modifier.width(contentWidth), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                when {
+                    !notificationAccessGranted -> PreviewInfoCard("开启通知访问", "副一屏上滑进入通知中心后完成授权", onOpenNotifications)
+                    previewLayout.isEmpty() -> PreviewInfoCard("暂无通知", "副一屏上滑可打开通知中心", onOpenNotifications)
+                    else -> previewLayout.forEach { preview ->
+                        if (preview.hiddenCount > 0) {
+                            SwipeRevealDeleteContainer(
+                                target = NotificationRevealTarget.Group(preview.group.packageName),
+                                revealedTarget = revealedNotificationTarget,
+                                onRevealTargetChange = onRevealTargetChange,
+                                enabled = preview.group.entries.any(NotificationEntryUi::isClearable),
+                                onDelete = { onDismissGroup(preview.group.packageName) },
+                                actionHeight = 72.dp
+                            ) { StackedPreviewCard(preview.entries.first(), preview.hiddenCount, onOpenNotifications) }
+                        } else {
+                            preview.entries.forEach { entry ->
                                 SwipeRevealDeleteContainer(
-                                    target = NotificationRevealTarget.Group(preview.group.packageName),
+                                    target = NotificationRevealTarget.Entry(entry.key),
                                     revealedTarget = revealedNotificationTarget,
                                     onRevealTargetChange = onRevealTargetChange,
-                                    enabled = preview.group.entries.any(NotificationEntryUi::isClearable),
-                                    onDelete = { onDismissGroup(preview.group.packageName) },
-                                    actionHeight = 72.dp
-                                ) { StackedPreviewCard(preview.entries.first(), preview.hiddenCount, onOpenNotifications) }
-                            } else {
-                                preview.entries.forEach { entry ->
-                                    SwipeRevealDeleteContainer(
-                                        target = NotificationRevealTarget.Entry(entry.key),
-                                        revealedTarget = revealedNotificationTarget,
-                                        onRevealTargetChange = onRevealTargetChange,
-                                        enabled = entry.isClearable,
-                                        onDelete = { onDismissNotification(entry.key) }
-                                    ) { PreviewPill(entry, onOpenNotifications) }
-                                }
+                                    enabled = entry.isClearable,
+                                    onDelete = { onDismissNotification(entry.key) }
+                                ) { PreviewPill(entry, onOpenNotifications) }
                             }
                         }
                     }
