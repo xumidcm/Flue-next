@@ -51,13 +51,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.icon.rememberLauncherIcon
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.delay
 
 @Composable
 fun AppShortcutOverlay(
     app: AppInfo,
-    iconVersion: Long,
-    iconProvider: (String, Boolean) -> androidx.compose.ui.graphics.ImageBitmap?,
+    iconFlowProvider: (String, Boolean) -> StateFlow<androidx.compose.ui.graphics.ImageBitmap?>,
     blurEnabled: Boolean = true,
     onDismiss: () -> Unit
 ) {
@@ -65,8 +65,7 @@ fun AppShortcutOverlay(
     val appIcon = rememberLauncherIcon(
         componentKey = app.componentKey,
         blurred = false,
-        iconVersion = iconVersion,
-        iconProvider = iconProvider
+        iconFlowProvider = iconFlowProvider
     )
 
     var showing by remember { mutableStateOf(false) }

@@ -56,6 +56,7 @@ import com.flue.launcher.util.generateHoneycombRows
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 import kotlin.math.sqrt
@@ -69,8 +70,7 @@ private const val HONEYCOMB_AUTO_SCROLL_MAX_PX = 26f
 @Composable
 fun HoneycombScreen(
     apps: List<AppInfo>,
-    iconVersion: Long,
-    iconProvider: (String, Boolean) -> ImageBitmap?,
+    iconFlowProvider: (String, Boolean) -> StateFlow<ImageBitmap?>,
     onPrefetchIcons: (List<String>, Set<String>) -> Unit,
     blurEnabled: Boolean = true,
     edgeBlurEnabled: Boolean = false,
@@ -752,8 +752,7 @@ fun HoneycombScreen(
                     val sharpIcon = rememberLauncherIcon(
                         componentKey = renderItem.appKey,
                         blurred = false,
-                        iconVersion = iconVersion,
-                        iconProvider = iconProvider
+                        iconFlowProvider = iconFlowProvider
                     )
                     val effectiveItemBlur = reduceHoneycombBlurForFastScroll(
                         renderItem.itemBlur,
@@ -769,8 +768,7 @@ fun HoneycombScreen(
                         rememberLauncherIcon(
                             componentKey = renderItem.appKey,
                             blurred = true,
-                            iconVersion = iconVersion,
-                            iconProvider = iconProvider
+                            iconFlowProvider = iconFlowProvider
                         )
                     } else {
                         null
@@ -872,15 +870,13 @@ fun HoneycombScreen(
                 val dragOverlaySharpIcon = rememberLauncherIcon(
                     componentKey = dragOverlayApp.componentKey,
                     blurred = false,
-                    iconVersion = iconVersion,
-                    iconProvider = iconProvider
+                    iconFlowProvider = iconFlowProvider
                 )
                 val dragOverlayBlurredIcon = if (dragOverlayUseBlurredIcon) {
                     rememberLauncherIcon(
                         componentKey = dragOverlayApp.componentKey,
                         blurred = true,
-                        iconVersion = iconVersion,
-                        iconProvider = iconProvider
+                        iconFlowProvider = iconFlowProvider
                     )
                 } else {
                     null
@@ -937,15 +933,13 @@ fun HoneycombScreen(
             val settlingSharpIcon = rememberLauncherIcon(
                 componentKey = settlingOverlayApp.componentKey,
                 blurred = false,
-                iconVersion = iconVersion,
-                iconProvider = iconProvider
+                iconFlowProvider = iconFlowProvider
             )
             val settlingBlurredIcon = if (settlingUseBlurredIcon) {
                 rememberLauncherIcon(
                     componentKey = settlingOverlayApp.componentKey,
                     blurred = true,
-                    iconVersion = iconVersion,
-                    iconProvider = iconProvider
+                    iconFlowProvider = iconFlowProvider
                 )
             } else {
                 null
@@ -1022,8 +1016,7 @@ fun HoneycombScreen(
     longPressedApp?.let { app ->
         AppShortcutOverlay(
             app = app,
-            iconVersion = iconVersion,
-            iconProvider = iconProvider,
+            iconFlowProvider = iconFlowProvider,
             blurEnabled = blurEnabled,
             onDismiss = { longPressedApp = null }
         )

@@ -126,7 +126,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val legacyCircularIcons by vm.legacyCircularIcons.collectAsState()
     val animationOverrideEnabled by vm.animationOverrideEnabled.collectAsState()
     val apps by vm.apps.collectAsState()
-    val appIconVersion by vm.appIconVersion.collectAsState()
     val appOpenOrigin by vm.appOpenOrigin.collectAsState()
     val splashIcon by vm.splashIcon.collectAsState()
     val splashDelay by vm.splashDelay.collectAsState()
@@ -178,8 +177,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         rememberLauncherIcon(
             componentKey = app.componentKey,
             blurred = false,
-            iconVersion = appIconVersion,
-            iconProvider = vm::getAppIcon
+            iconFlowProvider = vm::observeAppIcon
         )
     }
     var showSplash by remember { mutableStateOf(false) }
@@ -296,8 +294,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 when (layoutMode) {
                     LayoutMode.Honeycomb -> HoneycombScreen(
                         apps = apps,
-                        iconVersion = appIconVersion,
-                        iconProvider = vm::getAppIcon,
+                        iconFlowProvider = vm::observeAppIcon,
                         onPrefetchIcons = vm::prefetchAppIcons,
                         blurEnabled = blurEnabled,
                         edgeBlurEnabled = edgeBlurEnabled,
@@ -318,8 +315,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     )
                     LayoutMode.List -> ListDrawerScreen(
                         apps = apps,
-                        iconVersion = appIconVersion,
-                        iconProvider = vm::getAppIcon,
+                        iconFlowProvider = vm::observeAppIcon,
                         onPrefetchIcons = vm::prefetchAppIcons,
                         blurEnabled = blurEnabled,
                         edgeBlurEnabled = edgeBlurEnabled,

@@ -52,9 +52,7 @@ class AppIconStore(private val context: Context) {
         }
     }
     private val inFlight = mutableSetOf<IconRequestKey>()
-
-    private val _iconVersion = MutableStateFlow(0L)
-    val iconVersion: StateFlow<Long> = _iconVersion.asStateFlow()
+    private val iconStateFlows = mutableMapOf<IconRequestKey, MutableStateFlow<ImageBitmap?>>()
 
     private val _debugStats = MutableStateFlow(AppIconStoreStats())
     val debugStats: StateFlow<AppIconStoreStats> = _debugStats.asStateFlow()
@@ -101,37 +99,13 @@ class AppIconStore(private val context: Context) {
             blurredBitmapCache.clear()
             composeCache.clear()
             inFlight.clear()
+            iconStateFlows.values.forEach { it.value = null }
         }
-        bumpVersion()
     }
 
     fun get(componentKey: String, blurred: Boolean): ImageBitmap? {
-        val requestKey = IconRequestKey(componentKey = componentKey, blurred = blurred)
-        synchronized(lock) {
-            composeCache[requestKey]?.let {
-                recordCacheHit(blurred)
-                return it
-            }
-        }
-
-        val bitmap = synchronized(lock) {
-            if (blurred) blurredBitmapCache.get(componentKey) else sharpBitmapCache.get(componentKey)
-        }
-        if (bitmap != null) {
-            recordCacheHit(blurred)
-            return bitmap.toComposeImage(requestKey)
-        }
-
-        recordCacheMiss(blurred)
-        prefetch(
-            componentKeys = listOf(componentKey),
-            blurredKeys = if (blurred) setOf(componentKey) else emptySet(),
-            iconSize = currentIconSize
-        )
-        if (blurred) {
-            return get(componentKey, blurred = false)
-        }
-        return null
+        val state = observe(componentKey, blurred)
+        return state.value ?: if (blurred) observe(componentKey, blurred = false).value else null
     }
 
     fun prefetch(componentKeys: List<String>, blurredKeys: Set<String>, iconSize: Int) {
@@ -145,17 +119,33 @@ class AppIconStore(private val context: Context) {
         if (distinctKeys.isEmpty()) return
 
         scope.launch {
-            var changed = false
             distinctKeys.forEach { componentKey ->
-                changed = ensureIcon(componentKey, blurred = false) || changed
+                ensureIcon(componentKey, blurred = false)
                 if (blurredKeys.contains(componentKey)) {
-                    changed = ensureIcon(componentKey, blurred = true) || changed
+                    ensureIcon(componentKey, blurred = true)
                 }
             }
-            if (changed) {
-                bumpVersion()
+        }
+    }
+
+    fun observe(componentKey: String, blurred: Boolean): StateFlow<ImageBitmap?> {
+        val requestKey = IconRequestKey(componentKey = componentKey, blurred = blurred)
+        val flow = synchronized(lock) {
+            iconStateFlows.getOrPut(requestKey) {
+                MutableStateFlow(resolveCachedImage(requestKey))
             }
         }
+        if (flow.value == null) {
+            recordCacheMiss(blurred)
+            prefetch(
+                componentKeys = listOf(componentKey),
+                blurredKeys = if (blurred) setOf(componentKey) else emptySet(),
+                iconSize = currentIconSize
+            )
+        } else {
+            recordCacheHit(blurred)
+        }
+        return flow.asStateFlow()
     }
 
     fun destroy() {
@@ -171,20 +161,23 @@ class AppIconStore(private val context: Context) {
     private fun ensureIcon(componentKey: String, blurred: Boolean): Boolean {
         val requestKey = IconRequestKey(componentKey = componentKey, blurred = blurred)
         val snapshot = synchronized(lock) {
-            if (composeCache.containsKey(requestKey)) {
+            composeCache[requestKey]?.let { image ->
                 recordCacheHit(blurred)
+                iconStateFlows[requestKey]?.value = image
                 return false
             }
             if (blurred) {
                 blurredBitmapCache.get(componentKey)?.let {
                     recordCacheHit(true)
-                    composeCache[requestKey] = it.asImageBitmap()
+                    val image = cacheComposeImage(requestKey, it)
+                    iconStateFlows.getOrPut(requestKey) { MutableStateFlow(null) }.value = image
                     return true
                 }
             } else {
                 sharpBitmapCache.get(componentKey)?.let {
                     recordCacheHit(false)
-                    composeCache[requestKey] = it.asImageBitmap()
+                    val image = cacheComposeImage(requestKey, it)
+                    iconStateFlows.getOrPut(requestKey) { MutableStateFlow(null) }.value = image
                     return true
                 }
             }
@@ -201,10 +194,11 @@ class AppIconStore(private val context: Context) {
         return try {
             val sharpBitmap = ensureSharpBitmap(componentKey, snapshot) ?: return false
             if (!blurred) {
-                synchronized(lock) {
+                val image = synchronized(lock) {
                     if (configRevision != snapshot.revision) return false
-                    composeCache[requestKey] = sharpBitmap.asImageBitmap()
+                    cacheComposeImage(requestKey, sharpBitmap)
                 }
+                publishImage(requestKey, image)
                 true
             } else {
                 val blurredBitmap = synchronized(lock) {
@@ -216,10 +210,11 @@ class AppIconStore(private val context: Context) {
                     }
                     recordBlurredGeneration()
                 }
-                synchronized(lock) {
+                val image = synchronized(lock) {
                     if (configRevision != snapshot.revision) return false
-                    composeCache[requestKey] = blurredBitmap.asImageBitmap()
+                    cacheComposeImage(requestKey, blurredBitmap)
                 }
+                publishImage(requestKey, image)
                 true
             }
         } finally {
@@ -312,16 +307,26 @@ class AppIconStore(private val context: Context) {
         return output
     }
 
-    private fun Bitmap.toComposeImage(requestKey: IconRequestKey): ImageBitmap {
-        val image = asImageBitmap()
-        synchronized(lock) {
-            composeCache[requestKey] = image
+    private fun resolveCachedImage(requestKey: IconRequestKey): ImageBitmap? {
+        composeCache[requestKey]?.let { return it }
+        val bitmap = if (requestKey.blurred) {
+            blurredBitmapCache.get(requestKey.componentKey)
+        } else {
+            sharpBitmapCache.get(requestKey.componentKey)
         }
-        return image
+        return bitmap?.let { cacheComposeImage(requestKey, it) }
     }
 
-    private fun bumpVersion() {
-        _iconVersion.value = _iconVersion.value + 1L
+    private fun cacheComposeImage(requestKey: IconRequestKey, bitmap: Bitmap): ImageBitmap {
+        return composeCache[requestKey] ?: bitmap.asImageBitmap().also { image ->
+            composeCache[requestKey] = image
+        }
+    }
+
+    private fun publishImage(requestKey: IconRequestKey, image: ImageBitmap) {
+        synchronized(lock) {
+            iconStateFlows.getOrPut(requestKey) { MutableStateFlow(null) }.value = image
+        }
     }
 
     private fun recordCacheHit(blurred: Boolean) {

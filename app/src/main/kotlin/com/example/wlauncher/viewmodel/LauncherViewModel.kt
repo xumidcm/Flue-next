@@ -90,7 +90,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     val allApps: StateFlow<List<AppInfo>> = appRepository.allApps
     val apps: StateFlow<List<AppInfo>> = appRepository.apps
-    val appIconVersion: StateFlow<Long> = appRepository.iconStore.iconVersion
     val appIconDebugStats: StateFlow<AppIconStoreStats> = appRepository.iconStore.debugStats
 
     private val _screenState = MutableStateFlow(ScreenState.Face)
@@ -691,6 +690,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun getAppIcon(componentKey: String, blurred: Boolean = false): ImageBitmap? {
         return appRepository.getIcon(componentKey, blurred)
+    }
+
+    fun observeAppIcon(componentKey: String, blurred: Boolean = false): StateFlow<ImageBitmap?> {
+        return appRepository.observeIcon(componentKey, blurred)
     }
 
     fun prefetchAppIcons(componentKeys: List<String>, blurredKeys: Set<String> = emptySet()) {

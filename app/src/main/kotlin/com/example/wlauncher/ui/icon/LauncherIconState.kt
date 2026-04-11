@@ -1,17 +1,21 @@
 package com.flue.launcher.ui.icon
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.ImageBitmap
+import kotlinx.coroutines.flow.StateFlow
 
 @Composable
 fun rememberLauncherIcon(
     componentKey: String,
     blurred: Boolean,
-    iconVersion: Long,
-    iconProvider: (String, Boolean) -> ImageBitmap?
+    iconFlowProvider: (String, Boolean) -> StateFlow<ImageBitmap?>
 ): ImageBitmap? {
-    return remember(componentKey, blurred, iconVersion) {
-        iconProvider(componentKey, blurred)
+    val flow = remember(componentKey, blurred) {
+        iconFlowProvider(componentKey, blurred)
     }
+    val image by flow.collectAsState()
+    return image
 }

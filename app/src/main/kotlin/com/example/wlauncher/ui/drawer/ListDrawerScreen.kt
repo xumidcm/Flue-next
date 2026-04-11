@@ -77,6 +77,7 @@ import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
@@ -90,8 +91,7 @@ private const val LIST_EDGE_ITEM_BLUR_DP = 4f
 @Composable
 fun ListDrawerScreen(
     apps: List<AppInfo>,
-    iconVersion: Long,
-    iconProvider: (String, Boolean) -> ImageBitmap?,
+    iconFlowProvider: (String, Boolean) -> StateFlow<ImageBitmap?>,
     onPrefetchIcons: (List<String>, Set<String>) -> Unit,
     blurEnabled: Boolean = true,
     edgeBlurEnabled: Boolean = false,
@@ -500,15 +500,13 @@ fun ListDrawerScreen(
                     val sharpIcon = rememberLauncherIcon(
                         componentKey = app.componentKey,
                         blurred = false,
-                        iconVersion = iconVersion,
-                        iconProvider = iconProvider
+                        iconFlowProvider = iconFlowProvider
                     )
                     val blurredIcon = if (useBlurredIcon) {
                         rememberLauncherIcon(
                             componentKey = app.componentKey,
                             blurred = true,
-                            iconVersion = iconVersion,
-                            iconProvider = iconProvider
+                            iconFlowProvider = iconFlowProvider
                         )
                     } else {
                         null
@@ -651,15 +649,13 @@ fun ListDrawerScreen(
                     val overlaySharpIcon = rememberLauncherIcon(
                         componentKey = draggedApp.componentKey,
                         blurred = false,
-                        iconVersion = iconVersion,
-                        iconProvider = iconProvider
+                        iconFlowProvider = iconFlowProvider
                     )
                     val overlayBlurredIcon = if (overlayUseBlurredIcon) {
                         rememberLauncherIcon(
                             componentKey = draggedApp.componentKey,
                             blurred = true,
-                            iconVersion = iconVersion,
-                            iconProvider = iconProvider
+                            iconFlowProvider = iconFlowProvider
                         )
                     } else {
                         null
@@ -750,8 +746,7 @@ fun ListDrawerScreen(
     longPressedApp?.let { app ->
         AppShortcutOverlay(
             app = app,
-            iconVersion = iconVersion,
-            iconProvider = iconProvider,
+            iconFlowProvider = iconFlowProvider,
             blurEnabled = blurEnabled,
             onDismiss = { longPressedApp = null }
         )

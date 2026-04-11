@@ -175,7 +175,6 @@ private fun SettingsRootScreen(
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsState()
     val selectedWatchFace by vm.selectedWatchFace.collectAsState()
     val allApps by vm.allApps.collectAsState()
-    val appIconVersion by vm.appIconVersion.collectAsState()
     val hiddenApps by vm.hiddenApps.collectAsState()
     val availableIconPacks by vm.availableIconPacks.collectAsState()
     val selectedIconPackPackage by vm.selectedIconPackPackage.collectAsState()
@@ -386,8 +385,7 @@ private fun SettingsRootScreen(
                             rememberLauncherIcon(
                                 componentKey = app.componentKey,
                                 blurred = false,
-                                iconVersion = appIconVersion,
-                                iconProvider = vm::getAppIcon
+                                iconFlowProvider = vm::observeAppIcon
                             )
                         } else {
                             null

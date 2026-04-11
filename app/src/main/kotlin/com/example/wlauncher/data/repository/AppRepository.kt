@@ -111,6 +111,10 @@ class AppRepository(private val context: Context) {
         return iconStore.get(componentKey, blurred)
     }
 
+    fun observeIcon(componentKey: String, blurred: Boolean): StateFlow<ImageBitmap?> {
+        return iconStore.observe(componentKey, blurred)
+    }
+
     fun prefetchIcons(componentKeys: List<String>, blurredKeys: Set<String> = emptySet()) {
         iconStore.prefetch(componentKeys, blurredKeys, currentIconSize)
     }
