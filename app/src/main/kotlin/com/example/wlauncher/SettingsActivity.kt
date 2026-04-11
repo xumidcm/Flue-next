@@ -99,7 +99,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.navigation.LayoutMode
-import com.flue.launcher.ui.settings.addDisplaySettingsToggleItems
 import com.flue.launcher.ui.settings.WatchFaceSettingCard
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
@@ -514,27 +513,63 @@ private fun SettingsRootScreen(
                 )
             }
             item("display_header") { SectionTitle(if (isZh) "\u663e\u793a\u8bbe\u7f6e" else "Display", itemFisheye(listState, "display_header", screenCenterY, screenHeightPx)) }
-            addDisplaySettingsToggleItems(
-                isZh = isZh,
-                sideScreenEnabled = sideScreenEnabled,
-                showNotification = showNotification,
-                blurEnabled = blurEnabled,
-                edgeBlurEnabled = edgeBlurEnabled,
-                onSideScreenToggle = vm::setSideScreenEnabled,
-                onShowNotificationChange = vm::setShowNotification,
-                onBlurToggle = vm::setBlurEnabled,
-                onEdgeBlurToggle = vm::setEdgeBlurEnabled
-            ) { key, label, description, checked, enabled, onToggle ->
-                item(key) {
-                    SettingsSwitchRow(
-                        title = label,
-                        subtitle = description,
-                        checked = checked,
-                        enabled = enabled,
-                        onToggle = onToggle,
-                        scale = itemFisheye(listState, key, screenCenterY, screenHeightPx)
-                    )
-                }
+            item("side_screen_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "副一屏" else "Side Screen",
+                    subtitle = if (isZh) {
+                        "从表盘右滑进入快捷启动与通知页"
+                    } else {
+                        "Swipe right from the watch face to open the side screen"
+                    },
+                    checked = sideScreenEnabled,
+                    onToggle = vm::setSideScreenEnabled,
+                    scale = itemFisheye(listState, "side_screen_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            item("notification_center_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "通知中心" else "Notification Center",
+                    subtitle = if (showNotification) {
+                        if (isZh) {
+                            "显示通知横幅，并允许从副一屏上滑进入通知中心"
+                        } else {
+                            "Show notification banners and allow swipe-up from the side screen into the notification center"
+                        }
+                    } else {
+                        if (isZh) {
+                            "隐藏通知横幅与通知中心，并把快捷启动扩展为 3×3"
+                        } else {
+                            "Hide notification banners and the notification center, and expand quick launch to 3x3"
+                        }
+                    },
+                    checked = showNotification,
+                    enabled = sideScreenEnabled,
+                    onToggle = vm::setShowNotification,
+                    scale = itemFisheye(listState, "notification_center_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            item("blur_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "模糊" else "Blur",
+                    subtitle = if (isZh) "在支持的 Android 版本上启用模糊" else "Enable blur on supported Android versions",
+                    checked = blurEnabled,
+                    onToggle = vm::setBlurEnabled,
+                    scale = itemFisheye(listState, "blur_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            item("edge_blur_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "边缘模糊（实验）" else "Edge Blur (Experimental)",
+                    subtitle = if (blurEnabled) {
+                        if (isZh) "在顶部和底部边缘增加模糊" else "Apply extra blur near the top and bottom edges"
+                    } else {
+                        if (isZh) "请先开启模糊" else "Enable Blur first"
+                    },
+                    checked = edgeBlurEnabled,
+                    enabled = blurEnabled,
+                    onToggle = vm::setEdgeBlurEnabled,
+                    scale = itemFisheye(listState, "edge_blur_toggle", screenCenterY, screenHeightPx)
+                )
             }
             item("honeycomb_cols") {
                 SettingsSliderRow(

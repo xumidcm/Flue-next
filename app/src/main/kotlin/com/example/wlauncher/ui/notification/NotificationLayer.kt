@@ -17,6 +17,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -60,6 +61,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -94,6 +96,37 @@ fun NotificationLayer(
     val listState = rememberLazyListState()
     val overscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val closeIfPulled: suspend () -> Unit = {
+        if (overscroll.value > 80f) {
+            overscroll.snapTo(0f)
+            onRevealTargetChange(null)
+            onDismissToStack()
+        } else if (overscroll.value != 0f) {
+            overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+        }
+    }
+    val staticContentDismissModifier = Modifier.pointerInput(notificationAccessGranted, notificationGroups.size) {
+        detectVerticalDragGestures(
+            onVerticalDrag = { change, dragAmount ->
+                if (dragAmount > 0f || overscroll.value > 0f) {
+                    change.consume()
+                    scope.launch {
+                        overscroll.snapTo((overscroll.value + dragAmount * 0.35f).coerceIn(0f, 180f))
+                    }
+                }
+            },
+            onDragEnd = {
+                scope.launch { closeIfPulled() }
+            },
+            onDragCancel = {
+                scope.launch {
+                    if (overscroll.value != 0f) {
+                        overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                    }
+                }
+            }
+        )
+    }
 
     val nestedScroll = remember(listState) {
         object : NestedScrollConnection {
@@ -113,9 +146,7 @@ fun NotificationLayer(
 
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (overscroll.value > 80f) {
-                    overscroll.snapTo(0f)
-                    onRevealTargetChange(null)
-                    onDismissToStack()
+                    closeIfPulled()
                     return available
                 }
                 if (overscroll.value != 0f) {
@@ -136,12 +167,18 @@ fun NotificationLayer(
     ) {
         val contentWidth = maxWidth * NOTIFICATION_CARD_WIDTH_RATIO
         Column(
-            modifier = Modifier.fillMaxSize().graphicsLayer { translationY = overscroll.value }.padding(top = 14.dp, bottom = 10.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { translationY = overscroll.value }
+                .padding(top = 14.dp, bottom = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             when {
                 !notificationAccessGranted -> Box(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .then(staticContentDismissModifier),
                     contentAlignment = Alignment.Center
                 ) {
                     PermissionCard(contentWidth) {
@@ -150,7 +187,10 @@ fun NotificationLayer(
                 }
 
                 notificationGroups.isEmpty() -> Box(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .then(staticContentDismissModifier),
                     contentAlignment = Alignment.Center
                 ) {
                     EmptyCard(contentWidth)
@@ -158,7 +198,9 @@ fun NotificationLayer(
 
                 else -> LazyColumn(
                     state = listState,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                     contentPadding = PaddingValues(top = 4.dp, bottom = 12.dp)
                 ) {
@@ -337,12 +379,12 @@ private fun CollapsedStackCard(width: androidx.compose.ui.unit.Dp, leadEntry: No
                     .fillMaxWidth()
                     .height(72.dp)
                     .graphicsLayer {
-                        translationY = (index + 1) * 30f * stackStrength
-                        scaleX = 1f - (index + 1) * 0.016f * stackStrength
-                        scaleY = 1f - (index + 1) * 0.016f * stackStrength
+                        translationY = (index + 1) * 40f * stackStrength
+                        scaleX = 1f - (index + 1) * 0.012f * stackStrength
+                        scaleY = 1f - (index + 1) * 0.012f * stackStrength
                         alpha = 0.42f + (0.18f / (index + 1))
                     }
-                    .padding(start = 6.dp, end = 6.dp)
+                    .padding(start = 4.dp, end = 4.dp)
                     .clip(RoundedCornerShape(28.dp))
                     .background(if (index == 0) Color(0xFF404040) else Color(0xFF2E2E2E))
             )

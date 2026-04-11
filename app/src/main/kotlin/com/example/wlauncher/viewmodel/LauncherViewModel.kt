@@ -237,6 +237,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private var watchFaceScanHydrated = false
     private var lastWatchFaceRefreshAt = 0L
     private val pendingWriteJobs = ConcurrentHashMap<String, Job>()
+    private var pendingNotificationClearJob: Job? = null
     private var refreshIconsJob: Job? = null
     init {
         refreshNotificationAccess()
@@ -254,8 +255,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     pendingDismissedKeys.intersect(activeNotificationKeys)
                 )
             }.collect { (previewGroups, groups, remainingPendingDismissedKeys) ->
-                _sideScreenPreviewGroups.value = previewGroups
-                _notificationGroups.value = groups
+                updateStableNotificationGroups(previewGroups, groups)
                 if (_pendingDismissedNotificationKeys.value != remainingPendingDismissedKeys) {
                     _pendingDismissedNotificationKeys.value = remainingPendingDismissedKeys
                 }
@@ -641,10 +641,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setShowNotification(show: Boolean) {
-        _showNotification.value = show
         if (!show && _screenState.value == ScreenState.Notifications) {
             _screenState.value = if (_sideScreenEnabled.value) ScreenState.Stack else ScreenState.Face
+            _revealedNotificationTarget.value = null
         }
+        _showNotification.value = show
         persist {
             store.edit {
                 it[KEY_SHOW_NOTIFICATION] = show
@@ -1052,6 +1053,28 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         return if (normalized.all(String::isEmpty)) "" else normalized.joinToString("|")
     }
 
+    private fun updateStableNotificationGroups(
+        previewGroups: List<NotificationGroupUi>,
+        groups: List<NotificationGroupUi>
+    ) {
+        if (previewGroups.isNotEmpty() || groups.isNotEmpty()) {
+            pendingNotificationClearJob?.cancel()
+            pendingNotificationClearJob = null
+            _sideScreenPreviewGroups.value = previewGroups
+            _notificationGroups.value = groups
+            return
+        }
+        if (_sideScreenPreviewGroups.value.isEmpty() && _notificationGroups.value.isEmpty()) {
+            return
+        }
+        pendingNotificationClearJob?.cancel()
+        pendingNotificationClearJob = viewModelScope.launch {
+            delay(220)
+            _sideScreenPreviewGroups.value = emptyList()
+            _notificationGroups.value = emptyList()
+        }
+    }
+
     private fun buildNotificationGroups(
         notifications: List<com.flue.launcher.service.NotifData>,
         expandedPackages: Set<String>
@@ -1097,6 +1120,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     override fun onCleared() {
         refreshIconsJob?.cancel()
+        pendingNotificationClearJob?.cancel()
         pendingWriteJobs.values.forEach(Job::cancel)
         pendingWriteJobs.clear()
         super.onCleared()
