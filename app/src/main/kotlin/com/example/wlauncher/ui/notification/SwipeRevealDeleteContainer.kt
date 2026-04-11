@@ -6,8 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -16,18 +16,19 @@ import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.awaitFirstDown
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 internal val RevealActionWidth = 74.dp
@@ -46,6 +47,7 @@ internal fun SwipeRevealDeleteContainer(
     val revealWidthPx = with(androidx.compose.ui.platform.LocalDensity.current) { RevealActionWidth.toPx() }
     val touchSlop = LocalViewConfiguration.current.touchSlop
     val offsetX = remember(target) { Animatable(0f) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(revealedTarget, revealWidthPx) {
         val targetOffset = if (enabled && revealedTarget == target) -revealWidthPx else 0f
@@ -57,7 +59,7 @@ internal fun SwipeRevealDeleteContainer(
     Box(modifier = modifier.fillMaxWidth()) {
         Box(
             modifier = Modifier
-                .matchParentSize()
+                .fillMaxSize()
                 .clip(RevealShape)
                 .background(Color(0xFF8E4F64))
                 .padding(end = 18.dp),
@@ -83,7 +85,7 @@ internal fun SwipeRevealDeleteContainer(
                 .pointerInput(target, enabled, revealWidthPx, touchSlop) {
                     if (!enabled) return@pointerInput
                     awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val down = awaitPrimaryDown()
                         val pointerId = down.id
                         val tracker = VelocityTracker()
                         tracker.addPosition(down.uptimeMillis, down.position)
@@ -121,7 +123,7 @@ internal fun SwipeRevealDeleteContainer(
                             if (horizontalLock) {
                                 change.consume()
                                 val nextOffset = (offsetX.value + delta.x).coerceIn(-revealWidthPx, 0f)
-                                offsetX.snapTo(nextOffset)
+                                scope.launch { offsetX.snapTo(nextOffset) }
                             }
                         }
 
@@ -131,12 +133,21 @@ internal fun SwipeRevealDeleteContainer(
                                 velocityX < -1200f
                             )
                         val finalOffset = if (shouldReveal) -revealWidthPx else 0f
-                        offsetX.animateTo(finalOffset, tween(180))
+                        scope.launch { offsetX.animateTo(finalOffset, tween(180)) }
                         onRevealTargetChange(if (shouldReveal) target else null)
                     }
                 }
         ) {
             content()
         }
+    }
+}
+
+private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awaitPrimaryDown():
+    androidx.compose.ui.input.pointer.PointerInputChange {
+    while (true) {
+        val event = awaitPointerEvent()
+        val change = event.changes.firstOrNull { it.pressed }
+        if (change != null) return change
     }
 }
