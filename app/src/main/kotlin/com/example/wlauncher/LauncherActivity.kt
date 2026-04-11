@@ -447,7 +447,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     honeycombTopFade = honeycombTopFade,
                     honeycombBottomFade = honeycombBottomFade,
                     honeycombFastScrollOptimization = honeycombFastScrollOptimization,
-                    showNotification = showNotification,
+                    showNotification = notificationsLayerEnabled,
                     watchFaces = watchFaces,
                     selectedWatchFaceId = selectedWatchFaceId,
                     watchFaceLastError = watchFaceLastError,

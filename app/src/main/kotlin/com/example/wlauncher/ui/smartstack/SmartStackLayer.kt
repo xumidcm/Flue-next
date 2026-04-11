@@ -647,7 +647,7 @@ private fun SideScreenModal(
         }
     }
 
-    val alpha by animateFloatAsState(
+    val modalAlpha by animateFloatAsState(
         targetValue = if (visible) 1f else 0f,
         animationSpec = spring(stiffness = 720f, dampingRatio = 0.85f),
         label = "side_modal_alpha"
@@ -661,7 +661,7 @@ private fun SideScreenModal(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .graphicsLayer { alpha = alpha }
+            .graphicsLayer { alpha = modalAlpha }
             .background(Color.Black.copy(alpha = 0.72f))
             .clickable(
                 indication = null,
