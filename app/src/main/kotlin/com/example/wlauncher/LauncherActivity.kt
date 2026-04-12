@@ -9,7 +9,6 @@ import androidx.activity.addCallback
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -36,7 +35,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
@@ -67,8 +65,6 @@ import com.flue.launcher.watchface.LunchWatchFaceHost
 import kotlinx.coroutines.delay
 
 private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
-private const val STACK_LAUNCH_SOURCE_STAGE_MS = 180L
-
 class LauncherActivity : ComponentActivity() {
 
     private lateinit var vm: LauncherViewModel
@@ -178,29 +174,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
     var launchBackdropVisible by remember { mutableStateOf(false) }
     var startupGateReleased by remember { mutableStateOf(false) }
     var showSplash by remember { mutableStateOf(false) }
-    val stackLaunchOverlayProgress = remember { Animatable(0f) }
-    var stackLaunchOverlayVisible by remember { mutableStateOf(false) }
     LaunchedEffect(screenState, launchSourceState, currentLaunchIcon) {
         if (screenState == ScreenState.App && currentLaunchIcon != null) {
-            if (launchSourceState == ScreenState.Stack) {
-                launchBackdropVisible = false
-                delay(STACK_LAUNCH_SOURCE_STAGE_MS)
-            }
             launchBackdropVisible = true
         } else {
             launchBackdropVisible = false
-        }
-    }
-    LaunchedEffect(screenState, launchSourceState, currentLaunchIcon) {
-        if (screenState == ScreenState.App && launchSourceState == ScreenState.Stack && currentLaunchIcon != null) {
-            stackLaunchOverlayVisible = true
-            stackLaunchOverlayProgress.snapTo(0f)
-            stackLaunchOverlayProgress.animateTo(1f, tween(durationMillis = STACK_LAUNCH_SOURCE_STAGE_MS.toInt()))
-            stackLaunchOverlayVisible = false
-            stackLaunchOverlayProgress.snapTo(0f)
-        } else {
-            stackLaunchOverlayVisible = false
-            stackLaunchOverlayProgress.snapTo(0f)
         }
     }
     val showLaunchBackdrop = launchBackdropVisible && screenState == ScreenState.App && currentLaunchIcon != null
@@ -210,8 +188,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
             startupGateReleased = true
         }
     }
-    LaunchedEffect(screenState, splashIcon, splashDelay, currentLaunchIcon) {
-        if (screenState == ScreenState.App && splashIcon && currentLaunchIcon != null) {
+    LaunchedEffect(screenState, splashIcon, splashDelay, currentLaunchIcon, launchSourceState) {
+        if (
+            screenState == ScreenState.App &&
+            launchSourceState != ScreenState.Stack &&
+            splashIcon &&
+            currentLaunchIcon != null
+        ) {
             showSplash = false
             delay(BASE_LAUNCH_MASK_DELAY_MS)
             showSplash = true
@@ -284,7 +267,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             translationY = 0f
         )
         val stackLayerTargetValues = when {
-            launchingFromStack -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f)
+            launchingFromStack -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 0f)
             directFaceStackTransition -> interpolateLayerValues(
                 hiddenStackValues,
                 stackLayerValues(ScreenState.Stack),
@@ -480,38 +463,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 }
             }
 
-            if (stackLaunchOverlayVisible && currentLaunchIcon != null) {
-                val iconSizePx = with(density) { 58.dp.toPx() }
-                val launchProgress = stackLaunchOverlayProgress.value
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .zIndex(6f)
-                ) {
-                    currentLaunchIcon?.let { icon ->
-                        Image(
-                            bitmap = icon,
-                            contentDescription = null,
-                            modifier = Modifier
-                                .size(58.dp)
-                                .clip(CircleShape)
-                                .graphicsLayer {
-                                    translationX = appOpenOrigin.x * screenWidthPx - iconSizePx / 2f
-                                    translationY = appOpenOrigin.y * screenHeightPx - iconSizePx / 2f
-                                    val scale = 1f + launchProgress * 1.85f
-                                    scaleX = scale
-                                    scaleY = scale
-                                    alpha = (1f - launchProgress * 0.92f).coerceIn(0f, 1f)
-                                },
-                            contentScale = ContentScale.Crop
-                        )
-                    }
-                }
-            }
-
-            /* legacy launch overlay animation kept for icon stage only */
-            /* removed duplicate full-screen backdrop composition */
-
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -521,7 +472,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled,
-                        origin = if (launchingFromStack || isReturningToStackFromApp) appOpenOrigin else null,
+                        origin = if (launchingFromNotifications || isReturningToNotificationsFromApp) appOpenOrigin else null,
                         animate = !directFaceStackTransition
                     )
             ) {
@@ -537,7 +488,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onRevealTargetChange = vm::setRevealedNotificationTarget,
                         onOpenNotifications = { vm.setState(ScreenState.Notifications) },
                         onLaunchApp = { appInfo, origin ->
-                            val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
+                            val launchDelay = BASE_LAUNCH_MASK_DELAY_MS
                             vm.openApp(appInfo, origin, launchDelay, ScreenState.Stack)
                         },
                         onSetShortcut = vm::setSideScreenShortcut,
