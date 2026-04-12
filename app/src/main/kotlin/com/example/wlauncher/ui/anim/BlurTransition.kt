@@ -65,7 +65,7 @@ fun stackLayerValues(state: ScreenState): LayerAnimValues = when (state) {
  */
 fun notificationLayerValues(state: ScreenState): LayerAnimValues = when (state) {
     ScreenState.Notifications -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f, translationY = 0f)
-    else -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 0f, translationY = -1f)
+    else -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 0f, translationY = 1f)
 }
 
 /**

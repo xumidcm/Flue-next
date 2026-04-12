@@ -219,6 +219,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             else -> screenState
         }
         val sideScreenVisible = sidePageProgress > 0.001f || screenState == ScreenState.Stack || screenState == ScreenState.Notifications
+        val sideSceneOverlayActive = sideScreenVisible
 
         GestureHost(
             screenState = screenState,
@@ -231,7 +232,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(if (screenState == ScreenState.Face) 3f else 1f)
+                    .zIndex(if (screenState == ScreenState.Face && !sideSceneOverlayActive) 3f else 1f)
                     .graphicsLayer {
                         translationX = sidePageProgress * screenWidthPx
                     }
@@ -372,7 +373,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .zIndex(2f)
+                        .zIndex(4f)
                         .graphicsLayer {
                             translationX = (sidePageProgress - 1f) * screenWidthPx
                             alpha = sidePageProgress.coerceIn(0f, 1f) *
@@ -406,7 +407,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .zIndex(3f)
+                        .zIndex(5f)
                         .scaleBlurAlpha(
                             targetValues = notificationLayerValues(screenState),
                             screenHeight = screenHeightPx,
