@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -45,6 +46,7 @@ import com.flue.launcher.ui.anim.appListLayerValues
 import com.flue.launcher.ui.anim.faceLayerValues
 import com.flue.launcher.ui.anim.notificationLayerValues
 import com.flue.launcher.ui.anim.scaleBlurAlpha
+import com.flue.launcher.ui.anim.stackLayerValues
 import com.flue.launcher.ui.drawer.HoneycombScreen
 import com.flue.launcher.ui.drawer.ListDrawerScreen
 import com.flue.launcher.ui.home.WatchFaceLayer
@@ -155,7 +157,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val notificationsLayerEnabled = showNotification
     var prevState by remember { mutableStateOf(screenState) }
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
-    var sideDragProgress by remember { mutableStateOf<Float?>(null) }
+    val context = LocalContext.current
     LaunchedEffect(screenState) { prevState = screenState }
 
     val useOrigin = screenState == ScreenState.App || isReturningFromApp
@@ -201,14 +203,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
             (screenState == ScreenState.App && launchSourceState == ScreenState.Stack)
         val keepNotificationLayer = screenState == ScreenState.Notifications ||
             (screenState == ScreenState.App && launchSourceState == ScreenState.Notifications)
-        val animatedStackStage by animateFloatAsState(
-            targetValue = if (keepStackLayer) 2f else 0f,
+        val stackProgress by animateFloatAsState(
+            targetValue = if (keepStackLayer) 1f else 0f,
             animationSpec = spring(dampingRatio = 0.88f, stiffness = 520f),
             label = "stack_scene_progress"
         )
-        val stackStage = sideDragProgress ?: animatedStackStage
-        val faceSlideProgress = stackStage.coerceIn(0f, 1f)
-        val stackEntryProgress = (stackStage - 1f).coerceIn(0f, 1f)
         val notificationProgress by animateFloatAsState(
             targetValue = if (keepNotificationLayer) 1f else 0f,
             animationSpec = spring(dampingRatio = 0.9f, stiffness = 560f),
@@ -216,33 +215,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
         )
         val launchingFromStack = screenState == ScreenState.App && launchSourceState == ScreenState.Stack
         val launchingFromNotifications = screenState == ScreenState.App && launchSourceState == ScreenState.Notifications
-        val faceLayerTargetValues = when {
-            screenState == ScreenState.App -> faceLayerValues(ScreenState.App)
-            keepStackLayer || sideDragProgress != null || keepNotificationLayer -> LayerAnimValues(
-                scale = 1f,
-                blur = if (layerBlurEnabled) 8f * faceSlideProgress else 0f,
-                alpha = 1f,
-                translationX = faceSlideProgress
-            )
-            else -> faceLayerValues(screenState)
+        val effectiveFaceState = when {
+            keepNotificationLayer -> ScreenState.Notifications
+            keepStackLayer -> ScreenState.Stack
+            else -> screenState
         }
         val stackLayerTargetValues = when {
             launchingFromStack -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f)
-            screenState == ScreenState.Notifications -> LayerAnimValues(
-                scale = 0.985f,
-                blur = 0f,
-                alpha = 0.42f,
-                translationX = 0f,
-                translationY = -0.04f
-            )
-            keepStackLayer || sideDragProgress != null -> LayerAnimValues(
-                scale = 1f,
-                blur = 0f,
-                alpha = stackEntryProgress,
-                translationX = -1f + stackEntryProgress,
-                translationY = 0f
-            )
-            else -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 0f, translationX = -1f, translationY = 0f)
+            screenState == ScreenState.Notifications -> stackLayerValues(ScreenState.Notifications)
+            keepStackLayer -> stackLayerValues(ScreenState.Stack)
+            else -> stackLayerValues(ScreenState.Apps)
         }
         val notificationLayerTargetValues = when {
             launchingFromNotifications -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f)
@@ -256,7 +238,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
             sideScreenEnabled = sideScreenEnabled,
             showNotification = notificationsLayerEnabled,
             showControlCenter = false,
-            onSideScreenProgressChange = { sideDragProgress = it },
             modifier = Modifier.fillMaxSize()
         ) {
             Box(
@@ -264,11 +245,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .fillMaxSize()
                     .zIndex(0f)
                     .scaleBlurAlpha(
-                        targetValues = faceLayerTargetValues,
+                        targetValues = faceLayerValues(effectiveFaceState),
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
-                        blurEnabled = layerBlurEnabled,
-                        animate = sideDragProgress == null
+                        blurEnabled = layerBlurEnabled
                     )
             ) {
                 AnimatedContent(
@@ -308,14 +288,28 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 cropToFill = builtInVideoFillScreen,
                                 clockColorMode = builtInVideoClockColorMode
                             ),
-                            onLongPress = null
+                            onLongPress = {
+                                context.startActivity(
+                                    Intent(context, SettingsActivity::class.java).apply {
+                                        putExtra(EXTRA_SETTINGS_DESTINATION, SETTINGS_DESTINATION_WATCH_FACES)
+                                        putExtra(EXTRA_SETTINGS_RETURN_TO_FACE, true)
+                                    }
+                                )
+                            }
                         )
                     } else {
                         LunchWatchFaceHost(
                             descriptor = selectedWatchFace,
                             isFaceVisible = screenState == ScreenState.Face,
                             refreshToken = watchFaceRefreshToken,
-                            onLongPress = null,
+                            onLongPress = {
+                                context.startActivity(
+                                    Intent(context, SettingsActivity::class.java).apply {
+                                        putExtra(EXTRA_SETTINGS_DESTINATION, SETTINGS_DESTINATION_WATCH_FACES)
+                                        putExtra(EXTRA_SETTINGS_RETURN_TO_FACE, true)
+                                    }
+                                )
+                            },
                             onLoadFailure = { descriptor, error ->
                                 val rootCause = generateSequence(error) { it.cause }.last()
                                 vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
@@ -423,17 +417,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(if (stackEntryProgress > 0f) 4f else 2f)
+                    .zIndex(if (stackProgress > 0f) 4f else 2f)
                     .scaleBlurAlpha(
                         targetValues = stackLayerTargetValues,
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled,
-                        origin = if (launchingFromStack) appOpenOrigin else null,
-                        animate = sideDragProgress == null
+                        origin = if (launchingFromStack) appOpenOrigin else null
                     )
             ) {
-                if (stackEntryProgress > 0.001f || keepStackLayer || sideDragProgress != null) {
+                if (stackProgress > 0.001f || keepStackLayer) {
                     SmartStackLayer(
                         apps = apps,
                         sideScreenShortcuts = sideScreenShortcuts,

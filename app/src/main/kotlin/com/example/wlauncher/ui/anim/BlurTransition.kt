@@ -25,8 +25,8 @@ fun faceLayerValues(state: ScreenState): LayerAnimValues = when (state) {
     ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
     ScreenState.Apps, ScreenState.Settings -> LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f)
     ScreenState.App -> LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f)
-    ScreenState.Stack -> LayerAnimValues(scale = 0.96f, blur = 9f, alpha = 0.95f, translationX = 0.22f)
-    ScreenState.Notifications -> LayerAnimValues(scale = 0.93f, blur = 12f, alpha = 0.92f, translationX = 0.28f)
+    ScreenState.Stack -> LayerAnimValues(scale = 0.96f, blur = 9f, alpha = 0.95f, translationX = 1f)
+    ScreenState.Notifications -> LayerAnimValues(scale = 0.93f, blur = 12f, alpha = 0.92f, translationX = 1.04f)
     ScreenState.ControlCenter -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.5f)
 }
 
