@@ -433,6 +433,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         previewGroups = sideScreenPreviewGroups,
                         notificationsEnabled = notificationsLayerEnabled,
                         notificationAccessGranted = notificationAccessGranted,
+                        notificationsSceneActive = screenState == ScreenState.Notifications,
                         revealedNotificationTarget = revealedNotificationTarget,
                         onRevealTargetChange = vm::setRevealedNotificationTarget,
                         onOpenNotifications = { vm.setState(ScreenState.Notifications) },

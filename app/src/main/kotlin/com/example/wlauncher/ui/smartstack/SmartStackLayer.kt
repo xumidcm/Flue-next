@@ -102,6 +102,7 @@ fun SmartStackLayer(
     previewGroups: List<NotificationGroupUi>,
     notificationsEnabled: Boolean,
     notificationAccessGranted: Boolean,
+    notificationsSceneActive: Boolean,
     revealedNotificationTarget: NotificationRevealTarget?,
     onRevealTargetChange: (NotificationRevealTarget?) -> Unit,
     onOpenNotifications: () -> Unit,
@@ -129,13 +130,22 @@ fun SmartStackLayer(
     var overscrollTarget by remember { mutableFloatStateOf(0f) }
     val overscrollY by animateFloatAsState(overscrollTarget, spring(stiffness = 440f, dampingRatio = 0.78f), label = "side_overscroll")
 
+    LaunchedEffect(notificationsSceneActive) {
+        if (notificationsSceneActive) {
+            delay(120)
+            overscrollTarget = 0f
+            dragDx = 0f
+            dragDy = 0f
+        }
+    }
+
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(40.dp))
             .background(WatchColors.Black)
-            .pointerInput(notificationAccessGranted, notificationsEnabled, modalState) {
-                if (modalState != SideScreenModalState.None) return@pointerInput
+            .pointerInput(notificationAccessGranted, notificationsEnabled, modalState, notificationsSceneActive) {
+                if (modalState != SideScreenModalState.None || notificationsSceneActive) return@pointerInput
                 detectDragGestures(
                     onDragStart = { dragDx = 0f; dragDy = 0f },
                     onDrag = { change, dragAmount ->
@@ -152,7 +162,8 @@ fun SmartStackLayer(
                     },
                     onDragEnd = {
                         if (notificationsEnabled && dragDy < -SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD) {
-                            onRevealTargetChange(null); overscrollTarget = 0f; onOpenNotifications()
+                            onRevealTargetChange(null)
+                            onOpenNotifications()
                         } else {
                             overscrollTarget = 0f
                         }
