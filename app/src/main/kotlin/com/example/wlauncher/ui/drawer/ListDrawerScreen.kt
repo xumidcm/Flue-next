@@ -96,7 +96,7 @@ fun ListDrawerScreen(
     iconSize: Dp = 48.dp,
     topFadeRangeDp: Int = 56,
     bottomFadeRangeDp: Int = 56,
-    showEdgeFades: Boolean = true,
+    edgeFadeAlpha: Float = 1f,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
     onLongClick: (AppInfo) -> Unit = {},
@@ -593,10 +593,12 @@ fun ListDrawerScreen(
                 }
             }
         }
-        if (showEdgeFades && blurEnabled && effectiveEdgeBlur) {
+        val clampedEdgeFadeAlpha = edgeFadeAlpha.coerceIn(0f, 1f)
+        if (clampedEdgeFadeAlpha > 0.001f && blurEnabled && effectiveEdgeBlur) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
+                    .graphicsLayer { alpha = clampedEdgeFadeAlpha }
                     .fillMaxWidth()
                     .height(topFadeRangeDp.coerceAtLeast(0).dp)
                     .background(
@@ -613,6 +615,7 @@ fun ListDrawerScreen(
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
+                    .graphicsLayer { alpha = clampedEdgeFadeAlpha }
                     .fillMaxWidth()
                     .height(bottomFadeRangeDp.coerceAtLeast(0).dp)
                     .background(
@@ -627,19 +630,21 @@ fun ListDrawerScreen(
                     .platformBlur(LIST_EDGE_ITEM_BLUR_DP, true)
             )
         }
-        if (showEdgeFades && topFadeRangeDp > 0) {
+        if (clampedEdgeFadeAlpha > 0.001f && topFadeRangeDp > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
+                    .graphicsLayer { alpha = clampedEdgeFadeAlpha }
                     .fillMaxWidth()
                     .height(topFadeRangeDp.dp)
                     .background(Brush.verticalGradient(listOf(Color.Black, Color.Transparent)))
             )
         }
-        if (showEdgeFades && bottomFadeRangeDp > 0) {
+        if (clampedEdgeFadeAlpha > 0.001f && bottomFadeRangeDp > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
+                    .graphicsLayer { alpha = clampedEdgeFadeAlpha }
                     .fillMaxWidth()
                     .height(bottomFadeRangeDp.dp)
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))

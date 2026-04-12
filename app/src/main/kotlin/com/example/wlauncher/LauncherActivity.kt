@@ -248,6 +248,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
             animationSpec = spring(dampingRatio = 0.9f, stiffness = 560f),
             label = "notification_scene_progress"
         )
+        val listEdgeFadeAlpha by animateFloatAsState(
+            targetValue = if (screenState == ScreenState.Face) 0f else 1f,
+            animationSpec = tween(durationMillis = 220),
+            label = "list_edge_fade_alpha"
+        )
         val launchingFromStack = screenState == ScreenState.App && launchSourceState == ScreenState.Stack
         val launchingFromNotifications = screenState == ScreenState.App && launchSourceState == ScreenState.Notifications
         val isReturningToStackFromApp =
@@ -428,7 +433,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         suppressHeavyEffects = reduceLegacyDrawerEffects,
                         topFadeRangeDp = honeycombTopFade,
                         bottomFadeRangeDp = honeycombBottomFade,
-                        showEdgeFades = screenState != ScreenState.Face,
+                        edgeFadeAlpha = listEdgeFadeAlpha,
                         onAppClick = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
                             vm.openApp(appInfo, origin, launchDelay, ScreenState.Apps)
