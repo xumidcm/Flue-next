@@ -65,6 +65,7 @@ import com.flue.launcher.watchface.LunchWatchFaceHost
 import kotlinx.coroutines.delay
 
 private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
+private const val STACK_RETURN_BACKDROP_HOLD_MS = 90L
 class LauncherActivity : ComponentActivity() {
 
     private lateinit var vm: LauncherViewModel
@@ -174,6 +175,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     var launchBackdropVisible by remember { mutableStateOf(false) }
     var startupGateReleased by remember { mutableStateOf(false) }
     var showSplash by remember { mutableStateOf(false) }
+    var stackReturnBackdropVisible by remember { mutableStateOf(false) }
     LaunchedEffect(screenState, launchSourceState, currentLaunchIcon) {
         if (screenState == ScreenState.App && currentLaunchIcon != null) {
             launchBackdropVisible = true
@@ -181,7 +183,22 @@ fun LauncherScreen(vm: LauncherViewModel) {
             launchBackdropVisible = false
         }
     }
-    val showLaunchBackdrop = launchBackdropVisible && screenState == ScreenState.App && currentLaunchIcon != null
+    LaunchedEffect(screenState, launchSourceState, prevState) {
+        if (
+            prevState == ScreenState.App &&
+            screenState == ScreenState.Stack &&
+            launchSourceState == ScreenState.Stack
+        ) {
+            stackReturnBackdropVisible = true
+            delay(STACK_RETURN_BACKDROP_HOLD_MS)
+            stackReturnBackdropVisible = false
+        } else if (screenState != ScreenState.App) {
+            stackReturnBackdropVisible = false
+        }
+    }
+    val showLaunchBackdrop =
+        (launchBackdropVisible && screenState == ScreenState.App && currentLaunchIcon != null) ||
+            stackReturnBackdropVisible
     LaunchedEffect(appDrawerReady) {
         if (appDrawerReady) {
             delay(120)
@@ -430,8 +447,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
             AnimatedVisibility(
                 visible = showLaunchBackdrop,
-                enter = fadeIn(),
-                exit = fadeOut()
+                modifier = Modifier.zIndex(6f),
+                enter = fadeIn(animationSpec = tween(durationMillis = 140)),
+                exit = fadeOut(animationSpec = tween(durationMillis = 180))
             ) {
                 Box(
                     modifier = Modifier
