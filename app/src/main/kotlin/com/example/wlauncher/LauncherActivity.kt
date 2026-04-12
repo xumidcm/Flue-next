@@ -9,6 +9,7 @@ import androidx.activity.addCallback
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -65,6 +66,7 @@ import com.flue.launcher.watchface.LunchWatchFaceHost
 import kotlinx.coroutines.delay
 
 private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
+private const val STACK_LAUNCH_SOURCE_STAGE_MS = 180L
 
 class LauncherActivity : ComponentActivity() {
 
@@ -172,9 +174,35 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
     }
 
-    val showLaunchBackdrop = screenState == ScreenState.App && currentLaunchIcon != null
+    var launchBackdropVisible by remember { mutableStateOf(false) }
     var startupGateReleased by remember { mutableStateOf(false) }
     var showSplash by remember { mutableStateOf(false) }
+    val stackLaunchOverlayProgress = remember { Animatable(0f) }
+    var stackLaunchOverlayVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(screenState, launchSourceState, currentLaunchIcon) {
+        if (screenState == ScreenState.App && currentLaunchIcon != null) {
+            if (launchSourceState == ScreenState.Stack) {
+                launchBackdropVisible = false
+                delay(STACK_LAUNCH_SOURCE_STAGE_MS)
+            }
+            launchBackdropVisible = true
+        } else {
+            launchBackdropVisible = false
+        }
+    }
+    LaunchedEffect(screenState, launchSourceState, currentLaunchIcon) {
+        if (screenState == ScreenState.App && launchSourceState == ScreenState.Stack && currentLaunchIcon != null) {
+            stackLaunchOverlayVisible = true
+            stackLaunchOverlayProgress.snapTo(0f)
+            stackLaunchOverlayProgress.animateTo(1f, tween(durationMillis = STACK_LAUNCH_SOURCE_STAGE_MS.toInt()))
+            stackLaunchOverlayVisible = false
+            stackLaunchOverlayProgress.snapTo(0f)
+        } else {
+            stackLaunchOverlayVisible = false
+            stackLaunchOverlayProgress.snapTo(0f)
+        }
+    }
+    val showLaunchBackdrop = launchBackdropVisible && screenState == ScreenState.App && currentLaunchIcon != null
     LaunchedEffect(appDrawerReady) {
         if (appDrawerReady) {
             delay(120)
@@ -447,6 +475,35 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 contentScale = ContentScale.Crop
                             )
                         }
+                    }
+                }
+            }
+
+            if (stackLaunchOverlayVisible && currentLaunchIcon != null) {
+                val iconSizePx = with(density) { 58.dp.toPx() }
+                val launchProgress = stackLaunchOverlayProgress.value
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(6f)
+                ) {
+                    currentLaunchIcon?.let { icon ->
+                        Image(
+                            bitmap = icon,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(58.dp)
+                                .clip(CircleShape)
+                                .graphicsLayer {
+                                    translationX = appOpenOrigin.x * screenWidthPx - iconSizePx / 2f
+                                    translationY = appOpenOrigin.y * screenHeightPx - iconSizePx / 2f
+                                    val scale = 1f + launchProgress * 1.85f
+                                    scaleX = scale
+                                    scaleY = scale
+                                    alpha = (1f - launchProgress * 0.92f).coerceIn(0f, 1f)
+                                },
+                            contentScale = ContentScale.Crop
+                        )
                     }
                 }
             }
