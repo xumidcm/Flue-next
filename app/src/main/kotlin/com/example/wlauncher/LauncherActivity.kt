@@ -35,7 +35,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
@@ -156,7 +155,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val builtInVideoClockBold by vm.builtInVideoClockBold.collectAsState()
     val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
     val builtInVideoClockColorMode by vm.builtInVideoClockColorMode.collectAsState()
-    val animationOverrideEnabled by vm.animationOverrideEnabled.collectAsState()
     val layerBlurEnabled = blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
     val notificationsLayerEnabled = showNotification
@@ -176,32 +174,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
     var launchBackdropVisible by remember { mutableStateOf(false) }
     var startupGateReleased by remember { mutableStateOf(false) }
     var showSplash by remember { mutableStateOf(false) }
-    var returnBackdropVisible by remember { mutableStateOf(false) }
-    var returnBackdropIcon by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     LaunchedEffect(screenState, launchSourceState, currentLaunchIcon) {
         if (screenState == ScreenState.App && currentLaunchIcon != null) {
             launchBackdropVisible = true
         } else {
             launchBackdropVisible = false
-        }
-    }
-    LaunchedEffect(screenState, prevState, currentLaunchIcon, launchSourceState, animationOverrideEnabled) {
-        val shouldShowReturnMask =
-            currentLaunchIcon != null && (launchSourceState == ScreenState.Stack || animationOverrideEnabled)
-        if (prevState == ScreenState.App && screenState != ScreenState.App && shouldShowReturnMask) {
-            returnBackdropIcon = currentLaunchIcon
-            returnBackdropVisible = true
-            delay(220)
-            returnBackdropVisible = false
-            returnBackdropIcon = null
-            vm.clearLaunchIcon()
-        } else if (prevState == ScreenState.App && screenState != ScreenState.App) {
-            returnBackdropVisible = false
-            returnBackdropIcon = null
-            vm.clearLaunchIcon()
-        } else if (screenState == ScreenState.App) {
-            returnBackdropVisible = false
-            returnBackdropIcon = null
         }
     }
     val showLaunchBackdrop = launchBackdropVisible && screenState == ScreenState.App && currentLaunchIcon != null
@@ -482,20 +459,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 )
             }
 
-            AnimatedVisibility(
-                visible = returnBackdropVisible,
-                modifier = Modifier.zIndex(6f),
-                enter = fadeIn(animationSpec = tween(durationMillis = 80)),
-                exit = fadeOut(animationSpec = tween(durationMillis = 180))
-            ) {
-                LaunchBackdropContent(
-                    visible = returnBackdropVisible,
-                    showSplash = true,
-                    icon = returnBackdropIcon,
-                    shrinkDownOnExit = true
-                )
-            }
-
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -587,10 +550,8 @@ private fun lerpFloat(start: Float, end: Float, fraction: Float): Float =
 
 @Composable
 private fun LaunchBackdropContent(
-    visible: Boolean = true,
     showSplash: Boolean,
-    icon: androidx.compose.ui.graphics.ImageBitmap?,
-    shrinkDownOnExit: Boolean = false
+    icon: androidx.compose.ui.graphics.ImageBitmap?
 ) {
     Box(
         modifier = Modifier
@@ -598,54 +559,20 @@ private fun LaunchBackdropContent(
             .background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
-        if (shrinkDownOnExit) {
-            val iconScale by animateFloatAsState(
-                targetValue = if (visible) 1f else 0.28f,
-                animationSpec = tween(durationMillis = 180),
-                label = "return_backdrop_icon_scale"
-            )
-            val iconAlpha by animateFloatAsState(
-                targetValue = if (visible) 1f else 0f,
-                animationSpec = tween(durationMillis = 180),
-                label = "return_backdrop_icon_alpha"
-            )
-            val iconOffsetY by animateFloatAsState(
-                targetValue = if (visible) 0f else 44f,
-                animationSpec = tween(durationMillis = 180),
-                label = "return_backdrop_icon_offset"
-            )
+        AnimatedVisibility(
+            visible = showSplash && icon != null,
+            enter = fadeIn() + scaleIn(initialScale = 0.5f),
+            exit = fadeOut() + scaleOut(targetScale = 0.3f)
+        ) {
             icon?.let { launchIcon ->
                 Image(
                     bitmap = launchIcon,
                     contentDescription = null,
                     modifier = Modifier
-                        .graphicsLayer {
-                            scaleX = iconScale
-                            scaleY = iconScale
-                            alpha = iconAlpha
-                            translationY = iconOffsetY
-                        }
                         .size(96.dp)
                         .clip(CircleShape),
                     contentScale = ContentScale.Crop
                 )
-            }
-        } else {
-            AnimatedVisibility(
-                visible = showSplash && icon != null,
-                enter = fadeIn() + scaleIn(initialScale = 0.5f),
-                exit = fadeOut() + scaleOut(targetScale = 0.3f)
-            ) {
-                icon?.let { launchIcon ->
-                    Image(
-                        bitmap = launchIcon,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .size(96.dp)
-                            .clip(CircleShape),
-                        contentScale = ContentScale.Crop
-                    )
-                }
             }
         }
     }
