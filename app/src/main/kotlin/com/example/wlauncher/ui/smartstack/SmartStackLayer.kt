@@ -86,6 +86,7 @@ import kotlin.math.floor
 private const val SIDE_SCREEN_CONTENT_WIDTH_RATIO = 0.884f
 private const val SIDE_SCREEN_DISMISS_THRESHOLD = 86f
 private const val SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD = 110f
+private const val SIDE_SCREEN_SHORTCUT_LAUNCH_HOLD_MS = 200L
 private sealed interface SideScreenModalState {
     data object None : SideScreenModalState
     data class Picker(val slotIndex: Int) : SideScreenModalState
@@ -116,7 +117,6 @@ fun SmartStackLayer(
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
-    val scope = rememberCoroutineScope()
     val clock = rememberClockSnapshot()
     val battery = rememberBatterySnapshot()
     val slotCenters = remember { mutableStateMapOf<Int, Offset>() }
@@ -132,6 +132,7 @@ fun SmartStackLayer(
     var overscrollTarget by remember { mutableFloatStateOf(0f) }
     var transitionInFlight by remember { mutableStateOf(false) }
     val overscrollY by animateFloatAsState(overscrollTarget, spring(stiffness = 440f, dampingRatio = 0.78f), label = "side_overscroll")
+    val contentTranslationY = if (notificationsSceneActive || transitionInFlight) 0f else overscrollY
 
     LaunchedEffect(notificationsSceneActive) {
         if (notificationsSceneActive) {
@@ -180,12 +181,11 @@ fun SmartStackLayer(
                             }
                             openNotifications -> {
                                 transitionInFlight = true
-                                overscrollTarget = with(density) { (-72).dp.toPx() }
-                                scope.launch {
-                                    delay(120L)
-                                    onRevealTargetChange(null)
-                                    onOpenNotifications()
-                                }
+                                overscrollTarget = 0f
+                                dragDx = 0f
+                                dragDy = 0f
+                                onRevealTargetChange(null)
+                                onOpenNotifications()
                             }
                             else -> {
                                 overscrollTarget = 0f
@@ -226,7 +226,7 @@ fun SmartStackLayer(
 
         Column(
             modifier = Modifier.fillMaxSize().graphicsLayer {
-                translationY = overscrollY
+                translationY = contentTranslationY
             }.padding(top = 10.dp, bottom = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -293,7 +293,18 @@ fun SmartStackLayer(
     }
 }
 
-@Composable private fun QuickPanel(width: androidx.compose.ui.unit.Dp, height: androidx.compose.ui.unit.Dp, apps: List<AppInfo?>, slotCenters: MutableMap<Int, Offset>, onAdd: (Int) -> Unit, onLongPress: (Int) -> Unit, onClick: (Int, AppInfo) -> Unit) {
+@Composable private fun QuickPanel(
+    width: androidx.compose.ui.unit.Dp,
+    height: androidx.compose.ui.unit.Dp,
+    apps: List<AppInfo?>,
+    slotCenters: MutableMap<Int, Offset>,
+    onAdd: (Int) -> Unit,
+    onLongPress: (Int) -> Unit,
+    onClick: (Int, AppInfo) -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var launchingSlot by remember { mutableIntStateOf(-1) }
+
     Box(Modifier.width(width).height(height).clip(RoundedCornerShape(28.dp)).background(Color(0xFF353535)).padding(14.dp)) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
             apps.chunked(3).forEachIndexed { rowIndex, row ->
@@ -301,7 +312,35 @@ fun SmartStackLayer(
                     row.forEachIndexed { colIndex, app ->
                         val slot = rowIndex * 3 + colIndex
                         Box(Modifier.onGloballyPositioned { c -> val p = c.positionInRoot(); slotCenters[slot] = Offset(p.x + c.size.width / 2f, p.y + c.size.height / 2f) }, contentAlignment = Alignment.Center) {
-                            if (app == null) AddBubble { onAdd(slot) } else AppBubble(app.cachedIcon, 58.dp, onClick = { onClick(slot, app) }, onLongClick = { onLongPress(slot) }, pressScaleTarget = 0.9f, pressAnimationDurationMillis = 200)
+                            if (app == null) {
+                                AddBubble { if (launchingSlot == -1) onAdd(slot) }
+                            } else {
+                                AppBubble(
+                                    app.cachedIcon,
+                                    58.dp,
+                                    onClick = {
+                                        if (launchingSlot == -1) {
+                                            launchingSlot = slot
+                                            onClick(slot, app)
+                                            scope.launch {
+                                                delay(SIDE_SCREEN_SHORTCUT_LAUNCH_HOLD_MS)
+                                                if (launchingSlot == slot) {
+                                                    launchingSlot = -1
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onLongClick = if (launchingSlot == -1) {
+                                        { onLongPress(slot) }
+                                    } else {
+                                        null
+                                    },
+                                    forcePressed = launchingSlot == slot,
+                                    pressScaleTarget = 0.9f,
+                                    pressAnimationDurationMillis = SIDE_SCREEN_SHORTCUT_LAUNCH_HOLD_MS.toInt(),
+                                    onPressedChange = {}
+                                )
+                            }
                         }
                     }
                     repeat(3 - row.size) { Spacer(Modifier.size(58.dp)) }
