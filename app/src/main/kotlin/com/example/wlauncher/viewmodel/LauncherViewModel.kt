@@ -96,8 +96,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     val allApps: StateFlow<List<AppInfo>> = appRepository.allApps
     val apps: StateFlow<List<AppInfo>> = appRepository.apps
-    val appDrawerReady: StateFlow<Boolean> = appRepository.initialLoadComplete
-
     private val _screenState = MutableStateFlow(ScreenState.Face)
     val screenState: StateFlow<ScreenState> = _screenState.asStateFlow()
 

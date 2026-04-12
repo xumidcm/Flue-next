@@ -166,7 +166,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val layerBlurEnabled = blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
     val notificationsEnabled = showNotification
-    val openWatchFaceChooser = remember(context) {
+    val openWatchFaceChooser: () -> Unit = remember(context) {
         {
             context.startActivity(
                 Intent(context, SettingsActivity::class.java)
@@ -174,6 +174,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .putExtra(EXTRA_SETTINGS_RETURN_TO_FACE, true)
             )
             (context as? Activity)?.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+            Unit
         }
     }
     var prevState by remember { mutableStateOf(screenState) }
