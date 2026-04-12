@@ -117,7 +117,7 @@ import java.io.File
 import java.util.Date
 import java.util.Locale
 
-private const val ABOUT_VERSION = "beta0.8"
+private const val ABOUT_VERSION = "beta1.0"
 const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
 const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"

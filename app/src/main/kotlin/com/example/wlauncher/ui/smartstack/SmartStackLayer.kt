@@ -86,8 +86,6 @@ import kotlin.math.floor
 private const val SIDE_SCREEN_CONTENT_WIDTH_RATIO = 0.884f
 private const val SIDE_SCREEN_DISMISS_THRESHOLD = 86f
 private const val SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD = 110f
-private const val SIDE_SCREEN_FINISH_DELAY_MS = 120L
-private const val SIDE_SCREEN_RESET_DELAY_MS = 180L
 private sealed interface SideScreenModalState {
     data object None : SideScreenModalState
     data class Picker(val slotIndex: Int) : SideScreenModalState
@@ -132,16 +130,12 @@ fun SmartStackLayer(
     var dragDx by remember { mutableFloatStateOf(0f) }
     var dragDy by remember { mutableFloatStateOf(0f) }
     var overscrollTarget by remember { mutableFloatStateOf(0f) }
-    var releaseOffsetXTarget by remember { mutableFloatStateOf(0f) }
     var transitionInFlight by remember { mutableStateOf(false) }
     val overscrollY by animateFloatAsState(overscrollTarget, spring(stiffness = 440f, dampingRatio = 0.78f), label = "side_overscroll")
-    val releaseOffsetX by animateFloatAsState(releaseOffsetXTarget, spring(stiffness = 420f, dampingRatio = 0.8f), label = "side_release_x")
 
     LaunchedEffect(notificationsSceneActive) {
         if (notificationsSceneActive) {
-            delay(SIDE_SCREEN_FINISH_DELAY_MS)
             overscrollTarget = 0f
-            releaseOffsetXTarget = 0f
             dragDx = 0f
             dragDy = 0f
             transitionInFlight = false
@@ -159,7 +153,6 @@ fun SmartStackLayer(
                     onDragStart = {
                         dragDx = 0f
                         dragDy = 0f
-                        releaseOffsetXTarget = 0f
                     },
                     onDrag = { change, dragAmount ->
                         dragDx += dragAmount.x
@@ -179,32 +172,23 @@ fun SmartStackLayer(
 
                         when {
                             dismissToFace -> {
-                                transitionInFlight = true
                                 overscrollTarget = 0f
-                                releaseOffsetXTarget = with(density) { (-44).dp.toPx() }
-                                scope.launch {
-                                    delay(SIDE_SCREEN_FINISH_DELAY_MS)
-                                    onRevealTargetChange(null)
-                                    onDismissToFace()
-                                    delay(SIDE_SCREEN_RESET_DELAY_MS)
-                                    releaseOffsetXTarget = 0f
-                                    dragDx = 0f
-                                    dragDy = 0f
-                                    transitionInFlight = false
-                                }
+                                dragDx = 0f
+                                dragDy = 0f
+                                onRevealTargetChange(null)
+                                onDismissToFace()
                             }
                             openNotifications -> {
                                 transitionInFlight = true
                                 overscrollTarget = with(density) { (-72).dp.toPx() }
                                 scope.launch {
-                                    delay(SIDE_SCREEN_FINISH_DELAY_MS)
+                                    delay(120L)
                                     onRevealTargetChange(null)
                                     onOpenNotifications()
                                 }
                             }
                             else -> {
                                 overscrollTarget = 0f
-                                releaseOffsetXTarget = 0f
                                 dragDx = 0f
                                 dragDy = 0f
                             }
@@ -213,7 +197,6 @@ fun SmartStackLayer(
                     onDragCancel = {
                         if (!transitionInFlight) {
                             overscrollTarget = 0f
-                            releaseOffsetXTarget = 0f
                             dragDx = 0f
                             dragDy = 0f
                         } else {
@@ -243,7 +226,6 @@ fun SmartStackLayer(
 
         Column(
             modifier = Modifier.fillMaxSize().graphicsLayer {
-                translationX = releaseOffsetX
                 translationY = overscrollY
             }.padding(top = 10.dp, bottom = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally

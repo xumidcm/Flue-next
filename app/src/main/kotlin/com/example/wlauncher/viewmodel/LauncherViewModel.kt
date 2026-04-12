@@ -481,24 +481,35 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun openNotification(
         key: String,
         origin: Offset = Offset(0.5f, 0.5f),
-        returnState: ScreenState = ScreenState.Stack
+        returnState: ScreenState = ScreenState.Stack,
+        launchDelayMs: Long = _splashDelay.value.toLong()
     ): Boolean {
-        val opened = WLauncherNotificationListener.openNotification(key)
-        if (opened) {
-            launchingExternalApp = true
-            returnStateAfterExternalLaunch = returnState
-            _launchSourceState.value = returnState
-            _currentApp.value = null
-            _currentLaunchIcon.value = _notificationGroups.value
-                .asSequence()
-                .flatMap { it.entries.asSequence() }
-                .firstOrNull { it.key == key }
-                ?.icon
-            _appOpenOrigin.value = origin
-            _screenState.value = ScreenState.App
-            _revealedNotificationTarget.value = null
+        val targetEntry = _notificationGroups.value
+            .asSequence()
+            .flatMap { it.entries.asSequence() }
+            .firstOrNull { it.key == key }
+            ?: return false
+        returnStateAfterExternalLaunch = returnState
+        _launchSourceState.value = returnState
+        _currentApp.value = null
+        _currentLaunchIcon.value = targetEntry.icon
+        _appOpenOrigin.value = origin
+        _screenState.value = ScreenState.App
+        _revealedNotificationTarget.value = null
+
+        launchJob?.cancel()
+        launchJob = viewModelScope.launch {
+            delay(launchDelayMs)
+            val opened = WLauncherNotificationListener.openNotification(key)
+            if (opened) {
+                launchingExternalApp = true
+            } else {
+                launchingExternalApp = false
+                _currentLaunchIcon.value = null
+                _screenState.value = returnStateAfterExternalLaunch
+            }
         }
-        return opened
+        return true
     }
 
     fun onReturnToLauncher() {

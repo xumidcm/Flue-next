@@ -71,7 +71,6 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.ui.common.instantPressGesture
-import com.flue.launcher.ui.common.bottomFisheyeScale
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.delay
@@ -183,8 +182,6 @@ fun NotificationLayer(
             .nestedScroll(nestedScroll)
     ) {
         val contentWidth = maxWidth * NOTIFICATION_CARD_WIDTH_RATIO
-        val screenHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
-        val screenCenterY = screenHeightPx / 2f
         val bottomScrollPadding = ((maxHeight / 2) - 64.dp).coerceAtLeast(120.dp)
         val rows = remember(notificationGroups) { buildNotificationRows(notificationGroups) }
         Column(
@@ -230,13 +227,7 @@ fun NotificationLayer(
                         key = { it.key },
                         contentType = { it.contentType }
                     ) { row ->
-                        val scale = bottomFisheyeScale(
-                            listState = listState,
-                            key = row.key,
-                            screenCenterY = screenCenterY,
-                            screenHeight = screenHeightPx
-                        )
-                        NotificationRowContainer(scale = scale) {
+                        NotificationRowContainer {
                             when (row) {
                                 is NotificationListRow.GroupHeader -> Box(Modifier.width(contentWidth)) {
                                     GroupHeader(
@@ -293,15 +284,10 @@ private fun buildNotificationRows(groups: List<NotificationGroupUi>): List<Notif
 }
 
 @Composable
-private fun NotificationRowContainer(scale: Float, content: @Composable () -> Unit) {
+private fun NotificationRowContainer(content: @Composable () -> Unit) {
     Box(
         modifier = Modifier
-            .fillMaxWidth()
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                alpha = scale.coerceIn(0.55f, 1f)
-            },
+            .fillMaxWidth(),
         contentAlignment = Alignment.Center
     ) {
         content()

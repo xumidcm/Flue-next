@@ -15,6 +15,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -44,8 +45,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.anim.LayerAnimValues
 import com.flue.launcher.ui.anim.appListLayerValues
 import com.flue.launcher.ui.anim.faceLayerValues
-import com.flue.launcher.ui.anim.lunchNegativeFaceValues
-import com.flue.launcher.ui.anim.lunchNegativeStackValues
 import com.flue.launcher.ui.anim.notificationLayerValues
 import com.flue.launcher.ui.anim.scaleBlurAlpha
 import com.flue.launcher.ui.anim.stackLayerValues
@@ -210,7 +209,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             (screenState == ScreenState.App && launchSourceState == ScreenState.Notifications)
         val stackProgress by animateFloatAsState(
             targetValue = if (keepStackLayer) 1f else 0f,
-            animationSpec = spring(dampingRatio = 0.88f, stiffness = 520f),
+            animationSpec = tween(durationMillis = 240),
             label = "stack_scene_progress"
         )
         val notificationProgress by animateFloatAsState(
@@ -225,20 +224,33 @@ fun LauncherScreen(vm: LauncherViewModel) {
             keepStackLayer -> ScreenState.Stack
             else -> screenState
         }
-        val useLunchStyleStackTransition =
-            (stackProgress > 0.001f || keepStackLayer) &&
+        val directFaceStackTransition =
+            !launchingFromStack &&
+                !launchingFromNotifications &&
                 screenState != ScreenState.Notifications &&
-                !launchingFromStack
+                (stackProgress > 0.001f || keepStackLayer)
         val faceLayerTargetValues = when {
-            useLunchStyleStackTransition -> lunchNegativeFaceValues(
-                progress = stackProgress,
-                blurEnabled = layerBlurEnabled
+            directFaceStackTransition -> interpolateLayerValues(
+                faceLayerValues(ScreenState.Face),
+                faceLayerValues(ScreenState.Stack),
+                stackProgress
             )
             else -> faceLayerValues(effectiveFaceState)
         }
+        val hiddenStackValues = LayerAnimValues(
+            scale = 1f,
+            blur = 0f,
+            alpha = 1f,
+            translationX = -1f,
+            translationY = 0f
+        )
         val stackLayerTargetValues = when {
             launchingFromStack -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f)
-            useLunchStyleStackTransition -> lunchNegativeStackValues(stackProgress)
+            directFaceStackTransition -> interpolateLayerValues(
+                hiddenStackValues,
+                stackLayerValues(ScreenState.Stack),
+                stackProgress
+            )
             screenState == ScreenState.Notifications -> stackLayerValues(ScreenState.Notifications)
             keepStackLayer -> stackLayerValues(ScreenState.Stack)
             else -> stackLayerValues(ScreenState.Apps)
@@ -266,7 +278,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled,
-                        animate = !useLunchStyleStackTransition
+                        animate = !directFaceStackTransition
                     )
             ) {
                 AnimatedContent(
@@ -442,7 +454,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled,
                         origin = if (launchingFromStack) appOpenOrigin else null,
-                        animate = !useLunchStyleStackTransition
+                        animate = !directFaceStackTransition
                     )
             ) {
                 if (stackProgress > 0.001f || keepStackLayer) {
@@ -491,7 +503,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onToggleGroup = vm::toggleNotificationGroup,
                         onDismissGroup = vm::dismissNotificationGroup,
                         onDismissNotification = vm::dismissNotification,
-                        onOpenNotification = { key, origin -> vm.openNotification(key, origin, ScreenState.Notifications) }
+                        onOpenNotification = { key, origin ->
+                            val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
+                            vm.openNotification(key, origin, ScreenState.Notifications, launchDelay)
+                        }
                     )
                 }
             }
@@ -499,3 +514,21 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
     }
 }
+
+private fun interpolateLayerValues(
+    start: LayerAnimValues,
+    end: LayerAnimValues,
+    progress: Float
+): LayerAnimValues {
+    val fraction = progress.coerceIn(0f, 1f)
+    return LayerAnimValues(
+        scale = lerpFloat(start.scale, end.scale, fraction),
+        blur = lerpFloat(start.blur, end.blur, fraction),
+        alpha = lerpFloat(start.alpha, end.alpha, fraction),
+        translationX = lerpFloat(start.translationX, end.translationX, fraction),
+        translationY = lerpFloat(start.translationY, end.translationY, fraction)
+    )
+}
+
+private fun lerpFloat(start: Float, end: Float, fraction: Float): Float =
+    start + (end - start) * fraction
