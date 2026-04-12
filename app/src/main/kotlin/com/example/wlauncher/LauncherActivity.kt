@@ -219,6 +219,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
         )
         val launchingFromStack = screenState == ScreenState.App && launchSourceState == ScreenState.Stack
         val launchingFromNotifications = screenState == ScreenState.App && launchSourceState == ScreenState.Notifications
+        val isReturningToStackFromApp =
+            prevState == ScreenState.App &&
+                screenState == ScreenState.Stack &&
+                launchSourceState == ScreenState.Stack
+        val isReturningToNotificationsFromApp =
+            prevState == ScreenState.App &&
+                screenState == ScreenState.Notifications &&
+                launchSourceState == ScreenState.Notifications
         val effectiveFaceState = when {
             keepNotificationLayer -> ScreenState.Notifications
             keepStackLayer -> ScreenState.Stack
@@ -227,6 +235,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val directFaceStackTransition =
             !launchingFromStack &&
                 !launchingFromNotifications &&
+                !isReturningToStackFromApp &&
+                !isReturningToNotificationsFromApp &&
                 screenState != ScreenState.Notifications &&
                 (stackProgress > 0.001f || keepStackLayer)
         val faceLayerTargetValues = when {
@@ -453,7 +463,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled,
-                        origin = if (launchingFromStack) appOpenOrigin else null,
+                        origin = if (launchingFromStack || isReturningToStackFromApp) appOpenOrigin else null,
                         animate = !directFaceStackTransition
                     )
             ) {
@@ -490,7 +500,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled,
-                        origin = if (launchingFromNotifications) appOpenOrigin else null
+                        origin = if (launchingFromNotifications || isReturningToNotificationsFromApp) appOpenOrigin else null
                     )
             ) {
                 if (notificationProgress > 0.001f || keepNotificationLayer) {
