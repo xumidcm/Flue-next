@@ -47,7 +47,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -86,7 +85,6 @@ import kotlin.math.floor
 private const val SIDE_SCREEN_CONTENT_WIDTH_RATIO = 0.884f
 private const val SIDE_SCREEN_DISMISS_THRESHOLD = 86f
 private const val SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD = 110f
-private const val SIDE_SCREEN_SHORTCUT_LAUNCH_HOLD_MS = 200L
 private sealed interface SideScreenModalState {
     data object None : SideScreenModalState
     data class Picker(val slotIndex: Int) : SideScreenModalState
@@ -317,9 +315,6 @@ fun SmartStackLayer(
     onLongPress: (Int) -> Unit,
     onClick: (Int, AppInfo) -> Unit
 ) {
-    val scope = rememberCoroutineScope()
-    var launchingSlot by remember { mutableIntStateOf(-1) }
-
     Box(Modifier.width(width).height(height).clip(RoundedCornerShape(28.dp)).background(Color(0xFF353535)).padding(14.dp)) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
             apps.chunked(3).forEachIndexed { rowIndex, row ->
@@ -328,32 +323,15 @@ fun SmartStackLayer(
                         val slot = rowIndex * 3 + colIndex
                         Box(Modifier.onGloballyPositioned { c -> val p = c.positionInRoot(); slotCenters[slot] = Offset(p.x + c.size.width / 2f, p.y + c.size.height / 2f) }, contentAlignment = Alignment.Center) {
                             if (app == null) {
-                                AddBubble { if (launchingSlot == -1) onAdd(slot) }
+                                AddBubble { onAdd(slot) }
                             } else {
                                 AppBubble(
                                     app.cachedIcon,
                                     58.dp,
                                     onClick = {
-                                        if (launchingSlot == -1) {
-                                            launchingSlot = slot
-                                            onClick(slot, app)
-                                            scope.launch {
-                                                delay(SIDE_SCREEN_SHORTCUT_LAUNCH_HOLD_MS)
-                                                if (launchingSlot == slot) {
-                                                    launchingSlot = -1
-                                                }
-                                            }
-                                        }
+                                        onClick(slot, app)
                                     },
-                                    onLongClick = if (launchingSlot == -1) {
-                                        { onLongPress(slot) }
-                                    } else {
-                                        null
-                                    },
-                                    forcePressed = launchingSlot == slot,
-                                    pressScaleTarget = 0.9f,
-                                    pressAnimationDurationMillis = SIDE_SCREEN_SHORTCUT_LAUNCH_HOLD_MS.toInt(),
-                                    onPressedChange = {}
+                                    onLongClick = { onLongPress(slot) }
                                 )
                             }
                         }

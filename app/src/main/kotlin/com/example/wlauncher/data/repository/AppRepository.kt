@@ -35,8 +35,6 @@ class AppRepository(private val context: Context) {
 
     private val _apps = MutableStateFlow<List<AppInfo>>(emptyList())
     val apps: StateFlow<List<AppInfo>> = _apps.asStateFlow()
-    private val _initialLoadComplete = MutableStateFlow(false)
-    val initialLoadComplete: StateFlow<Boolean> = _initialLoadComplete.asStateFlow()
 
     private var customOrder: List<String> = emptyList()
     private var customOrderIndexMap: Map<String, Int> = emptyMap()
@@ -143,10 +141,8 @@ class AppRepository(private val context: Context) {
                 } else {
                     resolvedIconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
                 }
-                baseBitmap.prepareToDraw()
                 val sharp = baseBitmap.asImageBitmap()
-                val softenedBitmap = createSoftenedBitmap(baseBitmap).also { it.prepareToDraw() }
-                val softened = softenedBitmap.asImageBitmap()
+                val softened = createSoftenedBitmap(baseBitmap).asImageBitmap()
                 synchronized(iconCache) {
                     iconCache[iconCacheKey] = sharp to softened
                 }
@@ -170,7 +166,6 @@ class AppRepository(private val context: Context) {
 
         _allApps.value = sortApps(loadedApps)
         applyFilters()
-        _initialLoadComplete.value = true
     }
 
     fun launchApp(appInfo: AppInfo): Boolean {
