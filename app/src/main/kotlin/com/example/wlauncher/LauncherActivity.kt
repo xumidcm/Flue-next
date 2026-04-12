@@ -44,6 +44,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.anim.LayerAnimValues
 import com.flue.launcher.ui.anim.appListLayerValues
 import com.flue.launcher.ui.anim.faceLayerValues
+import com.flue.launcher.ui.anim.lunchNegativeFaceValues
+import com.flue.launcher.ui.anim.lunchNegativeStackValues
 import com.flue.launcher.ui.anim.notificationLayerValues
 import com.flue.launcher.ui.anim.scaleBlurAlpha
 import com.flue.launcher.ui.anim.stackLayerValues
@@ -223,8 +225,20 @@ fun LauncherScreen(vm: LauncherViewModel) {
             keepStackLayer -> ScreenState.Stack
             else -> screenState
         }
+        val useLunchStyleStackTransition =
+            (stackProgress > 0.001f || keepStackLayer) &&
+                screenState != ScreenState.Notifications &&
+                !launchingFromStack
+        val faceLayerTargetValues = when {
+            useLunchStyleStackTransition -> lunchNegativeFaceValues(
+                progress = stackProgress,
+                blurEnabled = layerBlurEnabled
+            )
+            else -> faceLayerValues(effectiveFaceState)
+        }
         val stackLayerTargetValues = when {
             launchingFromStack -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f)
+            useLunchStyleStackTransition -> lunchNegativeStackValues(stackProgress)
             screenState == ScreenState.Notifications -> stackLayerValues(ScreenState.Notifications)
             keepStackLayer -> stackLayerValues(ScreenState.Stack)
             else -> stackLayerValues(ScreenState.Apps)
@@ -248,10 +262,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .fillMaxSize()
                     .zIndex(0f)
                     .scaleBlurAlpha(
-                        targetValues = faceLayerValues(effectiveFaceState),
+                        targetValues = faceLayerTargetValues,
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
-                        blurEnabled = layerBlurEnabled
+                        blurEnabled = layerBlurEnabled,
+                        animate = !useLunchStyleStackTransition
                     )
             ) {
                 AnimatedContent(
@@ -426,7 +441,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled,
-                        origin = if (launchingFromStack) appOpenOrigin else null
+                        origin = if (launchingFromStack) appOpenOrigin else null,
+                        animate = !useLunchStyleStackTransition
                     )
             ) {
                 if (stackProgress > 0.001f || keepStackLayer) {

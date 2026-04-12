@@ -27,8 +27,11 @@ fun Modifier.scaleBlurAlpha(
                 alpha = targetValues.alpha
                 translationX = targetValues.translationX * screenWidth
                 translationY = targetValues.translationY * screenHeight
+                rotationY = targetValues.rotationY
                 if (origin != null) {
                     transformOrigin = TransformOrigin(origin.x, origin.y)
+                } else {
+                    transformOrigin = TransformOrigin(targetValues.pivotX, targetValues.pivotY)
                 }
             }
             .platformBlur(
@@ -42,6 +45,7 @@ fun Modifier.scaleBlurAlpha(
     val animBlur = remember { Animatable(targetValues.blur) }
     val animTransX = remember { Animatable(targetValues.translationX) }
     val animTransY = remember { Animatable(targetValues.translationY) }
+    val animRotationY = remember { Animatable(targetValues.rotationY) }
 
     LaunchedEffect(targetValues) {
         launch { animScale.animateTo(targetValues.scale, TransitionSpring) }
@@ -49,6 +53,7 @@ fun Modifier.scaleBlurAlpha(
         launch { animBlur.animateTo(targetValues.blur, AlphaSpec) }
         launch { animTransX.animateTo(targetValues.translationX, TransitionSpring) }
         launch { animTransY.animateTo(targetValues.translationY, TransitionSpring) }
+        launch { animRotationY.animateTo(targetValues.rotationY, TransitionSpring) }
     }
 
     return this
@@ -58,8 +63,11 @@ fun Modifier.scaleBlurAlpha(
             alpha = animAlpha.value
             translationX = animTransX.value * screenWidth
             translationY = animTransY.value * screenHeight
+            rotationY = animRotationY.value
             if (origin != null) {
                 transformOrigin = TransformOrigin(origin.x, origin.y)
+            } else {
+                transformOrigin = TransformOrigin(targetValues.pivotX, targetValues.pivotY)
             }
         }
         .platformBlur(

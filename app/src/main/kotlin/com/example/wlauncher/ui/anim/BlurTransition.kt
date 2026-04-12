@@ -14,7 +14,10 @@ data class LayerAnimValues(
     val blur: Float = 0f,    // dp
     val alpha: Float = 1f,
     val translationX: Float = 0f,  // 占屏幕宽度比例 (-1f = 向左移出, 1f = 向右移出)
-    val translationY: Float = 0f  // 占屏幕高度比例 (-1f = 向上移出, 1f = 向下移出)
+    val translationY: Float = 0f,  // 占屏幕高度比例 (-1f = 向上移出, 1f = 向下移出)
+    val rotationY: Float = 0f,
+    val pivotX: Float = 0.5f,
+    val pivotY: Float = 0.5f
 )
 
 /**
@@ -77,6 +80,33 @@ fun notificationLayerValues(state: ScreenState): LayerAnimValues = when (state) 
 fun controlCenterLayerValues(state: ScreenState): LayerAnimValues = when (state) {
     ScreenState.ControlCenter -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f, translationY = 0f)
     else -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 0f, translationY = 1f)
+}
+
+fun lunchNegativeFaceValues(progress: Float, blurEnabled: Boolean): LayerAnimValues {
+    val clamped = progress.coerceIn(0f, 1f)
+    val centered = clamped - 0.5f
+    val midScale = 0.8f + 4f * (1f - 0.8f) * centered * centered
+    return LayerAnimValues(
+        scale = midScale,
+        blur = if (blurEnabled) 4f * clamped else 0f,
+        alpha = 1f - 0.16f * clamped,
+        translationX = 1.02f * clamped,
+        rotationY = 10f * clamped,
+        pivotX = 1f
+    )
+}
+
+fun lunchNegativeStackValues(progress: Float): LayerAnimValues {
+    val clamped = progress.coerceIn(0f, 1f)
+    val enter = ((clamped - 0.18f) / 0.82f).coerceIn(0f, 1f)
+    return LayerAnimValues(
+        scale = 0.8f + 0.2f * enter,
+        blur = 0f,
+        alpha = 0.75f + 0.25f * enter,
+        translationX = -0.22f * (1f - enter),
+        rotationY = -10f * (1f - enter),
+        pivotX = 0f
+    )
 }
 
 // 带轻微回弹的 spring，模拟 HTML 的 cubic-bezier(0.32, 1.2, 0.4, 1)
