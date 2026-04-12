@@ -5,19 +5,20 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Build
 import android.view.WindowManager
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -37,11 +38,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.flue.launcher.ui.anim.LayerAnimValues
 import com.flue.launcher.ui.anim.appListLayerValues
 import com.flue.launcher.ui.anim.faceLayerValues
 import com.flue.launcher.ui.anim.notificationLayerValues
@@ -58,16 +60,12 @@ import com.flue.launcher.ui.smartstack.SmartStackLayer
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.viewmodel.LauncherViewModel
-import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
-import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceHost
-import com.flue.launcher.watchface.LunchWatchFaceRuntime
 import kotlinx.coroutines.delay
 
 private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
-
 class LauncherActivity : ComponentActivity() {
 
     private lateinit var vm: LauncherViewModel
@@ -128,15 +126,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val sideScreenPreviewGroups by vm.sideScreenPreviewGroups.collectAsState()
     val blurEnabled by vm.blurEnabled.collectAsState()
     val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsState()
-    val legacyCircularIcons by vm.legacyCircularIcons.collectAsState()
-    val animationOverrideEnabled by vm.animationOverrideEnabled.collectAsState()
     val apps by vm.apps.collectAsState()
+    val appDrawerReady by vm.appDrawerReady.collectAsState()
     val appOpenOrigin by vm.appOpenOrigin.collectAsState()
     val splashIcon by vm.splashIcon.collectAsState()
     val splashDelay by vm.splashDelay.collectAsState()
-    val currentApp by vm.currentApp.collectAsState()
     val currentLaunchIcon by vm.currentLaunchIcon.collectAsState()
-    val launchSourceState by vm.launchSourceState.collectAsState()
     val honeycombCols by vm.honeycombCols.collectAsState()
     val honeycombTopBlur by vm.honeycombTopBlur.collectAsState()
     val honeycombBottomBlur by vm.honeycombBottomBlur.collectAsState()
@@ -147,12 +142,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val notificationAccessGranted by vm.notificationAccessGranted.collectAsState()
     val notificationGroups by vm.notificationGroups.collectAsState()
     val revealedNotificationTarget by vm.revealedNotificationTarget.collectAsState()
-    val watchFaces by vm.availableWatchFaces.collectAsState()
+    val launchSourceState by vm.launchSourceState.collectAsState()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsState()
     val selectedWatchFace by vm.selectedWatchFace.collectAsState()
     val watchFaceSelectionReady by vm.watchFaceSelectionReady.collectAsState()
     val watchFaceRefreshToken by vm.watchFaceRefreshToken.collectAsState()
-    val watchFaceLastError by vm.watchFaceLastError.collectAsState()
     val builtInPhotoPath by vm.builtInPhotoPath.collectAsState()
     val builtInVideoPath by vm.builtInVideoPath.collectAsState()
     val builtInPhotoClockPosition by vm.builtInPhotoClockPosition.collectAsState()
@@ -165,7 +159,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val builtInVideoClockColorMode by vm.builtInVideoClockColorMode.collectAsState()
     val layerBlurEnabled = blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
-    val notificationsEnabled = showNotification
+    val notificationsLayerEnabled = showNotification
     val openWatchFaceChooser: () -> Unit = remember(context) {
         {
             context.startActivity(
@@ -183,9 +177,23 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
     val useOrigin = (screenState == ScreenState.App || isReturningFromApp) && launchSourceState != ScreenState.Notifications
 
-    val showLaunchBackdrop =
-        screenState == ScreenState.App && (currentLaunchIcon != null || launchSourceState == ScreenState.Notifications)
+    LaunchedEffect(sideScreenEnabled, screenState) {
+        if (!sideScreenEnabled && (screenState == ScreenState.Stack || screenState == ScreenState.Notifications)) {
+            vm.setState(ScreenState.Face)
+        }
+    }
+
+    var startupGateReleased by remember { mutableStateOf(false) }
     var showSplash by remember { mutableStateOf(false) }
+    val showLaunchBackdrop = screenState == ScreenState.App && (currentLaunchIcon != null || launchSourceState == ScreenState.Notifications)
+    val showStackLaunchBackdrop = showLaunchBackdrop && launchSourceState == ScreenState.Stack
+    val showStandardLaunchBackdrop = showLaunchBackdrop && launchSourceState != ScreenState.Stack
+    LaunchedEffect(appDrawerReady) {
+        if (appDrawerReady) {
+            delay(120)
+            startupGateReleased = true
+        }
+    }
     LaunchedEffect(screenState, splashIcon, splashDelay, currentLaunchIcon) {
         if (screenState == ScreenState.App && splashIcon && currentLaunchIcon != null) {
             showSplash = false
@@ -201,25 +209,99 @@ fun LauncherScreen(vm: LauncherViewModel) {
             .fillMaxSize()
             .background(Color.Black)
     ) {
+        if (!startupGateReleased) {
+            return@BoxWithConstraints
+        }
         val density = LocalDensity.current
+        val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
+        val keepStackLayer = screenState == ScreenState.Stack ||
+            screenState == ScreenState.Notifications ||
+            (screenState == ScreenState.App && launchSourceState == ScreenState.Stack)
+        val keepNotificationLayer = screenState == ScreenState.Notifications ||
+            (screenState == ScreenState.App && launchSourceState == ScreenState.Notifications)
+        val stackProgress by animateFloatAsState(
+            targetValue = if (keepStackLayer) 1f else 0f,
+            animationSpec = tween(durationMillis = 240),
+            label = "stack_scene_progress"
+        )
+        val notificationProgress by animateFloatAsState(
+            targetValue = if (keepNotificationLayer) 1f else 0f,
+            animationSpec = spring(dampingRatio = 0.9f, stiffness = 560f),
+            label = "notification_scene_progress"
+        )
+        val launchingFromStack = screenState == ScreenState.App && launchSourceState == ScreenState.Stack
+        val launchingFromNotifications = screenState == ScreenState.App && launchSourceState == ScreenState.Notifications
+        val isReturningToStackFromApp =
+            prevState == ScreenState.App &&
+                screenState == ScreenState.Stack &&
+                launchSourceState == ScreenState.Stack
+        val isReturningToNotificationsFromApp =
+            prevState == ScreenState.App &&
+                screenState == ScreenState.Notifications &&
+                launchSourceState == ScreenState.Notifications
+        val effectiveFaceState = when {
+            keepNotificationLayer -> ScreenState.Notifications
+            keepStackLayer -> ScreenState.Stack
+            else -> screenState
+        }
+        val directFaceStackTransition =
+            !launchingFromStack &&
+                !launchingFromNotifications &&
+                !isReturningToStackFromApp &&
+                !isReturningToNotificationsFromApp &&
+                screenState != ScreenState.Notifications &&
+                (stackProgress > 0.001f || keepStackLayer)
+        val faceLayerTargetValues = when {
+            directFaceStackTransition -> interpolateLayerValues(
+                faceLayerValues(ScreenState.Face),
+                faceLayerValues(ScreenState.Stack),
+                stackProgress
+            )
+            else -> faceLayerValues(effectiveFaceState)
+        }
+        val hiddenStackValues = LayerAnimValues(
+            scale = 1f,
+            blur = 0f,
+            alpha = 1f,
+            translationX = -1f,
+            translationY = 0f
+        )
+        val stackLayerTargetValues = when {
+            launchingFromStack -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f)
+            directFaceStackTransition -> interpolateLayerValues(
+                hiddenStackValues,
+                stackLayerValues(ScreenState.Stack),
+                stackProgress
+            )
+            screenState == ScreenState.Notifications -> stackLayerValues(ScreenState.Notifications)
+            keepStackLayer -> stackLayerValues(ScreenState.Stack)
+            else -> stackLayerValues(ScreenState.Apps)
+        }
+        val notificationLayerTargetValues = when {
+            launchingFromNotifications -> notificationLayerValues(ScreenState.Notifications)
+            keepNotificationLayer -> notificationLayerValues(ScreenState.Notifications)
+            else -> LayerAnimValues(scale = 0.92f, blur = 0f, alpha = 0f, translationY = 0.16f)
+        }
 
         GestureHost(
             screenState = screenState,
             onStateChange = { vm.setState(it) },
             sideScreenEnabled = sideScreenEnabled,
-            showNotification = notificationsEnabled,
+            showNotification = notificationsLayerEnabled,
             showControlCenter = false,
             modifier = Modifier.fillMaxSize()
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(if (screenState == ScreenState.Face) 3f else 1f)
+                    .zIndex(0f)
                     .scaleBlurAlpha(
-                        targetValues = faceLayerValues(screenState),
+                        targetValues = faceLayerTargetValues,
+                        screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
-                        blurEnabled = layerBlurEnabled
+                        blurEnabled = layerBlurEnabled,
+                        animate = !directFaceStackTransition
                     )
             ) {
                 AnimatedContent(
@@ -279,9 +361,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(if (screenState == ScreenState.Apps) 3f else 0f)
+                    .zIndex(1f)
                     .scaleBlurAlpha(
                         targetValues = appListLayerValues(screenState),
+                        screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled,
                         origin = if (useOrigin) appOpenOrigin else null
@@ -338,79 +421,78 @@ fun LauncherScreen(vm: LauncherViewModel) {
             }
 
             AnimatedVisibility(
-                visible = showLaunchBackdrop,
+                visible = showStandardLaunchBackdrop,
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black),
-                    contentAlignment = Alignment.Center
-                ) {
-                    AnimatedVisibility(
-                        visible = showSplash && splashIcon && currentLaunchIcon != null,
-                        enter = fadeIn() + scaleIn(initialScale = 0.5f),
-                        exit = fadeOut() + scaleOut(targetScale = 0.3f)
-                    ) {
-                        currentLaunchIcon?.let { launchIcon ->
-                            Image(
-                                bitmap = launchIcon,
-                                contentDescription = null,
-                                modifier = Modifier
-                                    .size(96.dp)
-                                    .clip(CircleShape),
-                                contentScale = ContentScale.Crop
-                            )
-                        }
-                    }
-                }
+                LaunchBackdropContent(
+                    showSplash = showSplash && splashIcon && currentLaunchIcon != null,
+                    icon = currentLaunchIcon
+                )
             }
 
-            /* legacy launch overlay animation kept for icon stage only */
-            /* removed duplicate full-screen backdrop composition */
+            AnimatedVisibility(
+                visible = showStackLaunchBackdrop,
+                modifier = Modifier.zIndex(6f),
+                enter = fadeIn(animationSpec = tween(durationMillis = 140)),
+                exit = fadeOut(animationSpec = tween(durationMillis = 180))
+            ) {
+                LaunchBackdropContent(
+                    showSplash = showSplash && splashIcon && currentLaunchIcon != null,
+                    icon = currentLaunchIcon
+                )
+            }
 
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .zIndex(if (stackProgress > 0f) 4f else 2f)
                     .scaleBlurAlpha(
-                        targetValues = stackLayerValues(screenState),
+                        targetValues = stackLayerTargetValues,
+                        screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
-                        blurEnabled = layerBlurEnabled
+                        blurEnabled = layerBlurEnabled,
+                        origin = if (launchingFromStack || isReturningToStackFromApp) appOpenOrigin else null,
+                        animate = !directFaceStackTransition
                     )
             ) {
-                SmartStackLayer(
-                    apps = apps,
-                    sideScreenShortcuts = sideScreenShortcuts,
-                    previewGroups = sideScreenPreviewGroups,
-                    notificationsEnabled = notificationsEnabled,
-                    notificationAccessGranted = notificationAccessGranted,
-                    notificationsSceneActive = screenState == ScreenState.Notifications,
-                    revealedNotificationTarget = revealedNotificationTarget,
-                    onRevealTargetChange = vm::setRevealedNotificationTarget,
-                    onOpenNotifications = { vm.setState(ScreenState.Notifications) },
-                    onLaunchApp = { appInfo, origin ->
-                        val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
-                        vm.openApp(appInfo, origin, launchDelay, ScreenState.Stack)
-                    },
-                    onSetShortcut = vm::setSideScreenShortcut,
-                    onRemoveShortcut = vm::removeSideScreenShortcut,
-                    onDismissGroup = vm::dismissNotificationGroup,
-                    onDismissNotification = vm::dismissNotification,
-                    onDismissToFace = { vm.setState(ScreenState.Face) }
-                )
+                if (stackProgress > 0.001f || keepStackLayer) {
+                    SmartStackLayer(
+                        apps = apps,
+                        sideScreenShortcuts = sideScreenShortcuts,
+                        previewGroups = sideScreenPreviewGroups,
+                        notificationsEnabled = notificationsLayerEnabled,
+                        notificationAccessGranted = notificationAccessGranted,
+                        notificationsSceneActive = screenState == ScreenState.Notifications,
+                        revealedNotificationTarget = revealedNotificationTarget,
+                        onRevealTargetChange = vm::setRevealedNotificationTarget,
+                        onOpenNotifications = { vm.setState(ScreenState.Notifications) },
+                        onLaunchApp = { appInfo, origin ->
+                            val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
+                            vm.openApp(appInfo, origin, launchDelay, ScreenState.Stack)
+                        },
+                        onSetShortcut = vm::setSideScreenShortcut,
+                        onRemoveShortcut = vm::removeSideScreenShortcut,
+                        onDismissGroup = vm::dismissNotificationGroup,
+                        onDismissNotification = vm::dismissNotification,
+                        onDismissToFace = { vm.setState(ScreenState.Face) }
+                    )
+                }
             }
 
-            if (notificationsEnabled && showNotification) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .scaleBlurAlpha(
-                            targetValues = notificationLayerValues(screenState),
-                            screenHeight = screenHeightPx,
-                            blurEnabled = layerBlurEnabled
-                        )
-                ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(if (notificationProgress > 0f) 5f else 3f)
+                    .scaleBlurAlpha(
+                        targetValues = notificationLayerTargetValues,
+                        screenWidth = screenWidthPx,
+                        screenHeight = screenHeightPx,
+                        blurEnabled = layerBlurEnabled,
+                        origin = if (launchingFromNotifications || isReturningToNotificationsFromApp) appOpenOrigin else null
+                    )
+            ) {
+                if (notificationProgress > 0.001f || keepNotificationLayer) {
                     NotificationLayer(
                         notificationGroups = notificationGroups,
                         notificationAccessGranted = notificationAccessGranted,
@@ -421,12 +503,61 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onDismissGroup = vm::dismissNotificationGroup,
                         onDismissNotification = vm::dismissNotification,
                         onOpenNotification = { key, origin ->
-                            vm.openNotification(key, origin, ScreenState.Notifications, 0L)
+                            val launchDelay = 0L
+                            vm.openNotification(key, origin, ScreenState.Notifications, launchDelay)
                         }
                     )
                 }
             }
         }
 
+    }
+}
+
+private fun interpolateLayerValues(
+    start: LayerAnimValues,
+    end: LayerAnimValues,
+    progress: Float
+): LayerAnimValues {
+    val fraction = progress.coerceIn(0f, 1f)
+    return LayerAnimValues(
+        scale = lerpFloat(start.scale, end.scale, fraction),
+        blur = lerpFloat(start.blur, end.blur, fraction),
+        alpha = lerpFloat(start.alpha, end.alpha, fraction),
+        translationX = lerpFloat(start.translationX, end.translationX, fraction),
+        translationY = lerpFloat(start.translationY, end.translationY, fraction)
+    )
+}
+
+private fun lerpFloat(start: Float, end: Float, fraction: Float): Float =
+    start + (end - start) * fraction
+
+@Composable
+private fun LaunchBackdropContent(
+    showSplash: Boolean,
+    icon: androidx.compose.ui.graphics.ImageBitmap?
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
+        contentAlignment = Alignment.Center
+    ) {
+        AnimatedVisibility(
+            visible = showSplash && icon != null,
+            enter = fadeIn() + scaleIn(initialScale = 0.5f),
+            exit = fadeOut() + scaleOut(targetScale = 0.3f)
+        ) {
+            icon?.let { launchIcon ->
+                Image(
+                    bitmap = launchIcon,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(96.dp)
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+            }
+        }
     }
 }
