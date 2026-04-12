@@ -492,7 +492,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         returnStateAfterExternalLaunch = returnState
         _launchSourceState.value = returnState
         _currentApp.value = null
-        _currentLaunchIcon.value = targetEntry.icon
+        _currentLaunchIcon.value = null
         _appOpenOrigin.value = origin
         _screenState.value = ScreenState.App
         _revealedNotificationTarget.value = null

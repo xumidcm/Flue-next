@@ -273,7 +273,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             else -> stackLayerValues(ScreenState.Apps)
         }
         val notificationLayerTargetValues = when {
-            launchingFromNotifications -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 1f)
+            launchingFromNotifications -> notificationLayerValues(ScreenState.Notifications)
             keepNotificationLayer -> notificationLayerValues(ScreenState.Notifications)
             else -> LayerAnimValues(scale = 0.92f, blur = 0f, alpha = 0f, translationY = 0.16f)
         }
@@ -518,7 +518,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onDismissGroup = vm::dismissNotificationGroup,
                         onDismissNotification = vm::dismissNotification,
                         onOpenNotification = { key, origin ->
-                            val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
+                            val launchDelay = 0L
                             vm.openNotification(key, origin, ScreenState.Notifications, launchDelay)
                         }
                     )
