@@ -96,14 +96,14 @@ class LauncherActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         RecentsVisibility.apply(this)
-        if (::vm.isInitialized && vm.animationOverrideEnabled.value) {
-            @Suppress("DEPRECATION")
-            overridePendingTransition(android.R.anim.fade_in, R.anim.launcher_return_cupertino_exit)
-        }
         if (::vm.isInitialized) {
             vm.onReturnToLauncher()
             vm.refreshWatchFaces()
             vm.refreshNotificationAccess()
+        }
+        if (::vm.isInitialized && vm.animationOverrideEnabled.value) {
+            @Suppress("DEPRECATION")
+            overridePendingTransition(android.R.anim.fade_in, R.anim.launcher_return_cupertino_exit)
         }
     }
 
@@ -196,9 +196,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
             stackReturnBackdropVisible = false
         }
     }
-    val showLaunchBackdrop =
-        (launchBackdropVisible && screenState == ScreenState.App && currentLaunchIcon != null) ||
-            stackReturnBackdropVisible
+    val showLaunchBackdrop = launchBackdropVisible && screenState == ScreenState.App && currentLaunchIcon != null
+    val showStackLaunchBackdrop =
+        (showLaunchBackdrop && launchSourceState == ScreenState.Stack) || stackReturnBackdropVisible
+    val showStandardLaunchBackdrop = showLaunchBackdrop && launchSourceState != ScreenState.Stack
     LaunchedEffect(appDrawerReady) {
         if (appDrawerReady) {
             delay(120)
@@ -446,34 +447,26 @@ fun LauncherScreen(vm: LauncherViewModel) {
             }
 
             AnimatedVisibility(
-                visible = showLaunchBackdrop,
+                visible = showStandardLaunchBackdrop,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                LaunchBackdropContent(
+                    showSplash = showSplash && splashIcon && currentLaunchIcon != null,
+                    icon = currentLaunchIcon
+                )
+            }
+
+            AnimatedVisibility(
+                visible = showStackLaunchBackdrop,
                 modifier = Modifier.zIndex(6f),
                 enter = fadeIn(animationSpec = tween(durationMillis = 140)),
                 exit = fadeOut(animationSpec = tween(durationMillis = 180))
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black),
-                    contentAlignment = Alignment.Center
-                ) {
-                    AnimatedVisibility(
-                        visible = showSplash && splashIcon && currentLaunchIcon != null,
-                        enter = fadeIn() + scaleIn(initialScale = 0.5f),
-                        exit = fadeOut() + scaleOut(targetScale = 0.3f)
-                    ) {
-                        currentLaunchIcon?.let { icon ->
-                            Image(
-                                bitmap = icon,
-                                contentDescription = null,
-                                modifier = Modifier
-                                    .size(96.dp)
-                                    .clip(CircleShape),
-                                contentScale = ContentScale.Crop
-                            )
-                        }
-                    }
-                }
+                LaunchBackdropContent(
+                    showSplash = showSplash && splashIcon && currentLaunchIcon != null,
+                    icon = currentLaunchIcon
+                )
             }
 
             Box(
@@ -564,3 +557,33 @@ private fun interpolateLayerValues(
 
 private fun lerpFloat(start: Float, end: Float, fraction: Float): Float =
     start + (end - start) * fraction
+
+@Composable
+private fun LaunchBackdropContent(
+    showSplash: Boolean,
+    icon: androidx.compose.ui.graphics.ImageBitmap?
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
+        contentAlignment = Alignment.Center
+    ) {
+        AnimatedVisibility(
+            visible = showSplash && icon != null,
+            enter = fadeIn() + scaleIn(initialScale = 0.5f),
+            exit = fadeOut() + scaleOut(targetScale = 0.3f)
+        ) {
+            icon?.let { launchIcon ->
+                Image(
+                    bitmap = launchIcon,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(96.dp)
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+            }
+        }
+    }
+}
