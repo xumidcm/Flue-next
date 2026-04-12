@@ -67,8 +67,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.platformBlur
-import com.flue.launcher.ui.input.flueRotaryScrollable
+import com.flue.launcher.ui.input.DrawerInputMode
+import com.flue.launcher.ui.input.DrawerInputSource
+import com.flue.launcher.ui.input.flueDrawerRotaryScrollable
+import com.flue.launcher.ui.input.normalizeDrawerScrollDelta
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
@@ -117,6 +121,7 @@ fun ListDrawerScreen(
     var settlingKey by remember { mutableStateOf<String?>(null) }
     val settlingCenterY = remember { Animatable(0f) }
     var focusReady by remember { mutableStateOf(false) }
+    var wheelMomentumJob by remember { mutableStateOf<Job?>(null) }
     val visibleIndexes = remember(listState.layoutInfo.visibleItemsInfo) {
         listState.layoutInfo.visibleItemsInfo.map { it.index }
     }
@@ -136,6 +141,21 @@ fun ListDrawerScreen(
             focusRequester.requestFocusAfterFirstFrame()
         }
     }
+    fun launchWheelScroll(delta: Float) {
+        if (delta == 0f) return
+        wheelMomentumJob?.cancel()
+        wheelMomentumJob = scope.launch {
+            val baseDelta = delta.coerceIn(-96f, 96f)
+            listState.scrollBy(baseDelta)
+            var tail = baseDelta * 0.35f
+            repeat(3) {
+                withFrameNanos { }
+                if (abs(tail) < 1f) return@launch
+                listState.scrollBy(tail)
+                tail *= 0.45f
+            }
+        }
+    }
     LaunchedEffect(apps.size) {
         if (!initializedAtTop && apps.isNotEmpty()) {
             listState.scrollToItem(0)
@@ -147,7 +167,8 @@ fun ListDrawerScreen(
         BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxSize()
-                    .flueRotaryScrollable(focusRequester, 0.95f) { rotaryDelta ->
+                    .flueDrawerRotaryScrollable(focusRequester, DrawerInputMode.List) { rotaryDelta ->
+                        wheelMomentumJob?.cancel()
                         scope.launch { listState.scrollBy(-rotaryDelta) }
                     }
                     .onGloballyPositioned {
@@ -158,9 +179,13 @@ fun ListDrawerScreen(
                         while (true) {
                             val event = awaitPointerEvent()
                             if (event.type == PointerEventType.Scroll) {
-                                val delta = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                                val delta = normalizeDrawerScrollDelta(
+                                    verticalScrollPixels = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f,
+                                    source = DrawerInputSource.MouseWheel,
+                                    mode = DrawerInputMode.List
+                                )
                                 if (delta != 0f) {
-                                    scope.launch { listState.scrollBy(delta * 30f) }
+                                    launchWheelScroll(delta)
                                     event.changes.forEach { it.consume() }
                                 }
                             }
@@ -344,7 +369,6 @@ fun ListDrawerScreen(
             val visibleInfoByIndex = remember(listState.layoutInfo.visibleItemsInfo) {
                 listState.layoutInfo.visibleItemsInfo.associateBy { it.index }
             }
-
             LaunchedEffect(dragFromIndex, screenHeightPx) {
                 var previousFrameNanos = 0L
                 while (dragFromIndex != null) {
@@ -411,16 +435,13 @@ fun ListDrawerScreen(
                         bottomBlurZonePx = bottomEdgeBlurZonePx,
                         maxBlurDp = LIST_EDGE_ITEM_BLUR_DP
                     )
-                    val displayIcon = if (
+                    val useBlurredIcon = (
                         Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
                         blurEnabled &&
-                        edgeBlurEnabled &&
+                        effectiveEdgeBlur &&
                         itemBlur > 0.5f
-                    ) {
-                        app.cachedBlurredIcon
-                    } else {
-                        app.cachedIcon
-                    }
+                    )
+                    val displayIcon = if (useBlurredIcon) app.cachedBlurredIcon else app.cachedIcon
                     val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
                     val isPressed by interactionSource.collectIsPressedAsState()
                     val isDragged = dragFromIndex == index
@@ -474,7 +495,7 @@ fun ListDrawerScreen(
                                 scaleY = targetScale
                                 alpha = if (isDragged || isSettling) 0f else itemScale.coerceIn(0.3f, 1f)
                             }
-                            .platformBlur(itemBlur, blurEnabled && edgeBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                            .platformBlur(itemBlur, blurEnabled && effectiveEdgeBlur && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                             .background(Color.Black.copy(alpha = pressedOverlay), RoundedCornerShape(18.dp))
                             .combinedClickable(
                                 interactionSource = interactionSource,
@@ -528,7 +549,7 @@ fun ListDrawerScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .platformBlur(draggedBlur, blurEnabled && edgeBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                        .platformBlur(draggedBlur, blurEnabled && effectiveEdgeBlur && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                         .graphicsLayer {
                             translationY = overlayCenterY - dragOverlayHeightPx / 2f
                             scaleX = 0.965f
@@ -540,17 +561,14 @@ fun ListDrawerScreen(
                         .padding(horizontal = 28.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Image(
-                        bitmap = if (
-                            Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
+                    val overlayUseBlurredIcon = (
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
                             blurEnabled &&
-                            edgeBlurEnabled &&
+                            effectiveEdgeBlur &&
                             draggedBlur > 0.5f
-                        ) {
-                            draggedApp.cachedBlurredIcon
-                        } else {
-                            draggedApp.cachedIcon
-                        },
+                        )
+                    Image(
+                        bitmap = if (overlayUseBlurredIcon) draggedApp.cachedBlurredIcon else draggedApp.cachedIcon,
                         contentDescription = draggedApp.label,
                         modifier = Modifier
                             .size(iconSize)
@@ -623,7 +641,11 @@ fun ListDrawerScreen(
     }
 
     longPressedApp?.let { app ->
-        AppShortcutOverlay(app = app, blurEnabled = blurEnabled, onDismiss = { longPressedApp = null })
+        AppShortcutOverlay(
+            app = app,
+            blurEnabled = blurEnabled,
+            onDismiss = { longPressedApp = null }
+        )
     }
 }
 

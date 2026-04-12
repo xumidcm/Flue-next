@@ -2,8 +2,9 @@
 
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.net.Uri
+import android.os.Build
+import android.os.Process
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -139,16 +140,41 @@ fun AppShortcutOverlay(
                     Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
                     ShortcutMenuItem("卸载", Color(0xFFFF453A)) {
                         val packageUri = Uri.fromParts("package", app.packageName, null)
-                        val uninstallIntent = Intent(Intent.ACTION_DELETE, packageUri)
-                        val activity = context as? android.app.Activity
-                        runCatching {
-                            if (activity != null) {
-                                activity.startActivity(uninstallIntent)
-                            } else {
-                                context.startActivity(uninstallIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        val intents = listOf(
+                            Intent(Intent.ACTION_DELETE, packageUri).apply {
+                                putExtra(Intent.EXTRA_RETURN_RESULT, false)
+                                putExtra(Intent.EXTRA_USER, Process.myUserHandle())
+                            },
+                            Intent(Intent.ACTION_UNINSTALL_PACKAGE, packageUri).apply {
+                                putExtra(Intent.EXTRA_RETURN_RESULT, false)
                             }
-                        }.onFailure {
-                            Log.w("ShortcutPopup", "Failed to launch uninstall for ${app.packageName}", it)
+                        )
+                        val fallbackIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = packageUri
+                        }
+                        val launched = intents.any { baseIntent ->
+                            val intent = baseIntent.apply {
+                                if (context !is android.app.Activity) {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                            }
+                            val resolved = intent.resolveActivity(context.packageManager) != null
+                            if (!resolved) return@any false
+                            runCatching {
+                                context.startActivity(intent)
+                            }.onFailure {
+                                Log.w("ShortcutPopup", "Failed to launch uninstall intent for ${app.packageName}", it)
+                            }.isSuccess
+                        }
+                        if (!launched) {
+                            runCatching {
+                                if (context !is android.app.Activity) {
+                                    fallbackIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(fallbackIntent)
+                            }.onFailure {
+                                Log.w("ShortcutPopup", "Failed to open app details for ${app.packageName}", it)
+                            }
                         }
                         onDismiss()
                     }

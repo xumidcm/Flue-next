@@ -59,6 +59,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_HONEYCOMB_BOTTOM_BLUR = intPreferencesKey("honeycomb_bottom_blur")
         val KEY_HONEYCOMB_TOP_FADE = intPreferencesKey("honeycomb_top_fade")
         val KEY_HONEYCOMB_BOTTOM_FADE = intPreferencesKey("honeycomb_bottom_fade")
+        val KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION = booleanPreferencesKey("honeycomb_fast_scroll_optimization")
         val KEY_SHOW_NOTIFICATION = booleanPreferencesKey("show_notification")
         val KEY_HIDDEN_APPS = stringPreferencesKey("hidden_apps")
         val KEY_ICON_PACK_PACKAGE = stringPreferencesKey("icon_pack_package")
@@ -123,6 +124,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _honeycombBottomFade = MutableStateFlow(56)
     val honeycombBottomFade: StateFlow<Int> = _honeycombBottomFade.asStateFlow()
+
+    private val _honeycombFastScrollOptimization = MutableStateFlow(true)
+    val honeycombFastScrollOptimization: StateFlow<Boolean> = _honeycombFastScrollOptimization.asStateFlow()
 
     private val _splashIcon = MutableStateFlow(true)
     val splashIcon: StateFlow<Boolean> = _splashIcon.asStateFlow()
@@ -267,6 +271,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 val loadedBottomFade = (prefs[KEY_HONEYCOMB_BOTTOM_FADE] ?: 56).coerceIn(0, 160)
                 if (_honeycombBottomFade.value != loadedBottomFade) _honeycombBottomFade.value = loadedBottomFade
+
+                val loadedFastScrollOptimization = prefs[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION] ?: true
+                if (_honeycombFastScrollOptimization.value != loadedFastScrollOptimization) {
+                    _honeycombFastScrollOptimization.value = loadedFastScrollOptimization
+                }
 
                 val loadedShowNotification = prefs[KEY_SHOW_NOTIFICATION] ?: false
                 if (_showNotification.value != loadedShowNotification) _showNotification.value = loadedShowNotification
@@ -494,6 +503,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persistDebounced("key_honeycomb_bottom_fade") { store.edit { it[KEY_HONEYCOMB_BOTTOM_FADE] = savedValue } }
     }
 
+    fun setHoneycombFastScrollOptimization(enabled: Boolean) {
+        _honeycombFastScrollOptimization.value = enabled
+        persist { store.edit { it[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION] = enabled } }
+    }
+
     fun setShowNotification(show: Boolean) {
         _showNotification.value = show
         persist { store.edit { it[KEY_SHOW_NOTIFICATION] = show } }
@@ -687,6 +701,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _honeycombBottomBlur.value = 4
         _honeycombTopFade.value = 56
         _honeycombBottomFade.value = 56
+        _honeycombFastScrollOptimization.value = true
         _showNotification.value = false
         _hiddenApps.value = emptySet()
         _selectedIconPackPackage.value = null
@@ -721,6 +736,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_HONEYCOMB_BOTTOM_BLUR] = 4
                 it[KEY_HONEYCOMB_TOP_FADE] = 56
                 it[KEY_HONEYCOMB_BOTTOM_FADE] = 56
+                it[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION] = true
                 it[KEY_LEGACY_CIRCULAR_ICONS] = false
                 it[KEY_SHOW_NOTIFICATION] = false
                 it.remove(KEY_HIDDEN_APPS)

@@ -13,6 +13,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Shader
 import android.graphics.drawable.Drawable
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
 import com.flue.launcher.data.model.AppInfo
@@ -36,15 +37,17 @@ class AppRepository(private val context: Context) {
     val apps: StateFlow<List<AppInfo>> = _apps.asStateFlow()
 
     private var customOrder: List<String> = emptyList()
+    private var customOrderIndexMap: Map<String, Int> = emptyMap()
     private var hiddenComponents: Set<String> = emptySet()
     private var currentIconSize = 128
     private var iconPackPackage: String? = null
     private var useLegacyCircularIcons = false
     private var refreshGeneration = 0
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val iconCache = object : LinkedHashMap<String, Pair<Bitmap, Bitmap>>(120, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Bitmap, Bitmap>>?): Boolean {
-            return size > 120
+    private val installTimeCache = mutableMapOf<String, Long>()
+    private val iconCache = object : LinkedHashMap<String, Pair<ImageBitmap, ImageBitmap>>(160, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<ImageBitmap, ImageBitmap>>?): Boolean {
+            return size > 160
         }
     }
 
@@ -67,6 +70,7 @@ class AppRepository(private val context: Context) {
 
     fun setCustomOrder(order: List<String>) {
         customOrder = order
+        customOrderIndexMap = order.withIndex().associate { it.value to it.index }
         reorder()
     }
 
@@ -89,12 +93,11 @@ class AppRepository(private val context: Context) {
     }
 
     private fun reorder() {
-        val current = _allApps.value
-        _allApps.value = sortApps(current)
+        _allApps.value = sortApps(_allApps.value)
         applyFilters()
     }
 
-    fun refresh(iconSize: Int = 128) {
+    fun refresh(iconSize: Int = currentIconSize) {
         val generation = synchronized(this) {
             refreshGeneration += 1
             refreshGeneration
@@ -107,7 +110,6 @@ class AppRepository(private val context: Context) {
         val iconPackPackageSnapshot = iconPackPackage
         val useLegacyCircularIconsSnapshot = useLegacyCircularIcons
         val pm = context.packageManager
-        val installTimeCache = mutableMapOf<String, Long>()
         val mainIntent = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
         }
@@ -125,39 +127,44 @@ class AppRepository(private val context: Context) {
         val loadedApps = ArrayList<AppInfo>(resolveList.size)
 
         resolveList.forEach { ri ->
-                val packageName = ri.activityInfo.packageName
-                val componentKey = "$packageName/${ri.activityInfo.name}"
+            val packageName = ri.activityInfo.packageName
+            val componentKey = "$packageName/${ri.activityInfo.name}"
+            val iconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|$componentKey|$iconSize|${if (useLegacyCircularIconsSnapshot) "legacy" else "plain"}"
+            val cachedIcons = synchronized(iconCache) { iconCache[iconCacheKey] } ?: run {
                 val packedIcon = iconPackMapping?.let { IconPackScanner.loadIconDrawable(context, it, componentKey) }
                 val resolvedIconDrawable = packedIcon ?: ri.loadIcon(pm)
-                val iconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|$componentKey|$iconSize|${if (useLegacyCircularIconsSnapshot) "legacy" else "plain"}"
-                val (iconBitmap, blurredBitmap) = synchronized(iconCache) {
-                    iconCache[iconCacheKey]
-                } ?: run {
-                    val createdIconBitmap = if (useLegacyCircularIconsSnapshot && packedIcon == null) {
-                        createCircularBitmap(
-                            drawableToBitmap(resolvedIconDrawable, iconSize),
-                            edgeInsetPx = iconSize * 0.015f
-                        )
-                    } else {
-                        resolvedIconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
-                    }
-                    val createdBlurredBitmap = createSoftenedBitmap(createdIconBitmap)
-                    synchronized(iconCache) {
-                        iconCache[iconCacheKey] = createdIconBitmap to createdBlurredBitmap
-                    }
-                    createdIconBitmap to createdBlurredBitmap
+                val baseBitmap = if (useLegacyCircularIconsSnapshot && packedIcon == null) {
+                    createCircularBitmap(
+                        drawableToBitmap(resolvedIconDrawable, iconSize),
+                        edgeInsetPx = iconSize * 0.015f
+                    )
+                } else {
+                    resolvedIconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
                 }
-                loadedApps += AppInfo(
-                    label = ri.loadLabel(pm).toString(),
-                    packageName = packageName,
-                    activityName = ri.activityInfo.name,
-                    icon = resolvedIconDrawable,
-                    cachedIcon = iconBitmap.asImageBitmap(),
-                    cachedBlurredIcon = blurredBitmap.asImageBitmap()
-                )
+                val sharp = baseBitmap.asImageBitmap()
+                val softened = createSoftenedBitmap(baseBitmap).asImageBitmap()
+                synchronized(iconCache) {
+                    iconCache[iconCacheKey] = sharp to softened
+                }
+                sharp to softened
             }
+            loadedApps += AppInfo(
+                label = ri.loadLabel(pm).toString(),
+                packageName = packageName,
+                activityName = ri.activityInfo.name,
+                cachedIcon = cachedIcons.first,
+                cachedBlurredIcon = cachedIcons.second
+            )
+        }
+
         if (synchronized(this) { generation != refreshGeneration }) return
-        _allApps.value = sortApps(loadedApps, installTimeCache)
+
+        val knownPackages = loadedApps.mapTo(linkedSetOf()) { it.packageName }
+        synchronized(installTimeCache) {
+            installTimeCache.keys.retainAll(knownPackages)
+        }
+
+        _allApps.value = sortApps(loadedApps)
         applyFilters()
     }
 
@@ -232,35 +239,37 @@ class AppRepository(private val context: Context) {
 
     private fun orderRank(app: AppInfo): Int {
         if (customOrder.isEmpty()) return Int.MAX_VALUE
-        val exactIndex = customOrder.indexOf(app.componentKey)
-        if (exactIndex >= 0) return exactIndex
-        val legacyIndex = customOrder.indexOf(app.packageName)
-        if (legacyIndex >= 0) return legacyIndex
-        return Int.MAX_VALUE
+        return customOrderIndexMap[app.componentKey]
+            ?: customOrderIndexMap[app.packageName]
+            ?: Int.MAX_VALUE
     }
 
     private fun packageInstallTime(packageName: String): Long {
-        return try {
+        synchronized(installTimeCache) {
+            installTimeCache[packageName]?.let { return it }
+        }
+        val installTime = try {
             @Suppress("DEPRECATION")
             context.packageManager.getPackageInfo(packageName, 0).firstInstallTime
         } catch (_: Exception) {
             Long.MAX_VALUE
         }
+        synchronized(installTimeCache) {
+            installTimeCache[packageName] = installTime
+        }
+        return installTime
     }
 
-    private fun sortApps(
-        apps: List<AppInfo>,
-        installTimeCache: MutableMap<String, Long> = mutableMapOf()
-    ): List<AppInfo> {
+    private fun sortApps(apps: List<AppInfo>): List<AppInfo> {
         return if (customOrder.isNotEmpty()) {
             apps.sortedWith(
                 compareBy<AppInfo> { orderRank(it) }
-                    .thenBy { installTimeCache.getOrPut(it.packageName) { packageInstallTime(it.packageName) } }
+                    .thenBy { packageInstallTime(it.packageName) }
                     .thenBy { it.label.lowercase() }
             )
         } else {
             apps.sortedWith(
-                compareBy<AppInfo> { installTimeCache.getOrPut(it.packageName) { packageInstallTime(it.packageName) } }
+                compareBy<AppInfo> { packageInstallTime(it.packageName) }
                     .thenBy { it.label.lowercase() }
             )
         }
