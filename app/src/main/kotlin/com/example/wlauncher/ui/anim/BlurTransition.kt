@@ -57,7 +57,7 @@ fun appViewLayerValues(state: ScreenState): LayerAnimValues = when (state) {
  */
 fun stackLayerValues(state: ScreenState): LayerAnimValues = when (state) {
     ScreenState.Stack -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f, translationX = 0f, translationY = 0f)
-    ScreenState.Notifications -> LayerAnimValues(scale = 0.985f, blur = 0f, alpha = 0.42f, translationX = 0f, translationY = 0f)
+    ScreenState.Notifications -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 0.42f, translationX = 0f, translationY = 0f)
     ScreenState.Settings -> LayerAnimValues(scale = 1f, blur = 6f, alpha = 0f, translationX = 0f, translationY = 0f)
     ScreenState.Apps -> LayerAnimValues(scale = 1.02f, blur = 8f, alpha = 0f, translationX = -0.18f, translationY = 0f)
     else -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f, translationX = -1f, translationY = 0f)
