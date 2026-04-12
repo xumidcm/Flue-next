@@ -56,6 +56,7 @@ import com.flue.launcher.ui.navigation.ScreenState
 import com.flue.launcher.ui.notification.NotificationLayer
 import com.flue.launcher.ui.smartstack.SmartStackLayer
 import com.flue.launcher.ui.theme.WatchLauncherTheme
+import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
@@ -70,6 +71,7 @@ class LauncherActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        RecentsVisibility.apply(this)
         CrashHandler(applicationContext).install()
         window.setFlags(
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
@@ -92,6 +94,7 @@ class LauncherActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        RecentsVisibility.apply(this)
         if (::vm.isInitialized && vm.animationOverrideEnabled.value) {
             @Suppress("DEPRECATION")
             overridePendingTransition(android.R.anim.fade_in, R.anim.launcher_return_cupertino_exit)

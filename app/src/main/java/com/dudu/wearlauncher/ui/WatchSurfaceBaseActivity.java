@@ -9,6 +9,7 @@ import android.widget.Toast;
 import com.dudu.wearlauncher.model.WatchSurface;
 import com.dudu.wearlauncher.utils.ILog;
 import com.dudu.wearlauncher.utils.WatchSurfaceHelper;
+import com.flue.launcher.util.RecentsVisibility;
 
 public class WatchSurfaceBaseActivity extends Activity {
     WatchSurface wsf;
@@ -16,6 +17,7 @@ public class WatchSurfaceBaseActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        RecentsVisibility.apply(this);
         Intent intent = getIntent();
         String wfName = intent.getStringExtra("wfName");
         String wsfClassName = intent.getStringExtra("wsfClassName");

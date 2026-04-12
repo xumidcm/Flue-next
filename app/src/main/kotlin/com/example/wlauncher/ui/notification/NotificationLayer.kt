@@ -48,6 +48,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -64,6 +65,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
@@ -72,12 +74,15 @@ import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.bottomFisheyeScale
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.theme.WatchColors
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 private const val NOTIFICATION_CARD_WIDTH_RATIO = 0.884f
+private const val NOTIFICATION_FINISH_DELAY_MS = 120L
+private const val NOTIFICATION_RESET_DELAY_MS = 180L
 
 @Composable
 fun NotificationLayer(
@@ -93,20 +98,29 @@ fun NotificationLayer(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
     val batteryLevel = rememberBatteryLevel()
     val listState = rememberLazyListState()
     val overscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var dismissTransitionInFlight by remember { mutableStateOf(false) }
     val closeIfPulled: suspend () -> Unit = {
-        if (overscroll.value > 80f) {
-            overscroll.snapTo(0f)
-            onRevealTargetChange(null)
-            onDismissToStack()
-        } else if (overscroll.value != 0f) {
-            overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+        if (!dismissTransitionInFlight) {
+            if (overscroll.value > 80f) {
+                dismissTransitionInFlight = true
+                overscroll.animateTo(with(density) { 72.dp.toPx() }, tween(durationMillis = NOTIFICATION_FINISH_DELAY_MS.toInt()))
+                onRevealTargetChange(null)
+                onDismissToStack()
+                delay(NOTIFICATION_RESET_DELAY_MS)
+                overscroll.snapTo(0f)
+                dismissTransitionInFlight = false
+            } else if (overscroll.value != 0f) {
+                overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+            }
         }
     }
-    val staticContentDismissModifier = Modifier.pointerInput(notificationAccessGranted, notificationGroups.size) {
+    val staticContentDismissModifier = Modifier.pointerInput(notificationAccessGranted, notificationGroups.size, dismissTransitionInFlight) {
+        if (dismissTransitionInFlight) return@pointerInput
         detectVerticalDragGestures(
             onVerticalDrag = { change, dragAmount ->
                 if (dragAmount > 0f || overscroll.value > 0f) {
@@ -129,9 +143,10 @@ fun NotificationLayer(
         )
     }
 
-    val nestedScroll = remember(listState) {
+    val nestedScroll = remember(listState, dismissTransitionInFlight) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: NestedScrollSource): androidx.compose.ui.geometry.Offset {
+                if (dismissTransitionInFlight) return androidx.compose.ui.geometry.Offset.Zero
                 if (source != NestedScrollSource.Drag) return androidx.compose.ui.geometry.Offset.Zero
                 val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
                 if (available.y > 0f && atTop) {
@@ -146,6 +161,7 @@ fun NotificationLayer(
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
+                if (dismissTransitionInFlight) return available
                 if (overscroll.value > 80f) {
                     closeIfPulled()
                     return available

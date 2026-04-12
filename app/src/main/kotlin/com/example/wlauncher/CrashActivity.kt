@@ -34,12 +34,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.flue.launcher.util.RecentsVisibility
 import java.io.File
 import java.util.Locale
 
 class CrashActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        RecentsVisibility.apply(this)
         val crashInfo = intent.getStringExtra("crash_info") ?: readCache("crash_info.txt", "Unknown error")
         val crashBrief = intent.getStringExtra("crash_brief") ?: readCache("crash_brief.txt", "Unknown")
         val appInfo = intent.getStringExtra("crash_app_info") ?: readCache("crash_app_info.txt", "Unknown")

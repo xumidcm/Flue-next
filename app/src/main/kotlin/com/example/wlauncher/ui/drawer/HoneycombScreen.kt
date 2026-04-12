@@ -63,6 +63,8 @@ private const val HONEYCOMB_MENU_DRAG_START_DP = 20f
 private const val HONEYCOMB_PRESS_DURATION_MS = 200
 private const val HONEYCOMB_AUTO_SCROLL_EDGE_DP = 96f
 private const val HONEYCOMB_AUTO_SCROLL_MAX_PX = 26f
+private const val HONEYCOMB_RETURN_FINISH_DELAY_MS = 120L
+private const val HONEYCOMB_RETURN_RESET_DELAY_MS = 180L
 
 @Composable
 fun HoneycombScreen(
@@ -473,8 +475,17 @@ fun HoneycombScreen(
                             }
                             directScrollOffset = current
                             if (current >= maxScroll - iconSizePx * 0.45f && velocity > 800f) {
-                                directScrollOffset = Float.NaN
-                                onScrollToTop()
+                                scope.launch {
+                                    scrollOffset.snapTo(current)
+                                    directScrollOffset = Float.NaN
+                                    scrollOffset.animateTo(
+                                        maxScroll + with(density) { 72.dp.toPx() },
+                                        tween(durationMillis = HONEYCOMB_RETURN_FINISH_DELAY_MS.toInt())
+                                    )
+                                    onScrollToTop()
+                                    delay(HONEYCOMB_RETURN_RESET_DELAY_MS)
+                                    scrollOffset.snapTo(maxScroll)
+                                }
                                 return@detectDragGestures
                             }
                             scope.launch {

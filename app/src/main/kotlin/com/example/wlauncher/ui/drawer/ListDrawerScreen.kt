@@ -83,6 +83,8 @@ private const val LIST_MENU_DRAG_START_DP = 20f
 private const val LIST_AUTO_SCROLL_EDGE_DP = 84f
 private const val LIST_AUTO_SCROLL_MAX_PX = 30f
 private const val LIST_EDGE_ITEM_BLUR_DP = 4f
+private const val LIST_RETURN_FINISH_DELAY_MS = 120L
+private const val LIST_RETURN_RESET_DELAY_MS = 180L
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -223,8 +225,13 @@ fun ListDrawerScreen(
                                 if (dragFromIndex != null || longPressedApp != null) return Velocity.Zero
                                 val atTop = !listState.canScrollBackward
                                 if ((overscroll.value > 80f || available.y > 1200f) && atTop) {
-                                    overscroll.snapTo(0f)
+                                    overscroll.animateTo(
+                                        with(density) { 72.dp.toPx() },
+                                        tween(durationMillis = LIST_RETURN_FINISH_DELAY_MS.toInt())
+                                    )
                                     onScrollToTop()
+                                    delay(LIST_RETURN_RESET_DELAY_MS)
+                                    overscroll.snapTo(0f)
                                     return available
                                 }
                                 if (overscroll.value != 0f) {

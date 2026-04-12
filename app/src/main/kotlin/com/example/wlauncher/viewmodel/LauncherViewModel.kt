@@ -87,6 +87,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_VIDEO_FILL_SCREEN = booleanPreferencesKey("video_fill_screen")
         val KEY_VIDEO_CLOCK_COLOR_MODE = stringPreferencesKey("video_clock_color_mode")
         val KEY_BUILTIN_MANAGER_THUMBNAILS = booleanPreferencesKey("builtin_manager_thumbnails")
+        val KEY_HIDE_FROM_RECENTS = booleanPreferencesKey("hide_from_recents")
         private const val SIDE_SCREEN_SLOT_COUNT = 9
     }
 
@@ -219,6 +220,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _builtInManagerThumbnails = MutableStateFlow(true)
     val builtInManagerThumbnails: StateFlow<Boolean> = _builtInManagerThumbnails.asStateFlow()
+    private val _hideFromRecents = MutableStateFlow(true)
+    val hideFromRecents: StateFlow<Boolean> = _hideFromRecents.asStateFlow()
 
     private val _appOpenOrigin = MutableStateFlow(Offset(0.5f, 0.5f))
     val appOpenOrigin: StateFlow<Offset> = _appOpenOrigin.asStateFlow()
@@ -429,6 +432,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 val loadedManagerThumbnails = prefs[KEY_BUILTIN_MANAGER_THUMBNAILS] ?: true
                 if (_builtInManagerThumbnails.value != loadedManagerThumbnails) _builtInManagerThumbnails.value = loadedManagerThumbnails
+
+                val loadedHideFromRecents = prefs[KEY_HIDE_FROM_RECENTS] ?: true
+                if (_hideFromRecents.value != loadedHideFromRecents) _hideFromRecents.value = loadedHideFromRecents
 
                 watchFacePrefsHydrated = true
                 syncSelectedWatchFace()
@@ -814,6 +820,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_BUILTIN_MANAGER_THUMBNAILS] = enabled } }
     }
 
+    fun setHideFromRecents(enabled: Boolean) {
+        _hideFromRecents.value = enabled
+        persist { store.edit { it[KEY_HIDE_FROM_RECENTS] = enabled } }
+    }
+
     fun requestWatchFaceRefresh() {
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
     }
@@ -935,6 +946,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _builtInVideoFillScreen.value = true
         _builtInVideoClockColorMode.value = WatchClockColorMode.AUTO
         _builtInManagerThumbnails.value = true
+        _hideFromRecents.value = true
         appRepository.setHiddenComponents(emptySet())
         appRepository.setIconPackPackage(null)
         appRepository.setLegacyCircularIconsEnabled(false)
@@ -972,6 +984,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_VIDEO_FILL_SCREEN] = true
                 it[KEY_VIDEO_CLOCK_COLOR_MODE] = WatchClockColorMode.AUTO.name
                 it[KEY_BUILTIN_MANAGER_THUMBNAILS] = true
+                it[KEY_HIDE_FROM_RECENTS] = true
                 it.remove(KEY_LAST_WATCHFACE_ERROR)
             }
         }

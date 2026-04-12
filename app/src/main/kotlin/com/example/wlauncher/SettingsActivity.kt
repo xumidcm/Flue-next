@@ -103,6 +103,7 @@ import com.flue.launcher.ui.common.bottomFisheyeScale
 import com.flue.launcher.ui.settings.WatchFaceSettingCard
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
+import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
@@ -141,6 +142,7 @@ private data class SavedScrollPosition(
 class SettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        RecentsVisibility.apply(this)
         val initialDestination = when (intent.getStringExtra(EXTRA_SETTINGS_DESTINATION)) {
             SETTINGS_DESTINATION_WATCH_FACES -> SettingsDestination.WATCH_FACES
             else -> SettingsDestination.ROOT
@@ -205,6 +207,7 @@ private fun SettingsRootScreen(
     val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
     val builtInVideoClockColorMode by vm.builtInVideoClockColorMode.collectAsState()
     val builtInManagerThumbnails by vm.builtInManagerThumbnails.collectAsState()
+    val hideFromRecents by vm.hideFromRecents.collectAsState()
     val showNotification by vm.showNotification.collectAsState()
     val headerTime = rememberSettingsHeaderTime()
     val isZh = remember(context.resources.configuration) {
@@ -225,6 +228,10 @@ private fun SettingsRootScreen(
 
     LaunchedEffect(Unit) {
         vm.refreshWatchFaces()
+    }
+
+    LaunchedEffect(hideFromRecents, context) {
+        (context as? Activity)?.let { RecentsVisibility.apply(it, hideFromRecents) }
     }
 
     val commitHiddenAppsDraft = {
@@ -696,6 +703,15 @@ private fun SettingsRootScreen(
                     checked = animationOverrideEnabled,
                     onToggle = { vm.setAnimationOverrideEnabled(it) },
                     scale = itemFisheye(listState, "anim_override", screenCenterY, screenHeightPx)
+                )
+            }
+            item("hide_from_recents") {
+                SettingsSwitchRow(
+                    title = if (isZh) "隐藏后台卡片" else "Hide Recents Card",
+                    subtitle = if (isZh) "从最近任务中隐藏 Flue 的后台卡片" else "Hide Flue from the system recents screen",
+                    checked = hideFromRecents,
+                    onToggle = { vm.setHideFromRecents(it) },
+                    scale = itemFisheye(listState, "hide_from_recents", screenCenterY, screenHeightPx)
                 )
             }
             item("builtin_manager_thumbnails") {

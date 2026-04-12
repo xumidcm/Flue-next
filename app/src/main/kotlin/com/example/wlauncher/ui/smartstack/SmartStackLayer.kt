@@ -85,6 +85,8 @@ import kotlin.math.floor
 private const val SIDE_SCREEN_CONTENT_WIDTH_RATIO = 0.884f
 private const val SIDE_SCREEN_DISMISS_THRESHOLD = 86f
 private const val SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD = 110f
+private const val SIDE_SCREEN_FINISH_DELAY_MS = 120L
+private const val SIDE_SCREEN_RESET_DELAY_MS = 180L
 private sealed interface SideScreenModalState {
     data object None : SideScreenModalState
     data class Picker(val slotIndex: Int) : SideScreenModalState
@@ -128,14 +130,19 @@ fun SmartStackLayer(
     var dragDx by remember { mutableFloatStateOf(0f) }
     var dragDy by remember { mutableFloatStateOf(0f) }
     var overscrollTarget by remember { mutableFloatStateOf(0f) }
+    var releaseOffsetXTarget by remember { mutableFloatStateOf(0f) }
+    var transitionInFlight by remember { mutableStateOf(false) }
     val overscrollY by animateFloatAsState(overscrollTarget, spring(stiffness = 440f, dampingRatio = 0.78f), label = "side_overscroll")
+    val releaseOffsetX by animateFloatAsState(releaseOffsetXTarget, spring(stiffness = 420f, dampingRatio = 0.8f), label = "side_release_x")
 
     LaunchedEffect(notificationsSceneActive) {
         if (notificationsSceneActive) {
-            delay(120)
+            delay(SIDE_SCREEN_FINISH_DELAY_MS)
             overscrollTarget = 0f
+            releaseOffsetXTarget = 0f
             dragDx = 0f
             dragDy = 0f
+            transitionInFlight = false
         }
     }
 
@@ -144,31 +151,73 @@ fun SmartStackLayer(
             .fillMaxSize()
             .clip(RoundedCornerShape(40.dp))
             .background(WatchColors.Black)
-            .pointerInput(notificationAccessGranted, notificationsEnabled, modalState, notificationsSceneActive) {
-                if (modalState != SideScreenModalState.None || notificationsSceneActive) return@pointerInput
+            .pointerInput(notificationAccessGranted, notificationsEnabled, modalState, notificationsSceneActive, transitionInFlight) {
+                if (modalState != SideScreenModalState.None || notificationsSceneActive || transitionInFlight) return@pointerInput
                 detectDragGestures(
-                    onDragStart = { dragDx = 0f; dragDy = 0f },
+                    onDragStart = {
+                        dragDx = 0f
+                        dragDy = 0f
+                        releaseOffsetXTarget = 0f
+                    },
                     onDrag = { change, dragAmount ->
                         dragDx += dragAmount.x
                         dragDy += dragAmount.y
                         if (abs(dragDx) > abs(dragDy)) {
-                            if (dragDx < -SIDE_SCREEN_DISMISS_THRESHOLD) {
-                                change.consume(); onRevealTargetChange(null); onDismissToFace()
-                            }
+                            if (dragDx < 0f) change.consume()
                         } else {
                             change.consume()
                             overscrollTarget = (overscrollTarget + dragAmount.y * 0.35f).coerceIn(-180f, 120f)
                         }
                     },
                     onDragEnd = {
-                        if (notificationsEnabled && dragDy < -SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD) {
-                            onRevealTargetChange(null)
-                            onOpenNotifications()
+                        val dismissToFace = dragDx < -SIDE_SCREEN_DISMISS_THRESHOLD && abs(dragDx) > abs(dragDy)
+                        val openNotifications = notificationsEnabled &&
+                            dragDy < -SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD &&
+                            abs(dragDy) > abs(dragDx)
+
+                        when {
+                            dismissToFace -> {
+                                transitionInFlight = true
+                                overscrollTarget = 0f
+                                releaseOffsetXTarget = with(density) { (-44).dp.toPx() }
+                                scope.launch {
+                                    delay(SIDE_SCREEN_FINISH_DELAY_MS)
+                                    onRevealTargetChange(null)
+                                    onDismissToFace()
+                                    delay(SIDE_SCREEN_RESET_DELAY_MS)
+                                    releaseOffsetXTarget = 0f
+                                    dragDx = 0f
+                                    dragDy = 0f
+                                    transitionInFlight = false
+                                }
+                            }
+                            openNotifications -> {
+                                transitionInFlight = true
+                                overscrollTarget = with(density) { (-72).dp.toPx() }
+                                scope.launch {
+                                    delay(SIDE_SCREEN_FINISH_DELAY_MS)
+                                    onRevealTargetChange(null)
+                                    onOpenNotifications()
+                                }
+                            }
+                            else -> {
+                                overscrollTarget = 0f
+                                releaseOffsetXTarget = 0f
+                                dragDx = 0f
+                                dragDy = 0f
+                            }
+                        }
+                    },
+                    onDragCancel = {
+                        if (!transitionInFlight) {
+                            overscrollTarget = 0f
+                            releaseOffsetXTarget = 0f
+                            dragDx = 0f
+                            dragDy = 0f
                         } else {
                             overscrollTarget = 0f
                         }
-                    },
-                    onDragCancel = { overscrollTarget = 0f }
+                    }
                 )
             }
     ) {
@@ -191,7 +240,10 @@ fun SmartStackLayer(
         val previewLayout = remember(previewGroups, previewCapacity) { buildPreviewGroups(previewGroups, previewCapacity) }
 
         Column(
-            modifier = Modifier.fillMaxSize().graphicsLayer { translationY = overscrollY }.padding(top = 10.dp, bottom = 10.dp),
+            modifier = Modifier.fillMaxSize().graphicsLayer {
+                translationX = releaseOffsetX
+                translationY = overscrollY
+            }.padding(top = 10.dp, bottom = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(clock.time, color = Color.White, fontSize = 31.sp, fontWeight = FontWeight.SemiBold)
