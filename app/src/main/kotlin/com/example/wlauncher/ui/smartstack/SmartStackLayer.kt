@@ -117,6 +117,7 @@ fun SmartStackLayer(
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
     val clock = rememberClockSnapshot()
     val battery = rememberBatterySnapshot()
     val slotCenters = remember { mutableStateMapOf<Int, Offset>() }
