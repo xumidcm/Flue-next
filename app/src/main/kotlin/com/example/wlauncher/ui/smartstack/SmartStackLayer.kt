@@ -165,7 +165,12 @@ fun SmartStackLayer(
                             if (dragDx < 0f) change.consume()
                         } else {
                             change.consume()
-                            overscrollTarget = (overscrollTarget + dragAmount.y * 0.35f).coerceIn(-180f, 120f)
+                            val draggingUpToNotifications = notificationsEnabled && dragDy < 0f
+                            overscrollTarget = if (draggingUpToNotifications) {
+                                0f
+                            } else {
+                                (overscrollTarget + dragAmount.y * 0.35f).coerceIn(-180f, 120f)
+                            }
                         }
                     },
                     onDragEnd = {

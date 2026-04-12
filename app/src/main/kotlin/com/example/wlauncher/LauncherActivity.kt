@@ -273,7 +273,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             else -> stackLayerValues(ScreenState.Apps)
         }
         val notificationLayerTargetValues = when {
-            launchingFromNotifications -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f)
+            launchingFromNotifications -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 1f)
             keepNotificationLayer -> notificationLayerValues(ScreenState.Notifications)
             else -> LayerAnimValues(scale = 0.92f, blur = 0f, alpha = 0f, translationY = 0.16f)
         }
