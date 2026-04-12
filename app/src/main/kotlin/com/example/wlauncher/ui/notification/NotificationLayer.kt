@@ -173,13 +173,13 @@ fun NotificationLayer(
             .nestedScroll(nestedScroll)
     ) {
         val contentWidth = maxWidth * NOTIFICATION_CARD_WIDTH_RATIO
-        val bottomScrollPadding = ((maxHeight / 2) - 64.dp).coerceAtLeast(120.dp)
+        val bottomScrollPadding = ((maxHeight / 2) - 24.dp).coerceAtLeast(132.dp)
         val rows = remember(notificationGroups) { buildNotificationRows(notificationGroups) }
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer { translationY = overscroll.value }
-                .padding(top = 14.dp, bottom = 10.dp),
+                .padding(top = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             when {
@@ -245,8 +245,14 @@ fun NotificationLayer(
                     }
                 }
             }
-            BatteryPill(batteryLevel, Modifier.padding(bottom = 4.dp))
         }
+        BatteryPill(
+            level = batteryLevel,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 14.dp)
+                .graphicsLayer { translationY = overscroll.value }
+        )
     }
 }
 

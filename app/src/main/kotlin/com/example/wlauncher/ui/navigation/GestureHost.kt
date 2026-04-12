@@ -53,12 +53,7 @@ fun GestureHost(
                                     }
                                 }
 
-                                ScreenState.Notifications -> {
-                                    if (isVertical && totalDy < -80) {
-                                        onStateChange(if (sideScreenEnabled) ScreenState.Stack else ScreenState.Face)
-                                        change.consume()
-                                    }
-                                }
+                                ScreenState.Notifications -> Unit
 
                                 ScreenState.ControlCenter -> {
                                     if (isHorizontal && totalDx > 80) {

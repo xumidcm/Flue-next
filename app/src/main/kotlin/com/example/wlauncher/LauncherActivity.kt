@@ -65,6 +65,7 @@ import kotlinx.coroutines.delay
 
 private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
 private const val SIDE_SCREEN_TRANSITION_MS = 260
+private const val SIDE_SCREEN_EXIT_OVERSHOOT = 1.08f
 
 class LauncherActivity : ComponentActivity() {
 
@@ -98,7 +99,7 @@ class LauncherActivity : ComponentActivity() {
         RecentsVisibility.apply(this)
         if (::vm.isInitialized && vm.animationOverrideEnabled.value) {
             @Suppress("DEPRECATION")
-            overridePendingTransition(android.R.anim.fade_in, R.anim.launcher_return_cupertino_exit)
+            overridePendingTransition(R.anim.launcher_return_cupertino_enter, R.anim.launcher_return_cupertino_exit)
         }
         if (::vm.isInitialized) {
             vm.onReturnToLauncher()
@@ -205,6 +206,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val density = LocalDensity.current
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
+        val sideSceneTravelPx = screenWidthPx * SIDE_SCREEN_EXIT_OVERSHOOT
         val sidePageProgress by animateFloatAsState(
             targetValue = if (sideScreenEnabled && (screenState == ScreenState.Stack || screenState == ScreenState.Notifications)) {
                 1f
@@ -234,7 +236,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .fillMaxSize()
                     .zIndex(if (screenState == ScreenState.Face && !sideSceneOverlayActive) 3f else 1f)
                     .graphicsLayer {
-                        translationX = sidePageProgress * screenWidthPx
+                        translationX = sidePageProgress * sideSceneTravelPx
                     }
                     .scaleBlurAlpha(
                         targetValues = faceLayerValues(faceAnimState),
@@ -375,7 +377,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         .fillMaxSize()
                         .zIndex(4f)
                         .graphicsLayer {
-                            translationX = (sidePageProgress - 1f) * screenWidthPx
+                            translationX = (sidePageProgress - 1f) * sideSceneTravelPx
                             alpha = sidePageProgress.coerceIn(0f, 1f) *
                                 if (screenState == ScreenState.Notifications) 0.42f else 1f
                         }
