@@ -83,8 +83,6 @@ private const val LIST_MENU_DRAG_START_DP = 20f
 private const val LIST_AUTO_SCROLL_EDGE_DP = 84f
 private const val LIST_AUTO_SCROLL_MAX_PX = 30f
 private const val LIST_EDGE_ITEM_BLUR_DP = 4f
-private const val LIST_RETURN_FINISH_DELAY_MS = 120L
-private const val LIST_RETURN_RESET_DELAY_MS = 180L
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -96,7 +94,6 @@ fun ListDrawerScreen(
     iconSize: Dp = 48.dp,
     topFadeRangeDp: Int = 56,
     bottomFadeRangeDp: Int = 56,
-    edgeFadeAlpha: Float = 1f,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
     onLongClick: (AppInfo) -> Unit = {},
@@ -226,13 +223,8 @@ fun ListDrawerScreen(
                                 if (dragFromIndex != null || longPressedApp != null) return Velocity.Zero
                                 val atTop = !listState.canScrollBackward
                                 if ((overscroll.value > 80f || available.y > 1200f) && atTop) {
-                                    overscroll.animateTo(
-                                        with(density) { 72.dp.toPx() },
-                                        tween(durationMillis = LIST_RETURN_FINISH_DELAY_MS.toInt())
-                                    )
-                                    onScrollToTop()
-                                    delay(LIST_RETURN_RESET_DELAY_MS)
                                     overscroll.snapTo(0f)
+                                    onScrollToTop()
                                     return available
                                 }
                                 if (overscroll.value != 0f) {
@@ -593,12 +585,10 @@ fun ListDrawerScreen(
                 }
             }
         }
-        val clampedEdgeFadeAlpha = edgeFadeAlpha.coerceIn(0f, 1f)
-        if (clampedEdgeFadeAlpha > 0.001f && blurEnabled && effectiveEdgeBlur) {
+        if (blurEnabled && effectiveEdgeBlur) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .graphicsLayer { alpha = clampedEdgeFadeAlpha }
                     .fillMaxWidth()
                     .height(topFadeRangeDp.coerceAtLeast(0).dp)
                     .background(
@@ -615,7 +605,6 @@ fun ListDrawerScreen(
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .graphicsLayer { alpha = clampedEdgeFadeAlpha }
                     .fillMaxWidth()
                     .height(bottomFadeRangeDp.coerceAtLeast(0).dp)
                     .background(
@@ -630,21 +619,19 @@ fun ListDrawerScreen(
                     .platformBlur(LIST_EDGE_ITEM_BLUR_DP, true)
             )
         }
-        if (clampedEdgeFadeAlpha > 0.001f && topFadeRangeDp > 0) {
+        if (topFadeRangeDp > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .graphicsLayer { alpha = clampedEdgeFadeAlpha }
                     .fillMaxWidth()
                     .height(topFadeRangeDp.dp)
                     .background(Brush.verticalGradient(listOf(Color.Black, Color.Transparent)))
             )
         }
-        if (clampedEdgeFadeAlpha > 0.001f && bottomFadeRangeDp > 0) {
+        if (bottomFadeRangeDp > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .graphicsLayer { alpha = clampedEdgeFadeAlpha }
                     .fillMaxWidth()
                     .height(bottomFadeRangeDp.dp)
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))

@@ -37,7 +37,7 @@ fun faceLayerValues(state: ScreenState): LayerAnimValues = when (state) {
 fun appListLayerValues(state: ScreenState): LayerAnimValues = when (state) {
     ScreenState.Face -> LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f)
     ScreenState.Apps -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
-    ScreenState.Settings -> LayerAnimValues(scale = 0.95f, blur = 8f, alpha = 0f)
+    ScreenState.Settings -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.3f)
     ScreenState.App -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f)
     else -> LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f)
 }

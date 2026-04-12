@@ -35,7 +35,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
@@ -172,36 +171,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
     }
 
-    var launchBackdropVisible by remember { mutableStateOf(false) }
-    var launchBackdropIcon by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     var startupGateReleased by remember { mutableStateOf(false) }
     var showSplash by remember { mutableStateOf(false) }
-    var returnBackdropVisible by remember { mutableStateOf(false) }
-    var returnBackdropExiting by remember { mutableStateOf(false) }
-    var returnBackdropIcon by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
-    LaunchedEffect(screenState, launchSourceState, currentLaunchIcon) {
-        if (screenState == ScreenState.App && currentLaunchIcon != null) {
-            launchBackdropIcon = currentLaunchIcon
-            launchBackdropVisible = true
-        } else {
-            launchBackdropVisible = false
-        }
-    }
-    LaunchedEffect(prevState, screenState) {
-        if (prevState == ScreenState.App && screenState != ScreenState.App && launchBackdropIcon != null) {
-            returnBackdropIcon = launchBackdropIcon
-            returnBackdropVisible = true
-            returnBackdropExiting = false
-            delay(16)
-            returnBackdropExiting = true
-            delay(220)
-            returnBackdropVisible = false
-            returnBackdropExiting = false
-            returnBackdropIcon = null
-            launchBackdropIcon = null
-        }
-    }
-    val showLaunchBackdrop = launchBackdropVisible && screenState == ScreenState.App && launchBackdropIcon != null
+    val showLaunchBackdrop = screenState == ScreenState.App && currentLaunchIcon != null
     val showStackLaunchBackdrop = showLaunchBackdrop && launchSourceState == ScreenState.Stack
     val showStandardLaunchBackdrop = showLaunchBackdrop && launchSourceState != ScreenState.Stack
     LaunchedEffect(appDrawerReady) {
@@ -245,11 +217,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
             targetValue = if (keepNotificationLayer) 1f else 0f,
             animationSpec = spring(dampingRatio = 0.9f, stiffness = 560f),
             label = "notification_scene_progress"
-        )
-        val listEdgeFadeAlpha by animateFloatAsState(
-            targetValue = if (screenState == ScreenState.Face) 0f else 1f,
-            animationSpec = tween(durationMillis = 220),
-            label = "list_edge_fade_alpha"
         )
         val launchingFromStack = screenState == ScreenState.App && launchSourceState == ScreenState.Stack
         val launchingFromNotifications = screenState == ScreenState.App && launchSourceState == ScreenState.Notifications
@@ -431,7 +398,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         suppressHeavyEffects = reduceLegacyDrawerEffects,
                         topFadeRangeDp = honeycombTopFade,
                         bottomFadeRangeDp = honeycombBottomFade,
-                        edgeFadeAlpha = listEdgeFadeAlpha,
                         onAppClick = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
                             vm.openApp(appInfo, origin, launchDelay, ScreenState.Apps)
@@ -463,7 +429,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             ) {
                 LaunchBackdropContent(
                     showSplash = showSplash && splashIcon && currentLaunchIcon != null,
-                    icon = launchBackdropIcon
+                    icon = currentLaunchIcon
                 )
             }
 
@@ -475,54 +441,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
             ) {
                 LaunchBackdropContent(
                     showSplash = showSplash && splashIcon && currentLaunchIcon != null,
-                    icon = launchBackdropIcon
+                    icon = currentLaunchIcon
                 )
-            }
-
-            if (returnBackdropVisible && returnBackdropIcon != null) {
-                val returnBackdropAlpha by animateFloatAsState(
-                    targetValue = if (returnBackdropExiting) 0f else 1f,
-                    animationSpec = tween(durationMillis = 220),
-                    label = "return_backdrop_alpha"
-                )
-                val returnIconScale by animateFloatAsState(
-                    targetValue = if (returnBackdropExiting) 0.28f else 1f,
-                    animationSpec = tween(durationMillis = 220),
-                    label = "return_backdrop_icon_scale"
-                )
-                val returnIconAlpha by animateFloatAsState(
-                    targetValue = if (returnBackdropExiting) 0f else 1f,
-                    animationSpec = tween(durationMillis = 220),
-                    label = "return_backdrop_icon_alpha"
-                )
-                val returnIconOffsetY by animateFloatAsState(
-                    targetValue = if (returnBackdropExiting) 44f else 0f,
-                    animationSpec = tween(durationMillis = 220),
-                    label = "return_backdrop_icon_offset"
-                )
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .zIndex(6f)
-                        .graphicsLayer { alpha = returnBackdropAlpha }
-                        .background(Color.Black),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Image(
-                        bitmap = returnBackdropIcon!!,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .graphicsLayer {
-                                scaleX = returnIconScale
-                                scaleY = returnIconScale
-                                alpha = returnIconAlpha
-                                translationY = returnIconOffsetY
-                            }
-                            .size(96.dp)
-                            .clip(CircleShape),
-                        contentScale = ContentScale.Crop
-                    )
-                }
             }
 
             Box(
