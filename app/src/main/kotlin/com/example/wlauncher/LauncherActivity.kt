@@ -188,13 +188,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
             startupGateReleased = true
         }
     }
-    LaunchedEffect(screenState, splashIcon, splashDelay, currentLaunchIcon, launchSourceState) {
-        if (
-            screenState == ScreenState.App &&
-            launchSourceState != ScreenState.Stack &&
-            splashIcon &&
-            currentLaunchIcon != null
-        ) {
+    LaunchedEffect(screenState, splashIcon, splashDelay, currentLaunchIcon) {
+        if (screenState == ScreenState.App && splashIcon && currentLaunchIcon != null) {
             showSplash = false
             delay(BASE_LAUNCH_MASK_DELAY_MS)
             showSplash = true
@@ -267,7 +262,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             translationY = 0f
         )
         val stackLayerTargetValues = when {
-            launchingFromStack -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 0f)
+            launchingFromStack -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f)
             directFaceStackTransition -> interpolateLayerValues(
                 hiddenStackValues,
                 stackLayerValues(ScreenState.Stack),
@@ -472,7 +467,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled,
-                        origin = if (launchingFromNotifications || isReturningToNotificationsFromApp) appOpenOrigin else null,
+                        origin = if (launchingFromStack || isReturningToStackFromApp) appOpenOrigin else null,
                         animate = !directFaceStackTransition
                     )
             ) {
@@ -488,7 +483,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onRevealTargetChange = vm::setRevealedNotificationTarget,
                         onOpenNotifications = { vm.setState(ScreenState.Notifications) },
                         onLaunchApp = { appInfo, origin ->
-                            val launchDelay = BASE_LAUNCH_MASK_DELAY_MS
+                            val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
                             vm.openApp(appInfo, origin, launchDelay, ScreenState.Stack)
                         },
                         onSetShortcut = vm::setSideScreenShortcut,

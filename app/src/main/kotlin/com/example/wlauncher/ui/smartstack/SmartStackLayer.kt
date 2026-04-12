@@ -95,7 +95,10 @@ private sealed interface SideScreenModalState {
 
 private data class SideScreenClockSnapshot(val time: String, val date: String)
 private data class BatterySnapshot(val level: Int = 0)
-private data class PreviewGroup(val group: NotificationGroupUi, val entries: List<NotificationEntryUi>, val hiddenCount: Int)
+private sealed interface PreviewRow {
+    data class Group(val group: NotificationGroupUi, val entries: List<NotificationEntryUi>, val hiddenCount: Int) : PreviewRow
+    data class Aggregate(val leadEntry: NotificationEntryUi, val hiddenCount: Int) : PreviewRow
+}
 
 @Composable
 fun SmartStackLayer(
@@ -222,7 +225,7 @@ fun SmartStackLayer(
             val rowPx = with(density) { 76.dp.toPx() + 10.dp.toPx() }
             floor(((heightPx - headerPx - footerPx - quickPx).coerceAtLeast(rowPx)) / rowPx).toInt().coerceAtLeast(1)
         }
-        val previewLayout = remember(previewGroups, previewCapacity) { buildPreviewGroups(previewGroups, previewCapacity) }
+        val previewRows = remember(previewGroups, previewCapacity) { buildPreviewRows(previewGroups, previewCapacity) }
 
         Column(
             modifier = Modifier.fillMaxSize().graphicsLayer {
@@ -253,26 +256,33 @@ fun SmartStackLayer(
                 ) {
                     when {
                         !notificationAccessGranted -> PreviewInfoCard("开启通知访问", "副一屏上滑进入通知中心后完成授权", onOpenNotifications)
-                        previewLayout.isEmpty() -> PreviewInfoCard("暂无通知", "副一屏上滑可打开通知中心", onOpenNotifications)
-                        else -> previewLayout.forEach { preview ->
-                            if (preview.hiddenCount > 0) {
-                                SwipeRevealDeleteContainer(
-                                    target = NotificationRevealTarget.Group(preview.group.packageName),
-                                    revealedTarget = revealedNotificationTarget,
-                                    onRevealTargetChange = onRevealTargetChange,
-                                    enabled = preview.group.entries.any(NotificationEntryUi::isClearable),
-                                    onDelete = { onDismissGroup(preview.group.packageName) },
-                                    actionHeight = 72.dp
-                                ) { StackedPreviewCard(preview.entries.first(), preview.hiddenCount, onOpenNotifications) }
-                            } else {
-                                preview.entries.forEach { entry ->
-                                    SwipeRevealDeleteContainer(
-                                        target = NotificationRevealTarget.Entry(entry.key),
-                                        revealedTarget = revealedNotificationTarget,
-                                        onRevealTargetChange = onRevealTargetChange,
-                                        enabled = entry.isClearable,
-                                        onDelete = { onDismissNotification(entry.key) }
-                                    ) { PreviewPill(entry, onOpenNotifications) }
+                        previewRows.isEmpty() -> PreviewInfoCard("暂无通知", "副一屏上滑可打开通知中心", onOpenNotifications)
+                        else -> previewRows.forEach { preview ->
+                            when (preview) {
+                                is PreviewRow.Aggregate -> {
+                                    StackedPreviewCard(preview.leadEntry, preview.hiddenCount, onOpenNotifications)
+                                }
+                                is PreviewRow.Group -> {
+                                    if (preview.hiddenCount > 0) {
+                                        SwipeRevealDeleteContainer(
+                                            target = NotificationRevealTarget.Group(preview.group.packageName),
+                                            revealedTarget = revealedNotificationTarget,
+                                            onRevealTargetChange = onRevealTargetChange,
+                                            enabled = preview.group.entries.any(NotificationEntryUi::isClearable),
+                                            onDelete = { onDismissGroup(preview.group.packageName) },
+                                            actionHeight = 72.dp
+                                        ) { StackedPreviewCard(preview.entries.first(), preview.hiddenCount, onOpenNotifications) }
+                                    } else {
+                                        preview.entries.forEach { entry ->
+                                            SwipeRevealDeleteContainer(
+                                                target = NotificationRevealTarget.Entry(entry.key),
+                                                revealedTarget = revealedNotificationTarget,
+                                                onRevealTargetChange = onRevealTargetChange,
+                                                enabled = entry.isClearable,
+                                                onDelete = { onDismissNotification(entry.key) }
+                                            ) { PreviewPill(entry, onOpenNotifications) }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -504,16 +514,31 @@ fun SmartStackLayer(
     }
 }
 
-private fun buildPreviewGroups(groups: List<NotificationGroupUi>, maxRows: Int): List<PreviewGroup> {
-    return groups
-        .take(maxRows.coerceAtLeast(0))
-        .map { group ->
-            if (group.entries.size > 1) {
-                PreviewGroup(group, listOf(group.entries.first()), group.entries.size - 1)
-            } else {
-                PreviewGroup(group, group.entries, 0)
-            }
+private fun buildPreviewRows(groups: List<NotificationGroupUi>, maxRows: Int): List<PreviewRow> {
+    val safeMaxRows = maxRows.coerceAtLeast(0)
+    if (safeMaxRows == 0) return emptyList()
+
+    val visibleGroups = groups.take(safeMaxRows)
+    val totalNotificationCount = visibleGroups.sumOf { it.entries.size }
+    val distinctGroupCount = visibleGroups.size
+
+    if (distinctGroupCount > 1 && totalNotificationCount > 1) {
+        val leadEntry = visibleGroups.firstOrNull()?.entries?.firstOrNull() ?: return emptyList()
+        return listOf(
+            PreviewRow.Aggregate(
+                leadEntry = leadEntry,
+                hiddenCount = (totalNotificationCount - 1).coerceAtLeast(0)
+            )
+        )
+    }
+
+    return visibleGroups.map { group ->
+        if (group.entries.size > 1) {
+            PreviewRow.Group(group, listOf(group.entries.first()), group.entries.size - 1)
+        } else {
+            PreviewRow.Group(group, group.entries, 0)
         }
+    }
 }
 
 private fun formatClockTime(timestamp: Long): String = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
