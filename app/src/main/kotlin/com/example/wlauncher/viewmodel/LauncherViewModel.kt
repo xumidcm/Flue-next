@@ -515,10 +515,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun onReturnToLauncher() {
         if (launchingExternalApp) {
             launchingExternalApp = false
-            _currentLaunchIcon.value = null
             _screenState.value = returnStateAfterExternalLaunch
             _revealedNotificationTarget.value = null
         }
+    }
+
+    fun clearLaunchIcon() {
+        _currentLaunchIcon.value = null
     }
 
     fun handleHomePress() {

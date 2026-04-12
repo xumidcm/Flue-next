@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -46,6 +47,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -94,6 +96,7 @@ fun ListDrawerScreen(
     iconSize: Dp = 48.dp,
     topFadeRangeDp: Int = 56,
     bottomFadeRangeDp: Int = 56,
+    showEdgeFades: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
     onLongClick: (AppInfo) -> Unit = {},
@@ -589,6 +592,58 @@ fun ListDrawerScreen(
                     )
                 }
             }
+        }
+        if (showEdgeFades && blurEnabled && effectiveEdgeBlur) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(topFadeRangeDp.coerceAtLeast(0).dp)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.Black.copy(alpha = 0.38f),
+                                Color.Black.copy(alpha = 0.14f),
+                                Color.Transparent
+                            )
+                        )
+                    )
+                    .platformBlur(LIST_EDGE_ITEM_BLUR_DP, true)
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(bottomFadeRangeDp.coerceAtLeast(0).dp)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.14f),
+                                Color.Black.copy(alpha = 0.42f)
+                            )
+                        )
+                    )
+                    .platformBlur(LIST_EDGE_ITEM_BLUR_DP, true)
+            )
+        }
+        if (showEdgeFades && topFadeRangeDp > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(topFadeRangeDp.dp)
+                    .background(Brush.verticalGradient(listOf(Color.Black, Color.Transparent)))
+            )
+        }
+        if (showEdgeFades && bottomFadeRangeDp > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(bottomFadeRangeDp.dp)
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
+            )
         }
     }
 

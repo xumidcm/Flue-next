@@ -65,7 +65,6 @@ import com.flue.launcher.watchface.LunchWatchFaceHost
 import kotlinx.coroutines.delay
 
 private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
-private const val STACK_RETURN_BACKDROP_HOLD_MS = 90L
 class LauncherActivity : ComponentActivity() {
 
     private lateinit var vm: LauncherViewModel
@@ -156,6 +155,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val builtInVideoClockBold by vm.builtInVideoClockBold.collectAsState()
     val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
     val builtInVideoClockColorMode by vm.builtInVideoClockColorMode.collectAsState()
+    val animationOverrideEnabled by vm.animationOverrideEnabled.collectAsState()
     val layerBlurEnabled = blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
     val notificationsLayerEnabled = showNotification
@@ -175,7 +175,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     var launchBackdropVisible by remember { mutableStateOf(false) }
     var startupGateReleased by remember { mutableStateOf(false) }
     var showSplash by remember { mutableStateOf(false) }
-    var stackReturnBackdropVisible by remember { mutableStateOf(false) }
+    var returnBackdropVisible by remember { mutableStateOf(false) }
+    var returnBackdropIcon by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     LaunchedEffect(screenState, launchSourceState, currentLaunchIcon) {
         if (screenState == ScreenState.App && currentLaunchIcon != null) {
             launchBackdropVisible = true
@@ -183,22 +184,27 @@ fun LauncherScreen(vm: LauncherViewModel) {
             launchBackdropVisible = false
         }
     }
-    LaunchedEffect(screenState, launchSourceState, prevState) {
-        if (
-            prevState == ScreenState.App &&
-            screenState == ScreenState.Stack &&
-            launchSourceState == ScreenState.Stack
-        ) {
-            stackReturnBackdropVisible = true
-            delay(STACK_RETURN_BACKDROP_HOLD_MS)
-            stackReturnBackdropVisible = false
-        } else if (screenState != ScreenState.App) {
-            stackReturnBackdropVisible = false
+    LaunchedEffect(screenState, prevState, currentLaunchIcon, launchSourceState, animationOverrideEnabled) {
+        val shouldShowReturnMask =
+            currentLaunchIcon != null && (launchSourceState == ScreenState.Stack || animationOverrideEnabled)
+        if (prevState == ScreenState.App && screenState != ScreenState.App && shouldShowReturnMask) {
+            returnBackdropIcon = currentLaunchIcon
+            returnBackdropVisible = true
+            delay(220)
+            returnBackdropVisible = false
+            returnBackdropIcon = null
+            vm.clearLaunchIcon()
+        } else if (prevState == ScreenState.App && screenState != ScreenState.App) {
+            returnBackdropVisible = false
+            returnBackdropIcon = null
+            vm.clearLaunchIcon()
+        } else if (screenState == ScreenState.App) {
+            returnBackdropVisible = false
+            returnBackdropIcon = null
         }
     }
     val showLaunchBackdrop = launchBackdropVisible && screenState == ScreenState.App && currentLaunchIcon != null
-    val showStackLaunchBackdrop =
-        (showLaunchBackdrop && launchSourceState == ScreenState.Stack) || stackReturnBackdropVisible
+    val showStackLaunchBackdrop = showLaunchBackdrop && launchSourceState == ScreenState.Stack
     val showStandardLaunchBackdrop = showLaunchBackdrop && launchSourceState != ScreenState.Stack
     LaunchedEffect(appDrawerReady) {
         if (appDrawerReady) {
@@ -422,6 +428,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         suppressHeavyEffects = reduceLegacyDrawerEffects,
                         topFadeRangeDp = honeycombTopFade,
                         bottomFadeRangeDp = honeycombBottomFade,
+                        showEdgeFades = screenState != ScreenState.Face,
                         onAppClick = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
                             vm.openApp(appInfo, origin, launchDelay, ScreenState.Apps)
@@ -466,6 +473,20 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 LaunchBackdropContent(
                     showSplash = showSplash && splashIcon && currentLaunchIcon != null,
                     icon = currentLaunchIcon
+                )
+            }
+
+            AnimatedVisibility(
+                visible = returnBackdropVisible,
+                modifier = Modifier.zIndex(6f),
+                enter = fadeIn(animationSpec = tween(durationMillis = 80)),
+                exit = fadeOut(animationSpec = tween(durationMillis = 180))
+            ) {
+                LaunchBackdropContent(
+                    visible = returnBackdropVisible,
+                    showSplash = true,
+                    icon = returnBackdropIcon,
+                    shrinkDownOnExit = true
                 )
             }
 
@@ -560,8 +581,10 @@ private fun lerpFloat(start: Float, end: Float, fraction: Float): Float =
 
 @Composable
 private fun LaunchBackdropContent(
+    visible: Boolean = true,
     showSplash: Boolean,
-    icon: androidx.compose.ui.graphics.ImageBitmap?
+    icon: androidx.compose.ui.graphics.ImageBitmap?,
+    shrinkDownOnExit: Boolean = false
 ) {
     Box(
         modifier = Modifier
@@ -569,20 +592,54 @@ private fun LaunchBackdropContent(
             .background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
-        AnimatedVisibility(
-            visible = showSplash && icon != null,
-            enter = fadeIn() + scaleIn(initialScale = 0.5f),
-            exit = fadeOut() + scaleOut(targetScale = 0.3f)
-        ) {
+        if (shrinkDownOnExit) {
+            val iconScale by animateFloatAsState(
+                targetValue = if (visible) 1f else 0.28f,
+                animationSpec = tween(durationMillis = 180),
+                label = "return_backdrop_icon_scale"
+            )
+            val iconAlpha by animateFloatAsState(
+                targetValue = if (visible) 1f else 0f,
+                animationSpec = tween(durationMillis = 180),
+                label = "return_backdrop_icon_alpha"
+            )
+            val iconOffsetY by animateFloatAsState(
+                targetValue = if (visible) 0f else 44f,
+                animationSpec = tween(durationMillis = 180),
+                label = "return_backdrop_icon_offset"
+            )
             icon?.let { launchIcon ->
                 Image(
                     bitmap = launchIcon,
                     contentDescription = null,
                     modifier = Modifier
+                        .graphicsLayer {
+                            scaleX = iconScale
+                            scaleY = iconScale
+                            alpha = iconAlpha
+                            translationY = iconOffsetY
+                        }
                         .size(96.dp)
                         .clip(CircleShape),
                     contentScale = ContentScale.Crop
                 )
+            }
+        } else {
+            AnimatedVisibility(
+                visible = showSplash && icon != null,
+                enter = fadeIn() + scaleIn(initialScale = 0.5f),
+                exit = fadeOut() + scaleOut(targetScale = 0.3f)
+            ) {
+                icon?.let { launchIcon ->
+                    Image(
+                        bitmap = launchIcon,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(96.dp)
+                            .clip(CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+                }
             }
         }
     }
