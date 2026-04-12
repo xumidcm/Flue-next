@@ -65,6 +65,7 @@ import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
+import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.viewmodel.LauncherViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -81,6 +82,7 @@ const val FILE_MANAGER_MODE_VIDEO = "video"
 class BuiltInFileManagerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        RecentsVisibility.apply(this)
         val mode = intent.getStringExtra(EXTRA_FILE_MANAGER_MODE)
             ?.takeIf { it == FILE_MANAGER_MODE_IMAGE || it == FILE_MANAGER_MODE_VIDEO }
             ?: FILE_MANAGER_MODE_IMAGE

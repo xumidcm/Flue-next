@@ -96,12 +96,14 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.flue.launcher.ui.common.bottomFisheyeScale
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.settings.WatchFaceSettingCard
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
+import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
@@ -115,7 +117,7 @@ import java.io.File
 import java.util.Date
 import java.util.Locale
 
-private const val ABOUT_VERSION = "beta0.8"
+private const val ABOUT_VERSION = "beta1.0"
 const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
 const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
@@ -140,6 +142,7 @@ private data class SavedScrollPosition(
 class SettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        RecentsVisibility.apply(this)
         val initialDestination = when (intent.getStringExtra(EXTRA_SETTINGS_DESTINATION)) {
             SETTINGS_DESTINATION_WATCH_FACES -> SettingsDestination.WATCH_FACES
             else -> SettingsDestination.ROOT
@@ -179,6 +182,7 @@ private fun SettingsRootScreen(
     val selectedIconPackPackage by vm.selectedIconPackPackage.collectAsState()
     val watchFaceLastError by vm.watchFaceLastError.collectAsState()
     val layoutMode by vm.layoutMode.collectAsState()
+    val sideScreenEnabled by vm.sideScreenEnabled.collectAsState()
     val blurEnabled by vm.blurEnabled.collectAsState()
     val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsState()
     val lowResIcons by vm.lowResIcons.collectAsState()
@@ -203,7 +207,12 @@ private fun SettingsRootScreen(
     val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
     val builtInVideoClockColorMode by vm.builtInVideoClockColorMode.collectAsState()
     val builtInManagerThumbnails by vm.builtInManagerThumbnails.collectAsState()
+    val hideFromRecents by vm.hideFromRecents.collectAsState()
+    val showNotification by vm.showNotification.collectAsState()
     val headerTime = rememberSettingsHeaderTime()
+    val isZh = remember(context.resources.configuration) {
+        context.resources.configuration.locales[0]?.language?.startsWith("zh") == true
+    }
 
     var destination by remember(initialDestination) { mutableStateOf(initialDestination) }
     var hiddenAppsDraft by remember { mutableStateOf(hiddenApps) }
@@ -219,6 +228,10 @@ private fun SettingsRootScreen(
 
     LaunchedEffect(Unit) {
         vm.refreshWatchFaces()
+    }
+
+    LaunchedEffect(hideFromRecents, context) {
+        (context as? Activity)?.let { RecentsVisibility.apply(it, hideFromRecents) }
     }
 
     val commitHiddenAppsDraft = {
@@ -507,24 +520,53 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "layout_list", screenCenterY, screenHeightPx)
                 )
             }
-            item("visual_header") { SectionTitle("\u89c6\u89c9", itemFisheye(listState, "visual_header", screenCenterY, screenHeightPx)) }
-            item("blur_enabled") {
+            item("display_header") {
+                SectionTitle(if (isZh) "\u663e\u793a\u8bbe\u7f6e" else "Display", itemFisheye(listState, "display_header", screenCenterY, screenHeightPx))
+            }
+            item("side_screen_toggle") {
                 SettingsSwitchRow(
-                    title = "\u80cc\u666f\u6a21\u7cca",
-                    subtitle = "\u5728\u62bd\u5c49\u4e0e\u5c42\u7ea7\u5207\u6362\u4e2d\u542f\u7528\u6a21\u7cca",
-                    checked = blurEnabled,
-                    onToggle = { vm.setBlurEnabled(it) },
-                    scale = itemFisheye(listState, "blur_enabled", screenCenterY, screenHeightPx)
+                    title = if (isZh) "\u526f\u4e00\u5c4f" else "Side Screen",
+                    subtitle = if (isZh) "\u4ece\u8868\u76d8\u53f3\u6ed1\u8fdb\u5165\u5feb\u6377\u542f\u52a8\u4e0e\u901a\u77e5\u9875" else "Swipe right from the watch face to open the side screen",
+                    checked = sideScreenEnabled,
+                    onToggle = vm::setSideScreenEnabled,
+                    scale = itemFisheye(listState, "side_screen_toggle", screenCenterY, screenHeightPx)
                 )
             }
-            item("edge_blur") {
+            item("notification_center_toggle") {
                 SettingsSwitchRow(
-                    title = "\u8fb9\u7f18\u6a21\u7cca",
-                    subtitle = if (blurEnabled) "\u4e3a\u9876\u90e8\u548c\u5e95\u90e8\u6dfb\u52a0\u6e10\u53d8\u6a21\u7cca" else "\u5f00\u542f\u80cc\u666f\u6a21\u7cca\u540e\u53ef\u7528",
+                    title = if (isZh) "\u901a\u77e5\u4e2d\u5fc3" else "Notification Center",
+                    subtitle = if (showNotification) {
+                        if (isZh) "\u663e\u793a\u901a\u77e5\u6a2a\u5e45\uff0c\u5e76\u5141\u8bb8\u4ece\u526f\u4e00\u5c4f\u4e0a\u6ed1\u8fdb\u5165\u901a\u77e5\u4e2d\u5fc3" else "Show notification banners and allow swipe-up from the side screen into the notification center"
+                    } else {
+                        if (isZh) "\u9690\u85cf\u901a\u77e5\u6a2a\u5e45\u4e0e\u901a\u77e5\u4e2d\u5fc3\uff0c\u5e76\u628a\u5feb\u6377\u542f\u52a8\u6269\u5c55\u4e3a 3x3" else "Hide notification banners and the notification center, and expand quick launch to 3x3"
+                    },
+                    checked = showNotification,
+                    enabled = sideScreenEnabled,
+                    onToggle = vm::setShowNotification,
+                    scale = itemFisheye(listState, "notification_center_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            item("blur_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "\u6a21\u7cca" else "Blur",
+                    subtitle = if (isZh) "\u5728\u652f\u6301\u7684 Android \u7248\u672c\u4e0a\u542f\u7528\u6a21\u7cca" else "Enable blur on supported Android versions",
+                    checked = blurEnabled,
+                    onToggle = vm::setBlurEnabled,
+                    scale = itemFisheye(listState, "blur_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            item("edge_blur_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "\u8fb9\u7f18\u6a21\u7cca\uff08\u5b9e\u9a8c\uff09" else "Edge Blur (Experimental)",
+                    subtitle = if (blurEnabled) {
+                        if (isZh) "\u5728\u9876\u90e8\u548c\u5e95\u90e8\u8fb9\u7f18\u589e\u52a0\u6a21\u7cca" else "Apply extra blur near the top and bottom edges"
+                    } else {
+                        if (isZh) "\u8bf7\u5148\u5f00\u542f\u6a21\u7cca" else "Enable Blur first"
+                    },
                     checked = edgeBlurEnabled,
                     enabled = blurEnabled,
-                    onToggle = { vm.setEdgeBlurEnabled(it) },
-                    scale = itemFisheye(listState, "edge_blur", screenCenterY, screenHeightPx)
+                    onToggle = vm::setEdgeBlurEnabled,
+                    scale = itemFisheye(listState, "edge_blur_toggle", screenCenterY, screenHeightPx)
                 )
             }
             item("honeycomb_cols") {
@@ -651,6 +693,15 @@ private fun SettingsRootScreen(
                     checked = animationOverrideEnabled,
                     onToggle = { vm.setAnimationOverrideEnabled(it) },
                     scale = itemFisheye(listState, "anim_override", screenCenterY, screenHeightPx)
+                )
+            }
+            item("hide_from_recents") {
+                SettingsSwitchRow(
+                    title = if (isZh) "\u9690\u85cf\u540e\u53f0\u5361\u7247" else "Hide Recents Card",
+                    subtitle = if (isZh) "\u4ece\u6700\u8fd1\u4efb\u52a1\u4e2d\u9690\u85cf Flue \u7684\u540e\u53f0\u5361\u7247" else "Hide Flue from the system recents screen",
+                    checked = hideFromRecents,
+                    onToggle = vm::setHideFromRecents,
+                    scale = itemFisheye(listState, "hide_from_recents", screenCenterY, screenHeightPx)
                 )
             }
             item("builtin_manager_thumbnails") {
@@ -1445,43 +1496,7 @@ private fun itemFisheye(
     screenCenterY: Float,
     screenHeight: Float
 ): Float {
-    val layoutInfo = listState.layoutInfo
-    val info = layoutInfo.visibleItemsInfo.find { it.key == key } ?: return 0.92f
-    val totalCount = layoutInfo.totalItemsCount.coerceAtLeast(1)
-    val isTailItem = info.index >= (totalCount - 2).coerceAtLeast(0)
-    val itemCenterY = info.offset + info.size / 2f
-    if (itemCenterY <= screenCenterY && !isTailItem) return 1f
-    val distance = kotlin.math.abs(itemCenterY - screenCenterY)
-    val normalized = (distance / (screenHeight / 2f)).coerceIn(0f, 1f)
-    val baseScale = 1f - 0.14f * normalized
-    val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()
-    val flattenWindow = 4
-    val startFlattenIndex = (totalCount - flattenWindow).coerceAtLeast(0)
-    val nearBottomProgress = if (lastVisible == null) {
-        0f
-    } else {
-        ((lastVisible.index - startFlattenIndex).toFloat() / flattenWindow.toFloat()).coerceIn(0f, 1f)
-    }
-    val edgeProgress = if (lastVisible != null && lastVisible.index >= totalCount - 1) {
-        val bottomGap = (layoutInfo.viewportEndOffset - (lastVisible.offset + lastVisible.size)).coerceAtLeast(0)
-        (1f - (bottomGap / (screenHeight * 0.16f)).coerceIn(0f, 1f)).coerceIn(0f, 1f)
-    } else {
-        0f
-    }
-    val rawFlattenProgress = (nearBottomProgress * 0.6f + edgeProgress * 0.4f).coerceIn(0f, 1f)
-    val flattenProgress by animateFloatAsState(
-        targetValue = rawFlattenProgress,
-        animationSpec = tween(durationMillis = 260),
-        label = "settings_fisheye_flatten_progress"
-    )
-
-    val visibleItems = layoutInfo.visibleItemsInfo
-    val currentVisibleOrder = visibleItems.indexOfFirst { it.key == key }.coerceAtLeast(0)
-    val fromBottomOrder = (visibleItems.lastIndex - currentVisibleOrder).coerceAtLeast(0)
-    val stagger = ((fromBottomOrder + 1) * 0.075f).coerceAtMost(0.32f)
-    val stagedFlatten = ((flattenProgress - stagger) / (1f - stagger)).coerceIn(0f, 1f)
-
-    return androidx.compose.ui.util.lerp(baseScale, 1f, stagedFlatten)
+    return bottomFisheyeScale(listState, key, screenCenterY, screenHeight)
 }
 
 private fun exportLog(context: android.content.Context) {
