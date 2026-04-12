@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -47,7 +46,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -524,10 +522,10 @@ fun ListDrawerScreen(
                                 .clip(CircleShape),
                             contentScale = ContentScale.Crop
                         )
-                        Spacer(modifier = Modifier.width(14.dp))
+                        Spacer(modifier = Modifier.width(18.dp))
                         Text(
                             text = app.label,
-                            fontSize = 16.sp,
+                            fontSize = 17.sp,
                             fontWeight = FontWeight.W500,
                             color = Color.White
                         )
@@ -582,68 +580,15 @@ fun ListDrawerScreen(
                             .clip(CircleShape),
                         contentScale = ContentScale.Crop
                     )
-                    Spacer(modifier = Modifier.width(14.dp))
+                    Spacer(modifier = Modifier.width(18.dp))
                     Text(
                         text = draggedApp.label,
-                        fontSize = 16.sp,
+                        fontSize = 17.sp,
                         fontWeight = FontWeight.W500,
                         color = Color.White
                     )
                 }
             }
-        }
-
-        if (blurEnabled && effectiveEdgeBlur) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .height(topFadeRangeDp.coerceAtLeast(0).dp)
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                Color.Black.copy(alpha = 0.38f),
-                                Color.Black.copy(alpha = 0.14f),
-                                Color.Transparent
-                            )
-                        )
-                    )
-                    .platformBlur(LIST_EDGE_ITEM_BLUR_DP, true)
-            )
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .height(bottomFadeRangeDp.coerceAtLeast(0).dp)
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                Color.Transparent,
-                                Color.Black.copy(alpha = 0.14f),
-                                Color.Black.copy(alpha = 0.42f)
-                            )
-                        )
-                    )
-                    .platformBlur(LIST_EDGE_ITEM_BLUR_DP, true)
-            )
-        }
-        if (topFadeRangeDp > 0) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .height(topFadeRangeDp.dp)
-                    .background(Brush.verticalGradient(listOf(Color.Black, Color.Transparent)))
-            )
-        }
-        if (bottomFadeRangeDp > 0) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .height(bottomFadeRangeDp.dp)
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
-            )
         }
     }
 

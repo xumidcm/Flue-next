@@ -96,14 +96,14 @@ class LauncherActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         RecentsVisibility.apply(this)
+        if (::vm.isInitialized && vm.animationOverrideEnabled.value) {
+            @Suppress("DEPRECATION")
+            overridePendingTransition(android.R.anim.fade_in, R.anim.launcher_return_cupertino_exit)
+        }
         if (::vm.isInitialized) {
             vm.onReturnToLauncher()
             vm.refreshWatchFaces()
             vm.refreshNotificationAccess()
-        }
-        if (::vm.isInitialized && vm.animationOverrideEnabled.value) {
-            @Suppress("DEPRECATION")
-            overridePendingTransition(android.R.anim.fade_in, R.anim.launcher_return_cupertino_exit)
         }
     }
 
