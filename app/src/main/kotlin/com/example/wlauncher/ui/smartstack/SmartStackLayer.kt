@@ -61,6 +61,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -85,8 +86,9 @@ import kotlin.math.floor
 
 private const val SIDE_SCREEN_CONTENT_WIDTH_RATIO = 0.884f
 private const val SIDE_SCREEN_DISMISS_THRESHOLD = 86f
-private const val SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD = 92f
-private const val SIDE_SCREEN_NOTIFICATION_DRAG_RANGE = 180f
+private const val SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_RATIO = 0.78f
+private const val SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_MIN = 300f
+private const val SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS = 0.6f
 private sealed interface SideScreenModalState {
     data object None : SideScreenModalState
     data class Picker(val slotIndex: Int) : SideScreenModalState
@@ -130,10 +132,18 @@ fun SmartStackLayer(
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
     val clock = rememberClockSnapshot()
     val battery = rememberBatterySnapshot()
     val slotCenters = remember { mutableStateMapOf<Int, Offset>() }
     val visibleShortcutCount = if (notificationsEnabled) 6 else 9
+    val notificationDragRangePx = remember(configuration.screenHeightDp, density) {
+        maxOf(
+            with(density) { configuration.screenHeightDp.dp.toPx() } * SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_RATIO,
+            SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_MIN
+        )
+    }
+    val notificationReleaseThresholdPx = notificationDragRangePx * SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS
     val shortcuts = remember(apps, sideScreenShortcuts, visibleShortcutCount) {
         sideScreenShortcuts
             .take(visibleShortcutCount)
@@ -178,7 +188,7 @@ fun SmartStackLayer(
                             if (notificationPullActive) {
                                 overscrollTarget = 0f
                                 onNotificationTransitionProgressChange(
-                                    (-dragDy / SIDE_SCREEN_NOTIFICATION_DRAG_RANGE).coerceIn(0f, 1f)
+                                    (-dragDy / notificationDragRangePx).coerceIn(0f, 1f)
                                 )
                             } else {
                                 overscrollTarget = (overscrollTarget + dragAmount.y * 0.35f).coerceIn(-180f, 120f)
@@ -190,8 +200,8 @@ fun SmartStackLayer(
                         val openNotifications = notificationsEnabled &&
                             abs(dragDy) > abs(dragDx) &&
                             (
-                                dragDy < -SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD ||
-                                    notificationTransitionProgress > 0.48f
+                                dragDy < -notificationReleaseThresholdPx ||
+                                    notificationTransitionProgress > SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS
                                 )
 
                         when {

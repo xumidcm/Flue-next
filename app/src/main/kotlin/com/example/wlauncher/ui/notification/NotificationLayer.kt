@@ -65,7 +65,9 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
@@ -80,9 +82,10 @@ import java.util.Locale
 
 private const val NOTIFICATION_CARD_WIDTH_RATIO = 0.86f
 private const val NOTIFICATION_TOP_SAFE_PADDING_DP = 22
-private const val NOTIFICATION_TOP_DISMISS_THRESHOLD = 80f
 private const val NOTIFICATION_BOTTOM_OVERSCROLL_LIMIT = -96f
-private const val NOTIFICATION_DISMISS_DRAG_RANGE = 180f
+private const val NOTIFICATION_DISMISS_DRAG_RANGE_RATIO = 0.78f
+private const val NOTIFICATION_DISMISS_DRAG_RANGE_MIN = 300f
+private const val NOTIFICATION_DISMISS_RELEASE_PROGRESS = 0.6f
 private val NOTIFICATION_TIME_FORMAT = ThreadLocal.withInitial {
     SimpleDateFormat("HH:mm", Locale.getDefault())
 }
@@ -106,8 +109,17 @@ fun NotificationLayer(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
     val batteryLevel = rememberBatteryLevel()
     val listState = rememberLazyListState()
+    val dismissDragRangePx = remember(configuration.screenHeightDp, density) {
+        maxOf(
+            with(density) { configuration.screenHeightDp.dp.toPx() } * NOTIFICATION_DISMISS_DRAG_RANGE_RATIO,
+            NOTIFICATION_DISMISS_DRAG_RANGE_MIN
+        )
+    }
+    val dismissThresholdPx = dismissDragRangePx * NOTIFICATION_DISMISS_RELEASE_PROGRESS
     val overscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var dismissTransitionInFlight by remember { mutableStateOf(false) }
@@ -120,19 +132,19 @@ fun NotificationLayer(
         }
     }
     val updateDismissDrag: (Float) -> Unit = { delta ->
-        dismissDragDistance = (dismissDragDistance + delta).coerceIn(0f, NOTIFICATION_DISMISS_DRAG_RANGE)
+        dismissDragDistance = (dismissDragDistance + delta).coerceIn(0f, dismissDragRangePx)
         onTransitionProgressChange(
-            (1f - dismissDragDistance / NOTIFICATION_DISMISS_DRAG_RANGE).coerceIn(0f, 1f)
+            (1f - dismissDragDistance / dismissDragRangePx).coerceIn(0f, 1f)
         )
     }
     val releaseDismissDrag: () -> Unit = {
-        val shouldDismiss = dismissDragDistance > NOTIFICATION_TOP_DISMISS_THRESHOLD
+        val shouldDismiss = dismissDragDistance > dismissThresholdPx
         dismissDragDistance = 0f
         onTransitionRelease(shouldDismiss)
     }
     val closeIfPulled: suspend () -> Unit = {
         if (!dismissTransitionInFlight) {
-            if (dismissDragDistance > NOTIFICATION_TOP_DISMISS_THRESHOLD) {
+            if (dismissDragDistance > dismissThresholdPx) {
                 dismissTransitionInFlight = true
                 onRevealTargetChange(null)
                 releaseDismissDrag()
