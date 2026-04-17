@@ -10,6 +10,7 @@ import androidx.activity.addCallback
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -29,8 +30,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,7 +49,6 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.anim.appListLayerValues
 import com.flue.launcher.ui.anim.faceLayerValues
-import com.flue.launcher.ui.anim.notificationLayerValues
 import com.flue.launcher.ui.anim.scaleBlurAlpha
 import com.flue.launcher.ui.drawer.HoneycombScreen
 import com.flue.launcher.ui.drawer.ListDrawerScreen
@@ -62,12 +64,14 @@ import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceHost
-import kotlinx.coroutines.delay
 import androidx.compose.animation.core.Spring
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
 private const val SIDE_SCREEN_TRANSITION_MS = 260
 private const val SIDE_SCREEN_EXIT_OVERSHOOT = 1.08f
+private const val NOTIFICATION_TRANSITION_MS = 240
 
 class LauncherActivity : ComponentActivity() {
 
@@ -186,10 +190,29 @@ fun LauncherScreen(vm: LauncherViewModel) {
     var prevState by remember { mutableStateOf(screenState) }
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
     LaunchedEffect(screenState) { prevState = screenState }
+    val launcherScope = rememberCoroutineScope()
+    val notificationTransition = remember { Animatable(if (notificationSceneActive) 1f else 0f) }
+    var notificationGestureActive by remember { mutableStateOf(false) }
+    var notificationTargetProgress by remember { mutableFloatStateOf(if (notificationSceneActive) 1f else 0f) }
 
     val useOrigin = (screenState == ScreenState.App || isReturningFromApp) &&
         launchSourceState == ScreenState.Apps
     val fadeLaunch = launchSourceState == ScreenState.Stack || launchSourceState == ScreenState.Notifications
+
+    LaunchedEffect(notificationSceneActive) {
+        if (!notificationGestureActive) {
+            notificationTargetProgress = if (notificationSceneActive) 1f else 0f
+        }
+    }
+
+    LaunchedEffect(notificationTargetProgress, notificationGestureActive) {
+        if (!notificationGestureActive) {
+            notificationTransition.animateTo(
+                notificationTargetProgress,
+                tween(durationMillis = NOTIFICATION_TRANSITION_MS)
+            )
+        }
+    }
 
     LaunchedEffect(sideScreenEnabled, screenState) {
         if (!sideScreenEnabled && (screenState == ScreenState.Stack || screenState == ScreenState.Notifications)) {
@@ -218,15 +241,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
         val sideSceneTravelPx = screenWidthPx * SIDE_SCREEN_EXIT_OVERSHOOT
-        val notificationLayerHostProgress by animateFloatAsState(
-            targetValue = if (notificationSceneActive) 1f else 0f,
-            animationSpec = spring(
-                dampingRatio = Spring.DampingRatioNoBouncy,
-                stiffness = Spring.StiffnessMedium
-            ),
-            label = "notification_layer_host_progress"
-        )
-        val keepNotificationLayer = notificationLayerHostProgress > 0.001f || notificationSceneActive
+        val notificationProgress = notificationTransition.value.coerceIn(0f, 1f)
+        val keepNotificationLayer = notificationProgress > 0.001f || notificationSceneActive || notificationGestureActive
         val sidePageProgress by animateFloatAsState(
             targetValue = if (sideScreenEnabled && (screenState == ScreenState.Stack || screenState == ScreenState.Notifications)) {
                 1f
@@ -239,6 +255,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val faceAnimState = when (screenState) {
             ScreenState.Stack, ScreenState.Notifications -> ScreenState.Face
             else -> screenState
+        }
+        val updateNotificationTransitionProgress: (Float) -> Unit = { progress ->
+            notificationGestureActive = true
+            launcherScope.launch {
+                notificationTransition.snapTo(progress.coerceIn(0f, 1f))
+            }
+        }
+        val settleNotificationTransition: (Float) -> Unit = { target ->
+            notificationGestureActive = false
+            notificationTargetProgress = target.coerceIn(0f, 1f)
         }
         val sideScreenVisible = sidePageProgress > 0.001f || screenState == ScreenState.Stack || screenState == ScreenState.Notifications
         val sideSceneOverlayActive = sideScreenVisible
@@ -400,7 +426,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         .graphicsLayer {
                             translationX = (sidePageProgress - 1f) * sideSceneTravelPx
                             alpha = sidePageProgress.coerceIn(0f, 1f) *
-                                if (screenState == ScreenState.Notifications) 0.42f else 1f
+                                (1f - 0.58f * notificationProgress)
                         }
                 ) {
                     SmartStackLayer(
@@ -410,9 +436,19 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         notificationsEnabled = notificationsEnabled,
                         notificationAccessGranted = notificationAccessGranted,
                         notificationsSceneActive = screenState == ScreenState.Notifications,
+                        notificationTransitionProgress = notificationProgress,
                         revealedNotificationTarget = revealedNotificationTarget,
                         onRevealTargetChange = vm::setRevealedNotificationTarget,
                         onOpenNotifications = { vm.setState(ScreenState.Notifications) },
+                        onNotificationTransitionProgressChange = updateNotificationTransitionProgress,
+                        onNotificationTransitionRelease = { open ->
+                            if (open) {
+                                vm.setState(ScreenState.Notifications)
+                                settleNotificationTransition(1f)
+                            } else {
+                                settleNotificationTransition(0f)
+                            }
+                        },
                         onLaunchApp = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
                             vm.openApp(appInfo, origin, launchDelay, ScreenState.Stack)
@@ -431,23 +467,31 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     modifier = Modifier
                         .fillMaxSize()
                         .zIndex(5f)
-                    .scaleBlurAlpha(
-                        targetValues = notificationLayerValues(screenState),
-                        screenHeight = screenHeightPx,
-                        blurEnabled = layerBlurEnabled,
-                        translationSpec = spring(
-                            dampingRatio = Spring.DampingRatioNoBouncy,
-                            stiffness = Spring.StiffnessMedium
-                        )
-                    )
+                        .graphicsLayer {
+                            alpha = notificationProgress
+                            translationY = (1f - notificationProgress) * screenHeightPx
+                        }
                 ) {
                     NotificationLayer(
-                        isActive = notificationSceneActive,
+                        isActive = notificationSceneActive || notificationGestureActive,
+                        transitionProgress = notificationProgress,
                         notificationGroups = notificationGroups,
                         notificationAccessGranted = notificationAccessGranted,
                         revealedNotificationTarget = revealedNotificationTarget,
                         onRevealTargetChange = vm::setRevealedNotificationTarget,
-                        onDismissToStack = { vm.setState(if (sideScreenEnabled) ScreenState.Stack else ScreenState.Face) },
+                        onDismissToStack = {
+                            vm.setState(if (sideScreenEnabled) ScreenState.Stack else ScreenState.Face)
+                            settleNotificationTransition(0f)
+                        },
+                        onTransitionProgressChange = updateNotificationTransitionProgress,
+                        onTransitionRelease = { dismiss ->
+                            if (dismiss) {
+                                vm.setState(if (sideScreenEnabled) ScreenState.Stack else ScreenState.Face)
+                                settleNotificationTransition(0f)
+                            } else {
+                                settleNotificationTransition(1f)
+                            }
+                        },
                         onToggleGroup = vm::toggleNotificationGroup,
                         onDismissGroup = vm::dismissNotificationGroup,
                         onDismissNotification = vm::dismissNotification,

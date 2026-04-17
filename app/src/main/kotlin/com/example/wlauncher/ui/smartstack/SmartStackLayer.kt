@@ -85,7 +85,8 @@ import kotlin.math.floor
 
 private const val SIDE_SCREEN_CONTENT_WIDTH_RATIO = 0.884f
 private const val SIDE_SCREEN_DISMISS_THRESHOLD = 86f
-private const val SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD = 110f
+private const val SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD = 92f
+private const val SIDE_SCREEN_NOTIFICATION_DRAG_RANGE = 180f
 private sealed interface SideScreenModalState {
     data object None : SideScreenModalState
     data class Picker(val slotIndex: Int) : SideScreenModalState
@@ -114,9 +115,12 @@ fun SmartStackLayer(
     notificationsEnabled: Boolean,
     notificationAccessGranted: Boolean,
     notificationsSceneActive: Boolean,
+    notificationTransitionProgress: Float,
     revealedNotificationTarget: NotificationRevealTarget?,
     onRevealTargetChange: (NotificationRevealTarget?) -> Unit,
     onOpenNotifications: () -> Unit,
+    onNotificationTransitionProgressChange: (Float) -> Unit,
+    onNotificationTransitionRelease: (Boolean) -> Unit,
     onLaunchApp: (AppInfo, Offset) -> Unit,
     onSetShortcut: (Int, String?) -> Unit,
     onRemoveShortcut: (Int) -> Unit,
@@ -169,51 +173,56 @@ fun SmartStackLayer(
                             if (dragDx < 0f) change.consume()
                         } else {
                             change.consume()
-                            val draggingUpToNotifications = notificationsEnabled && dragDy < 0f
-                            overscrollTarget = if (draggingUpToNotifications) {
-                                0f
+                            val notificationPullActive = notificationsEnabled &&
+                                (dragDy < 0f || notificationTransitionProgress > 0f)
+                            if (notificationPullActive) {
+                                overscrollTarget = 0f
+                                onNotificationTransitionProgressChange(
+                                    (-dragDy / SIDE_SCREEN_NOTIFICATION_DRAG_RANGE).coerceIn(0f, 1f)
+                                )
                             } else {
-                                (overscrollTarget + dragAmount.y * 0.35f).coerceIn(-180f, 120f)
+                                overscrollTarget = (overscrollTarget + dragAmount.y * 0.35f).coerceIn(-180f, 120f)
                             }
                         }
                     },
                     onDragEnd = {
                         val dismissToFace = dragDx < -SIDE_SCREEN_DISMISS_THRESHOLD && abs(dragDx) > abs(dragDy)
                         val openNotifications = notificationsEnabled &&
-                            dragDy < -SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD &&
-                            abs(dragDy) > abs(dragDx)
+                            abs(dragDy) > abs(dragDx) &&
+                            (
+                                dragDy < -SIDE_SCREEN_NOTIFICATION_PULL_THRESHOLD ||
+                                    notificationTransitionProgress > 0.48f
+                                )
 
                         when {
                             dismissToFace -> {
                                 overscrollTarget = 0f
                                 dragDx = 0f
                                 dragDy = 0f
+                                onNotificationTransitionRelease(false)
                                 onRevealTargetChange(null)
                                 onDismissToFace()
                             }
                             openNotifications -> {
-                                transitionInFlight = true
                                 overscrollTarget = 0f
                                 dragDx = 0f
                                 dragDy = 0f
                                 onRevealTargetChange(null)
-                                onOpenNotifications()
+                                onNotificationTransitionRelease(true)
                             }
                             else -> {
                                 overscrollTarget = 0f
                                 dragDx = 0f
                                 dragDy = 0f
+                                onNotificationTransitionRelease(false)
                             }
                         }
                     },
                     onDragCancel = {
-                        if (!transitionInFlight) {
-                            overscrollTarget = 0f
-                            dragDx = 0f
-                            dragDy = 0f
-                        } else {
-                            overscrollTarget = 0f
-                        }
+                        overscrollTarget = 0f
+                        dragDx = 0f
+                        dragDy = 0f
+                        onNotificationTransitionRelease(false)
                     }
                 )
             }
