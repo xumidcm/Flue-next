@@ -2,6 +2,9 @@
 
 import android.app.Notification
 import android.app.PendingIntent
+import android.graphics.Bitmap
+import android.graphics.drawable.Icon
+import android.os.Build
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import androidx.compose.ui.graphics.ImageBitmap
@@ -30,11 +33,18 @@ data class NotifData(
 class WLauncherNotificationListener : NotificationListenerService() {
 
     companion object {
+        private const val NOTIFICATION_ICON_SIZE_PX = 96
+        private val IM_AVATAR_PACKAGES = setOf(
+            "com.tencent.mobileqq",
+            "com.tencent.mm",
+            "com.tencent.tim"
+        )
         private val _notifications = MutableStateFlow<List<NotifData>>(emptyList())
         val notifications: StateFlow<List<NotifData>> = _notifications.asStateFlow()
 
         private var instance: WLauncherNotificationListener? = null
         private val pendingIntentMap = mutableMapOf<String, PendingIntent?>()
+        private val packageIconCache = mutableMapOf<String, ImageBitmap?>()
 
         fun isConnected() = instance != null
 
@@ -64,6 +74,7 @@ class WLauncherNotificationListener : NotificationListenerService() {
         instance = null
         _notifications.value = emptyList()
         synchronized(pendingIntentMap) { pendingIntentMap.clear() }
+        synchronized(packageIconCache) { packageIconCache.clear() }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
@@ -96,10 +107,7 @@ class WLauncherNotificationListener : NotificationListenerService() {
                         pm.getApplicationLabel(pm.getApplicationInfo(sbn.packageName, 0)).toString()
                     } catch (_: Exception) { sbn.packageName }
 
-                    val iconBitmap = try {
-                        val smallIcon = n.smallIcon
-                        smallIcon?.loadDrawable(applicationContext)?.toBitmap(48, 48)?.asImageBitmap()
-                    } catch (_: Exception) { null }
+                    val iconBitmap = resolveNotificationIcon(sbn, n)
 
                     NotifData(
                         key = sbn.key,
@@ -125,5 +133,101 @@ class WLauncherNotificationListener : NotificationListenerService() {
                     }
                 }
         } catch (_: Exception) {}
+    }
+
+    private fun resolveNotificationIcon(
+        sbn: StatusBarNotification,
+        notification: Notification
+    ): ImageBitmap? {
+        return resolveMessagingAvatar(sbn, notification)
+            ?: resolveLargeNotificationIcon(notification)
+            ?: resolveApplicationIcon(sbn.packageName)
+            ?: resolveSmallNotificationIcon(notification)
+    }
+
+    private fun resolveMessagingAvatar(
+        sbn: StatusBarNotification,
+        notification: Notification
+    ): ImageBitmap? {
+        if (sbn.packageName !in IM_AVATAR_PACKAGES) return null
+        val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(
+            notification.extras.getParcelableArray(Notification.EXTRA_MESSAGES)
+        )
+        val historicMessages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(
+            notification.extras.getParcelableArray(Notification.EXTRA_HISTORIC_MESSAGES)
+        )
+        return (messages.asSequence() + historicMessages.asSequence())
+            .mapNotNull { message ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    message.senderPerson?.icon?.toImageBitmap()
+                } else {
+                    null
+                }
+            }
+            .firstOrNull()
+    }
+
+    private fun resolveLargeNotificationIcon(notification: Notification): ImageBitmap? {
+        val extras = notification.extras
+        val iconCandidates = listOfNotNull(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) notification.largeIcon else null,
+            extras.get(Notification.EXTRA_LARGE_ICON_BIG) as? Icon,
+            extras.get(Notification.EXTRA_LARGE_ICON) as? Icon
+        )
+        iconCandidates.firstNotNullOfOrNull { it.toImageBitmap() }?.let { return it }
+
+        val bitmapCandidates = listOfNotNull(
+            extras.get(Notification.EXTRA_LARGE_ICON_BIG) as? Bitmap,
+            extras.get(Notification.EXTRA_LARGE_ICON) as? Bitmap
+        )
+        return bitmapCandidates.firstNotNullOfOrNull { it.scaleToNotificationIcon() }
+    }
+
+    private fun resolveApplicationIcon(packageName: String): ImageBitmap? {
+        synchronized(packageIconCache) {
+            if (packageIconCache.containsKey(packageName)) {
+                return packageIconCache[packageName]
+            }
+        }
+        val resolved = runCatching {
+            applicationContext.packageManager
+                .getApplicationIcon(packageName)
+                .toBitmap(NOTIFICATION_ICON_SIZE_PX, NOTIFICATION_ICON_SIZE_PX)
+                .asImageBitmap()
+        }.getOrNull()
+        synchronized(packageIconCache) {
+            packageIconCache[packageName] = resolved
+        }
+        return resolved
+    }
+
+    private fun resolveSmallNotificationIcon(notification: Notification): ImageBitmap? {
+        return runCatching {
+            notification.smallIcon
+                ?.loadDrawable(applicationContext)
+                ?.toBitmap(NOTIFICATION_ICON_SIZE_PX, NOTIFICATION_ICON_SIZE_PX)
+                ?.asImageBitmap()
+        }.getOrNull()
+    }
+
+    private fun Icon.toImageBitmap(): ImageBitmap? {
+        return runCatching {
+            loadDrawable(applicationContext)
+                ?.toBitmap(NOTIFICATION_ICON_SIZE_PX, NOTIFICATION_ICON_SIZE_PX)
+                ?.asImageBitmap()
+        }.getOrNull()
+    }
+
+    private fun Bitmap.scaleToNotificationIcon(): ImageBitmap {
+        return if (width == NOTIFICATION_ICON_SIZE_PX && height == NOTIFICATION_ICON_SIZE_PX) {
+            asImageBitmap()
+        } else {
+            Bitmap.createScaledBitmap(
+                this,
+                NOTIFICATION_ICON_SIZE_PX,
+                NOTIFICATION_ICON_SIZE_PX,
+                true
+            ).asImageBitmap()
+        }
     }
 }

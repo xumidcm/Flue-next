@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -93,6 +94,13 @@ private sealed interface SideScreenModalState {
 
 private data class SideScreenClockSnapshot(val time: String, val date: String)
 private data class BatterySnapshot(val level: Int = 0)
+private data class ShortcutPickerItem(
+    val componentKey: String,
+    val label: String,
+    val packageName: String,
+    val icon: ImageBitmap,
+    val source: AppInfo
+)
 private sealed interface PreviewRow {
     data class Group(val group: NotificationGroupUi, val entries: List<NotificationEntryUi>, val hiddenCount: Int) : PreviewRow
     data class Aggregate(val leadEntry: NotificationEntryUi, val hiddenCount: Int) : PreviewRow
@@ -415,20 +423,82 @@ fun SmartStackLayer(
 }
 
 @Composable private fun PickerOverlay(apps: List<AppInfo>, onSelect: (AppInfo) -> Unit, onDismiss: () -> Unit) {
+    val pickerItems = remember(apps) {
+        apps.map { app ->
+            ShortcutPickerItem(
+                componentKey = app.componentKey,
+                label = app.label,
+                packageName = app.packageName,
+                icon = app.cachedIcon,
+                source = app
+            )
+        }
+    }
+    val listState = rememberLazyListState()
     ModalShell(onDismiss) { dismiss ->
         Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFF1E1E1E)).padding(vertical = 12.dp)) {
             Text("添加快捷启动", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 10.dp))
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(apps, key = { it.componentKey }) { app ->
-                    val pressed = rememberPressedState(); val isPressed by pressed
-                    val scale by animateFloatAsState(if (isPressed) 0.97f else 1f, spring(stiffness = 840f, dampingRatio = 0.74f), label = "picker_row")
-                    Row(Modifier.fillMaxWidth().graphicsLayer { scaleX = scale; scaleY = scale }.clip(RoundedCornerShape(18.dp)).background(if (isPressed) Color(0xFF303030) else Color.Transparent).instantPressGesture(pressed) { onSelect(app); dismiss() }.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Image(app.cachedIcon, null, modifier = Modifier.size(42.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-                        Spacer(Modifier.width(12.dp))
-                        Column { Text(app.label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold); Text(app.packageName, color = WatchColors.TextTertiary, fontSize = 11.sp) }
-                    }
+            LazyColumn(
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                items(
+                    items = pickerItems,
+                    key = { it.componentKey },
+                    contentType = { "shortcut_picker_app" }
+                ) { app ->
+                    ShortcutPickerRow(
+                        item = app,
+                        onClick = {
+                            onSelect(app.source)
+                            dismiss()
+                        }
+                    )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ShortcutPickerRow(
+    item: ShortcutPickerItem,
+    onClick: () -> Unit
+) {
+    val pressed = rememberPressedState()
+    val isPressed by pressed
+    val scale by animateFloatAsState(
+        if (isPressed) 0.985f else 1f,
+        spring(stiffness = 880f, dampingRatio = 0.8f),
+        label = "picker_row"
+    )
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(62.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (isPressed) Color(0xFF303030) else Color.Transparent)
+            .instantPressGesture(pressed, onClick = onClick)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Image(
+            item.icon,
+            null,
+            modifier = Modifier
+                .size(42.dp)
+                .clip(CircleShape),
+            contentScale = ContentScale.Crop,
+            filterQuality = FilterQuality.Low
+        )
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(item.label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Text(item.packageName, color = WatchColors.TextTertiary, fontSize = 11.sp, maxLines = 1)
         }
     }
 }
