@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.animateItemPlacement
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -76,7 +77,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private const val NOTIFICATION_CARD_WIDTH_RATIO = 0.884f
+private const val NOTIFICATION_CARD_WIDTH_RATIO = 0.86f
+private const val NOTIFICATION_TOP_SAFE_PADDING_DP = 22
+private const val NOTIFICATION_TOP_DISMISS_THRESHOLD = 80f
+private const val NOTIFICATION_BOTTOM_OVERSCROLL_LIMIT = -96f
 private val NOTIFICATION_TIME_FORMAT = ThreadLocal.withInitial {
     SimpleDateFormat("HH:mm", Locale.getDefault())
 }
@@ -102,7 +106,7 @@ fun NotificationLayer(
     var dismissTransitionInFlight by remember { mutableStateOf(false) }
     val closeIfPulled: suspend () -> Unit = {
         if (!dismissTransitionInFlight) {
-            if (overscroll.value > 80f) {
+            if (overscroll.value > NOTIFICATION_TOP_DISMISS_THRESHOLD) {
                 dismissTransitionInFlight = true
                 onRevealTargetChange(null)
                 onDismissToStack()
@@ -115,10 +119,13 @@ fun NotificationLayer(
         if (dismissTransitionInFlight) return@pointerInput
         detectVerticalDragGestures(
             onVerticalDrag = { change, dragAmount ->
-                if (dragAmount > 0f || overscroll.value > 0f) {
+                if (dragAmount != 0f || overscroll.value != 0f) {
                     change.consume()
                     scope.launch {
-                        overscroll.snapTo((overscroll.value + dragAmount * 0.35f).coerceIn(0f, 180f))
+                        overscroll.snapTo(
+                            (overscroll.value + dragAmount * 0.35f)
+                                .coerceIn(NOTIFICATION_BOTTOM_OVERSCROLL_LIMIT, 180f)
+                        )
                     }
                 }
             },
@@ -141,12 +148,34 @@ fun NotificationLayer(
                 if (dismissTransitionInFlight) return androidx.compose.ui.geometry.Offset.Zero
                 if (source != NestedScrollSource.Drag) return androidx.compose.ui.geometry.Offset.Zero
                 val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+                val layoutInfo = listState.layoutInfo
+                val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+                val atBottom = layoutInfo.totalItemsCount > 0 &&
+                    lastVisibleItem != null &&
+                    lastVisibleItem.index == layoutInfo.totalItemsCount - 1 &&
+                    lastVisibleItem.offset + lastVisibleItem.size <= layoutInfo.viewportEndOffset
                 if (available.y > 0f && atTop) {
                     scope.launch { overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtMost(180f)) }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
-                if (overscroll.value > 0f && available.y < 0f) {
-                    scope.launch { overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(0f)) }
+                if (available.y < 0f && atBottom) {
+                    scope.launch {
+                        overscroll.snapTo(
+                            (overscroll.value + available.y * 0.35f)
+                                .coerceAtLeast(NOTIFICATION_BOTTOM_OVERSCROLL_LIMIT)
+                        )
+                    }
+                    return androidx.compose.ui.geometry.Offset(0f, available.y)
+                }
+                if (overscroll.value != 0f && ((overscroll.value > 0f && available.y < 0f) || (overscroll.value < 0f && available.y > 0f))) {
+                    scope.launch {
+                        overscroll.snapTo(
+                            when {
+                                overscroll.value > 0f -> (overscroll.value + available.y).coerceAtLeast(0f)
+                                else -> (overscroll.value + available.y).coerceAtMost(0f)
+                            }
+                        )
+                    }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 return androidx.compose.ui.geometry.Offset.Zero
@@ -154,7 +183,7 @@ fun NotificationLayer(
 
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (dismissTransitionInFlight) return available
-                if (overscroll.value > 80f) {
+                if (overscroll.value > NOTIFICATION_TOP_DISMISS_THRESHOLD) {
                     closeIfPulled()
                     return available
                 }
@@ -180,7 +209,7 @@ fun NotificationLayer(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer { translationY = overscroll.value }
-                .padding(top = 14.dp),
+                .padding(top = NOTIFICATION_TOP_SAFE_PADDING_DP.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             when {
@@ -212,7 +241,7 @@ fun NotificationLayer(
                         .weight(1f)
                         .fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
-                    contentPadding = PaddingValues(top = 4.dp, bottom = bottomScrollPadding)
+                    contentPadding = PaddingValues(top = 10.dp, bottom = bottomScrollPadding)
                 ) {
                     items(
                         items = notificationGroups,
@@ -221,6 +250,12 @@ fun NotificationLayer(
                     ) { group ->
                         NotificationRowContainer {
                             NotificationGroupSection(
+                                modifier = Modifier.animateItemPlacement(
+                                    animationSpec = spring(
+                                        stiffness = 520f,
+                                        dampingRatio = 0.86f
+                                    )
+                                ),
                                 width = contentWidth,
                                 group = group,
                                 revealedTarget = revealedNotificationTarget,
@@ -258,6 +293,7 @@ private fun NotificationRowContainer(content: @Composable () -> Unit) {
 
 @Composable
 private fun NotificationGroupSection(
+    modifier: Modifier = Modifier,
     width: androidx.compose.ui.unit.Dp,
     group: NotificationGroupUi,
     revealedTarget: NotificationRevealTarget?,
@@ -268,7 +304,7 @@ private fun NotificationGroupSection(
     onOpenNotification: (String, Offset) -> Boolean
 ) {
     Column(
-        modifier = Modifier.width(width),
+        modifier = modifier.width(width),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         GroupHeader(
@@ -435,7 +471,7 @@ private fun CollapsedStackCard(width: androidx.compose.ui.unit.Dp, leadEntry: No
         label = "collapsed_stack_strength"
     )
     Box(Modifier.width(width)) {
-        repeat(minOf(hiddenCount, 2)) { index ->
+        repeat(minOf(hiddenCount, 1)) { index ->
             Box(
                 Modifier
                     .fillMaxWidth()

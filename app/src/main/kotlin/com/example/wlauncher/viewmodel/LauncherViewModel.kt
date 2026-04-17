@@ -126,7 +126,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _honeycombCols = MutableStateFlow(3)
     val honeycombCols: StateFlow<Int> = _honeycombCols.asStateFlow()
-    private val _legacyCircularIcons = MutableStateFlow(false)
+    private val _legacyCircularIcons = MutableStateFlow(true)
     val legacyCircularIcons: StateFlow<Boolean> = _legacyCircularIcons.asStateFlow()
 
     private val _honeycombTopBlur = MutableStateFlow(4)
@@ -305,10 +305,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     refreshIcons()
                 }
 
-                val loadedLegacyCircularIcons = prefs[KEY_LEGACY_CIRCULAR_ICONS] ?: false
+                val loadedLegacyCircularIcons = true
                 if (_legacyCircularIcons.value != loadedLegacyCircularIcons) {
                     _legacyCircularIcons.value = loadedLegacyCircularIcons
                     appRepository.setLegacyCircularIconsEnabled(loadedLegacyCircularIcons)
+                }
+                if (prefs[KEY_LEGACY_CIRCULAR_ICONS] != true) {
+                    store.edit { it[KEY_LEGACY_CIRCULAR_ICONS] = true }
                 }
 
                 val loadedAnimationOverride = prefs[KEY_ANIMATION_OVERRIDE] ?: true
@@ -936,7 +939,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _splashIcon.value = true
         _splashDelay.value = 500
         _honeycombCols.value = 3
-        _legacyCircularIcons.value = false
+        _legacyCircularIcons.value = true
         _honeycombTopBlur.value = 4
         _honeycombBottomBlur.value = 4
         _honeycombTopFade.value = 56
@@ -960,7 +963,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _hideFromRecents.value = true
         appRepository.setHiddenComponents(emptySet())
         appRepository.setIconPackPackage(null)
-        appRepository.setLegacyCircularIconsEnabled(false)
+        appRepository.setLegacyCircularIconsEnabled(true)
         LunchWatchFaceRegistry.setCurrentSelectedId(BUILT_IN_WATCHFACE_ID)
         refreshIcons()
         persist {
@@ -979,7 +982,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_HONEYCOMB_TOP_FADE] = 56
                 it[KEY_HONEYCOMB_BOTTOM_FADE] = 56
                 it[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION] = true
-                it[KEY_LEGACY_CIRCULAR_ICONS] = false
+                it[KEY_LEGACY_CIRCULAR_ICONS] = true
                 it[KEY_SHOW_NOTIFICATION] = true
                 it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
                 it.remove(KEY_SIDE_SCREEN_SHORTCUTS)

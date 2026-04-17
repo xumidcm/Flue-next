@@ -1,6 +1,7 @@
 package com.flue.launcher.ui.anim
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -15,7 +16,8 @@ fun Modifier.scaleBlurAlpha(
     targetValues: LayerAnimValues,
     screenHeight: Float = 0f,
     blurEnabled: Boolean = true,
-    origin: Offset? = null
+    origin: Offset? = null,
+    translationSpec: FiniteAnimationSpec<Float> = TransitionSpring
 ): Modifier {
     val animScale = remember { Animatable(targetValues.scale) }
     val animAlpha = remember { Animatable(targetValues.alpha) }
@@ -26,7 +28,7 @@ fun Modifier.scaleBlurAlpha(
         launch { animScale.animateTo(targetValues.scale, TransitionSpring) }
         launch { animAlpha.animateTo(targetValues.alpha, AlphaSpec) }
         launch { animBlur.animateTo(targetValues.blur, AlphaSpec) }
-        launch { animTransY.animateTo(targetValues.translationY, TransitionSpring) }
+        launch { animTransY.animateTo(targetValues.translationY, translationSpec) }
     }
 
     return this

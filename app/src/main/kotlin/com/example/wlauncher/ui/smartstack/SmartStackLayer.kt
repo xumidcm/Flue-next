@@ -144,12 +144,10 @@ fun SmartStackLayer(
     val contentTranslationY = if (notificationsSceneActive || transitionInFlight) 0f else overscrollY
 
     LaunchedEffect(notificationsSceneActive) {
-        if (notificationsSceneActive) {
-            overscrollTarget = 0f
-            dragDx = 0f
-            dragDy = 0f
-            transitionInFlight = false
-        }
+        overscrollTarget = 0f
+        dragDx = 0f
+        dragDy = 0f
+        transitionInFlight = false
     }
 
     BoxWithConstraints(
@@ -391,7 +389,7 @@ fun SmartStackLayer(
         label = "preview_stack_strength"
     )
     Box(Modifier.fillMaxWidth()) {
-        repeat(minOf(hiddenCount, 2)) { index ->
+        repeat(minOf(hiddenCount, 1)) { index ->
             Box(
                 Modifier
                     .align(Alignment.TopCenter)
@@ -571,12 +569,11 @@ private fun buildPreviewRows(groups: List<NotificationGroupUi>, maxRows: Int): L
     val safeMaxRows = maxRows.coerceAtLeast(0)
     if (safeMaxRows == 0) return emptyList()
 
-    val visibleGroups = groups.take(safeMaxRows)
-    val totalNotificationCount = visibleGroups.sumOf { it.entries.size }
-    val distinctGroupCount = visibleGroups.size
+    val totalNotificationCount = groups.sumOf { it.entries.size }
+    val distinctGroupCount = groups.size
 
     if (distinctGroupCount > 1 && totalNotificationCount > 1) {
-        val leadEntry = visibleGroups.firstOrNull()?.entries?.firstOrNull() ?: return emptyList()
+        val leadEntry = groups.firstOrNull()?.entries?.firstOrNull() ?: return emptyList()
         return listOf(
             PreviewRow.Aggregate(
                 leadEntry = leadEntry,
@@ -585,7 +582,7 @@ private fun buildPreviewRows(groups: List<NotificationGroupUi>, maxRows: Int): L
         )
     }
 
-    return visibleGroups.map { group ->
+    return groups.take(safeMaxRows).map { group ->
         if (group.entries.size > 1) {
             PreviewRow.Group(group, listOf(group.entries.first()), group.entries.size - 1)
         } else {

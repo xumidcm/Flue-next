@@ -11,6 +11,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -62,6 +63,7 @@ import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceHost
 import kotlinx.coroutines.delay
+import androidx.compose.animation.core.Spring
 
 private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
 private const val SIDE_SCREEN_TRANSITION_MS = 260
@@ -419,11 +421,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     modifier = Modifier
                         .fillMaxSize()
                         .zIndex(5f)
-                        .scaleBlurAlpha(
-                            targetValues = notificationLayerValues(screenState),
-                            screenHeight = screenHeightPx,
-                            blurEnabled = layerBlurEnabled
+                    .scaleBlurAlpha(
+                        targetValues = notificationLayerValues(screenState),
+                        screenHeight = screenHeightPx,
+                        blurEnabled = layerBlurEnabled,
+                        translationSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMedium
                         )
+                    )
                 ) {
                     NotificationLayer(
                         notificationGroups = notificationGroups,

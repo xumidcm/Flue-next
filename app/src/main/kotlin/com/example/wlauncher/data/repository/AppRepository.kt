@@ -41,7 +41,7 @@ class AppRepository(private val context: Context) {
     private var hiddenComponents: Set<String> = emptySet()
     private var currentIconSize = 128
     private var iconPackPackage: String? = null
-    private var useLegacyCircularIcons = false
+    private var useLegacyCircularIcons = true
     private var refreshGeneration = 0
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val installTimeCache = mutableMapOf<String, Long>()
