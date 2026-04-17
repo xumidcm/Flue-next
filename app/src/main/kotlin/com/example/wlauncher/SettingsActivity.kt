@@ -289,7 +289,7 @@ private fun SettingsRootScreen(
     ) { currentDestination ->
         when (currentDestination) {
             SettingsDestination.ROOT -> SettingsPageScaffold(
-                title = "Flue桌面设置",
+                title = "Flue设置",
                 onBack = {
                     commitHiddenAppsDraft()
                     onFinish()

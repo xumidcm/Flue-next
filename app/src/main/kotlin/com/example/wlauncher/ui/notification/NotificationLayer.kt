@@ -679,19 +679,21 @@ private fun rememberBatteryStatus(): BatteryStatus {
 private fun BatteryPill(level: Int, charging: Boolean, modifier: Modifier = Modifier) {
     val tint = when { level <= 10 -> WatchColors.ActiveRed; level <= 20 -> WatchColors.ActiveOrange; else -> WatchColors.ActiveGreen }
     val backgroundTint = if (charging) Color(0xFF1F6C35) else Color(0xFF141414)
-    Row(
+    val sideSlotWidth = 16.dp
+    val pillWidth = 56.dp
+    Box(
         modifier = modifier
+            .width(pillWidth + sideSlotWidth * 2)
             .height(24.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(backgroundTint)
-            .padding(horizontal = 8.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+            .padding(horizontal = 2.dp, vertical = 2.dp)
     ) {
         Box(
             Modifier
-                .width(56.dp)
-                .fillMaxHeight()
+                .width(pillWidth)
+                .height(20.dp)
+                .align(Alignment.Center)
                 .clip(RoundedCornerShape(12.dp))
                 .background(Color.Transparent)
         ) {
@@ -709,7 +711,10 @@ private fun BatteryPill(level: Int, charging: Boolean, modifier: Modifier = Modi
                 Icons.Filled.Bolt,
                 contentDescription = null,
                 tint = Color(0xFFFFD54A),
-                modifier = Modifier.size(13.dp)
+                modifier = Modifier
+                    .size(13.dp)
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 3.dp)
             )
         }
     }
