@@ -519,6 +519,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun hasPendingExternalLaunchReturn(): Boolean = launchingExternalApp
+
     fun handleHomePress() {
         when (_screenState.value) {
             ScreenState.Face -> _screenState.value = ScreenState.Apps

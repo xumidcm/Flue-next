@@ -91,13 +91,16 @@ class LauncherActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (::vm.isInitialized) vm.handleHomePress()
+        setIntent(intent)
+        if (::vm.isInitialized && intent.isLauncherHomeIntent()) {
+            vm.handleHomePress()
+        }
     }
 
     override fun onResume() {
         super.onResume()
         RecentsVisibility.apply(this)
-        if (::vm.isInitialized && vm.animationOverrideEnabled.value) {
+        if (::vm.isInitialized && vm.animationOverrideEnabled.value && vm.hasPendingExternalLaunchReturn()) {
             @Suppress("DEPRECATION")
             overridePendingTransition(R.anim.launcher_return_cupertino_enter, R.anim.launcher_return_cupertino_exit)
         }
@@ -115,6 +118,11 @@ class LauncherActivity : ComponentActivity() {
             overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
         }
     }
+}
+
+private fun Intent.isLauncherHomeIntent(): Boolean {
+    return action == Intent.ACTION_MAIN &&
+        hasCategory(Intent.CATEGORY_HOME)
 }
 
 @Composable

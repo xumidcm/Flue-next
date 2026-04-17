@@ -6,7 +6,6 @@ import android.content.IntentFilter
 import android.os.BatteryManager
 import android.provider.Settings
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -78,6 +77,9 @@ import java.util.Date
 import java.util.Locale
 
 private const val NOTIFICATION_CARD_WIDTH_RATIO = 0.884f
+private val NOTIFICATION_TIME_FORMAT = ThreadLocal.withInitial {
+    SimpleDateFormat("HH:mm", Locale.getDefault())
+}
 
 @Composable
 fun NotificationLayer(
@@ -174,7 +176,6 @@ fun NotificationLayer(
     ) {
         val contentWidth = maxWidth * NOTIFICATION_CARD_WIDTH_RATIO
         val bottomScrollPadding = ((maxHeight / 2) - 24.dp).coerceAtLeast(132.dp)
-        val rows = remember(notificationGroups) { buildNotificationRows(notificationGroups) }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -214,33 +215,21 @@ fun NotificationLayer(
                     contentPadding = PaddingValues(top = 4.dp, bottom = bottomScrollPadding)
                 ) {
                     items(
-                        items = rows,
-                        key = { it.key },
-                        contentType = { it.contentType }
-                    ) { row ->
+                        items = notificationGroups,
+                        key = { it.packageName },
+                        contentType = { "group" }
+                    ) { group ->
                         NotificationRowContainer {
-                            when (row) {
-                                is NotificationListRow.GroupHeader -> Box(Modifier.width(contentWidth)) {
-                                    GroupHeader(
-                                        title = row.group.headerTitle,
-                                        count = row.group.entries.size,
-                                        showMeta = row.group.entries.size > 1 && row.group.expanded,
-                                        expanded = row.group.expanded,
-                                        onClick = { onToggleGroup(row.group.packageName) }
-                                    )
-                                }
-
-                                is NotificationListRow.GroupBody -> NotificationGroupBody(
-                                    width = contentWidth,
-                                    group = row.group,
-                                    revealedTarget = revealedNotificationTarget,
-                                    onRevealTargetChange = onRevealTargetChange,
-                                    onToggleGroup = { onToggleGroup(row.group.packageName) },
-                                    onDismissGroup = { onDismissGroup(row.group.packageName) },
-                                    onDismissNotification = onDismissNotification,
-                                    onOpenNotification = onOpenNotification
-                                )
-                            }
+                            NotificationGroupSection(
+                                width = contentWidth,
+                                group = group,
+                                revealedTarget = revealedNotificationTarget,
+                                onRevealTargetChange = onRevealTargetChange,
+                                onToggleGroup = { onToggleGroup(group.packageName) },
+                                onDismissGroup = { onDismissGroup(group.packageName) },
+                                onDismissNotification = onDismissNotification,
+                                onOpenNotification = onOpenNotification
+                            )
                         }
                     }
                 }
@@ -256,30 +245,6 @@ fun NotificationLayer(
     }
 }
 
-private sealed interface NotificationListRow {
-    val key: String
-    val contentType: String
-
-    data class GroupHeader(val group: NotificationGroupUi) : NotificationListRow {
-        override val key: String = "header_${group.packageName}"
-        override val contentType: String = "header"
-    }
-
-    data class GroupBody(val group: NotificationGroupUi) : NotificationListRow {
-        override val key: String = "body_${group.packageName}"
-        override val contentType: String = "body"
-    }
-}
-
-private fun buildNotificationRows(groups: List<NotificationGroupUi>): List<NotificationListRow> {
-    return buildList(groups.size * 2) {
-        groups.forEach { group ->
-            add(NotificationListRow.GroupHeader(group))
-            add(NotificationListRow.GroupBody(group))
-        }
-    }
-}
-
 @Composable
 private fun NotificationRowContainer(content: @Composable () -> Unit) {
     Box(
@@ -288,6 +253,41 @@ private fun NotificationRowContainer(content: @Composable () -> Unit) {
         contentAlignment = Alignment.Center
     ) {
         content()
+    }
+}
+
+@Composable
+private fun NotificationGroupSection(
+    width: androidx.compose.ui.unit.Dp,
+    group: NotificationGroupUi,
+    revealedTarget: NotificationRevealTarget?,
+    onRevealTargetChange: (NotificationRevealTarget?) -> Unit,
+    onToggleGroup: () -> Unit,
+    onDismissGroup: () -> Unit,
+    onDismissNotification: (String) -> Unit,
+    onOpenNotification: (String, Offset) -> Boolean
+) {
+    Column(
+        modifier = Modifier.width(width),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        GroupHeader(
+            title = group.headerTitle,
+            count = group.entries.size,
+            showMeta = group.entries.size > 1 && group.expanded,
+            expanded = group.expanded,
+            onClick = onToggleGroup
+        )
+        NotificationGroupBody(
+            width = width,
+            group = group,
+            revealedTarget = revealedTarget,
+            onRevealTargetChange = onRevealTargetChange,
+            onToggleGroup = onToggleGroup,
+            onDismissGroup = onDismissGroup,
+            onDismissNotification = onDismissNotification,
+            onOpenNotification = onOpenNotification
+        )
     }
 }
 
@@ -491,7 +491,7 @@ private fun NotificationCard(width: androidx.compose.ui.unit.Dp, entry: Notifica
 @Composable
 private fun NotificationIcon(icon: ImageBitmap?) {
     Box(Modifier.size(46.dp).clip(CircleShape).background(Color(0xFFD9D9D9)), contentAlignment = Alignment.Center) {
-        if (icon != null) Image(icon, null, modifier = Modifier.fillMaxSize().clip(CircleShape), filterQuality = FilterQuality.Medium, contentScale = ContentScale.Crop)
+        if (icon != null) Image(icon, null, modifier = Modifier.fillMaxSize().clip(CircleShape), filterQuality = FilterQuality.Low, contentScale = ContentScale.Crop)
         else Icon(Icons.Filled.Notifications, null, tint = Color(0xFF2B2B2B), modifier = Modifier.size(24.dp))
     }
 }
@@ -519,4 +519,4 @@ private fun BatteryPill(level: Int, modifier: Modifier = Modifier) {
     }
 }
 
-private fun formatNotificationTime(timestamp: Long): String = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
+private fun formatNotificationTime(timestamp: Long): String = NOTIFICATION_TIME_FORMAT.get().format(Date(timestamp))
