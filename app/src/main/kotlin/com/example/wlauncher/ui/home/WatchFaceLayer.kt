@@ -8,6 +8,7 @@ import android.widget.ImageView
 import android.widget.TextView
 import android.widget.VideoView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clipToBounds
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -152,7 +153,9 @@ private fun BuiltInWatchFaceSurface(
         )
 
     Box(
-        modifier = backgroundModifier.background(Color.Black),
+        modifier = backgroundModifier
+            .clipToBounds()
+            .background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
         when (watchFaceId) {
@@ -243,7 +246,9 @@ private fun MediaImageBackground(path: String?) {
                 imageView.setImageURI(File(filePath).toUri())
             }
         },
-        modifier = Modifier.fillMaxSize()
+        modifier = Modifier
+            .fillMaxSize()
+            .clipToBounds()
     )
 }
 
