@@ -89,6 +89,7 @@ private const val SIDE_SCREEN_DISMISS_THRESHOLD = 86f
 private const val SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_RATIO = 0.78f
 private const val SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_MIN = 300f
 private const val SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS = 0.6f
+private const val SIDE_SCREEN_NOTIFICATION_FLING_VELOCITY = 1350f
 private sealed interface SideScreenModalState {
     data object None : SideScreenModalState
     data class Picker(val slotIndex: Int) : SideScreenModalState
@@ -152,6 +153,8 @@ fun SmartStackLayer(
     var modalState by remember { mutableStateOf<SideScreenModalState>(SideScreenModalState.None) }
     var dragDx by remember { mutableFloatStateOf(0f) }
     var dragDy by remember { mutableFloatStateOf(0f) }
+    var dragVelocityY by remember { mutableFloatStateOf(0f) }
+    var lastDragEventUptime by remember { mutableStateOf(0L) }
     var overscrollTarget by remember { mutableFloatStateOf(0f) }
     var transitionInFlight by remember { mutableStateOf(false) }
     val overscrollY by animateFloatAsState(overscrollTarget, spring(stiffness = 440f, dampingRatio = 0.78f), label = "side_overscroll")
@@ -161,6 +164,8 @@ fun SmartStackLayer(
         overscrollTarget = 0f
         dragDx = 0f
         dragDy = 0f
+        dragVelocityY = 0f
+        lastDragEventUptime = 0L
         transitionInFlight = false
     }
 
@@ -175,8 +180,20 @@ fun SmartStackLayer(
                     onDragStart = {
                         dragDx = 0f
                         dragDy = 0f
+                        dragVelocityY = 0f
+                        lastDragEventUptime = 0L
                     },
                     onDrag = { change, dragAmount ->
+                        if (lastDragEventUptime != 0L) {
+                            val deltaMs = (change.uptimeMillis - lastDragEventUptime).coerceAtLeast(1L)
+                            val instantVelocityY = dragAmount.y / deltaMs * 1000f
+                            dragVelocityY = if (dragVelocityY == 0f) {
+                                instantVelocityY
+                            } else {
+                                dragVelocityY * 0.35f + instantVelocityY * 0.65f
+                            }
+                        }
+                        lastDragEventUptime = change.uptimeMillis
                         dragDx += dragAmount.x
                         dragDy += dragAmount.y
                         if (abs(dragDx) > abs(dragDy)) {
@@ -196,12 +213,14 @@ fun SmartStackLayer(
                         }
                     },
                     onDragEnd = {
+                        val verticalIntent = abs(dragDy) > abs(dragDx) || abs(dragVelocityY) > SIDE_SCREEN_NOTIFICATION_FLING_VELOCITY
                         val dismissToFace = dragDx < -SIDE_SCREEN_DISMISS_THRESHOLD && abs(dragDx) > abs(dragDy)
                         val openNotifications = notificationsEnabled &&
-                            abs(dragDy) > abs(dragDx) &&
+                            verticalIntent &&
                             (
                                 dragDy < -notificationReleaseThresholdPx ||
-                                    notificationTransitionProgress > SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS
+                                    notificationTransitionProgress > SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS ||
+                                    dragVelocityY < -SIDE_SCREEN_NOTIFICATION_FLING_VELOCITY
                                 )
 
                         when {
@@ -209,6 +228,8 @@ fun SmartStackLayer(
                                 overscrollTarget = 0f
                                 dragDx = 0f
                                 dragDy = 0f
+                                dragVelocityY = 0f
+                                lastDragEventUptime = 0L
                                 onNotificationTransitionRelease(false)
                                 onRevealTargetChange(null)
                                 onDismissToFace()
@@ -217,6 +238,8 @@ fun SmartStackLayer(
                                 overscrollTarget = 0f
                                 dragDx = 0f
                                 dragDy = 0f
+                                dragVelocityY = 0f
+                                lastDragEventUptime = 0L
                                 onRevealTargetChange(null)
                                 onNotificationTransitionRelease(true)
                             }
@@ -224,6 +247,8 @@ fun SmartStackLayer(
                                 overscrollTarget = 0f
                                 dragDx = 0f
                                 dragDy = 0f
+                                dragVelocityY = 0f
+                                lastDragEventUptime = 0L
                                 onNotificationTransitionRelease(false)
                             }
                         }
@@ -232,6 +257,8 @@ fun SmartStackLayer(
                         overscrollTarget = 0f
                         dragDx = 0f
                         dragDy = 0f
+                        dragVelocityY = 0f
+                        lastDragEventUptime = 0L
                         onNotificationTransitionRelease(false)
                     }
                 )

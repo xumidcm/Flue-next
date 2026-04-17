@@ -86,6 +86,7 @@ private const val NOTIFICATION_BOTTOM_OVERSCROLL_LIMIT = -96f
 private const val NOTIFICATION_DISMISS_DRAG_RANGE_RATIO = 0.78f
 private const val NOTIFICATION_DISMISS_DRAG_RANGE_MIN = 300f
 private const val NOTIFICATION_DISMISS_RELEASE_PROGRESS = 0.6f
+private const val NOTIFICATION_DISMISS_FLING_VELOCITY = 1350f
 private val NOTIFICATION_TIME_FORMAT = ThreadLocal.withInitial {
     SimpleDateFormat("HH:mm", Locale.getDefault())
 }
@@ -124,10 +125,14 @@ fun NotificationLayer(
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var dismissTransitionInFlight by remember { mutableStateOf(false) }
     var dismissDragDistance by remember { mutableFloatStateOf(0f) }
+    var dismissDragVelocityY by remember { mutableFloatStateOf(0f) }
+    var lastDismissDragEventUptime by remember { mutableStateOf(0L) }
     LaunchedEffect(isActive) {
         if (!isActive) {
             dismissTransitionInFlight = false
             dismissDragDistance = 0f
+            dismissDragVelocityY = 0f
+            lastDismissDragEventUptime = 0L
             overscroll.snapTo(0f)
         }
     }
@@ -138,8 +143,11 @@ fun NotificationLayer(
         )
     }
     val releaseDismissDrag: () -> Unit = {
-        val shouldDismiss = dismissDragDistance > dismissThresholdPx
+        val shouldDismiss = dismissDragDistance > dismissThresholdPx ||
+            dismissDragVelocityY > NOTIFICATION_DISMISS_FLING_VELOCITY
         dismissDragDistance = 0f
+        dismissDragVelocityY = 0f
+        lastDismissDragEventUptime = 0L
         onTransitionRelease(shouldDismiss)
     }
     val closeIfPulled: suspend () -> Unit = {
@@ -156,7 +164,21 @@ fun NotificationLayer(
     val staticContentDismissModifier = Modifier.pointerInput(notificationAccessGranted, notificationGroups.size, dismissTransitionInFlight) {
         if (dismissTransitionInFlight) return@pointerInput
         detectVerticalDragGestures(
+            onDragStart = {
+                dismissDragVelocityY = 0f
+                lastDismissDragEventUptime = 0L
+            },
             onVerticalDrag = { change, dragAmount ->
+                if (lastDismissDragEventUptime != 0L) {
+                    val deltaMs = (change.uptimeMillis - lastDismissDragEventUptime).coerceAtLeast(1L)
+                    val instantVelocityY = dragAmount / deltaMs * 1000f
+                    dismissDragVelocityY = if (dismissDragVelocityY == 0f) {
+                        instantVelocityY
+                    } else {
+                        dismissDragVelocityY * 0.35f + instantVelocityY * 0.65f
+                    }
+                }
+                lastDismissDragEventUptime = change.uptimeMillis
                 if (dragAmount > 0f || dismissDragDistance > 0f) {
                     change.consume()
                     updateDismissDrag(dragAmount)
@@ -180,6 +202,8 @@ fun NotificationLayer(
             onDragCancel = {
                 if (dismissDragDistance > 0f || transitionProgress < 1f) {
                     dismissDragDistance = 0f
+                    dismissDragVelocityY = 0f
+                    lastDismissDragEventUptime = 0L
                     onTransitionRelease(false)
                 }
                 scope.launch {
@@ -236,7 +260,9 @@ fun NotificationLayer(
 
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (dismissTransitionInFlight) return available
-                if (dismissDragDistance > 0f) {
+                val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+                if (dismissDragDistance > 0f || (available.y > NOTIFICATION_DISMISS_FLING_VELOCITY && atTop)) {
+                    dismissDragVelocityY = available.y
                     releaseDismissDrag()
                     return available
                 }
