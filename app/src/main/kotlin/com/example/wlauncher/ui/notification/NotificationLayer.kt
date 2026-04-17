@@ -41,6 +41,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -112,7 +113,7 @@ fun NotificationLayer(
     val context = LocalContext.current
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
-    val batteryLevel = rememberBatteryLevel()
+    val batteryStatus = rememberBatteryStatus()
     val listState = rememberLazyListState()
     val dismissDragRangePx = remember(configuration.screenHeightDp, density) {
         maxOf(
@@ -350,11 +351,11 @@ fun NotificationLayer(
             }
         }
         BatteryPill(
-            level = batteryLevel,
+            level = batteryStatus.level,
+            charging = batteryStatus.charging,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 14.dp)
-                .graphicsLayer { translationY = overscroll.value }
         )
     }
 }
@@ -612,25 +613,75 @@ private fun NotificationIcon(icon: ImageBitmap?) {
 }
 
 @Composable
-private fun rememberBatteryLevel(): Int {
+private data class BatteryStatus(
+    val level: Int,
+    val charging: Boolean
+)
+
+@Composable
+private fun rememberBatteryStatus(): BatteryStatus {
     val context = LocalContext.current
     var level by remember(context) { mutableIntStateOf(0) }
+    var charging by remember(context) { mutableStateOf(false) }
     DisposableEffect(context) {
         fun readLevel(): Int = (context.getSystemService(BatteryManager::class.java)?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0).coerceIn(0, 100)
+        fun readCharging(intent: Intent?): Boolean {
+            val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+            return status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                status == BatteryManager.BATTERY_STATUS_FULL
+        }
         level = readLevel()
-        val receiver = object : BroadcastReceiver() { override fun onReceive(context: android.content.Context?, intent: Intent?) { level = readLevel() } }
+        val stickyIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        charging = readCharging(stickyIntent)
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: Intent?) {
+                level = readLevel()
+                charging = readCharging(intent)
+            }
+        }
         context.registerReceiver(receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         onDispose { runCatching { context.unregisterReceiver(receiver) } }
     }
-    return level
+    return BatteryStatus(level = level, charging = charging)
 }
 
 @Composable
-private fun BatteryPill(level: Int, modifier: Modifier = Modifier) {
+private fun BatteryPill(level: Int, charging: Boolean, modifier: Modifier = Modifier) {
     val tint = when { level <= 10 -> WatchColors.ActiveRed; level <= 20 -> WatchColors.ActiveOrange; else -> WatchColors.ActiveGreen }
-    Box(modifier.width(56.dp).height(24.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF141414)).padding(2.dp)) {
-        Box(Modifier.fillMaxWidth((level / 100f).coerceIn(0f, 1f)).fillMaxHeight().clip(RoundedCornerShape(12.dp)).background(tint.copy(alpha = 0.24f)))
-        Text("${level}%", color = tint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Center))
+    val backgroundTint = if (charging) Color(0xFF1F6C35) else Color(0xFF141414)
+    Row(
+        modifier = modifier
+            .height(24.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(backgroundTint)
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Box(
+            Modifier
+                .width(56.dp)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.Transparent)
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth((level / 100f).coerceIn(0f, 1f))
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(tint.copy(alpha = 0.24f))
+            )
+            Text("${level}%", color = tint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Center))
+        }
+        if (charging) {
+            Icon(
+                Icons.Filled.Bolt,
+                contentDescription = null,
+                tint = Color(0xFFFFD54A),
+                modifier = Modifier.size(13.dp)
+            )
+        }
     }
 }
 
