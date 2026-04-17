@@ -2,9 +2,11 @@
 
 import android.app.Notification
 import android.app.PendingIntent
+import android.app.Person
 import android.graphics.Bitmap
 import android.graphics.drawable.Icon
 import android.os.Build
+import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import androidx.compose.ui.graphics.ImageBitmap
@@ -149,22 +151,29 @@ class WLauncherNotificationListener : NotificationListenerService() {
         sbn: StatusBarNotification,
         notification: Notification
     ): ImageBitmap? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
         if (sbn.packageName !in IM_AVATAR_PACKAGES) return null
-        val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(
-            notification.extras.getParcelableArray(Notification.EXTRA_MESSAGES)
-        )
-        val historicMessages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(
-            notification.extras.getParcelableArray(Notification.EXTRA_HISTORIC_MESSAGES)
-        )
-        return (messages.asSequence() + historicMessages.asSequence())
-            .mapNotNull { message ->
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    message.senderPerson?.icon?.toImageBitmap()
-                } else {
-                    null
-                }
-            }
+        return readMessagingPersons(notification.extras)
+            .mapNotNull { it.icon?.toImageBitmap() }
             .firstOrNull()
+    }
+
+    private fun readMessagingPersons(extras: Bundle): Sequence<Person> {
+        val live = extras.getParcelableArray(Notification.EXTRA_MESSAGES).orEmpty().asSequence()
+        val history = extras.getParcelableArray(Notification.EXTRA_HISTORIC_MESSAGES).orEmpty().asSequence()
+        return (live + history)
+            .mapNotNull { parcelable ->
+                (parcelable as? Bundle)?.let(::extractSenderPerson)
+            }
+    }
+
+    private fun extractSenderPerson(bundle: Bundle): Person? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            bundle.getParcelable("sender_person", Person::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            bundle.getParcelable("sender_person") as? Person
+        }
     }
 
     private fun resolveLargeNotificationIcon(notification: Notification): ImageBitmap? {
