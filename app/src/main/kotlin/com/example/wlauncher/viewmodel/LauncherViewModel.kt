@@ -135,10 +135,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _honeycombBottomBlur = MutableStateFlow(4)
     val honeycombBottomBlur: StateFlow<Int> = _honeycombBottomBlur.asStateFlow()
 
-    private val _honeycombTopFade = MutableStateFlow(56)
+    private val _honeycombTopFade = MutableStateFlow(30)
     val honeycombTopFade: StateFlow<Int> = _honeycombTopFade.asStateFlow()
 
-    private val _honeycombBottomFade = MutableStateFlow(56)
+    private val _honeycombBottomFade = MutableStateFlow(30)
     val honeycombBottomFade: StateFlow<Int> = _honeycombBottomFade.asStateFlow()
 
     private val _honeycombFastScrollOptimization = MutableStateFlow(true)
@@ -343,10 +343,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedBottomBlur = (prefs[KEY_HONEYCOMB_BOTTOM_BLUR] ?: 4).coerceIn(0, 48)
                 if (_honeycombBottomBlur.value != loadedBottomBlur) _honeycombBottomBlur.value = loadedBottomBlur
 
-                val loadedTopFade = (prefs[KEY_HONEYCOMB_TOP_FADE] ?: 56).coerceIn(0, 160)
+                val loadedTopFade = (prefs[KEY_HONEYCOMB_TOP_FADE] ?: 30).coerceIn(0, 160)
                 if (_honeycombTopFade.value != loadedTopFade) _honeycombTopFade.value = loadedTopFade
 
-                val loadedBottomFade = (prefs[KEY_HONEYCOMB_BOTTOM_FADE] ?: 56).coerceIn(0, 160)
+                val loadedBottomFade = (prefs[KEY_HONEYCOMB_BOTTOM_FADE] ?: 30).coerceIn(0, 160)
                 if (_honeycombBottomFade.value != loadedBottomFade) _honeycombBottomFade.value = loadedBottomFade
 
                 val loadedFastScrollOptimization = prefs[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION] ?: true
@@ -574,19 +574,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setBlurEnabled(enabled: Boolean) {
         _blurEnabled.value = enabled
-        if (!enabled) _edgeBlurEnabled.value = false
         persist {
             store.edit {
                 it[KEY_BLUR] = enabled
-                if (!enabled) it[KEY_EDGE_BLUR] = false
             }
         }
     }
 
     fun setEdgeBlurEnabled(enabled: Boolean) {
-        val value = enabled && _blurEnabled.value
-        _edgeBlurEnabled.value = value
-        persist { store.edit { it[KEY_EDGE_BLUR] = value } }
+        _edgeBlurEnabled.value = enabled
+        persist { store.edit { it[KEY_EDGE_BLUR] = enabled } }
     }
 
     fun setLowResIcons(enabled: Boolean) {
@@ -942,8 +939,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _legacyCircularIcons.value = true
         _honeycombTopBlur.value = 4
         _honeycombBottomBlur.value = 4
-        _honeycombTopFade.value = 56
-        _honeycombBottomFade.value = 56
+        _honeycombTopFade.value = 30
+        _honeycombBottomFade.value = 30
         _honeycombFastScrollOptimization.value = true
         _showNotification.value = true
         _hiddenApps.value = emptySet()
@@ -979,8 +976,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_HONEYCOMB_COLS] = 3
                 it[KEY_HONEYCOMB_TOP_BLUR] = 4
                 it[KEY_HONEYCOMB_BOTTOM_BLUR] = 4
-                it[KEY_HONEYCOMB_TOP_FADE] = 56
-                it[KEY_HONEYCOMB_BOTTOM_FADE] = 56
+                it[KEY_HONEYCOMB_TOP_FADE] = 30
+                it[KEY_HONEYCOMB_BOTTOM_FADE] = 30
                 it[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION] = true
                 it[KEY_LEGACY_CIRCULAR_ICONS] = true
                 it[KEY_SHOW_NOTIFICATION] = true

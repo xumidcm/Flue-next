@@ -289,7 +289,7 @@ private fun SettingsRootScreen(
     ) { currentDestination ->
         when (currentDestination) {
             SettingsDestination.ROOT -> SettingsPageScaffold(
-                title = "桌面设置",
+                title = "Flue桌面设置",
                 onBack = {
                     commitHiddenAppsDraft()
                     onFinish()
@@ -401,7 +401,7 @@ private fun SettingsRootScreen(
                 item("icon_pack_default") {
                     SettingsChoiceRow(
                         title = "系统默认",
-                        subtitle = "使用 Flue 当前应用图标",
+                        subtitle = "使用当前系统默认图标包",
                         selected = selectedIconPackPackage.isNullOrBlank(),
                         onClick = { vm.setIconPackPackage(null) },
                         scale = itemFisheye(listState, "icon_pack_default", screenCenterY, screenHeightPx)
@@ -410,7 +410,7 @@ private fun SettingsRootScreen(
                 items(availableIconPacks, key = { "iconpack_${it.packageName}" }) { pack ->
                     SettingsChoiceRow(
                         title = pack.label,
-                        subtitle = "ADW Icon Pack Standard",
+                        subtitle = "ADW 图标包",
                         selected = pack.packageName == selectedIconPackPackage,
                         onClick = { vm.setIconPackPackage(pack.packageName) },
                         scale = itemFisheye(listState, "iconpack_${pack.packageName}", screenCenterY, screenHeightPx)
@@ -549,8 +549,8 @@ private fun SettingsRootScreen(
             }
             item("blur_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "模糊" else "Blur",
-                    subtitle = if (isZh) "在支持的 Android 版本上启用模糊" else "Enable blur on supported Android versions",
+                    title = if (isZh) "高级材质" else "Blur",
+                    subtitle = if (isZh) "建议Android12+设备开启" else "Enable blur on supported Android versions",
                     checked = blurEnabled,
                     onToggle = vm::setBlurEnabled,
                     scale = itemFisheye(listState, "blur_toggle", screenCenterY, screenHeightPx)
@@ -558,14 +558,9 @@ private fun SettingsRootScreen(
             }
             item("edge_blur_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "边缘模糊（实验）" else "Edge Blur (Experimental)",
-                    subtitle = if (blurEnabled) {
-                        if (isZh) "在顶部和底部边缘增加模糊" else "Apply extra blur near the top and bottom edges"
-                    } else {
-                        if (isZh) "请先开启模糊" else "Enable Blur first"
-                    },
+                    title = if (isZh) "边缘模糊（实验性）" else "Edge Blur (Experimental)",
+                    subtitle = if (isZh) "在顶部和底部边缘增加模糊，并增加少量bug" else "Apply extra blur near the top and bottom edges",
                     checked = edgeBlurEnabled,
-                    enabled = blurEnabled,
                     onToggle = vm::setEdgeBlurEnabled,
                     scale = itemFisheye(listState, "edge_blur_toggle", screenCenterY, screenHeightPx)
                 )
@@ -671,8 +666,8 @@ private fun SettingsRootScreen(
             }
             item("honeycomb_fast_scroll_opt") {
                 SettingsSwitchRow(
-                    title = "蜂窝高速滑动优化",
-                    subtitle = "高速滑动时临时降低普通图标的模糊与阴影负载，停下后恢复完整效果",
+                    title = "滑动流畅度优化",
+                    subtitle = "开启后大幅增加滑动流畅性",
                     checked = honeycombFastScrollOptimization,
                     onToggle = { vm.setHoneycombFastScrollOptimization(it) },
                     scale = itemFisheye(listState, "honeycomb_fast_scroll_opt", screenCenterY, screenHeightPx)
@@ -681,7 +676,7 @@ private fun SettingsRootScreen(
             item("anim_override") {
                 SettingsSwitchRow(
                     title = "桌面返回动画",
-                    subtitle = "启用类 watchOS 的返回过渡",
+                    subtitle = "启用渐隐过渡",
                     checked = animationOverrideEnabled,
                     onToggle = { vm.setAnimationOverrideEnabled(it) },
                     scale = itemFisheye(listState, "anim_override", screenCenterY, screenHeightPx)
@@ -758,14 +753,14 @@ private fun SettingsRootScreen(
             ) { listState, screenCenterY, screenHeightPx, _ ->
                 item("donate_tip") {
                     MessageCard(
-                        text = "感谢支持 Flue。点开下方二维码可全屏查看并扫码捐赠。",
+                        text = "真的很感谢你能支持Flue开发！点开下方二维码可全屏查看",
                         background = Color(0xFF1A2233),
                         onClick = {}
                     )
                 }
                 item("donate_wechat") {
                     DonateMethodCard(
-                        title = "微信赞助码",
+                        title = "微信",
                         subtitle = "点击预览图全屏查看",
                         resId = R.drawable.donate_wechat,
                         scale = itemFisheye(listState, "donate_wechat", screenCenterY, screenHeightPx),
@@ -774,7 +769,7 @@ private fun SettingsRootScreen(
                 }
                 item("donate_alipay") {
                     DonateMethodCard(
-                        title = "支付宝收款码",
+                        title = "支付宝",
                         subtitle = "点击预览图全屏查看",
                         resId = R.drawable.donate_alipay,
                         scale = itemFisheye(listState, "donate_alipay", screenCenterY, screenHeightPx),
