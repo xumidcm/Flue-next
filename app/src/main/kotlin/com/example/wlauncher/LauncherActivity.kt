@@ -171,6 +171,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
     val notificationsEnabled = showNotification
+    val notificationSceneActive = screenState == ScreenState.Notifications
     val openWatchFaceChooser: () -> Unit = remember(context) {
         {
             context.startActivity(
@@ -217,6 +218,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
         val sideSceneTravelPx = screenWidthPx * SIDE_SCREEN_EXIT_OVERSHOOT
+        val notificationLayerHostProgress by animateFloatAsState(
+            targetValue = if (notificationSceneActive) 1f else 0f,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioNoBouncy,
+                stiffness = Spring.StiffnessMedium
+            ),
+            label = "notification_layer_host_progress"
+        )
+        val keepNotificationLayer = notificationLayerHostProgress > 0.001f || notificationSceneActive
         val sidePageProgress by animateFloatAsState(
             targetValue = if (sideScreenEnabled && (screenState == ScreenState.Stack || screenState == ScreenState.Notifications)) {
                 1f
@@ -416,7 +426,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 }
             }
 
-            if (notificationsEnabled || screenState == ScreenState.Notifications) {
+            if (notificationsEnabled && keepNotificationLayer) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -432,6 +442,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     )
                 ) {
                     NotificationLayer(
+                        isActive = notificationSceneActive,
                         notificationGroups = notificationGroups,
                         notificationAccessGranted = notificationAccessGranted,
                         revealedNotificationTarget = revealedNotificationTarget,

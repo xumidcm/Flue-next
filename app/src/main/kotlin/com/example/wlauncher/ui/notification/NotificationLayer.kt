@@ -88,6 +88,7 @@ private val NOTIFICATION_TIME_FORMAT = ThreadLocal.withInitial {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun NotificationLayer(
+    isActive: Boolean,
     notificationGroups: List<NotificationGroupUi>,
     notificationAccessGranted: Boolean,
     revealedNotificationTarget: NotificationRevealTarget?,
@@ -105,6 +106,12 @@ fun NotificationLayer(
     val overscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var dismissTransitionInFlight by remember { mutableStateOf(false) }
+    LaunchedEffect(isActive) {
+        if (!isActive) {
+            dismissTransitionInFlight = false
+            overscroll.snapTo(0f)
+        }
+    }
     val closeIfPulled: suspend () -> Unit = {
         if (!dismissTransitionInFlight) {
             if (overscroll.value > NOTIFICATION_TOP_DISMISS_THRESHOLD) {
