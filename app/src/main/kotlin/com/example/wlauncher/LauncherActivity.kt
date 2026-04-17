@@ -18,6 +18,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -191,6 +192,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
     LaunchedEffect(screenState) { prevState = screenState }
     val launcherScope = rememberCoroutineScope()
+    var retainedLaunchIcon by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    var retainedLaunchSplash by remember { mutableStateOf(false) }
     val notificationTransition = remember { Animatable(if (notificationSceneActive) 1f else 0f) }
     var notificationGestureActive by remember { mutableStateOf(false) }
     var notificationTargetProgress by remember { mutableFloatStateOf(if (notificationSceneActive) 1f else 0f) }
@@ -222,6 +225,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
     var showSplash by remember { mutableStateOf(false) }
     val showLaunchBackdrop = screenState == ScreenState.App && (fadeLaunch || currentLaunchIcon != null)
+    val effectiveLaunchIcon = if (fadeLaunch) null else (currentLaunchIcon ?: retainedLaunchIcon)
+    val effectiveLaunchSplash = !fadeLaunch && (
+        (showSplash && currentLaunchIcon != null) ||
+            (!showLaunchBackdrop && retainedLaunchSplash && retainedLaunchIcon != null)
+        )
     LaunchedEffect(screenState, splashIcon, splashDelay, currentLaunchIcon, fadeLaunch) {
         if (!fadeLaunch && screenState == ScreenState.App && splashIcon && currentLaunchIcon != null) {
             showSplash = false
@@ -229,6 +237,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
             showSplash = true
         } else {
             showSplash = false
+        }
+    }
+    LaunchedEffect(showLaunchBackdrop, currentLaunchIcon, showSplash, fadeLaunch) {
+        if (!fadeLaunch && showLaunchBackdrop && currentLaunchIcon != null) {
+            retainedLaunchIcon = currentLaunchIcon
+            retainedLaunchSplash = showSplash
+        } else if (!showLaunchBackdrop) {
+            delay(240)
+            retainedLaunchIcon = null
+            retainedLaunchSplash = false
         }
     }
 
@@ -409,12 +427,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
             AnimatedVisibility(
                 visible = showLaunchBackdrop,
                 modifier = Modifier.zIndex(6f),
-                enter = fadeIn(),
-                exit = fadeOut()
+                enter = fadeIn(animationSpec = tween(140)),
+                exit = fadeOut(animationSpec = tween(180)) +
+                    slideOutVertically(
+                        animationSpec = tween(220),
+                        targetOffsetY = { fullHeight -> fullHeight / 6 }
+                    )
             ) {
                 LaunchBackdropContent(
-                    showSplash = showSplash && !fadeLaunch && splashIcon && currentLaunchIcon != null,
-                    icon = if (fadeLaunch) null else currentLaunchIcon
+                    showSplash = effectiveLaunchSplash,
+                    icon = effectiveLaunchIcon
                 )
             }
 
