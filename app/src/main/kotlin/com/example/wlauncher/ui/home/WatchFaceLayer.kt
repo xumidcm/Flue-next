@@ -1,14 +1,15 @@
 package com.flue.launcher.ui.home
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.TextView
 import android.widget.VideoView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -27,18 +28,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.net.toUri
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
+import com.flue.launcher.watchface.WatchFacePhotoCache
 import com.flue.launcher.watchface.WatchClockColorMode
 import com.flue.launcher.watchface.WatchClockPosition
 import kotlinx.coroutines.delay
@@ -233,23 +235,31 @@ private fun BuiltInWatchFaceSurface(
 @Composable
 private fun MediaImageBackground(path: String?) {
     val filePath = path?.takeIf { File(it).exists() }
-    AndroidView(
-        factory = { imageContext ->
-            ImageView(imageContext).apply {
-                scaleType = ImageView.ScaleType.CENTER_CROP
-            }
-        },
-        update = { imageView ->
-            if (filePath == null) {
-                imageView.setImageDrawable(null)
-            } else {
-                imageView.setImageURI(File(filePath).toUri())
-            }
-        },
-        modifier = Modifier
-            .fillMaxSize()
-            .graphicsLayer { clip = true }
-    )
+    val photoBitmap by produceState<ImageBitmap?>(initialValue = null, key1 = filePath) {
+        value = if (filePath.isNullOrBlank()) {
+            null
+        } else {
+            WatchFacePhotoCache.get(filePath) ?: withContext(Dispatchers.IO) {
+                decodeWatchFacePhoto(filePath)
+            }?.also { WatchFacePhotoCache.put(filePath, it) }
+        }
+    }
+    if (photoBitmap != null) {
+        Image(
+            bitmap = photoBitmap!!,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { clip = true }
+        )
+    } else {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        )
+    }
 }
 
 @Composable
@@ -488,6 +498,25 @@ private suspend fun sampleClockPalette(
                 dateColor = Color.White.copy(alpha = 0.82f)
             )
         }
+    }.getOrNull()
+}
+
+private fun decodeWatchFacePhoto(path: String): ImageBitmap? {
+    return runCatching {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(path, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+
+        var sampleSize = 1
+        while (bounds.outWidth / sampleSize >= 1024 && bounds.outHeight / sampleSize >= 1024) {
+            sampleSize *= 2
+        }
+
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize.coerceAtLeast(1)
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        BitmapFactory.decodeFile(path, options)?.asImageBitmap()
     }.getOrNull()
 }
 

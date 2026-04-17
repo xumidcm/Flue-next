@@ -34,6 +34,7 @@ import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.WatchClockPosition
 import com.flue.launcher.watchface.WatchClockColorMode
 import com.flue.launcher.watchface.InternalWatchFaceStorage
+import com.flue.launcher.watchface.WatchFacePhotoCache
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceRegistry
 import com.flue.launcher.watchface.LunchWatchFaceScanner
@@ -761,8 +762,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setBuiltInPhotoPath(path: String?) {
+        val previousPath = _builtInPhotoPath.value
         _builtInPhotoPath.value = path
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
+        previousPath?.takeIf { it != path }?.let(WatchFacePhotoCache::remove)
         if (path.isNullOrBlank()) InternalWatchFaceStorage.clearPhoto(getApplication())
         persist {
             store.edit {

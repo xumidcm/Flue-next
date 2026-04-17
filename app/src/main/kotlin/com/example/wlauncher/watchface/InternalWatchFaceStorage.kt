@@ -10,7 +10,9 @@ import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.webkit.MimeTypeMap
+import androidx.compose.ui.graphics.ImageBitmap
 import java.io.File
+import java.util.LinkedHashMap
 import kotlin.math.roundToInt
 
 object InternalWatchFaceStorage {
@@ -174,5 +176,32 @@ object InternalWatchFaceStorage {
             source.recycle()
         }
         return output
+    }
+}
+
+object WatchFacePhotoCache {
+    private const val MAX_ENTRIES = 3
+    private val cache = object : LinkedHashMap<String, ImageBitmap>(MAX_ENTRIES, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ImageBitmap>?): Boolean {
+            return size > MAX_ENTRIES
+        }
+    }
+
+    @Synchronized
+    fun get(path: String): ImageBitmap? = cache[path]
+
+    @Synchronized
+    fun put(path: String, bitmap: ImageBitmap) {
+        cache[path] = bitmap
+    }
+
+    @Synchronized
+    fun remove(path: String) {
+        cache.remove(path)
+    }
+
+    @Synchronized
+    fun clear() {
+        cache.clear()
     }
 }
