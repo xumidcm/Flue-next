@@ -66,6 +66,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
@@ -414,10 +415,25 @@ fun SmartStackLayer(
     PreviewPill(fake, onClick)
 }
 
-@Composable private fun PreviewPill(entry: NotificationEntryUi, onClick: () -> Unit) {
+@Composable private fun PreviewPill(
+    entry: NotificationEntryUi,
+    onClick: () -> Unit,
+    onMeasuredHeight: ((Int) -> Unit)? = null
+) {
     val pressed = rememberPressedState(); val isPressed by pressed
     val scale by animateFloatAsState(if (isPressed) 0.968f else 1f, spring(stiffness = 860f, dampingRatio = 0.72f), label = "preview_scale")
-    Box(Modifier.fillMaxWidth().graphicsLayer { scaleX = scale; scaleY = scale }.clip(RoundedCornerShape(28.dp)).background(Color(0xFF353535)).instantPressGesture(pressed, onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp)) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { coordinates ->
+                onMeasuredHeight?.invoke(coordinates.size.height)
+            }
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(RoundedCornerShape(28.dp))
+            .background(Color(0xFF353535))
+            .instantPressGesture(pressed, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             NotificationIcon(entry.icon)
             Spacer(Modifier.width(12.dp))
@@ -440,6 +456,9 @@ fun SmartStackLayer(
         animationSpec = spring(stiffness = 620f, dampingRatio = 0.82f),
         label = "preview_stack_strength"
     )
+    var frontCardHeight by remember { mutableIntStateOf(72) }
+    val density = LocalDensity.current
+    val stackCardHeight: Dp = with(density) { frontCardHeight.toDp() }
     Box(Modifier.fillMaxWidth()) {
         repeat(minOf(hiddenCount, 1)) { index ->
             Box(
@@ -453,13 +472,21 @@ fun SmartStackLayer(
                     }
                     .padding(start = 4.dp, end = 4.dp)
                     .fillMaxWidth()
-                    .height(72.dp)
+                    .height(stackCardHeight)
                     .clip(RoundedCornerShape(28.dp))
                     .background(if (index == 0) Color(0xFF404040) else Color(0xFF2E2E2E))
             )
         }
         Column(modifier = Modifier.padding(bottom = 2.dp)) {
-            PreviewPill(entry, onClick)
+            PreviewPill(
+                entry = entry,
+                onClick = onClick,
+                onMeasuredHeight = { heightPx ->
+                    if (heightPx > 0 && frontCardHeight != heightPx) {
+                        frontCardHeight = heightPx
+                    }
+                }
+            )
             Text("+${hiddenCount}条新消息", color = WatchColors.TextTertiary, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 6.dp))
         }
     }
