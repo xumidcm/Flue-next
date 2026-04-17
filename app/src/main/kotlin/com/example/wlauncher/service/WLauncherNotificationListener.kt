@@ -169,8 +169,13 @@ class WLauncherNotificationListener : NotificationListenerService() {
 
     private fun resolveLargeNotificationIcon(notification: Notification): ImageBitmap? {
         val extras = notification.extras
+        val notificationLargeIcon = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            notification.getLargeIcon()
+        } else {
+            null
+        }
         val iconCandidates = listOfNotNull<Icon>(
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) notification.largeIcon else null,
+            notificationLargeIcon,
             extras.get(Notification.EXTRA_LARGE_ICON_BIG) as? Icon,
             extras.get(Notification.EXTRA_LARGE_ICON) as? Icon
         )
