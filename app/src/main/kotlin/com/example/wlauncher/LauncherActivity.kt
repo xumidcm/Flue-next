@@ -19,7 +19,6 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clipToBounds
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -243,9 +242,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .clipToBounds()
                     .zIndex(if (screenState == ScreenState.Face && !sideSceneOverlayActive) 3f else 1f)
                     .graphicsLayer {
+                        clip = true
                         translationX = sidePageProgress * sideSceneTravelPx
                     }
                     .scaleBlurAlpha(

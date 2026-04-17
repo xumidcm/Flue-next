@@ -8,7 +8,6 @@ import android.widget.ImageView
 import android.widget.TextView
 import android.widget.VideoView
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clipToBounds
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -154,7 +154,7 @@ private fun BuiltInWatchFaceSurface(
 
     Box(
         modifier = backgroundModifier
-            .clipToBounds()
+            .graphicsLayer { clip = true }
             .background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
@@ -248,7 +248,7 @@ private fun MediaImageBackground(path: String?) {
         },
         modifier = Modifier
             .fillMaxSize()
-            .clipToBounds()
+            .graphicsLayer { clip = true }
     )
 }
 
