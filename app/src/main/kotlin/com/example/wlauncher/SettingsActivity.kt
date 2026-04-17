@@ -117,7 +117,9 @@ import java.io.File
 import java.util.Date
 import java.util.Locale
 
-private const val ABOUT_VERSION = "beta1.0"
+private const val ABOUT_VERSION = "beta1.2"
+private const val COMMUNITY_GROUP_NUMBER = "1097162313"
+private const val COMMUNITY_GROUP_URL = "https://qun.qq.com/universal-share/share?ac=1&authKey=5CJC0tNLWsy3YWzGlPbqt%2F5kv%2BYZuJ8y8IVj%2B1UnIeLyR2DWR6QjWtM%2B4HXxH%2BKJ&busi_data=eyJncm91cENvZGUiOiIxMDk3MTYyMzEzIiwidG9rZW4iOiJlMGFBc1VpRXRROE1mS3J5SHgxRjFudmxXY0FuSnRQd2hOWWl6WllFMmlxNTErNWdadXJ5U1ozMmdzUSszaGNYIiwidWluIjoiMzUxMzkwMzA1NSJ9&data=YK52b80xUVwmcLWmSneKQMdVZodE4vTpsqmSb60ykXudbVCfa6AskMHxvqjhAjervNeE4exll-kQw5w-EifYOg&svctype=4&tempid=h5_group_info"
 const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
 const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
@@ -1340,6 +1342,20 @@ private fun AboutCard(scale: Float, onDonateClick: () -> Unit) {
                 }
             }
             Spacer(modifier = Modifier.height(18.dp))
+            ActionCard(
+                title = "加入交流群&获取更新",
+                subtitle = "群号 $COMMUNITY_GROUP_NUMBER",
+                onClick = {
+                    context.startActivity(
+                        Intent(
+                            Intent.ACTION_VIEW,
+                            android.net.Uri.parse(COMMUNITY_GROUP_URL)
+                        )
+                    )
+                },
+                scale = 1f
+            )
+            Spacer(modifier = Modifier.height(10.dp))
             ActionCard(
                 title = "捐赠支持",
                 subtitle = "微信 / 支付宝",
