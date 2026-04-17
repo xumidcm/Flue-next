@@ -612,7 +612,6 @@ private fun NotificationIcon(icon: ImageBitmap?) {
     }
 }
 
-@Composable
 private data class BatteryStatus(
     val level: Int,
     val charging: Boolean
