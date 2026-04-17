@@ -92,6 +92,8 @@ private const val SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_RATIO = 0.78f
 private const val SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_MIN = 300f
 private const val SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS = 0.6f
 private const val SIDE_SCREEN_NOTIFICATION_FLING_VELOCITY = 1350f
+private const val STACKED_PREVIEW_TRANSLATION_DP = 28
+private const val STACKED_PREVIEW_HORIZONTAL_INSET_DP = 4
 private sealed interface SideScreenModalState {
     data object None : SideScreenModalState
     data class Picker(val slotIndex: Int) : SideScreenModalState
@@ -465,12 +467,12 @@ fun SmartStackLayer(
                 Modifier
                     .align(Alignment.TopCenter)
                     .graphicsLayer {
-                        translationY = (index + 1) * 40f * stackStrength
+                        translationY = with(density) { (STACKED_PREVIEW_TRANSLATION_DP * (index + 1)).dp.toPx() } * stackStrength
                         scaleX = 1f - (index + 1) * 0.012f * stackStrength
                         scaleY = 1f - (index + 1) * 0.012f * stackStrength
                         alpha = 0.44f + (0.18f / (index + 1))
                     }
-                    .padding(start = 4.dp, end = 4.dp)
+                    .padding(horizontal = STACKED_PREVIEW_HORIZONTAL_INSET_DP.dp)
                     .fillMaxWidth()
                     .height(stackCardHeight)
                     .clip(RoundedCornerShape(28.dp))

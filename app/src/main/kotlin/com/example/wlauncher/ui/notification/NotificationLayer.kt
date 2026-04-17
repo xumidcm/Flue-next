@@ -88,6 +88,8 @@ private const val NOTIFICATION_DISMISS_DRAG_RANGE_RATIO = 0.78f
 private const val NOTIFICATION_DISMISS_DRAG_RANGE_MIN = 300f
 private const val NOTIFICATION_DISMISS_RELEASE_PROGRESS = 0.6f
 private const val NOTIFICATION_DISMISS_FLING_VELOCITY = 1350f
+private const val COLLAPSED_STACK_TRANSLATION_DP = 28
+private const val COLLAPSED_STACK_HORIZONTAL_INSET_DP = 4
 private val NOTIFICATION_TIME_FORMAT = ThreadLocal.withInitial {
     SimpleDateFormat("HH:mm", Locale.getDefault())
 }
@@ -550,37 +552,65 @@ private fun CollapsedStackCard(width: androidx.compose.ui.unit.Dp, leadEntry: No
         animationSpec = spring(stiffness = 620f, dampingRatio = 0.82f),
         label = "collapsed_stack_strength"
     )
+    var frontCardHeight by remember { mutableIntStateOf(72) }
+    val density = LocalDensity.current
+    val stackCardHeight: androidx.compose.ui.unit.Dp = with(density) { frontCardHeight.toDp() }
     Box(Modifier.width(width)) {
         repeat(minOf(hiddenCount, 1)) { index ->
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(72.dp)
+                    .height(stackCardHeight)
                     .graphicsLayer {
-                        translationY = (index + 1) * 40f * stackStrength
+                        translationY = with(density) { (COLLAPSED_STACK_TRANSLATION_DP * (index + 1)).dp.toPx() } * stackStrength
                         scaleX = 1f - (index + 1) * 0.012f * stackStrength
                         scaleY = 1f - (index + 1) * 0.012f * stackStrength
                         alpha = 0.42f + (0.18f / (index + 1))
                     }
-                    .padding(start = 4.dp, end = 4.dp)
+                    .padding(horizontal = COLLAPSED_STACK_HORIZONTAL_INSET_DP.dp)
                     .clip(RoundedCornerShape(28.dp))
                     .background(if (index == 0) Color(0xFF404040) else Color(0xFF2E2E2E))
             )
         }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 2.dp)) {
-            NotificationCard(width, leadEntry, leadEntry.text.ifBlank { leadEntry.title.ifBlank { leadEntry.appLabel } }, formatNotificationTime(leadEntry.time), onClick = { onClick() })
+            NotificationCard(
+                width = width,
+                entry = leadEntry,
+                subtitle = leadEntry.text.ifBlank { leadEntry.title.ifBlank { leadEntry.appLabel } },
+                trailing = formatNotificationTime(leadEntry.time),
+                onClick = { onClick() },
+                onMeasuredHeight = { heightPx ->
+                    if (heightPx > 0 && frontCardHeight != heightPx) {
+                        frontCardHeight = heightPx
+                    }
+                }
+            )
             Text("+${hiddenCount}条新消息", color = WatchColors.TextTertiary, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
         }
     }
 }
 
 @Composable
-private fun NotificationCard(width: androidx.compose.ui.unit.Dp, entry: NotificationEntryUi, subtitle: String, trailing: String, onClick: () -> Unit) {
+private fun NotificationCard(
+    width: androidx.compose.ui.unit.Dp,
+    entry: NotificationEntryUi,
+    subtitle: String,
+    trailing: String,
+    onClick: () -> Unit,
+    onMeasuredHeight: ((Int) -> Unit)? = null
+) {
     val pressed = rememberPressedState()
     val isPressed by pressed
     val scale by animateFloatAsState(if (isPressed) 0.968f else 1f, spring(stiffness = 860f, dampingRatio = 0.72f), label = "notif_card")
     Box(
-        Modifier.width(width).graphicsLayer { scaleX = scale; scaleY = scale }.clip(RoundedCornerShape(28.dp)).background(Color(0xFF353535))
+        Modifier
+            .width(width)
+            .onGloballyPositioned { coordinates ->
+                onMeasuredHeight?.invoke(coordinates.size.height)
+            }
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(RoundedCornerShape(28.dp))
+            .background(Color(0xFF353535))
             .instantPressGesture(
                 pressed,
                 enabled = entry.key == "perm" || entry.key == "empty" || entry.contentIntentAvailable,
