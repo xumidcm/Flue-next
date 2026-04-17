@@ -289,7 +289,7 @@ private fun SettingsRootScreen(
     ) { currentDestination ->
         when (currentDestination) {
             SettingsDestination.ROOT -> SettingsPageScaffold(
-                title = "\u684c\u9762\u8bbe\u7f6e",
+                title = "桌面设置",
                 onBack = {
                     commitHiddenAppsDraft()
                     onFinish()
@@ -301,7 +301,7 @@ private fun SettingsRootScreen(
             ) { listState, screenCenterY, screenHeightPx, _ ->
                 item("watchfaces") {
                     SettingsCategoryCard(
-                        title = "\u8868\u76d8",
+                        title = "表盘",
                         subtitle = selectedWatchFace.displayName,
                         onClick = { navigateTo(SettingsDestination.WATCH_FACES) },
                         scale = itemFisheye(listState, "watchfaces", screenCenterY, screenHeightPx)
@@ -309,47 +309,47 @@ private fun SettingsRootScreen(
                 }
                 item("appearance") {
                     SettingsCategoryCard(
-                        title = "\u663e\u793a\u4e0e\u5916\u89c2",
-                        subtitle = "\u5e03\u5c40\u3001\u6a21\u7cca\u4e0e\u542f\u52a8\u56fe\u6807",
+                        title = "显示与外观",
+                        subtitle = "布局、模糊与启动图标",
                         onClick = { navigateTo(SettingsDestination.APPEARANCE) },
                         scale = itemFisheye(listState, "appearance", screenCenterY, screenHeightPx)
                     )
                 }
                 item("hidden_apps") {
                     SettingsCategoryCard(
-                        title = "\u9690\u85cf\u5e94\u7528",
-                        subtitle = "\u5df2\u9690\u85cf ${hiddenAppsDraft.size} \u4e2a\u5e94\u7528",
+                        title = "隐藏应用",
+                        subtitle = "已隐藏 ${hiddenAppsDraft.size} 个应用",
                         onClick = { navigateTo(SettingsDestination.HIDDEN_APPS) },
                         scale = itemFisheye(listState, "hidden_apps", screenCenterY, screenHeightPx)
                     )
                 }
                 item("icon_packs") {
                     SettingsCategoryCard(
-                        title = "\u56fe\u6807\u5305",
-                        subtitle = selectedIconPackLabel ?: "\u7cfb\u7edf\u9ed8\u8ba4\u56fe\u6807",
+                        title = "图标包",
+                        subtitle = selectedIconPackLabel ?: "系统默认图标",
                         onClick = { navigateTo(SettingsDestination.ICON_PACKS) },
                         scale = itemFisheye(listState, "icon_packs", screenCenterY, screenHeightPx)
                     )
                 }
                 item("performance") {
                     SettingsCategoryCard(
-                        title = "\u6027\u80fd\u4e0e\u52a8\u753b",
-                        subtitle = "\u56fe\u6807\u8d28\u91cf\u4e0e\u52a8\u753b\u63a7\u5236",
+                        title = "性能与动画",
+                        subtitle = "图标质量与动画控制",
                         onClick = { navigateTo(SettingsDestination.PERFORMANCE) },
                         scale = itemFisheye(listState, "performance", screenCenterY, screenHeightPx)
                     )
                 }
                 item("tools") {
                     SettingsCategoryCard(
-                        title = "\u5de5\u5177",
-                        subtitle = "\u5bfc\u51fa\u65e5\u5fd7\u4e0e\u6062\u590d\u9ed8\u8ba4",
+                        title = "工具",
+                        subtitle = "导出日志与恢复默认",
                         onClick = { navigateTo(SettingsDestination.TOOLS) },
                         scale = itemFisheye(listState, "tools", screenCenterY, screenHeightPx)
                     )
                 }
                 item("about") {
                     SettingsCategoryCard(
-                        title = "\u5173\u4e8e",
+                        title = "关于",
                         subtitle = "Flue  $ABOUT_VERSION",
                         onClick = { navigateTo(SettingsDestination.ABOUT) },
                         scale = itemFisheye(listState, "about", screenCenterY, screenHeightPx)
@@ -358,7 +358,7 @@ private fun SettingsRootScreen(
             }
 
             SettingsDestination.HIDDEN_APPS -> SettingsPageScaffold(
-                title = "\u9690\u85cf\u5e94\u7528",
+                title = "隐藏应用",
                 onBack = { handleBack() },
                 headerTime = headerTime,
                 initialFirstVisibleItemIndex = scrollFor(SettingsDestination.HIDDEN_APPS).index,
@@ -367,7 +367,7 @@ private fun SettingsRootScreen(
             ) { listState, screenCenterY, screenHeightPx, visibleItemKeys ->
                 item("hidden_summary") {
                     MessageCard(
-                        text = "\u5df2\u9690\u85cf ${hiddenAppsDraft.size} \u4e2a\u5e94\u7528",
+                        text = "已隐藏 ${hiddenAppsDraft.size} 个应用",
                         background = WatchColors.SurfaceGlass,
                         onClick = {}
                     )
@@ -391,7 +391,7 @@ private fun SettingsRootScreen(
             }
 
             SettingsDestination.ICON_PACKS -> SettingsPageScaffold(
-                title = "\u56fe\u6807\u5305",
+                title = "图标包",
                 onBack = { handleBack() },
                 headerTime = headerTime,
                 initialFirstVisibleItemIndex = scrollFor(SettingsDestination.ICON_PACKS).index,
@@ -400,8 +400,8 @@ private fun SettingsRootScreen(
             ) { listState, screenCenterY, screenHeightPx, _ ->
                 item("icon_pack_default") {
                     SettingsChoiceRow(
-                        title = "\u7cfb\u7edf\u9ed8\u8ba4",
-                        subtitle = "\u4f7f\u7528 Flue \u5f53\u524d\u5e94\u7528\u56fe\u6807",
+                        title = "系统默认",
+                        subtitle = "使用 Flue 当前应用图标",
                         selected = selectedIconPackPackage.isNullOrBlank(),
                         onClick = { vm.setIconPackPackage(null) },
                         scale = itemFisheye(listState, "icon_pack_default", screenCenterY, screenHeightPx)
@@ -418,8 +418,8 @@ private fun SettingsRootScreen(
                 }
                 item("icon_pack_refresh") {
                     ActionCard(
-                        title = "\u5237\u65b0\u56fe\u6807\u5305",
-                        subtitle = "\u91cd\u65b0\u626b\u63cf\u5df2\u5b89\u88c5\u7684 ADW \u56fe\u6807\u5305",
+                        title = "刷新图标包",
+                        subtitle = "重新扫描已安装的 ADW 图标包",
                         icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
                         onClick = { vm.refreshIconPacks() },
                         scale = itemFisheye(listState, "icon_pack_refresh", screenCenterY, screenHeightPx)
@@ -428,7 +428,7 @@ private fun SettingsRootScreen(
             }
 
             SettingsDestination.WATCH_FACES -> SettingsPageScaffold(
-            title = "\u8868\u76d8",
+            title = "表盘",
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.WATCH_FACES).index,
@@ -472,7 +472,7 @@ private fun SettingsRootScreen(
                                 )
                                 (context as? Activity)?.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
                             } else if (!LunchWatchFaceRuntime.openSettings(context, descriptor)) {
-                                Toast.makeText(context, "\u6CA1\u6709\u53EF\u7528\u7684\u8868\u76D8\u8BBE\u7F6E", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "没有可用的表盘设置", Toast.LENGTH_SHORT).show()
                             } else {
                                 (context as? Activity)?.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
                             }
@@ -485,8 +485,8 @@ private fun SettingsRootScreen(
             }
             item("watchface_refresh") {
                 ActionCard(
-                    title = "\u91cd\u65b0\u626b\u63cf\u8868\u76d8",
-                    subtitle = "\u5237\u65b0\u5df2\u5b89\u88c5\u7684 Lunch \u517c\u5bb9\u8868\u76d8",
+                    title = "重新扫描表盘",
+                    subtitle = "刷新已安装的 Lunch 兼容表盘",
                     scale = itemFisheye(listState, "watchface_refresh", screenCenterY, screenHeightPx),
                     icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
                     onClick = { vm.refreshWatchFaces(force = true) }
@@ -495,18 +495,18 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.APPEARANCE -> SettingsPageScaffold(
-            title = "\u663e\u793a\u4e0e\u5916\u89c2",
+            title = "显示与外观",
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.APPEARANCE).index,
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.APPEARANCE).offset,
             onScrollChanged = { index, offset -> updateScroll(SettingsDestination.APPEARANCE, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
-            item("layout_header") { SectionTitle("\u5e03\u5c40", itemFisheye(listState, "layout_header", screenCenterY, screenHeightPx)) }
+            item("layout_header") { SectionTitle("布局", itemFisheye(listState, "layout_header", screenCenterY, screenHeightPx)) }
             item("layout_honeycomb") {
                 SettingsChoiceRow(
-                    title = "\u8702\u7a9d\u5e03\u5c40",
-                    subtitle = "Apple Watch \u98ce\u683c",
+                    title = "蜂窝布局",
+                    subtitle = "Apple Watch 风格",
                     selected = layoutMode == LayoutMode.Honeycomb,
                     onClick = { vm.setLayoutMode(LayoutMode.Honeycomb) },
                     scale = itemFisheye(listState, "layout_honeycomb", screenCenterY, screenHeightPx)
@@ -514,20 +514,20 @@ private fun SettingsRootScreen(
             }
             item("layout_list") {
                 SettingsChoiceRow(
-                    title = "\u5217\u8868\u5e03\u5c40",
-                    subtitle = "\u7ecf\u5178\u7eb5\u5411\u5217\u8868",
+                    title = "列表布局",
+                    subtitle = "经典纵向列表",
                     selected = layoutMode == LayoutMode.List,
                     onClick = { vm.setLayoutMode(LayoutMode.List) },
                     scale = itemFisheye(listState, "layout_list", screenCenterY, screenHeightPx)
                 )
             }
             item("display_header") {
-                SectionTitle(if (isZh) "\u663e\u793a\u8bbe\u7f6e" else "Display", itemFisheye(listState, "display_header", screenCenterY, screenHeightPx))
+                SectionTitle(if (isZh) "显示设置" else "Display", itemFisheye(listState, "display_header", screenCenterY, screenHeightPx))
             }
             item("side_screen_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "\u526f\u4e00\u5c4f" else "Side Screen",
-                    subtitle = if (isZh) "\u4ece\u8868\u76d8\u53f3\u6ed1\u8fdb\u5165\u5feb\u6377\u542f\u52a8\u4e0e\u901a\u77e5\u9875" else "Swipe right from the watch face to open the side screen",
+                    title = if (isZh) "副一屏" else "Side Screen",
+                    subtitle = if (isZh) "从表盘右滑进入快捷启动与通知页" else "Swipe right from the watch face to open the side screen",
                     checked = sideScreenEnabled,
                     onToggle = vm::setSideScreenEnabled,
                     scale = itemFisheye(listState, "side_screen_toggle", screenCenterY, screenHeightPx)
@@ -535,11 +535,11 @@ private fun SettingsRootScreen(
             }
             item("notification_center_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "\u901a\u77e5\u4e2d\u5fc3" else "Notification Center",
+                    title = if (isZh) "通知中心" else "Notification Center",
                     subtitle = if (showNotification) {
-                        if (isZh) "\u663e\u793a\u901a\u77e5\u6a2a\u5e45\uff0c\u5e76\u5141\u8bb8\u4ece\u526f\u4e00\u5c4f\u4e0a\u6ed1\u8fdb\u5165\u901a\u77e5\u4e2d\u5fc3" else "Show notification banners and allow swipe-up from the side screen into the notification center"
+                        if (isZh) "显示通知横幅，并允许从副一屏上滑进入通知中心" else "Show notification banners and allow swipe-up from the side screen into the notification center"
                     } else {
-                        if (isZh) "\u9690\u85cf\u901a\u77e5\u6a2a\u5e45\u4e0e\u901a\u77e5\u4e2d\u5fc3\uff0c\u5e76\u628a\u5feb\u6377\u542f\u52a8\u6269\u5c55\u4e3a 3x3" else "Hide notification banners and the notification center, and expand quick launch to 3x3"
+                        if (isZh) "隐藏通知横幅与通知中心，并把快捷启动扩展为 3x3" else "Hide notification banners and the notification center, and expand quick launch to 3x3"
                     },
                     checked = showNotification,
                     enabled = sideScreenEnabled,
@@ -549,8 +549,8 @@ private fun SettingsRootScreen(
             }
             item("blur_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "\u6a21\u7cca" else "Blur",
-                    subtitle = if (isZh) "\u5728\u652f\u6301\u7684 Android \u7248\u672c\u4e0a\u542f\u7528\u6a21\u7cca" else "Enable blur on supported Android versions",
+                    title = if (isZh) "模糊" else "Blur",
+                    subtitle = if (isZh) "在支持的 Android 版本上启用模糊" else "Enable blur on supported Android versions",
                     checked = blurEnabled,
                     onToggle = vm::setBlurEnabled,
                     scale = itemFisheye(listState, "blur_toggle", screenCenterY, screenHeightPx)
@@ -558,11 +558,11 @@ private fun SettingsRootScreen(
             }
             item("edge_blur_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "\u8fb9\u7f18\u6a21\u7cca\uff08\u5b9e\u9a8c\uff09" else "Edge Blur (Experimental)",
+                    title = if (isZh) "边缘模糊（实验）" else "Edge Blur (Experimental)",
                     subtitle = if (blurEnabled) {
-                        if (isZh) "\u5728\u9876\u90e8\u548c\u5e95\u90e8\u8fb9\u7f18\u589e\u52a0\u6a21\u7cca" else "Apply extra blur near the top and bottom edges"
+                        if (isZh) "在顶部和底部边缘增加模糊" else "Apply extra blur near the top and bottom edges"
                     } else {
-                        if (isZh) "\u8bf7\u5148\u5f00\u542f\u6a21\u7cca" else "Enable Blur first"
+                        if (isZh) "请先开启模糊" else "Enable Blur first"
                     },
                     checked = edgeBlurEnabled,
                     enabled = blurEnabled,
@@ -572,9 +572,9 @@ private fun SettingsRootScreen(
             }
             item("honeycomb_cols") {
                 SettingsSliderRow(
-                    title = "\u8702\u7a9d\u5217\u6570",
+                    title = "蜂窝列数",
                     value = honeycombCols.toFloat(),
-                    valueText = "$honeycombCols \u5217",
+                    valueText = "$honeycombCols 列",
                     range = 3f..6f,
                     steps = 2,
                     onValueChange = { vm.setHoneycombCols(it.toInt()) },
@@ -583,7 +583,7 @@ private fun SettingsRootScreen(
             }
             item("top_blur") {
                 SettingsSliderRow(
-                    title = "\u9876\u90e8\u6a21\u7cca\u534a\u5f84",
+                    title = "顶部模糊半径",
                     value = honeycombTopBlur.toFloat(),
                     valueText = "$honeycombTopBlur dp",
                     range = 0f..48f,
@@ -595,7 +595,7 @@ private fun SettingsRootScreen(
             }
             item("bottom_blur") {
                 SettingsSliderRow(
-                    title = "\u5e95\u90e8\u6a21\u7cca\u534a\u5f84",
+                    title = "底部模糊半径",
                     value = honeycombBottomBlur.toFloat(),
                     valueText = "$honeycombBottomBlur dp",
                     range = 0f..48f,
@@ -607,7 +607,7 @@ private fun SettingsRootScreen(
             }
             item("top_fade") {
                 SettingsSliderRow(
-                    title = "\u9876\u90e8\u6e10\u9690\u8303\u56f4",
+                    title = "顶部渐隐范围",
                     value = honeycombTopFade.toFloat(),
                     valueText = "$honeycombTopFade dp",
                     range = 0f..160f,
@@ -618,7 +618,7 @@ private fun SettingsRootScreen(
             }
             item("bottom_fade") {
                 SettingsSliderRow(
-                    title = "\u5e95\u90e8\u6e10\u9690\u8303\u56f4",
+                    title = "底部渐隐范围",
                     value = honeycombBottomFade.toFloat(),
                     valueText = "$honeycombBottomFade dp",
                     range = 0f..160f,
@@ -627,11 +627,11 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "bottom_fade", screenCenterY, screenHeightPx)
                 )
             }
-            item("launch_header") { SectionTitle("\u542f\u52a8", itemFisheye(listState, "launch_header", screenCenterY, screenHeightPx)) }
+            item("launch_header") { SectionTitle("启动", itemFisheye(listState, "launch_header", screenCenterY, screenHeightPx)) }
             item("splash_toggle") {
                 SettingsSwitchRow(
-                    title = "\u542f\u52a8\u906e\u7f69",
-                    subtitle = "\u6253\u5f00\u5e94\u7528\u65f6\u663e\u793a\u56fe\u6807\u8fc7\u6e21",
+                    title = "启动遮罩",
+                    subtitle = "打开应用时显示图标过渡",
                     checked = splashIcon,
                     onToggle = { vm.setSplashIcon(it) },
                     scale = itemFisheye(listState, "splash_toggle", screenCenterY, screenHeightPx)
@@ -640,7 +640,7 @@ private fun SettingsRootScreen(
             if (splashIcon) {
                 item("splash_delay") {
                     SettingsSliderRow(
-                        title = "\u906e\u7f69\u65f6\u957f",
+                        title = "遮罩时长",
                         value = splashDelay.toFloat(),
                         valueText = "${splashDelay} ms",
                         range = 300f..1500f,
@@ -653,7 +653,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.PERFORMANCE -> SettingsPageScaffold(
-            title = "\u6027\u80fd\u4e0e\u52a8\u753b",
+            title = "性能与动画",
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.PERFORMANCE).index,
@@ -662,8 +662,8 @@ private fun SettingsRootScreen(
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("low_res") {
                 SettingsSwitchRow(
-                    title = "\u4f4e\u5206\u8fa8\u7387\u56fe\u6807",
-                    subtitle = "\u964d\u4f4e\u56fe\u6807\u5f00\u9500\u4ee5\u63d0\u5347\u6d41\u7545\u5ea6",
+                    title = "低分辨率图标",
+                    subtitle = "降低图标开销以提升流畅度",
                     checked = lowResIcons,
                     onToggle = { vm.setLowResIcons(it) },
                     scale = itemFisheye(listState, "low_res", screenCenterY, screenHeightPx)
@@ -671,8 +671,8 @@ private fun SettingsRootScreen(
             }
             item("honeycomb_fast_scroll_opt") {
                 SettingsSwitchRow(
-                    title = "\u8702\u7a9d\u9ad8\u901f\u6ed1\u52a8\u4f18\u5316",
-                    subtitle = "\u9ad8\u901f\u6ed1\u52a8\u65f6\u4e34\u65f6\u964d\u4f4e\u666e\u901a\u56fe\u6807\u7684\u6a21\u7cca\u4e0e\u9634\u5f71\u8d1f\u8f7d\uff0c\u505c\u4e0b\u540e\u6062\u590d\u5b8c\u6574\u6548\u679c",
+                    title = "蜂窝高速滑动优化",
+                    subtitle = "高速滑动时临时降低普通图标的模糊与阴影负载，停下后恢复完整效果",
                     checked = honeycombFastScrollOptimization,
                     onToggle = { vm.setHoneycombFastScrollOptimization(it) },
                     scale = itemFisheye(listState, "honeycomb_fast_scroll_opt", screenCenterY, screenHeightPx)
@@ -680,8 +680,8 @@ private fun SettingsRootScreen(
             }
             item("anim_override") {
                 SettingsSwitchRow(
-                    title = "\u684c\u9762\u8fd4\u56de\u52a8\u753b",
-                    subtitle = "\u542f\u7528\u7c7b watchOS \u7684\u8fd4\u56de\u8fc7\u6e21",
+                    title = "桌面返回动画",
+                    subtitle = "启用类 watchOS 的返回过渡",
                     checked = animationOverrideEnabled,
                     onToggle = { vm.setAnimationOverrideEnabled(it) },
                     scale = itemFisheye(listState, "anim_override", screenCenterY, screenHeightPx)
@@ -689,8 +689,8 @@ private fun SettingsRootScreen(
             }
             item("hide_from_recents") {
                 SettingsSwitchRow(
-                    title = if (isZh) "\u9690\u85cf\u540e\u53f0\u5361\u7247" else "Hide Recents Card",
-                    subtitle = if (isZh) "\u4ece\u6700\u8fd1\u4efb\u52a1\u4e2d\u9690\u85cf Flue \u7684\u540e\u53f0\u5361\u7247" else "Hide Flue from the system recents screen",
+                    title = if (isZh) "隐藏后台卡片" else "Hide Recents Card",
+                    subtitle = if (isZh) "从最近任务中隐藏 Flue 的后台卡片" else "Hide Flue from the system recents screen",
                     checked = hideFromRecents,
                     onToggle = vm::setHideFromRecents,
                     scale = itemFisheye(listState, "hide_from_recents", screenCenterY, screenHeightPx)
@@ -698,8 +698,8 @@ private fun SettingsRootScreen(
             }
             item("builtin_manager_thumbnails") {
                 SettingsSwitchRow(
-                    title = "\u5185\u7f6e\u7ba1\u7406\u5668\u7f29\u7565\u56fe",
-                    subtitle = "\u5728\u56fe\u7247/\u89c6\u9891\u5217\u8868\u5de6\u4fa7\u663e\u793a\u9884\u89c8\u56fe",
+                    title = "内置管理器缩略图",
+                    subtitle = "在图片/视频列表左侧显示预览图",
                     checked = builtInManagerThumbnails,
                     onToggle = { vm.setBuiltInManagerThumbnails(it) },
                     scale = itemFisheye(listState, "builtin_manager_thumbnails", screenCenterY, screenHeightPx)
@@ -708,7 +708,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.TOOLS -> SettingsPageScaffold(
-            title = "\u5de5\u5177",
+            title = "工具",
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.TOOLS).index,
@@ -717,16 +717,16 @@ private fun SettingsRootScreen(
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("export_log") {
                 ActionCard(
-                    title = "\u5bfc\u51fa\u65e5\u5fd7",
-                    subtitle = "\u5bfc\u51fa\u6700\u8fd1 500 \u884c\u7cfb\u7edf\u65e5\u5fd7",
+                    title = "导出日志",
+                    subtitle = "导出最近 500 行系统日志",
                     onClick = { exportLog(context) },
                     scale = itemFisheye(listState, "export_log", screenCenterY, screenHeightPx)
                 )
             }
             item("reset_defaults") {
                 ActionCard(
-                    title = "\u6062\u590d\u9ed8\u8ba4\u8bbe\u7f6e",
-                    subtitle = "\u91cd\u7f6e\u684c\u9762\u5916\u89c2\u4e0e\u6027\u80fd\u9009\u9879",
+                    title = "恢复默认设置",
+                    subtitle = "重置桌面外观与性能选项",
                     onClick = { vm.resetSettings() },
                     scale = itemFisheye(listState, "reset_defaults", screenCenterY, screenHeightPx)
                 )
@@ -734,7 +734,7 @@ private fun SettingsRootScreen(
             }
 
             SettingsDestination.ABOUT -> SettingsPageScaffold(
-                title = "\u5173\u4e8e",
+                title = "关于",
                 onBack = { handleBack() },
                 headerTime = headerTime,
                 initialFirstVisibleItemIndex = scrollFor(SettingsDestination.ABOUT).index,
@@ -1151,7 +1151,7 @@ private fun SettingsSwitchRow(
                     Box(
                         modifier = Modifier
                             .size(34.dp)
-                            .clip(RoundedCornerShape(11.dp))
+                            .clip(CircleShape)
                             .background(Color.White.copy(alpha = if (leadingIcon != null) 0f else 0.05f)),
                         contentAlignment = Alignment.Center
                     ) {
@@ -1161,7 +1161,7 @@ private fun SettingsSwitchRow(
                                 contentDescription = null,
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .clip(RoundedCornerShape(11.dp))
+                                    .clip(CircleShape)
                             )
                         }
                     }
@@ -1518,11 +1518,11 @@ private fun exportLog(context: android.content.Context) {
                     putExtra(Intent.EXTRA_STREAM, uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 },
-                "\u5bfc\u51fa\u65e5\u5fd7"
+                "导出日志"
             )
         )
     } catch (_: Exception) {
-        Toast.makeText(context, "\u5bfc\u51fa\u5931\u8d25", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "导出失败", Toast.LENGTH_SHORT).show()
     }
 }
 
