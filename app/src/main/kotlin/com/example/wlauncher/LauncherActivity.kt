@@ -109,7 +109,7 @@ class LauncherActivity : ComponentActivity() {
         RecentsVisibility.apply(this)
         if (::vm.isInitialized && vm.animationOverrideEnabled.value && vm.hasPendingExternalLaunchReturn()) {
             @Suppress("DEPRECATION")
-            overridePendingTransition(R.anim.launcher_return_cupertino_enter, R.anim.launcher_return_cupertino_exit)
+            overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
         }
         if (::vm.isInitialized) {
             vm.onReturnToLauncher()
