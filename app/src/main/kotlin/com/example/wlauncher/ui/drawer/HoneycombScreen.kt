@@ -473,7 +473,17 @@ fun HoneycombScreen(
                             }
                             directScrollOffset = current
                             if (current >= maxScroll - iconSizePx * 0.45f && velocity > 800f) {
-                                directScrollOffset = Float.NaN
+                                val returnStart = current
+                                scope.launch {
+                                    scrollOffset.snapTo(returnStart)
+                                    directScrollOffset = Float.NaN
+                                    launch {
+                                        scrollOffset.animateTo(
+                                            maxScroll,
+                                            spring(dampingRatio = 0.64f, stiffness = 360f)
+                                        )
+                                    }
+                                }
                                 onScrollToTop()
                                 return@detectDragGestures
                             }

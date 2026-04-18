@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Settings
@@ -162,7 +163,7 @@ fun WatchFaceSettingCard(
                 if (onOpenSettings != null && descriptor.supportsSettings) {
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
+                            .clip(CircleShape)
                             .background(Color.White.copy(alpha = 0.08f))
                             .clickable(onClick = onOpenSettings)
                             .padding(8.dp),

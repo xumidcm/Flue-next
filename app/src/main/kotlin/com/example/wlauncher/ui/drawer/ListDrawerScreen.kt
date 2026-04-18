@@ -223,7 +223,9 @@ fun ListDrawerScreen(
                                 if (dragFromIndex != null || longPressedApp != null) return Velocity.Zero
                                 val atTop = !listState.canScrollBackward
                                 if ((overscroll.value > 80f || available.y > 1200f) && atTop) {
-                                    overscroll.snapTo(0f)
+                                    scope.launch {
+                                        overscroll.animateTo(0f, spring(dampingRatio = 0.75f, stiffness = 460f))
+                                    }
                                     onScrollToTop()
                                     return available
                                 }
