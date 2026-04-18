@@ -234,14 +234,16 @@ fun NotificationLayer(
                     lastVisibleItem.index == layoutInfo.totalItemsCount - 1 &&
                     lastVisibleItem.offset + lastVisibleItem.size <= layoutInfo.viewportEndOffset
                 if (available.y > 0f && atTop) {
-                    if (dismissDragDistance > 0f || overscroll.value >= NOTIFICATION_TOP_OVERSCROLL_TRIGGER) {
+                    if (dismissDragDistance > 0f) {
                         updateDismissDrag(available.y)
                     } else {
                         scope.launch {
-                            overscroll.snapTo(
-                                (overscroll.value + available.y * 0.35f)
-                                    .coerceIn(0f, NOTIFICATION_TOP_OVERSCROLL_LIMIT)
-                            )
+                            val newOverscroll = (overscroll.value + available.y * 0.35f)
+                                .coerceIn(0f, NOTIFICATION_TOP_OVERSCROLL_LIMIT)
+                            overscroll.snapTo(newOverscroll)
+                            if (newOverscroll >= NOTIFICATION_TOP_OVERSCROLL_TRIGGER) {
+                                updateDismissDrag(available.y)
+                            }
                         }
                     }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
@@ -275,8 +277,7 @@ fun NotificationLayer(
 
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (dismissTransitionInFlight) return available
-                val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
-                if (dismissDragDistance > 0f || (available.y > NOTIFICATION_DISMISS_FLING_VELOCITY && atTop)) {
+                if (dismissDragDistance > 0f) {
                     dismissDragVelocityY = available.y
                     releaseDismissDrag()
                     return available
@@ -690,44 +691,39 @@ private fun rememberBatteryStatus(): BatteryStatus {
 private fun BatteryPill(level: Int, charging: Boolean, modifier: Modifier = Modifier) {
     val tint = when { level <= 10 -> WatchColors.ActiveRed; level <= 20 -> WatchColors.ActiveOrange; else -> WatchColors.ActiveGreen }
     val backgroundTint = if (charging) Color(0xFF1F6C35) else Color(0xFF141414)
-    val outerPadding = 3.dp
-    val sideSlotWidth = 12.dp
-    val pillWidth = 48.dp
-    Box(
+    val pillPadding = 4.dp
+    Row(
         modifier = modifier
-            .width(pillWidth + sideSlotWidth * 2 + outerPadding * 2)
-            .height(24.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(backgroundTint)
-            .padding(outerPadding)
+            .padding(pillPadding),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
     ) {
+        if (charging) {
+            Icon(
+                Icons.Filled.Bolt,
+                contentDescription = null,
+                tint = Color(0xFFFFD54A),
+                modifier = Modifier.size(13.dp)
+            )
+            Spacer(Modifier.width(2.dp))
+        }
         Box(
             Modifier
-                .width(pillWidth)
-                .height(18.dp)
-                .align(Alignment.Center)
-                .clip(RoundedCornerShape(12.dp))
+                .width(48.dp)
+                .height(16.dp)
+                .clip(RoundedCornerShape(10.dp))
                 .background(Color.Transparent)
         ) {
             Box(
                 Modifier
                     .fillMaxWidth((level / 100f).coerceIn(0f, 1f))
                     .fillMaxHeight()
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(10.dp))
                     .background(tint.copy(alpha = 0.24f))
             )
             Text("${level}%", color = tint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Center))
-        }
-        if (charging) {
-            Icon(
-                Icons.Filled.Bolt,
-                contentDescription = null,
-                tint = Color(0xFFFFD54A),
-                modifier = Modifier
-                    .size(13.dp)
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 1.dp)
-            )
         }
     }
 }
