@@ -37,7 +37,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -72,6 +71,7 @@ import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.rememberPressedState
+import com.flue.launcher.ui.common.WatchBatteryPill
 import com.flue.launcher.ui.drawer.AppBubble
 import com.flue.launcher.ui.notification.NotificationEntryUi
 import com.flue.launcher.ui.notification.NotificationGroupUi
@@ -349,7 +349,7 @@ fun SmartStackLayer(
                 }
             }
         }
-        BatteryPill(
+        WatchBatteryPill(
             level = battery.level,
             charging = battery.charging,
             modifier = Modifier
@@ -651,44 +651,6 @@ private fun ShortcutPickerRow(
     return BatterySnapshot(level = level, charging = charging)
 }
 
-@Composable private fun BatteryPill(level: Int, charging: Boolean, modifier: Modifier = Modifier) {
-    val tint = when { level <= 10 -> WatchColors.ActiveRed; level <= 20 -> WatchColors.ActiveOrange; else -> WatchColors.ActiveGreen }
-    val backgroundTint = if (charging) Color(0xFF1F6C35) else Color(0xFF141414)
-    val outerPadding = 3.dp
-    val sideSlotWidth = 12.dp
-    val pillWidth = 48.dp
-    Box(
-        modifier = modifier
-            .width(pillWidth + sideSlotWidth * 2 + outerPadding * 2)
-            .height(24.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(backgroundTint)
-            .padding(outerPadding)
-    ) {
-        Box(
-            Modifier
-                .width(pillWidth)
-                .height(18.dp)
-                .align(Alignment.Center)
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color.Transparent)
-        ) {
-            Box(Modifier.fillMaxWidth((level / 100f).coerceIn(0f, 1f)).fillMaxHeight().clip(RoundedCornerShape(12.dp)).background(tint.copy(alpha = 0.24f)))
-            Text("${level}%", color = tint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Center))
-        }
-        if (charging) {
-            Icon(
-                Icons.Filled.Bolt,
-                contentDescription = null,
-                tint = Color(0xFFFFD54A),
-                modifier = Modifier
-                    .size(13.dp)
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 1.dp)
-            )
-        }
-    }
-}
 
 private fun buildPreviewRows(groups: List<NotificationGroupUi>, maxRows: Int): List<PreviewRow> {
     val safeMaxRows = maxRows.coerceAtLeast(0)

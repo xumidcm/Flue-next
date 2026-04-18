@@ -41,7 +41,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -76,6 +75,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.rememberPressedState
+import com.flue.launcher.ui.common.WatchBatteryPill
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -133,13 +133,31 @@ fun NotificationLayer(
     var dismissDragDistance by remember { mutableFloatStateOf(0f) }
     var dismissDragVelocityY by remember { mutableFloatStateOf(0f) }
     var lastDismissDragEventUptime by remember { mutableStateOf(0L) }
+    var topDismissArmed by remember { mutableStateOf(false) }
     LaunchedEffect(isActive) {
         if (!isActive) {
             dismissTransitionInFlight = false
             dismissDragDistance = 0f
             dismissDragVelocityY = 0f
             lastDismissDragEventUptime = 0L
+            topDismissArmed = false
             overscroll.snapTo(0f)
+        }
+    }
+    val listAtTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+    LaunchedEffect(
+        isActive,
+        listAtTop,
+        listState.isScrollInProgress,
+        dismissDragDistance,
+        overscroll.value
+    ) {
+        if (!isActive) {
+            topDismissArmed = false
+        } else if (!listAtTop) {
+            topDismissArmed = false
+        } else if (!listState.isScrollInProgress && dismissDragDistance == 0f && overscroll.value == 0f) {
+            topDismissArmed = true
         }
     }
     val updateDismissDrag: (Float) -> Unit = { delta ->
@@ -154,6 +172,7 @@ fun NotificationLayer(
         dismissDragDistance = 0f
         dismissDragVelocityY = 0f
         lastDismissDragEventUptime = 0L
+        topDismissArmed = false
         onTransitionRelease(shouldDismiss)
     }
     val closeIfPulled: suspend () -> Unit = {
@@ -241,7 +260,7 @@ fun NotificationLayer(
                             val newOverscroll = (overscroll.value + available.y * 0.35f)
                                 .coerceIn(0f, NOTIFICATION_TOP_OVERSCROLL_LIMIT)
                             overscroll.snapTo(newOverscroll)
-                            if (newOverscroll >= NOTIFICATION_TOP_OVERSCROLL_TRIGGER) {
+                            if (topDismissArmed && newOverscroll >= NOTIFICATION_TOP_OVERSCROLL_TRIGGER) {
                                 updateDismissDrag(available.y)
                             }
                         }
@@ -365,7 +384,7 @@ fun NotificationLayer(
                 }
             }
         }
-        BatteryPill(
+        WatchBatteryPill(
             level = batteryStatus.level,
             charging = batteryStatus.charging,
             modifier = Modifier
@@ -687,45 +706,5 @@ private fun rememberBatteryStatus(): BatteryStatus {
     return BatteryStatus(level = level, charging = charging)
 }
 
-@Composable
-private fun BatteryPill(level: Int, charging: Boolean, modifier: Modifier = Modifier) {
-    val tint = when { level <= 10 -> WatchColors.ActiveRed; level <= 20 -> WatchColors.ActiveOrange; else -> WatchColors.ActiveGreen }
-    val backgroundTint = if (charging) Color(0xFF1F6C35) else Color(0xFF141414)
-    val pillPadding = 4.dp
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(backgroundTint)
-            .padding(pillPadding),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center
-    ) {
-        if (charging) {
-            Icon(
-                Icons.Filled.Bolt,
-                contentDescription = null,
-                tint = Color(0xFFFFD54A),
-                modifier = Modifier.size(13.dp)
-            )
-            Spacer(Modifier.width(2.dp))
-        }
-        Box(
-            Modifier
-                .width(48.dp)
-                .height(16.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(Color.Transparent)
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth((level / 100f).coerceIn(0f, 1f))
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(tint.copy(alpha = 0.24f))
-            )
-            Text("${level}%", color = tint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Center))
-        }
-    }
-}
 
 private fun formatNotificationTime(timestamp: Long): String = NOTIFICATION_TIME_FORMAT.get().format(Date(timestamp))
