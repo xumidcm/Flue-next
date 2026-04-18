@@ -900,9 +900,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun refreshNotificationAccess() {
-        val component = ComponentName(getApplication(), WLauncherNotificationListener::class.java)
+        val application = getApplication<Application>()
+        val component = ComponentName(application, WLauncherNotificationListener::class.java)
         val enabledListeners = Settings.Secure.getString(
-            getApplication<Application>().contentResolver,
+            application.contentResolver,
             "enabled_notification_listeners"
         )
         val granted = enabledListeners
@@ -911,6 +912,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             ?.any { it.packageName == component.packageName && it.className == component.className }
             ?: false
         _notificationAccessGranted.value = granted || WLauncherNotificationListener.isConnected()
+        if (granted) {
+            WLauncherNotificationListener.requestRebindIfNeeded(application)
+        }
     }
 
     private fun markNotificationsDismissed(keys: Collection<String>) {

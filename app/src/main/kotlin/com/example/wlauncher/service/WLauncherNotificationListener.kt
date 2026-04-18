@@ -3,12 +3,15 @@
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Person
+import android.content.ComponentName
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import android.util.Log
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
@@ -35,9 +38,11 @@ data class NotifData(
 class WLauncherNotificationListener : NotificationListenerService() {
 
     companion object {
+        private const val TAG = "WLauncherNotif"
         private const val NOTIFICATION_ICON_SIZE_PX = 96
         private val IM_AVATAR_PACKAGES = setOf(
             "com.tencent.mobileqq",
+            "com.tencent.qqlite",
             "com.tencent.mm",
             "com.tencent.tim"
         )
@@ -49,6 +54,16 @@ class WLauncherNotificationListener : NotificationListenerService() {
         private val packageIconCache = mutableMapOf<String, ImageBitmap?>()
 
         fun isConnected() = instance != null
+
+        fun requestRebindIfNeeded(context: Context) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || instance != null) return
+            runCatching {
+                requestRebind(ComponentName(context, WLauncherNotificationListener::class.java))
+                Log.d(TAG, "Requested notification listener rebind")
+            }.onFailure { error ->
+                Log.e(TAG, "Failed to request notification listener rebind", error)
+            }
+        }
 
         fun dismissNotification(key: String) {
             instance?.cancelNotification(key)
@@ -69,11 +84,13 @@ class WLauncherNotificationListener : NotificationListenerService() {
 
     override fun onListenerConnected() {
         instance = this
+        Log.d(TAG, "Notification listener connected")
         refreshNotifications()
     }
 
     override fun onListenerDisconnected() {
         instance = null
+        Log.d(TAG, "Notification listener disconnected")
         _notifications.value = emptyList()
         synchronized(pendingIntentMap) { pendingIntentMap.clear() }
         synchronized(packageIconCache) { packageIconCache.clear() }
@@ -88,53 +105,71 @@ class WLauncherNotificationListener : NotificationListenerService() {
     }
 
     private fun refreshNotifications() {
-        try {
-            val sbns = activeNotifications ?: return
-            val pm = applicationContext.packageManager
-            _notifications.value = sbns
-                .filter { sbn ->
-                    val flags = sbn.notification.flags
-                    val isGroupSummary = flags and Notification.FLAG_GROUP_SUMMARY != 0
-                    val isOngoing = flags and Notification.FLAG_ONGOING_EVENT != 0
-                    val isForegroundService = flags and Notification.FLAG_FOREGROUND_SERVICE != 0
-                    !isGroupSummary && !isOngoing && !isForegroundService
-                }
-                .sortedByDescending { it.postTime }
-                .take(20)
-                .map { sbn ->
-                    val n = sbn.notification
-                    val extras = n.extras
-                    val flags = n.flags
-                    val appLabel = try {
-                        pm.getApplicationLabel(pm.getApplicationInfo(sbn.packageName, 0)).toString()
-                    } catch (_: Exception) { sbn.packageName }
-
-                    val iconBitmap = resolveNotificationIcon(sbn, n)
-
-                    NotifData(
-                        key = sbn.key,
-                        packageName = sbn.packageName,
-                        groupKey = sbn.groupKey,
-                        appLabel = appLabel,
-                        title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: "",
-                        text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: "",
-                        time = sbn.postTime,
-                        icon = iconBitmap,
-                        isClearable = sbn.isClearable,
-                        contentIntentAvailable = n.contentIntent != null,
-                        isGroupSummary = flags and Notification.FLAG_GROUP_SUMMARY != 0,
-                        isOngoing = flags and Notification.FLAG_ONGOING_EVENT != 0,
-                        isForegroundService = flags and Notification.FLAG_FOREGROUND_SERVICE != 0
-                    )
-                }.also { notifications ->
-                    synchronized(pendingIntentMap) {
-                        pendingIntentMap.clear()
-                        sbns.forEach { sbn ->
-                            pendingIntentMap[sbn.key] = sbn.notification.contentIntent
-                        }
+        val sbns = runCatching { activeNotifications.orEmpty() }
+            .onFailure { error ->
+                Log.e(TAG, "Failed to read active notifications", error)
+            }
+            .getOrDefault(emptyArray())
+        val pm = applicationContext.packageManager
+        val parsedNotifications = sbns
+            .filter { sbn ->
+                val flags = sbn.notification.flags
+                val isGroupSummary = flags and Notification.FLAG_GROUP_SUMMARY != 0
+                val isOngoing = flags and Notification.FLAG_ONGOING_EVENT != 0
+                val isForegroundService = flags and Notification.FLAG_FOREGROUND_SERVICE != 0
+                !isGroupSummary && !isOngoing && !isForegroundService
+            }
+            .sortedByDescending { it.postTime }
+            .take(20)
+            .mapNotNull { sbn ->
+                runCatching { buildNotifData(pm, sbn) }
+                    .onFailure { error ->
+                        Log.e(TAG, "Failed to parse notification ${sbn.key} from ${sbn.packageName}", error)
                     }
-                }
-        } catch (_: Exception) {}
+                    .getOrNull()
+            }
+
+        _notifications.value = parsedNotifications
+        synchronized(pendingIntentMap) {
+            pendingIntentMap.clear()
+            parsedNotifications.forEach { notification ->
+                pendingIntentMap[notification.key] = sbns
+                    .firstOrNull { it.key == notification.key }
+                    ?.notification
+                    ?.contentIntent
+            }
+        }
+        Log.d(TAG, "Notification refresh complete: active=${sbns.size}, visible=${parsedNotifications.size}")
+    }
+
+    private fun buildNotifData(
+        pm: android.content.pm.PackageManager,
+        sbn: StatusBarNotification
+    ): NotifData {
+        val notification = sbn.notification
+        val extras = notification.extras
+        val flags = notification.flags
+        val appLabel = try {
+            pm.getApplicationLabel(pm.getApplicationInfo(sbn.packageName, 0)).toString()
+        } catch (_: Exception) {
+            sbn.packageName
+        }
+
+        return NotifData(
+            key = sbn.key,
+            packageName = sbn.packageName,
+            groupKey = sbn.groupKey,
+            appLabel = appLabel,
+            title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: "",
+            text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: "",
+            time = sbn.postTime,
+            icon = resolveNotificationIcon(sbn, notification),
+            isClearable = sbn.isClearable,
+            contentIntentAvailable = notification.contentIntent != null,
+            isGroupSummary = flags and Notification.FLAG_GROUP_SUMMARY != 0,
+            isOngoing = flags and Notification.FLAG_ONGOING_EVENT != 0,
+            isForegroundService = flags and Notification.FLAG_FOREGROUND_SERVICE != 0
+        )
     }
 
     private fun resolveNotificationIcon(
@@ -153,9 +188,13 @@ class WLauncherNotificationListener : NotificationListenerService() {
     ): ImageBitmap? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
         if (sbn.packageName !in IM_AVATAR_PACKAGES) return null
-        return readMessagingPersons(notification.extras)
-            .mapNotNull { it.icon?.toImageBitmap() }
-            .firstOrNull()
+        return runCatching {
+            readMessagingPersons(notification.extras)
+                .mapNotNull { it.icon?.toImageBitmap() }
+                .firstOrNull()
+        }.onFailure { error ->
+            Log.w(TAG, "Failed to resolve messaging avatar for ${sbn.packageName}", error)
+        }.getOrNull()
     }
 
     private fun readMessagingPersons(extras: Bundle): Sequence<Person> {

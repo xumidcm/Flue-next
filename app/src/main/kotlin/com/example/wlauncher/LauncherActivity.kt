@@ -229,7 +229,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val effectiveLaunchSplash = !fadeLaunch && (
         (showSplash && currentLaunchIcon != null) ||
             (!showLaunchBackdrop && retainedLaunchSplash && retainedLaunchIcon != null)
-        )
+    )
     LaunchedEffect(screenState, splashIcon, splashDelay, currentLaunchIcon, fadeLaunch) {
         if (!fadeLaunch && screenState == ScreenState.App && splashIcon && currentLaunchIcon != null) {
             showSplash = false

@@ -654,20 +654,21 @@ private fun ShortcutPickerRow(
 @Composable private fun BatteryPill(level: Int, charging: Boolean, modifier: Modifier = Modifier) {
     val tint = when { level <= 10 -> WatchColors.ActiveRed; level <= 20 -> WatchColors.ActiveOrange; else -> WatchColors.ActiveGreen }
     val backgroundTint = if (charging) Color(0xFF1F6C35) else Color(0xFF141414)
-    val sideSlotWidth = 16.dp
-    val pillWidth = 56.dp
+    val outerPadding = 3.dp
+    val sideSlotWidth = 12.dp
+    val pillWidth = 48.dp
     Box(
         modifier = modifier
-            .width(pillWidth + sideSlotWidth * 2)
+            .width(pillWidth + sideSlotWidth * 2 + outerPadding * 2)
             .height(24.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(backgroundTint)
-            .padding(horizontal = 2.dp, vertical = 2.dp)
+            .padding(outerPadding)
     ) {
         Box(
             Modifier
                 .width(pillWidth)
-                .height(20.dp)
+                .height(18.dp)
                 .align(Alignment.Center)
                 .clip(RoundedCornerShape(12.dp))
                 .background(Color.Transparent)
@@ -683,7 +684,7 @@ private fun ShortcutPickerRow(
                 modifier = Modifier
                     .size(13.dp)
                     .align(Alignment.CenterEnd)
-                    .padding(end = 3.dp)
+                    .padding(end = 1.dp)
             )
         }
     }

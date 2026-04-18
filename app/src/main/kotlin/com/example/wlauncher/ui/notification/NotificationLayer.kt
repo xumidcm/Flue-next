@@ -84,6 +84,8 @@ import java.util.Locale
 
 private const val NOTIFICATION_CARD_WIDTH_RATIO = 0.86f
 private const val NOTIFICATION_TOP_SAFE_PADDING_DP = 22
+private const val NOTIFICATION_TOP_OVERSCROLL_LIMIT = 72f
+private const val NOTIFICATION_TOP_OVERSCROLL_TRIGGER = 56f
 private const val NOTIFICATION_BOTTOM_OVERSCROLL_LIMIT = -96f
 private const val NOTIFICATION_DISMISS_DRAG_RANGE_RATIO = 0.78f
 private const val NOTIFICATION_DISMISS_DRAG_RANGE_MIN = 300f
@@ -232,7 +234,16 @@ fun NotificationLayer(
                     lastVisibleItem.index == layoutInfo.totalItemsCount - 1 &&
                     lastVisibleItem.offset + lastVisibleItem.size <= layoutInfo.viewportEndOffset
                 if (available.y > 0f && atTop) {
-                    updateDismissDrag(available.y)
+                    if (dismissDragDistance > 0f || overscroll.value >= NOTIFICATION_TOP_OVERSCROLL_TRIGGER) {
+                        updateDismissDrag(available.y)
+                    } else {
+                        scope.launch {
+                            overscroll.snapTo(
+                                (overscroll.value + available.y * 0.35f)
+                                    .coerceIn(0f, NOTIFICATION_TOP_OVERSCROLL_LIMIT)
+                            )
+                        }
+                    }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 if (available.y < 0f && atBottom) {
@@ -679,20 +690,21 @@ private fun rememberBatteryStatus(): BatteryStatus {
 private fun BatteryPill(level: Int, charging: Boolean, modifier: Modifier = Modifier) {
     val tint = when { level <= 10 -> WatchColors.ActiveRed; level <= 20 -> WatchColors.ActiveOrange; else -> WatchColors.ActiveGreen }
     val backgroundTint = if (charging) Color(0xFF1F6C35) else Color(0xFF141414)
-    val sideSlotWidth = 16.dp
-    val pillWidth = 56.dp
+    val outerPadding = 3.dp
+    val sideSlotWidth = 12.dp
+    val pillWidth = 48.dp
     Box(
         modifier = modifier
-            .width(pillWidth + sideSlotWidth * 2)
+            .width(pillWidth + sideSlotWidth * 2 + outerPadding * 2)
             .height(24.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(backgroundTint)
-            .padding(horizontal = 2.dp, vertical = 2.dp)
+            .padding(outerPadding)
     ) {
         Box(
             Modifier
                 .width(pillWidth)
-                .height(20.dp)
+                .height(18.dp)
                 .align(Alignment.Center)
                 .clip(RoundedCornerShape(12.dp))
                 .background(Color.Transparent)
@@ -714,7 +726,7 @@ private fun BatteryPill(level: Int, charging: Boolean, modifier: Modifier = Modi
                 modifier = Modifier
                     .size(13.dp)
                     .align(Alignment.CenterEnd)
-                    .padding(end = 3.dp)
+                    .padding(end = 1.dp)
             )
         }
     }
