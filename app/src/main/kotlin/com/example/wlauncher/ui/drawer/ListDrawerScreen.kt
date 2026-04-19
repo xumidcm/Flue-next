@@ -1,6 +1,7 @@
 package com.flue.launcher.ui.drawer
 
 import android.os.Build
+import android.widget.OverScroller
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
@@ -11,6 +12,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.FlingBehavior
+import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -77,6 +80,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private const val LIST_MENU_TRIGGER_MS = 410L
 private const val LIST_MENU_DRAG_START_DP = 20f
@@ -106,6 +110,7 @@ fun ListDrawerScreen(
     val scope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
     val effectiveEdgeBlur = edgeBlurEnabled && !suppressHeavyEffects
+    val independentFlingBehavior = remember(context) { IndependentListFlingBehavior(context) }
 
     var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
     val itemCenters = remember { mutableMapOf<Int, Float>() }
@@ -414,6 +419,7 @@ fun ListDrawerScreen(
 
             LazyColumn(
                 state = listState,
+                flingBehavior = independentFlingBehavior,
                 userScrollEnabled = dragFromIndex == null && longPressedApp == null,
                 modifier = Modifier
                     .fillMaxSize()
@@ -648,6 +654,41 @@ fun ListDrawerScreen(
             blurEnabled = blurEnabled,
             onDismiss = { longPressedApp = null }
         )
+    }
+}
+
+private class IndependentListFlingBehavior(
+    context: android.content.Context
+) : FlingBehavior {
+    private val scroller = OverScroller(context)
+
+    override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
+        if (abs(initialVelocity) < 1f) return initialVelocity
+        scroller.forceFinished(true)
+        scroller.fling(
+            0,
+            0,
+            0,
+            -initialVelocity.roundToInt(),
+            0,
+            0,
+            Int.MIN_VALUE,
+            Int.MAX_VALUE
+        )
+        var previousY = 0
+        while (!scroller.isFinished) {
+            withFrameNanos { }
+            if (!scroller.computeScrollOffset()) break
+            val delta = (scroller.currY - previousY).toFloat()
+            if (delta == 0f) continue
+            previousY = scroller.currY
+            val consumed = scrollBy(delta)
+            if (abs(delta - consumed) > 0.5f) {
+                scroller.forceFinished(true)
+                break
+            }
+        }
+        return 0f
     }
 }
 
