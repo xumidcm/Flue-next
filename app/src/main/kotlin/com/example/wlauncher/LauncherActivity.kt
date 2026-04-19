@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -44,10 +43,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalMotionDurationScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -76,9 +73,6 @@ private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
 private const val SIDE_SCREEN_TRANSITION_MS = 260
 private const val SIDE_SCREEN_EXIT_OVERSHOOT = 1.08f
 private const val NOTIFICATION_TRANSITION_MS = 240
-private val AppMotionDurationScale = object : MotionDurationScale {
-    override val scaleFactor: Float = 1f
-}
 
 class LauncherActivity : ComponentActivity() {
 
@@ -94,14 +88,10 @@ class LauncherActivity : ComponentActivity() {
         )
         onBackPressedDispatcher.addCallback(this) { vm.handleBackPress() }
         setContent {
-            // Keep Compose decay/fling animations independent from the system animator scale
-            // so list inertia still works when developer options animations are disabled.
-            CompositionLocalProvider(LocalMotionDurationScale provides AppMotionDurationScale) {
-                WatchLauncherTheme {
-                    val viewModel: LauncherViewModel = viewModel()
-                    vm = viewModel
-                    LauncherScreen(viewModel)
-                }
+            WatchLauncherTheme {
+                val viewModel: LauncherViewModel = viewModel()
+                vm = viewModel
+                LauncherScreen(viewModel)
             }
         }
     }
