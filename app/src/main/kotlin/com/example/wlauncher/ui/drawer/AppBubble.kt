@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 fun AppBubble(
     icon: ImageBitmap?,
     size: Dp = 54.dp,
+    tintColor: Color = Color.Transparent,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     forcePressed: Boolean = false,
@@ -86,6 +87,14 @@ fun AppBubble(
             ),
         contentAlignment = Alignment.Center
     ) {
+        if (tintColor.alpha > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+                    .background(tintColor)
+            )
+        }
         if (icon != null) {
             Image(
                 bitmap = icon,

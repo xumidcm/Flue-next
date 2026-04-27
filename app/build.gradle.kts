@@ -37,14 +37,14 @@ val hasReleaseSigning = listOf(
 
 android {
     namespace = "com.flue.launcher"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.flue.launcher"
         minSdk = 27
-        targetSdk = 35
-        versionCode = 12
-        versionName = "beta1.2"
+        targetSdk = 36
+        versionCode = 13
+        versionName = "beta1.3"
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
     }
 
@@ -74,12 +74,8 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
     buildFeatures {
@@ -103,6 +99,7 @@ dependencies {
     implementation(libs.compose.material.icons)
     implementation(libs.compose.animation)
     implementation(libs.compose.cloudy)
+    implementation(libs.graphics.shapes)
 
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.compose.ui.tooling.preview)

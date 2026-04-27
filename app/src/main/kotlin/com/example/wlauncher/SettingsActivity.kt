@@ -6,6 +6,8 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
@@ -96,6 +98,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.common.bottomFisheyeScale
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
@@ -103,11 +106,14 @@ import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.settings.WatchFaceSettingCard
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
+import com.flue.launcher.util.applyFadeCloseTransition
+import com.flue.launcher.util.applyFadeOpenTransition
 import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
+import com.flue.launcher.watchface.InternalWatchFaceStorage
 import com.flue.launcher.watchface.LunchWatchFaceRuntime
 import java.text.SimpleDateFormat
 import kotlinx.coroutines.delay
@@ -117,7 +123,7 @@ import java.io.File
 import java.util.Date
 import java.util.Locale
 
-private const val ABOUT_VERSION = "beta1.2"
+private const val ABOUT_VERSION = "beta1.3"
 private const val COMMUNITY_GROUP_NUMBER = "1097162313"
 private const val COMMUNITY_GROUP_URL = "https://qun.qq.com/universal-share/share?ac=1&authKey=5CJC0tNLWsy3YWzGlPbqt%2F5kv%2BYZuJ8y8IVj%2B1UnIeLyR2DWR6QjWtM%2B4HXxH%2BKJ&busi_data=eyJncm91cENvZGUiOiIxMDk3MTYyMzEzIiwidG9rZW4iOiJlMGFBc1VpRXRROE1mS3J5SHgxRjFudmxXY0FuSnRQd2hOWWl6WllFMmlxNTErNWdadXJ5U1ozMmdzUSszaGNYIiwidWluIjoiMzUxMzkwMzA1NSJ9&data=YK52b80xUVwmcLWmSneKQMdVZodE4vTpsqmSb60ykXudbVCfa6AskMHxvqjhAjervNeE4exll-kQw5w-EifYOg&svctype=4&tempid=h5_group_info"
 const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
@@ -163,7 +169,7 @@ class SettingsActivity : ComponentActivity() {
 
     override fun finish() {
         super.finish()
-        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+        applyFadeCloseTransition()
     }
 }
 
@@ -197,6 +203,10 @@ private fun SettingsRootScreen(
     val honeycombTopFade by vm.honeycombTopFade.collectAsState()
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsState()
     val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsState()
+    val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsState()
+    val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsState()
+    val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsState()
+    val showStepCount by vm.showStepCount.collectAsState()
     val builtInPhotoPath by vm.builtInPhotoPath.collectAsState()
     val builtInVideoPath by vm.builtInVideoPath.collectAsState()
     val builtInPhotoClockPosition by vm.builtInPhotoClockPosition.collectAsState()
@@ -207,12 +217,48 @@ private fun SettingsRootScreen(
     val builtInVideoClockBold by vm.builtInVideoClockBold.collectAsState()
     val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
     val builtInVideoClockColorMode by vm.builtInVideoClockColorMode.collectAsState()
+    val builtInWatchFaceFontPath by vm.builtInWatchFaceFontPath.collectAsState()
+    val builtInPhotoClockStyle by vm.builtInPhotoClockStyle.collectAsState()
+    val builtInVideoClockStyle by vm.builtInVideoClockStyle.collectAsState()
+    val builtInPhotoMd3eShape by vm.builtInPhotoMd3eShape.collectAsState()
+    val builtInVideoMd3eShape by vm.builtInVideoMd3eShape.collectAsState()
+    val builtInPhotoUseThemeTextColor by vm.builtInPhotoUseThemeTextColor.collectAsState()
+    val builtInVideoUseThemeTextColor by vm.builtInVideoUseThemeTextColor.collectAsState()
+    val builtInPhotoTextColorArgb by vm.builtInPhotoTextColorArgb.collectAsState()
+    val builtInVideoTextColorArgb by vm.builtInVideoTextColorArgb.collectAsState()
+    val builtInPhotoMd3eAutoColors by vm.builtInPhotoMd3eAutoColors.collectAsState()
+    val builtInVideoMd3eAutoColors by vm.builtInVideoMd3eAutoColors.collectAsState()
+    val builtInPhotoMd3eTextColorArgb by vm.builtInPhotoMd3eTextColorArgb.collectAsState()
+    val builtInVideoMd3eTextColorArgb by vm.builtInVideoMd3eTextColorArgb.collectAsState()
+    val builtInPhotoMd3eFaceColorArgb by vm.builtInPhotoMd3eFaceColorArgb.collectAsState()
+    val builtInVideoMd3eFaceColorArgb by vm.builtInVideoMd3eFaceColorArgb.collectAsState()
+    val builtInPhotoMd3eHourColorArgb by vm.builtInPhotoMd3eHourColorArgb.collectAsState()
+    val builtInVideoMd3eHourColorArgb by vm.builtInVideoMd3eHourColorArgb.collectAsState()
+    val builtInPhotoMd3eMinuteColorArgb by vm.builtInPhotoMd3eMinuteColorArgb.collectAsState()
+    val builtInVideoMd3eMinuteColorArgb by vm.builtInVideoMd3eMinuteColorArgb.collectAsState()
+    val builtInPhotoMd3eSecondColorArgb by vm.builtInPhotoMd3eSecondColorArgb.collectAsState()
+    val builtInVideoMd3eSecondColorArgb by vm.builtInVideoMd3eSecondColorArgb.collectAsState()
+    val builtInPhotoShowSeconds by vm.builtInPhotoShowSeconds.collectAsState()
+    val builtInVideoShowSeconds by vm.builtInVideoShowSeconds.collectAsState()
+    val builtInPhotoCustomText by vm.builtInPhotoCustomText.collectAsState()
+    val builtInVideoCustomText by vm.builtInVideoCustomText.collectAsState()
     val builtInManagerThumbnails by vm.builtInManagerThumbnails.collectAsState()
     val hideFromRecents by vm.hideFromRecents.collectAsState()
     val showNotification by vm.showNotification.collectAsState()
     val headerTime = rememberSettingsHeaderTime()
     val isZh = remember(context.resources.configuration) {
         context.resources.configuration.locales[0]?.language?.startsWith("zh") == true
+    }
+    val fontPicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+        if (uri != null) {
+            val savedPath = InternalWatchFaceStorage.copyFont(context, uri)
+            if (savedPath.isNullOrBlank()) {
+                Toast.makeText(context, "保存字体失败", Toast.LENGTH_SHORT).show()
+            } else {
+                vm.setBuiltInWatchFaceFontPath(savedPath)
+                Toast.makeText(context, "表盘字体已更新", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     var destination by remember(initialDestination) { mutableStateOf(initialDestination) }
@@ -372,7 +418,7 @@ private fun SettingsRootScreen(
                         onClick = {}
                     )
                 }
-                items(allApps, key = { "app_${it.componentKey}" }) { app ->
+                items(allApps.filterNot(AppInfo::isBuiltInSettingsEntry), key = { "app_${it.componentKey}" }) { app ->
                     SettingsSwitchRow(
                         title = app.label,
                         subtitle = app.packageName,
@@ -444,6 +490,36 @@ private fun SettingsRootScreen(
                     )
                 }
             }
+            item("watchface_font") {
+                ActionCard(
+                    title = "表盘字体",
+                    subtitle = builtInWatchFaceFontPath?.let { File(it).name } ?: "系统默认字体",
+                    scale = itemFisheye(listState, "watchface_font", screenCenterY, screenHeightPx),
+                    icon = { Icon(Icons.Filled.Settings, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                    onClick = {
+                        fontPicker.launch(
+                            arrayOf(
+                                "font/*",
+                                "application/x-font-ttf",
+                                "application/x-font-otf",
+                                "application/vnd.ms-opentype",
+                                "application/octet-stream"
+                            )
+                        )
+                    }
+                )
+            }
+            if (!builtInWatchFaceFontPath.isNullOrBlank()) {
+                item("watchface_font_clear") {
+                    ActionCard(
+                        title = "恢复默认字体",
+                        subtitle = "清除已保存的表盘字体",
+                        scale = itemFisheye(listState, "watchface_font_clear", screenCenterY, screenHeightPx),
+                        icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                        onClick = { vm.setBuiltInWatchFaceFontPath(null) }
+                    )
+                }
+            }
             items(watchFaces, key = { it.id }) { descriptor ->
                 WatchFaceSettingCard(
                     descriptor = descriptor,
@@ -453,14 +529,40 @@ private fun SettingsRootScreen(
                     photoOptions = BuiltInWatchFaceOptions(
                         clockPosition = builtInPhotoClockPosition,
                         clockSizeSp = builtInPhotoClockSize,
-                        boldClock = builtInPhotoClockBold
+                        boldClock = builtInPhotoClockBold,
+                        clockStyle = builtInPhotoClockStyle,
+                        showSeconds = builtInPhotoShowSeconds,
+                        customText = builtInPhotoCustomText,
+                        fontPath = builtInWatchFaceFontPath,
+                        md3eShape = builtInPhotoMd3eShape,
+                        useThemeTextColor = builtInPhotoUseThemeTextColor,
+                        textColorArgb = builtInPhotoTextColorArgb,
+                        md3eAutoColors = builtInPhotoMd3eAutoColors,
+                        md3eTextColorArgb = builtInPhotoMd3eTextColorArgb,
+                        md3eFaceColorArgb = builtInPhotoMd3eFaceColorArgb,
+                        md3eHourHandColorArgb = builtInPhotoMd3eHourColorArgb,
+                        md3eMinuteHandColorArgb = builtInPhotoMd3eMinuteColorArgb,
+                        md3eSecondHandColorArgb = builtInPhotoMd3eSecondColorArgb
                     ),
                     videoOptions = BuiltInWatchFaceOptions(
                         clockPosition = builtInVideoClockPosition,
                         clockSizeSp = builtInVideoClockSize,
                         boldClock = builtInVideoClockBold,
                         cropToFill = builtInVideoFillScreen,
-                        clockColorMode = builtInVideoClockColorMode
+                        clockColorMode = builtInVideoClockColorMode,
+                        clockStyle = builtInVideoClockStyle,
+                        showSeconds = builtInVideoShowSeconds,
+                        customText = builtInVideoCustomText,
+                        fontPath = builtInWatchFaceFontPath,
+                        md3eShape = builtInVideoMd3eShape,
+                        useThemeTextColor = builtInVideoUseThemeTextColor,
+                        textColorArgb = builtInVideoTextColorArgb,
+                        md3eAutoColors = builtInVideoMd3eAutoColors,
+                        md3eTextColorArgb = builtInVideoMd3eTextColorArgb,
+                        md3eFaceColorArgb = builtInVideoMd3eFaceColorArgb,
+                        md3eHourHandColorArgb = builtInVideoMd3eHourColorArgb,
+                        md3eMinuteHandColorArgb = builtInVideoMd3eMinuteColorArgb,
+                        md3eSecondHandColorArgb = builtInVideoMd3eSecondColorArgb
                     ),
                     onSelect = { vm.selectWatchFace(descriptor.id) },
                     onOpenSettings = if (descriptor.supportsSettings) {
@@ -470,11 +572,11 @@ private fun SettingsRootScreen(
                                     Intent(context, InternalWatchFaceConfigActivity::class.java)
                                         .putExtra(EXTRA_INTERNAL_WATCHFACE_ID, descriptor.id)
                                 )
-                                (context as? Activity)?.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+                                (context as? Activity)?.applyFadeOpenTransition()
                             } else if (!LunchWatchFaceRuntime.openSettings(context, descriptor)) {
                                 Toast.makeText(context, "没有可用的表盘设置", Toast.LENGTH_SHORT).show()
                             } else {
-                                (context as? Activity)?.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+                                (context as? Activity)?.applyFadeOpenTransition()
                             }
                         }
                     } else {
@@ -563,6 +665,15 @@ private fun SettingsRootScreen(
                     checked = edgeBlurEnabled,
                     onToggle = vm::setEdgeBlurEnabled,
                     scale = itemFisheye(listState, "edge_blur_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            if (destination == SettingsDestination.PERFORMANCE) item("app_list_fisheye") {
+                SettingsSwitchRow(
+                    title = if (isZh) "鱼眼模式" else "Fisheye Mode",
+                    subtitle = if (isZh) "开启后远离屏幕中心的图标会缩小并降低透明度" else "Scale and fade icons farther from the screen center",
+                    checked = appListFisheyeEnabled,
+                    onToggle = vm::setAppListFisheyeEnabled,
+                    scale = itemFisheye(listState, "app_list_fisheye", screenCenterY, screenHeightPx)
                 )
             }
             item("honeycomb_cols") {
@@ -671,6 +782,42 @@ private fun SettingsRootScreen(
                     checked = honeycombFastScrollOptimization,
                     onToggle = { vm.setHoneycombFastScrollOptimization(it) },
                     scale = itemFisheye(listState, "honeycomb_fast_scroll_opt", screenCenterY, screenHeightPx)
+                )
+            }
+            item("app_list_fisheye") {
+                SettingsSwitchRow(
+                    title = if (isZh) "鱼眼模式" else "Fisheye Mode",
+                    subtitle = if (isZh) "开启后远离屏幕中心的图标会缩小并降低透明度" else "Scale and fade icons farther from the screen center",
+                    checked = appListFisheyeEnabled,
+                    onToggle = vm::setAppListFisheyeEnabled,
+                    scale = itemFisheye(listState, "app_list_fisheye", screenCenterY, screenHeightPx)
+                )
+            }
+            item("fast_flow_animation") {
+                SettingsSwitchRow(
+                    title = if (isZh) "快速流逝动画" else "Fast Flow Animation",
+                    subtitle = if (isZh) "开启后越远离屏幕中心，滚动速度越快" else "Icons farther from center move faster while scrolling",
+                    checked = fastFlowAnimationEnabled,
+                    onToggle = vm::setFastFlowAnimationEnabled,
+                    scale = itemFisheye(listState, "fast_flow_animation", screenCenterY, screenHeightPx)
+                )
+            }
+            item("two_tone_icons") {
+                SettingsSwitchRow(
+                    title = if (isZh) "双色图标" else "Two-Tone Icons",
+                    subtitle = if (isZh) "AdaptiveIcon 使用单色层，其他图标转灰度后填色" else "Use adaptive monochrome when available, otherwise grayscale + tint",
+                    checked = twoToneIconsEnabled,
+                    onToggle = vm::setTwoToneIconsEnabled,
+                    scale = itemFisheye(listState, "two_tone_icons", screenCenterY, screenHeightPx)
+                )
+            }
+            item("show_step_count") {
+                SettingsSwitchRow(
+                    title = if (isZh) "显示步数" else "Show Step Count",
+                    subtitle = if (isZh) "在侧屏底部电池右侧显示步数" else "Show steps to the right of battery on side screen",
+                    checked = showStepCount,
+                    onToggle = vm::setShowStepCountEnabled,
+                    scale = itemFisheye(listState, "show_step_count", screenCenterY, screenHeightPx)
                 )
             }
             item("anim_override") {
@@ -811,7 +958,7 @@ private fun SettingsPageScaffold(
     val nestedScrollConnection = remember(listState) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: NestedScrollSource): androidx.compose.ui.geometry.Offset {
-                if (source != NestedScrollSource.Drag) return androidx.compose.ui.geometry.Offset.Zero
+                if (source != NestedScrollSource.UserInput) return androidx.compose.ui.geometry.Offset.Zero
                 val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
                 val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()
                 val atBottom = lastVisible != null &&
@@ -1428,7 +1575,7 @@ private fun DonateMethodCard(
 private fun DonatePreviewDialog(resId: Int, onDismiss: () -> Unit) {
     var scale by remember { mutableStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
-    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+    val transformState = rememberTransformableState { _, zoomChange, panChange, _ ->
         val newScale = (scale * zoomChange).coerceIn(1f, 4f)
         scale = newScale
         offset = if (newScale <= 1.02f) {

@@ -144,9 +144,6 @@ fun AppShortcutOverlay(
                             Intent(Intent.ACTION_DELETE, packageUri).apply {
                                 putExtra(Intent.EXTRA_RETURN_RESULT, false)
                                 putExtra(Intent.EXTRA_USER, Process.myUserHandle())
-                            },
-                            Intent(Intent.ACTION_UNINSTALL_PACKAGE, packageUri).apply {
-                                putExtra(Intent.EXTRA_RETURN_RESULT, false)
                             }
                         )
                         val fallbackIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {

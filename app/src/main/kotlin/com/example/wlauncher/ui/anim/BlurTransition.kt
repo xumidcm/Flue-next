@@ -6,19 +6,17 @@ import androidx.compose.animation.core.tween
 import com.flue.launcher.ui.navigation.ScreenState
 
 /**
- * 每个层在某个状态下的 scale / blur / opacity 目标值。
- * 完整复刻 HTML 原型中的 CSS transition 参数。
+ * 每一层在不同状态下的 scale / blur / opacity 目标值。
  */
 data class LayerAnimValues(
     val scale: Float = 1f,
     val blur: Float = 0f,    // dp
     val alpha: Float = 1f,
-    val translationY: Float = 0f  // 占屏幕高度比例 (-1f = 向上移出, 1f = 向下移出)
+    val translationY: Float = 0f  // 屏幕高度比例（-1f = 向上移出, 1f = 向下移出）
 )
 
 /**
- * 获取"表盘层"在各状态下的动画目标值。
- * 对应 HTML: #faces-layer 在不同 state- class 下的 CSS。
+ * 表盘层状态映射。
  */
 fun faceLayerValues(state: ScreenState): LayerAnimValues = when (state) {
     ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
@@ -30,8 +28,7 @@ fun faceLayerValues(state: ScreenState): LayerAnimValues = when (state) {
 }
 
 /**
- * 获取"应用列表层"在各状态下的动画目标值。
- * 对应 HTML: #app-list 在不同 state- class 下的 CSS。
+ * 应用列表层状态映射。
  */
 fun appListLayerValues(state: ScreenState): LayerAnimValues = when (state) {
     ScreenState.Face -> LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f)
@@ -42,8 +39,7 @@ fun appListLayerValues(state: ScreenState): LayerAnimValues = when (state) {
 }
 
 /**
- * 获取"应用视图层"在各状态下的动画目标值。
- * 对应 HTML: #app-view 在不同 state- class 下的 CSS。
+ * 应用视图层状态映射。
  */
 fun appViewLayerValues(state: ScreenState): LayerAnimValues = when (state) {
     ScreenState.App -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
@@ -52,7 +48,7 @@ fun appViewLayerValues(state: ScreenState): LayerAnimValues = when (state) {
 }
 
 /**
- * 获取"智能叠放层"在各状态下的动画目标值。
+ * 侧屏层状态映射。
  */
 fun stackLayerValues(state: ScreenState): LayerAnimValues = when (state) {
     ScreenState.Stack -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f, translationY = 0f)
@@ -61,7 +57,7 @@ fun stackLayerValues(state: ScreenState): LayerAnimValues = when (state) {
 }
 
 /**
- * 获取"通知层"在各状态下的动画目标值。
+ * 通知层状态映射。
  */
 fun notificationLayerValues(state: ScreenState): LayerAnimValues = when (state) {
     ScreenState.Notifications -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f, translationY = 0f)
@@ -69,14 +65,14 @@ fun notificationLayerValues(state: ScreenState): LayerAnimValues = when (state) 
 }
 
 /**
- * 获取"控制中心层"在各状态下的动画目标值。
+ * 控制中心层状态映射。
  */
 fun controlCenterLayerValues(state: ScreenState): LayerAnimValues = when (state) {
     ScreenState.ControlCenter -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f, translationY = 0f)
     else -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 0f, translationY = 1f)
 }
 
-// 带轻微回弹的 spring，模拟 HTML 的 cubic-bezier(0.32, 1.2, 0.4, 1)
+// 轻微回弹效果，接近 cubic-bezier(0.32, 1.2, 0.4, 1) 的观感
 val TransitionSpring = spring<Float>(
     dampingRatio = 0.75f,
     stiffness = Spring.StiffnessMediumLow

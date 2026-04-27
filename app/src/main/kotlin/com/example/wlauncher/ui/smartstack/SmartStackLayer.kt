@@ -1,10 +1,19 @@
 ﻿package com.flue.launcher.ui.smartstack
 
+import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.os.Build
 import android.os.BatteryManager
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -35,6 +44,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.Icon
@@ -68,6 +78,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.rememberPressedState
@@ -80,6 +91,7 @@ import com.flue.launcher.ui.notification.SwipeRevealDeleteContainer
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -102,6 +114,7 @@ private sealed interface SideScreenModalState {
 
 private data class SideScreenClockSnapshot(val time: String, val date: String)
 private data class BatterySnapshot(val level: Int = 0, val charging: Boolean = false)
+private data class StepSnapshot(val steps: Int? = null)
 private data class ShortcutPickerItem(
     val componentKey: String,
     val label: String,
@@ -134,12 +147,15 @@ fun SmartStackLayer(
     onDismissGroup: (String) -> Unit,
     onDismissNotification: (String) -> Unit,
     onDismissToFace: () -> Unit,
+    showSteps: Boolean,
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
     val clock = rememberClockSnapshot()
     val battery = rememberBatterySnapshot()
+    val stepPermissionGranted = rememberActivityRecognitionPermission(showSteps)
+    val stepSnapshot = rememberStepSnapshot(showSteps, stepPermissionGranted)
     val slotCenters = remember { mutableStateMapOf<Int, Offset>() }
     val visibleShortcutCount = if (notificationsEnabled) 6 else 9
     val notificationDragRangePx = remember(configuration.screenHeightDp, density) {
@@ -349,9 +365,11 @@ fun SmartStackLayer(
                 }
             }
         }
-        WatchBatteryPill(
+        WatchBatteryAndStepsPill(
             level = battery.level,
             charging = battery.charging,
+            steps = stepSnapshot.steps,
+            showSteps = showSteps,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 14.dp)
@@ -649,6 +667,117 @@ private fun ShortcutPickerRow(
         onDispose { runCatching { context.unregisterReceiver(receiver) } }
     }
     return BatterySnapshot(level = level, charging = charging)
+}
+
+@Composable
+private fun WatchBatteryAndStepsPill(
+    level: Int,
+    charging: Boolean,
+    steps: Int?,
+    showSteps: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val formattedSteps = remember(steps) {
+        steps?.let {
+            NumberFormat.getIntegerInstance(Locale.getDefault()).format(it)
+        } ?: "--"
+    }
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        WatchBatteryPill(
+            level = level,
+            charging = charging,
+            sizeScale = 1.3f
+        )
+        if (showSteps) {
+            Spacer(Modifier.width(24.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.DirectionsWalk,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.92f),
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    text = formattedSteps,
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun rememberActivityRecognitionPermission(showSteps: Boolean): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
+    val context = LocalContext.current
+    var granted by remember(context) {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { allowed ->
+        granted = allowed
+    }
+    LaunchedEffect(showSteps, context) {
+        val latest = ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
+            PackageManager.PERMISSION_GRANTED
+        granted = latest
+        if (showSteps && !latest) {
+            launcher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+        }
+    }
+    return granted
+}
+
+@Composable
+private fun rememberStepSnapshot(
+    showSteps: Boolean,
+    permissionGranted: Boolean
+): StepSnapshot {
+    val context = LocalContext.current
+    var steps by remember(showSteps, permissionGranted) { mutableStateOf<Int?>(null) }
+    DisposableEffect(context, showSteps, permissionGranted) {
+        if (!showSteps || !permissionGranted) {
+            steps = null
+            return@DisposableEffect onDispose { }
+        }
+        val sensorManager = context.getSystemService(SensorManager::class.java)
+        val stepCounter = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+        if (sensorManager == null || stepCounter == null) {
+            steps = null
+            return@DisposableEffect onDispose { }
+        }
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent?) {
+                val value = event?.values?.firstOrNull() ?: return
+                steps = value.toInt().coerceAtLeast(0)
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        }
+        val registered = runCatching {
+            sensorManager.registerListener(listener, stepCounter, SensorManager.SENSOR_DELAY_NORMAL)
+        }.getOrDefault(false)
+        if (!registered) {
+            steps = null
+        }
+        onDispose {
+            runCatching { sensorManager.unregisterListener(listener) }
+        }
+    }
+    return StepSnapshot(steps = steps)
 }
 
 

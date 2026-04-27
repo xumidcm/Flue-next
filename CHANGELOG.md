@@ -2,11 +2,12 @@
 
 本文档记录当前 PR `#19: Splice old side screen into main` 相对 `main` 分支的主要更新内容。
 
-更新时间：2026-04-18
+更新时间：2026-04-27
 
 ## 当前版本
 
-- 版本名：`beta1.2`
+- 版本名：`beta1.3`
+- 版本号：`13`
 - 当前 PR：`#19`
 - 当前分支：`codex/splice-old-side-screen`
 
@@ -98,7 +99,69 @@
 
 ## 本次最新补充修复
 
-以下内容是当前 PR 最近两次提交补进去的行为修正：
+以下内容是 `beta1.3 (13)` 相对上一版补进去的行为修正与功能增强：
+
+### 表盘与主题色增强
+
+- 保留原 AnalogClock 并重命名为“拟真时钟”
+- 新增 MD3E 时钟样式，支持官方 Material Shapes 表盘形状选择
+- 新增表盘文字颜色设置：可使用表盘主题色，也可通过 R/G/B 滑块手动混色
+- 拟真时钟会将手动颜色应用到整个钟表
+- MD3E 时钟支持自动从表盘取色，或分别设置文字、表盘、时针、分针、秒针颜色
+- 视频表盘自动取色会从第一帧采样
+- 应用列表背景与应用项接入表盘主色调，并根据系统深色/浅色模式生成同色调深/浅背景
+
+相关文件：
+
+- [`WatchFaceLayer.kt`](app/src/main/kotlin/com/example/wlauncher/ui/home/WatchFaceLayer.kt)
+- [`InternalWatchFaceConfigActivity.kt`](app/src/main/kotlin/com/example/wlauncher/InternalWatchFaceConfigActivity.kt)
+- [`LauncherActivity.kt`](app/src/main/kotlin/com/example/wlauncher/LauncherActivity.kt)
+- [`AppListTheme.kt`](app/src/main/kotlin/com/example/wlauncher/ui/drawer/AppListTheme.kt)
+- [`HoneycombScreen.kt`](app/src/main/kotlin/com/example/wlauncher/ui/drawer/HoneycombScreen.kt)
+- [`ListDrawerScreen.kt`](app/src/main/kotlin/com/example/wlauncher/ui/drawer/ListDrawerScreen.kt)
+
+### 应用列表与图标增强
+
+- 新增鱼眼模式、快速流逝动画、双色图标相关选项
+- 快速流逝动画改为只按屏幕 Y 位置计算，并优化中间慢区逻辑以降低抖动
+- 列表布局补齐快速流逝动画与无回弹 overscroll
+- 双色图标对非 AdaptiveIcon 路径进行灰度后二值化，并保持黑底白前景倾向
+- 应用栏恢复可排序的内置设置入口，且不依赖系统扫描出的 SettingsActivity
+
+相关文件：
+
+- [`AppRepository.kt`](app/src/main/kotlin/com/example/wlauncher/data/repository/AppRepository.kt)
+- [`LauncherViewModel.kt`](app/src/main/kotlin/com/example/wlauncher/viewmodel/LauncherViewModel.kt)
+- [`HoneycombScreen.kt`](app/src/main/kotlin/com/example/wlauncher/ui/drawer/HoneycombScreen.kt)
+- [`ListDrawerScreen.kt`](app/src/main/kotlin/com/example/wlauncher/ui/drawer/ListDrawerScreen.kt)
+
+### 副一屏电池与步数
+
+- 副一屏底部电池胶囊放大
+- 新增传感器计步显示与“显示步数”开关
+- 步数增加图标，电池与步数组合整体保持居中
+- 权限拒绝或传感器不可用时使用受控占位，不影响界面稳定
+
+相关文件：
+
+- [`SmartStackLayer.kt`](app/src/main/kotlin/com/example/wlauncher/ui/smartstack/SmartStackLayer.kt)
+- [`LauncherViewModel.kt`](app/src/main/kotlin/com/example/wlauncher/viewmodel/LauncherViewModel.kt)
+- [`AndroidManifest.xml`](app/src/main/AndroidManifest.xml)
+
+### Warning 与 Deprecation 清理
+
+- 清理 Kotlin 编译 warning 和多处 Android/Compose deprecation
+- 修复通知层时间格式空安全问题
+- 更新步数图标为 AutoMirrored Material 图标，消除 deprecation warning
+
+相关文件：
+
+- [`NotificationLayer.kt`](app/src/main/kotlin/com/example/wlauncher/ui/notification/NotificationLayer.kt)
+- [`WLauncherNotificationListener.kt`](app/src/main/kotlin/com/example/wlauncher/service/WLauncherNotificationListener.kt)
+- [`SettingsActivity.kt`](app/src/main/kotlin/com/example/wlauncher/SettingsActivity.kt)
+- [`SmartStackLayer.kt`](app/src/main/kotlin/com/example/wlauncher/ui/smartstack/SmartStackLayer.kt)
+
+以下内容是此前补进去的行为修正：
 
 ### 电池胶囊统一
 

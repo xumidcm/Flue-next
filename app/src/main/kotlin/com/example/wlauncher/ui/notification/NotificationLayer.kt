@@ -244,7 +244,7 @@ fun NotificationLayer(
         object : NestedScrollConnection {
             override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: NestedScrollSource): androidx.compose.ui.geometry.Offset {
                 if (dismissTransitionInFlight) return androidx.compose.ui.geometry.Offset.Zero
-                if (source != NestedScrollSource.Drag) return androidx.compose.ui.geometry.Offset.Zero
+                if (source != NestedScrollSource.UserInput) return androidx.compose.ui.geometry.Offset.Zero
                 val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
                 val layoutInfo = listState.layoutInfo
                 val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
@@ -364,12 +364,7 @@ fun NotificationLayer(
                     ) { group ->
                         NotificationRowContainer {
                             NotificationGroupSection(
-                                modifier = Modifier.animateItemPlacement(
-                                    animationSpec = spring(
-                                        stiffness = 520f,
-                                        dampingRatio = 0.86f
-                                    )
-                                ),
+                                modifier = Modifier,
                                 width = contentWidth,
                                 group = group,
                                 revealedTarget = revealedNotificationTarget,
@@ -707,4 +702,9 @@ private fun rememberBatteryStatus(): BatteryStatus {
 }
 
 
-private fun formatNotificationTime(timestamp: Long): String = NOTIFICATION_TIME_FORMAT.get().format(Date(timestamp))
+private fun formatNotificationTime(timestamp: Long): String {
+    val formatter = NOTIFICATION_TIME_FORMAT.get() ?: SimpleDateFormat("HH:mm", Locale.getDefault()).also {
+        NOTIFICATION_TIME_FORMAT.set(it)
+    }
+    return formatter.format(Date(timestamp))
+}

@@ -26,7 +26,7 @@ object IconPackScanner {
                 runCatching {
                     IconPackDescriptor(
                         packageName = resolveInfo.activityInfo.packageName,
-                        label = resolveInfo.loadLabel(pm)?.toString().orEmpty()
+                        label = resolveInfo.loadLabel(pm).toString()
                             .ifBlank { resolveInfo.activityInfo.packageName }
                     )
                 }.getOrNull()
@@ -42,7 +42,7 @@ object IconPackScanner {
             )
             val descriptor = IconPackDescriptor(
                 packageName = packageName,
-                label = packContext.applicationInfo.loadLabel(context.packageManager)?.toString().orEmpty()
+                label = packContext.applicationInfo.loadLabel(context.packageManager).toString()
                     .ifBlank { packageName }
             )
             val entries = parseAppFilter(packContext)

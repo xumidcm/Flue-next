@@ -7,6 +7,7 @@ import android.graphics.Canvas
 import android.graphics.ImageDecoder
 import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.webkit.MimeTypeMap
@@ -18,6 +19,7 @@ import kotlin.math.roundToInt
 object InternalWatchFaceStorage {
     private const val PHOTO_DIR = "photo"
     private const val VIDEO_DIR = "video"
+    private const val FONT_DIR = "font"
 
     fun copyPhoto(context: Context, uri: Uri): String? = runCatching {
         val root = File(context.filesDir, "internal_watchfaces/$PHOTO_DIR").apply { mkdirs() }
@@ -39,9 +41,29 @@ object InternalWatchFaceStorage {
 
     fun copyVideo(context: Context, uri: Uri): String? = copyMedia(context, uri, VIDEO_DIR, "video")
 
+    fun copyFont(context: Context, uri: Uri): String? = runCatching {
+        val root = File(context.filesDir, "internal_watchfaces/$FONT_DIR").apply { mkdirs() }
+        root.listFiles()?.forEach { existing ->
+            if (existing.isFile) existing.delete()
+        }
+
+        val extension = resolveExtension(context, uri, "ttf")
+            .lowercase()
+            .let { if (it in setOf("ttf", "otf", "ttc")) it else "ttf" }
+        val target = File(root, "current_${System.currentTimeMillis()}.$extension")
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            target.outputStream().use { output -> input.copyTo(output) }
+        } ?: return null
+
+        Typeface.createFromFile(target)
+        target.absolutePath
+    }.getOrNull()
+
     fun clearPhoto(context: Context) = clearMedia(context, PHOTO_DIR)
 
     fun clearVideo(context: Context) = clearMedia(context, VIDEO_DIR)
+
+    fun clearFont(context: Context) = clearMedia(context, FONT_DIR)
 
     private fun copyMedia(
         context: Context,

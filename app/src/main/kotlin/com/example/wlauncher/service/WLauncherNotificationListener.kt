@@ -9,6 +9,7 @@ import android.graphics.Bitmap
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
+import android.os.Parcelable
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
@@ -40,6 +41,7 @@ class WLauncherNotificationListener : NotificationListenerService() {
     companion object {
         private const val TAG = "WLauncherNotif"
         private const val NOTIFICATION_ICON_SIZE_PX = 96
+        private const val EXTRA_LARGE_ICON_LEGACY_KEY = "android.largeIcon"
         private val IM_AVATAR_PACKAGES = setOf(
             "com.tencent.mobileqq",
             "com.tencent.qqlite",
@@ -198,8 +200,8 @@ class WLauncherNotificationListener : NotificationListenerService() {
     }
 
     private fun readMessagingPersons(extras: Bundle): Sequence<Person> {
-        val live = extras.getParcelableArray(Notification.EXTRA_MESSAGES).orEmpty().asSequence()
-        val history = extras.getParcelableArray(Notification.EXTRA_HISTORIC_MESSAGES).orEmpty().asSequence()
+        val live = extras.getParcelableArrayCompat(Notification.EXTRA_MESSAGES).asSequence()
+        val history = extras.getParcelableArrayCompat(Notification.EXTRA_HISTORIC_MESSAGES).asSequence()
         return (live + history)
             .mapNotNull { parcelable ->
                 (parcelable as? Bundle)?.let(::extractSenderPerson)
@@ -224,16 +226,40 @@ class WLauncherNotificationListener : NotificationListenerService() {
         }
         val iconCandidates = listOfNotNull<Icon>(
             notificationLargeIcon,
-            extras.get(Notification.EXTRA_LARGE_ICON_BIG) as? Icon,
-            extras.get(Notification.EXTRA_LARGE_ICON) as? Icon
+            extras.getParcelableCompat(Notification.EXTRA_LARGE_ICON_BIG, Icon::class.java),
+            extras.getParcelableCompat(EXTRA_LARGE_ICON_LEGACY_KEY, Icon::class.java)
         )
         iconCandidates.firstNotNullOfOrNull { it.toImageBitmap() }?.let { return it }
 
         val bitmapCandidates = listOfNotNull(
-            extras.get(Notification.EXTRA_LARGE_ICON_BIG) as? Bitmap,
-            extras.get(Notification.EXTRA_LARGE_ICON) as? Bitmap
+            extras.getParcelableCompat(Notification.EXTRA_LARGE_ICON_BIG, Bitmap::class.java),
+            extras.getParcelableCompat(EXTRA_LARGE_ICON_LEGACY_KEY, Bitmap::class.java)
         )
         return bitmapCandidates.firstNotNullOfOrNull { it.scaleToNotificationIcon() }
+    }
+
+    private fun Bundle.getParcelableArrayCompat(key: String): Array<Parcelable> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelableArray(key, Parcelable::class.java)
+                ?.map { it as Parcelable }
+                ?.toTypedArray()
+                ?: emptyArray()
+        } else {
+            @Suppress("DEPRECATION")
+            getParcelableArray(key)
+                ?.map { it as Parcelable }
+                ?.toTypedArray()
+                ?: emptyArray()
+        }
+    }
+
+    private fun <T : Parcelable> Bundle.getParcelableCompat(key: String, clazz: Class<T>): T? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelable(key, clazz)
+        } else {
+            @Suppress("DEPRECATION")
+            getParcelable(key) as? T
+        }
     }
 
     private fun resolveApplicationIcon(packageName: String): ImageBitmap? {

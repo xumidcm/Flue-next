@@ -7,16 +7,27 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ResolveInfo
+import android.os.Build
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
 import android.graphics.Shader
+import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
+import com.flue.launcher.R
 import com.flue.launcher.data.model.AppInfo
+import com.flue.launcher.data.model.BUILTIN_SETTINGS_ENTRY_COMPONENT
+import com.flue.launcher.data.model.BUILTIN_SETTINGS_ENTRY_PACKAGE
 import com.flue.launcher.iconpack.IconPackMapping
 import com.flue.launcher.iconpack.IconPackScanner
 import kotlinx.coroutines.CoroutineScope
@@ -29,6 +40,18 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 class AppRepository(private val context: Context) {
+    private data class CachedIconSet(
+        val sharp: ImageBitmap,
+        val softened: ImageBitmap,
+        val twoToneSharp: ImageBitmap?,
+        val twoToneSoftened: ImageBitmap?
+    )
+
+    private companion object {
+        private const val TWO_TONE_BG = 0xFF1D1D1F.toInt()
+        private const val TWO_TONE_FG = 0xFFF5F5F7.toInt()
+        private const val BINARY_LUMINANCE_THRESHOLD = 0.8f
+    }
 
     private val _allApps = MutableStateFlow<List<AppInfo>>(emptyList())
     val allApps: StateFlow<List<AppInfo>> = _allApps.asStateFlow()
@@ -42,11 +65,12 @@ class AppRepository(private val context: Context) {
     private var currentIconSize = 128
     private var iconPackPackage: String? = null
     private var useLegacyCircularIcons = true
+    private var useTwoToneIcons = false
     private var refreshGeneration = 0
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val installTimeCache = mutableMapOf<String, Long>()
-    private val iconCache = object : LinkedHashMap<String, Pair<ImageBitmap, ImageBitmap>>(160, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<ImageBitmap, ImageBitmap>>?): Boolean {
+    private val iconCache = object : LinkedHashMap<String, CachedIconSet>(160, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedIconSet>?): Boolean {
             return size > 160
         }
     }
@@ -92,6 +116,13 @@ class AppRepository(private val context: Context) {
         refreshAsync(currentIconSize)
     }
 
+    fun setTwoToneIconsEnabled(enabled: Boolean) {
+        if (useTwoToneIcons == enabled) return
+        useTwoToneIcons = enabled
+        synchronized(iconCache) { iconCache.clear() }
+        refreshAsync(currentIconSize)
+    }
+
     private fun reorder() {
         _allApps.value = sortApps(_allApps.value)
         applyFilters()
@@ -109,6 +140,7 @@ class AppRepository(private val context: Context) {
         }
         val iconPackPackageSnapshot = iconPackPackage
         val useLegacyCircularIconsSnapshot = useLegacyCircularIcons
+        val useTwoToneIconsSnapshot = useTwoToneIcons
         val pm = context.packageManager
         val mainIntent = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
@@ -121,41 +153,60 @@ class AppRepository(private val context: Context) {
         val resolveList = resolveInfos
             .filter { ri ->
                 !(ri.activityInfo.packageName == myPackage &&
-                    ri.activityInfo.name == "com.flue.launcher.LauncherActivity")
+                    ri.activityInfo.name in setOf(
+                        "com.flue.launcher.LauncherActivity",
+                        "com.flue.launcher.SettingsActivity"
+                    ))
             }
             .distinctBy { "${it.activityInfo.packageName}/${it.activityInfo.name}" }
-        val loadedApps = ArrayList<AppInfo>(resolveList.size)
+        val loadedApps = ArrayList<AppInfo>(resolveList.size + 1)
 
         resolveList.forEach { ri ->
             val packageName = ri.activityInfo.packageName
             val componentKey = "$packageName/${ri.activityInfo.name}"
-            val iconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|$componentKey|$iconSize|${if (useLegacyCircularIconsSnapshot) "legacy" else "plain"}"
+            val iconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|$componentKey|$iconSize|${if (useLegacyCircularIconsSnapshot) "legacy" else "plain"}|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
             val cachedIcons = synchronized(iconCache) { iconCache[iconCacheKey] } ?: run {
                 val packedIcon = iconPackMapping?.let { IconPackScanner.loadIconDrawable(context, it, componentKey) }
                 val resolvedIconDrawable = packedIcon ?: ri.loadIcon(pm)
                 val baseBitmap = if (useLegacyCircularIconsSnapshot && packedIcon == null) {
                     createCircularBitmap(
                         drawableToBitmap(resolvedIconDrawable, iconSize),
-                        edgeInsetPx = iconSize * 0.015f
+                        edgeInsetPx = iconSize * 0.005f
                     )
                 } else {
                     resolvedIconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
                 }
                 val sharp = baseBitmap.asImageBitmap()
                 val softened = createSoftenedBitmap(baseBitmap).asImageBitmap()
-                synchronized(iconCache) {
-                    iconCache[iconCacheKey] = sharp to softened
+                val twoToneBitmap = if (useTwoToneIconsSnapshot) {
+                    createTwoToneBitmap(resolvedIconDrawable, iconSize)
+                } else {
+                    null
                 }
-                sharp to softened
+                val twoToneSharp = twoToneBitmap?.asImageBitmap()
+                val twoToneSoftened = twoToneBitmap?.let(::createSoftenedBitmap)?.asImageBitmap()
+                val iconSet = CachedIconSet(
+                    sharp = sharp,
+                    softened = softened,
+                    twoToneSharp = twoToneSharp,
+                    twoToneSoftened = twoToneSoftened
+                )
+                synchronized(iconCache) {
+                    iconCache[iconCacheKey] = iconSet
+                }
+                iconSet
             }
             loadedApps += AppInfo(
                 label = ri.loadLabel(pm).toString(),
                 packageName = packageName,
                 activityName = ri.activityInfo.name,
-                cachedIcon = cachedIcons.first,
-                cachedBlurredIcon = cachedIcons.second
+                cachedIcon = cachedIcons.sharp,
+                cachedBlurredIcon = cachedIcons.softened,
+                cachedTwoToneIcon = cachedIcons.twoToneSharp,
+                cachedTwoToneBlurredIcon = cachedIcons.twoToneSoftened
             )
         }
+        createBuiltInSettingsEntry(iconSize, useTwoToneIconsSnapshot)?.let(loadedApps::add)
 
         if (synchronized(this) { generation != refreshGeneration }) return
 
@@ -169,6 +220,20 @@ class AppRepository(private val context: Context) {
     }
 
     fun launchApp(appInfo: AppInfo): Boolean {
+        if (appInfo.isBuiltInSettingsEntry) {
+            val settingsIntent = Intent(context, com.flue.launcher.SettingsActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            return try {
+                context.startActivity(settingsIntent)
+                true
+            } catch (_: ActivityNotFoundException) {
+                false
+            } catch (_: SecurityException) {
+                false
+            }
+        }
+        if (appInfo.packageName == context.packageName) return false
         val intent = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
             component = ComponentName(appInfo.packageName, appInfo.activityName)
@@ -237,6 +302,71 @@ class AppRepository(private val context: Context) {
         return output
     }
 
+    private fun createTwoToneBitmap(drawable: Drawable, size: Int): Bitmap {
+        val adaptiveMono = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            (drawable as? AdaptiveIconDrawable)?.monochrome
+        } else {
+            null
+        }
+        if (adaptiveMono != null) {
+            return createAdaptiveMonochromeBitmap(adaptiveMono, size)
+        }
+        return createTintedGrayscaleBitmap(drawableToBitmap(drawable, size))
+    }
+
+    private fun createAdaptiveMonochromeBitmap(monochrome: Drawable, size: Int): Bitmap {
+        val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        canvas.drawColor(TWO_TONE_BG)
+        val monoDrawable = monochrome.constantState?.newDrawable()?.mutate() ?: monochrome.mutate()
+        monoDrawable.colorFilter = PorterDuffColorFilter(TWO_TONE_FG, PorterDuff.Mode.SRC_IN)
+        val inset = (size * 0.10f).toInt()
+        monoDrawable.setBounds(inset, inset, size - inset, size - inset)
+        monoDrawable.draw(canvas)
+        return output
+    }
+
+    private fun createTintedGrayscaleBitmap(source: Bitmap): Bitmap {
+        val grayscale = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+        val grayscaleCanvas = Canvas(grayscale)
+        val grayscalePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+            colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f) })
+        }
+        grayscaleCanvas.drawBitmap(source, 0f, 0f, grayscalePaint)
+
+        val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+
+        val pixels = IntArray(grayscale.width * grayscale.height)
+        grayscale.getPixels(pixels, 0, grayscale.width, 0, 0, grayscale.width, grayscale.height)
+        val threshold = (255 * BINARY_LUMINANCE_THRESHOLD).toInt()
+        var opaqueCount = 0
+        var whiteCount = 0
+        for (index in pixels.indices) {
+            val px = pixels[index]
+            val alpha = Color.alpha(px)
+            if (alpha == 0) continue
+            opaqueCount += 1
+            val luminance = ((Color.red(px) + Color.green(px) + Color.blue(px)) / 3f).toInt()
+            val color = if (luminance < threshold) Color.WHITE else Color.BLACK
+            if (color == Color.WHITE) {
+                whiteCount += 1
+            }
+            pixels[index] = Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
+        }
+        if (opaqueCount > 0 && whiteCount > opaqueCount / 2) {
+            for (index in pixels.indices) {
+                val px = pixels[index]
+                val alpha = Color.alpha(px)
+                if (alpha == 0) continue
+                val isWhite = Color.red(px) > 127
+                val inverted = if (isWhite) Color.BLACK else Color.WHITE
+                pixels[index] = Color.argb(alpha, Color.red(inverted), Color.green(inverted), Color.blue(inverted))
+            }
+        }
+        output.setPixels(pixels, 0, grayscale.width, 0, 0, grayscale.width, grayscale.height)
+        return output
+    }
+
     private fun orderRank(app: AppInfo): Int {
         if (customOrder.isEmpty()) return Int.MAX_VALUE
         return customOrderIndexMap[app.componentKey]
@@ -264,15 +394,48 @@ class AppRepository(private val context: Context) {
         return if (customOrder.isNotEmpty()) {
             apps.sortedWith(
                 compareBy<AppInfo> { orderRank(it) }
+                    .thenBy { if (it.isBuiltInSettingsEntry && it.componentKey !in customOrderIndexMap) 1 else 0 }
                     .thenBy { packageInstallTime(it.packageName) }
                     .thenBy { it.label.lowercase() }
             )
         } else {
             apps.sortedWith(
-                compareBy<AppInfo> { packageInstallTime(it.packageName) }
+                compareBy<AppInfo> { if (it.isBuiltInSettingsEntry) 1 else 0 }
+                    .thenBy { packageInstallTime(it.packageName) }
                     .thenBy { it.label.lowercase() }
             )
         }
+    }
+
+    private fun createBuiltInSettingsEntry(iconSize: Int, useTwoToneIconsSnapshot: Boolean): AppInfo? {
+        val iconDrawable = ContextCompat.getDrawable(context, R.mipmap.ic_settings_launcher) ?: return null
+        val iconCacheKey = "builtin_settings|$iconSize|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
+        val cachedIcons = synchronized(iconCache) { iconCache[iconCacheKey] } ?: run {
+            val baseBitmap = drawableToBitmap(iconDrawable, iconSize)
+            val sharp = baseBitmap.asImageBitmap()
+            val softened = createSoftenedBitmap(baseBitmap).asImageBitmap()
+            val twoToneBitmap = if (useTwoToneIconsSnapshot) createTwoToneBitmap(iconDrawable, iconSize) else null
+            val iconSet = CachedIconSet(
+                sharp = sharp,
+                softened = softened,
+                twoToneSharp = twoToneBitmap?.asImageBitmap(),
+                twoToneSoftened = twoToneBitmap?.let(::createSoftenedBitmap)?.asImageBitmap()
+            )
+            synchronized(iconCache) {
+                iconCache[iconCacheKey] = iconSet
+            }
+            iconSet
+        }
+        return AppInfo(
+            label = context.getString(R.string.settings_title),
+            packageName = BUILTIN_SETTINGS_ENTRY_PACKAGE,
+            activityName = BUILTIN_SETTINGS_ENTRY_COMPONENT.substringAfter('/'),
+            cachedIcon = cachedIcons.sharp,
+            cachedBlurredIcon = cachedIcons.softened,
+            cachedTwoToneIcon = cachedIcons.twoToneSharp,
+            cachedTwoToneBlurredIcon = cachedIcons.twoToneSoftened,
+            isBuiltInSettingsEntry = true
+        )
     }
 
     private fun applyFilters() {

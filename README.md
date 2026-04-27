@@ -2,7 +2,7 @@
 
 Flue 是一个面向 Android 手表的自定义桌面启动器，目标是提供更接近 watchOS 风格的主屏体验，同时保留 Android 生态下的应用启动、通知查看、表盘切换与快捷入口能力。
 
-当前版本仍处于 `beta1.2 / demo` 阶段，但主流程已经可用，分支内也在持续补齐交互细节、通知体验和表盘能力。
+当前版本为 `beta1.3 (13)`，仍处于 beta 阶段，但主流程已经可用，分支内也在持续补齐交互细节、通知体验和表盘能力。
 
 ## 项目定位
 
@@ -22,19 +22,24 @@ Flue 不是传统意义上的“表盘应用”，而是一个会替代系统桌
 - 支持内置表盘
 - 支持图片表盘与视频表盘
 - 支持已安装表盘扫描与切换
-- 支持时钟位置、字号、粗细、颜色模式等配置
+- 支持数字、拟真时钟与 MD3E 时钟样式
+- 支持时钟位置、字号、粗细、秒显、字体、颜色与 MD3E 表盘形状配置
+- 支持从图片表盘和视频首帧自动取色，也支持 RGB 滑块手动配色
 
 ### 应用抽屉
 
 - 支持蜂窝布局与列表布局
 - 支持最近打开动画与回桌面过渡
 - 支持图标包与图标质量切换
+- 支持鱼眼模式、快速流逝动画与双色图标
+- 支持跟随表盘主色调的应用列表背景与应用项配色
 
 ### 副一屏 / Smart Stack
 
 - 支持快捷应用槽位
 - 支持通知预览聚合
 - 支持从副一屏上滑进入通知中心
+- 支持底部电池与步数组合显示
 
 ### 通知中心
 
@@ -71,11 +76,11 @@ Flue 不是传统意义上的“表盘应用”，而是一个会替代系统桌
 ## 运行要求
 
 - `minSdk = 27`
-- `targetSdk = 35`
-- `compileSdk = 35`
-- JDK 17
-- Android Gradle Plugin `8.7.3`
-- Kotlin `2.1.0`
+- `targetSdk = 36`
+- `compileSdk = 36`
+- JDK 21
+- Android Gradle Plugin `8.13.2`
+- Kotlin `2.3.21`
 
 核心配置可参考：
 
@@ -120,9 +125,17 @@ app/
 ### 方式一：Android Studio 本地调试
 
 1. 用 Android Studio 打开仓库根目录
-2. 使用 JDK 17
+2. 使用 JDK 21
 3. 等待 Gradle Sync 完成
 4. 选择设备后运行 `app`
+
+命令行调试可使用：
+
+```powershell
+$env:JAVA_HOME="D:\Java"
+$env:Path="$env:JAVA_HOME\bin;$env:Path"
+.\gradlew.bat installDebug
+```
 
 如需签名 Release，可在根目录提供 `keystore.properties`，或通过环境变量 / Gradle 属性传入：
 
@@ -145,17 +158,32 @@ Workflow file: [`.github/workflows/build.yml`](.github/workflows/build.yml)
 
 - `Flue-release` APK artifact
 
+本地生成 Release APK：
+
+```powershell
+$env:JAVA_HOME="D:\Java"
+$env:Path="$env:JAVA_HOME\bin;$env:Path"
+.\gradlew.bat assembleRelease --no-daemon --console=plain
+```
+
+默认输出路径：
+
+- [`app/build/outputs/apk/release/app-release.apk`](app/build/outputs/apk/release/app-release.apk)
+
 ## 配置项概览
 
 根据当前设置页，Flue 已支持以下主要配置：
 
 - 表盘切换与刷新
 - 图片 / 视频表盘资源管理
-- 表盘文字位置、大小、粗细与颜色
+- 表盘文字位置、大小、粗细、字体、秒显与颜色
+- MD3E 表盘形状与多部件颜色配置
 - 首页布局模式切换
 - 副一屏开关
-- 模糊、边缘模糊、低清图标与动画覆盖
+- 模糊、边缘模糊、低清图标、鱼眼、双色图标与动画覆盖
 - 蜂窝布局列数、顶部 / 底部模糊与渐隐
+- 快速流逝动画
+- 副一屏步数显示
 - 隐藏应用
 - ADW 图标包扫描与切换
 - 通知显示开关
@@ -165,12 +193,12 @@ Workflow file: [`.github/workflows/build.yml`](.github/workflows/build.yml)
 
 项目正处于快速迭代阶段，最近的改动重点集中在：
 
-- 将旧版副一屏整合回主分支
-- 重做通知中心与预览交互
-- 完善通知监听与删除行为
-- 优化图片表盘缓存与裁剪
-- 统一底部电池胶囊组件
-- 修复下拉 / 回弹 / 返回等细节手势
+- 表盘颜色系统、MD3E 时钟与应用列表主色调联动
+- 蜂窝 / 列表应用抽屉的鱼眼、快速流逝动画与双色图标
+- 副一屏电池与步数组合显示
+- 应用栏内置设置入口与自启动隔离
+- Kotlin warning / deprecation 清理
+- 通知、下拉、回弹与返回等细节手势持续修正
 
 详细更新见：
 

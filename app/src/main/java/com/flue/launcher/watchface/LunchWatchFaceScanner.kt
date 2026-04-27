@@ -50,7 +50,7 @@ object LunchWatchFaceScanner {
         return resolveInfos.mapNotNull { info ->
             runCatching {
                 val packageName = info.activityInfo.packageName
-                val displayLabel = runCatching { info.loadLabel(pm)?.toString() }
+                val displayLabel = runCatching { info.loadLabel(pm).toString() }
                     .getOrNull()
                     .orEmpty()
                 val packageContext = context.createPackageContext(packageName, Context.CONTEXT_IGNORE_SECURITY)

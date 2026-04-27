@@ -1,18 +1,16 @@
 package com.flue.launcher.util
 
 import androidx.compose.ui.geometry.Offset
-import kotlin.math.abs
-import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
- * 六边形网格轴坐标。
- * q = 列, r = 行 (axial coordinate system)
+ * 六边形轴坐标。
+ * q = 列，r = 行（axial coordinate system）
  */
 data class HexCoord(val q: Int, val r: Int)
 
 /**
- * 生成从中心向外的螺旋排列六边形坐标。
+ * 生成从中心向外的螺旋六边形坐标。
  * @param count 需要的坐标数量
  * @return 按螺旋顺序排列的坐标列表
  */
@@ -21,7 +19,7 @@ fun generateHexSpiral(count: Int): List<HexCoord> {
     val result = mutableListOf(HexCoord(0, 0))
     if (count == 1) return result
 
-    // 六方向: E, NE, NW, W, SW, SE
+    // 六个方向: E, NE, NW, W, SW, SE
     val directions = listOf(
         HexCoord(1, 0), HexCoord(0, -1), HexCoord(-1, -1),
         HexCoord(-1, 0), HexCoord(0, 1), HexCoord(1, 1)
@@ -45,10 +43,10 @@ fun generateHexSpiral(count: Int): List<HexCoord> {
 }
 
 /**
- * 轴坐标 → 像素坐标 (pointy-top hex)
+ * 轴坐标 -> 像素坐标（pointy-top hex）
  * @param hex 六边形坐标
- * @param size 六边形边长(像素)
- * @return 相对于中心(0,0)的像素偏移
+ * @param size 六边形边长（像素）
+ * @return 相对中心点(0,0)的像素偏移
  */
 fun hexToPixel(hex: HexCoord, size: Float): Offset {
     val x = size * (sqrt(3f) * hex.q + sqrt(3f) / 2f * hex.r)
@@ -58,10 +56,10 @@ fun hexToPixel(hex: HexCoord, size: Float): Offset {
 
 /**
  * 鱼眼缩放：离中心越近的图标越大。
- * @param distance 图标中心到屏幕中心的距离(像素)
- * @param maxDistance 最大距离参考值(通常为屏幕半径)
- * @param maxScale 中心处的缩放值
- * @param minScale 边缘处的缩放值
+ * @param distance 图标中心到屏幕中心的距离（像素）
+ * @param maxDistance 最大距离参考值（通常为屏幕半径）
+ * @param maxScale 中心处缩放值
+ * @param minScale 边缘处缩放值
  */
 fun fisheyeScale(
     distance: Float,
@@ -78,7 +76,7 @@ fun fisheyeScale(
  * @param count 图标总数
  * @param narrowCols 窄行列数（宽行 = narrowCols + 1）
  * @param cellSize 图标间距（像素）
- * @return 每个图标相对于网格中心的像素偏移列表
+ * @return 每个图标相对网格中心的像素偏移列表
  */
 fun generateHoneycombRows(count: Int, narrowCols: Int, cellSize: Float): List<Offset> {
     if (count <= 0) return emptyList()
@@ -94,7 +92,7 @@ fun generateHoneycombRows(count: Int, narrowCols: Int, cellSize: Float): List<Of
         val itemsInRow = minOf(cols, count - placed)
 
         for (col in 0 until itemsInRow) {
-            // 居中排列：宽行和窄行各自居中
+            // 宽行和窄行都分别居中
             val totalWidth = (cols - 1) * cellSize
             val x = col * cellSize - totalWidth / 2f
             val y = row * rowHeight
@@ -104,7 +102,7 @@ fun generateHoneycombRows(count: Int, narrowCols: Int, cellSize: Float): List<Of
         row++
     }
 
-    // 将整个网格的 Y 中心移到 0
+    // 将整张网格的 Y 中心平移到 0
     val totalHeight = (row - 1) * rowHeight
     val yOffset = totalHeight / 2f
     return result.map { Offset(it.x, it.y - yOffset) }

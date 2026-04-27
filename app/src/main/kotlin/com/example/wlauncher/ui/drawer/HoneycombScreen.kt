@@ -43,6 +43,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.flue.launcher.data.model.AppInfo
+import com.flue.launcher.data.model.iconForDisplay
 import com.flue.launcher.ui.anim.platformBlur
 import com.flue.launcher.ui.input.DrawerInputMode
 import com.flue.launcher.ui.input.DrawerInputSource
@@ -63,6 +64,11 @@ private const val HONEYCOMB_MENU_DRAG_START_DP = 20f
 private const val HONEYCOMB_PRESS_DURATION_MS = 200
 private const val HONEYCOMB_AUTO_SCROLL_EDGE_DP = 96f
 private const val HONEYCOMB_AUTO_SCROLL_MAX_PX = 26f
+private const val FAST_FLOW_SLOW_TOP_FRACTION = 0.30f
+private const val FAST_FLOW_SLOW_BOTTOM_FRACTION = 0.70f
+private const val FAST_FLOW_SLOW_SCALE = 0.56f
+private const val FAST_FLOW_FAST_SCALE = 1.85f
+private const val FAST_FLOW_MAX_OFFSET_PX = 260f
 
 @Composable
 fun HoneycombScreen(
@@ -70,6 +76,11 @@ fun HoneycombScreen(
     blurEnabled: Boolean = true,
     edgeBlurEnabled: Boolean = false,
     suppressHeavyEffects: Boolean = false,
+    fisheyeEnabled: Boolean = true,
+    fastFlowAnimationEnabled: Boolean = false,
+    twoToneIconsEnabled: Boolean = false,
+    themeColor: Color = Color(0xFF7BE8FF),
+    darkMode: Boolean = true,
     narrowCols: Int = 4,
     topBlurRadiusDp: Int = 12,
     bottomBlurRadiusDp: Int = 12,
@@ -101,6 +112,7 @@ fun HoneycombScreen(
     var directScrollOffset by remember { mutableFloatStateOf(Float.NaN) }
     var fastScrollActive by remember { mutableStateOf(false) }
     var fastScrollResetJob by remember { mutableStateOf<Job?>(null) }
+    val appPalette = appListPalette(themeColor, darkMode)
 
     LaunchedEffect(focusReady) {
         if (focusReady) {
@@ -257,10 +269,13 @@ fun HoneycombScreen(
         }
 
         val currentScroll = currentScrollOffsetValue()
+        val fastFlowSlowTopY = screenHeightPx * FAST_FLOW_SLOW_TOP_FRACTION
+        val fastFlowSlowBottomY = screenHeightPx * FAST_FLOW_SLOW_BOTTOM_FRACTION
 
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .background(appPalette.background)
                 .flueDrawerRotaryScrollable(focusRequester, DrawerInputMode.Honeycomb) { rotaryDelta ->
                     launchWheelScroll(-rotaryDelta)
                 }
@@ -656,22 +671,27 @@ fun HoneycombScreen(
                     )
                     val effectiveItemBlur = reduceHoneycombBlurForFastScroll(itemBlur, reduceVisualLoad)
                     AppBubble(
-                        icon = if (
-                            blurEnabled &&
-                            effectiveEdgeBlur &&
-                            effectiveItemBlur > 0.5f &&
-                            Build.VERSION.SDK_INT < Build.VERSION_CODES.S
-                        ) {
-                            app.cachedBlurredIcon
-                        } else {
-                            app.cachedIcon
-                        },
+                        icon = app.iconForDisplay(
+                            useTwoTone = twoToneIconsEnabled,
+                            blurred = blurEnabled &&
+                                effectiveEdgeBlur &&
+                                effectiveItemBlur > 0.5f &&
+                                Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+                        ),
                         size = iconSizeDp,
+                        tintColor = appPalette.item,
                         onClick = {
                             if (longPressedApp == null && dragFromIndex == null) {
                                 val clickPos = if (isDragged) gridPos else visualPos
+                                val flowOffset = honeycombFlowOffset(
+                                    enabled = fastFlowAnimationEnabled,
+                                    rowCenterY = screenCenterY + clickPos.y + currentScroll,
+                                    screenCenterY = screenCenterY,
+                                    slowTopY = fastFlowSlowTopY,
+                                    slowBottomY = fastFlowSlowBottomY
+                                )
                                 val sx = screenCenterX + clickPos.x
-                                val syPos = screenCenterY + clickPos.y + currentScroll
+                                val syPos = screenCenterY + clickPos.y + currentScroll + flowOffset
                                 onAppClick(app, Offset(sx / screenWidthPx, syPos / screenHeightPx))
                             }
                         },
@@ -686,8 +706,15 @@ fun HoneycombScreen(
                             .graphicsLayer {
                                 val baseX = slotX
                                 val baseY = slotY
+                                val flowOffset = honeycombFlowOffset(
+                                    enabled = fastFlowAnimationEnabled,
+                                    rowCenterY = screenCenterY + baseY + currentScroll,
+                                    screenCenterY = screenCenterY,
+                                    slowTopY = fastFlowSlowTopY,
+                                    slowBottomY = fastFlowSlowBottomY
+                                )
                                 val posX = screenCenterX + baseX
-                                val pY = screenCenterY + baseY + currentScroll
+                                val pY = screenCenterY + baseY + currentScroll + flowOffset
                                 var actualCenterX = posX
                                 var actualCenterY = pY
                                 translationX = posX - iconSizePx / 2f
@@ -706,13 +733,17 @@ fun HoneycombScreen(
                                 val dx = actualCenterX - screenCenterX
                                 val dy = actualCenterY - screenCenterY
                                 val dist = sqrt(dx * dx + dy * dy)
-                                val scale = fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
+                                val scale = if (fisheyeEnabled) {
+                                    fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
+                                } else {
+                                    1f
+                                }
                                 scaleX = scale * neighborScale
                                 scaleY = scale * neighborScale
                                 alpha = when {
                                     isDragged -> 0f
                                     settlingKey == app.componentKey -> 0f
-                                    else -> scale.coerceIn(0.24f, 1f)
+                                    else -> if (fisheyeEnabled) scale.coerceIn(0.24f, 1f) else 1f
                                 }
                                 shadowElevation = if (reduceVisualLoad) 0f else 8.dp.toPx()
                                 shape = CircleShape
@@ -738,14 +769,18 @@ fun HoneycombScreen(
                 val dragDx = scalePointer.x - screenCenterX
                 val dragDy = scalePointer.y - screenCenterY
                 val dragDist = sqrt(dragDx * dragDx + dragDy * dragDy)
-                val dragScale = fisheyeScale(dragDist, screenRadius * 1.65f, minScale = 0.58f)
+                val dragScale = if (fisheyeEnabled) {
+                    fisheyeScale(dragDist, screenRadius * 1.65f, minScale = 0.58f)
+                } else {
+                    1f
+                }
                 AppBubble(
-                    icon = if (blurEnabled && effectiveEdgeBlur && dragOverlayBlur > 0.5f && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-                        dragOverlayApp.cachedBlurredIcon
-                    } else {
-                        dragOverlayApp.cachedIcon
-                    },
+                    icon = dragOverlayApp.iconForDisplay(
+                        useTwoTone = twoToneIconsEnabled,
+                        blurred = blurEnabled && effectiveEdgeBlur && dragOverlayBlur > 0.5f && Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+                    ),
                     size = iconSizeDp,
+                    tintColor = appPalette.item,
                     onClick = {},
                     onLongClick = null,
                     forcePressed = false,
@@ -768,7 +803,7 @@ fun HoneycombScreen(
                             translationY = dragOverlayPointer.y - iconSizePx / 2f
                             scaleX = dragScale
                             scaleY = dragScale
-                            alpha = dragScale.coerceIn(0.24f, 1f)
+                            alpha = if (fisheyeEnabled) dragScale.coerceIn(0.24f, 1f) else 1f
                             shadowElevation = 12.dp.toPx()
                             shape = CircleShape
                         }
@@ -787,12 +822,12 @@ fun HoneycombScreen(
                 bottomBlurDp = bottomBlurRadiusDp.toFloat()
             )
             AppBubble(
-                icon = if (blurEnabled && effectiveEdgeBlur && settlingBlur > 0.5f && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-                    settlingOverlayApp.cachedBlurredIcon
-                } else {
-                    settlingOverlayApp.cachedIcon
-                },
+                icon = settlingOverlayApp.iconForDisplay(
+                    useTwoTone = twoToneIconsEnabled,
+                    blurred = blurEnabled && effectiveEdgeBlur && settlingBlur > 0.5f && Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+                ),
                 size = iconSizeDp,
+                tintColor = appPalette.item,
                 onClick = {},
                 forcePressed = false,
                 pressScaleTarget = 1f,
@@ -815,10 +850,14 @@ fun HoneycombScreen(
                         val dx = settlingX.value - screenCenterX
                         val dy = settlingY.value - screenCenterY
                         val dist = sqrt(dx * dx + dy * dy)
-                        val scale = fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
+                        val scale = if (fisheyeEnabled) {
+                            fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
+                        } else {
+                            1f
+                        }
                         scaleX = scale
                         scaleY = scale
-                        alpha = scale.coerceIn(0.24f, 1f)
+                        alpha = if (fisheyeEnabled) scale.coerceIn(0.24f, 1f) else 1f
                         shadowElevation = 12.dp.toPx()
                         shape = CircleShape
                     }
@@ -834,7 +873,7 @@ fun HoneycombScreen(
                     .background(
                         Brush.verticalGradient(
                             listOf(
-                                Color.Black,
+                                appPalette.fadeEdge,
                                 Color.Transparent
                             )
                         )
@@ -851,7 +890,7 @@ fun HoneycombScreen(
                         Brush.verticalGradient(
                             listOf(
                                 Color.Transparent,
-                                Color.Black
+                                appPalette.fadeEdge
                             )
                         )
                     )
@@ -1057,6 +1096,28 @@ private fun reduceHoneycombBlurForFastScroll(
         blurDp < 9f -> 8f
         else -> 12f
     }
+}
+
+private fun honeycombFlowOffset(
+    enabled: Boolean,
+    rowCenterY: Float,
+    screenCenterY: Float,
+    slowTopY: Float,
+    slowBottomY: Float
+): Float {
+    if (!enabled) return 0f
+    val transformedY = when {
+        rowCenterY < slowTopY -> {
+            screenCenterY + (slowTopY - screenCenterY) * FAST_FLOW_SLOW_SCALE +
+                (rowCenterY - slowTopY) * FAST_FLOW_FAST_SCALE
+        }
+        rowCenterY > slowBottomY -> {
+            screenCenterY + (slowBottomY - screenCenterY) * FAST_FLOW_SLOW_SCALE +
+                (rowCenterY - slowBottomY) * FAST_FLOW_FAST_SCALE
+        }
+        else -> screenCenterY + (rowCenterY - screenCenterY) * FAST_FLOW_SLOW_SCALE
+    }
+    return (transformedY - rowCenterY).coerceIn(-FAST_FLOW_MAX_OFFSET_PX, FAST_FLOW_MAX_OFFSET_PX)
 }
 
 private fun computeHoneycombEdgeBlur(

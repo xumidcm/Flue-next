@@ -58,6 +58,7 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -66,6 +67,7 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
+import com.flue.launcher.data.model.iconForDisplay
 import com.flue.launcher.ui.anim.platformBlur
 import com.flue.launcher.ui.input.DrawerInputMode
 import com.flue.launcher.ui.input.DrawerInputSource
@@ -83,6 +85,11 @@ private const val LIST_MENU_DRAG_START_DP = 20f
 private const val LIST_AUTO_SCROLL_EDGE_DP = 84f
 private const val LIST_AUTO_SCROLL_MAX_PX = 30f
 private const val LIST_EDGE_ITEM_BLUR_DP = 4f
+private const val FAST_FLOW_SLOW_TOP_FRACTION = 0.30f
+private const val FAST_FLOW_SLOW_BOTTOM_FRACTION = 0.70f
+private const val FAST_FLOW_SLOW_SCALE = 0.56f
+private const val FAST_FLOW_FAST_SCALE = 1.85f
+private const val FAST_FLOW_MAX_OFFSET_PX = 260f
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -91,6 +98,11 @@ fun ListDrawerScreen(
     blurEnabled: Boolean = true,
     edgeBlurEnabled: Boolean = false,
     suppressHeavyEffects: Boolean = false,
+    fisheyeEnabled: Boolean = true,
+    fastFlowAnimationEnabled: Boolean = false,
+    twoToneIconsEnabled: Boolean = false,
+    themeColor: Color = Color(0xFF7BE8FF),
+    darkMode: Boolean = true,
     iconSize: Dp = 48.dp,
     topFadeRangeDp: Int = 56,
     bottomFadeRangeDp: Int = 56,
@@ -102,6 +114,7 @@ fun ListDrawerScreen(
 ) {
     val listState = rememberLazyListState()
     val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
@@ -125,6 +138,9 @@ fun ListDrawerScreen(
     val visibleIndexes = remember(listState.layoutInfo.visibleItemsInfo) {
         listState.layoutInfo.visibleItemsInfo.map { it.index }
     }
+    val estimatedItemHeightPx = with(density) { (iconSize + 24.dp).toPx() }
+    val overscrollLimitPx = with(density) { configuration.screenHeightDp.dp.toPx() / 2f }
+    val appPalette = appListPalette(themeColor, darkMode)
 
     LaunchedEffect(visibleIndexes, dragFromIndex, dragCurrentIndex, apps.size) {
         val retain = buildSet {
@@ -141,6 +157,7 @@ fun ListDrawerScreen(
             focusRequester.requestFocusAfterFirstFrame()
         }
     }
+
     fun launchWheelScroll(delta: Float) {
         if (delta == 0f) return
         wheelMomentumJob?.cancel()
@@ -196,12 +213,13 @@ fun ListDrawerScreen(
                     remember(listState, dragFromIndex, longPressedApp) {
                         object : NestedScrollConnection {
                             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                                if (source != NestedScrollSource.Drag || dragFromIndex != null || longPressedApp != null) return Offset.Zero
+                                if (source != NestedScrollSource.UserInput || dragFromIndex != null || longPressedApp != null) return Offset.Zero
                                 return consumeListOverscroll(
                                     availableY = available.y,
                                     listState = listState,
                                     overscroll = overscroll,
-                                    scope = scope
+                                    scope = scope,
+                                    overscrollLimitPx = overscrollLimitPx
                                 )
                             }
 
@@ -210,12 +228,13 @@ fun ListDrawerScreen(
                                 available: Offset,
                                 source: NestedScrollSource
                             ): Offset {
-                                if (source != NestedScrollSource.Drag || dragFromIndex != null || longPressedApp != null) return Offset.Zero
+                                if (source != NestedScrollSource.UserInput || dragFromIndex != null || longPressedApp != null) return Offset.Zero
                                 return consumeListOverscroll(
                                     availableY = available.y,
                                     listState = listState,
                                     overscroll = overscroll,
-                                    scope = scope
+                                    scope = scope,
+                                    overscrollLimitPx = overscrollLimitPx
                                 )
                             }
 
@@ -223,14 +242,10 @@ fun ListDrawerScreen(
                                 if (dragFromIndex != null || longPressedApp != null) return Velocity.Zero
                                 val atTop = !listState.canScrollBackward
                                 if ((overscroll.value > 80f || available.y > 1200f) && atTop) {
-                                    scope.launch {
-                                        overscroll.animateTo(0f, spring(dampingRatio = 0.75f, stiffness = 460f))
-                                    }
                                     onScrollToTop()
                                     return available
                                 }
                                 if (overscroll.value != 0f) {
-                                    overscroll.animateTo(0f, spring(dampingRatio = 0.75f, stiffness = 460f))
                                     return available
                                 }
                                 return Velocity.Zero
@@ -361,6 +376,8 @@ fun ListDrawerScreen(
         ) {
             val screenHeightPx = with(density) { maxHeight.toPx() }
             val screenCenterY = screenHeightPx / 2f
+            val fastFlowSlowTopY = screenHeightPx * FAST_FLOW_SLOW_TOP_FRACTION
+            val fastFlowSlowBottomY = screenHeightPx * FAST_FLOW_SLOW_BOTTOM_FRACTION
             val autoScrollEdgePx = with(density) { LIST_AUTO_SCROLL_EDGE_DP.dp.toPx() }
             val topEdgeBlurZonePx = with(density) { topFadeRangeDp.coerceIn(0, 220).dp.toPx() }
             val bottomEdgeBlurZonePx = with(density) { bottomFadeRangeDp.coerceIn(0, 220).dp.toPx() }
@@ -418,7 +435,7 @@ fun ListDrawerScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer { translationY = overscroll.value }
-                    .background(Color.Black),
+                    .background(appPalette.background),
                 contentPadding = PaddingValues(
                     top = centeredPadding,
                     bottom = centeredPadding,
@@ -429,7 +446,20 @@ fun ListDrawerScreen(
             ) {
                 itemsIndexed(apps, key = { _, app -> app.componentKey }) { index, app ->
                     val itemInfo = visibleInfoByIndex[index]
-                    val itemScale = computeItemScale(itemInfo, screenCenterY, screenHeightPx)
+                    val itemScale = computeItemScale(
+                        itemInfo = itemInfo,
+                        screenCenterY = screenCenterY,
+                        screenHeight = screenHeightPx,
+                        fisheyeEnabled = fisheyeEnabled
+                    )
+                    val rowCenterY = itemCenters[index] ?: itemInfo?.let { it.offset + it.size / 2f } ?: screenCenterY
+                    val flowOffset = computeFastFlowOffset(
+                        rowCenterY = rowCenterY,
+                        screenCenterY = screenCenterY,
+                        slowTopY = fastFlowSlowTopY,
+                        slowBottomY = fastFlowSlowBottomY,
+                        enabled = fastFlowAnimationEnabled && dragFromIndex == null && longPressedApp == null
+                    )
                     val itemBlur = computeVerticalEdgeBlur(
                         centerY = itemInfo?.let { it.offset + it.size / 2f } ?: screenCenterY,
                         screenHeight = screenHeightPx,
@@ -443,7 +473,10 @@ fun ListDrawerScreen(
                         effectiveEdgeBlur &&
                         itemBlur > 0.5f
                     )
-                    val displayIcon = if (useBlurredIcon) app.cachedBlurredIcon else app.cachedIcon
+                    val displayIcon = app.iconForDisplay(
+                        useTwoTone = twoToneIconsEnabled,
+                        blurred = useBlurredIcon
+                    )
                     val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
                     val isPressed by interactionSource.collectIsPressedAsState()
                     val isDragged = dragFromIndex == index
@@ -492,13 +525,20 @@ fun ListDrawerScreen(
                             }
                             .graphicsLayer {
                                 val targetScale = itemScale * pressedScale
-                                translationY = if (isDragged) 0f else displayDisplacement
+                                translationY = if (isDragged) 0f else displayDisplacement + flowOffset
                                 scaleX = targetScale
                                 scaleY = targetScale
-                                alpha = if (isDragged || isSettling) 0f else itemScale.coerceIn(0.3f, 1f)
+                                alpha = if (isDragged || isSettling) {
+                                    0f
+                                } else if (fisheyeEnabled) {
+                                    itemScale.coerceIn(0.3f, 1f)
+                                } else {
+                                    1f
+                                }
                             }
                             .platformBlur(itemBlur, blurEnabled && effectiveEdgeBlur && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                            .background(Color.Black.copy(alpha = pressedOverlay), RoundedCornerShape(18.dp))
+                            .background(appPalette.item, RoundedCornerShape(18.dp))
+                            .background(appPalette.itemPressedOverlay.copy(alpha = pressedOverlay), RoundedCornerShape(18.dp))
                             .combinedClickable(
                                 interactionSource = interactionSource,
                                 indication = null,
@@ -524,7 +564,7 @@ fun ListDrawerScreen(
                             text = app.label,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.W500,
-                            color = Color.White
+                            color = appPalette.text
                         )
                     }
                 }
@@ -559,7 +599,7 @@ fun ListDrawerScreen(
                             alpha = 0.98f
                             shadowElevation = 18.dp.toPx()
                         }
-                        .background(Color.Black.copy(alpha = 0.10f), RoundedCornerShape(18.dp))
+                        .background(appPalette.item, RoundedCornerShape(18.dp))
                         .padding(horizontal = 28.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -570,7 +610,10 @@ fun ListDrawerScreen(
                             draggedBlur > 0.5f
                         )
                     Image(
-                        bitmap = if (overlayUseBlurredIcon) draggedApp.cachedBlurredIcon else draggedApp.cachedIcon,
+                        bitmap = draggedApp.iconForDisplay(
+                            useTwoTone = twoToneIconsEnabled,
+                            blurred = overlayUseBlurredIcon
+                        ),
                         contentDescription = draggedApp.label,
                         modifier = Modifier
                             .size(iconSize)
@@ -582,7 +625,7 @@ fun ListDrawerScreen(
                         text = draggedApp.label,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.W500,
-                        color = Color.White
+                        color = appPalette.text
                     )
                 }
             }
@@ -597,8 +640,8 @@ fun ListDrawerScreen(
                     .background(
                         Brush.verticalGradient(
                             listOf(
-                                Color.Black.copy(alpha = 0.38f),
-                                Color.Black.copy(alpha = 0.14f),
+                                appPalette.fadeEdge.copy(alpha = 0.78f),
+                                appPalette.fadeEdge.copy(alpha = 0.28f),
                                 Color.Transparent
                             )
                         )
@@ -614,8 +657,8 @@ fun ListDrawerScreen(
                         Brush.verticalGradient(
                             listOf(
                                 Color.Transparent,
-                                Color.Black.copy(alpha = 0.14f),
-                                Color.Black.copy(alpha = 0.42f)
+                                appPalette.fadeEdge.copy(alpha = 0.28f),
+                                appPalette.fadeEdge.copy(alpha = 0.82f)
                             )
                         )
                     )
@@ -628,7 +671,7 @@ fun ListDrawerScreen(
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
                     .height(topFadeRangeDp.dp)
-                    .background(Brush.verticalGradient(listOf(Color.Black, Color.Transparent)))
+                    .background(Brush.verticalGradient(listOf(appPalette.fadeEdge, Color.Transparent)))
             )
         }
         if (bottomFadeRangeDp > 0) {
@@ -637,7 +680,7 @@ fun ListDrawerScreen(
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .height(bottomFadeRangeDp.dp)
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, appPalette.fadeEdge)))
             )
         }
     }
@@ -655,14 +698,15 @@ private fun consumeListOverscroll(
     availableY: Float,
     listState: androidx.compose.foundation.lazy.LazyListState,
     overscroll: Animatable<Float, AnimationVector1D>,
-    scope: kotlinx.coroutines.CoroutineScope
+    scope: kotlinx.coroutines.CoroutineScope,
+    overscrollLimitPx: Float
 ): Offset {
     val atTop = !listState.canScrollBackward
     val atBottom = !listState.canScrollForward
     val current = overscroll.value
     val next = when {
-        availableY > 0f && atTop -> (current + availableY * 0.35f).coerceAtMost(180f)
-        availableY < 0f && atBottom -> (current + availableY * 0.35f).coerceAtLeast(-180f)
+        availableY > 0f && atTop -> (current + availableY).coerceAtMost(overscrollLimitPx)
+        availableY < 0f && atBottom -> (current + availableY).coerceAtLeast(-overscrollLimitPx)
         current > 0f && availableY < 0f -> (current + availableY).coerceAtLeast(0f)
         current < 0f && availableY > 0f -> (current + availableY).coerceAtMost(0f)
         else -> current
@@ -706,14 +750,38 @@ private fun findNearestListIndex(
 private fun computeItemScale(
     itemInfo: androidx.compose.foundation.lazy.LazyListItemInfo?,
     screenCenterY: Float,
-    screenHeight: Float
+    screenHeight: Float,
+    fisheyeEnabled: Boolean
 ): Float {
+    if (!fisheyeEnabled) return 1f
     if (itemInfo == null) return 0.85f
     val itemCenterY = itemInfo.offset + itemInfo.size / 2f
     val dist = abs(itemCenterY - screenCenterY)
     val maxDist = screenHeight / 2f
     val t = (dist / maxDist).coerceIn(0f, 1f)
     return 1f - 0.2f * t
+}
+
+private fun computeFastFlowOffset(
+    rowCenterY: Float,
+    screenCenterY: Float,
+    slowTopY: Float,
+    slowBottomY: Float,
+    enabled: Boolean
+): Float {
+    if (!enabled) return 0f
+    val transformedY = when {
+        rowCenterY < slowTopY -> {
+            screenCenterY + (slowTopY - screenCenterY) * FAST_FLOW_SLOW_SCALE +
+                (rowCenterY - slowTopY) * FAST_FLOW_FAST_SCALE
+        }
+        rowCenterY > slowBottomY -> {
+            screenCenterY + (slowBottomY - screenCenterY) * FAST_FLOW_SLOW_SCALE +
+                (rowCenterY - slowBottomY) * FAST_FLOW_FAST_SCALE
+        }
+        else -> screenCenterY + (rowCenterY - screenCenterY) * FAST_FLOW_SLOW_SCALE
+    }
+    return (transformedY - rowCenterY).coerceIn(-FAST_FLOW_MAX_OFFSET_PX, FAST_FLOW_MAX_OFFSET_PX)
 }
 
 private fun computeVerticalEdgeBlur(

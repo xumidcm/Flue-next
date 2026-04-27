@@ -22,6 +22,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -54,12 +55,15 @@ import com.flue.launcher.ui.anim.scaleBlurAlpha
 import com.flue.launcher.ui.drawer.HoneycombScreen
 import com.flue.launcher.ui.drawer.ListDrawerScreen
 import com.flue.launcher.ui.home.WatchFaceLayer
+import com.flue.launcher.ui.home.rememberAppListSeedColor
 import com.flue.launcher.ui.navigation.GestureHost
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.navigation.ScreenState
 import com.flue.launcher.ui.notification.NotificationLayer
 import com.flue.launcher.ui.smartstack.SmartStackLayer
 import com.flue.launcher.ui.theme.WatchLauncherTheme
+import com.flue.launcher.util.applyFadeCloseTransition
+import com.flue.launcher.util.applyFadeOpenTransition
 import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
@@ -108,8 +112,7 @@ class LauncherActivity : ComponentActivity() {
         super.onResume()
         RecentsVisibility.apply(this)
         if (::vm.isInitialized && vm.animationOverrideEnabled.value && vm.hasPendingExternalLaunchReturn()) {
-            @Suppress("DEPRECATION")
-            overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+            applyFadeCloseTransition()
         }
         if (::vm.isInitialized) {
             vm.onReturnToLauncher()
@@ -121,8 +124,7 @@ class LauncherActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         if (::vm.isInitialized && vm.animationOverrideEnabled.value) {
-            @Suppress("DEPRECATION")
-            overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+            applyFadeCloseTransition()
         }
     }
 }
@@ -153,6 +155,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val honeycombTopFade by vm.honeycombTopFade.collectAsState()
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsState()
     val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsState()
+    val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsState()
+    val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsState()
+    val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsState()
+    val showStepCount by vm.showStepCount.collectAsState()
     val showNotification by vm.showNotification.collectAsState()
     val notificationAccessGranted by vm.notificationAccessGranted.collectAsState()
     val notificationGroups by vm.notificationGroups.collectAsState()
@@ -172,6 +178,77 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val builtInVideoClockBold by vm.builtInVideoClockBold.collectAsState()
     val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
     val builtInVideoClockColorMode by vm.builtInVideoClockColorMode.collectAsState()
+    val builtInWatchFaceFontPath by vm.builtInWatchFaceFontPath.collectAsState()
+    val builtInPhotoClockStyle by vm.builtInPhotoClockStyle.collectAsState()
+    val builtInVideoClockStyle by vm.builtInVideoClockStyle.collectAsState()
+    val builtInPhotoMd3eShape by vm.builtInPhotoMd3eShape.collectAsState()
+    val builtInVideoMd3eShape by vm.builtInVideoMd3eShape.collectAsState()
+    val builtInPhotoUseThemeTextColor by vm.builtInPhotoUseThemeTextColor.collectAsState()
+    val builtInVideoUseThemeTextColor by vm.builtInVideoUseThemeTextColor.collectAsState()
+    val builtInPhotoTextColorArgb by vm.builtInPhotoTextColorArgb.collectAsState()
+    val builtInVideoTextColorArgb by vm.builtInVideoTextColorArgb.collectAsState()
+    val builtInPhotoMd3eAutoColors by vm.builtInPhotoMd3eAutoColors.collectAsState()
+    val builtInVideoMd3eAutoColors by vm.builtInVideoMd3eAutoColors.collectAsState()
+    val builtInPhotoMd3eTextColorArgb by vm.builtInPhotoMd3eTextColorArgb.collectAsState()
+    val builtInVideoMd3eTextColorArgb by vm.builtInVideoMd3eTextColorArgb.collectAsState()
+    val builtInPhotoMd3eFaceColorArgb by vm.builtInPhotoMd3eFaceColorArgb.collectAsState()
+    val builtInVideoMd3eFaceColorArgb by vm.builtInVideoMd3eFaceColorArgb.collectAsState()
+    val builtInPhotoMd3eHourColorArgb by vm.builtInPhotoMd3eHourColorArgb.collectAsState()
+    val builtInVideoMd3eHourColorArgb by vm.builtInVideoMd3eHourColorArgb.collectAsState()
+    val builtInPhotoMd3eMinuteColorArgb by vm.builtInPhotoMd3eMinuteColorArgb.collectAsState()
+    val builtInVideoMd3eMinuteColorArgb by vm.builtInVideoMd3eMinuteColorArgb.collectAsState()
+    val builtInPhotoMd3eSecondColorArgb by vm.builtInPhotoMd3eSecondColorArgb.collectAsState()
+    val builtInVideoMd3eSecondColorArgb by vm.builtInVideoMd3eSecondColorArgb.collectAsState()
+    val builtInPhotoShowSeconds by vm.builtInPhotoShowSeconds.collectAsState()
+    val builtInVideoShowSeconds by vm.builtInVideoShowSeconds.collectAsState()
+    val builtInPhotoCustomText by vm.builtInPhotoCustomText.collectAsState()
+    val builtInVideoCustomText by vm.builtInVideoCustomText.collectAsState()
+    val systemDarkMode = isSystemInDarkTheme()
+    val photoWatchOptions = BuiltInWatchFaceOptions(
+        clockPosition = builtInPhotoClockPosition,
+        clockSizeSp = builtInPhotoClockSize,
+        boldClock = builtInPhotoClockBold,
+        clockStyle = builtInPhotoClockStyle,
+        showSeconds = builtInPhotoShowSeconds,
+        customText = builtInPhotoCustomText,
+        fontPath = builtInWatchFaceFontPath,
+        md3eShape = builtInPhotoMd3eShape,
+        useThemeTextColor = builtInPhotoUseThemeTextColor,
+        textColorArgb = builtInPhotoTextColorArgb,
+        md3eAutoColors = builtInPhotoMd3eAutoColors,
+        md3eTextColorArgb = builtInPhotoMd3eTextColorArgb,
+        md3eFaceColorArgb = builtInPhotoMd3eFaceColorArgb,
+        md3eHourHandColorArgb = builtInPhotoMd3eHourColorArgb,
+        md3eMinuteHandColorArgb = builtInPhotoMd3eMinuteColorArgb,
+        md3eSecondHandColorArgb = builtInPhotoMd3eSecondColorArgb
+    )
+    val videoWatchOptions = BuiltInWatchFaceOptions(
+        clockPosition = builtInVideoClockPosition,
+        clockSizeSp = builtInVideoClockSize,
+        boldClock = builtInVideoClockBold,
+        cropToFill = builtInVideoFillScreen,
+        clockColorMode = builtInVideoClockColorMode,
+        clockStyle = builtInVideoClockStyle,
+        showSeconds = builtInVideoShowSeconds,
+        customText = builtInVideoCustomText,
+        fontPath = builtInWatchFaceFontPath,
+        md3eShape = builtInVideoMd3eShape,
+        useThemeTextColor = builtInVideoUseThemeTextColor,
+        textColorArgb = builtInVideoTextColorArgb,
+        md3eAutoColors = builtInVideoMd3eAutoColors,
+        md3eTextColorArgb = builtInVideoMd3eTextColorArgb,
+        md3eFaceColorArgb = builtInVideoMd3eFaceColorArgb,
+        md3eHourHandColorArgb = builtInVideoMd3eHourColorArgb,
+        md3eMinuteHandColorArgb = builtInVideoMd3eMinuteColorArgb,
+        md3eSecondHandColorArgb = builtInVideoMd3eSecondColorArgb
+    )
+    val appListThemeColor = rememberAppListSeedColor(
+        watchFaceId = selectedWatchFaceId,
+        photoPath = builtInPhotoPath,
+        videoPath = builtInVideoPath,
+        photoOptions = photoWatchOptions,
+        videoOptions = videoWatchOptions
+    )
     val layerBlurEnabled =
         blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
@@ -184,7 +261,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .putExtra(EXTRA_SETTINGS_DESTINATION, SETTINGS_DESTINATION_WATCH_FACES)
                     .putExtra(EXTRA_SETTINGS_RETURN_TO_FACE, true)
             )
-            (context as? Activity)?.overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+            (context as? Activity)?.applyFadeOpenTransition()
             Unit
         }
     }
@@ -334,18 +411,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             photoPath = builtInPhotoPath,
                             videoPath = builtInVideoPath,
                             isFaceVisible = screenState == ScreenState.Face,
-                            photoOptions = BuiltInWatchFaceOptions(
-                                clockPosition = builtInPhotoClockPosition,
-                                clockSizeSp = builtInPhotoClockSize,
-                                boldClock = builtInPhotoClockBold
-                            ),
-                            videoOptions = BuiltInWatchFaceOptions(
-                                clockPosition = builtInVideoClockPosition,
-                                clockSizeSp = builtInVideoClockSize,
-                                boldClock = builtInVideoClockBold,
-                                cropToFill = builtInVideoFillScreen,
-                                clockColorMode = builtInVideoClockColorMode
-                            ),
+                            photoOptions = photoWatchOptions,
+                            videoOptions = videoWatchOptions,
                             onLongPress = openWatchFaceChooser
                         )
                     } else {
@@ -386,6 +453,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         topFadeRangeDp = honeycombTopFade,
                         bottomFadeRangeDp = honeycombBottomFade,
                         fastScrollOptimizationEnabled = honeycombFastScrollOptimization,
+                        fisheyeEnabled = appListFisheyeEnabled,
+                        fastFlowAnimationEnabled = fastFlowAnimationEnabled,
+                        twoToneIconsEnabled = twoToneIconsEnabled,
+                        themeColor = appListThemeColor,
+                        darkMode = systemDarkMode,
                         onAppClick = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
                             vm.openApp(appInfo, origin, launchDelay, ScreenState.Apps)
@@ -400,6 +472,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         suppressHeavyEffects = reduceLegacyDrawerEffects,
                         topFadeRangeDp = honeycombTopFade,
                         bottomFadeRangeDp = honeycombBottomFade,
+                        fisheyeEnabled = appListFisheyeEnabled,
+                        fastFlowAnimationEnabled = fastFlowAnimationEnabled,
+                        twoToneIconsEnabled = twoToneIconsEnabled,
+                        themeColor = appListThemeColor,
+                        darkMode = systemDarkMode,
                         onAppClick = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
                             vm.openApp(appInfo, origin, launchDelay, ScreenState.Apps)
@@ -479,7 +556,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onRemoveShortcut = vm::removeSideScreenShortcut,
                         onDismissGroup = vm::dismissNotificationGroup,
                         onDismissNotification = vm::dismissNotification,
-                        onDismissToFace = { vm.setState(ScreenState.Face) }
+                        onDismissToFace = { vm.setState(ScreenState.Face) },
+                        showSteps = showStepCount
                     )
                 }
             }

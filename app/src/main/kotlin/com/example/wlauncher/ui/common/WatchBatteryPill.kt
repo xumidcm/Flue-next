@@ -18,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -32,7 +33,12 @@ private val BatteryLabelStyle = TextStyle(
 )
 
 @Composable
-fun WatchBatteryPill(level: Int, charging: Boolean, modifier: Modifier = Modifier) {
+fun WatchBatteryPill(
+    level: Int,
+    charging: Boolean,
+    modifier: Modifier = Modifier,
+    sizeScale: Float = 1f
+) {
     val tint = when {
         level <= 10 -> WatchColors.ActiveRed
         level <= 20 -> WatchColors.ActiveOrange
@@ -40,7 +46,13 @@ fun WatchBatteryPill(level: Int, charging: Boolean, modifier: Modifier = Modifie
     }
     val backgroundTint = if (charging) Color(0xFF1F6C35) else Color(0xFF141414)
 
-    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+    Box(
+        modifier = modifier.graphicsLayer {
+            scaleX = sizeScale
+            scaleY = sizeScale
+        },
+        contentAlignment = Alignment.Center
+    ) {
         Box(
             modifier = Modifier
                 .width(56.dp)
