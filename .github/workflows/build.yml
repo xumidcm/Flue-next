@@ -44,6 +44,8 @@ jobs:
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: Flue-release
           path: app/build/outputs/apk/release/*.apk
+          retention-days: 1
