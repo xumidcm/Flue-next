@@ -21,7 +21,8 @@ enum class WatchClockColorMode {
 enum class WatchFaceClockStyle {
     DIGITAL,
     MD3_ANALOG,
-    MD3E_CLOCK
+    MD3E_CLOCK,
+    APPLE_WATCH
 }
 
 enum class WatchFaceMd3eShape {

@@ -4,6 +4,8 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import com.flue.launcher.ui.navigation.ScreenState
+import com.flue.launcher.ui.theme.UiStyle
+import com.flue.launcher.ui.theme.isMaterial
 
 /**
  * 每一层在不同状态下的 scale / blur / opacity 目标值。
@@ -18,25 +20,48 @@ data class LayerAnimValues(
 /**
  * 表盘层状态映射。
  */
-fun faceLayerValues(state: ScreenState): LayerAnimValues = when (state) {
-    ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
-    ScreenState.Apps, ScreenState.Settings -> LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f)
-    ScreenState.App -> LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f)
-    ScreenState.Stack -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
-    ScreenState.Notifications -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
-    ScreenState.ControlCenter -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.5f)
-}
+fun faceLayerValues(state: ScreenState, uiStyle: UiStyle): LayerAnimValues =
+    if (uiStyle.isMaterial) {
+        when (state) {
+            ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
+            ScreenState.Apps, ScreenState.Settings -> LayerAnimValues(scale = 1.22f, blur = 7f, alpha = 0.22f)
+            ScreenState.App -> LayerAnimValues(scale = 1.28f, blur = 9f, alpha = 0.14f)
+            ScreenState.Stack -> LayerAnimValues(scale = 0.93f, blur = 3f, alpha = 0.58f)
+            ScreenState.Notifications -> LayerAnimValues(scale = 0.92f, blur = 4f, alpha = 0.52f)
+            ScreenState.ControlCenter -> LayerAnimValues(scale = 0.94f, blur = 5f, alpha = 0.48f)
+        }
+    } else {
+        when (state) {
+            ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
+            ScreenState.Apps, ScreenState.Settings -> LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f)
+            ScreenState.App -> LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f)
+            ScreenState.Stack -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
+            ScreenState.Notifications -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
+            ScreenState.ControlCenter -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.5f)
+        }
+    }
 
 /**
  * 应用列表层状态映射。
  */
-fun appListLayerValues(state: ScreenState): LayerAnimValues = when (state) {
-    ScreenState.Face -> LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f)
-    ScreenState.Apps -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
-    ScreenState.Settings -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.3f)
-    ScreenState.App -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f)
-    else -> LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f)
-}
+fun appListLayerValues(state: ScreenState, uiStyle: UiStyle): LayerAnimValues =
+    if (uiStyle.isMaterial) {
+        when (state) {
+            ScreenState.Face -> LayerAnimValues(scale = 0.88f, blur = 8f, alpha = 0f)
+            ScreenState.Apps -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
+            ScreenState.Settings -> LayerAnimValues(scale = 0.96f, blur = 4f, alpha = 0.42f)
+            ScreenState.App -> LayerAnimValues(scale = 1.1f, blur = 8f, alpha = 0f)
+            else -> LayerAnimValues(scale = 0.88f, blur = 8f, alpha = 0f)
+        }
+    } else {
+        when (state) {
+            ScreenState.Face -> LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f)
+            ScreenState.Apps -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
+            ScreenState.Settings -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.3f)
+            ScreenState.App -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f)
+            else -> LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f)
+        }
+    }
 
 /**
  * 应用视图层状态映射。

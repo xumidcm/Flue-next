@@ -32,7 +32,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.produceState
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -63,6 +65,9 @@ import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.WatchFacePhotoCache
+import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.UiStyle
+import com.flue.launcher.ui.theme.isMaterial
 import com.flue.launcher.watchface.WatchClockColorMode
 import com.flue.launcher.watchface.WatchClockPosition
 import com.flue.launcher.watchface.WatchFaceClockStyle
@@ -119,6 +124,40 @@ private data class Md3eColorPalette(
     val secondColor: Color
 )
 
+private object WatchFaceVideoThumbnailCache {
+    private const val MAX_ENTRIES = 3
+    private val cache = object : LinkedHashMap<String, ImageBitmap>(MAX_ENTRIES, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ImageBitmap>?): Boolean {
+            return size > MAX_ENTRIES
+        }
+    }
+
+    @Synchronized
+    fun get(path: String): ImageBitmap? = cache[path]
+
+    @Synchronized
+    fun put(path: String, bitmap: ImageBitmap) {
+        cache[path] = bitmap
+    }
+}
+
+private object WatchFacePaletteCache {
+    private const val MAX_ENTRIES = 8
+    private val cache = object : LinkedHashMap<String, ClockPalette>(MAX_ENTRIES, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ClockPalette>?): Boolean {
+            return size > MAX_ENTRIES
+        }
+    }
+
+    @Synchronized
+    fun get(key: String): ClockPalette? = cache[key]
+
+    @Synchronized
+    fun put(key: String, palette: ClockPalette) {
+        cache[key] = palette
+    }
+}
+
 private data class WatchFaceTypeface(
     val androidTypeface: AndroidTypeface?,
     val fontFamily: FontFamily?
@@ -135,6 +174,7 @@ fun WatchFaceLayer(
     photoPath: String? = null,
     videoPath: String? = null,
     isFaceVisible: Boolean = true,
+    uiStyle: UiStyle = UiStyle.APPLE_WATCH,
     photoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
     videoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
     onLongPress: (() -> Unit)? = null,
@@ -145,6 +185,7 @@ fun WatchFaceLayer(
         photoPath = photoPath,
         videoPath = videoPath,
         isFaceVisible = isFaceVisible,
+        uiStyle = uiStyle,
         photoOptions = photoOptions,
         videoOptions = videoOptions,
         clockOverride = null,
@@ -159,6 +200,7 @@ fun BuiltInWatchFacePreview(
     watchFaceId: String,
     photoPath: String? = null,
     videoPath: String? = null,
+    uiStyle: UiStyle = UiStyle.APPLE_WATCH,
     photoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
     videoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
     clockOverride: ClockSnapshot? = FIXED_PREVIEW_CLOCK,
@@ -171,6 +213,7 @@ fun BuiltInWatchFacePreview(
         photoPath = photoPath,
         videoPath = videoPath,
         isFaceVisible = playVideo,
+        uiStyle = uiStyle,
         photoOptions = photoOptions,
         videoOptions = videoOptions,
         clockOverride = clockOverride,
@@ -186,6 +229,7 @@ private fun BuiltInWatchFaceSurface(
     photoPath: String?,
     videoPath: String?,
     isFaceVisible: Boolean,
+    uiStyle: UiStyle,
     photoOptions: BuiltInWatchFaceOptions,
     videoOptions: BuiltInWatchFaceOptions,
     clockOverride: ClockSnapshot?,
@@ -214,6 +258,7 @@ private fun BuiltInWatchFaceSurface(
     )
     val typeface = rememberWatchFaceTypeface(activeOptions.fontPath)
     val chargingSnapshot = rememberChargingSnapshot()
+    val launcherStyle = LauncherTheme.style
     val backgroundModifier = modifier
         .fillMaxSize()
         .then(
@@ -229,7 +274,7 @@ private fun BuiltInWatchFaceSurface(
     Box(
         modifier = backgroundModifier
             .graphicsLayer { clip = true }
-            .background(Color.Black),
+            .background(launcherStyle.screenBackground),
         contentAlignment = Alignment.Center
     ) {
         when (watchFaceId) {
@@ -246,10 +291,20 @@ private fun BuiltInWatchFaceSurface(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(
-                            Brush.radialGradient(
-                                colors = listOf(Color(0xFF16304A), Color(0xFF0B1322), Color.Black),
-                                radius = 900f
-                            )
+                            if (uiStyle.isMaterial) {
+                                Brush.linearGradient(
+                                    colors = listOf(
+                                        Color(0xFF1F3144),
+                                        Color(0xFF2E4965),
+                                        launcherStyle.screenBackground
+                                    )
+                                )
+                            } else {
+                                Brush.radialGradient(
+                                    colors = listOf(Color(0xFF16304A), Color(0xFF0B1322), Color.Black),
+                                    radius = 900f
+                                )
+                            }
                         )
                 )
             }
@@ -258,15 +313,7 @@ private fun BuiltInWatchFaceSurface(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Black.copy(alpha = 0.10f),
-                            Color.Transparent,
-                            Color.Black.copy(alpha = 0.42f)
-                        )
-                    )
-                )
+                .background(launcherStyle.screenScrim)
         )
 
         if (showClock) {
@@ -340,21 +387,18 @@ private fun MediaVideoBackground(path: String?, isFaceVisible: Boolean, fillScre
 
 @Composable
 private fun MediaVideoThumbnail(path: String?) {
-    val frameBitmap by produceState<android.graphics.Bitmap?>(initialValue = null, path) {
-        value = runCatching {
-            if (path.isNullOrBlank()) return@runCatching null
-            val retriever = MediaMetadataRetriever()
-            try {
-                retriever.setDataSource(path)
-                retriever.frameAtTime
-            } finally {
-                runCatching { retriever.release() }
-            }
-        }.getOrNull()
+    val frameBitmap by produceState<ImageBitmap?>(initialValue = null, path) {
+        value = if (path.isNullOrBlank()) {
+            null
+        } else {
+            WatchFaceVideoThumbnailCache.get(path) ?: withContext(Dispatchers.IO) {
+                extractVideoThumbnail(path)
+            }?.also { WatchFaceVideoThumbnailCache.put(path, it) }
+        }
     }
     if (frameBitmap != null) {
         androidx.compose.foundation.Image(
-            bitmap = frameBitmap!!.asImageBitmap(),
+            bitmap = frameBitmap!!,
             contentDescription = null,
             contentScale = androidx.compose.ui.layout.ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
@@ -416,6 +460,18 @@ private fun ClockOverlay(
     }
     if (options.clockStyle == WatchFaceClockStyle.MD3_ANALOG && !compact) {
         Md3AnalogClockOverlay(
+            clock = clock,
+            options = options,
+            palette = effectivePalette,
+            typeface = typeface,
+            chargingSnapshot = chargingSnapshot,
+            fallbackTitle = fallbackTitle,
+            fallbackSubtitle = fallbackSubtitle
+        )
+        return
+    }
+    if (options.clockStyle == WatchFaceClockStyle.APPLE_WATCH && !compact) {
+        AppleWatchClockOverlay(
             clock = clock,
             options = options,
             palette = effectivePalette,
@@ -490,6 +546,23 @@ private fun ClockOverlay(
             }
         }
     }
+}
+
+private fun extractVideoThumbnail(path: String): ImageBitmap? {
+    return runCatching {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(path)
+            val frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: retriever.frameAtTime
+                ?: return@runCatching null
+            frame.asImageBitmap().also {
+                if (!frame.isRecycled) frame.recycle()
+            }
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }.getOrNull()
 }
 
 @Composable
@@ -624,6 +697,140 @@ private fun Md3AnalogClockOverlay(
                 fallbackSubtitle?.let {
                     Text(
                         text = it,
+                        color = palette.timeColor.copy(alpha = 0.78f),
+                        fontSize = 10.sp,
+                        fontFamily = typeface.fontFamily
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppleWatchClockOverlay(
+    clock: ClockSnapshot,
+    options: BuiltInWatchFaceOptions,
+    palette: ClockPalette,
+    typeface: WatchFaceTypeface,
+    chargingSnapshot: ChargingSnapshot,
+    fallbackTitle: String?,
+    fallbackSubtitle: String?
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 18.dp, vertical = 18.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val side = min(size.width, size.height)
+            val inset = side * 0.075f
+            val panelRadius = side * 0.075f
+            val accent = palette.seedColor
+            val quietText = palette.dateColor
+            val ringStroke = side * 0.018f
+            val ringSize = side * 0.38f
+            val left = inset
+            val right = size.width - inset - side * 0.28f
+            val top = inset
+            val bottom = size.height - inset - side * 0.16f
+
+            drawRoundRect(
+                color = Color.White.copy(alpha = 0.10f),
+                topLeft = Offset(left, top),
+                size = Size(side * 0.30f, side * 0.16f),
+                cornerRadius = CornerRadius(panelRadius, panelRadius)
+            )
+            drawRoundRect(
+                color = accent.copy(alpha = 0.24f),
+                topLeft = Offset(right, top),
+                size = Size(side * 0.28f, side * 0.16f),
+                cornerRadius = CornerRadius(panelRadius, panelRadius)
+            )
+            drawRoundRect(
+                color = quietText.copy(alpha = 0.18f),
+                topLeft = Offset(left, bottom),
+                size = Size(side * 0.36f, side * 0.15f),
+                cornerRadius = CornerRadius(panelRadius, panelRadius)
+            )
+            drawRoundRect(
+                color = Color.White.copy(alpha = 0.08f),
+                topLeft = Offset(size.width - inset - side * 0.34f, bottom),
+                size = Size(side * 0.34f, side * 0.15f),
+                cornerRadius = CornerRadius(panelRadius, panelRadius)
+            )
+
+            val ringTopLeft = Offset(size.width / 2f - ringSize / 2f, size.height / 2f - ringSize / 2f)
+            drawArc(
+                color = Color.White.copy(alpha = 0.14f),
+                startAngle = -90f,
+                sweepAngle = 360f,
+                useCenter = false,
+                topLeft = ringTopLeft,
+                size = Size(ringSize, ringSize),
+                style = Stroke(width = ringStroke)
+            )
+            drawArc(
+                color = accent,
+                startAngle = -90f,
+                sweepAngle = ((clock.minute + clock.second / 60f) / 60f) * 360f,
+                useCenter = false,
+                topLeft = ringTopLeft,
+                size = Size(ringSize, ringSize),
+                style = Stroke(width = ringStroke, cap = StrokeCap.Round)
+            )
+        }
+
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = clock.time,
+                color = palette.timeColor,
+                fontSize = (options.clockSizeSp * 0.94f).sp,
+                fontWeight = FontWeight.W300,
+                fontFamily = typeface.fontFamily,
+                letterSpacing = 0.sp
+            )
+            Spacer(modifier = Modifier.height(5.dp))
+            Text(
+                text = clock.date,
+                color = palette.dateColor,
+                fontSize = (options.clockSizeSp * 0.20f).sp,
+                fontWeight = FontWeight.Medium,
+                fontFamily = typeface.fontFamily
+            )
+            options.customText.takeIf { it.isNotBlank() }?.let {
+                Spacer(modifier = Modifier.height(7.dp))
+                Text(
+                    text = it,
+                    color = palette.timeColor,
+                    fontSize = (options.clockSizeSp * 0.20f).sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = typeface.fontFamily
+                )
+            }
+            chargingSpeedLabel(chargingSnapshot)?.let {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = it,
+                    color = Color(0xFF9BE15D),
+                    fontSize = (options.clockSizeSp * 0.18f).sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFamily = typeface.fontFamily
+                )
+            }
+            fallbackTitle?.let {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = it,
+                    color = palette.timeColor,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = typeface.fontFamily
+                )
+                fallbackSubtitle?.let { subtitle ->
+                    Text(
+                        text = subtitle,
                         color = palette.timeColor.copy(alpha = 0.78f),
                         fontSize = 10.sp,
                         fontFamily = typeface.fontFamily
@@ -944,7 +1151,7 @@ fun appListSeedColorFromOptions(options: BuiltInWatchFaceOptions): Color {
             if (options.md3eAutoColors) {
                 Color(0xFF806EA4)
             } else {
-                Color(options.md3eSecondHandColorArgb)
+                Color(options.md3eFaceColorArgb)
             }
         }
         else -> {
@@ -1037,7 +1244,10 @@ private fun rememberClockPalette(
     }
     LaunchedEffect(watchFaceId, photoPath, videoPath, clockPosition, videoClockColorMode) {
         palette = if (watchFaceId == BUILT_IN_PHOTO_WATCHFACE_ID && !photoPath.isNullOrBlank()) {
-            sampleClockPalette(photoPath, clockPosition) ?: defaultClockPalette(watchFaceId)
+            val cacheKey = "photo|$photoPath|${clockPosition.name}"
+            WatchFacePaletteCache.get(cacheKey)
+                ?: (sampleClockPalette(photoPath, clockPosition) ?: defaultClockPalette(watchFaceId))
+                    .also { WatchFacePaletteCache.put(cacheKey, it) }
         } else if (watchFaceId == BUILT_IN_VIDEO_WATCHFACE_ID) {
             when (videoClockColorMode) {
                 WatchClockColorMode.WHITE -> ClockPalette(
@@ -1052,7 +1262,10 @@ private fun rememberClockPalette(
                 )
                 WatchClockColorMode.AUTO -> {
                     if (!videoPath.isNullOrBlank()) {
-                        sampleVideoClockPalette(videoPath) ?: defaultClockPalette(watchFaceId)
+                        val cacheKey = "video|$videoPath"
+                        WatchFacePaletteCache.get(cacheKey)
+                            ?: (sampleVideoClockPalette(videoPath) ?: defaultClockPalette(watchFaceId))
+                                .also { WatchFacePaletteCache.put(cacheKey, it) }
                     } else {
                         defaultClockPalette(watchFaceId)
                     }
@@ -1178,7 +1391,13 @@ private suspend fun sampleVideoClockPalette(path: String): ClockPalette? = withC
         val retriever = MediaMetadataRetriever()
         val frame = try {
             retriever.setDataSource(path)
-            retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            retriever.getScaledFrameAtTime(
+                0,
+                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                144,
+                144
+            )
+                ?: retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                 ?: retriever.frameAtTime
         } finally {
             runCatching { retriever.release() }
@@ -1297,12 +1516,17 @@ private class InternalLoopingVideoView(context: Context) : FrameLayout(context) 
     }
 
     fun bind(path: String?, play: Boolean, fillScreen: Boolean) {
+        val pathChanged = path != currentPath
+        val playChanged = shouldPlay != play
+        val fillChanged = this.fillScreen != fillScreen
         shouldPlay = play
         this.fillScreen = fillScreen
         placeholder.visibility = if (path == null) VISIBLE else GONE
         videoView.visibility = if (path == null) INVISIBLE else VISIBLE
-        if (path != currentPath) {
+        if (pathChanged) {
             currentPath = path
+            videoWidth = 0
+            videoHeight = 0
             if (path == null) {
                 videoView.stopPlayback()
                 runCatching { videoView.setVideoURI(null) }
@@ -1310,11 +1534,13 @@ private class InternalLoopingVideoView(context: Context) : FrameLayout(context) 
                 videoView.setVideoPath(path)
             }
         }
-        updateScale()
+        if (pathChanged || fillChanged) {
+            updateScale()
+        }
         if (path == null) return
-        if (play) {
+        if (playChanged && play) {
             if (!videoView.isPlaying) videoView.start()
-        } else if (videoView.isPlaying) {
+        } else if (playChanged && videoView.isPlaying) {
             videoView.pause()
         }
     }

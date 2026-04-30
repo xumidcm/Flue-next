@@ -347,8 +347,8 @@ class AppRepository(private val context: Context) {
             if (alpha == 0) continue
             opaqueCount += 1
             val luminance = ((Color.red(px) + Color.green(px) + Color.blue(px)) / 3f).toInt()
-            val color = if (luminance < threshold) Color.WHITE else Color.BLACK
-            if (color == Color.WHITE) {
+            val color = if (luminance < threshold) TWO_TONE_FG else TWO_TONE_BG
+            if (color == TWO_TONE_FG) {
                 whiteCount += 1
             }
             pixels[index] = Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
@@ -358,8 +358,8 @@ class AppRepository(private val context: Context) {
                 val px = pixels[index]
                 val alpha = Color.alpha(px)
                 if (alpha == 0) continue
-                val isWhite = Color.red(px) > 127
-                val inverted = if (isWhite) Color.BLACK else Color.WHITE
+                val isFg = Color.red(px) == Color.red(TWO_TONE_FG)
+                val inverted = if (isFg) TWO_TONE_BG else TWO_TONE_FG
                 pixels[index] = Color.argb(alpha, Color.red(inverted), Color.green(inverted), Color.blue(inverted))
             }
         }

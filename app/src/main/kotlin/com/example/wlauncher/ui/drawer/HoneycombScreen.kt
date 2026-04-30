@@ -1,4 +1,4 @@
-package com.flue.launcher.ui.drawer
+﻿package com.flue.launcher.ui.drawer
 
 import android.os.Build
 import androidx.compose.animation.core.Animatable
@@ -7,15 +7,28 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.exponentialDecay
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -28,19 +41,27 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.zIndex
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.iconForDisplay
@@ -50,6 +71,8 @@ import com.flue.launcher.ui.input.DrawerInputSource
 import com.flue.launcher.ui.input.flueDrawerRotaryScrollable
 import com.flue.launcher.ui.input.normalizeDrawerScrollDelta
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
+import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.util.fisheyeScale
 import com.flue.launcher.util.generateHoneycombRows
 import kotlinx.coroutines.Job
@@ -64,11 +87,11 @@ private const val HONEYCOMB_MENU_DRAG_START_DP = 20f
 private const val HONEYCOMB_PRESS_DURATION_MS = 200
 private const val HONEYCOMB_AUTO_SCROLL_EDGE_DP = 96f
 private const val HONEYCOMB_AUTO_SCROLL_MAX_PX = 26f
-private const val FAST_FLOW_SLOW_TOP_FRACTION = 0.30f
-private const val FAST_FLOW_SLOW_BOTTOM_FRACTION = 0.70f
+private const val FAST_FLOW_SLOW_TOP_FRACTION = 0.25f
+private const val FAST_FLOW_SLOW_BOTTOM_FRACTION = 0.75f
 private const val FAST_FLOW_SLOW_SCALE = 0.56f
 private const val FAST_FLOW_FAST_SCALE = 1.85f
-private const val FAST_FLOW_MAX_OFFSET_PX = 260f
+private const val FAST_FLOW_MAX_OFFSET_PX = 300f
 
 @Composable
 fun HoneycombScreen(
@@ -80,6 +103,7 @@ fun HoneycombScreen(
     fastFlowAnimationEnabled: Boolean = false,
     twoToneIconsEnabled: Boolean = false,
     themeColor: Color = Color(0xFF7BE8FF),
+    uiStyle: UiStyle = UiStyle.APPLE_WATCH,
     darkMode: Boolean = true,
     narrowCols: Int = 4,
     topBlurRadiusDp: Int = 12,
@@ -93,7 +117,24 @@ fun HoneycombScreen(
     onScrollToTop: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    if (uiStyle == UiStyle.MATERIAL_3) {
+        MaterialDenseGridScreen(
+            apps = apps,
+            blurEnabled = blurEnabled,
+            twoToneIconsEnabled = twoToneIconsEnabled,
+            themeColor = themeColor,
+            darkMode = darkMode,
+            columns = (narrowCols + 1).coerceIn(4, 6),
+            onAppClick = onAppClick,
+            onLongClick = onLongClick,
+            onScrollToTop = onScrollToTop,
+            modifier = modifier
+        )
+        return
+    }
+
     val context = LocalContext.current
+    val launcherStyle = LauncherTheme.style
     val focusRequester = remember { FocusRequester() }
     var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
     var glidePressedKey by remember { mutableStateOf<String?>(null) }
@@ -112,7 +153,7 @@ fun HoneycombScreen(
     var directScrollOffset by remember { mutableFloatStateOf(Float.NaN) }
     var fastScrollActive by remember { mutableStateOf(false) }
     var fastScrollResetJob by remember { mutableStateOf<Job?>(null) }
-    val appPalette = appListPalette(themeColor, darkMode)
+    val appPalette = appListPalette(themeColor, darkMode, uiStyle)
 
     LaunchedEffect(focusReady) {
         if (focusReady) {
@@ -680,6 +721,7 @@ fun HoneycombScreen(
                         ),
                         size = iconSizeDp,
                         tintColor = appPalette.item,
+                        shape = launcherStyle.bubbleShape,
                         onClick = {
                             if (longPressedApp == null && dragFromIndex == null) {
                                 val clickPos = if (isDragged) gridPos else visualPos
@@ -781,6 +823,7 @@ fun HoneycombScreen(
                     ),
                     size = iconSizeDp,
                     tintColor = appPalette.item,
+                    shape = launcherStyle.bubbleShape,
                     onClick = {},
                     onLongClick = null,
                     forcePressed = false,
@@ -828,6 +871,7 @@ fun HoneycombScreen(
                 ),
                 size = iconSizeDp,
                 tintColor = appPalette.item,
+                shape = launcherStyle.bubbleShape,
                 onClick = {},
                 forcePressed = false,
                 pressScaleTarget = 1f,
@@ -904,6 +948,215 @@ fun HoneycombScreen(
             blurEnabled = blurEnabled,
             onDismiss = { longPressedApp = null }
         )
+    }
+}
+@Composable
+private fun MaterialDenseGridScreen(
+    apps: List<AppInfo>,
+    blurEnabled: Boolean,
+    twoToneIconsEnabled: Boolean,
+    themeColor: Color,
+    darkMode: Boolean,
+    columns: Int,
+    onAppClick: (AppInfo, Offset) -> Unit,
+    onLongClick: (AppInfo) -> Unit,
+    onScrollToTop: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    val density = LocalDensity.current
+    val focusRequester = remember { FocusRequester() }
+    val gridState = rememberLazyGridState()
+    val scope = rememberCoroutineScope()
+    val launcherStyle = LauncherTheme.style
+    val appPalette = appListPalette(themeColor, darkMode, UiStyle.MATERIAL_3)
+    var focusReady by remember { mutableStateOf(false) }
+    var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
+    val overscroll = remember { Animatable(0f) }
+    val topReturnThresholdPx = with(density) { 72.dp.toPx() }
+    val overscrollLimitPx = with(density) { 140.dp.toPx() }
+
+    val nestedScrollConnection = remember(gridState, onScrollToTop) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput) return Offset.Zero
+                val atTop = gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
+                val lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()
+                val atBottom = lastVisible != null &&
+                    lastVisible.index >= gridState.layoutInfo.totalItemsCount - 1 &&
+                    lastVisible.offset.y + lastVisible.size.height <= gridState.layoutInfo.viewportEndOffset
+                if (available.y > 0f && atTop) {
+                    scope.launch {
+                        overscroll.snapTo((overscroll.value + available.y).coerceAtMost(overscrollLimitPx))
+                    }
+                    return Offset(0f, available.y)
+                }
+                if (available.y < 0f && atBottom) {
+                    scope.launch {
+                        overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(-overscrollLimitPx))
+                    }
+                    return Offset(0f, available.y)
+                }
+                if (overscroll.value > 0f && available.y < 0f) {
+                    scope.launch {
+                        overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(0f))
+                    }
+                    return Offset(0f, available.y)
+                }
+                if (overscroll.value < 0f && available.y > 0f) {
+                    scope.launch {
+                        overscroll.snapTo((overscroll.value + available.y).coerceAtMost(0f))
+                    }
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (overscroll.value != 0f) {
+                    if (overscroll.value >= topReturnThresholdPx) {
+                        onScrollToTop()
+                    }
+                    overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                    return available
+                }
+                return Velocity.Zero
+            }
+        }
+    }
+
+    LaunchedEffect(focusReady) {
+        if (focusReady) {
+            focusRequester.requestFocusAfterFirstFrame()
+        }
+    }
+
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxSize()
+            .background(appPalette.background)
+            .flueDrawerRotaryScrollable(focusRequester, DrawerInputMode.Honeycomb) { rotaryDelta ->
+                scope.launch { gridState.scrollBy(-rotaryDelta) }
+            }
+            .nestedScroll(nestedScrollConnection)
+            .graphicsLayer { translationY = overscroll.value }
+            .onGloballyPositioned {
+                if (!focusReady) focusReady = true
+            }
+            .pointerInput(gridState) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.type == PointerEventType.Scroll) {
+                            val delta = normalizeDrawerScrollDelta(
+                                verticalScrollPixels = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f,
+                                source = DrawerInputSource.MouseWheel,
+                                mode = DrawerInputMode.Honeycomb
+                            )
+                            if (delta != 0f) {
+                                scope.launch { gridState.scrollBy(delta) }
+                                event.changes.forEach { it.consume() }
+                            }
+                        }
+                    }
+                }
+            }
+            .pointerInput(onScrollToTop) {
+                awaitEachGesture {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.changes.none { it.pressed }) break
+                    }
+                    if (overscroll.value != 0f) {
+                        if (overscroll.value >= topReturnThresholdPx) {
+                            onScrollToTop()
+                        }
+                        scope.launch {
+                            overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                        }
+                    }
+                }
+            }
+    ) {
+        val screenWidthPx = with(density) { maxWidth.toPx() }
+        val horizontalPaddingPx = with(density) { 8.dp.toPx() }
+        val itemGapPx = with(density) { 4.dp.toPx() }
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(columns),
+            state = gridState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
+        ) {
+            itemsIndexed(apps, key = { _, app -> app.componentKey }) { index, app ->
+                val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
+                val isPressed by interactionSource.collectIsPressedAsState()
+                val displayIcon = remember(
+                    app.componentKey,
+                    app.cachedIcon,
+                    app.cachedTwoToneIcon,
+                    twoToneIconsEnabled
+                ) {
+                    app.iconForDisplay(
+                        useTwoTone = twoToneIconsEnabled,
+                        blurred = false
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(0.92f)
+                        .clip(launcherStyle.bubbleShape)
+                        .combinedClickable(
+                            interactionSource = interactionSource,
+                            indication = null,
+                            onClick = {
+                                val col = index % columns
+                                val usableWidth = screenWidthPx - horizontalPaddingPx * 2f - itemGapPx * (columns - 1)
+                                val cellWidth = usableWidth / columns
+                                val centerX = horizontalPaddingPx + col * (cellWidth + itemGapPx) + cellWidth / 2f
+                                onAppClick(
+                                    app,
+                                    Offset(
+                                        x = centerX / screenWidthPx,
+                                        y = 0.5f
+                                    )
+                                )
+                            },
+                            onLongClick = {
+                                onLongClick(app)
+                                longPressedApp = app
+                            }
+                        )
+                        .background(
+                            color = if (isPressed) launcherStyle.pressedCardColor else appPalette.item,
+                            shape = launcherStyle.bubbleShape
+                        )
+                        .padding(0.dp)
+                ) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Image(
+                            bitmap = displayIcon,
+                            contentDescription = app.label,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxSize()
+                        )
+                    }
+                }
+            }
+        }
+
+        longPressedApp?.let { app ->
+            AppShortcutOverlay(
+                app = app,
+                blurEnabled = blurEnabled,
+                onDismiss = { longPressedApp = null }
+            )
+        }
     }
 }
 
@@ -1090,12 +1343,7 @@ private fun reduceHoneycombBlurForFastScroll(
     reduced: Boolean
 ): Float {
     if (!reduced) return blurDp
-    return when {
-        blurDp < 1.5f -> 0f
-        blurDp < 5f -> 4f
-        blurDp < 9f -> 8f
-        else -> 12f
-    }
+    return 0f
 }
 
 private fun honeycombFlowOffset(

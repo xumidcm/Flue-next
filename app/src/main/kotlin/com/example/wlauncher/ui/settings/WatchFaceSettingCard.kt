@@ -39,6 +39,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import com.flue.launcher.ui.home.BuiltInWatchFacePreview
+import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
@@ -51,6 +53,7 @@ fun WatchFaceSettingCard(
     descriptor: LunchWatchFaceDescriptor,
     selected: Boolean,
     scale: Float,
+    uiStyle: UiStyle = UiStyle.APPLE_WATCH,
     builtInPhotoPath: String? = null,
     builtInVideoPath: String? = null,
     photoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
@@ -65,6 +68,7 @@ fun WatchFaceSettingCard(
         animationSpec = spring(stiffness = 780f, dampingRatio = 0.72f),
         label = "watchface_card_press_scale"
     )
+    val launcherStyle = LauncherTheme.style
 
     Row(
         modifier = Modifier
@@ -74,8 +78,8 @@ fun WatchFaceSettingCard(
                 scaleY = scale * pressScale
                 alpha = scale.coerceIn(0.3f, 1f)
             }
-            .clip(RoundedCornerShape(18.dp))
-            .background(if (selected) WatchColors.ActiveCyan.copy(alpha = 0.16f) else WatchColors.SurfaceGlass)
+            .clip(launcherStyle.compactShape)
+            .background(if (selected) launcherStyle.selectedCardColor else launcherStyle.cardColor)
             .clickable(interactionSource = cardInteraction, indication = null, onClick = onSelect)
             .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -86,13 +90,14 @@ fun WatchFaceSettingCard(
                 watchFaceId = descriptor.id,
                 photoPath = builtInPhotoPath,
                 videoPath = builtInVideoPath,
+                uiStyle = uiStyle,
                 photoOptions = photoOptions,
                 videoOptions = videoOptions,
                 showClock = false,
                 playVideo = false,
                 modifier = Modifier
                     .size(52.dp)
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(launcherStyle.compactShape)
             )
         } else {
             val context = androidx.compose.ui.platform.LocalContext.current
@@ -110,14 +115,14 @@ fun WatchFaceSettingCard(
                     contentDescription = null,
                     modifier = Modifier
                         .size(52.dp)
-                        .clip(RoundedCornerShape(14.dp)),
+                        .clip(launcherStyle.compactShape),
                     contentScale = ContentScale.Crop
                 )
             } else {
                 Box(
                     modifier = Modifier
                         .size(52.dp)
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(launcherStyle.compactShape)
                         .background(Color.White.copy(alpha = 0.08f))
                 )
             }
@@ -127,13 +132,13 @@ fun WatchFaceSettingCard(
             contentAlignment = Alignment.CenterStart
         ) {
             Column(modifier = Modifier.padding(end = 56.dp)) {
-                Text(descriptor.displayName, fontSize = 14.sp, color = Color.White)
+                Text(descriptor.displayName, fontSize = 14.sp, color = launcherStyle.titleColor)
                 Spacer(modifier = Modifier.height(2.dp))
                 if (descriptor.summary.isNotBlank()) {
                     Text(
                         descriptor.summary,
                         fontSize = 11.sp,
-                        color = WatchColors.TextTertiary
+                        color = launcherStyle.secondaryTextColor
                     )
                 }
                 val meta = buildString {
@@ -152,7 +157,7 @@ fun WatchFaceSettingCard(
                 }
                 if (meta.isNotBlank()) {
                     Spacer(modifier = Modifier.height(2.dp))
-                    Text(meta, fontSize = 11.sp, color = WatchColors.TextTertiary)
+                    Text(meta, fontSize = 11.sp, color = launcherStyle.secondaryTextColor)
                 }
             }
             Row(
@@ -164,16 +169,16 @@ fun WatchFaceSettingCard(
                     Box(
                         modifier = Modifier
                             .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.08f))
+                            .background(launcherStyle.topBarChipColor)
                             .clickable(onClick = onOpenSettings)
                             .padding(8.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Filled.Settings, contentDescription = null, tint = WatchColors.ActiveCyan)
+                        Icon(Icons.Filled.Settings, contentDescription = null, tint = launcherStyle.accentColor)
                     }
                 }
                 if (selected) {
-                    Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = WatchColors.ActiveCyan)
+                    Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = launcherStyle.accentColor)
                 }
             }
         }

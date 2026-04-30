@@ -69,9 +69,6 @@ fun GestureHost(
                                     if (isHorizontal && totalDx < -80) {
                                         onStateChange(ScreenState.Face)
                                         change.consume()
-                                    } else if (isVertical && totalDy < -80 && showNotification) {
-                                        onStateChange(ScreenState.Notifications)
-                                        change.consume()
                                     }
                                 }
                             }

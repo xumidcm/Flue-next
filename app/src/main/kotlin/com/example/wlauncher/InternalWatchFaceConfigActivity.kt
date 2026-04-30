@@ -1,4 +1,4 @@
-package com.flue.launcher
+﻿package com.flue.launcher
 
 import android.app.Application
 import android.app.Activity.RESULT_OK
@@ -70,6 +70,7 @@ import com.flue.launcher.ui.home.BuiltInWatchFacePreview
 import com.flue.launcher.ui.home.FIXED_PREVIEW_CLOCK
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
+import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.util.RecentsVisibility
@@ -92,7 +93,10 @@ class InternalWatchFaceConfigActivity : ComponentActivity() {
         RecentsVisibility.apply(this)
         val watchFaceId = intent.getStringExtra(EXTRA_INTERNAL_WATCHFACE_ID) ?: BUILT_IN_PHOTO_WATCHFACE_ID
         setContent {
-            WatchLauncherTheme {
+            val viewModel: LauncherViewModel = viewModel()
+            val themeMode by viewModel.themeMode.collectAsState()
+            val uiStyle by viewModel.uiStyle.collectAsState()
+            WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle) {
                 InternalWatchFaceConfigScreen(
                     watchFaceId = watchFaceId,
                     onBack = { finish() }
@@ -108,6 +112,7 @@ private fun InternalWatchFaceConfigScreen(
     onBack: () -> Unit
 ) {
     val vm: LauncherViewModel = viewModel()
+    val launcherStyle = LauncherTheme.style
     val photoPath by vm.builtInPhotoPath.collectAsState()
     val videoPath by vm.builtInVideoPath.collectAsState()
     val photoClockPosition by vm.builtInPhotoClockPosition.collectAsState()
@@ -325,7 +330,7 @@ private fun InternalWatchFaceConfigScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(launcherStyle.screenBackground)
             .flueRotaryScrollable(focusRequester, 0.9f) { rotaryDelta ->
                 scope.launch { scrollState.scrollBy(-rotaryDelta) }
             }
@@ -335,7 +340,7 @@ private fun InternalWatchFaceConfigScreen(
     ) {
         Text(
             text = if (isPhoto) "\u56FE\u7247\u8868\u76D8\u8BBE\u7F6E" else "\u89C6\u9891\u8868\u76D8\u8BBE\u7F6E",
-            color = Color.White,
+            color = launcherStyle.titleColor,
             fontSize = 22.sp,
             fontWeight = FontWeight.Bold
         )
@@ -408,7 +413,7 @@ private fun InternalWatchFaceConfigScreen(
 
         Text(
             text = "\u8868\u76D8\u6837\u5F0F",
-            color = Color.White,
+            color = launcherStyle.titleColor,
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.fillMaxWidth()
@@ -426,7 +431,7 @@ private fun InternalWatchFaceConfigScreen(
             Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = "MD3E\u8868\u76D8\u5F62\u72B6",
-                color = Color.White,
+                color = launcherStyle.titleColor,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.fillMaxWidth()
@@ -532,7 +537,7 @@ private fun InternalWatchFaceConfigScreen(
             Spacer(modifier = Modifier.height(16.dp))
             Text(
             text = "\u65F6\u95F4\u4F4D\u7F6E",
-            color = Color.White,
+            color = launcherStyle.titleColor,
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.fillMaxWidth()
@@ -554,7 +559,7 @@ private fun InternalWatchFaceConfigScreen(
 
             Text(
             text = "\u65F6\u95F4\u5927\u5C0F  ${localClockSize.toInt()}sp",
-            color = Color.White,
+            color = launcherStyle.titleColor,
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.fillMaxWidth()
@@ -653,7 +658,7 @@ private fun InternalWatchFaceConfigScreen(
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = "\u65F6\u949F\u989C\u8272",
-                color = Color.White,
+                color = launcherStyle.titleColor,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.fillMaxWidth()
@@ -734,7 +739,7 @@ private fun ActionButton(
                 scaleY = pressScale
             }
             .clip(RoundedCornerShape(18.dp))
-            .background(if (enabled) WatchColors.SurfaceGlass else Color.White.copy(alpha = 0.05f))
+            .background(if (enabled) WatchColors.SurfaceGlass else WatchColors.InactiveGray)
             .pointerInput(enabled, onLongClick) {
                 if (!enabled) return@pointerInput
                 detectTapGestures(
@@ -785,31 +790,42 @@ private fun handlePickedMedia(
     onMessage("\u8868\u76D8\u5A92\u4F53\u5DF2\u66F4\u65B0")
     return savedPath
 }
-
 @Composable
 private fun ClockStylePickerRow(
     current: WatchFaceClockStyle,
     onSelect: (WatchFaceClockStyle) -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
-    ) {
-        SmallChoiceChip(
-            label = "\u6570\u5B57",
-            selected = current == WatchFaceClockStyle.DIGITAL,
-            modifier = Modifier.weight(1f)
-        ) { onSelect(WatchFaceClockStyle.DIGITAL) }
-        SmallChoiceChip(
-            label = "\u62DF\u771F\u65F6\u949F",
-            selected = current == WatchFaceClockStyle.MD3_ANALOG,
-            modifier = Modifier.weight(1f)
-        ) { onSelect(WatchFaceClockStyle.MD3_ANALOG) }
-        SmallChoiceChip(
-            label = "MD3E\u65F6\u949F",
-            selected = current == WatchFaceClockStyle.MD3E_CLOCK,
-            modifier = Modifier.weight(1f)
-        ) { onSelect(WatchFaceClockStyle.MD3E_CLOCK) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+        ) {
+            SmallChoiceChip(
+                label = "\u6570\u5B57",
+                selected = current == WatchFaceClockStyle.DIGITAL,
+                modifier = Modifier.weight(1f)
+            ) { onSelect(WatchFaceClockStyle.DIGITAL) }
+            SmallChoiceChip(
+                label = "AW\u98CE\u683C",
+                selected = current == WatchFaceClockStyle.APPLE_WATCH,
+                modifier = Modifier.weight(1f)
+            ) { onSelect(WatchFaceClockStyle.APPLE_WATCH) }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+        ) {
+            SmallChoiceChip(
+                label = "MD3\u98CE\u683C",
+                selected = current == WatchFaceClockStyle.MD3_ANALOG,
+                modifier = Modifier.weight(1f)
+            ) { onSelect(WatchFaceClockStyle.MD3_ANALOG) }
+            SmallChoiceChip(
+                label = "MD3E\u56FE\u5F62",
+                selected = current == WatchFaceClockStyle.MD3E_CLOCK,
+                modifier = Modifier.weight(1f)
+            ) { onSelect(WatchFaceClockStyle.MD3E_CLOCK) }
+        }
     }
 }
 
@@ -845,9 +861,10 @@ private fun CustomTextField(
     value: String,
     onValueChange: (String) -> Unit
 ) {
+    val launcherStyle = LauncherTheme.style
     Text(
         text = "\u81EA\u5B9A\u4E49\u6587\u5B57",
-        color = Color.White,
+        color = launcherStyle.titleColor,
         fontSize = 15.sp,
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier.fillMaxWidth()
@@ -864,10 +881,10 @@ private fun CustomTextField(
             focusedContainerColor = WatchColors.SurfaceGlass,
             unfocusedContainerColor = WatchColors.SurfaceGlass,
             disabledContainerColor = WatchColors.SurfaceGlass,
-            focusedTextColor = Color.White,
-            unfocusedTextColor = Color.White,
+            focusedTextColor = launcherStyle.bodyColor,
+            unfocusedTextColor = launcherStyle.bodyColor,
             focusedIndicatorColor = WatchColors.ActiveCyan,
-            unfocusedIndicatorColor = Color.White.copy(alpha = 0.18f),
+            unfocusedIndicatorColor = launcherStyle.outlineColor,
             cursorColor = WatchColors.ActiveCyan
         ),
         modifier = Modifier
@@ -882,6 +899,7 @@ private fun ColorRgbSliderGroup(
     argb: Int,
     onColorChange: (Int) -> Unit
 ) {
+    val launcherStyle = LauncherTheme.style
     val red = android.graphics.Color.red(argb)
     val green = android.graphics.Color.green(argb)
     val blue = android.graphics.Color.blue(argb)
@@ -899,7 +917,7 @@ private fun ColorRgbSliderGroup(
         ) {
             Text(
                 text = title,
-                color = Color.White,
+                color = launcherStyle.titleColor,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold
             )
@@ -941,12 +959,10 @@ private fun ColorChannelSlider(
 }
 
 private fun rgbArgb(red: Int, green: Int, blue: Int): Int {
-    return Color(
-        red = red.coerceIn(0, 255) / 255f,
-        green = green.coerceIn(0, 255) / 255f,
-        blue = blue.coerceIn(0, 255) / 255f,
-        alpha = 1f
-    ).toArgb()
+    val r = red.coerceIn(0, 255)
+    val g = green.coerceIn(0, 255)
+    val b = blue.coerceIn(0, 255)
+    return android.graphics.Color.argb(255, r, g, b)
 }
 
 @Composable
@@ -1025,6 +1041,7 @@ private fun SmallChoiceChip(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
+    val launcherStyle = LauncherTheme.style
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
@@ -1047,7 +1064,7 @@ private fun SmallChoiceChip(
     ) {
         Text(
             text = label,
-            color = if (selected) WatchColors.ActiveCyan else Color.White,
+            color = if (selected) WatchColors.ActiveCyan else launcherStyle.bodyColor,
             fontSize = 14.sp,
             fontWeight = FontWeight.Medium
         )
@@ -1060,6 +1077,7 @@ private fun ToggleRow(
     enabled: Boolean,
     onToggle: () -> Unit
 ) {
+    val launcherStyle = LauncherTheme.style
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
@@ -1073,7 +1091,7 @@ private fun ToggleRow(
         label = "clock_toggle_knob_offset"
     )
     val trackColor by animateColorAsState(
-        targetValue = if (enabled) WatchColors.ActiveGreen else Color.White.copy(alpha = 0.18f),
+        targetValue = if (enabled) WatchColors.ActiveGreen else WatchColors.InactiveGray,
         label = "clock_toggle_track_color"
     )
     Row(
@@ -1093,7 +1111,7 @@ private fun ToggleRow(
     ) {
         Text(
             text = label,
-            color = Color.White,
+            color = launcherStyle.bodyColor,
             fontSize = 15.sp,
             fontWeight = FontWeight.Medium
         )

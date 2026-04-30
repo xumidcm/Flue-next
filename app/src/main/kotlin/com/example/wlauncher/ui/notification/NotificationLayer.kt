@@ -76,6 +76,7 @@ import androidx.compose.ui.unit.sp
 import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.common.WatchBatteryPill
+import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -129,6 +130,7 @@ fun NotificationLayer(
     val dismissThresholdPx = dismissDragRangePx * NOTIFICATION_DISMISS_RELEASE_PROGRESS
     val overscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val launcherStyle = LauncherTheme.style
     var dismissTransitionInFlight by remember { mutableStateOf(false) }
     var dismissDragDistance by remember { mutableFloatStateOf(0f) }
     var dismissDragVelocityY by remember { mutableFloatStateOf(0f) }
@@ -314,7 +316,7 @@ fun NotificationLayer(
         modifier = modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(40.dp))
-            .background(WatchColors.Black)
+            .background(launcherStyle.screenBackground)
             .nestedScroll(nestedScroll)
     ) {
         val contentWidth = maxWidth * NOTIFICATION_CARD_WIDTH_RATIO
@@ -546,6 +548,7 @@ private fun GroupHeader(
 ) {
     val pressed = rememberPressedState()
     val isPressed by pressed
+    val launcherStyle = LauncherTheme.style
     val scale by animateFloatAsState(if (isPressed) 0.97f else 1f, spring(stiffness = 840f, dampingRatio = 0.74f), label = "group_header")
     Row(
         modifier = Modifier
@@ -560,13 +563,13 @@ private fun GroupHeader(
             ),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        Text(title, color = launcherStyle.titleColor, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
         if (showMeta) {
             Spacer(Modifier.weight(1f))
-            Text("${count}条通知", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Text("${count}条通知", color = launcherStyle.titleColor, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.width(10.dp))
-            Box(Modifier.size(28.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.10f)), contentAlignment = Alignment.Center) {
-                Icon(Icons.Filled.KeyboardArrowDown, null, tint = Color.White, modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = if (expanded) 180f else 0f })
+            Box(Modifier.size(28.dp).clip(CircleShape).background(launcherStyle.topBarChipColor), contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.KeyboardArrowDown, null, tint = launcherStyle.topBarTextColor, modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = if (expanded) 180f else 0f })
             }
         }
     }
@@ -628,6 +631,7 @@ private fun NotificationCard(
 ) {
     val pressed = rememberPressedState()
     val isPressed by pressed
+    val launcherStyle = LauncherTheme.style
     val scale by animateFloatAsState(if (isPressed) 0.968f else 1f, spring(stiffness = 860f, dampingRatio = 0.72f), label = "notif_card")
     Box(
         Modifier
@@ -637,7 +641,7 @@ private fun NotificationCard(
             }
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(RoundedCornerShape(28.dp))
-            .background(Color(0xFF353535))
+            .background(launcherStyle.cardColor)
             .instantPressGesture(
                 pressed,
                 enabled = entry.key == "perm" || entry.key == "empty" || entry.contentIntentAvailable,
@@ -649,13 +653,13 @@ private fun NotificationCard(
             NotificationIcon(entry.icon)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(entry.title.ifBlank { entry.appLabel }, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text(entry.title.ifBlank { entry.appLabel }, color = launcherStyle.titleColor, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(2.dp))
                 Text(subtitle, color = WatchColors.TextSecondary, fontSize = 13.sp, maxLines = 2)
             }
             if (trailing.isNotBlank()) {
                 Spacer(Modifier.width(10.dp))
-                Text(trailing, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text(trailing, color = launcherStyle.bodyColor, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             }
         }
     }

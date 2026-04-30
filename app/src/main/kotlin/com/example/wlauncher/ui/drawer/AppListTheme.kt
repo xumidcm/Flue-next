@@ -1,6 +1,8 @@
 package com.flue.launcher.ui.drawer
 
 import androidx.compose.ui.graphics.Color
+import com.flue.launcher.ui.theme.UiStyle
+import com.flue.launcher.ui.theme.isMaterial
 
 data class AppListPalette(
     val background: Color,
@@ -10,8 +12,27 @@ data class AppListPalette(
     val fadeEdge: Color
 )
 
-fun appListPalette(seed: Color, darkMode: Boolean): AppListPalette {
+fun appListPalette(seed: Color, darkMode: Boolean, uiStyle: UiStyle): AppListPalette {
     val normalizedSeed = if (seed.alpha <= 0.01f) Color(0xFF7BE8FF) else seed.copy(alpha = 1f)
+    if (uiStyle.isMaterial) {
+        return if (darkMode) {
+            AppListPalette(
+                background = mixAppListColor(normalizedSeed, Color(0xFF0E131A), 0.78f),
+                item = mixAppListColor(normalizedSeed, Color(0xFF1A2430), 0.72f),
+                itemPressedOverlay = mixAppListColor(normalizedSeed, Color.White, 0.10f).copy(alpha = 0.16f),
+                text = Color(0xFFF4F7FB),
+                fadeEdge = mixAppListColor(normalizedSeed, Color(0xFF0E131A), 0.86f)
+            )
+        } else {
+            AppListPalette(
+                background = mixAppListColor(normalizedSeed, Color(0xFFF5F1EA), 0.84f),
+                item = mixAppListColor(normalizedSeed, Color(0xFFE9E2D5), 0.80f),
+                itemPressedOverlay = mixAppListColor(normalizedSeed, Color.Black, 0.16f).copy(alpha = 0.08f),
+                text = Color(0xFF202833),
+                fadeEdge = mixAppListColor(normalizedSeed, Color(0xFFF5F1EA), 0.90f)
+            )
+        }
+    }
     return if (darkMode) {
         AppListPalette(
             background = mixAppListColor(normalizedSeed, Color.Black, 0.82f),

@@ -1,4 +1,4 @@
-import java.io.FileInputStream
+﻿import java.io.FileInputStream
 import java.util.Properties
 
 plugins {
@@ -43,8 +43,8 @@ android {
         applicationId = "com.flue.launcher"
         minSdk = 27
         targetSdk = 36
-        versionCode = 13
-        versionName = "beta1.3"
+        versionCode = 14
+        versionName = "beta1.4"
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
     }
 

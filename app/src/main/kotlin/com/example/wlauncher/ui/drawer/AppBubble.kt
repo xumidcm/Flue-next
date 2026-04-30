@@ -22,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
@@ -40,6 +41,7 @@ fun AppBubble(
     pressAnimationDelayMillis: Int = 0,
     pressAnimationDurationMillis: Int = 180,
     onPressedChange: (Boolean) -> Unit = {},
+    shape: Shape = CircleShape,
     modifier: Modifier = Modifier
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -91,7 +93,7 @@ fun AppBubble(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .clip(CircleShape)
+                    .clip(shape)
                     .background(tintColor)
             )
         }
@@ -102,14 +104,14 @@ fun AppBubble(
                 filterQuality = FilterQuality.Medium,
                 modifier = Modifier
                     .size(size)
-                    .clip(CircleShape),
+                    .clip(shape),
                 contentScale = ContentScale.Crop
             )
         } else {
             Box(
                 modifier = Modifier
                     .size(size)
-                    .clip(CircleShape)
+                    .clip(shape)
                     .background(Color.White.copy(alpha = 0.06f))
             )
         }
@@ -117,7 +119,7 @@ fun AppBubble(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .clip(CircleShape)
+                    .clip(shape)
                     .background(Color.Black.copy(alpha = pressedOverlayAlpha))
             )
         }

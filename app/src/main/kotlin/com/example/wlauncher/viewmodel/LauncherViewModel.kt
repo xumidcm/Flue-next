@@ -1,4 +1,4 @@
-﻿package com.flue.launcher.viewmodel
+package com.flue.launcher.viewmodel
 
 import android.app.Application
 import android.content.ComponentName
@@ -25,6 +25,8 @@ import com.flue.launcher.data.model.iconForDisplay
 import com.flue.launcher.data.repository.AppRepository
 import com.flue.launcher.iconpack.IconPackDescriptor
 import com.flue.launcher.iconpack.IconPackScanner
+import com.flue.launcher.ui.theme.ThemeMode
+import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.navigation.ScreenState
 import com.flue.launcher.ui.notification.NotificationEntryUi
@@ -60,6 +62,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     companion object {
         val KEY_LAYOUT = stringPreferencesKey("layout_mode")
+        val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
+        val KEY_UI_STYLE = stringPreferencesKey("ui_style")
         val KEY_SIDE_SCREEN_ENABLED = booleanPreferencesKey("side_screen_enabled")
         val KEY_SIDE_SCREEN_SHORTCUTS = stringPreferencesKey("side_screen_shortcuts")
         val KEY_BLUR = booleanPreferencesKey("blur_enabled")
@@ -123,7 +127,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_VIDEO_CUSTOM_TEXT = stringPreferencesKey("video_custom_text")
         val KEY_BUILTIN_MANAGER_THUMBNAILS = booleanPreferencesKey("builtin_manager_thumbnails")
         val KEY_HIDE_FROM_RECENTS = booleanPreferencesKey("hide_from_recents")
-        private const val SIDE_SCREEN_SLOT_COUNT = 9
+        val KEY_SIDE_SCREEN_WIDGETS = stringPreferencesKey("side_screen_widgets")
+        val KEY_SIDE_SCREEN_SHORTCUT_ROWS = intPreferencesKey("side_screen_shortcut_rows")
+        val KEY_SIDE_SCREEN_SHORTCUT_COLS = intPreferencesKey("side_screen_shortcut_cols")
+        private const val SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY = 12
+        private const val SIDE_SCREEN_WIDGET_CAPACITY = 8
     }
 
     private val store = application.dataStore
@@ -136,10 +144,75 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _layoutMode = MutableStateFlow(LayoutMode.Honeycomb)
     val layoutMode: StateFlow<LayoutMode> = _layoutMode.asStateFlow()
+    private val _themeMode = MutableStateFlow(ThemeMode.SYSTEM)
+    val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+    private val _uiStyle = MutableStateFlow(UiStyle.APPLE_WATCH)
+    val uiStyle: StateFlow<UiStyle> = _uiStyle.asStateFlow()
     private val _sideScreenEnabled = MutableStateFlow(true)
     val sideScreenEnabled: StateFlow<Boolean> = _sideScreenEnabled.asStateFlow()
-    private val _sideScreenShortcuts = MutableStateFlow(List(SIDE_SCREEN_SLOT_COUNT) { null as String? })
+    private val _sideScreenShortcutRows = MutableStateFlow(2)
+    val sideScreenShortcutRows: StateFlow<Int> = _sideScreenShortcutRows.asStateFlow()
+    private val _sideScreenShortcutCols = MutableStateFlow(3)
+    val sideScreenShortcutCols: StateFlow<Int> = _sideScreenShortcutCols.asStateFlow()
+    private val _sideScreenShortcuts = MutableStateFlow(List(SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY) { null as String? })
     val sideScreenShortcuts: StateFlow<List<String?>> = _sideScreenShortcuts.asStateFlow()
+
+    private val _sideScreenWidgetSlots = MutableStateFlow(List(SIDE_SCREEN_WIDGET_CAPACITY) { null as String? })
+    val sideScreenWidgetSlots: StateFlow<List<String?>> = _sideScreenWidgetSlots.asStateFlow()
+
+    fun setWidgetSlot(slotIndex: Int, slotValue: String?) {
+        if (slotIndex !in 0 until SIDE_SCREEN_WIDGET_CAPACITY) return
+        val next = _sideScreenWidgetSlots.value.toMutableList().apply {
+            this[slotIndex] = slotValue?.takeIf { it.isNotBlank() }
+        }
+        _sideScreenWidgetSlots.value = next
+        persist {
+            store.edit { prefs ->
+                val serialized = serializeSideScreenWidgets(next)
+                if (serialized.isEmpty()) {
+                    prefs.remove(KEY_SIDE_SCREEN_WIDGETS)
+                } else {
+                    prefs[KEY_SIDE_SCREEN_WIDGETS] = serialized
+                }
+            }
+        }
+    }
+
+    fun removeWidgetSlot(slotIndex: Int) {
+        setWidgetSlot(slotIndex, null)
+    }
+
+    fun swapWidgetSlots(fromIndex: Int, toIndex: Int) {
+        if (fromIndex == toIndex) return
+        if (fromIndex !in 0 until SIDE_SCREEN_WIDGET_CAPACITY || toIndex !in 0 until SIDE_SCREEN_WIDGET_CAPACITY) return
+        val next = _sideScreenWidgetSlots.value.toMutableList()
+        val item = next[fromIndex]
+        next[fromIndex] = next[toIndex]
+        next[toIndex] = item
+        _sideScreenWidgetSlots.value = next
+        persist {
+            store.edit { prefs ->
+                val serialized = serializeSideScreenWidgets(next)
+                if (serialized.isEmpty()) {
+                    prefs.remove(KEY_SIDE_SCREEN_WIDGETS)
+                } else {
+                    prefs[KEY_SIDE_SCREEN_WIDGETS] = serialized
+                }
+            }
+        }
+    }
+
+    fun setSideScreenShortcutRows(rows: Int) {
+        _sideScreenShortcutRows.value = rows.coerceIn(1, 3)
+        val savedValue = _sideScreenShortcutRows.value
+        persist { store.edit { it[KEY_SIDE_SCREEN_SHORTCUT_ROWS] = savedValue } }
+    }
+
+    fun setSideScreenShortcutCols(cols: Int) {
+        _sideScreenShortcutCols.value = cols.coerceIn(2, 4)
+        val savedValue = _sideScreenShortcutCols.value
+        persist { store.edit { it[KEY_SIDE_SCREEN_SHORTCUT_COLS] = savedValue } }
+    }
 
     private val _blurEnabled = MutableStateFlow(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
     val blurEnabled: StateFlow<Boolean> = _blurEnabled.asStateFlow()
@@ -403,12 +476,45 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 } ?: LayoutMode.Honeycomb
                 if (_layoutMode.value != loadedLayout) _layoutMode.value = loadedLayout
 
+                val loadedThemeMode = prefs[KEY_THEME_MODE]?.let {
+                    try {
+                        ThemeMode.valueOf(it)
+                    } catch (_: Exception) {
+                        ThemeMode.SYSTEM
+                    }
+                } ?: ThemeMode.SYSTEM
+                if (_themeMode.value != loadedThemeMode) _themeMode.value = loadedThemeMode
+
+                val loadedUiStyle = prefs[KEY_UI_STYLE]?.let {
+                    try {
+                        UiStyle.valueOf(it)
+                    } catch (_: Exception) {
+                        UiStyle.APPLE_WATCH
+                    }
+                } ?: UiStyle.APPLE_WATCH
+                if (_uiStyle.value != loadedUiStyle) _uiStyle.value = loadedUiStyle
+
                 val loadedSideScreenEnabled = prefs[KEY_SIDE_SCREEN_ENABLED] ?: true
                 if (_sideScreenEnabled.value != loadedSideScreenEnabled) _sideScreenEnabled.value = loadedSideScreenEnabled
+
+                val loadedShortcutRows = (prefs[KEY_SIDE_SCREEN_SHORTCUT_ROWS] ?: 2).coerceIn(1, 3)
+                if (_sideScreenShortcutRows.value != loadedShortcutRows) {
+                    _sideScreenShortcutRows.value = loadedShortcutRows
+                }
+
+                val loadedShortcutCols = (prefs[KEY_SIDE_SCREEN_SHORTCUT_COLS] ?: 3).coerceIn(2, 4)
+                if (_sideScreenShortcutCols.value != loadedShortcutCols) {
+                    _sideScreenShortcutCols.value = loadedShortcutCols
+                }
 
                 val loadedSideScreenShortcuts = parseSideScreenShortcuts(prefs[KEY_SIDE_SCREEN_SHORTCUTS])
                 if (_sideScreenShortcuts.value != loadedSideScreenShortcuts) {
                     _sideScreenShortcuts.value = loadedSideScreenShortcuts
+                }
+
+                val loadedWidgets = parseSideScreenWidgets(prefs[KEY_SIDE_SCREEN_WIDGETS])
+                if (_sideScreenWidgetSlots.value != loadedWidgets) {
+                    _sideScreenWidgetSlots.value = loadedWidgets
                 }
 
                 val loadedBlur = prefs[KEY_BLUR] ?: (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
@@ -717,7 +823,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setState(state: ScreenState) {
-        _screenState.value = state
+        _screenState.value = if (state == ScreenState.Notifications) {
+            if (_sideScreenEnabled.value) ScreenState.Stack else ScreenState.Face
+        } else {
+            state
+        }
         _revealedNotificationTarget.value = null
     }
 
@@ -849,6 +959,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_LAYOUT] = mode.name } }
     }
 
+    fun setThemeMode(mode: ThemeMode) {
+        _themeMode.value = mode
+        persist { store.edit { it[KEY_THEME_MODE] = mode.name } }
+    }
+
+    fun setUiStyle(style: UiStyle) {
+        _uiStyle.value = style
+        persist { store.edit { it[KEY_UI_STYLE] = style.name } }
+    }
+
     fun setSideScreenEnabled(enabled: Boolean) {
         _sideScreenEnabled.value = enabled
         if (!enabled && _screenState.value == ScreenState.Stack) {
@@ -965,10 +1085,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setShowNotification(show: Boolean) {
-        if (!show && _screenState.value == ScreenState.Notifications) {
-            _screenState.value = if (_sideScreenEnabled.value) ScreenState.Stack else ScreenState.Face
-            _revealedNotificationTarget.value = null
-        }
         _showNotification.value = show
         persist {
             store.edit {
@@ -1299,7 +1415,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setSideScreenShortcut(slotIndex: Int, componentKey: String?) {
-        if (slotIndex !in 0 until SIDE_SCREEN_SLOT_COUNT) return
+        if (slotIndex !in 0 until SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY) return
         val next = _sideScreenShortcuts.value.toMutableList().apply {
             this[slotIndex] = componentKey?.takeIf { it.isNotBlank() }
         }
@@ -1390,7 +1506,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val defaultBlurEnabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         _layoutMode.value = LayoutMode.Honeycomb
         _sideScreenEnabled.value = true
-        _sideScreenShortcuts.value = List(SIDE_SCREEN_SLOT_COUNT) { null }
+        _sideScreenShortcutRows.value = 2
+        _sideScreenShortcutCols.value = 3
+        _sideScreenShortcuts.value = List(SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY) { null }
+        _sideScreenWidgetSlots.value = List(SIDE_SCREEN_WIDGET_CAPACITY) { null }
         _blurEnabled.value = defaultBlurEnabled
         _edgeBlurEnabled.value = false
         _lowResIcons.value = false
@@ -1460,6 +1579,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             store.edit {
                 it[KEY_LAYOUT] = LayoutMode.Honeycomb.name
                 it[KEY_SIDE_SCREEN_ENABLED] = true
+                it[KEY_SIDE_SCREEN_SHORTCUT_ROWS] = 2
+                it[KEY_SIDE_SCREEN_SHORTCUT_COLS] = 3
                 it[KEY_BLUR] = defaultBlurEnabled
                 it[KEY_EDGE_BLUR] = false
                 it[KEY_LOW_RES] = false
@@ -1480,6 +1601,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_SHOW_NOTIFICATION] = true
                 it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
                 it.remove(KEY_SIDE_SCREEN_SHORTCUTS)
+                it.remove(KEY_SIDE_SCREEN_WIDGETS)
                 it.remove(KEY_HIDDEN_APPS)
                 it.remove(KEY_ICON_PACK_PACKAGE)
                 it[KEY_SELECTED_WATCHFACE_ID] = BUILT_IN_WATCHFACE_ID
@@ -1597,12 +1719,27 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             ?.split('|')
             ?.map { it.ifBlank { null } }
             .orEmpty()
-        return List(SIDE_SCREEN_SLOT_COUNT) { index -> parts.getOrNull(index) }
+        return List(SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY) { index -> parts.getOrNull(index) }
     }
 
     private fun serializeSideScreenShortcuts(shortcuts: List<String?>): String {
-        val normalized = List(SIDE_SCREEN_SLOT_COUNT) { index ->
+        val normalized = List(SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY) { index ->
             shortcuts.getOrNull(index)?.takeIf { it.isNotBlank() } ?: ""
+        }
+        return if (normalized.all(String::isEmpty)) "" else normalized.joinToString("|")
+    }
+
+    private fun parseSideScreenWidgets(raw: String?): List<String?> {
+        val parts = raw
+            ?.split(if (raw.contains('|')) '|' else ',')
+            ?.map { it.ifBlank { null } }
+            .orEmpty()
+        return List(SIDE_SCREEN_WIDGET_CAPACITY) { index -> parts.getOrNull(index) }
+    }
+
+    private fun serializeSideScreenWidgets(widgets: List<String?>): String {
+        val normalized = List(SIDE_SCREEN_WIDGET_CAPACITY) { index ->
+            widgets.getOrNull(index)?.takeIf { it.isNotBlank() } ?: ""
         }
         return if (normalized.all(String::isEmpty)) "" else normalized.joinToString("|")
     }

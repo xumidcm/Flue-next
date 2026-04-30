@@ -74,6 +74,8 @@ import com.flue.launcher.ui.input.DrawerInputSource
 import com.flue.launcher.ui.input.flueDrawerRotaryScrollable
 import com.flue.launcher.ui.input.normalizeDrawerScrollDelta
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
+import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.UiStyle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -85,11 +87,11 @@ private const val LIST_MENU_DRAG_START_DP = 20f
 private const val LIST_AUTO_SCROLL_EDGE_DP = 84f
 private const val LIST_AUTO_SCROLL_MAX_PX = 30f
 private const val LIST_EDGE_ITEM_BLUR_DP = 4f
-private const val FAST_FLOW_SLOW_TOP_FRACTION = 0.30f
-private const val FAST_FLOW_SLOW_BOTTOM_FRACTION = 0.70f
+private const val FAST_FLOW_SLOW_TOP_FRACTION = 0.25f
+private const val FAST_FLOW_SLOW_BOTTOM_FRACTION = 0.75f
 private const val FAST_FLOW_SLOW_SCALE = 0.56f
 private const val FAST_FLOW_FAST_SCALE = 1.85f
-private const val FAST_FLOW_MAX_OFFSET_PX = 260f
+private const val FAST_FLOW_MAX_OFFSET_PX = 300f
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -102,6 +104,7 @@ fun ListDrawerScreen(
     fastFlowAnimationEnabled: Boolean = false,
     twoToneIconsEnabled: Boolean = false,
     themeColor: Color = Color(0xFF7BE8FF),
+    uiStyle: UiStyle = UiStyle.APPLE_WATCH,
     darkMode: Boolean = true,
     iconSize: Dp = 48.dp,
     topFadeRangeDp: Int = 56,
@@ -135,12 +138,15 @@ fun ListDrawerScreen(
     val settlingCenterY = remember { Animatable(0f) }
     var focusReady by remember { mutableStateOf(false) }
     var wheelMomentumJob by remember { mutableStateOf<Job?>(null) }
+    var fastScrollActive by remember { mutableStateOf(false) }
+    var fastScrollResetJob by remember { mutableStateOf<Job?>(null) }
     val visibleIndexes = remember(listState.layoutInfo.visibleItemsInfo) {
         listState.layoutInfo.visibleItemsInfo.map { it.index }
     }
     val estimatedItemHeightPx = with(density) { (iconSize + 24.dp).toPx() }
     val overscrollLimitPx = with(density) { configuration.screenHeightDp.dp.toPx() / 2f }
-    val appPalette = appListPalette(themeColor, darkMode)
+    val launcherStyle = LauncherTheme.style
+    val appPalette = appListPalette(themeColor, darkMode, uiStyle)
 
     LaunchedEffect(visibleIndexes, dragFromIndex, dragCurrentIndex, apps.size) {
         val retain = buildSet {
@@ -158,10 +164,20 @@ fun ListDrawerScreen(
         }
     }
 
+    fun markFastScrollActive(durationMs: Long = 180L) {
+        fastScrollActive = true
+        fastScrollResetJob?.cancel()
+        fastScrollResetJob = scope.launch {
+            delay(durationMs)
+            fastScrollActive = false
+        }
+    }
+
     fun launchWheelScroll(delta: Float) {
         if (delta == 0f) return
         wheelMomentumJob?.cancel()
         wheelMomentumJob = scope.launch {
+            markFastScrollActive(220L)
             val baseDelta = delta.coerceIn(-96f, 96f)
             listState.scrollBy(baseDelta)
             var tail = baseDelta * 0.35f
@@ -184,9 +200,13 @@ fun ListDrawerScreen(
         BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxSize()
+                    .background(appPalette.background)
                     .flueDrawerRotaryScrollable(focusRequester, DrawerInputMode.List) { rotaryDelta ->
                         wheelMomentumJob?.cancel()
-                        scope.launch { listState.scrollBy(-rotaryDelta) }
+                        scope.launch {
+                            markFastScrollActive(180L)
+                            listState.scrollBy(-rotaryDelta)
+                        }
                     }
                     .onGloballyPositioned {
                         if (!focusReady) focusReady = true
@@ -388,6 +408,9 @@ fun ListDrawerScreen(
             val visibleInfoByIndex = remember(listState.layoutInfo.visibleItemsInfo) {
                 listState.layoutInfo.visibleItemsInfo.associateBy { it.index }
             }
+            val reduceListVisualLoad = (fastScrollActive || listState.isScrollInProgress) &&
+                dragFromIndex == null &&
+                longPressedApp == null
             LaunchedEffect(dragFromIndex, screenHeightPx) {
                 var previousFrameNanos = 0L
                 while (dragFromIndex != null) {
@@ -444,13 +467,17 @@ fun ListDrawerScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                itemsIndexed(apps, key = { _, app -> app.componentKey }) { index, app ->
+                itemsIndexed(
+                    items = apps,
+                    key = { _, app -> app.componentKey },
+                    contentType = { _, _ -> "app_row" }
+                ) { index, app ->
                     val itemInfo = visibleInfoByIndex[index]
                     val itemScale = computeItemScale(
                         itemInfo = itemInfo,
                         screenCenterY = screenCenterY,
                         screenHeight = screenHeightPx,
-                        fisheyeEnabled = fisheyeEnabled
+                        fisheyeEnabled = fisheyeEnabled && !reduceListVisualLoad
                     )
                     val rowCenterY = itemCenters[index] ?: itemInfo?.let { it.offset + it.size / 2f } ?: screenCenterY
                     val flowOffset = computeFastFlowOffset(
@@ -458,7 +485,10 @@ fun ListDrawerScreen(
                         screenCenterY = screenCenterY,
                         slowTopY = fastFlowSlowTopY,
                         slowBottomY = fastFlowSlowBottomY,
-                        enabled = fastFlowAnimationEnabled && dragFromIndex == null && longPressedApp == null
+                        enabled = fastFlowAnimationEnabled &&
+                            !reduceListVisualLoad &&
+                            dragFromIndex == null &&
+                            longPressedApp == null
                     )
                     val itemBlur = computeVerticalEdgeBlur(
                         centerY = itemInfo?.let { it.offset + it.size / 2f } ?: screenCenterY,
@@ -467,16 +497,27 @@ fun ListDrawerScreen(
                         bottomBlurZonePx = bottomEdgeBlurZonePx,
                         maxBlurDp = LIST_EDGE_ITEM_BLUR_DP
                     )
+                    val effectiveItemBlur = reduceListBlurForFastScroll(itemBlur, reduceListVisualLoad)
                     val useBlurredIcon = (
                         Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
                         blurEnabled &&
                         effectiveEdgeBlur &&
-                        itemBlur > 0.5f
+                        effectiveItemBlur > 0.5f
                     )
-                    val displayIcon = app.iconForDisplay(
-                        useTwoTone = twoToneIconsEnabled,
-                        blurred = useBlurredIcon
-                    )
+                    val displayIcon = remember(
+                        app.componentKey,
+                        app.cachedIcon,
+                        app.cachedBlurredIcon,
+                        app.cachedTwoToneIcon,
+                        app.cachedTwoToneBlurredIcon,
+                        twoToneIconsEnabled,
+                        useBlurredIcon
+                    ) {
+                        app.iconForDisplay(
+                            useTwoTone = twoToneIconsEnabled,
+                            blurred = useBlurredIcon
+                        )
+                    }
                     val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
                     val isPressed by interactionSource.collectIsPressedAsState()
                     val isDragged = dragFromIndex == index
@@ -536,9 +577,15 @@ fun ListDrawerScreen(
                                     1f
                                 }
                             }
-                            .platformBlur(itemBlur, blurEnabled && effectiveEdgeBlur && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                            .background(appPalette.item, RoundedCornerShape(18.dp))
-                            .background(appPalette.itemPressedOverlay.copy(alpha = pressedOverlay), RoundedCornerShape(18.dp))
+                            .platformBlur(
+                                effectiveItemBlur,
+                                blurEnabled &&
+                                    effectiveEdgeBlur &&
+                                    !reduceListVisualLoad &&
+                                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                            )
+                            .background(appPalette.item, launcherStyle.compactShape)
+                            .background(appPalette.itemPressedOverlay.copy(alpha = pressedOverlay), launcherStyle.compactShape)
                             .combinedClickable(
                                 interactionSource = interactionSource,
                                 indication = null,
@@ -599,7 +646,7 @@ fun ListDrawerScreen(
                             alpha = 0.98f
                             shadowElevation = 18.dp.toPx()
                         }
-                        .background(appPalette.item, RoundedCornerShape(18.dp))
+                        .background(appPalette.item, launcherStyle.compactShape)
                         .padding(horizontal = 28.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -631,7 +678,7 @@ fun ListDrawerScreen(
             }
         }
 
-        if (blurEnabled && effectiveEdgeBlur) {
+        if (blurEnabled && effectiveEdgeBlur && !(fastScrollActive || listState.isScrollInProgress)) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -803,6 +850,11 @@ private fun computeVerticalEdgeBlur(
         (1f - (bottomDistance / bottomBlurZonePx)).coerceIn(0f, 1f)
     }
     return maxOf(topStrength, bottomStrength) * maxBlurDp
+}
+
+private fun reduceListBlurForFastScroll(blurDp: Float, reduced: Boolean): Float {
+    if (!reduced) return blurDp
+    return 0f
 }
 
 private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awaitLongPressByTimeoutOrCancel(

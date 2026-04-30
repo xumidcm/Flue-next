@@ -61,6 +61,9 @@ import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.navigation.ScreenState
 import com.flue.launcher.ui.notification.NotificationLayer
 import com.flue.launcher.ui.smartstack.SmartStackLayer
+import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.ThemeMode
+import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.util.applyFadeCloseTransition
 import com.flue.launcher.util.applyFadeOpenTransition
@@ -92,9 +95,11 @@ class LauncherActivity : ComponentActivity() {
         )
         onBackPressedDispatcher.addCallback(this) { vm.handleBackPress() }
         setContent {
-            WatchLauncherTheme {
-                val viewModel: LauncherViewModel = viewModel()
-                vm = viewModel
+            val viewModel: LauncherViewModel = viewModel()
+            vm = viewModel
+            val themeMode by viewModel.themeMode.collectAsState()
+            val uiStyle by viewModel.uiStyle.collectAsState()
+            WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle) {
                 LauncherScreen(viewModel)
             }
         }
@@ -139,9 +144,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val context = LocalContext.current
     val screenState by vm.screenState.collectAsState()
     val layoutMode by vm.layoutMode.collectAsState()
+    val themeMode by vm.themeMode.collectAsState()
     val sideScreenEnabled by vm.sideScreenEnabled.collectAsState()
+    val sideScreenShortcutRows by vm.sideScreenShortcutRows.collectAsState()
+    val sideScreenShortcutCols by vm.sideScreenShortcutCols.collectAsState()
     val sideScreenShortcuts by vm.sideScreenShortcuts.collectAsState()
-    val sideScreenPreviewGroups by vm.sideScreenPreviewGroups.collectAsState()
     val blurEnabled by vm.blurEnabled.collectAsState()
     val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsState()
     val apps by vm.apps.collectAsState()
@@ -160,6 +167,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsState()
     val showStepCount by vm.showStepCount.collectAsState()
     val showNotification by vm.showNotification.collectAsState()
+    val uiStyle by vm.uiStyle.collectAsState()
     val notificationAccessGranted by vm.notificationAccessGranted.collectAsState()
     val notificationGroups by vm.notificationGroups.collectAsState()
     val revealedNotificationTarget by vm.revealedNotificationTarget.collectAsState()
@@ -203,7 +211,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val builtInVideoShowSeconds by vm.builtInVideoShowSeconds.collectAsState()
     val builtInPhotoCustomText by vm.builtInPhotoCustomText.collectAsState()
     val builtInVideoCustomText by vm.builtInVideoCustomText.collectAsState()
-    val systemDarkMode = isSystemInDarkTheme()
+    val effectiveDarkMode = when (themeMode) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.DARK -> true
+        ThemeMode.LIGHT -> false
+    }
+    val launcherStyle = LauncherTheme.style
     val photoWatchOptions = BuiltInWatchFaceOptions(
         clockPosition = builtInPhotoClockPosition,
         clockSizeSp = builtInPhotoClockSize,
@@ -330,7 +343,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(launcherStyle.screenBackground)
     ) {
         val density = LocalDensity.current
         val screenWidthPx = with(density) { maxWidth.toPx() }
@@ -368,7 +381,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             screenState = screenState,
             onStateChange = { vm.setState(it) },
             sideScreenEnabled = sideScreenEnabled,
-            showNotification = notificationsEnabled,
+            showNotification = false,
             showControlCenter = false,
             modifier = Modifier.fillMaxSize()
         ) {
@@ -381,7 +394,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         translationX = sidePageProgress * sideSceneTravelPx
                     }
                     .scaleBlurAlpha(
-                        targetValues = faceLayerValues(faceAnimState),
+                        targetValues = faceLayerValues(faceAnimState, uiStyle),
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled
                     )
@@ -393,8 +406,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         "loading"
                     },
                     transitionSpec = {
-                        fadeIn(animationSpec = tween(220, delayMillis = 70)) togetherWith
-                            fadeOut(animationSpec = tween(180))
+                        fadeIn(animationSpec = launcherStyle.faceSwitchEnterSpec) togetherWith
+                            fadeOut(animationSpec = launcherStyle.faceSwitchExitSpec)
                     },
                     modifier = Modifier.fillMaxSize(),
                     label = "watchface_switch"
@@ -411,6 +424,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             photoPath = builtInPhotoPath,
                             videoPath = builtInVideoPath,
                             isFaceVisible = screenState == ScreenState.Face,
+                            uiStyle = uiStyle,
                             photoOptions = photoWatchOptions,
                             videoOptions = videoWatchOptions,
                             onLongPress = openWatchFaceChooser
@@ -435,7 +449,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .fillMaxSize()
                     .zIndex(if (screenState == ScreenState.Apps) 3f else 0f)
                     .scaleBlurAlpha(
-                        targetValues = appListLayerValues(screenState),
+                        targetValues = appListLayerValues(screenState, uiStyle),
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled,
                         origin = if (useOrigin) appOpenOrigin else null
@@ -457,7 +471,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                         twoToneIconsEnabled = twoToneIconsEnabled,
                         themeColor = appListThemeColor,
-                        darkMode = systemDarkMode,
+                        uiStyle = uiStyle,
+                        darkMode = effectiveDarkMode,
                         onAppClick = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
                             vm.openApp(appInfo, origin, launchDelay, ScreenState.Apps)
@@ -476,7 +491,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                         twoToneIconsEnabled = twoToneIconsEnabled,
                         themeColor = appListThemeColor,
-                        darkMode = systemDarkMode,
+                        uiStyle = uiStyle,
+                        darkMode = effectiveDarkMode,
                         onAppClick = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
                             vm.openApp(appInfo, origin, launchDelay, ScreenState.Apps)
@@ -504,16 +520,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
             AnimatedVisibility(
                 visible = showLaunchBackdrop,
                 modifier = Modifier.zIndex(6f),
-                enter = fadeIn(animationSpec = tween(140)),
-                exit = fadeOut(animationSpec = tween(180)) +
+                enter = fadeIn(animationSpec = launcherStyle.launchMaskEnterSpec),
+                exit = fadeOut(animationSpec = launcherStyle.launchMaskExitSpec) +
                     slideOutVertically(
-                        animationSpec = tween(220),
-                        targetOffsetY = { fullHeight -> fullHeight / 6 }
+                        animationSpec = tween(if (uiStyle == UiStyle.MATERIAL_3) 260 else 220),
+                        targetOffsetY = { fullHeight -> if (uiStyle == UiStyle.MATERIAL_3) fullHeight / 10 else fullHeight / 6 }
                     )
             ) {
                 LaunchBackdropContent(
                     showSplash = effectiveLaunchSplash,
-                    icon = effectiveLaunchIcon
+                    icon = effectiveLaunchIcon,
+                    uiStyle = uiStyle
                 )
             }
 
@@ -528,32 +545,32 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 (1f - 0.58f * notificationProgress)
                         }
                 ) {
+                    val sideScreenWidgetSlots by vm.sideScreenWidgetSlots.collectAsState()
                     SmartStackLayer(
                         apps = apps,
+                        shortcutRows = sideScreenShortcutRows,
+                        shortcutCols = sideScreenShortcutCols,
                         sideScreenShortcuts = sideScreenShortcuts,
-                        previewGroups = sideScreenPreviewGroups,
+                        sideScreenWidgetSlots = sideScreenWidgetSlots,
+                        previewGroups = notificationGroups,
                         notificationsEnabled = notificationsEnabled,
                         notificationAccessGranted = notificationAccessGranted,
-                        notificationsSceneActive = screenState == ScreenState.Notifications,
-                        notificationTransitionProgress = notificationProgress,
+                        notificationsSceneActive = false,
+                        notificationTransitionProgress = 0f,
                         revealedNotificationTarget = revealedNotificationTarget,
                         onRevealTargetChange = vm::setRevealedNotificationTarget,
-                        onOpenNotifications = { vm.setState(ScreenState.Notifications) },
-                        onNotificationTransitionProgressChange = updateNotificationTransitionProgress,
-                        onNotificationTransitionRelease = { open ->
-                            if (open) {
-                                vm.setState(ScreenState.Notifications)
-                                settleNotificationTransition(1f)
-                            } else {
-                                settleNotificationTransition(0f)
-                            }
-                        },
+                        onOpenNotifications = {},
+                        onNotificationTransitionProgressChange = {},
+                        onNotificationTransitionRelease = {},
                         onLaunchApp = { appInfo, origin ->
                             val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
                             vm.openApp(appInfo, origin, launchDelay, ScreenState.Stack)
                         },
                         onSetShortcut = vm::setSideScreenShortcut,
                         onRemoveShortcut = vm::removeSideScreenShortcut,
+                        onSetWidget = vm::setWidgetSlot,
+                        onSwapWidget = vm::swapWidgetSlots,
+                        onRemoveWidget = vm::removeWidgetSlot,
                         onDismissGroup = vm::dismissNotificationGroup,
                         onDismissNotification = vm::dismissNotification,
                         onDismissToFace = { vm.setState(ScreenState.Face) },
@@ -608,18 +625,20 @@ fun LauncherScreen(vm: LauncherViewModel) {
 @Composable
 private fun LaunchBackdropContent(
     showSplash: Boolean,
-    icon: androidx.compose.ui.graphics.ImageBitmap?
+    icon: androidx.compose.ui.graphics.ImageBitmap?,
+    uiStyle: UiStyle
 ) {
+    val launcherStyle = LauncherTheme.style
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(launcherStyle.screenBackground),
         contentAlignment = Alignment.Center
     ) {
         AnimatedVisibility(
             visible = showSplash && icon != null,
-            enter = fadeIn() + scaleIn(initialScale = 0.5f),
-            exit = fadeOut() + scaleOut(targetScale = 0.3f)
+            enter = fadeIn() + scaleIn(initialScale = if (uiStyle == UiStyle.MATERIAL_3) 0.82f else 0.5f),
+            exit = fadeOut() + scaleOut(targetScale = if (uiStyle == UiStyle.MATERIAL_3) 0.88f else 0.3f)
         ) {
             icon?.let { launchIcon ->
                 Image(
@@ -627,7 +646,7 @@ private fun LaunchBackdropContent(
                     contentDescription = null,
                     modifier = Modifier
                         .size(96.dp)
-                        .clip(CircleShape),
+                        .clip(if (uiStyle == UiStyle.MATERIAL_3) launcherStyle.compactShape else CircleShape),
                     contentScale = ContentScale.Crop
                 )
             }

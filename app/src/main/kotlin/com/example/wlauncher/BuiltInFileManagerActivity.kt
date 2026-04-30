@@ -63,6 +63,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
+import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.util.RecentsVisibility
@@ -97,7 +98,10 @@ class BuiltInFileManagerActivity : ComponentActivity() {
         }
 
         setContent {
-            WatchLauncherTheme {
+            val viewModel: LauncherViewModel = viewModel()
+            val themeMode by viewModel.themeMode.collectAsState()
+            val uiStyle by viewModel.uiStyle.collectAsState()
+            WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle) {
                 BuiltInFileManagerScreen(
                     mode = mode,
                     hasPermission = permissionState.value,
@@ -136,6 +140,7 @@ private fun BuiltInFileManagerScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     val vm: LauncherViewModel = viewModel()
     val showThumbnails by vm.builtInManagerThumbnails.collectAsState()
+    val launcherStyle = LauncherTheme.style
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
@@ -150,7 +155,7 @@ private fun BuiltInFileManagerScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(launcherStyle.screenBackground)
             .padding(16.dp)
             .flueRotaryScrollable(focusRequester, 0.95f) { rotaryDelta ->
                 scope.launch { listState.scrollBy(-rotaryDelta) }
@@ -158,7 +163,7 @@ private fun BuiltInFileManagerScreen(
     ) {
         Text(
             text = if (mode == FILE_MANAGER_MODE_VIDEO) "内置文件管理器（视频）" else "内置文件管理器（图片）",
-            color = Color.White,
+            color = launcherStyle.titleColor,
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold
         )
@@ -237,7 +242,7 @@ private fun BuiltInFileManagerScreen(
                                 Spacer(modifier = Modifier.size(10.dp))
                             }
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(text = item.displayName, color = Color.White, fontSize = 14.sp)
+                                Text(text = item.displayName, color = launcherStyle.bodyColor, fontSize = 14.sp)
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(text = subTitle, color = WatchColors.TextTertiary, fontSize = 11.sp)
                             }
@@ -255,6 +260,7 @@ private fun BuiltInFileManagerScreen(
 @Composable
 private fun MediaThumb(uri: Uri, isVideo: Boolean) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val launcherStyle = LauncherTheme.style
     val cacheKey = remember(uri, isVideo) { "${if (isVideo) "v" else "i"}:${uri}" }
     val thumbnail by produceState<Bitmap?>(initialValue = MediaThumbCache.get(cacheKey), cacheKey, uri, isVideo) {
         if (value != null) return@produceState
@@ -276,13 +282,13 @@ private fun MediaThumb(uri: Uri, isVideo: Boolean) {
             contentDescription = null,
             modifier = Modifier
                 .size(42.dp)
-                .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(10.dp))
+                .background(launcherStyle.cardColor, RoundedCornerShape(10.dp))
         )
     } else {
         Spacer(
             modifier = Modifier
                 .size(42.dp)
-                .background(Color.White.copy(alpha = 0.06f), RoundedCornerShape(10.dp))
+                .background(launcherStyle.cardColor, RoundedCornerShape(10.dp))
         )
     }
 }
@@ -433,7 +439,7 @@ private fun FileManagerActionButton(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer { scaleX = pressScale; scaleY = pressScale }
-            .background(if (enabled) WatchColors.SurfaceGlass else Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+            .background(if (enabled) WatchColors.SurfaceGlass else WatchColors.InactiveGray, RoundedCornerShape(12.dp))
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick)
             .padding(vertical = 12.dp),
         horizontalArrangement = Arrangement.Center
