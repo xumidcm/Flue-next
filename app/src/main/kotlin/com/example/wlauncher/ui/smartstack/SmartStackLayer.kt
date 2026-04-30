@@ -1,4 +1,4 @@
-﻿package com.flue.launcher.ui.smartstack
+package com.flue.launcher.ui.smartstack
 
 import android.Manifest
 import android.app.Activity
@@ -30,6 +30,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -78,6 +79,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -93,11 +95,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.WidgetInfo
+import com.flue.launcher.FlueApplication
 import com.flue.launcher.data.repository.WidgetRepository
 import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.common.WatchBatteryPill
 import com.flue.launcher.ui.drawer.AppBubble
+import com.flue.launcher.ui.drawer.AppShortcutOverlay
+import com.flue.launcher.ui.drawer.vibrateHaptic
 import com.flue.launcher.ui.notification.NotificationEntryUi
 import com.flue.launcher.ui.notification.NotificationGroupUi
 import com.flue.launcher.ui.notification.NotificationRevealTarget
@@ -126,6 +131,7 @@ private sealed interface SideScreenModalState {
     data object None : SideScreenModalState
     data class ShortcutPicker(val slotIndex: Int) : SideScreenModalState
     data object WidgetPicker : SideScreenModalState
+    data class ShortcutActions(val slotIndex: Int, val app: AppInfo) : SideScreenModalState
     data class RemoveShortcut(val slotIndex: Int) : SideScreenModalState
     data class WidgetActions(val widgetIndex: Int) : SideScreenModalState
     data class RemoveWidget(val widgetIndex: Int) : SideScreenModalState
@@ -176,6 +182,8 @@ fun SmartStackLayer(
     onLaunchApp: (AppInfo, Offset) -> Unit,
     onSetShortcut: (Int, String?) -> Unit,
     onRemoveShortcut: (Int) -> Unit,
+    onSwapShortcut: (Int, Int) -> Unit,
+    onHideApp: (AppInfo) -> Unit,
     onSetWidget: (Int, String?) -> Unit,
     onSwapWidget: (Int, Int) -> Unit,
     onRemoveWidget: (Int) -> Unit,
@@ -198,7 +206,7 @@ fun SmartStackLayer(
     val visibleShortcutCount = visibleShortcutRows * visibleShortcutCols
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
-    val widgetRepository = remember(context) { WidgetRepository(context) }
+    val widgetRepository = remember(context) { FlueApplication.repositories(context).widgetRepository }
     val appWidgetManager = remember(context) { AppWidgetManager.getInstance(context) }
     val appWidgetHost = remember(context) { AppWidgetHost(context, SIDE_SCREEN_APP_WIDGET_HOST_ID) }
     var pendingWidgetSelection by remember { mutableStateOf<PendingWidgetSelection?>(null) }
@@ -262,14 +270,6 @@ fun SmartStackLayer(
         }
     }
 
-    DisposableEffect(appWidgetHost) {
-        runCatching { appWidgetHost.startListening() }
-        onDispose {
-            discardPendingWidgetSelection()
-            runCatching { appWidgetHost.stopListening() }
-        }
-    }
-
     val shortcutItems = remember(apps, sideScreenShortcuts, visibleShortcutCount) {
         List(visibleShortcutCount) { i ->
             val appKey = sideScreenShortcuts.getOrNull(i)
@@ -279,6 +279,18 @@ fun SmartStackLayer(
     val widgetCards = remember(sideScreenWidgetSlots, widgetRepository) {
         sideScreenWidgetSlots.mapIndexedNotNull { index, raw ->
             widgetRepository.parseSlotValue(raw)?.let { SideScreenWidgetCardItem(index, it) }
+        }
+    }
+    val visibleWidgetCards = remember(widgetCards) { widgetCards.take(3) }
+    DisposableEffect(appWidgetHost, visibleWidgetCards.isNotEmpty()) {
+        if (visibleWidgetCards.isNotEmpty()) {
+            runCatching { appWidgetHost.startListening() }
+        }
+        onDispose {
+            discardPendingWidgetSelection()
+            if (visibleWidgetCards.isNotEmpty()) {
+                runCatching { appWidgetHost.stopListening() }
+            }
         }
     }
     var modalState by remember { mutableStateOf<SideScreenModalState>(SideScreenModalState.None) }
@@ -399,7 +411,11 @@ fun SmartStackLayer(
                 items = shortcutItems,
                 slotCenters = slotCenters,
                 onAdd = { onRevealTargetChange(null); modalState = SideScreenModalState.ShortcutPicker(it) },
-                onLongPress = { onRevealTargetChange(null); modalState = SideScreenModalState.RemoveShortcut(it) },
+                onOpenActions = { slot, app ->
+                    onRevealTargetChange(null)
+                    modalState = SideScreenModalState.ShortcutActions(slot, app)
+                },
+                onSwap = onSwapShortcut,
                 onClickApp = { slot, app ->
                     val center = slotCenters[slot] ?: Offset(widthPx / 2f, heightPx / 2f)
                     onRevealTargetChange(null)
@@ -417,7 +433,7 @@ fun SmartStackLayer(
                 }
             )
             Spacer(Modifier.height(10.dp))
-            if (widgetCards.isEmpty()) {
+            if (visibleWidgetCards.isEmpty()) {
                 EmptyWidgetCard(width = contentWidth)
             } else {
                 Column(
@@ -426,7 +442,7 @@ fun SmartStackLayer(
                         .animateContentSize(),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    widgetCards.forEach { card ->
+                    visibleWidgetCards.forEach { card ->
                         WidgetCard(
                             widget = card.widget,
                             widgetRepository = widgetRepository,
@@ -460,16 +476,23 @@ fun SmartStackLayer(
                     when {
                         !notificationAccessGranted -> PreviewInfoCard("寮€鍚€氱煡璁块棶", "鎺堟潈鍚庢墍鏈夐€氱煡浼氱洿鎺ユ樉绀哄湪杩欓噷", onOpenNotifications)
                         previewGroups.isEmpty() -> PreviewInfoCard("鏆傛棤閫氱煡", "鏂扮殑閫氱煡浼氱洿鎺ユ帓鍒楀湪灏忕粍浠朵笅鏂?", onOpenNotifications)
-                        else -> previewGroups.forEach { group ->
-                            group.entries.forEach { entry ->
-                                SwipeRevealDeleteContainer(
-                                    target = NotificationRevealTarget.Entry(entry.key),
-                                    revealedTarget = revealedNotificationTarget,
-                                    onRevealTargetChange = onRevealTargetChange,
-                                    enabled = entry.isClearable,
-                                    onDelete = { onDismissNotification(entry.key) }
-                                ) {
-                                    PreviewPill(entry, onOpenNotifications)
+                        else -> buildPreviewRows(previewGroups, maxRows = 3).forEach { row ->
+                            when (row) {
+                                is PreviewRow.Aggregate -> StackedPreviewCard(row.leadEntry, row.hiddenCount, onOpenNotifications)
+                                is PreviewRow.Group -> row.entries.forEach { entry ->
+                                    SwipeRevealDeleteContainer(
+                                        target = NotificationRevealTarget.Entry(entry.key),
+                                        revealedTarget = revealedNotificationTarget,
+                                        onRevealTargetChange = onRevealTargetChange,
+                                        enabled = entry.isClearable,
+                                        onDelete = { onDismissNotification(entry.key) }
+                                    ) {
+                                        if (row.hiddenCount > 0) {
+                                            StackedPreviewCard(entry, row.hiddenCount, onOpenNotifications)
+                                        } else {
+                                            PreviewPill(entry, onOpenNotifications)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -539,6 +562,15 @@ fun SmartStackLayer(
             },
             onDismiss = { modalState = SideScreenModalState.None }
         )
+        is SideScreenModalState.ShortcutActions -> AppShortcutOverlay(
+            app = state.app,
+            onExcludeApp = {
+                onHideApp(state.app)
+                onRemoveShortcut(state.slotIndex)
+            },
+            onRemoveShortcut = { onRemoveShortcut(state.slotIndex) },
+            onDismiss = { modalState = SideScreenModalState.None }
+        )
         is SideScreenModalState.RemoveShortcut -> {
             val app = shortcutItems.getOrNull(state.slotIndex)
             if (app != null) {
@@ -605,13 +637,22 @@ fun SmartStackLayer(
     items: List<AppInfo?>,
     slotCenters: MutableMap<Int, Offset>,
     onAdd: (Int) -> Unit,
-    onLongPress: (Int) -> Unit,
+    onOpenActions: (Int, AppInfo) -> Unit,
+    onSwap: (Int, Int) -> Unit,
     onClickApp: (Int, AppInfo) -> Unit
 ) {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val dragThresholdPx = with(density) { 10.dp.toPx() }
+    val dropThresholdPx = with(density) { 68.dp.toPx() }
     val horizontalSpacing = 12.dp
     val verticalSpacing = 12.dp
     val bubbleSize = ((width - 28.dp - horizontalSpacing * (cols - 1)) / cols)
         .coerceIn(44.dp, 58.dp)
+    var draggingSlot by remember { mutableStateOf<Int?>(null) }
+    var dragPointer by remember { mutableStateOf<Offset?>(null) }
+    var dragMoved by remember { mutableStateOf(false) }
+    var dragDistance by remember { mutableFloatStateOf(0f) }
     Box(
         Modifier
             .width(width)
@@ -633,11 +674,58 @@ fun SmartStackLayer(
                                     AddBubble(size = bubbleSize) { onAdd(slot) }
                                 }
                                 else -> {
+                                    val dragModifier = Modifier.pointerInput(item.componentKey, slot, slotCenters) {
+                                        detectDragGesturesAfterLongPress(
+                                            onDragStart = {
+                                                vibrateHaptic(context)
+                                                draggingSlot = slot
+                                                dragPointer = slotCenters[slot]
+                                                dragMoved = false
+                                                dragDistance = 0f
+                                            },
+                                            onDrag = { change, dragAmount ->
+                                                change.consume()
+                                                val current = dragPointer ?: slotCenters[slot] ?: Offset.Zero
+                                                dragPointer = current + dragAmount
+                                                dragDistance += dragAmount.getDistance()
+                                                if (dragDistance > dragThresholdPx) {
+                                                    dragMoved = true
+                                                }
+                                            },
+                                            onDragEnd = {
+                                                val pointer = dragPointer
+                                                val target = pointer?.let { release ->
+                                                    slotCenters
+                                                        .filterKeys { it != slot }
+                                                        .minByOrNull { (_, center) -> (center - release).getDistance() }
+                                                        ?.takeIf { (_, center) -> (center - release).getDistance() <= dropThresholdPx }
+                                                        ?.key
+                                                }
+                                                if (dragMoved && target != null) {
+                                                    onSwap(slot, target)
+                                                } else if (!dragMoved) {
+                                                    onOpenActions(slot, item)
+                                                }
+                                                draggingSlot = null
+                                                dragPointer = null
+                                                dragMoved = false
+                                                dragDistance = 0f
+                                            },
+                                            onDragCancel = {
+                                                draggingSlot = null
+                                                dragPointer = null
+                                                dragMoved = false
+                                                dragDistance = 0f
+                                            }
+                                        )
+                                    }
                                     AppBubble(
                                         item.cachedIcon,
                                         bubbleSize,
                                         onClick = { onClickApp(slot, item) },
-                                        onLongClick = { onLongPress(slot) }
+                                        onLongClick = null,
+                                        forcePressed = draggingSlot == slot,
+                                        modifier = dragModifier
                                     )
                                 }
                             }
@@ -693,10 +781,14 @@ private fun WidgetCard(
             )
     ) {
         if (providerInfo != null && widget.widgetId != -1) {
+            val widgetBindTag = remember(widget.widgetId, providerInfo) {
+                "${widget.widgetId}|${providerInfo.provider.flattenToString()}|${providerInfo.minWidth}x${providerInfo.minHeight}"
+            }
             AndroidView(
                 factory = { viewContext ->
                     appWidgetHost.createView(viewContext, widget.widgetId, providerInfo).apply {
                         setAppWidget(widget.widgetId, providerInfo)
+                        tag = widgetBindTag
                         setOnLongClickListener {
                             onLongPress()
                             true
@@ -704,16 +796,19 @@ private fun WidgetCard(
                     }
                 },
                 update = { hostView ->
-                    @Suppress("DEPRECATION")
-                    hostView.setAppWidget(widget.widgetId, providerInfo)
-                    @Suppress("DEPRECATION")
-                    hostView.updateAppWidgetSize(
-                        buildWidgetBindOptions(providerInfo),
-                        0,
-                        0,
-                        Int.MAX_VALUE,
-                        Int.MAX_VALUE
-                    )
+                    if (hostView.tag != widgetBindTag) {
+                        @Suppress("DEPRECATION")
+                        hostView.setAppWidget(widget.widgetId, providerInfo)
+                        @Suppress("DEPRECATION")
+                        hostView.updateAppWidgetSize(
+                            buildWidgetBindOptions(providerInfo),
+                            0,
+                            0,
+                            Int.MAX_VALUE,
+                            Int.MAX_VALUE
+                        )
+                        hostView.tag = widgetBindTag
+                    }
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1209,8 +1304,17 @@ private fun ShortcutPickerRow(
     LaunchedEffect(visible) { if (!visible) { delay(220); onDismissRequest() } }
     val alpha by animateFloatAsState(if (visible) 1f else 0f, spring(stiffness = 720f, dampingRatio = 0.85f), label = "modal_alpha")
     val scale by animateFloatAsState(if (visible) 1f else 0.84f, spring(stiffness = 700f, dampingRatio = 0.8f), label = "modal_scale")
-    Box(Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha }.background(Color.Black.copy(alpha = 0.72f)).clickable(indication = null, interactionSource = dismissInteraction) { dismiss() }, contentAlignment = Alignment.Center) {
-        Box(Modifier.graphicsLayer { scaleX = scale; scaleY = scale }.clickable(indication = null, interactionSource = blockInteraction) {}) { content(::dismiss) }
+    Box(Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha }.background(Color.Black.copy(alpha = 0.72f)).clickable(indication = null, interactionSource = dismissInteraction) { dismiss() }.consumeModalPointers(), contentAlignment = Alignment.Center) {
+        Box(Modifier.graphicsLayer { scaleX = scale; scaleY = scale }.clickable(indication = null, interactionSource = blockInteraction) {}.consumeModalPointers()) { content(::dismiss) }
+    }
+}
+
+private fun Modifier.consumeModalPointers(): Modifier = pointerInput(Unit) {
+    awaitPointerEventScope {
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Final)
+            event.changes.forEach { it.consume() }
+        }
     }
 }
 

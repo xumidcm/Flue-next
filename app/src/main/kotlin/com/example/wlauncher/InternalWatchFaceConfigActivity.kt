@@ -1,4 +1,4 @@
-﻿package com.flue.launcher
+package com.flue.launcher
 
 import android.app.Application
 import android.app.Activity.RESULT_OK
@@ -44,7 +44,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -94,8 +94,8 @@ class InternalWatchFaceConfigActivity : ComponentActivity() {
         val watchFaceId = intent.getStringExtra(EXTRA_INTERNAL_WATCHFACE_ID) ?: BUILT_IN_PHOTO_WATCHFACE_ID
         setContent {
             val viewModel: LauncherViewModel = viewModel()
-            val themeMode by viewModel.themeMode.collectAsState()
-            val uiStyle by viewModel.uiStyle.collectAsState()
+            val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+            val uiStyle by viewModel.uiStyle.collectAsStateWithLifecycle()
             WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle) {
                 InternalWatchFaceConfigScreen(
                     watchFaceId = watchFaceId,
@@ -113,41 +113,41 @@ private fun InternalWatchFaceConfigScreen(
 ) {
     val vm: LauncherViewModel = viewModel()
     val launcherStyle = LauncherTheme.style
-    val photoPath by vm.builtInPhotoPath.collectAsState()
-    val videoPath by vm.builtInVideoPath.collectAsState()
-    val photoClockPosition by vm.builtInPhotoClockPosition.collectAsState()
-    val videoClockPosition by vm.builtInVideoClockPosition.collectAsState()
-    val photoClockSize by vm.builtInPhotoClockSize.collectAsState()
-    val videoClockSize by vm.builtInVideoClockSize.collectAsState()
-    val photoClockBold by vm.builtInPhotoClockBold.collectAsState()
-    val videoClockBold by vm.builtInVideoClockBold.collectAsState()
-    val videoFillScreen by vm.builtInVideoFillScreen.collectAsState()
-    val videoClockColorMode by vm.builtInVideoClockColorMode.collectAsState()
-    val watchFaceFontPath by vm.builtInWatchFaceFontPath.collectAsState()
-    val photoClockStyle by vm.builtInPhotoClockStyle.collectAsState()
-    val videoClockStyle by vm.builtInVideoClockStyle.collectAsState()
-    val photoMd3eShape by vm.builtInPhotoMd3eShape.collectAsState()
-    val videoMd3eShape by vm.builtInVideoMd3eShape.collectAsState()
-    val photoUseThemeTextColor by vm.builtInPhotoUseThemeTextColor.collectAsState()
-    val videoUseThemeTextColor by vm.builtInVideoUseThemeTextColor.collectAsState()
-    val photoTextColorArgb by vm.builtInPhotoTextColorArgb.collectAsState()
-    val videoTextColorArgb by vm.builtInVideoTextColorArgb.collectAsState()
-    val photoMd3eAutoColors by vm.builtInPhotoMd3eAutoColors.collectAsState()
-    val videoMd3eAutoColors by vm.builtInVideoMd3eAutoColors.collectAsState()
-    val photoMd3eTextColorArgb by vm.builtInPhotoMd3eTextColorArgb.collectAsState()
-    val videoMd3eTextColorArgb by vm.builtInVideoMd3eTextColorArgb.collectAsState()
-    val photoMd3eFaceColorArgb by vm.builtInPhotoMd3eFaceColorArgb.collectAsState()
-    val videoMd3eFaceColorArgb by vm.builtInVideoMd3eFaceColorArgb.collectAsState()
-    val photoMd3eHourColorArgb by vm.builtInPhotoMd3eHourColorArgb.collectAsState()
-    val videoMd3eHourColorArgb by vm.builtInVideoMd3eHourColorArgb.collectAsState()
-    val photoMd3eMinuteColorArgb by vm.builtInPhotoMd3eMinuteColorArgb.collectAsState()
-    val videoMd3eMinuteColorArgb by vm.builtInVideoMd3eMinuteColorArgb.collectAsState()
-    val photoMd3eSecondColorArgb by vm.builtInPhotoMd3eSecondColorArgb.collectAsState()
-    val videoMd3eSecondColorArgb by vm.builtInVideoMd3eSecondColorArgb.collectAsState()
-    val photoShowSeconds by vm.builtInPhotoShowSeconds.collectAsState()
-    val videoShowSeconds by vm.builtInVideoShowSeconds.collectAsState()
-    val photoCustomText by vm.builtInPhotoCustomText.collectAsState()
-    val videoCustomText by vm.builtInVideoCustomText.collectAsState()
+    val photoPath by vm.builtInPhotoPath.collectAsStateWithLifecycle()
+    val videoPath by vm.builtInVideoPath.collectAsStateWithLifecycle()
+    val photoClockPosition by vm.builtInPhotoClockPosition.collectAsStateWithLifecycle()
+    val videoClockPosition by vm.builtInVideoClockPosition.collectAsStateWithLifecycle()
+    val photoClockSize by vm.builtInPhotoClockSize.collectAsStateWithLifecycle()
+    val videoClockSize by vm.builtInVideoClockSize.collectAsStateWithLifecycle()
+    val photoClockBold by vm.builtInPhotoClockBold.collectAsStateWithLifecycle()
+    val videoClockBold by vm.builtInVideoClockBold.collectAsStateWithLifecycle()
+    val videoFillScreen by vm.builtInVideoFillScreen.collectAsStateWithLifecycle()
+    val videoClockColorMode by vm.builtInVideoClockColorMode.collectAsStateWithLifecycle()
+    val watchFaceFontPath by vm.builtInWatchFaceFontPath.collectAsStateWithLifecycle()
+    val photoClockStyle by vm.builtInPhotoClockStyle.collectAsStateWithLifecycle()
+    val videoClockStyle by vm.builtInVideoClockStyle.collectAsStateWithLifecycle()
+    val photoMd3eShape by vm.builtInPhotoMd3eShape.collectAsStateWithLifecycle()
+    val videoMd3eShape by vm.builtInVideoMd3eShape.collectAsStateWithLifecycle()
+    val photoUseThemeTextColor by vm.builtInPhotoUseThemeTextColor.collectAsStateWithLifecycle()
+    val videoUseThemeTextColor by vm.builtInVideoUseThemeTextColor.collectAsStateWithLifecycle()
+    val photoTextColorArgb by vm.builtInPhotoTextColorArgb.collectAsStateWithLifecycle()
+    val videoTextColorArgb by vm.builtInVideoTextColorArgb.collectAsStateWithLifecycle()
+    val photoMd3eAutoColors by vm.builtInPhotoMd3eAutoColors.collectAsStateWithLifecycle()
+    val videoMd3eAutoColors by vm.builtInVideoMd3eAutoColors.collectAsStateWithLifecycle()
+    val photoMd3eTextColorArgb by vm.builtInPhotoMd3eTextColorArgb.collectAsStateWithLifecycle()
+    val videoMd3eTextColorArgb by vm.builtInVideoMd3eTextColorArgb.collectAsStateWithLifecycle()
+    val photoMd3eFaceColorArgb by vm.builtInPhotoMd3eFaceColorArgb.collectAsStateWithLifecycle()
+    val videoMd3eFaceColorArgb by vm.builtInVideoMd3eFaceColorArgb.collectAsStateWithLifecycle()
+    val photoMd3eHourColorArgb by vm.builtInPhotoMd3eHourColorArgb.collectAsStateWithLifecycle()
+    val videoMd3eHourColorArgb by vm.builtInVideoMd3eHourColorArgb.collectAsStateWithLifecycle()
+    val photoMd3eMinuteColorArgb by vm.builtInPhotoMd3eMinuteColorArgb.collectAsStateWithLifecycle()
+    val videoMd3eMinuteColorArgb by vm.builtInVideoMd3eMinuteColorArgb.collectAsStateWithLifecycle()
+    val photoMd3eSecondColorArgb by vm.builtInPhotoMd3eSecondColorArgb.collectAsStateWithLifecycle()
+    val videoMd3eSecondColorArgb by vm.builtInVideoMd3eSecondColorArgb.collectAsStateWithLifecycle()
+    val photoShowSeconds by vm.builtInPhotoShowSeconds.collectAsStateWithLifecycle()
+    val videoShowSeconds by vm.builtInVideoShowSeconds.collectAsStateWithLifecycle()
+    val photoCustomText by vm.builtInPhotoCustomText.collectAsStateWithLifecycle()
+    val videoCustomText by vm.builtInVideoCustomText.collectAsStateWithLifecycle()
     val isPhoto = watchFaceId == BUILT_IN_PHOTO_WATCHFACE_ID
     val currentPath = if (isPhoto) photoPath else videoPath
     val activeClockPosition = if (isPhoto) photoClockPosition else videoClockPosition

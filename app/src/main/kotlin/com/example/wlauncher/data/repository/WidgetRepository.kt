@@ -6,14 +6,18 @@ import android.content.Context
 import com.flue.launcher.data.model.WidgetInfo
 
 class WidgetRepository(private val context: Context) {
+    private data class ProviderSnapshot(
+        val widgets: List<WidgetInfo>,
+        val providersByKey: Map<String, AppWidgetProviderInfo>
+    )
+
+    @Volatile private var providerSnapshot: ProviderSnapshot? = null
 
     private val appWidgetManager: AppWidgetManager
         get() = AppWidgetManager.getInstance(context)
 
     fun getAllWidgets(): List<WidgetInfo> {
-        return appWidgetManager.installedProviders
-            .map { providerInfo -> providerInfo.toWidgetInfo() }
-            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+        return snapshot().widgets
     }
 
     fun getWidgetByKey(widgetKey: String, widgetId: Int = -1): WidgetInfo? {
@@ -21,19 +25,18 @@ class WidgetRepository(private val context: Context) {
     }
 
     fun findProviderInfo(widgetKey: String): AppWidgetProviderInfo? {
-        return appWidgetManager.installedProviders.firstOrNull {
-            "${it.provider.packageName}/${it.provider.className}" == widgetKey
-        }
+        return snapshot().providersByKey[widgetKey]
+    }
+
+    fun invalidateProviders() {
+        providerSnapshot = null
     }
 
     fun parseSlotValue(raw: String?): WidgetInfo? {
         if (raw.isNullOrBlank()) return null
         val separatorIndex = raw.indexOf(':')
-        val widgetId = raw.substring(0, separatorIndex).toIntOrNull()
-        val widgetKey = when {
-            separatorIndex <= 0 -> raw
-            else -> raw.substring(separatorIndex + 1)
-        }
+        val widgetId = if (separatorIndex > 0) raw.substring(0, separatorIndex).toIntOrNull() else null
+        val widgetKey = if (separatorIndex > 0) raw.substring(separatorIndex + 1) else raw
         return getWidgetByKey(widgetKey = widgetKey, widgetId = widgetId ?: -1)
     }
 
@@ -61,5 +64,22 @@ class WidgetRepository(private val context: Context) {
             minHeightDp = minHeight.coerceAtLeast(0),
             configureClassName = configure?.className
         )
+    }
+
+    private fun snapshot(): ProviderSnapshot {
+        providerSnapshot?.let { return it }
+        return synchronized(this) {
+            providerSnapshot ?: appWidgetManager.installedProviders
+                .associateBy { "${it.provider.packageName}/${it.provider.className}" }
+                .let { providers ->
+                    ProviderSnapshot(
+                        widgets = providers.values
+                            .map { providerInfo -> providerInfo.toWidgetInfo() }
+                            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label }),
+                        providersByKey = providers
+                    )
+                }
+                .also { providerSnapshot = it }
+        }
     }
 }

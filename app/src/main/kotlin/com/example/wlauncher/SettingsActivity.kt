@@ -1,4 +1,4 @@
-﻿package com.flue.launcher
+package com.flue.launcher
 
 import android.app.Activity
 import android.content.Intent
@@ -73,7 +73,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -98,6 +98,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.dudu.wearlauncher.utils.ILog
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.common.bottomFisheyeScale
 import com.flue.launcher.ui.input.flueRotaryScrollable
@@ -119,15 +120,18 @@ import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.InternalWatchFaceStorage
 import com.flue.launcher.watchface.LunchWatchFaceRuntime
 import java.text.SimpleDateFormat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Date
 import java.util.Locale
 
 private const val ABOUT_VERSION = "beta1.4"
 private const val COMMUNITY_GROUP_NUMBER = "1097162313"
+private const val DIAGNOSTIC_LOG_DURATION_MS = 5 * 60 * 1000L
 private const val COMMUNITY_GROUP_URL = "https://qun.qq.com/universal-share/share?ac=1&authKey=5CJC0tNLWsy3YWzGlPbqt%2F5kv%2BYZuJ8y8IVj%2B1UnIeLyR2DWR6QjWtM%2B4HXxH%2BKJ&busi_data=eyJncm91cENvZGUiOiIxMDk3MTYyMzEzIiwidG9rZW4iOiJlMGFBc1VpRXRROE1mS3J5SHgxRjFudmxXY0FuSnRQd2hOWWl6WllFMmlxNTErNWdadXJ5U1ozMmdzUSszaGNYIiwidWluIjoiMzUxMzkwMzA1NSJ9&data=YK52b80xUVwmcLWmSneKQMdVZodE4vTpsqmSb60ykXudbVCfa6AskMHxvqjhAjervNeE4exll-kQw5w-EifYOg&svctype=4&tempid=h5_group_info"
 const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
 const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
@@ -161,8 +165,8 @@ class SettingsActivity : ComponentActivity() {
         val returnToFaceOnBack = intent.getBooleanExtra(EXTRA_SETTINGS_RETURN_TO_FACE, false)
         setContent {
             val viewModel: LauncherViewModel = viewModel()
-            val themeMode by viewModel.themeMode.collectAsState()
-            val uiStyle by viewModel.uiStyle.collectAsState()
+            val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+            val uiStyle by viewModel.uiStyle.collectAsStateWithLifecycle()
             WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle) {
                 SettingsRootScreen(
                     onFinish = { finish() },
@@ -186,76 +190,77 @@ private fun SettingsRootScreen(
     returnToFaceOnBack: Boolean = false
 ) {
     val context = LocalContext.current
+    val settingsScope = rememberCoroutineScope()
     val vm: LauncherViewModel = viewModel()
-    val watchFaces by vm.availableWatchFaces.collectAsState()
-    val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsState()
-    val selectedWatchFace by vm.selectedWatchFace.collectAsState()
-    val allApps by vm.allApps.collectAsState()
-    val hiddenApps by vm.hiddenApps.collectAsState()
-    val availableIconPacks by vm.availableIconPacks.collectAsState()
-    val selectedIconPackPackage by vm.selectedIconPackPackage.collectAsState()
-    val watchFaceLastError by vm.watchFaceLastError.collectAsState()
-    val layoutMode by vm.layoutMode.collectAsState()
-    val sideScreenEnabled by vm.sideScreenEnabled.collectAsState()
-    val sideScreenShortcutRows by vm.sideScreenShortcutRows.collectAsState()
-    val sideScreenShortcutCols by vm.sideScreenShortcutCols.collectAsState()
-    val blurEnabled by vm.blurEnabled.collectAsState()
-    val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsState()
-    val lowResIcons by vm.lowResIcons.collectAsState()
-    val animationOverrideEnabled by vm.animationOverrideEnabled.collectAsState()
-    val splashIcon by vm.splashIcon.collectAsState()
-    val splashDelay by vm.splashDelay.collectAsState()
-    val honeycombCols by vm.honeycombCols.collectAsState()
-    val honeycombTopBlur by vm.honeycombTopBlur.collectAsState()
-    val honeycombBottomBlur by vm.honeycombBottomBlur.collectAsState()
-    val honeycombTopFade by vm.honeycombTopFade.collectAsState()
-    val honeycombBottomFade by vm.honeycombBottomFade.collectAsState()
-    val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsState()
-    val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsState()
-    val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsState()
-    val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsState()
-    val showStepCount by vm.showStepCount.collectAsState()
-    val builtInPhotoPath by vm.builtInPhotoPath.collectAsState()
-    val builtInVideoPath by vm.builtInVideoPath.collectAsState()
-    val builtInPhotoClockPosition by vm.builtInPhotoClockPosition.collectAsState()
-    val builtInVideoClockPosition by vm.builtInVideoClockPosition.collectAsState()
-    val builtInPhotoClockSize by vm.builtInPhotoClockSize.collectAsState()
-    val builtInVideoClockSize by vm.builtInVideoClockSize.collectAsState()
-    val builtInPhotoClockBold by vm.builtInPhotoClockBold.collectAsState()
-    val builtInVideoClockBold by vm.builtInVideoClockBold.collectAsState()
-    val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
-    val builtInVideoClockColorMode by vm.builtInVideoClockColorMode.collectAsState()
-    val builtInWatchFaceFontPath by vm.builtInWatchFaceFontPath.collectAsState()
-    val builtInPhotoClockStyle by vm.builtInPhotoClockStyle.collectAsState()
-    val builtInVideoClockStyle by vm.builtInVideoClockStyle.collectAsState()
-    val builtInPhotoMd3eShape by vm.builtInPhotoMd3eShape.collectAsState()
-    val builtInVideoMd3eShape by vm.builtInVideoMd3eShape.collectAsState()
-    val builtInPhotoUseThemeTextColor by vm.builtInPhotoUseThemeTextColor.collectAsState()
-    val builtInVideoUseThemeTextColor by vm.builtInVideoUseThemeTextColor.collectAsState()
-    val builtInPhotoTextColorArgb by vm.builtInPhotoTextColorArgb.collectAsState()
-    val builtInVideoTextColorArgb by vm.builtInVideoTextColorArgb.collectAsState()
-    val builtInPhotoMd3eAutoColors by vm.builtInPhotoMd3eAutoColors.collectAsState()
-    val builtInVideoMd3eAutoColors by vm.builtInVideoMd3eAutoColors.collectAsState()
-    val builtInPhotoMd3eTextColorArgb by vm.builtInPhotoMd3eTextColorArgb.collectAsState()
-    val builtInVideoMd3eTextColorArgb by vm.builtInVideoMd3eTextColorArgb.collectAsState()
-    val builtInPhotoMd3eFaceColorArgb by vm.builtInPhotoMd3eFaceColorArgb.collectAsState()
-    val builtInVideoMd3eFaceColorArgb by vm.builtInVideoMd3eFaceColorArgb.collectAsState()
-    val builtInPhotoMd3eHourColorArgb by vm.builtInPhotoMd3eHourColorArgb.collectAsState()
-    val builtInVideoMd3eHourColorArgb by vm.builtInVideoMd3eHourColorArgb.collectAsState()
-    val builtInPhotoMd3eMinuteColorArgb by vm.builtInPhotoMd3eMinuteColorArgb.collectAsState()
-    val builtInVideoMd3eMinuteColorArgb by vm.builtInVideoMd3eMinuteColorArgb.collectAsState()
-    val builtInPhotoMd3eSecondColorArgb by vm.builtInPhotoMd3eSecondColorArgb.collectAsState()
-    val builtInVideoMd3eSecondColorArgb by vm.builtInVideoMd3eSecondColorArgb.collectAsState()
-    val builtInPhotoShowSeconds by vm.builtInPhotoShowSeconds.collectAsState()
-    val builtInVideoShowSeconds by vm.builtInVideoShowSeconds.collectAsState()
-    val builtInPhotoCustomText by vm.builtInPhotoCustomText.collectAsState()
-    val builtInVideoCustomText by vm.builtInVideoCustomText.collectAsState()
-    val builtInManagerThumbnails by vm.builtInManagerThumbnails.collectAsState()
-    val hideFromRecents by vm.hideFromRecents.collectAsState()
-    val themeMode by vm.themeMode.collectAsState()
-    val uiStyle by vm.uiStyle.collectAsState()
+    val watchFaces by vm.availableWatchFaces.collectAsStateWithLifecycle()
+    val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsStateWithLifecycle()
+    val selectedWatchFace by vm.selectedWatchFace.collectAsStateWithLifecycle()
+    val allApps by vm.allApps.collectAsStateWithLifecycle()
+    val hiddenApps by vm.hiddenApps.collectAsStateWithLifecycle()
+    val availableIconPacks by vm.availableIconPacks.collectAsStateWithLifecycle()
+    val selectedIconPackPackage by vm.selectedIconPackPackage.collectAsStateWithLifecycle()
+    val watchFaceLastError by vm.watchFaceLastError.collectAsStateWithLifecycle()
+    val layoutMode by vm.layoutMode.collectAsStateWithLifecycle()
+    val sideScreenEnabled by vm.sideScreenEnabled.collectAsStateWithLifecycle()
+    val sideScreenShortcutRows by vm.sideScreenShortcutRows.collectAsStateWithLifecycle()
+    val sideScreenShortcutCols by vm.sideScreenShortcutCols.collectAsStateWithLifecycle()
+    val blurEnabled by vm.blurEnabled.collectAsStateWithLifecycle()
+    val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsStateWithLifecycle()
+    val lowResIcons by vm.lowResIcons.collectAsStateWithLifecycle()
+    val animationOverrideEnabled by vm.animationOverrideEnabled.collectAsStateWithLifecycle()
+    val splashIcon by vm.splashIcon.collectAsStateWithLifecycle()
+    val splashDelay by vm.splashDelay.collectAsStateWithLifecycle()
+    val honeycombCols by vm.honeycombCols.collectAsStateWithLifecycle()
+    val honeycombTopBlur by vm.honeycombTopBlur.collectAsStateWithLifecycle()
+    val honeycombBottomBlur by vm.honeycombBottomBlur.collectAsStateWithLifecycle()
+    val honeycombTopFade by vm.honeycombTopFade.collectAsStateWithLifecycle()
+    val honeycombBottomFade by vm.honeycombBottomFade.collectAsStateWithLifecycle()
+    val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsStateWithLifecycle()
+    val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsStateWithLifecycle()
+    val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsStateWithLifecycle()
+    val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
+    val showStepCount by vm.showStepCount.collectAsStateWithLifecycle()
+    val builtInPhotoPath by vm.builtInPhotoPath.collectAsStateWithLifecycle()
+    val builtInVideoPath by vm.builtInVideoPath.collectAsStateWithLifecycle()
+    val builtInPhotoClockPosition by vm.builtInPhotoClockPosition.collectAsStateWithLifecycle()
+    val builtInVideoClockPosition by vm.builtInVideoClockPosition.collectAsStateWithLifecycle()
+    val builtInPhotoClockSize by vm.builtInPhotoClockSize.collectAsStateWithLifecycle()
+    val builtInVideoClockSize by vm.builtInVideoClockSize.collectAsStateWithLifecycle()
+    val builtInPhotoClockBold by vm.builtInPhotoClockBold.collectAsStateWithLifecycle()
+    val builtInVideoClockBold by vm.builtInVideoClockBold.collectAsStateWithLifecycle()
+    val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsStateWithLifecycle()
+    val builtInVideoClockColorMode by vm.builtInVideoClockColorMode.collectAsStateWithLifecycle()
+    val builtInWatchFaceFontPath by vm.builtInWatchFaceFontPath.collectAsStateWithLifecycle()
+    val builtInPhotoClockStyle by vm.builtInPhotoClockStyle.collectAsStateWithLifecycle()
+    val builtInVideoClockStyle by vm.builtInVideoClockStyle.collectAsStateWithLifecycle()
+    val builtInPhotoMd3eShape by vm.builtInPhotoMd3eShape.collectAsStateWithLifecycle()
+    val builtInVideoMd3eShape by vm.builtInVideoMd3eShape.collectAsStateWithLifecycle()
+    val builtInPhotoUseThemeTextColor by vm.builtInPhotoUseThemeTextColor.collectAsStateWithLifecycle()
+    val builtInVideoUseThemeTextColor by vm.builtInVideoUseThemeTextColor.collectAsStateWithLifecycle()
+    val builtInPhotoTextColorArgb by vm.builtInPhotoTextColorArgb.collectAsStateWithLifecycle()
+    val builtInVideoTextColorArgb by vm.builtInVideoTextColorArgb.collectAsStateWithLifecycle()
+    val builtInPhotoMd3eAutoColors by vm.builtInPhotoMd3eAutoColors.collectAsStateWithLifecycle()
+    val builtInVideoMd3eAutoColors by vm.builtInVideoMd3eAutoColors.collectAsStateWithLifecycle()
+    val builtInPhotoMd3eTextColorArgb by vm.builtInPhotoMd3eTextColorArgb.collectAsStateWithLifecycle()
+    val builtInVideoMd3eTextColorArgb by vm.builtInVideoMd3eTextColorArgb.collectAsStateWithLifecycle()
+    val builtInPhotoMd3eFaceColorArgb by vm.builtInPhotoMd3eFaceColorArgb.collectAsStateWithLifecycle()
+    val builtInVideoMd3eFaceColorArgb by vm.builtInVideoMd3eFaceColorArgb.collectAsStateWithLifecycle()
+    val builtInPhotoMd3eHourColorArgb by vm.builtInPhotoMd3eHourColorArgb.collectAsStateWithLifecycle()
+    val builtInVideoMd3eHourColorArgb by vm.builtInVideoMd3eHourColorArgb.collectAsStateWithLifecycle()
+    val builtInPhotoMd3eMinuteColorArgb by vm.builtInPhotoMd3eMinuteColorArgb.collectAsStateWithLifecycle()
+    val builtInVideoMd3eMinuteColorArgb by vm.builtInVideoMd3eMinuteColorArgb.collectAsStateWithLifecycle()
+    val builtInPhotoMd3eSecondColorArgb by vm.builtInPhotoMd3eSecondColorArgb.collectAsStateWithLifecycle()
+    val builtInVideoMd3eSecondColorArgb by vm.builtInVideoMd3eSecondColorArgb.collectAsStateWithLifecycle()
+    val builtInPhotoShowSeconds by vm.builtInPhotoShowSeconds.collectAsStateWithLifecycle()
+    val builtInVideoShowSeconds by vm.builtInVideoShowSeconds.collectAsStateWithLifecycle()
+    val builtInPhotoCustomText by vm.builtInPhotoCustomText.collectAsStateWithLifecycle()
+    val builtInVideoCustomText by vm.builtInVideoCustomText.collectAsStateWithLifecycle()
+    val builtInManagerThumbnails by vm.builtInManagerThumbnails.collectAsStateWithLifecycle()
+    val hideFromRecents by vm.hideFromRecents.collectAsStateWithLifecycle()
+    val themeMode by vm.themeMode.collectAsStateWithLifecycle()
+    val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
     val launcherStyle = LauncherTheme.style
-    val showNotification by vm.showNotification.collectAsState()
+    val showNotification by vm.showNotification.collectAsStateWithLifecycle()
     val headerTime = rememberSettingsHeaderTime()
     val isZh = remember(context.resources.configuration) {
         context.resources.configuration.locales[0]?.language?.startsWith("zh") == true
@@ -276,6 +281,7 @@ private fun SettingsRootScreen(
     var hiddenAppsDraft by remember { mutableStateOf(hiddenApps) }
     var hiddenAppsDirty by remember { mutableStateOf(false) }
     var donatePreviewResId by remember { mutableStateOf<Int?>(null) }
+    var diagnosticLoggingEnabled by remember { mutableStateOf(ILog.isDiagnosticLoggingEnabled()) }
     val pageScrollPositions = remember { mutableStateMapOf<SettingsDestination, SavedScrollPosition>() }
 
     LaunchedEffect(hiddenApps) {
@@ -952,9 +958,21 @@ private fun SettingsRootScreen(
             item("export_log") {
                 ActionCard(
                     title = "瀵煎嚭鏃ュ織",
-                    subtitle = "导出最近 500 行系统日志",
-                    onClick = { exportLog(context) },
+                    subtitle = "导出 Flue 摘要、崩溃文件和最近 500 行系统日志",
+                    onClick = { settingsScope.launch { exportLog(context) } },
                     scale = itemFisheye(listState, "export_log", screenCenterY, screenHeightPx)
+                )
+            }
+            item("diagnostic_logging") {
+                SettingsSwitchRow(
+                    title = "诊断日志模式",
+                    subtitle = if (diagnosticLoggingEnabled) "已开启，5 分钟后自动关闭" else "默认关闭，开启后临时允许 release 输出诊断日志",
+                    checked = diagnosticLoggingEnabled,
+                    onToggle = { enabled ->
+                        diagnosticLoggingEnabled = enabled
+                        ILog.setDiagnosticLoggingEnabled(context, enabled, DIAGNOSTIC_LOG_DURATION_MS)
+                    },
+                    scale = itemFisheye(listState, "diagnostic_logging", screenCenterY, screenHeightPx)
                 )
             }
             item("reset_defaults") {
@@ -1776,11 +1794,39 @@ private fun itemFisheye(
     return bottomFisheyeScale(listState, key, screenCenterY, screenHeight)
 }
 
-private fun exportLog(context: android.content.Context) {
+private suspend fun exportLog(context: android.content.Context) {
     try {
-        val log = Runtime.getRuntime().exec("logcat -d -t 500").inputStream.bufferedReader().readText()
-        val file = File(context.cacheDir, "wlauncher_log.txt")
-        file.writeText(log)
+        val file = withContext(Dispatchers.IO) {
+            val rawLog = runCatching {
+                Runtime.getRuntime()
+                    .exec(arrayOf("logcat", "-d", "-t", "500"))
+                    .inputStream
+                    .bufferedReader()
+                    .use { it.readText() }
+            }.getOrElse { error -> "logcat export failed: ${error.message.orEmpty()}" }
+            val crashSummary = listOf("crash_brief.txt", "crash_info.txt", "crash_app_info.txt")
+                .mapNotNull { name ->
+                    val crashFile = File(context.cacheDir, name)
+                    if (!crashFile.exists()) return@mapNotNull null
+                    "===== $name =====\n${crashFile.readText()}"
+                }
+                .joinToString("\n\n")
+                .ifBlank { "No private crash files found." }
+            File(context.cacheDir, "wlauncher_log.txt").apply {
+                writeText(
+                    buildString {
+                        appendLine("===== Flue Diagnostics =====")
+                        appendLine("diagnosticLoggingEnabled=${ILog.isDiagnosticLoggingEnabled()}")
+                        appendLine()
+                        appendLine("===== Private Crash Files =====")
+                        appendLine(crashSummary)
+                        appendLine()
+                        appendLine("===== Raw logcat tail =====")
+                        append(rawLog)
+                    }
+                )
+            }
+        }
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         context.startActivity(
             Intent.createChooser(

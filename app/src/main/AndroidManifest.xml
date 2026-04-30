@@ -12,6 +12,7 @@
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
 
     <application
+        android:name=".FlueApplication"
         android:allowBackup="false"
         android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"

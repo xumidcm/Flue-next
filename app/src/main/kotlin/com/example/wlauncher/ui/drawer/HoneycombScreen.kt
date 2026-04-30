@@ -1,4 +1,4 @@
-﻿package com.flue.launcher.ui.drawer
+package com.flue.launcher.ui.drawer
 
 import android.os.Build
 import androidx.compose.animation.core.Animatable
@@ -87,11 +87,11 @@ private const val HONEYCOMB_MENU_DRAG_START_DP = 20f
 private const val HONEYCOMB_PRESS_DURATION_MS = 200
 private const val HONEYCOMB_AUTO_SCROLL_EDGE_DP = 96f
 private const val HONEYCOMB_AUTO_SCROLL_MAX_PX = 26f
-private const val FAST_FLOW_SLOW_TOP_FRACTION = 0.25f
-private const val FAST_FLOW_SLOW_BOTTOM_FRACTION = 0.75f
+private const val FAST_FLOW_SLOW_TOP_FRACTION = 0.30f
+private const val FAST_FLOW_SLOW_BOTTOM_FRACTION = 0.70f
 private const val FAST_FLOW_SLOW_SCALE = 0.56f
 private const val FAST_FLOW_FAST_SCALE = 1.85f
-private const val FAST_FLOW_MAX_OFFSET_PX = 300f
+private const val FAST_FLOW_MAX_OFFSET_PX = 260f
 
 @Composable
 fun HoneycombScreen(
@@ -114,6 +114,7 @@ fun HoneycombScreen(
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
     onLongClick: (AppInfo) -> Unit = {},
+    onExcludeApp: (AppInfo) -> Unit = {},
     onScrollToTop: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -127,6 +128,7 @@ fun HoneycombScreen(
             columns = (narrowCols + 1).coerceIn(4, 6),
             onAppClick = onAppClick,
             onLongClick = onLongClick,
+            onExcludeApp = onExcludeApp,
             onScrollToTop = onScrollToTop,
             modifier = modifier
         )
@@ -946,6 +948,7 @@ fun HoneycombScreen(
         AppShortcutOverlay(
             app = app,
             blurEnabled = blurEnabled,
+            onExcludeApp = { onExcludeApp(app) },
             onDismiss = { longPressedApp = null }
         )
     }
@@ -960,6 +963,7 @@ private fun MaterialDenseGridScreen(
     columns: Int,
     onAppClick: (AppInfo, Offset) -> Unit,
     onLongClick: (AppInfo) -> Unit,
+    onExcludeApp: (AppInfo) -> Unit,
     onScrollToTop: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -1088,7 +1092,11 @@ private fun MaterialDenseGridScreen(
             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
             verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
         ) {
-            itemsIndexed(apps, key = { _, app -> app.componentKey }) { index, app ->
+            itemsIndexed(
+                items = apps,
+                key = { _, app -> app.componentKey },
+                contentType = { _, _ -> "material_dense_app" }
+            ) { index, app ->
                 val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
                 val isPressed by interactionSource.collectIsPressedAsState()
                 val displayIcon = remember(
@@ -1154,6 +1162,7 @@ private fun MaterialDenseGridScreen(
             AppShortcutOverlay(
                 app = app,
                 blurEnabled = blurEnabled,
+                onExcludeApp = { onExcludeApp(app) },
                 onDismiss = { longPressedApp = null }
             )
         }

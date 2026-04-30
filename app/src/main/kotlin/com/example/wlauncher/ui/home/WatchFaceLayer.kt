@@ -247,17 +247,21 @@ private fun BuiltInWatchFaceSurface(
             clockColorMode = WatchClockColorMode.AUTO
         )
     }
-    val liveClock = rememberClockSnapshot(activeOptions.showSeconds)
+    val liveClock = if (showClock) rememberClockSnapshot(activeOptions.showSeconds) else (clockOverride ?: FIXED_PREVIEW_CLOCK)
     val clock = formatClockForOptions(clockOverride ?: liveClock, activeOptions.showSeconds)
-    val clockPalette = rememberClockPalette(
-        watchFaceId = watchFaceId,
-        photoPath = photoPath,
-        videoPath = videoPath,
-        clockPosition = activeOptions.clockPosition,
-        videoClockColorMode = videoOptions.clockColorMode
-    )
-    val typeface = rememberWatchFaceTypeface(activeOptions.fontPath)
-    val chargingSnapshot = rememberChargingSnapshot()
+    val clockPalette = if (showClock) {
+        rememberClockPalette(
+            watchFaceId = watchFaceId,
+            photoPath = photoPath,
+            videoPath = videoPath,
+            clockPosition = activeOptions.clockPosition,
+            videoClockColorMode = videoOptions.clockColorMode
+        )
+    } else {
+        defaultClockPalette(watchFaceId)
+    }
+    val typeface = if (showClock) rememberWatchFaceTypeface(activeOptions.fontPath) else WatchFaceTypeface(null, null)
+    val chargingSnapshot = if (showClock) rememberChargingSnapshot() else ChargingSnapshot()
     val launcherStyle = LauncherTheme.style
     val backgroundModifier = modifier
         .fillMaxSize()
@@ -556,7 +560,8 @@ private fun extractVideoThumbnail(path: String): ImageBitmap? {
             val frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                 ?: retriever.frameAtTime
                 ?: return@runCatching null
-            frame.asImageBitmap().also {
+            val safeFrame = frame.copy(Bitmap.Config.ARGB_8888, false)
+            safeFrame.asImageBitmap().also {
                 if (!frame.isRecycled) frame.recycle()
             }
         } finally {
@@ -1177,6 +1182,11 @@ fun rememberAppListSeedColor(
         BUILT_IN_VIDEO_WATCHFACE_ID -> videoOptions
         else -> BuiltInWatchFaceOptions()
     }
+    val needsPalette = when {
+        activeOptions.clockStyle == WatchFaceClockStyle.MD3E_CLOCK -> activeOptions.md3eAutoColors
+        else -> activeOptions.useThemeTextColor
+    }
+    if (!needsPalette) return appListSeedColorFromOptions(activeOptions)
     val palette = rememberClockPalette(
         watchFaceId = watchFaceId,
         photoPath = photoPath,
@@ -1231,6 +1241,14 @@ private fun resolveMd3ePalette(
     )
 }
 
+private fun mediaPaletteCacheKey(kind: String, path: String?, variant: String?): String {
+    if (path.isNullOrBlank()) return "$kind|empty|${variant.orEmpty()}"
+    val file = File(path)
+    val lastModified = runCatching { file.lastModified() }.getOrDefault(0L)
+    val length = runCatching { file.length() }.getOrDefault(0L)
+    return "$kind|$path|$lastModified|$length|${variant.orEmpty()}"
+}
+
 @Composable
 private fun rememberClockPalette(
     watchFaceId: String,
@@ -1242,9 +1260,11 @@ private fun rememberClockPalette(
     var palette by remember(watchFaceId, photoPath, videoPath, clockPosition, videoClockColorMode) {
         mutableStateOf(defaultClockPalette(watchFaceId))
     }
-    LaunchedEffect(watchFaceId, photoPath, videoPath, clockPosition, videoClockColorMode) {
+    val photoCacheKey = remember(photoPath, clockPosition) { mediaPaletteCacheKey("photo", photoPath, clockPosition.name) }
+    val videoCacheKey = remember(videoPath) { mediaPaletteCacheKey("video", videoPath, null) }
+    LaunchedEffect(watchFaceId, photoPath, videoPath, clockPosition, videoClockColorMode, photoCacheKey, videoCacheKey) {
         palette = if (watchFaceId == BUILT_IN_PHOTO_WATCHFACE_ID && !photoPath.isNullOrBlank()) {
-            val cacheKey = "photo|$photoPath|${clockPosition.name}"
+            val cacheKey = photoCacheKey
             WatchFacePaletteCache.get(cacheKey)
                 ?: (sampleClockPalette(photoPath, clockPosition) ?: defaultClockPalette(watchFaceId))
                     .also { WatchFacePaletteCache.put(cacheKey, it) }
@@ -1262,7 +1282,7 @@ private fun rememberClockPalette(
                 )
                 WatchClockColorMode.AUTO -> {
                     if (!videoPath.isNullOrBlank()) {
-                        val cacheKey = "video|$videoPath"
+                        val cacheKey = videoCacheKey
                         WatchFacePaletteCache.get(cacheKey)
                             ?: (sampleVideoClockPalette(videoPath) ?: defaultClockPalette(watchFaceId))
                                 .also { WatchFacePaletteCache.put(cacheKey, it) }

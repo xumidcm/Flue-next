@@ -42,7 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -99,8 +99,8 @@ class BuiltInFileManagerActivity : ComponentActivity() {
 
         setContent {
             val viewModel: LauncherViewModel = viewModel()
-            val themeMode by viewModel.themeMode.collectAsState()
-            val uiStyle by viewModel.uiStyle.collectAsState()
+            val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+            val uiStyle by viewModel.uiStyle.collectAsStateWithLifecycle()
             WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle) {
                 BuiltInFileManagerScreen(
                     mode = mode,
@@ -139,7 +139,7 @@ private fun BuiltInFileManagerScreen(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val vm: LauncherViewModel = viewModel()
-    val showThumbnails by vm.builtInManagerThumbnails.collectAsState()
+    val showThumbnails by vm.builtInManagerThumbnails.collectAsStateWithLifecycle()
     val launcherStyle = LauncherTheme.style
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()

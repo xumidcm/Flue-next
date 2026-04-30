@@ -32,12 +32,14 @@ import com.flue.launcher.iconpack.IconPackMapping
 import com.flue.launcher.iconpack.IconPackScanner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 
 class AppRepository(private val context: Context) {
     private data class CachedIconSet(
@@ -68,7 +70,11 @@ class AppRepository(private val context: Context) {
     private var useTwoToneIcons = false
     private var refreshGeneration = 0
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val refreshMonitor = Any()
+    private var refreshJob: Job? = null
+    private var packageRefreshJob: Job? = null
     private val installTimeCache = mutableMapOf<String, Long>()
+    private val iconLocks = ConcurrentHashMap<String, Any>()
     private val iconCache = object : LinkedHashMap<String, CachedIconSet>(160, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedIconSet>?): Boolean {
             return size > 160
@@ -77,7 +83,13 @@ class AppRepository(private val context: Context) {
 
     private val packageReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
-            refreshAsync()
+            synchronized(refreshMonitor) {
+                packageRefreshJob?.cancel()
+                packageRefreshJob = scope.launch {
+                    kotlinx.coroutines.delay(350)
+                    refreshAsync()
+                }
+            }
         }
     }
 
@@ -99,28 +111,42 @@ class AppRepository(private val context: Context) {
     }
 
     fun setHiddenComponents(components: Set<String>) {
+        if (hiddenComponents == components) return
         hiddenComponents = components
         applyFilters()
     }
 
     fun setIconPackPackage(packageName: String?) {
-        iconPackPackage = packageName?.takeIf { it.isNotBlank() }
-        synchronized(iconCache) { iconCache.clear() }
-        refreshAsync(currentIconSize)
+        setIconRenderingOptions(packageName = packageName)
     }
 
     fun setLegacyCircularIconsEnabled(enabled: Boolean) {
-        if (useLegacyCircularIcons == enabled) return
-        useLegacyCircularIcons = enabled
-        synchronized(iconCache) { iconCache.clear() }
-        refreshAsync(currentIconSize)
+        setIconRenderingOptions(legacyCircular = enabled)
     }
 
     fun setTwoToneIconsEnabled(enabled: Boolean) {
-        if (useTwoToneIcons == enabled) return
-        useTwoToneIcons = enabled
+        setIconRenderingOptions(twoTone = enabled)
+    }
+
+    fun setIconRenderingOptions(
+        packageName: String? = iconPackPackage,
+        legacyCircular: Boolean = useLegacyCircularIcons,
+        twoTone: Boolean = useTwoToneIcons,
+        iconSize: Int = currentIconSize
+    ) {
+        val normalized = packageName?.takeIf { it.isNotBlank() }
+        val nextIconSize = iconSize.coerceAtLeast(1)
+        val changed = iconPackPackage != normalized ||
+            useLegacyCircularIcons != legacyCircular ||
+            useTwoToneIcons != twoTone ||
+            currentIconSize != nextIconSize
+        if (!changed) return
+        iconPackPackage = normalized
+        useLegacyCircularIcons = legacyCircular
+        useTwoToneIcons = twoTone
+        currentIconSize = nextIconSize
         synchronized(iconCache) { iconCache.clear() }
-        refreshAsync(currentIconSize)
+        refreshAsync(nextIconSize)
     }
 
     private fun reorder() {
@@ -162,10 +188,11 @@ class AppRepository(private val context: Context) {
         val loadedApps = ArrayList<AppInfo>(resolveList.size + 1)
 
         resolveList.forEach { ri ->
+            if (!isCurrentRefresh(generation)) return
             val packageName = ri.activityInfo.packageName
             val componentKey = "$packageName/${ri.activityInfo.name}"
             val iconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|$componentKey|$iconSize|${if (useLegacyCircularIconsSnapshot) "legacy" else "plain"}|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
-            val cachedIcons = synchronized(iconCache) { iconCache[iconCacheKey] } ?: run {
+            val cachedIcons = getOrCreateIconSet(iconCacheKey) {
                 val packedIcon = iconPackMapping?.let { IconPackScanner.loadIconDrawable(context, it, componentKey) }
                 val resolvedIconDrawable = packedIcon ?: ri.loadIcon(pm)
                 val baseBitmap = if (useLegacyCircularIconsSnapshot && packedIcon == null) {
@@ -191,10 +218,6 @@ class AppRepository(private val context: Context) {
                     twoToneSharp = twoToneSharp,
                     twoToneSoftened = twoToneSoftened
                 )
-                synchronized(iconCache) {
-                    iconCache[iconCacheKey] = iconSet
-                }
-                iconSet
             }
             loadedApps += AppInfo(
                 label = ri.loadLabel(pm).toString(),
@@ -257,6 +280,12 @@ class AppRepository(private val context: Context) {
     }
 
     fun destroy() {
+        synchronized(refreshMonitor) {
+            packageRefreshJob?.cancel()
+            packageRefreshJob = null
+            refreshJob?.cancel()
+            refreshJob = null
+        }
         scope.cancel()
         synchronized(iconCache) { iconCache.clear() }
         try {
@@ -265,9 +294,40 @@ class AppRepository(private val context: Context) {
         }
     }
 
+    fun requestRefresh(iconSize: Int = currentIconSize) {
+        refreshAsync(iconSize)
+    }
+
     private fun refreshAsync(iconSize: Int = currentIconSize) {
-        scope.launch {
-            refresh(iconSize)
+        synchronized(refreshMonitor) {
+            refreshJob?.cancel()
+            refreshJob = scope.launch {
+                refresh(iconSize)
+            }
+        }
+    }
+
+    private fun isCurrentRefresh(generation: Int): Boolean =
+        synchronized(this) { generation == refreshGeneration }
+
+    private fun getOrCreateIconSet(key: String, producer: () -> CachedIconSet): CachedIconSet {
+        synchronized(iconCache) { iconCache[key]?.let { return it } }
+        val lock = iconLocks.getOrPut(key) { Any() }
+        return synchronized(lock) {
+            val existing = synchronized(iconCache) { iconCache[key] }
+            if (existing != null) {
+                existing
+            } else {
+                try {
+                    producer().also { iconSet ->
+                        synchronized(iconCache) {
+                            iconCache[key] = iconSet
+                        }
+                    }
+                } finally {
+                    iconLocks.remove(key)
+                }
+            }
         }
     }
 
@@ -410,21 +470,17 @@ class AppRepository(private val context: Context) {
     private fun createBuiltInSettingsEntry(iconSize: Int, useTwoToneIconsSnapshot: Boolean): AppInfo? {
         val iconDrawable = ContextCompat.getDrawable(context, R.mipmap.ic_settings_launcher) ?: return null
         val iconCacheKey = "builtin_settings|$iconSize|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
-        val cachedIcons = synchronized(iconCache) { iconCache[iconCacheKey] } ?: run {
+        val cachedIcons = getOrCreateIconSet(iconCacheKey) {
             val baseBitmap = drawableToBitmap(iconDrawable, iconSize)
             val sharp = baseBitmap.asImageBitmap()
             val softened = createSoftenedBitmap(baseBitmap).asImageBitmap()
             val twoToneBitmap = if (useTwoToneIconsSnapshot) createTwoToneBitmap(iconDrawable, iconSize) else null
-            val iconSet = CachedIconSet(
+            CachedIconSet(
                 sharp = sharp,
                 softened = softened,
                 twoToneSharp = twoToneBitmap?.asImageBitmap(),
                 twoToneSoftened = twoToneBitmap?.let(::createSoftenedBitmap)?.asImageBitmap()
             )
-            synchronized(iconCache) {
-                iconCache[iconCacheKey] = iconSet
-            }
-            iconSet
         }
         return AppInfo(
             label = context.getString(R.string.settings_title),

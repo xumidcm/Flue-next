@@ -30,7 +30,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +49,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.appListLayerValues
 import com.flue.launcher.ui.anim.faceLayerValues
 import com.flue.launcher.ui.anim.scaleBlurAlpha
@@ -97,8 +98,8 @@ class LauncherActivity : ComponentActivity() {
         setContent {
             val viewModel: LauncherViewModel = viewModel()
             vm = viewModel
-            val themeMode by viewModel.themeMode.collectAsState()
-            val uiStyle by viewModel.uiStyle.collectAsState()
+            val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+            val uiStyle by viewModel.uiStyle.collectAsStateWithLifecycle()
             WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle) {
                 LauncherScreen(viewModel)
             }
@@ -120,6 +121,7 @@ class LauncherActivity : ComponentActivity() {
             applyFadeCloseTransition()
         }
         if (::vm.isInitialized) {
+            vm.setLauncherInteractive(true)
             vm.onReturnToLauncher()
             vm.refreshWatchFaces()
             vm.refreshNotificationAccess()
@@ -128,6 +130,9 @@ class LauncherActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
+        if (::vm.isInitialized) {
+            vm.setLauncherInteractive(false)
+        }
         if (::vm.isInitialized && vm.animationOverrideEnabled.value) {
             applyFadeCloseTransition()
         }
@@ -142,75 +147,76 @@ private fun Intent.isLauncherHomeIntent(): Boolean {
 @Composable
 fun LauncherScreen(vm: LauncherViewModel) {
     val context = LocalContext.current
-    val screenState by vm.screenState.collectAsState()
-    val layoutMode by vm.layoutMode.collectAsState()
-    val themeMode by vm.themeMode.collectAsState()
-    val sideScreenEnabled by vm.sideScreenEnabled.collectAsState()
-    val sideScreenShortcutRows by vm.sideScreenShortcutRows.collectAsState()
-    val sideScreenShortcutCols by vm.sideScreenShortcutCols.collectAsState()
-    val sideScreenShortcuts by vm.sideScreenShortcuts.collectAsState()
-    val blurEnabled by vm.blurEnabled.collectAsState()
-    val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsState()
-    val apps by vm.apps.collectAsState()
-    val appOpenOrigin by vm.appOpenOrigin.collectAsState()
-    val splashIcon by vm.splashIcon.collectAsState()
-    val splashDelay by vm.splashDelay.collectAsState()
-    val currentLaunchIcon by vm.currentLaunchIcon.collectAsState()
-    val honeycombCols by vm.honeycombCols.collectAsState()
-    val honeycombTopBlur by vm.honeycombTopBlur.collectAsState()
-    val honeycombBottomBlur by vm.honeycombBottomBlur.collectAsState()
-    val honeycombTopFade by vm.honeycombTopFade.collectAsState()
-    val honeycombBottomFade by vm.honeycombBottomFade.collectAsState()
-    val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsState()
-    val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsState()
-    val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsState()
-    val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsState()
-    val showStepCount by vm.showStepCount.collectAsState()
-    val showNotification by vm.showNotification.collectAsState()
-    val uiStyle by vm.uiStyle.collectAsState()
-    val notificationAccessGranted by vm.notificationAccessGranted.collectAsState()
-    val notificationGroups by vm.notificationGroups.collectAsState()
-    val revealedNotificationTarget by vm.revealedNotificationTarget.collectAsState()
-    val launchSourceState by vm.launchSourceState.collectAsState()
-    val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsState()
-    val selectedWatchFace by vm.selectedWatchFace.collectAsState()
-    val watchFaceSelectionReady by vm.watchFaceSelectionReady.collectAsState()
-    val watchFaceRefreshToken by vm.watchFaceRefreshToken.collectAsState()
-    val builtInPhotoPath by vm.builtInPhotoPath.collectAsState()
-    val builtInVideoPath by vm.builtInVideoPath.collectAsState()
-    val builtInPhotoClockPosition by vm.builtInPhotoClockPosition.collectAsState()
-    val builtInVideoClockPosition by vm.builtInVideoClockPosition.collectAsState()
-    val builtInPhotoClockSize by vm.builtInPhotoClockSize.collectAsState()
-    val builtInVideoClockSize by vm.builtInVideoClockSize.collectAsState()
-    val builtInPhotoClockBold by vm.builtInPhotoClockBold.collectAsState()
-    val builtInVideoClockBold by vm.builtInVideoClockBold.collectAsState()
-    val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsState()
-    val builtInVideoClockColorMode by vm.builtInVideoClockColorMode.collectAsState()
-    val builtInWatchFaceFontPath by vm.builtInWatchFaceFontPath.collectAsState()
-    val builtInPhotoClockStyle by vm.builtInPhotoClockStyle.collectAsState()
-    val builtInVideoClockStyle by vm.builtInVideoClockStyle.collectAsState()
-    val builtInPhotoMd3eShape by vm.builtInPhotoMd3eShape.collectAsState()
-    val builtInVideoMd3eShape by vm.builtInVideoMd3eShape.collectAsState()
-    val builtInPhotoUseThemeTextColor by vm.builtInPhotoUseThemeTextColor.collectAsState()
-    val builtInVideoUseThemeTextColor by vm.builtInVideoUseThemeTextColor.collectAsState()
-    val builtInPhotoTextColorArgb by vm.builtInPhotoTextColorArgb.collectAsState()
-    val builtInVideoTextColorArgb by vm.builtInVideoTextColorArgb.collectAsState()
-    val builtInPhotoMd3eAutoColors by vm.builtInPhotoMd3eAutoColors.collectAsState()
-    val builtInVideoMd3eAutoColors by vm.builtInVideoMd3eAutoColors.collectAsState()
-    val builtInPhotoMd3eTextColorArgb by vm.builtInPhotoMd3eTextColorArgb.collectAsState()
-    val builtInVideoMd3eTextColorArgb by vm.builtInVideoMd3eTextColorArgb.collectAsState()
-    val builtInPhotoMd3eFaceColorArgb by vm.builtInPhotoMd3eFaceColorArgb.collectAsState()
-    val builtInVideoMd3eFaceColorArgb by vm.builtInVideoMd3eFaceColorArgb.collectAsState()
-    val builtInPhotoMd3eHourColorArgb by vm.builtInPhotoMd3eHourColorArgb.collectAsState()
-    val builtInVideoMd3eHourColorArgb by vm.builtInVideoMd3eHourColorArgb.collectAsState()
-    val builtInPhotoMd3eMinuteColorArgb by vm.builtInPhotoMd3eMinuteColorArgb.collectAsState()
-    val builtInVideoMd3eMinuteColorArgb by vm.builtInVideoMd3eMinuteColorArgb.collectAsState()
-    val builtInPhotoMd3eSecondColorArgb by vm.builtInPhotoMd3eSecondColorArgb.collectAsState()
-    val builtInVideoMd3eSecondColorArgb by vm.builtInVideoMd3eSecondColorArgb.collectAsState()
-    val builtInPhotoShowSeconds by vm.builtInPhotoShowSeconds.collectAsState()
-    val builtInVideoShowSeconds by vm.builtInVideoShowSeconds.collectAsState()
-    val builtInPhotoCustomText by vm.builtInPhotoCustomText.collectAsState()
-    val builtInVideoCustomText by vm.builtInVideoCustomText.collectAsState()
+    val screenState by vm.screenState.collectAsStateWithLifecycle()
+    val launcherInteractive by vm.launcherInteractive.collectAsStateWithLifecycle()
+    val layoutMode by vm.layoutMode.collectAsStateWithLifecycle()
+    val themeMode by vm.themeMode.collectAsStateWithLifecycle()
+    val sideScreenEnabled by vm.sideScreenEnabled.collectAsStateWithLifecycle()
+    val sideScreenShortcutRows by vm.sideScreenShortcutRows.collectAsStateWithLifecycle()
+    val sideScreenShortcutCols by vm.sideScreenShortcutCols.collectAsStateWithLifecycle()
+    val sideScreenShortcuts by vm.sideScreenShortcuts.collectAsStateWithLifecycle()
+    val blurEnabled by vm.blurEnabled.collectAsStateWithLifecycle()
+    val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsStateWithLifecycle()
+    val apps by vm.apps.collectAsStateWithLifecycle()
+    val appOpenOrigin by vm.appOpenOrigin.collectAsStateWithLifecycle()
+    val splashIcon by vm.splashIcon.collectAsStateWithLifecycle()
+    val splashDelay by vm.splashDelay.collectAsStateWithLifecycle()
+    val currentLaunchIcon by vm.currentLaunchIcon.collectAsStateWithLifecycle()
+    val honeycombCols by vm.honeycombCols.collectAsStateWithLifecycle()
+    val honeycombTopBlur by vm.honeycombTopBlur.collectAsStateWithLifecycle()
+    val honeycombBottomBlur by vm.honeycombBottomBlur.collectAsStateWithLifecycle()
+    val honeycombTopFade by vm.honeycombTopFade.collectAsStateWithLifecycle()
+    val honeycombBottomFade by vm.honeycombBottomFade.collectAsStateWithLifecycle()
+    val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsStateWithLifecycle()
+    val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsStateWithLifecycle()
+    val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsStateWithLifecycle()
+    val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
+    val showStepCount by vm.showStepCount.collectAsStateWithLifecycle()
+    val showNotification by vm.showNotification.collectAsStateWithLifecycle()
+    val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
+    val notificationAccessGranted by vm.notificationAccessGranted.collectAsStateWithLifecycle()
+    val notificationGroups by vm.notificationGroups.collectAsStateWithLifecycle()
+    val revealedNotificationTarget by vm.revealedNotificationTarget.collectAsStateWithLifecycle()
+    val launchSourceState by vm.launchSourceState.collectAsStateWithLifecycle()
+    val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsStateWithLifecycle()
+    val selectedWatchFace by vm.selectedWatchFace.collectAsStateWithLifecycle()
+    val watchFaceSelectionReady by vm.watchFaceSelectionReady.collectAsStateWithLifecycle()
+    val watchFaceRefreshToken by vm.watchFaceRefreshToken.collectAsStateWithLifecycle()
+    val builtInPhotoPath by vm.builtInPhotoPath.collectAsStateWithLifecycle()
+    val builtInVideoPath by vm.builtInVideoPath.collectAsStateWithLifecycle()
+    val builtInPhotoClockPosition by vm.builtInPhotoClockPosition.collectAsStateWithLifecycle()
+    val builtInVideoClockPosition by vm.builtInVideoClockPosition.collectAsStateWithLifecycle()
+    val builtInPhotoClockSize by vm.builtInPhotoClockSize.collectAsStateWithLifecycle()
+    val builtInVideoClockSize by vm.builtInVideoClockSize.collectAsStateWithLifecycle()
+    val builtInPhotoClockBold by vm.builtInPhotoClockBold.collectAsStateWithLifecycle()
+    val builtInVideoClockBold by vm.builtInVideoClockBold.collectAsStateWithLifecycle()
+    val builtInVideoFillScreen by vm.builtInVideoFillScreen.collectAsStateWithLifecycle()
+    val builtInVideoClockColorMode by vm.builtInVideoClockColorMode.collectAsStateWithLifecycle()
+    val builtInWatchFaceFontPath by vm.builtInWatchFaceFontPath.collectAsStateWithLifecycle()
+    val builtInPhotoClockStyle by vm.builtInPhotoClockStyle.collectAsStateWithLifecycle()
+    val builtInVideoClockStyle by vm.builtInVideoClockStyle.collectAsStateWithLifecycle()
+    val builtInPhotoMd3eShape by vm.builtInPhotoMd3eShape.collectAsStateWithLifecycle()
+    val builtInVideoMd3eShape by vm.builtInVideoMd3eShape.collectAsStateWithLifecycle()
+    val builtInPhotoUseThemeTextColor by vm.builtInPhotoUseThemeTextColor.collectAsStateWithLifecycle()
+    val builtInVideoUseThemeTextColor by vm.builtInVideoUseThemeTextColor.collectAsStateWithLifecycle()
+    val builtInPhotoTextColorArgb by vm.builtInPhotoTextColorArgb.collectAsStateWithLifecycle()
+    val builtInVideoTextColorArgb by vm.builtInVideoTextColorArgb.collectAsStateWithLifecycle()
+    val builtInPhotoMd3eAutoColors by vm.builtInPhotoMd3eAutoColors.collectAsStateWithLifecycle()
+    val builtInVideoMd3eAutoColors by vm.builtInVideoMd3eAutoColors.collectAsStateWithLifecycle()
+    val builtInPhotoMd3eTextColorArgb by vm.builtInPhotoMd3eTextColorArgb.collectAsStateWithLifecycle()
+    val builtInVideoMd3eTextColorArgb by vm.builtInVideoMd3eTextColorArgb.collectAsStateWithLifecycle()
+    val builtInPhotoMd3eFaceColorArgb by vm.builtInPhotoMd3eFaceColorArgb.collectAsStateWithLifecycle()
+    val builtInVideoMd3eFaceColorArgb by vm.builtInVideoMd3eFaceColorArgb.collectAsStateWithLifecycle()
+    val builtInPhotoMd3eHourColorArgb by vm.builtInPhotoMd3eHourColorArgb.collectAsStateWithLifecycle()
+    val builtInVideoMd3eHourColorArgb by vm.builtInVideoMd3eHourColorArgb.collectAsStateWithLifecycle()
+    val builtInPhotoMd3eMinuteColorArgb by vm.builtInPhotoMd3eMinuteColorArgb.collectAsStateWithLifecycle()
+    val builtInVideoMd3eMinuteColorArgb by vm.builtInVideoMd3eMinuteColorArgb.collectAsStateWithLifecycle()
+    val builtInPhotoMd3eSecondColorArgb by vm.builtInPhotoMd3eSecondColorArgb.collectAsStateWithLifecycle()
+    val builtInVideoMd3eSecondColorArgb by vm.builtInVideoMd3eSecondColorArgb.collectAsStateWithLifecycle()
+    val builtInPhotoShowSeconds by vm.builtInPhotoShowSeconds.collectAsStateWithLifecycle()
+    val builtInVideoShowSeconds by vm.builtInVideoShowSeconds.collectAsStateWithLifecycle()
+    val builtInPhotoCustomText by vm.builtInPhotoCustomText.collectAsStateWithLifecycle()
+    val builtInVideoCustomText by vm.builtInVideoCustomText.collectAsStateWithLifecycle()
     val effectiveDarkMode = when (themeMode) {
         ThemeMode.SYSTEM -> isSystemInDarkTheme()
         ThemeMode.DARK -> true
@@ -276,6 +282,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
             )
             (context as? Activity)?.applyFadeOpenTransition()
             Unit
+        }
+    }
+    val launchAppFromLauncher: (AppInfo, Offset, ScreenState) -> Unit = { appInfo, origin, returnState ->
+        if (appInfo.isBuiltInSettingsEntry) {
+            context.startActivity(Intent(context, SettingsActivity::class.java))
+            (context as? Activity)?.applyFadeOpenTransition()
+        } else {
+            val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
+            vm.openApp(appInfo, origin, launchDelay, returnState)
         }
     }
     var prevState by remember { mutableStateOf(screenState) }
@@ -423,18 +438,18 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             watchFaceId = selectedWatchFace.id,
                             photoPath = builtInPhotoPath,
                             videoPath = builtInVideoPath,
-                            isFaceVisible = screenState == ScreenState.Face,
+                            isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
                             uiStyle = uiStyle,
                             photoOptions = photoWatchOptions,
                             videoOptions = videoWatchOptions,
-                            onLongPress = openWatchFaceChooser
+                            onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null
                         )
                     } else {
                         LunchWatchFaceHost(
                             descriptor = selectedWatchFace,
-                            isFaceVisible = screenState == ScreenState.Face,
+                            isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
                             refreshToken = watchFaceRefreshToken,
-                            onLongPress = openWatchFaceChooser,
+                            onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
                             onLoadFailure = { descriptor, error ->
                                 val rootCause = generateSequence(error) { it.cause }.last()
                                 vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
@@ -474,10 +489,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         uiStyle = uiStyle,
                         darkMode = effectiveDarkMode,
                         onAppClick = { appInfo, origin ->
-                            val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
-                            vm.openApp(appInfo, origin, launchDelay, ScreenState.Apps)
+                            launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
                         },
                         onReorder = { from, to -> vm.swapApps(from, to) },
+                        onExcludeApp = { appInfo -> vm.setAppHidden(appInfo.componentKey, true) },
                         onScrollToTop = { vm.setState(ScreenState.Face) }
                     )
                     LayoutMode.List -> ListDrawerScreen(
@@ -494,10 +509,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         uiStyle = uiStyle,
                         darkMode = effectiveDarkMode,
                         onAppClick = { appInfo, origin ->
-                            val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
-                            vm.openApp(appInfo, origin, launchDelay, ScreenState.Apps)
+                            launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
                         },
                         onReorder = { from, to -> vm.swapApps(from, to) },
+                        onExcludeApp = { appInfo -> vm.setAppHidden(appInfo.componentKey, true) },
                         onScrollToTop = { vm.setState(ScreenState.Face) }
                     )
                 }
@@ -545,7 +560,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 (1f - 0.58f * notificationProgress)
                         }
                 ) {
-                    val sideScreenWidgetSlots by vm.sideScreenWidgetSlots.collectAsState()
+                    val sideScreenWidgetSlots by vm.sideScreenWidgetSlots.collectAsStateWithLifecycle()
                     SmartStackLayer(
                         apps = apps,
                         shortcutRows = sideScreenShortcutRows,
@@ -563,11 +578,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onNotificationTransitionProgressChange = {},
                         onNotificationTransitionRelease = {},
                         onLaunchApp = { appInfo, origin ->
-                            val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
-                            vm.openApp(appInfo, origin, launchDelay, ScreenState.Stack)
+                            launchAppFromLauncher(appInfo, origin, ScreenState.Stack)
                         },
                         onSetShortcut = vm::setSideScreenShortcut,
                         onRemoveShortcut = vm::removeSideScreenShortcut,
+                        onSwapShortcut = vm::swapSideScreenShortcuts,
+                        onHideApp = { appInfo -> vm.setAppHidden(appInfo.componentKey, true) },
                         onSetWidget = vm::setWidgetSlot,
                         onSwapWidget = vm::swapWidgetSlots,
                         onRemoveWidget = vm::removeWidgetSlot,

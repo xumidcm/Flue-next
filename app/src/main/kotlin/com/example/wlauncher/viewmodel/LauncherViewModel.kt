@@ -19,10 +19,10 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.flue.launcher.FlueApplication
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.BUILTIN_SETTINGS_ENTRY_COMPONENT
 import com.flue.launcher.data.model.iconForDisplay
-import com.flue.launcher.data.repository.AppRepository
 import com.flue.launcher.iconpack.IconPackDescriptor
 import com.flue.launcher.iconpack.IconPackScanner
 import com.flue.launcher.ui.theme.ThemeMode
@@ -135,18 +135,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     private val store = application.dataStore
-    private val appRepository = AppRepository(application)
+    private val repositories = FlueApplication.repositories(application)
+    private val appRepository = repositories.appRepository
 
     val allApps: StateFlow<List<AppInfo>> = appRepository.allApps
     val apps: StateFlow<List<AppInfo>> = appRepository.apps
     private val _screenState = MutableStateFlow(ScreenState.Face)
     val screenState: StateFlow<ScreenState> = _screenState.asStateFlow()
+    private val _launcherInteractive = MutableStateFlow(true)
+    val launcherInteractive: StateFlow<Boolean> = _launcherInteractive.asStateFlow()
 
     private val _layoutMode = MutableStateFlow(LayoutMode.Honeycomb)
     val layoutMode: StateFlow<LayoutMode> = _layoutMode.asStateFlow()
-    private val _themeMode = MutableStateFlow(ThemeMode.SYSTEM)
+    private val _themeMode = repositories.sharedState.themeMode
     val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
-    private val _uiStyle = MutableStateFlow(UiStyle.APPLE_WATCH)
+    private val _uiStyle = repositories.sharedState.uiStyle
     val uiStyle: StateFlow<UiStyle> = _uiStyle.asStateFlow()
     private val _sideScreenEnabled = MutableStateFlow(true)
     val sideScreenEnabled: StateFlow<Boolean> = _sideScreenEnabled.asStateFlow()
@@ -205,13 +208,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setSideScreenShortcutRows(rows: Int) {
         _sideScreenShortcutRows.value = rows.coerceIn(1, 3)
         val savedValue = _sideScreenShortcutRows.value
-        persist { store.edit { it[KEY_SIDE_SCREEN_SHORTCUT_ROWS] = savedValue } }
+        persistDebounced("side_screen_shortcut_rows") { store.edit { it[KEY_SIDE_SCREEN_SHORTCUT_ROWS] = savedValue } }
     }
 
     fun setSideScreenShortcutCols(cols: Int) {
         _sideScreenShortcutCols.value = cols.coerceIn(2, 4)
         val savedValue = _sideScreenShortcutCols.value
-        persist { store.edit { it[KEY_SIDE_SCREEN_SHORTCUT_COLS] = savedValue } }
+        persistDebounced("side_screen_shortcut_cols") { store.edit { it[KEY_SIDE_SCREEN_SHORTCUT_COLS] = savedValue } }
     }
 
     private val _blurEnabled = MutableStateFlow(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
@@ -831,6 +834,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _revealedNotificationTarget.value = null
     }
 
+    fun setLauncherInteractive(interactive: Boolean) {
+        _launcherInteractive.value = interactive
+    }
+
     fun openApp(
         appInfo: AppInfo,
         origin: Offset = Offset(0.5f, 0.5f),
@@ -960,13 +967,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setThemeMode(mode: ThemeMode) {
+        if (_themeMode.value == mode) return
         _themeMode.value = mode
-        persist { store.edit { it[KEY_THEME_MODE] = mode.name } }
+        repositories.applicationScope.launch { store.edit { it[KEY_THEME_MODE] = mode.name } }
     }
 
     fun setUiStyle(style: UiStyle) {
+        if (_uiStyle.value == style) return
         _uiStyle.value = style
-        persist { store.edit { it[KEY_UI_STYLE] = style.name } }
+        repositories.applicationScope.launch { store.edit { it[KEY_UI_STYLE] = style.name } }
     }
 
     fun setSideScreenEnabled(enabled: Boolean) {
@@ -1073,9 +1082,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setTwoToneIconsEnabled(enabled: Boolean) {
+        if (_twoToneIconsEnabled.value == enabled) return
         _twoToneIconsEnabled.value = enabled
         appRepository.setTwoToneIconsEnabled(enabled)
-        refreshIcons()
         persist { store.edit { it[KEY_TWO_TONE_ICONS] = enabled } }
     }
 
@@ -1125,7 +1134,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setIconPackPackage(packageName: String?) {
-        _selectedIconPackPackage.value = packageName?.takeIf { it.isNotBlank() }
+        val normalized = packageName?.takeIf { it.isNotBlank() }
+        if (_selectedIconPackPackage.value == normalized) return
+        _selectedIconPackPackage.value = normalized
         viewModelScope.launch(Dispatchers.IO) {
             appRepository.setIconPackPackage(_selectedIconPackPackage.value)
         }
@@ -1436,6 +1447,26 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         setSideScreenShortcut(slotIndex, null)
     }
 
+    fun swapSideScreenShortcuts(fromIndex: Int, toIndex: Int) {
+        if (fromIndex == toIndex) return
+        if (fromIndex !in 0 until SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY || toIndex !in 0 until SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY) return
+        val next = _sideScreenShortcuts.value.toMutableList()
+        val item = next[fromIndex]
+        next[fromIndex] = next[toIndex]
+        next[toIndex] = item
+        _sideScreenShortcuts.value = next
+        persist {
+            store.edit { prefs ->
+                val serialized = serializeSideScreenShortcuts(next)
+                if (serialized.isEmpty()) {
+                    prefs.remove(KEY_SIDE_SCREEN_SHORTCUTS)
+                } else {
+                    prefs[KEY_SIDE_SCREEN_SHORTCUTS] = serialized
+                }
+            }
+        }
+    }
+
     fun toggleNotificationGroup(packageName: String) {
         if (packageName.isBlank()) return
         _expandedNotificationGroups.value = _expandedNotificationGroups.value.toMutableSet().apply {
@@ -1570,11 +1601,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _hideFromRecents.value = true
         InternalWatchFaceStorage.clearFont(getApplication())
         appRepository.setHiddenComponents(emptySet())
-        appRepository.setIconPackPackage(null)
-        appRepository.setLegacyCircularIconsEnabled(true)
-        appRepository.setTwoToneIconsEnabled(false)
+        appRepository.setIconRenderingOptions(
+            packageName = null,
+            legacyCircular = true,
+            twoTone = false,
+            iconSize = 128
+        )
         LunchWatchFaceRegistry.setCurrentSelectedId(BUILT_IN_WATCHFACE_ID)
-        refreshIcons()
         persist {
             store.edit {
                 it[KEY_LAYOUT] = LayoutMode.Honeycomb.name
@@ -1710,7 +1743,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private fun refreshIcons() {
         refreshIconsJob?.cancel()
         refreshIconsJob = viewModelScope.launch(Dispatchers.IO) {
-            appRepository.refresh(if (_lowResIcons.value) 64 else 128)
+            appRepository.requestRefresh(if (_lowResIcons.value) 64 else 128)
         }
     }
 
@@ -1815,6 +1848,5 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         pendingWriteJobs.values.forEach(Job::cancel)
         pendingWriteJobs.clear()
         super.onCleared()
-        appRepository.destroy()
     }
 }

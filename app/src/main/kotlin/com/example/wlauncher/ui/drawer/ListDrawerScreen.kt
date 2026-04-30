@@ -34,6 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -87,11 +88,11 @@ private const val LIST_MENU_DRAG_START_DP = 20f
 private const val LIST_AUTO_SCROLL_EDGE_DP = 84f
 private const val LIST_AUTO_SCROLL_MAX_PX = 30f
 private const val LIST_EDGE_ITEM_BLUR_DP = 4f
-private const val FAST_FLOW_SLOW_TOP_FRACTION = 0.25f
-private const val FAST_FLOW_SLOW_BOTTOM_FRACTION = 0.75f
+private const val FAST_FLOW_SLOW_TOP_FRACTION = 0.30f
+private const val FAST_FLOW_SLOW_BOTTOM_FRACTION = 0.70f
 private const val FAST_FLOW_SLOW_SCALE = 0.56f
 private const val FAST_FLOW_FAST_SCALE = 1.85f
-private const val FAST_FLOW_MAX_OFFSET_PX = 300f
+private const val FAST_FLOW_MAX_OFFSET_PX = 260f
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -112,6 +113,7 @@ fun ListDrawerScreen(
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
     onLongClick: (AppInfo) -> Unit = {},
+    onExcludeApp: (AppInfo) -> Unit = {},
     onScrollToTop: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -140,8 +142,10 @@ fun ListDrawerScreen(
     var wheelMomentumJob by remember { mutableStateOf<Job?>(null) }
     var fastScrollActive by remember { mutableStateOf(false) }
     var fastScrollResetJob by remember { mutableStateOf<Job?>(null) }
-    val visibleIndexes = remember(listState.layoutInfo.visibleItemsInfo) {
-        listState.layoutInfo.visibleItemsInfo.map { it.index }
+    val visibleIndexes by remember {
+        derivedStateOf {
+            listState.layoutInfo.visibleItemsInfo.map { it.index }
+        }
     }
     val estimatedItemHeightPx = with(density) { (iconSize + 24.dp).toPx() }
     val overscrollLimitPx = with(density) { configuration.screenHeightDp.dp.toPx() / 2f }
@@ -405,8 +409,10 @@ fun ListDrawerScreen(
             val centeredPadding = 8.dp
             val dragRowShift = dragFromIndex?.let { itemHeights[it] } ?: with(density) { estimatedItemHeight.toPx() }
             val dragOverlayHeightPx = dragFromIndex?.let { itemHeights[it] } ?: with(density) { (iconSize + 20.dp).toPx() }
-            val visibleInfoByIndex = remember(listState.layoutInfo.visibleItemsInfo) {
-                listState.layoutInfo.visibleItemsInfo.associateBy { it.index }
+            val visibleInfoByIndex by remember {
+                derivedStateOf {
+                    listState.layoutInfo.visibleItemsInfo.associateBy { it.index }
+                }
             }
             val reduceListVisualLoad = (fastScrollActive || listState.isScrollInProgress) &&
                 dragFromIndex == null &&
@@ -736,6 +742,7 @@ fun ListDrawerScreen(
         AppShortcutOverlay(
             app = app,
             blurEnabled = blurEnabled,
+            onExcludeApp = { onExcludeApp(app) },
             onDismiss = { longPressedApp = null }
         )
     }

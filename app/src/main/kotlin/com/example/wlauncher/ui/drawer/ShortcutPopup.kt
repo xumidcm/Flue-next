@@ -1,4 +1,4 @@
-﻿package com.flue.launcher.ui.drawer
+package com.flue.launcher.ui.drawer
 
 import android.content.Context
 import android.content.Intent
@@ -45,6 +45,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -57,6 +59,8 @@ import kotlinx.coroutines.delay
 fun AppShortcutOverlay(
     app: AppInfo,
     blurEnabled: Boolean = true,
+    onExcludeApp: (() -> Unit)? = null,
+    onRemoveShortcut: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -100,7 +104,8 @@ fun AppShortcutOverlay(
             .fillMaxSize()
             .graphicsLayer { alpha = animAlpha }
             .background(Color.Black.copy(alpha = 0.72f))
-            .clickable(indication = null, interactionSource = dismissInteraction) { animateDismiss() },
+            .clickable(indication = null, interactionSource = dismissInteraction) { animateDismiss() }
+            .consumeOverlayPointers(),
         contentAlignment = Alignment.Center
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -122,6 +127,7 @@ fun AppShortcutOverlay(
                         scaleY = animScale
                     }
                     .clickable(indication = null, interactionSource = blockInteraction) { }
+                    .consumeOverlayPointers()
             ) {
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -136,6 +142,20 @@ fun AppShortcutOverlay(
                             data = Uri.parse("package:${app.packageName}")
                         })
                         onDismiss()
+                    }
+                    onExcludeApp?.let { exclude ->
+                        Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
+                        ShortcutMenuItem("排除应用", Color(0xFFFF9F0A)) {
+                            exclude()
+                            onDismiss()
+                        }
+                    }
+                    onRemoveShortcut?.let { removeShortcut ->
+                        Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
+                        ShortcutMenuItem("从快捷启动移除", Color(0xFFFF9F0A)) {
+                            removeShortcut()
+                            onDismiss()
+                        }
                     }
                     Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
                     ShortcutMenuItem("卸载", Color(0xFFFF453A)) {
@@ -191,6 +211,15 @@ fun AppShortcutOverlay(
                 Text(app.label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.W600)
                 Spacer(modifier = Modifier.height(12.dp))
             }
+        }
+    }
+}
+
+private fun Modifier.consumeOverlayPointers(): Modifier = pointerInput(Unit) {
+    awaitPointerEventScope {
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Final)
+            event.changes.forEach { it.consume() }
         }
     }
 }

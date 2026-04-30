@@ -13,6 +13,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -148,7 +149,9 @@ fun ProvideLauncherStyle(
     darkMode: Boolean,
     content: @Composable () -> Unit
 ) {
-    val style = if (uiStyle.isMaterial) materialLauncherStyle(darkMode) else appleWatchLauncherStyle(darkMode)
+    val style = remember(uiStyle, darkMode) {
+        if (uiStyle.isMaterial) materialLauncherStyle(darkMode) else appleWatchLauncherStyle(darkMode)
+    }
     CompositionLocalProvider(LocalLauncherStyle provides style, content = content)
 }
 
