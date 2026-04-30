@@ -212,7 +212,7 @@ class AppRepository(private val context: Context) {
                 }
                 val twoToneSharp = twoToneBitmap?.asImageBitmap()
                 val twoToneSoftened = twoToneBitmap?.let(::createSoftenedBitmap)?.asImageBitmap()
-                val iconSet = CachedIconSet(
+                CachedIconSet(
                     sharp = sharp,
                     softened = softened,
                     twoToneSharp = twoToneSharp,
