@@ -6,14 +6,18 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.graphics.SurfaceTexture
 import android.graphics.Typeface as AndroidTypeface
-import android.media.AudioManager
+import android.media.AudioAttributes
 import android.media.MediaMetadataRetriever
+import android.media.MediaPlayer
 import android.os.BatteryManager
 import android.os.Build
+import android.view.Surface
 import android.widget.FrameLayout
+import android.view.TextureView
 import android.widget.TextView
-import android.widget.VideoView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.Image
@@ -1598,8 +1602,11 @@ private fun horizontalAlignment(position: WatchClockPosition): Alignment.Horizon
     else -> Alignment.Start
 }
 
-private class InternalLoopingVideoView(context: Context) : FrameLayout(context) {
-    private val videoView = VideoView(context)
+private class InternalLoopingVideoView(context: Context) : FrameLayout(context), TextureView.SurfaceTextureListener {
+    private val textureView = TextureView(context).apply {
+        surfaceTextureListener = this@InternalLoopingVideoView
+        setBackgroundColor(android.graphics.Color.BLACK)
+    }
     private val placeholder = TextView(context).apply {
         text = ""
         setTextColor(android.graphics.Color.WHITE)
@@ -1612,13 +1619,12 @@ private class InternalLoopingVideoView(context: Context) : FrameLayout(context) 
     private var fillScreen: Boolean = true
     private var videoWidth: Int = 0
     private var videoHeight: Int = 0
+    private var player: MediaPlayer? = null
+    private var surface: Surface? = null
 
     init {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            videoView.setAudioFocusRequest(AudioManager.AUDIOFOCUS_NONE)
-        }
         addView(
-            videoView,
+            textureView,
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
                 gravity = android.view.Gravity.CENTER
             }
@@ -1627,17 +1633,6 @@ private class InternalLoopingVideoView(context: Context) : FrameLayout(context) 
             placeholder,
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         )
-        videoView.setOnPreparedListener { mediaPlayer ->
-            videoWidth = mediaPlayer.videoWidth
-            videoHeight = mediaPlayer.videoHeight
-            mediaPlayer.isLooping = true
-            mediaPlayer.setVolume(0f, 0f)
-            updateScale()
-            if (shouldPlay) {
-                videoView.start()
-            }
-        }
-        videoView.setOnErrorListener { _, _, _ -> true }
     }
 
     fun bind(path: String?, play: Boolean, fillScreen: Boolean) {
@@ -1647,16 +1642,15 @@ private class InternalLoopingVideoView(context: Context) : FrameLayout(context) 
         shouldPlay = play
         this.fillScreen = fillScreen
         placeholder.visibility = if (path == null) VISIBLE else GONE
-        videoView.visibility = if (path == null) INVISIBLE else VISIBLE
+        textureView.visibility = if (path == null) INVISIBLE else VISIBLE
         if (pathChanged) {
             currentPath = path
             videoWidth = 0
             videoHeight = 0
             if (path == null) {
-                videoView.stopPlayback()
-                runCatching { videoView.setVideoURI(null) }
+                releasePlayer()
             } else {
-                videoView.setVideoPath(path)
+                preparePlayer()
             }
         }
         if (pathChanged || fillChanged) {
@@ -1664,9 +1658,13 @@ private class InternalLoopingVideoView(context: Context) : FrameLayout(context) 
         }
         if (path == null) return
         if (playChanged && play) {
-            if (!videoView.isPlaying) videoView.start()
-        } else if (playChanged && videoView.isPlaying) {
-            videoView.pause()
+            runCatching { player?.start() }
+        } else if (playChanged) {
+            runCatching {
+                if (player?.isPlaying == true) {
+                    player?.pause()
+                }
+            }
         }
     }
 
@@ -1676,54 +1674,114 @@ private class InternalLoopingVideoView(context: Context) : FrameLayout(context) 
     }
 
     private fun updateScale() {
-        if (videoWidth <= 0 || videoHeight <= 0 || width <= 0 || height <= 0) {
-            videoView.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
-                gravity = android.view.Gravity.CENTER
-            }
-            videoView.scaleX = 1f
-            videoView.scaleY = 1f
-            videoView.translationX = 0f
-            videoView.translationY = 0f
+        if (videoWidth <= 0 || videoHeight <= 0 || textureView.width <= 0 || textureView.height <= 0) {
+            textureView.setTransform(Matrix())
             return
         }
 
-        val containerWidth = width.toFloat()
-        val containerHeight = height.toFloat()
+        val containerWidth = textureView.width.toFloat()
+        val containerHeight = textureView.height.toFloat()
         val videoAspect = videoWidth.toFloat() / videoHeight.toFloat()
         val containerAspect = containerWidth / containerHeight
 
-        val (targetWidth, targetHeight) = if (fillScreen) {
+        val (scaleX, scaleY) = if (fillScreen) {
             if (videoAspect > containerAspect) {
-                (containerHeight * videoAspect) to containerHeight
+                (videoAspect / containerAspect) to 1f
             } else {
-                containerWidth to (containerWidth / videoAspect)
+                1f to (containerAspect / videoAspect)
             }
         } else {
             if (videoAspect > containerAspect) {
-                containerWidth to (containerWidth / videoAspect)
+                1f to (containerAspect / videoAspect)
             } else {
-                (containerHeight * videoAspect) to containerHeight
+                (videoAspect / containerAspect) to 1f
             }
         }
 
-        val widthPx = targetWidth.toInt().coerceAtLeast(1)
-        val heightPx = targetHeight.toInt().coerceAtLeast(1)
-        val layoutParams = (videoView.layoutParams as? LayoutParams)
-            ?: LayoutParams(widthPx, heightPx)
-        if (layoutParams.width != widthPx || layoutParams.height != heightPx || layoutParams.gravity != android.view.Gravity.CENTER) {
-            layoutParams.width = widthPx
-            layoutParams.height = heightPx
-            layoutParams.gravity = android.view.Gravity.CENTER
-            videoView.layoutParams = layoutParams
+        val matrix = Matrix().apply {
+            setScale(scaleX, scaleY, containerWidth / 2f, containerHeight / 2f)
         }
-        videoView.scaleX = 1f
-        videoView.scaleY = 1f
-        videoView.translationX = 0f
-        videoView.translationY = 0f
+        textureView.setTransform(matrix)
+    }
+
+    private fun preparePlayer() {
+        val path = currentPath
+        val targetSurface = surface
+        if (path.isNullOrBlank() || targetSurface == null) return
+        releasePlayer()
+        runCatching {
+            val mediaPlayer = MediaPlayer()
+            player = mediaPlayer
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                mediaPlayer.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                        .build()
+                )
+            }
+            mediaPlayer.setSurface(targetSurface)
+            mediaPlayer.setDataSource(path)
+            mediaPlayer.isLooping = true
+            mediaPlayer.setVolume(0f, 0f)
+            mediaPlayer.setOnVideoSizeChangedListener { _, width, height ->
+                videoWidth = width
+                videoHeight = height
+                updateScale()
+            }
+            mediaPlayer.setOnPreparedListener {
+                it.setVolume(0f, 0f)
+                videoWidth = it.videoWidth
+                videoHeight = it.videoHeight
+                updateScale()
+                if (shouldPlay) {
+                    it.start()
+                }
+            }
+            mediaPlayer.setOnErrorListener { _, _, _ -> true }
+            mediaPlayer.prepareAsync()
+        }.onFailure {
+            releasePlayer()
+            placeholder.visibility = VISIBLE
+            textureView.visibility = INVISIBLE
+        }
+    }
+
+    private fun releasePlayer() {
+        player?.let { mediaPlayer ->
+            runCatching { mediaPlayer.setOnPreparedListener(null) }
+            runCatching { mediaPlayer.setOnVideoSizeChangedListener(null) }
+            runCatching { mediaPlayer.setOnErrorListener(null) }
+            runCatching { mediaPlayer.stop() }
+            runCatching { mediaPlayer.release() }
+        }
+        player = null
+    }
+
+    override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+        surface = Surface(surfaceTexture)
+        preparePlayer()
+    }
+
+    override fun onSurfaceTextureSizeChanged(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+        updateScale()
+    }
+
+    override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
+        releasePlayer()
+        surface?.release()
+        surface = null
+        return true
+    }
+
+    override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) {
+        // No-op.
     }
 
     override fun onDetachedFromWindow() {
-        runCatching { videoView.stopPlayback() }
+        releasePlayer()
+        surface?.release()
+        surface = null
         super.onDetachedFromWindow()
     }
 }
