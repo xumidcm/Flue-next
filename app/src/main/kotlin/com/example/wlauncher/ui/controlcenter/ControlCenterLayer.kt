@@ -13,16 +13,26 @@ import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
+import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -69,7 +79,9 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -91,10 +103,18 @@ private data class ControlCenterMediaState(
     val title: String = "未在播放",
     val artist: String = "打开音乐应用后会显示控制",
     val artwork: ImageBitmap? = null,
+    val appIcon: ImageBitmap? = null,
     val artworkColor: Color = Color(0xFF2F3B45),
     val playing: Boolean = false,
     val progress: Float = 0f,
+    val positionMs: Long = 0L,
+    val durationMs: Long = 0L,
     val appPackage: String? = null
+)
+
+private data class ConnectivitySnapshot(
+    val wifiActive: Boolean = false,
+    val cellularActive: Boolean = false
 )
 
 @Composable
@@ -113,8 +133,22 @@ fun ControlCenterLayer(
     }
     var batteryLevel by remember(context) { mutableIntStateOf(0) }
     var timeText by remember { mutableStateOf("--:--") }
+    var connectivity by remember(context) { mutableStateOf(readConnectivitySnapshot(context)) }
+    var bluetoothEnabled by remember(context) { mutableStateOf(isBluetoothLikelyEnabled(context)) }
+    var dndEnabled by remember(context) { mutableStateOf(isDndEnabled(context)) }
     val mediaState = rememberMediaState(context)
     val leftSafeInset = leftSafeInsetDp.coerceIn(0, 128).dp
+    val bluetoothEnableLauncher = rememberLauncherForActivityResult(StartActivityForResult()) {
+        bluetoothEnabled = isBluetoothLikelyEnabled(context)
+    }
+    var pendingBluetoothEnable by remember(context) { mutableStateOf(false) }
+    val bluetoothPermissionLauncher = rememberLauncherForActivityResult(RequestPermission()) { granted ->
+        if (granted && pendingBluetoothEnable) {
+            requestBluetoothEnable(bluetoothEnableLauncher)
+        }
+        pendingBluetoothEnable = false
+        bluetoothEnabled = isBluetoothLikelyEnabled(context)
+    }
 
     LaunchedEffect(context) {
         while (true) {
@@ -124,7 +158,10 @@ fun ControlCenterLayer(
             timeText = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
             mediaVolume = readMusicVolume(audioManager)
             brightness = readBrightness(context)
-            delay(1000)
+            connectivity = readConnectivitySnapshot(context)
+            bluetoothEnabled = isBluetoothLikelyEnabled(context)
+            dndEnabled = isDndEnabled(context)
+            delay(250)
         }
     }
 
@@ -161,29 +198,41 @@ fun ControlCenterLayer(
                     ControlToggle(
                         icon = Icons.Filled.Wifi,
                         label = "WiFi",
-                        active = true,
-                        onClick = { openInternetPanel(context) },
+                        active = connectivity.wifiActive,
+                        onClick = { connectivity = readConnectivitySnapshot(context) },
                         onLongClick = { openSettings(context, Settings.ACTION_WIFI_SETTINGS) }
                     )
                     ControlToggle(
                         icon = Icons.Filled.Bluetooth,
                         label = "蓝牙",
-                        active = isBluetoothLikelyEnabled(context),
-                        onClick = { toggleBluetoothBestEffort(context) },
+                        active = bluetoothEnabled,
+                        onClick = {
+                            bluetoothEnabled = !bluetoothEnabled
+                            requestBluetoothToggle(
+                                context = context,
+                                enableLauncher = bluetoothEnableLauncher,
+                                permissionLauncher = bluetoothPermissionLauncher,
+                                onPermissionPending = { pendingBluetoothEnable = true }
+                            )
+                        },
                         onLongClick = { openSettings(context, Settings.ACTION_BLUETOOTH_SETTINGS) }
                     )
                     ControlToggle(
                         icon = Icons.Filled.NetworkCell,
                         label = "流量",
-                        active = true,
-                        onClick = { openInternetPanel(context) },
+                        active = connectivity.cellularActive,
+                        onClick = { connectivity = readConnectivitySnapshot(context) },
                         onLongClick = { openSettings(context, Settings.ACTION_WIRELESS_SETTINGS) }
                     )
                     ControlToggle(
                         icon = Icons.Filled.DoNotDisturbOn,
                         label = "勿扰",
-                        active = isDndEnabled(context),
-                        onClick = { toggleDnd(context) },
+                        active = dndEnabled,
+                        onClick = {
+                            dndEnabled = !dndEnabled
+                            toggleDnd(context)
+                            dndEnabled = isDndEnabled(context)
+                        },
                         onLongClick = { openSettings(context, Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS) }
                     )
                 }
@@ -208,7 +257,10 @@ fun ControlCenterLayer(
                 )
             }
 
-            MediaControlCard(mediaState = mediaState)
+            MediaControlCard(
+                mediaState = mediaState,
+                onOpenApp = { openMusicApp(context, mediaState.appPackage) }
+            )
         }
     }
 }
@@ -222,7 +274,21 @@ private fun ControlToggle(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    val targetScale by animateFloatAsState(if (active) 1f else 0.96f, label = "control_toggle_scale")
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val targetScale by animateFloatAsState(
+        when {
+            pressed -> 0.88f
+            active -> 1f
+            else -> 0.96f
+        },
+        label = "control_toggle_scale"
+    )
+    val buttonColor = when {
+        pressed -> if (active) Color(0xFFE4E4E4) else Color(0xFF424242)
+        active -> Color.White
+        else -> Color(0xFF2C2C2E)
+    }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier
@@ -232,8 +298,10 @@ private fun ControlToggle(
                     scaleY = targetScale
                 }
                 .clip(CircleShape)
-                .background(if (active) Color.White else Color(0xFF2C2C2E))
+                .background(buttonColor)
                 .combinedClickable(
+                    interactionSource = interactionSource,
+                    indication = null,
                     onClick = onClick,
                     onLongClick = onLongClick
                 ),
@@ -286,20 +354,28 @@ private fun ControlSliderCard(
 }
 
 @Composable
-private fun MediaControlCard(mediaState: ControlCenterMediaState) {
+private fun MediaControlCard(
+    mediaState: ControlCenterMediaState,
+    onOpenApp: () -> Unit
+) {
     val bg = mediaState.artworkColor
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .height(146.dp)
             .clip(RoundedCornerShape(32.dp))
             .background(bg.copy(alpha = 0.88f))
-            .padding(14.dp)
+            .clickable(onClick = onOpenApp)
+            .padding(10.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.fillMaxSize(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Box(
                 modifier = Modifier
-                    .size(72.dp)
-                    .clip(RoundedCornerShape(22.dp))
+                    .size(126.dp)
+                    .clip(RoundedCornerShape(24.dp))
                     .background(Color.Black.copy(alpha = 0.22f)),
                 contentAlignment = Alignment.Center
             ) {
@@ -309,7 +385,7 @@ private fun MediaControlCard(mediaState: ControlCenterMediaState) {
                         contentDescription = null,
                         modifier = Modifier
                             .fillMaxSize()
-                            .clip(RoundedCornerShape(22.dp)),
+                            .clip(RoundedCornerShape(24.dp)),
                         contentScale = ContentScale.Crop
                     )
                 } else {
@@ -317,39 +393,52 @@ private fun MediaControlCard(mediaState: ControlCenterMediaState) {
                 }
             }
             Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    mediaState.title,
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    mediaState.artist,
-                    color = Color.White.copy(alpha = 0.72f),
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(8.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(Color.White.copy(alpha = 0.22f))
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(126.dp),
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(mediaState.progress.coerceIn(0f, 1f))
-                            .height(4.dp)
-                            .clip(RoundedCornerShape(999.dp))
-                            .background(Color.White)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            mediaState.title,
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            mediaState.artist,
+                            color = Color.White.copy(alpha = 0.72f),
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    if (mediaState.appIcon != null) {
+                        Image(
+                            bitmap = mediaState.appIcon,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable(onClick = onOpenApp),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                }
+                Column {
+                    MediaProgressSection(
+                        mediaState = mediaState,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
-                Spacer(Modifier.height(8.dp))
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -366,6 +455,89 @@ private fun MediaControlCard(mediaState: ControlCenterMediaState) {
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun MediaProgressSection(
+    mediaState: ControlCenterMediaState,
+    modifier: Modifier = Modifier
+) {
+    var widthPx by remember { mutableIntStateOf(1) }
+    var dragging by remember { mutableStateOf(false) }
+    var localProgress by remember(mediaState.controller, mediaState.durationMs) {
+        mutableFloatStateOf(mediaState.progress.coerceIn(0f, 1f))
+    }
+    LaunchedEffect(mediaState.progress, dragging) {
+        if (!dragging) {
+            localProgress = mediaState.progress.coerceIn(0f, 1f)
+        }
+    }
+    val trackHeight by animateFloatAsState(if (dragging) 8f else 4f, label = "media_progress_height")
+    fun seekToProgress(progress: Float) {
+        val duration = mediaState.durationMs
+        if (duration <= 0L) return
+        mediaState.controller?.transportControls?.seekTo((progress.coerceIn(0f, 1f) * duration).toLong())
+    }
+    Column(modifier = modifier) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(22.dp)
+                .onSizeChanged { widthPx = it.width.coerceAtLeast(1) }
+                .pointerInput(mediaState.controller, mediaState.durationMs) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { offset ->
+                            dragging = true
+                            localProgress = (offset.x / widthPx).coerceIn(0f, 1f)
+                        },
+                        onDragCancel = {
+                            dragging = false
+                            localProgress = mediaState.progress.coerceIn(0f, 1f)
+                        },
+                        onDragEnd = {
+                            seekToProgress(localProgress)
+                            dragging = false
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            localProgress = (localProgress + dragAmount.x / widthPx).coerceIn(0f, 1f)
+                        }
+                    )
+                },
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(trackHeight.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color.White.copy(alpha = 0.22f))
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(localProgress.coerceIn(0f, 1f))
+                    .height(trackHeight.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color.White)
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = formatMediaTime((localProgress.coerceIn(0f, 1f) * mediaState.durationMs).toLong()),
+                color = Color.White.copy(alpha = 0.72f),
+                fontSize = 10.sp
+            )
+            Text(
+                text = formatMediaTime(mediaState.durationMs),
+                color = Color.White.copy(alpha = 0.72f),
+                fontSize = 10.sp
+            )
         }
     }
 }
@@ -390,7 +562,7 @@ private fun rememberMediaState(context: Context): ControlCenterMediaState {
     LaunchedEffect(context) {
         while (true) {
             state = readMediaState(context)
-            delay(1200)
+            delay(500)
         }
     }
     return state
@@ -404,12 +576,22 @@ private fun readMediaState(context: Context): ControlCenterMediaState {
     }.getOrNull() ?: return ControlCenterMediaState()
     val metadata = controller.metadata
     val playbackState = controller.playbackState
+    val appIconBitmap = loadAppIconBitmap(context, controller.packageName)
     val artworkBitmap = metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
         ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
         ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
-        ?: loadAppIconBitmap(context, controller.packageName)
     val duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION)?.takeIf { it > 0L } ?: 0L
-    val position = playbackState?.position?.coerceAtLeast(0L) ?: 0L
+    val rawPosition = playbackState?.position?.coerceAtLeast(0L) ?: 0L
+    val position = if (
+        playbackState?.state == PlaybackState.STATE_PLAYING &&
+        duration > 0L &&
+        playbackState.lastPositionUpdateTime > 0L
+    ) {
+        val elapsed = SystemClock.elapsedRealtime() - playbackState.lastPositionUpdateTime
+        (rawPosition + elapsed).coerceIn(0L, duration)
+    } else {
+        rawPosition.coerceAtMost(duration.takeIf { it > 0L } ?: rawPosition)
+    }
     val progress = if (duration > 0L) position.toFloat() / duration else 0f
     return ControlCenterMediaState(
         controller = controller,
@@ -419,10 +601,13 @@ private fun readMediaState(context: Context): ControlCenterMediaState {
         artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST)
             ?: metadata?.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)
             ?: controller.packageName.substringAfterLast('.'),
-        artwork = artworkBitmap?.asImageBitmap(),
-        artworkColor = artworkBitmap?.let(::averageBitmapColor) ?: Color(0xFF2F3B45),
+        artwork = (artworkBitmap ?: appIconBitmap)?.asImageBitmap(),
+        appIcon = appIconBitmap?.asImageBitmap(),
+        artworkColor = (artworkBitmap ?: appIconBitmap)?.let(::averageBitmapColor) ?: Color(0xFF2F3B45),
         playing = playbackState?.state == PlaybackState.STATE_PLAYING,
         progress = progress,
+        positionMs = position,
+        durationMs = duration,
         appPackage = controller.packageName
     )
 }
@@ -431,6 +616,21 @@ private fun loadAppIconBitmap(context: Context, packageName: String): Bitmap? {
     return runCatching {
         context.packageManager.getApplicationIcon(packageName).toBitmap(width = 128, height = 128)
     }.getOrNull()
+}
+
+private fun openMusicApp(context: Context, packageName: String?) {
+    if (packageName.isNullOrBlank()) return
+    runCatching {
+        val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return
+        context.startActivity(launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+}
+
+private fun formatMediaTime(timeMs: Long): String {
+    val totalSeconds = (timeMs / 1000L).coerceAtLeast(0L)
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    return "%d:%02d".format(Locale.US, minutes, seconds)
 }
 
 private fun averageBitmapColor(bitmap: Bitmap): Color {
@@ -493,6 +693,15 @@ private fun setBrightness(context: Context, value: Float) {
     )
 }
 
+private fun readConnectivitySnapshot(context: Context): ConnectivitySnapshot {
+    val manager = context.getSystemService(ConnectivityManager::class.java) ?: return ConnectivitySnapshot()
+    val capabilities = manager.getNetworkCapabilities(manager.activeNetwork) ?: return ConnectivitySnapshot()
+    return ConnectivitySnapshot(
+        wifiActive = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+        cellularActive = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+    )
+}
+
 private fun isBluetoothLikelyEnabled(context: Context): Boolean {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
         ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
@@ -502,22 +711,31 @@ private fun isBluetoothLikelyEnabled(context: Context): Boolean {
     return runCatching { BluetoothAdapter.getDefaultAdapter()?.isEnabled == true }.getOrDefault(false)
 }
 
-private fun toggleBluetoothBestEffort(context: Context) {
+private fun requestBluetoothToggle(
+    context: Context,
+    enableLauncher: ActivityResultLauncher<Intent>,
+    permissionLauncher: ActivityResultLauncher<String>,
+    onPermissionPending: () -> Unit
+) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
         ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
     ) {
-        Toast.makeText(context, "需要蓝牙权限，已打开蓝牙设置", Toast.LENGTH_SHORT).show()
-        openSettings(context, Settings.ACTION_BLUETOOTH_SETTINGS)
+        onPermissionPending()
+        permissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
         return
     }
-    @Suppress("DEPRECATION")
-    val changed = runCatching {
-        val adapter = BluetoothAdapter.getDefaultAdapter() ?: return@runCatching false
-        if (adapter.isEnabled) adapter.disable() else adapter.enable()
-    }.getOrDefault(false)
-    if (!changed) {
-        Toast.makeText(context, "系统限制直接切换蓝牙，已打开设置", Toast.LENGTH_SHORT).show()
-        openSettings(context, Settings.ACTION_BLUETOOTH_SETTINGS)
+    val adapter = runCatching { BluetoothAdapter.getDefaultAdapter() }.getOrNull() ?: return
+    if (!adapter.isEnabled) {
+        requestBluetoothEnable(enableLauncher)
+    } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        @Suppress("DEPRECATION")
+        runCatching { adapter.disable() }
+    }
+}
+
+private fun requestBluetoothEnable(enableLauncher: ActivityResultLauncher<Intent>) {
+    runCatching {
+        enableLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
     }
 }
 
@@ -529,8 +747,6 @@ private fun isDndEnabled(context: Context): Boolean {
 private fun toggleDnd(context: Context) {
     val manager = context.getSystemService(NotificationManager::class.java) ?: return
     if (!manager.isNotificationPolicyAccessGranted) {
-        Toast.makeText(context, "需要勿扰模式访问权限", Toast.LENGTH_SHORT).show()
-        openSettings(context, Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
         return
     }
     val next = if (isDndEnabled(context)) {
@@ -541,14 +757,6 @@ private fun toggleDnd(context: Context) {
     manager.setInterruptionFilter(next)
 }
 
-private fun openInternetPanel(context: Context) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        openSettings(context, Settings.Panel.ACTION_INTERNET_CONNECTIVITY)
-    } else {
-        openSettings(context, Settings.ACTION_WIRELESS_SETTINGS)
-    }
-}
-
 private fun openSettings(context: Context, action: String, data: Uri? = null) {
     runCatching {
         context.startActivity(
@@ -557,7 +765,5 @@ private fun openSettings(context: Context, action: String, data: Uri? = null) {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
         )
-    }.onFailure {
-        Toast.makeText(context, "无法打开系统设置", Toast.LENGTH_SHORT).show()
     }
 }
