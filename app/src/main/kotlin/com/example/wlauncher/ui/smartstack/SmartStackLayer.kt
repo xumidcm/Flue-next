@@ -545,7 +545,10 @@ fun SmartStackLayer(
                                         if (row.hiddenCount > 0) {
                                             StackedPreviewCard(entry, row.hiddenCount, onOpenNotifications)
                                         } else {
-                                            PreviewPill(entry) { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) }
+                                            PreviewPill(
+                                                entry = entry,
+                                                onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) }
+                                            )
                                         }
                                     }
                                 }
