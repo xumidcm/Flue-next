@@ -17,6 +17,9 @@ fun Modifier.scaleBlurAlpha(
     screenHeight: Float = 0f,
     blurEnabled: Boolean = true,
     origin: Offset? = null,
+    scaleSpec: FiniteAnimationSpec<Float> = TransitionSpring,
+    alphaSpec: FiniteAnimationSpec<Float> = AlphaSpec,
+    blurSpec: FiniteAnimationSpec<Float> = AlphaSpec,
     translationSpec: FiniteAnimationSpec<Float> = TransitionSpring
 ): Modifier {
     val animScale = remember { Animatable(targetValues.scale) }
@@ -25,9 +28,9 @@ fun Modifier.scaleBlurAlpha(
     val animTransY = remember { Animatable(targetValues.translationY) }
 
     LaunchedEffect(targetValues) {
-        launch { animScale.animateTo(targetValues.scale, TransitionSpring) }
-        launch { animAlpha.animateTo(targetValues.alpha, AlphaSpec) }
-        launch { animBlur.animateTo(targetValues.blur, AlphaSpec) }
+        launch { animScale.animateTo(targetValues.scale, scaleSpec) }
+        launch { animAlpha.animateTo(targetValues.alpha, alphaSpec) }
+        launch { animBlur.animateTo(targetValues.blur, blurSpec) }
         launch { animTransY.animateTo(targetValues.translationY, translationSpec) }
     }
 

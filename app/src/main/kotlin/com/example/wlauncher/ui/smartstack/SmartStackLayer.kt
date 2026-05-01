@@ -120,6 +120,7 @@ import com.flue.launcher.ui.notification.NotificationRevealTarget
 import com.flue.launcher.ui.notification.SwipeRevealDeleteContainer
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
+import com.flue.launcher.viewmodel.SideScreenSection
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -145,6 +146,7 @@ private sealed interface SideScreenModalState {
     data class RemoveShortcut(val slotIndex: Int) : SideScreenModalState
     data class WidgetActions(val card: SideScreenWidgetCardItem) : SideScreenModalState
     data class RemoveWidget(val card: SideScreenWidgetCardItem) : SideScreenModalState
+    data class SectionActions(val section: SideScreenSection) : SideScreenModalState
 }
 
 private data class SideScreenClockSnapshot(val time: String, val date: String)
@@ -186,6 +188,9 @@ fun SmartStackLayer(
     sideScreenShortcuts: List<String?>,
     sideScreenWidgetSlots: List<String?>,
     previewGroups: List<NotificationGroupUi>,
+    showWidgets: Boolean,
+    sectionOrder: List<SideScreenSection>,
+    leftSafeInsetDp: Int,
     notificationsEnabled: Boolean,
     notificationAccessGranted: Boolean,
     notificationsSceneActive: Boolean,
@@ -204,6 +209,9 @@ fun SmartStackLayer(
     onSetWidget: (Int, String?) -> Unit,
     onSwapWidget: (Int, Int) -> Unit,
     onRemoveWidget: (Int) -> Unit,
+    onSetShowWidgets: (Boolean) -> Unit,
+    onSetShowNotification: (Boolean) -> Unit,
+    onMoveSection: (SideScreenSection, Int) -> Unit,
     onDismissGroup: (String) -> Unit,
     onDismissNotification: (String) -> Unit,
     onDismissToFace: () -> Unit,
@@ -288,7 +296,19 @@ fun SmartStackLayer(
             widgetRepository.parseSlotValue(raw)?.let { SideScreenWidgetCardItem(index, it) }
         }
     }
-    val visibleWidgetCards = remember(widgetCards) { widgetCards.take(3) }
+    val visibleWidgetCards = remember(showWidgets, widgetCards) {
+        if (showWidgets) widgetCards.take(3) else emptyList()
+    }
+    val orderedSections = remember(sectionOrder, showWidgets, notificationsEnabled) {
+        sectionOrder
+            .distinct()
+            .filter { section ->
+                when (section) {
+                    SideScreenSection.Widgets -> showWidgets
+                    SideScreenSection.Notifications -> notificationsEnabled
+                }
+            }
+    }
     DisposableEffect(appWidgetHost, visibleWidgetCards.isNotEmpty()) {
         if (visibleWidgetCards.isNotEmpty()) {
             runCatching { appWidgetHost.startListening() }
@@ -417,7 +437,9 @@ fun SmartStackLayer(
     ) {
         val widthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
         val heightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
-        val contentWidth = maxWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
+        val leftSafeInset = leftSafeInsetDp.coerceIn(0, 128).dp.coerceAtMost(maxWidth * 0.36f)
+        val availableWidth = maxWidth - leftSafeInset
+        val contentWidth = availableWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
 
         LazyColumn(
             state = sideListState,
@@ -425,7 +447,7 @@ fun SmartStackLayer(
                 .fillMaxSize()
                 .nestedScroll(sideNestedScrollConnection)
                 .graphicsLayer { translationY = contentTranslationY }
-                .padding(horizontal = 0.dp),
+                .padding(start = leftSafeInset),
             horizontalAlignment = Alignment.CenterHorizontally,
             contentPadding = PaddingValues(top = 10.dp, bottom = 74.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -475,86 +497,100 @@ fun SmartStackLayer(
                     }
                 )
             }
-            item("widget_header") {
-                SideScreenSectionHeader(
-                    title = "小组件",
-                    width = contentWidth,
-                    actionLabel = "添加",
-                    onAction = {
-                        onRevealTargetChange(null)
-                        modalState = SideScreenModalState.WidgetPicker
-                    }
-                )
-            }
-            if (visibleWidgetCards.isEmpty()) {
-                item("empty_widget") {
-                    EmptyWidgetCard(width = contentWidth)
-                }
-            } else {
-                items(
-                    items = visibleWidgetCards,
-                    key = { "widget_${it.widgetIndex}_${it.widget.widgetKey}_${it.widget.widgetId}" },
-                    contentType = { "side_widget" }
-                ) { card ->
-                    Box(Modifier.width(contentWidth).animateContentSize()) {
-                        WidgetCard(
-                            widget = card.widget,
-                            widgetRepository = widgetRepository,
-                            appWidgetHost = appWidgetHost,
-                            onLongPress = {
-                                onRevealTargetChange(null)
-                                modalState = SideScreenModalState.WidgetActions(card)
-                            },
-                            onMeasuredHeight = { heightPx ->
-                                if (heightPx > 0) {
-                                    widgetCardHeightsPx[card.widgetIndex] = heightPx
+            orderedSections.forEach { section ->
+                when (section) {
+                    SideScreenSection.Widgets -> {
+                        item("widget_header") {
+                            SideScreenSectionHeader(
+                                title = "小组件",
+                                width = contentWidth,
+                                actionLabel = "添加",
+                                onAction = {
+                                    onRevealTargetChange(null)
+                                    modalState = SideScreenModalState.WidgetPicker
+                                },
+                                onLongPress = {
+                                    onRevealTargetChange(null)
+                                    modalState = SideScreenModalState.SectionActions(SideScreenSection.Widgets)
+                                }
+                            )
+                        }
+                        if (visibleWidgetCards.isEmpty()) {
+                            item("empty_widget") {
+                                EmptyWidgetCard(width = contentWidth)
+                            }
+                        } else {
+                            items(
+                                items = visibleWidgetCards,
+                                key = { "widget_${it.widgetIndex}_${it.widget.widgetKey}_${it.widget.widgetId}" },
+                                contentType = { "side_widget" }
+                            ) { card ->
+                                Box(Modifier.width(contentWidth).animateContentSize()) {
+                                    WidgetCard(
+                                        widget = card.widget,
+                                        widgetRepository = widgetRepository,
+                                        appWidgetHost = appWidgetHost,
+                                        onLongPress = {
+                                            onRevealTargetChange(null)
+                                            modalState = SideScreenModalState.WidgetActions(card)
+                                        },
+                                        onMeasuredHeight = { heightPx ->
+                                            if (heightPx > 0) {
+                                                widgetCardHeightsPx[card.widgetIndex] = heightPx
+                                            }
+                                        }
+                                    )
                                 }
                             }
-                        )
+                        }
                     }
-                }
-            }
-            if (notificationsEnabled) {
-                item("notification_header") {
-                    SideScreenSectionHeader(
-                        title = "通知",
-                        width = contentWidth
-                    )
-                }
-                item("notification_preview") {
-                    Column(
-                        Modifier
-                            .width(contentWidth)
-                            .animateContentSize(),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                    when {
-                        !notificationAccessGranted -> PreviewInfoCard("开启通知访问", "授权后所有通知会直接显示在这里", onOpenNotifications)
-                        previewGroups.isEmpty() -> PreviewInfoCard("暂无通知", "新的通知会直接排列在小组件下方", onOpenNotifications)
-                        else -> buildPreviewRows(previewGroups, maxRows = 3).forEach { row ->
-                            when (row) {
-                                is PreviewRow.Aggregate -> StackedPreviewCard(row.leadEntry, row.hiddenCount, onOpenNotifications)
-                                is PreviewRow.Group -> row.entries.forEach { entry ->
-                                    SwipeRevealDeleteContainer(
-                                        target = NotificationRevealTarget.Entry(entry.key),
-                                        revealedTarget = revealedNotificationTarget,
-                                        onRevealTargetChange = onRevealTargetChange,
-                                        enabled = entry.isClearable,
-                                        onDelete = { onDismissNotification(entry.key) }
-                                    ) {
-                                        if (row.hiddenCount > 0) {
-                                            StackedPreviewCard(entry, row.hiddenCount, onOpenNotifications)
-                                        } else {
-                                            PreviewPill(
-                                                entry = entry,
-                                                onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) }
-                                            )
+                    SideScreenSection.Notifications -> {
+                        item("notification_header") {
+                            SideScreenSectionHeader(
+                                title = "通知",
+                                width = contentWidth,
+                                onLongPress = {
+                                    onRevealTargetChange(null)
+                                    modalState = SideScreenModalState.SectionActions(SideScreenSection.Notifications)
+                                }
+                            )
+                        }
+                        item("notification_preview") {
+                            Column(
+                                Modifier
+                                    .width(contentWidth)
+                                    .animateContentSize(),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                when {
+                                    !notificationAccessGranted -> PreviewInfoCard("开启通知访问", "授权后所有通知会直接显示在这里", onOpenNotifications)
+                                    previewGroups.isEmpty() -> PreviewInfoCard("暂无通知", "新的通知会直接排列在小组件下方", onOpenNotifications)
+                                    else -> buildPreviewRows(previewGroups, maxRows = 3).forEach { row ->
+                                        when (row) {
+                                            is PreviewRow.Aggregate -> StackedPreviewCard(row.leadEntry, row.hiddenCount, onOpenNotifications)
+                                            is PreviewRow.Group -> row.entries.forEach { entry ->
+                                                SwipeRevealDeleteContainer(
+                                                    target = NotificationRevealTarget.Entry(entry.key),
+                                                    revealedTarget = revealedNotificationTarget,
+                                                    onRevealTargetChange = onRevealTargetChange,
+                                                    enabled = entry.isClearable,
+                                                    onDelete = { onDismissNotification(entry.key) }
+                                                ) {
+                                                    if (row.hiddenCount > 0) {
+                                                        StackedPreviewCard(entry, row.hiddenCount, onOpenNotifications)
+                                                    } else {
+                                                        PreviewPill(
+                                                            entry = entry,
+                                                            onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) }
+                                                        )
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
-                    }
                     }
                 }
             }
@@ -667,6 +703,27 @@ fun SmartStackLayer(
                     onRemove = {
                         clearAllocatedWidget(currentCard.widgetIndex)
                         onRemoveWidget(currentCard.widgetIndex)
+                    },
+                    onDismiss = { modalState = SideScreenModalState.None }
+                )
+            } else {
+                LaunchedEffect(state) { modalState = SideScreenModalState.None }
+            }
+        }
+        is SideScreenModalState.SectionActions -> {
+            val sectionIndex = sectionOrder.indexOf(state.section)
+            if (sectionIndex >= 0) {
+                SectionActionOverlay(
+                    title = sectionTitle(state.section),
+                    canMoveUp = sectionIndex > 0,
+                    canMoveDown = sectionIndex in 0 until sectionOrder.lastIndex,
+                    onMoveUp = { onMoveSection(state.section, -1) },
+                    onMoveDown = { onMoveSection(state.section, 1) },
+                    onDisable = {
+                        when (state.section) {
+                            SideScreenSection.Widgets -> onSetShowWidgets(false)
+                            SideScreenSection.Notifications -> onSetShowNotification(false)
+                        }
                     },
                     onDismiss = { modalState = SideScreenModalState.None }
                 )
@@ -983,6 +1040,58 @@ private fun WidgetActionOverlay(
 }
 
 @Composable
+private fun SectionActionOverlay(
+    title: String,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onDisable: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalShell(onDismiss) { dismiss ->
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .fillMaxWidth(0.78f)
+                .clip(RoundedCornerShape(20.dp))
+                .background(Color(0xFF1E1E1E))
+                .padding(horizontal = 14.dp, vertical = 14.dp)
+        ) {
+            Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(12.dp))
+            WidgetActionRow(
+                text = "上移",
+                enabled = canMoveUp,
+                onClick = {
+                    onMoveUp()
+                    dismiss()
+                }
+            )
+            Spacer(Modifier.height(8.dp))
+            WidgetActionRow(
+                text = "下移",
+                enabled = canMoveDown,
+                onClick = {
+                    onMoveDown()
+                    dismiss()
+                }
+            )
+            Spacer(Modifier.height(8.dp))
+            WidgetActionRow(
+                text = "关闭",
+                enabled = true,
+                textColor = Color(0xFFFF6B6B),
+                onClick = {
+                    onDisable()
+                    dismiss()
+                }
+            )
+        }
+    }
+}
+
+@Composable
 private fun WidgetActionRow(
     text: String,
     enabled: Boolean,
@@ -1009,15 +1118,25 @@ private fun WidgetActionRow(
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun SideScreenSectionHeader(
     title: String,
     width: Dp,
     actionLabel: String? = null,
-    onAction: (() -> Unit)? = null
+    onAction: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null
 ) {
     val launcherStyle = LauncherTheme.style
+    val interactionSource = remember { MutableInteractionSource() }
     Row(
-        modifier = Modifier.width(width),
+        modifier = Modifier
+            .width(width)
+            .combinedClickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = {},
+                onLongClick = onLongPress
+            ),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1043,6 +1162,13 @@ private fun SideScreenSectionHeader(
                 )
             }
         }
+    }
+}
+
+private fun sectionTitle(section: SideScreenSection): String {
+    return when (section) {
+        SideScreenSection.Widgets -> "小组件"
+        SideScreenSection.Notifications -> "通知"
     }
 }
 

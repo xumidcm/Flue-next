@@ -12,7 +12,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
-import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -45,7 +44,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
@@ -54,7 +52,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -68,8 +65,6 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Velocity
@@ -96,8 +91,6 @@ import java.io.File
 
 const val EXTRA_INTERNAL_WATCHFACE_ID = "internal_watchface_id"
 
-private val LocalWatchFaceConfigScrollState = staticCompositionLocalOf<ScrollState?> { null }
-
 class InternalWatchFaceConfigActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -116,7 +109,6 @@ class InternalWatchFaceConfigActivity : ComponentActivity() {
         }
     }
 }
-
 @Composable
 private fun InternalWatchFaceConfigScreen(
     watchFaceId: String,
@@ -375,8 +367,7 @@ private fun InternalWatchFaceConfigScreen(
         focusRequester.requestFocusAfterFirstFrame()
     }
 
-    CompositionLocalProvider(LocalWatchFaceConfigScrollState provides scrollState) {
-        Column(
+    Column(
             modifier = Modifier
                 .fillMaxSize()
                 .background(launcherStyle.screenBackground)
@@ -765,10 +756,8 @@ private fun InternalWatchFaceConfigScreen(
             persistPendingChanges()
             onBack()
         }
-        }
     }
 }
-
 @Composable
 private fun ActionButton(
     text: String,
@@ -785,7 +774,6 @@ private fun ActionButton(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .fishtailScale()
             .graphicsLayer {
                 scaleX = pressScale
                 scaleY = pressScale
@@ -847,10 +835,7 @@ private fun ClockStylePickerRow(
     current: WatchFaceClockStyle,
     onSelect: (WatchFaceClockStyle) -> Unit
 ) {
-    Column(
-        modifier = Modifier.fishtailScale(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
@@ -892,7 +877,6 @@ private fun Md3eShapePickerRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .fishtailScale(),
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
     ) {
         SmallChoiceChip(
@@ -946,7 +930,6 @@ private fun CustomTextField(
         ),
         modifier = Modifier
             .fillMaxWidth()
-            .fishtailScale()
             .clip(RoundedCornerShape(18.dp))
     )
 }
@@ -964,7 +947,6 @@ private fun ColorRgbSliderGroup(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .fishtailScale()
             .clip(RoundedCornerShape(18.dp))
             .background(WatchColors.SurfaceGlass)
             .padding(horizontal = 14.dp, vertical = 12.dp)
@@ -1032,7 +1014,6 @@ private fun PositionPickerRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .fishtailScale(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         listOf(
@@ -1112,7 +1093,6 @@ private fun SmallChoiceChip(
     )
     Box(
         modifier = modifier
-            .fishtailScale()
             .graphicsLayer {
                 scaleX = pressScale
                 scaleY = pressScale
@@ -1158,7 +1138,6 @@ private fun ToggleRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .fishtailScale()
             .graphicsLayer {
                 scaleX = pressScale
                 scaleY = pressScale
@@ -1194,30 +1173,4 @@ private fun ToggleRow(
             )
         }
     }
-}
-
-@Composable
-private fun Modifier.fishtailScale(): Modifier {
-    val density = androidx.compose.ui.platform.LocalDensity.current
-    val scrollState = LocalWatchFaceConfigScrollState.current
-    val flattenAtBottom = scrollState?.let { it.maxValue > 0 && it.value >= it.maxValue - 2 } == true
-    val screenCenter = with(density) {
-        androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp.toPx() / 2f
-    }
-    var itemCenter by remember { mutableFloatStateOf(screenCenter) }
-    val scale = if (flattenAtBottom || itemCenter <= screenCenter) {
-        1f
-    } else {
-        val normalized = ((itemCenter - screenCenter) / screenCenter).coerceIn(0f, 1f)
-        (1f - normalized * 0.14f).coerceIn(0.86f, 1f)
-    }
-    return this
-        .onGloballyPositioned { coords ->
-            itemCenter = coords.positionInWindow().y + coords.size.height / 2f
-        }
-        .graphicsLayer {
-            scaleX = scale
-            scaleY = scale
-            alpha = scale.coerceIn(0.65f, 1f)
-        }
 }

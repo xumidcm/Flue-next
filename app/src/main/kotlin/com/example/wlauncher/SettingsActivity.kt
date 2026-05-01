@@ -62,8 +62,10 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -136,6 +138,7 @@ private const val COMMUNITY_GROUP_URL = "https://qun.qq.com/universal-share/shar
 const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
 const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
+private val LocalSettingsLeftSafeInsetDp = compositionLocalOf { 0 }
 
 enum class SettingsDestination {
     ROOT,
@@ -211,13 +214,14 @@ private fun SettingsRootScreen(
     val splashIcon by vm.splashIcon.collectAsStateWithLifecycle()
     val splashDelay by vm.splashDelay.collectAsStateWithLifecycle()
     val honeycombCols by vm.honeycombCols.collectAsStateWithLifecycle()
-    val honeycombTopBlur by vm.honeycombTopBlur.collectAsStateWithLifecycle()
-    val honeycombBottomBlur by vm.honeycombBottomBlur.collectAsStateWithLifecycle()
+    val honeycombEdgeBlurRadius by vm.honeycombEdgeBlurRadius.collectAsStateWithLifecycle()
     val honeycombTopFade by vm.honeycombTopFade.collectAsStateWithLifecycle()
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsStateWithLifecycle()
     val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsStateWithLifecycle()
     val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsStateWithLifecycle()
     val appListLeftSafeInsetDp by vm.appListLeftSafeInsetDp.collectAsStateWithLifecycle()
+    val appListScalePercent by vm.appListScalePercent.collectAsStateWithLifecycle()
+    val appListWatchFaceColors by vm.appListWatchFaceColors.collectAsStateWithLifecycle()
     val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsStateWithLifecycle()
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
@@ -263,6 +267,9 @@ private fun SettingsRootScreen(
     val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
     val launcherStyle = LauncherTheme.style
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
+    val showWidgets by vm.showWidgets.collectAsStateWithLifecycle()
+    val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
+    val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val headerTime = rememberSettingsHeaderTime()
     val isZh = remember(context.resources.configuration) {
         context.resources.configuration.locales[0]?.language?.startsWith("zh") == true
@@ -344,22 +351,23 @@ private fun SettingsRootScreen(
         }
     }
 
-    AnimatedContent(
-        targetState = destination,
-        transitionSpec = {
-            (fadeIn(animationSpec = launcherStyle.pageMotionSpec) +
-                scaleIn(
-                    initialScale = if (uiStyle == UiStyle.MATERIAL_3) 0.98f else 0.985f,
-                    animationSpec = launcherStyle.pageMotionSpec
-                )) togetherWith
-                (fadeOut(animationSpec = tween(140)) +
-                    scaleOut(
-                        targetScale = if (uiStyle == UiStyle.MATERIAL_3) 0.995f else 0.985f,
-                        animationSpec = tween(140)
-                    ))
-        },
-        label = "settings_destination"
-    ) { currentDestination ->
+    CompositionLocalProvider(LocalSettingsLeftSafeInsetDp provides appListLeftSafeInsetDp) {
+        AnimatedContent(
+            targetState = destination,
+            transitionSpec = {
+                (fadeIn(animationSpec = launcherStyle.pageMotionSpec) +
+                    scaleIn(
+                        initialScale = if (uiStyle == UiStyle.MATERIAL_3) 0.98f else 0.985f,
+                        animationSpec = launcherStyle.pageMotionSpec
+                    )) togetherWith
+                    (fadeOut(animationSpec = tween(140)) +
+                        scaleOut(
+                            targetScale = if (uiStyle == UiStyle.MATERIAL_3) 0.995f else 0.985f,
+                            animationSpec = tween(140)
+                        ))
+            },
+            label = "settings_destination"
+        ) { currentDestination ->
         when (currentDestination) {
             SettingsDestination.ROOT -> SettingsPageScaffold(
                 title = "Flue设置",
@@ -725,6 +733,20 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "notification_center_toggle", screenCenterY, screenHeightPx)
                 )
             }
+            item("widget_center_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "显示小组件" else "Show Widgets",
+                    subtitle = if (showWidgets) {
+                        if (isZh) "副一屏显示小组件区和添加入口" else "Show the widget section and add entry on the side screen"
+                    } else {
+                        if (isZh) "隐藏副一屏小组件区" else "Hide the widget section from the side screen"
+                    },
+                    checked = showWidgets,
+                    enabled = sideScreenEnabled,
+                    onToggle = vm::setShowWidgets,
+                    scale = itemFisheye(listState, "widget_center_toggle", screenCenterY, screenHeightPx)
+                )
+            }
             item("side_screen_shortcut_rows") {
                 SettingsSliderRow(
                     title = if (isZh) "快捷启动行数" else "Quick Launch Rows",
@@ -792,34 +814,64 @@ private fun SettingsRootScreen(
                     title = if (isZh) "应用列表左侧安全区" else "App List Left Safe Area",
                     value = appListLeftSafeInsetDp.toFloat(),
                     valueText = "${appListLeftSafeInsetDp}dp",
-                    range = 0f..96f,
-                    steps = 11,
+                    range = 0f..128f,
+                    steps = 15,
                     onValueChange = { vm.setAppListLeftSafeInsetDp(it.toInt()) },
                     scale = itemFisheye(listState, "app_list_left_safe_inset", screenCenterY, screenHeightPx)
                 )
             }
-            item("top_blur") {
+            item("app_list_scale") {
                 SettingsSliderRow(
-                    title = "顶部模糊半径",
-                    value = honeycombTopBlur.toFloat(),
-                    valueText = "$honeycombTopBlur dp",
-                    range = 0f..48f,
-                    steps = 11,
-                    onValueChange = { vm.setHoneycombTopBlur(it.toInt()) },
-                    enabled = blurEnabled,
-                    scale = itemFisheye(listState, "top_blur", screenCenterY, screenHeightPx)
+                    title = if (isZh) "应用列表整体大小" else "App List Size",
+                    value = appListScalePercent.toFloat(),
+                    valueText = "${appListScalePercent}%",
+                    range = 50f..200f,
+                    steps = 14,
+                    onValueChange = { vm.setAppListScalePercent(it.toInt()) },
+                    scale = itemFisheye(listState, "app_list_scale", screenCenterY, screenHeightPx)
                 )
             }
-            item("bottom_blur") {
+            item("app_list_watchface_colors") {
+                SettingsSwitchRow(
+                    title = if (isZh) "应用列表表盘取色" else "Watch Face App List Colors",
+                    subtitle = if (appListWatchFaceColors) {
+                        if (isZh) "应用列表背景继续跟随表盘颜色" else "Keep the app list tinted by the watch face"
+                    } else {
+                        if (isZh) "应用列表背景固定为纯黑或纯白" else "Use a pure black or pure white app list background"
+                    },
+                    checked = appListWatchFaceColors,
+                    onToggle = vm::setAppListWatchFaceColors,
+                    scale = itemFisheye(listState, "app_list_watchface_colors", screenCenterY, screenHeightPx)
+                )
+            }
+            item("watchface_status_indicators") {
+                SettingsSwitchRow(
+                    title = if (isZh) "表盘状态提示" else "Watch Face Status Indicators",
+                    subtitle = if (isZh) "表盘顶部显示充电闪电和通知红点" else "Show charging and notification indicators at the top of the watch face",
+                    checked = watchFaceStatusIndicators,
+                    onToggle = vm::setWatchFaceStatusIndicatorsEnabled,
+                    scale = itemFisheye(listState, "watchface_status_indicators", screenCenterY, screenHeightPx)
+                )
+            }
+            item("watchface_charging_power_text") {
+                SettingsSwitchRow(
+                    title = if (isZh) "充电功率文字" else "Charging Power Text",
+                    subtitle = if (isZh) "充电时在表盘里显示功率或充电文字" else "Show charging wattage or charging text on the watch face",
+                    checked = watchFaceChargingPowerText,
+                    onToggle = vm::setWatchFaceChargingPowerTextEnabled,
+                    scale = itemFisheye(listState, "watchface_charging_power_text", screenCenterY, screenHeightPx)
+                )
+            }
+            item("edge_blur_radius") {
                 SettingsSliderRow(
-                    title = "底部模糊半径",
-                    value = honeycombBottomBlur.toFloat(),
-                    valueText = "$honeycombBottomBlur dp",
-                    range = 0f..48f,
-                    steps = 11,
-                    onValueChange = { vm.setHoneycombBottomBlur(it.toInt()) },
-                    enabled = blurEnabled,
-                    scale = itemFisheye(listState, "bottom_blur", screenCenterY, screenHeightPx)
+                    title = if (isZh) "边缘模糊半径" else "Edge Blur Radius",
+                    value = honeycombEdgeBlurRadius,
+                    valueText = "%.1f dp".format(java.util.Locale.US, honeycombEdgeBlurRadius),
+                    range = 0.1f..5f,
+                    steps = 48,
+                    onValueChange = vm::setHoneycombEdgeBlurRadius,
+                    enabled = blurEnabled && edgeBlurEnabled,
+                    scale = itemFisheye(listState, "edge_blur_radius", screenCenterY, screenHeightPx)
                 )
             }
             item("top_fade") {
@@ -1057,6 +1109,7 @@ private fun SettingsRootScreen(
                 }
             }
         }
+        }
     }
 
     donatePreviewResId?.let { resId ->
@@ -1075,6 +1128,7 @@ private fun SettingsPageScaffold(
     content: LazyListScope.(LazyListState, Float, Float, Set<Any>) -> Unit
 ) {
     val launcherStyle = LauncherTheme.style
+    val leftSafeInsetDp = LocalSettingsLeftSafeInsetDp.current
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = initialFirstVisibleItemIndex,
         initialFirstVisibleItemScrollOffset = initialFirstVisibleItemScrollOffset
@@ -1145,6 +1199,7 @@ private fun SettingsPageScaffold(
     ) {
         val screenHeightPx = constraints.maxHeight.toFloat()
         val screenCenterY = screenHeightPx / 2f
+        val leftSafeInset = leftSafeInsetDp.coerceIn(0, 128).dp.coerceAtMost(maxWidth * 0.36f)
 
         LazyColumn(
             state = listState,
@@ -1157,7 +1212,7 @@ private fun SettingsPageScaffold(
                 }
                 .nestedScroll(nestedScrollConnection)
                 .graphicsLayer { translationY = overscroll.value }
-                .padding(horizontal = 16.dp, vertical = 18.dp),
+                .padding(start = 16.dp + leftSafeInset, top = 18.dp, end = 16.dp, bottom = 18.dp),
             contentPadding = PaddingValues(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {

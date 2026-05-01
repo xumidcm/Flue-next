@@ -164,18 +164,23 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val splashDelay by vm.splashDelay.collectAsStateWithLifecycle()
     val currentLaunchIcon by vm.currentLaunchIcon.collectAsStateWithLifecycle()
     val honeycombCols by vm.honeycombCols.collectAsStateWithLifecycle()
-    val honeycombTopBlur by vm.honeycombTopBlur.collectAsStateWithLifecycle()
-    val honeycombBottomBlur by vm.honeycombBottomBlur.collectAsStateWithLifecycle()
+    val honeycombEdgeBlurRadius by vm.honeycombEdgeBlurRadius.collectAsStateWithLifecycle()
     val honeycombTopFade by vm.honeycombTopFade.collectAsStateWithLifecycle()
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsStateWithLifecycle()
     val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsStateWithLifecycle()
     val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsStateWithLifecycle()
     val appListLeftSafeInsetDp by vm.appListLeftSafeInsetDp.collectAsStateWithLifecycle()
+    val appListScalePercent by vm.appListScalePercent.collectAsStateWithLifecycle()
+    val appListWatchFaceColors by vm.appListWatchFaceColors.collectAsStateWithLifecycle()
     val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsStateWithLifecycle()
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
     val showStepCount by vm.showStepCount.collectAsStateWithLifecycle()
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
+    val showWidgets by vm.showWidgets.collectAsStateWithLifecycle()
+    val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
+    val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
+    val sideScreenSectionOrder by vm.sideScreenSectionOrder.collectAsStateWithLifecycle()
     val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
     val notificationAccessGranted by vm.notificationAccessGranted.collectAsStateWithLifecycle()
     val notificationGroups by vm.notificationGroups.collectAsStateWithLifecycle()
@@ -269,7 +274,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
         photoPath = builtInPhotoPath,
         videoPath = builtInVideoPath,
         photoOptions = photoWatchOptions,
-        videoOptions = videoWatchOptions
+        videoOptions = videoWatchOptions,
+        enabled = appListWatchFaceColors
     )
     val layerBlurEnabled =
         blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
@@ -293,6 +299,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
     var prevState by remember { mutableStateOf(screenState) }
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
+    val isOpeningAppList = prevState == ScreenState.Face && screenState == ScreenState.Apps
     LaunchedEffect(screenState) { prevState = screenState }
     val launcherScope = rememberCoroutineScope()
     var retainedLaunchIcon by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
@@ -440,6 +447,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             uiStyle = uiStyle,
                             photoOptions = photoWatchOptions,
                             videoOptions = videoWatchOptions,
+                            showChargingPowerText = watchFaceChargingPowerText,
+                            showStatusIndicators = watchFaceStatusIndicators,
+                            hasNotifications = showNotification && notificationGroups.isNotEmpty(),
                             onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null
                         )
                     } else {
@@ -460,12 +470,19 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(if (screenState == ScreenState.Apps) 3f else 0f)
+                    .zIndex(if (screenState == ScreenState.Apps || isOpeningAppList) 3f else 0f)
                     .scaleBlurAlpha(
                         targetValues = appListLayerValues(screenState, uiStyle),
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled,
-                        origin = if (useOrigin) appOpenOrigin else null
+                        origin = if (useOrigin) appOpenOrigin else null,
+                        scaleSpec = if (isOpeningAppList) {
+                            tween(durationMillis = 260)
+                        } else {
+                            spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow)
+                        },
+                        alphaSpec = if (isOpeningAppList) tween(durationMillis = 220) else tween(durationMillis = 400),
+                        blurSpec = if (isOpeningAppList) tween(durationMillis = 220) else tween(durationMillis = 400)
                     )
             ) {
                 when (layoutMode) {
@@ -475,13 +492,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         edgeBlurEnabled = edgeBlurEnabled,
                         suppressHeavyEffects = reduceLegacyDrawerEffects,
                         narrowCols = honeycombCols,
-                        topBlurRadiusDp = honeycombTopBlur,
-                        bottomBlurRadiusDp = honeycombBottomBlur,
+                        topBlurRadiusDp = honeycombEdgeBlurRadius,
+                        bottomBlurRadiusDp = honeycombEdgeBlurRadius,
                         topFadeRangeDp = honeycombTopFade,
                         bottomFadeRangeDp = honeycombBottomFade,
                         fastScrollOptimizationEnabled = honeycombFastScrollOptimization,
                         active = screenState == ScreenState.Apps,
                         leftSafeInsetDp = appListLeftSafeInsetDp,
+                        appListScalePercent = appListScalePercent,
+                        useWatchFaceColors = appListWatchFaceColors,
                         fisheyeEnabled = appListFisheyeEnabled,
                         fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                         twoToneIconsEnabled = twoToneIconsEnabled,
@@ -505,6 +524,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         bottomFadeRangeDp = honeycombBottomFade,
                         active = screenState == ScreenState.Apps,
                         leftSafeInsetDp = appListLeftSafeInsetDp,
+                        appListScalePercent = appListScalePercent,
+                        useWatchFaceColors = appListWatchFaceColors,
                         fisheyeEnabled = appListFisheyeEnabled,
                         fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                         twoToneIconsEnabled = twoToneIconsEnabled,
@@ -572,6 +593,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         sideScreenShortcuts = sideScreenShortcuts,
                         sideScreenWidgetSlots = sideScreenWidgetSlots,
                         previewGroups = notificationGroups,
+                        showWidgets = showWidgets,
+                        sectionOrder = sideScreenSectionOrder,
+                        leftSafeInsetDp = appListLeftSafeInsetDp,
                         notificationsEnabled = notificationsEnabled,
                         notificationAccessGranted = notificationAccessGranted,
                         notificationsSceneActive = false,
@@ -580,6 +604,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onRevealTargetChange = vm::setRevealedNotificationTarget,
                         onOpenNotifications = {
                             vm.setRevealedNotificationTarget(null)
+                            vm.setState(ScreenState.Notifications)
                             settleNotificationTransition(1f)
                         },
                         onNotificationTransitionProgressChange = {},
@@ -597,6 +622,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onSetWidget = vm::setWidgetSlot,
                         onSwapWidget = vm::swapWidgetSlots,
                         onRemoveWidget = vm::removeWidgetSlot,
+                        onSetShowWidgets = vm::setShowWidgets,
+                        onSetShowNotification = vm::setShowNotification,
+                        onMoveSection = vm::moveSideSection,
                         onDismissGroup = vm::dismissNotificationGroup,
                         onDismissNotification = vm::dismissNotification,
                         onDismissToFace = { vm.setState(ScreenState.Face) },

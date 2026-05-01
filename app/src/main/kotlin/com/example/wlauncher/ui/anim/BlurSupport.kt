@@ -20,8 +20,8 @@ fun Modifier.platformBlur(
     enabled: Boolean
 ): Modifier = composed {
     val density = LocalDensity.current
-    val radiusDp = ((blurRadiusDp.coerceAtLeast(0f) * 2f).roundToInt() / 2f).coerceAtLeast(0f)
-    if (!enabled || radiusDp < 0.5f) {
+    val radiusDp = ((blurRadiusDp.coerceAtLeast(0f) * 10f).roundToInt() / 10f).coerceAtLeast(0f)
+    if (!enabled || radiusDp < 0.1f) {
         this
     } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         val radiusPx = with(density) { radiusDp.dp.toPx() }

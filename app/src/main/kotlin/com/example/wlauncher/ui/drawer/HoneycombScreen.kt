@@ -80,6 +80,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 private const val HONEYCOMB_MENU_TRIGGER_MS = 410L
@@ -107,13 +108,15 @@ fun HoneycombScreen(
     uiStyle: UiStyle = UiStyle.APPLE_WATCH,
     darkMode: Boolean = true,
     narrowCols: Int = 4,
-    topBlurRadiusDp: Int = 12,
-    bottomBlurRadiusDp: Int = 12,
+    topBlurRadiusDp: Float = 4f,
+    bottomBlurRadiusDp: Float = 4f,
     topFadeRangeDp: Int = 56,
     bottomFadeRangeDp: Int = 56,
     fastScrollOptimizationEnabled: Boolean = true,
     active: Boolean = true,
     leftSafeInsetDp: Int = 0,
+    appListScalePercent: Int = 100,
+    useWatchFaceColors: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
     onLongClick: (AppInfo) -> Unit = {},
@@ -132,6 +135,8 @@ fun HoneycombScreen(
             columns = (narrowCols + 1).coerceIn(3, 6),
             active = active,
             leftSafeInsetDp = leftSafeInsetDp,
+            appListScalePercent = appListScalePercent,
+            useWatchFaceColors = useWatchFaceColors,
             onAppClick = onAppClick,
             onLongClick = onLongClick,
             onExcludeApp = onExcludeApp,
@@ -161,7 +166,7 @@ fun HoneycombScreen(
     var directScrollOffset by remember { mutableFloatStateOf(Float.NaN) }
     var fastScrollActive by remember { mutableStateOf(false) }
     var fastScrollResetJob by remember { mutableStateOf<Job?>(null) }
-    val appPalette = appListPalette(themeColor, darkMode, uiStyle)
+    val appPalette = appListPalette(themeColor, darkMode, uiStyle, useWatchFaceColors)
 
     LaunchedEffect(focusReady) {
         if (focusReady) {
@@ -173,18 +178,23 @@ fun HoneycombScreen(
         val density = LocalDensity.current
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
-        val leftSafeInsetPx = with(density) { leftSafeInsetDp.coerceIn(0, 96).dp.toPx() }
+        val leftSafeInsetPx = with(density) { leftSafeInsetDp.coerceIn(0, 128).dp.toPx() }
             .coerceAtMost(screenWidthPx * 0.36f)
         val contentWidthPx = (screenWidthPx - leftSafeInsetPx).coerceAtLeast(screenWidthPx * 0.55f)
         val screenCenterX = leftSafeInsetPx + contentWidthPx / 2f
         val screenCenterY = screenHeightPx / 2f
         val screenRadius = minOf(contentWidthPx, screenHeightPx) / 2f
+        val appListScale = appListScalePercent.coerceIn(50, 200) / 100f
 
         val maxCols = narrowCols + 1
         val availableWidth = contentWidthPx - with(density) { 20.dp.toPx() }
-        val iconSizePx = (availableWidth / (maxCols + 0.35f)).coerceIn(
+        val baseIconSizePx = (availableWidth / (maxCols + 0.35f)).coerceIn(
             with(density) { 54.dp.toPx() },
             with(density) { 84.dp.toPx() }
+        )
+        val iconSizePx = (baseIconSizePx * appListScale).coerceIn(
+            with(density) { 28.dp.toPx() },
+            with(density) { 148.dp.toPx() }
         )
         val iconSizeDp = with(density) { iconSizePx.toDp() }
         val cellSize = iconSizePx * 1.02f
@@ -551,7 +561,10 @@ fun HoneycombScreen(
                                 markFastScrollActive(260L)
                             }
                             directScrollOffset = current
-                            if (current >= maxScroll - iconSizePx * 0.45f && velocity > 800f) {
+                            if (
+                                current >= maxScroll + iconSizePx * 0.45f ||
+                                (current >= maxScroll - iconSizePx * 0.45f && velocity > 800f)
+                            ) {
                                 val returnStart = current
                             scope.launch {
                                 scrollOffset.snapTo(returnStart)
@@ -675,8 +688,8 @@ fun HoneycombScreen(
                     screenHeight = screenHeightPx,
                     topBlurZonePx = topFadePx,
                     bottomBlurZonePx = bottomFadePx,
-                    topBlurDp = topBlurRadiusDp.toFloat(),
-                    bottomBlurDp = bottomBlurRadiusDp.toFloat()
+                    topBlurDp = topBlurRadiusDp,
+                    bottomBlurDp = bottomBlurRadiusDp
                 )
                 val isGlidePressed = glidePressedKey == appKey
                 val motion = neighborPressMotion(
@@ -825,8 +838,8 @@ fun HoneycombScreen(
                     screenHeight = screenHeightPx,
                     topBlurZonePx = topFadePx,
                     bottomBlurZonePx = bottomFadePx,
-                    topBlurDp = topBlurRadiusDp.toFloat(),
-                    bottomBlurDp = bottomBlurRadiusDp.toFloat()
+                    topBlurDp = topBlurRadiusDp,
+                    bottomBlurDp = bottomBlurRadiusDp
                 )
                 val scalePointer = dragPointer ?: dragOverlayPointer
                 val dragDx = scalePointer.x - screenCenterX
@@ -882,8 +895,8 @@ fun HoneycombScreen(
                 screenHeight = screenHeightPx,
                 topBlurZonePx = topFadePx,
                 bottomBlurZonePx = bottomFadePx,
-                topBlurDp = topBlurRadiusDp.toFloat(),
-                bottomBlurDp = bottomBlurRadiusDp.toFloat()
+                topBlurDp = topBlurRadiusDp,
+                bottomBlurDp = bottomBlurRadiusDp
             )
             AppBubble(
                 icon = settlingOverlayApp.iconForDisplay(
@@ -983,6 +996,8 @@ private fun MaterialDenseGridScreen(
     columns: Int,
     active: Boolean,
     leftSafeInsetDp: Int,
+    appListScalePercent: Int,
+    useWatchFaceColors: Boolean,
     onAppClick: (AppInfo, Offset) -> Unit,
     onLongClick: (AppInfo) -> Unit,
     onExcludeApp: (AppInfo) -> Unit,
@@ -994,7 +1009,9 @@ private fun MaterialDenseGridScreen(
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
     val launcherStyle = LauncherTheme.style
-    val appPalette = appListPalette(themeColor, darkMode, UiStyle.MATERIAL_3)
+    val appPalette = appListPalette(themeColor, darkMode, UiStyle.MATERIAL_3, useWatchFaceColors)
+    val appListScale = appListScalePercent.coerceIn(50, 200) / 100f
+    val effectiveColumns = (columns / appListScale).roundToInt().coerceIn(2, 10)
     var focusReady by remember { mutableStateOf(false) }
     var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
     val overscroll = remember { Animatable(0f) }
@@ -1113,12 +1130,12 @@ private fun MaterialDenseGridScreen(
             }
     ) {
         val screenWidthPx = with(density) { maxWidth.toPx() }
-        val leftSafeInset = leftSafeInsetDp.coerceIn(0, 96).dp.coerceAtMost(maxWidth * 0.36f)
+        val leftSafeInset = leftSafeInsetDp.coerceIn(0, 128).dp.coerceAtMost(maxWidth * 0.36f)
         val horizontalPaddingPx = with(density) { 8.dp.toPx() }
         val leftPaddingPx = with(density) { (8.dp + leftSafeInset).toPx() }
         val itemGapPx = with(density) { 4.dp.toPx() }
         LazyVerticalGrid(
-            columns = GridCells.Fixed(columns),
+            columns = GridCells.Fixed(effectiveColumns),
             state = gridState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 8.dp + leftSafeInset, top = 8.dp, end = 8.dp, bottom = 8.dp),
@@ -1156,9 +1173,9 @@ private fun MaterialDenseGridScreen(
                             interactionSource = interactionSource,
                             indication = null,
                             onClick = {
-                                val col = index % columns
-                                val usableWidth = screenWidthPx - leftPaddingPx - horizontalPaddingPx - itemGapPx * (columns - 1)
-                                val cellWidth = usableWidth / columns
+                                val col = index % effectiveColumns
+                                val usableWidth = screenWidthPx - leftPaddingPx - horizontalPaddingPx - itemGapPx * (effectiveColumns - 1)
+                                val cellWidth = usableWidth / effectiveColumns
                                 val centerX = leftPaddingPx + col * (cellWidth + itemGapPx) + cellWidth / 2f
                                 onAppClick(
                                     app,

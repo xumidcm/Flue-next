@@ -113,6 +113,8 @@ fun ListDrawerScreen(
     bottomFadeRangeDp: Int = 56,
     active: Boolean = true,
     leftSafeInsetDp: Int = 0,
+    appListScalePercent: Int = 100,
+    useWatchFaceColors: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
     onLongClick: (AppInfo) -> Unit = {},
@@ -150,10 +152,16 @@ fun ListDrawerScreen(
             listState.layoutInfo.visibleItemsInfo.map { it.index }
         }
     }
-    val estimatedItemHeightPx = with(density) { (iconSize + 24.dp).toPx() }
     val overscrollLimitPx = with(density) { configuration.screenHeightDp.dp.toPx() / 2f }
+    val topReturnThresholdPx = with(density) { 72.dp.toPx() }
     val launcherStyle = LauncherTheme.style
-    val appPalette = appListPalette(themeColor, darkMode, uiStyle)
+    val appPalette = appListPalette(themeColor, darkMode, uiStyle, useWatchFaceColors)
+    val appListScale = appListScalePercent.coerceIn(50, 200) / 100f
+    val scaledIconSize = (iconSize * appListScale).coerceIn(24.dp, 128.dp)
+    val scaledRowVerticalPadding = (10.dp * appListScale).coerceIn(4.dp, 24.dp)
+    val scaledRowHorizontalPadding = (16.dp * appListScale).coerceIn(10.dp, 32.dp)
+    val scaledIconTextGap = (14.dp * appListScale).coerceIn(8.dp, 28.dp)
+    val scaledTextSizeSp = (16f * appListScale).coerceIn(10f, 32f).sp
 
     LaunchedEffect(visibleIndexes, dragFromIndex, dragCurrentIndex, apps.size) {
         val retain = buildSet {
@@ -274,7 +282,7 @@ fun ListDrawerScreen(
                             override suspend fun onPreFling(available: Velocity): Velocity {
                                 if (dragFromIndex != null || longPressedApp != null) return Velocity.Zero
                                 val atTop = !listState.canScrollBackward
-                                if ((overscroll.value > 80f || available.y > 1200f) && atTop) {
+                                if ((overscroll.value > topReturnThresholdPx || available.y > 1200f) && atTop) {
                                     overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
                                     onScrollToTop()
                                     return available
@@ -288,13 +296,31 @@ fun ListDrawerScreen(
                         }
                     }
                 )
+                .pointerInput(onScrollToTop, dragFromIndex, longPressedApp) {
+                    awaitEachGesture {
+                        awaitPrimaryDown()
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.changes.none { it.pressed }) break
+                        }
+                        if (dragFromIndex == null && longPressedApp == null && overscroll.value != 0f) {
+                            val shouldReturnToFace = overscroll.value >= topReturnThresholdPx
+                            scope.launch {
+                                overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                                if (shouldReturnToFace) {
+                                    onScrollToTop()
+                                }
+                            }
+                        }
+                    }
+                }
                 .platformBlur(16f, longPressedApp != null && blurEnabled && !suppressHeavyEffects)
                 .pointerInput(apps) {
                     val maxDistancePx = with(density) { 72.dp.toPx() }
                     val menuDragStartPx = with(density) { LIST_MENU_DRAG_START_DP.dp.toPx() }
                     awaitEachGesture {
                         val releaseOverlayHeightPx = dragFromIndex?.let { itemHeights[it] }
-                            ?: with(density) { (iconSize + 20.dp).toPx() }
+                            ?: with(density) { (scaledIconSize + scaledRowVerticalPadding * 2f).toPx() }
                         val down = awaitPrimaryDown()
                         val startIndex = findNearestListIndex(
                             pointerY = down.position.y,
@@ -411,16 +437,27 @@ fun ListDrawerScreen(
         ) {
             val screenHeightPx = with(density) { maxHeight.toPx() }
             val screenCenterY = screenHeightPx / 2f
+            val listViewportCenterY by remember {
+                derivedStateOf {
+                    val info = listState.layoutInfo
+                    if (info.totalItemsCount > 0) {
+                        (info.viewportStartOffset + info.viewportEndOffset) / 2f
+                    } else {
+                        screenCenterY
+                    }
+                }
+            }
             val fastFlowSlowTopY = screenHeightPx * FAST_FLOW_SLOW_TOP_FRACTION
             val fastFlowSlowBottomY = screenHeightPx * FAST_FLOW_SLOW_BOTTOM_FRACTION
             val autoScrollEdgePx = with(density) { LIST_AUTO_SCROLL_EDGE_DP.dp.toPx() }
             val topEdgeBlurZonePx = with(density) { topFadeRangeDp.coerceIn(0, 220).dp.toPx() }
             val bottomEdgeBlurZonePx = with(density) { bottomFadeRangeDp.coerceIn(0, 220).dp.toPx() }
-            val estimatedItemHeight = iconSize.coerceAtLeast(48.dp) + 20.dp
+            val estimatedItemHeight = scaledIconSize.coerceAtLeast(24.dp) + scaledRowVerticalPadding * 2f
             val centeredPadding = ((maxHeight - estimatedItemHeight) / 2f).coerceAtLeast(8.dp)
-            val leftSafeInset = leftSafeInsetDp.coerceIn(0, 96).dp.coerceAtMost(maxWidth * 0.36f)
+            val leftSafeInset = leftSafeInsetDp.coerceIn(0, 128).dp.coerceAtMost(maxWidth * 0.36f)
             val dragRowShift = dragFromIndex?.let { itemHeights[it] } ?: with(density) { estimatedItemHeight.toPx() }
-            val dragOverlayHeightPx = dragFromIndex?.let { itemHeights[it] } ?: with(density) { (iconSize + 20.dp).toPx() }
+            val dragOverlayHeightPx = dragFromIndex?.let { itemHeights[it] }
+                ?: with(density) { (scaledIconSize + scaledRowVerticalPadding * 2f).toPx() }
             val visibleInfoByIndex by remember {
                 derivedStateOf {
                     listState.layoutInfo.visibleItemsInfo.associateBy { it.index }
@@ -493,14 +530,14 @@ fun ListDrawerScreen(
                     val itemInfo = visibleInfoByIndex[index]
                     val itemScale = computeItemScale(
                         itemInfo = itemInfo,
-                        screenCenterY = screenCenterY,
+                        screenCenterY = listViewportCenterY,
                         screenHeight = screenHeightPx,
                         fisheyeEnabled = fisheyeEnabled
                     )
-                    val rowCenterY = itemCenters[index] ?: itemInfo?.let { it.offset + it.size / 2f } ?: screenCenterY
+                    val rowCenterY = itemInfo?.let { it.offset + it.size / 2f } ?: listViewportCenterY
                     val flowOffset = computeFastFlowOffset(
                         rowCenterY = rowCenterY,
-                        screenCenterY = screenCenterY,
+                        screenCenterY = listViewportCenterY,
                         slowTopY = fastFlowSlowTopY,
                         slowBottomY = fastFlowSlowBottomY,
                         enabled = fastFlowAnimationEnabled &&
@@ -509,7 +546,7 @@ fun ListDrawerScreen(
                             longPressedApp == null
                     )
                     val itemBlur = computeVerticalEdgeBlur(
-                        centerY = itemInfo?.let { it.offset + it.size / 2f } ?: screenCenterY,
+                        centerY = itemInfo?.let { it.offset + it.size / 2f } ?: listViewportCenterY,
                         screenHeight = screenHeightPx,
                         topBlurZonePx = topEdgeBlurZonePx,
                         bottomBlurZonePx = bottomEdgeBlurZonePx,
@@ -613,21 +650,21 @@ fun ListDrawerScreen(
                                     onAppClick(app, Offset(0.15f, centerY / screenHeightPx))
                                 }
                             )
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                            .padding(horizontal = scaledRowHorizontalPadding, vertical = scaledRowVerticalPadding),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Image(
                             bitmap = displayIcon,
                             contentDescription = app.label,
                             modifier = Modifier
-                                .size(iconSize)
+                                .size(scaledIconSize)
                                 .clip(CircleShape),
                             contentScale = ContentScale.Crop
                         )
-                        Spacer(modifier = Modifier.width(14.dp))
+                        Spacer(modifier = Modifier.width(scaledIconTextGap))
                         Text(
                             text = app.label,
-                            fontSize = 16.sp,
+                            fontSize = scaledTextSizeSp,
                             fontWeight = FontWeight.W500,
                             color = appPalette.text
                         )
@@ -665,7 +702,7 @@ fun ListDrawerScreen(
                             shadowElevation = if (iconShadowEnabled) 18.dp.toPx() else 0f
                         }
                         .background(appPalette.item, launcherStyle.compactShape)
-                        .padding(horizontal = 28.dp, vertical = 10.dp),
+                            .padding(horizontal = (28.dp * appListScale).coerceIn(14.dp, 40.dp), vertical = scaledRowVerticalPadding),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     val overlayUseBlurredIcon = (
@@ -681,14 +718,14 @@ fun ListDrawerScreen(
                         ),
                         contentDescription = draggedApp.label,
                         modifier = Modifier
-                            .size(iconSize)
+                            .size(scaledIconSize)
                             .clip(CircleShape),
                         contentScale = ContentScale.Crop
                     )
-                    Spacer(modifier = Modifier.width(14.dp))
+                    Spacer(modifier = Modifier.width(scaledIconTextGap))
                     Text(
                         text = draggedApp.label,
-                        fontSize = 16.sp,
+                        fontSize = scaledTextSizeSp,
                         fontWeight = FontWeight.W500,
                         color = appPalette.text
                     )

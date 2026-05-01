@@ -53,9 +53,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.roundToInt
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "launcher_settings")
+
+enum class SideScreenSection(val prefValue: String) {
+    Widgets("widgets"),
+    Notifications("notifications")
+}
 
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -76,17 +83,25 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_HONEYCOMB_COLS = intPreferencesKey("honeycomb_cols")
         val KEY_HONEYCOMB_TOP_BLUR = intPreferencesKey("honeycomb_top_blur")
         val KEY_HONEYCOMB_BOTTOM_BLUR = intPreferencesKey("honeycomb_bottom_blur")
+        val KEY_HONEYCOMB_EDGE_BLUR_TENTHS = intPreferencesKey("honeycomb_edge_blur_tenths")
         val KEY_HONEYCOMB_TOP_FADE = intPreferencesKey("honeycomb_top_fade")
         val KEY_HONEYCOMB_BOTTOM_FADE = intPreferencesKey("honeycomb_bottom_fade")
         val KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION = booleanPreferencesKey("honeycomb_fast_scroll_optimization")
         val KEY_APP_LIST_FISHEYE = booleanPreferencesKey("app_list_fisheye_enabled")
         val KEY_APP_LIST_LEFT_SAFE_INSET_DP = intPreferencesKey("app_list_left_safe_inset_dp")
+        val KEY_APP_LIST_SCALE_PERCENT = intPreferencesKey("app_list_scale_percent")
+        val KEY_APP_LIST_WATCHFACE_COLORS = booleanPreferencesKey("app_list_watchface_colors")
         val KEY_FAST_FLOW_ANIMATION = booleanPreferencesKey("fast_flow_animation_enabled")
         val KEY_TWO_TONE_ICONS = booleanPreferencesKey("two_tone_icons_enabled")
         val KEY_ICON_SHADOW = booleanPreferencesKey("app_icon_shadow_enabled")
         val KEY_SHOW_STEP_COUNT = booleanPreferencesKey("show_step_count")
         val KEY_SHOW_NOTIFICATION = booleanPreferencesKey("show_notification")
         val KEY_NOTIFICATION_SETTING_MIGRATED = booleanPreferencesKey("notification_setting_migrated")
+        val KEY_SHOW_WIDGETS = booleanPreferencesKey("show_widgets")
+        val KEY_WATCHFACE_CHARGING_POWER_TEXT = booleanPreferencesKey("watchface_charging_power_text")
+        val KEY_WATCHFACE_STATUS_INDICATORS = booleanPreferencesKey("watchface_status_indicators")
+        val KEY_SIDE_SCREEN_SECTION_ORDER = stringPreferencesKey("side_screen_section_order")
+        val KEY_DEVICE_PRESET_APPLIED = booleanPreferencesKey("device_preset_applied")
         val KEY_HIDDEN_APPS = stringPreferencesKey("hidden_apps")
         val KEY_ICON_PACK_PACKAGE = stringPreferencesKey("icon_pack_package")
         val KEY_SELECTED_WATCHFACE_ID = stringPreferencesKey("selected_watchface_id")
@@ -133,6 +148,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_SIDE_SCREEN_SHORTCUT_COLS = intPreferencesKey("side_screen_shortcut_cols")
         private const val SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY = 12
         private const val SIDE_SCREEN_WIDGET_CAPACITY = 8
+        private const val APP_LIST_LEFT_SAFE_INSET_MAX_DP = 128
+        private const val XIAOMI_17_PRO_SAFE_INSET_DP = 96
     }
 
     private val store = application.dataStore
@@ -246,6 +263,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _honeycombBottomBlur = MutableStateFlow(4)
     val honeycombBottomBlur: StateFlow<Int> = _honeycombBottomBlur.asStateFlow()
+    private val _honeycombEdgeBlurRadius = MutableStateFlow(4f)
+    val honeycombEdgeBlurRadius: StateFlow<Float> = _honeycombEdgeBlurRadius.asStateFlow()
 
     private val _honeycombTopFade = MutableStateFlow(30)
     val honeycombTopFade: StateFlow<Int> = _honeycombTopFade.asStateFlow()
@@ -259,6 +278,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val appListFisheyeEnabled: StateFlow<Boolean> = _appListFisheyeEnabled.asStateFlow()
     private val _appListLeftSafeInsetDp = MutableStateFlow(0)
     val appListLeftSafeInsetDp: StateFlow<Int> = _appListLeftSafeInsetDp.asStateFlow()
+    private val _appListScalePercent = MutableStateFlow(100)
+    val appListScalePercent: StateFlow<Int> = _appListScalePercent.asStateFlow()
+    private val _appListWatchFaceColors = MutableStateFlow(true)
+    val appListWatchFaceColors: StateFlow<Boolean> = _appListWatchFaceColors.asStateFlow()
     private val _fastFlowAnimationEnabled = MutableStateFlow(false)
     val fastFlowAnimationEnabled: StateFlow<Boolean> = _fastFlowAnimationEnabled.asStateFlow()
     private val _twoToneIconsEnabled = MutableStateFlow(false)
@@ -273,6 +296,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _showNotification = MutableStateFlow(true)
     val showNotification: StateFlow<Boolean> = _showNotification.asStateFlow()
+    private val _showWidgets = MutableStateFlow(true)
+    val showWidgets: StateFlow<Boolean> = _showWidgets.asStateFlow()
+    private val _watchFaceChargingPowerText = MutableStateFlow(true)
+    val watchFaceChargingPowerText: StateFlow<Boolean> = _watchFaceChargingPowerText.asStateFlow()
+    private val _watchFaceStatusIndicators = MutableStateFlow(true)
+    val watchFaceStatusIndicators: StateFlow<Boolean> = _watchFaceStatusIndicators.asStateFlow()
+    private val _sideScreenSectionOrder = MutableStateFlow(defaultSideScreenSectionOrder())
+    val sideScreenSectionOrder: StateFlow<List<SideScreenSection>> = _sideScreenSectionOrder.asStateFlow()
     private val _notificationAccessGranted = MutableStateFlow(false)
     val notificationAccessGranted: StateFlow<Boolean> = _notificationAccessGranted.asStateFlow()
     private val _expandedNotificationGroups = MutableStateFlow<Set<String>>(emptySet())
@@ -566,7 +597,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     appRepository.setCustomOrder(loadedOrder)
                 }
 
-                val loadedHoneycombCols = (prefs[KEY_HONEYCOMB_COLS] ?: 3).coerceIn(2, 5)
+                val devicePresetApplied = prefs[KEY_DEVICE_PRESET_APPLIED] ?: false
+                val shouldApplyDevicePreset = !devicePresetApplied && isXiaomi17ProSeriesDevice()
+                val hasSavedHoneycombCols = prefs[KEY_HONEYCOMB_COLS] != null
+                val hasSavedLeftSafeInset = prefs[KEY_APP_LIST_LEFT_SAFE_INSET_DP] != null
+                val honeycombColsDefault = if (shouldApplyDevicePreset && !hasSavedHoneycombCols) 2 else 3
+                val leftSafeInsetDefault = if (shouldApplyDevicePreset && !hasSavedLeftSafeInset) {
+                    XIAOMI_17_PRO_SAFE_INSET_DP
+                } else {
+                    0
+                }
+
+                val loadedHoneycombCols = (prefs[KEY_HONEYCOMB_COLS] ?: honeycombColsDefault).coerceIn(2, 5)
                 if (_honeycombCols.value != loadedHoneycombCols) _honeycombCols.value = loadedHoneycombCols
 
                 val loadedTopBlur = (prefs[KEY_HONEYCOMB_TOP_BLUR] ?: 4).coerceIn(0, 48)
@@ -574,6 +616,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 val loadedBottomBlur = (prefs[KEY_HONEYCOMB_BOTTOM_BLUR] ?: 4).coerceIn(0, 48)
                 if (_honeycombBottomBlur.value != loadedBottomBlur) _honeycombBottomBlur.value = loadedBottomBlur
+
+                val loadedEdgeBlurTenths = (prefs[KEY_HONEYCOMB_EDGE_BLUR_TENTHS]
+                    ?: (((loadedTopBlur + loadedBottomBlur) / 2f) * 10f).roundToInt())
+                    .coerceIn(1, 50)
+                val loadedEdgeBlurRadius = loadedEdgeBlurTenths / 10f
+                if (_honeycombEdgeBlurRadius.value != loadedEdgeBlurRadius) {
+                    _honeycombEdgeBlurRadius.value = loadedEdgeBlurRadius
+                }
 
                 val loadedTopFade = (prefs[KEY_HONEYCOMB_TOP_FADE] ?: 30).coerceIn(0, 160)
                 if (_honeycombTopFade.value != loadedTopFade) _honeycombTopFade.value = loadedTopFade
@@ -591,9 +641,20 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListFisheyeEnabled.value = loadedFisheyeEnabled
                 }
 
-                val loadedLeftSafeInset = (prefs[KEY_APP_LIST_LEFT_SAFE_INSET_DP] ?: 0).coerceIn(0, 96)
+                val loadedLeftSafeInset = (prefs[KEY_APP_LIST_LEFT_SAFE_INSET_DP] ?: leftSafeInsetDefault)
+                    .coerceIn(0, APP_LIST_LEFT_SAFE_INSET_MAX_DP)
                 if (_appListLeftSafeInsetDp.value != loadedLeftSafeInset) {
                     _appListLeftSafeInsetDp.value = loadedLeftSafeInset
+                }
+
+                val loadedAppListScale = (prefs[KEY_APP_LIST_SCALE_PERCENT] ?: 100).coerceIn(50, 200)
+                if (_appListScalePercent.value != loadedAppListScale) {
+                    _appListScalePercent.value = loadedAppListScale
+                }
+
+                val loadedAppListWatchFaceColors = prefs[KEY_APP_LIST_WATCHFACE_COLORS] ?: true
+                if (_appListWatchFaceColors.value != loadedAppListWatchFaceColors) {
+                    _appListWatchFaceColors.value = loadedAppListWatchFaceColors
                 }
 
                 val loadedFastFlowEnabled = prefs[KEY_FAST_FLOW_ANIMATION] ?: false
@@ -617,6 +678,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _showStepCount.value = loadedShowStepCount
                 }
 
+                val loadedWatchFaceChargingPowerText = prefs[KEY_WATCHFACE_CHARGING_POWER_TEXT] ?: true
+                if (_watchFaceChargingPowerText.value != loadedWatchFaceChargingPowerText) {
+                    _watchFaceChargingPowerText.value = loadedWatchFaceChargingPowerText
+                }
+
+                val loadedWatchFaceStatusIndicators = prefs[KEY_WATCHFACE_STATUS_INDICATORS] ?: true
+                if (_watchFaceStatusIndicators.value != loadedWatchFaceStatusIndicators) {
+                    _watchFaceStatusIndicators.value = loadedWatchFaceStatusIndicators
+                }
+
                 val notificationSettingMigrated = prefs[KEY_NOTIFICATION_SETTING_MIGRATED] ?: false
                 val loadedShowNotification = if (notificationSettingMigrated) {
                     prefs[KEY_SHOW_NOTIFICATION] ?: true
@@ -628,6 +699,28 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     store.edit {
                         it[KEY_SHOW_NOTIFICATION] = true
                         it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
+                    }
+                }
+
+                val loadedShowWidgets = prefs[KEY_SHOW_WIDGETS] ?: true
+                if (_showWidgets.value != loadedShowWidgets) {
+                    _showWidgets.value = loadedShowWidgets
+                }
+
+                val loadedSectionOrder = parseSideScreenSectionOrder(prefs[KEY_SIDE_SCREEN_SECTION_ORDER])
+                if (_sideScreenSectionOrder.value != loadedSectionOrder) {
+                    _sideScreenSectionOrder.value = loadedSectionOrder
+                }
+
+                if (!devicePresetApplied) {
+                    store.edit {
+                        if (shouldApplyDevicePreset && !hasSavedHoneycombCols) {
+                            it[KEY_HONEYCOMB_COLS] = 2
+                        }
+                        if (shouldApplyDevicePreset && !hasSavedLeftSafeInset) {
+                            it[KEY_APP_LIST_LEFT_SAFE_INSET_DP] = XIAOMI_17_PRO_SAFE_INSET_DP
+                        }
+                        it[KEY_DEVICE_PRESET_APPLIED] = true
                     }
                 }
 
@@ -841,10 +934,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setState(state: ScreenState) {
-        _screenState.value = if (state == ScreenState.Notifications) {
-            if (_sideScreenEnabled.value) ScreenState.Stack else ScreenState.Face
-        } else {
-            state
+        _screenState.value = when {
+            state == ScreenState.Notifications && !_sideScreenEnabled.value -> ScreenState.Face
+            state == ScreenState.Notifications && !_showNotification.value -> ScreenState.Stack
+            else -> state
         }
         _revealedNotificationTarget.value = null
     }
@@ -986,7 +1079,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setSideScreenEnabled(enabled: Boolean) {
         _sideScreenEnabled.value = enabled
-        if (!enabled && _screenState.value == ScreenState.Stack) {
+        if (!enabled && (_screenState.value == ScreenState.Stack || _screenState.value == ScreenState.Notifications)) {
             _screenState.value = ScreenState.Face
         }
         persist { store.edit { it[KEY_SIDE_SCREEN_ENABLED] = enabled } }
@@ -1060,6 +1153,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persistDebounced("key_honeycomb_bottom_blur") { store.edit { it[KEY_HONEYCOMB_BOTTOM_BLUR] = savedValue } }
     }
 
+    fun setHoneycombEdgeBlurRadius(value: Float) {
+        val savedTenths = (value * 10f).roundToInt().coerceIn(1, 50)
+        _honeycombEdgeBlurRadius.value = savedTenths / 10f
+        persistDebounced("key_honeycomb_edge_blur_tenths") {
+            store.edit { it[KEY_HONEYCOMB_EDGE_BLUR_TENTHS] = savedTenths }
+        }
+    }
+
     fun setHoneycombTopFade(value: Int) {
         _honeycombTopFade.value = value.coerceIn(0, 160)
         val savedValue = _honeycombTopFade.value
@@ -1083,11 +1184,24 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setAppListLeftSafeInsetDp(value: Int) {
-        _appListLeftSafeInsetDp.value = value.coerceIn(0, 96)
+        _appListLeftSafeInsetDp.value = value.coerceIn(0, APP_LIST_LEFT_SAFE_INSET_MAX_DP)
         val savedValue = _appListLeftSafeInsetDp.value
         persistDebounced("key_app_list_left_safe_inset_dp") {
             store.edit { it[KEY_APP_LIST_LEFT_SAFE_INSET_DP] = savedValue }
         }
+    }
+
+    fun setAppListScalePercent(value: Int) {
+        _appListScalePercent.value = value.coerceIn(50, 200)
+        val savedValue = _appListScalePercent.value
+        persistDebounced("key_app_list_scale_percent") {
+            store.edit { it[KEY_APP_LIST_SCALE_PERCENT] = savedValue }
+        }
+    }
+
+    fun setAppListWatchFaceColors(enabled: Boolean) {
+        _appListWatchFaceColors.value = enabled
+        persist { store.edit { it[KEY_APP_LIST_WATCHFACE_COLORS] = enabled } }
     }
 
     fun setFastFlowAnimationEnabled(enabled: Boolean) {
@@ -1112,14 +1226,46 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_SHOW_STEP_COUNT] = enabled } }
     }
 
+    fun setWatchFaceChargingPowerTextEnabled(enabled: Boolean) {
+        _watchFaceChargingPowerText.value = enabled
+        persist { store.edit { it[KEY_WATCHFACE_CHARGING_POWER_TEXT] = enabled } }
+    }
+
+    fun setWatchFaceStatusIndicatorsEnabled(enabled: Boolean) {
+        _watchFaceStatusIndicators.value = enabled
+        persist { store.edit { it[KEY_WATCHFACE_STATUS_INDICATORS] = enabled } }
+    }
+
     fun setShowNotification(show: Boolean) {
         _showNotification.value = show
+        if (!show && _screenState.value == ScreenState.Notifications) {
+            _screenState.value = if (_sideScreenEnabled.value) ScreenState.Stack else ScreenState.Face
+        }
         persist {
             store.edit {
                 it[KEY_SHOW_NOTIFICATION] = show
                 it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
             }
         }
+    }
+
+    fun setShowWidgets(show: Boolean) {
+        _showWidgets.value = show
+        persist { store.edit { it[KEY_SHOW_WIDGETS] = show } }
+    }
+
+    fun moveSideSection(section: SideScreenSection, direction: Int) {
+        if (direction == 0) return
+        val current = normalizeSideScreenSectionOrder(_sideScreenSectionOrder.value).toMutableList()
+        val fromIndex = current.indexOf(section)
+        if (fromIndex < 0) return
+        val toIndex = (fromIndex + direction.coerceIn(-1, 1)).coerceIn(current.indices)
+        if (fromIndex == toIndex) return
+        current.removeAt(fromIndex)
+        current.add(toIndex, section)
+        val next = normalizeSideScreenSectionOrder(current)
+        _sideScreenSectionOrder.value = next
+        persist { store.edit { it[KEY_SIDE_SCREEN_SECTION_ORDER] = serializeSideScreenSectionOrder(next) } }
     }
 
     fun setAppHidden(componentKey: String, hidden: Boolean) {
@@ -1570,16 +1716,23 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _legacyCircularIcons.value = true
         _honeycombTopBlur.value = 4
         _honeycombBottomBlur.value = 4
+        _honeycombEdgeBlurRadius.value = 4f
         _honeycombTopFade.value = 30
         _honeycombBottomFade.value = 30
         _honeycombFastScrollOptimization.value = true
         _appListFisheyeEnabled.value = true
         _appListLeftSafeInsetDp.value = 0
+        _appListScalePercent.value = 100
+        _appListWatchFaceColors.value = true
         _fastFlowAnimationEnabled.value = false
         _twoToneIconsEnabled.value = false
         _iconShadowEnabled.value = true
         _showStepCount.value = true
         _showNotification.value = true
+        _showWidgets.value = true
+        _watchFaceChargingPowerText.value = true
+        _watchFaceStatusIndicators.value = true
+        _sideScreenSectionOrder.value = defaultSideScreenSectionOrder()
         _hiddenApps.value = emptySet()
         _selectedIconPackPackage.value = null
         _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
@@ -1644,17 +1797,24 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_HONEYCOMB_COLS] = 3
                 it[KEY_HONEYCOMB_TOP_BLUR] = 4
                 it[KEY_HONEYCOMB_BOTTOM_BLUR] = 4
+                it[KEY_HONEYCOMB_EDGE_BLUR_TENTHS] = 40
                 it[KEY_HONEYCOMB_TOP_FADE] = 30
                 it[KEY_HONEYCOMB_BOTTOM_FADE] = 30
                 it[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION] = true
                 it[KEY_APP_LIST_FISHEYE] = true
                 it[KEY_APP_LIST_LEFT_SAFE_INSET_DP] = 0
+                it[KEY_APP_LIST_SCALE_PERCENT] = 100
+                it[KEY_APP_LIST_WATCHFACE_COLORS] = true
                 it[KEY_FAST_FLOW_ANIMATION] = false
                 it[KEY_TWO_TONE_ICONS] = false
                 it[KEY_ICON_SHADOW] = true
                 it[KEY_SHOW_STEP_COUNT] = true
                 it[KEY_LEGACY_CIRCULAR_ICONS] = true
                 it[KEY_SHOW_NOTIFICATION] = true
+                it[KEY_SHOW_WIDGETS] = true
+                it[KEY_WATCHFACE_CHARGING_POWER_TEXT] = true
+                it[KEY_WATCHFACE_STATUS_INDICATORS] = true
+                it[KEY_SIDE_SCREEN_SECTION_ORDER] = serializeSideScreenSectionOrder(defaultSideScreenSectionOrder())
                 it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
                 it.remove(KEY_SIDE_SCREEN_SHORTCUTS)
                 it.remove(KEY_SIDE_SCREEN_WIDGETS)
@@ -1798,6 +1958,52 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             widgets.getOrNull(index)?.takeIf { it.isNotBlank() } ?: ""
         }
         return if (normalized.all(String::isEmpty)) "" else normalized.joinToString("|")
+    }
+
+    private fun defaultSideScreenSectionOrder(): List<SideScreenSection> {
+        return listOf(SideScreenSection.Widgets, SideScreenSection.Notifications)
+    }
+
+    private fun parseSideScreenSectionOrder(raw: String?): List<SideScreenSection> {
+        val parsed = raw
+            ?.split(',')
+            ?.mapNotNull { token ->
+                SideScreenSection.entries.firstOrNull { section ->
+                    section.prefValue.equals(token.trim(), ignoreCase = true) ||
+                        section.name.equals(token.trim(), ignoreCase = true)
+                }
+            }
+            .orEmpty()
+        return normalizeSideScreenSectionOrder(parsed)
+    }
+
+    private fun normalizeSideScreenSectionOrder(order: List<SideScreenSection>): List<SideScreenSection> {
+        val normalized = order.distinct().toMutableList()
+        defaultSideScreenSectionOrder().forEach { section ->
+            if (section !in normalized) normalized.add(section)
+        }
+        return normalized
+    }
+
+    private fun serializeSideScreenSectionOrder(order: List<SideScreenSection>): String {
+        return normalizeSideScreenSectionOrder(order).joinToString(",") { it.prefValue }
+    }
+
+    private fun isXiaomi17ProSeriesDevice(): Boolean {
+        val maker = listOf(Build.MANUFACTURER, Build.BRAND)
+            .joinToString(" ")
+            .lowercase(Locale.ROOT)
+        if ("xiaomi" !in maker) return false
+        return listOf(Build.MODEL, Build.DEVICE, Build.PRODUCT)
+            .map { value ->
+                value.lowercase(Locale.ROOT).replace(Regex("[\\s_\\-]+"), "")
+            }
+            .any { normalized ->
+                normalized.contains("25098pn5ac") ||
+                    normalized.contains("2509fpn0bc") ||
+                    normalized.contains("xiaomi17pro") ||
+                    normalized.contains("xiaomi17promax")
+            }
     }
 
     private fun updateStableNotificationGroups(

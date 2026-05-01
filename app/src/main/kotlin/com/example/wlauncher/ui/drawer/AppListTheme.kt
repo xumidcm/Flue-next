@@ -12,7 +12,31 @@ data class AppListPalette(
     val fadeEdge: Color
 )
 
-fun appListPalette(seed: Color, darkMode: Boolean, uiStyle: UiStyle): AppListPalette {
+fun appListPalette(
+    seed: Color,
+    darkMode: Boolean,
+    uiStyle: UiStyle,
+    useWatchFaceColor: Boolean = true
+): AppListPalette {
+    if (!useWatchFaceColor) {
+        return if (darkMode) {
+            AppListPalette(
+                background = Color.Black,
+                item = Color.White.copy(alpha = if (uiStyle.isMaterial) 0.08f else 0.10f),
+                itemPressedOverlay = Color.White.copy(alpha = 0.18f),
+                text = Color.White,
+                fadeEdge = Color.Black
+            )
+        } else {
+            AppListPalette(
+                background = Color.White,
+                item = Color.Black.copy(alpha = if (uiStyle.isMaterial) 0.06f else 0.08f),
+                itemPressedOverlay = Color.Black.copy(alpha = 0.12f),
+                text = Color(0xFF101010),
+                fadeEdge = Color.White
+            )
+        }
+    }
     val normalizedSeed = if (seed.alpha <= 0.01f) Color(0xFF7BE8FF) else seed.copy(alpha = 1f)
     if (uiStyle.isMaterial) {
         return if (darkMode) {

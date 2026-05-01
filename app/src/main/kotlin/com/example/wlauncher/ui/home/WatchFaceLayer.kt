@@ -18,11 +18,16 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -177,6 +182,9 @@ fun WatchFaceLayer(
     uiStyle: UiStyle = UiStyle.APPLE_WATCH,
     photoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
     videoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
+    showChargingPowerText: Boolean = true,
+    showStatusIndicators: Boolean = true,
+    hasNotifications: Boolean = false,
     onLongPress: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -188,6 +196,9 @@ fun WatchFaceLayer(
         uiStyle = uiStyle,
         photoOptions = photoOptions,
         videoOptions = videoOptions,
+        showChargingPowerText = showChargingPowerText,
+        showStatusIndicators = showStatusIndicators,
+        hasNotifications = hasNotifications,
         clockOverride = null,
         onLongPress = onLongPress,
         showClock = true,
@@ -206,7 +217,10 @@ fun BuiltInWatchFacePreview(
     clockOverride: ClockSnapshot? = FIXED_PREVIEW_CLOCK,
     modifier: Modifier = Modifier,
     showClock: Boolean = false,
-    playVideo: Boolean = true
+    playVideo: Boolean = true,
+    showChargingPowerText: Boolean = true,
+    showStatusIndicators: Boolean = false,
+    hasNotifications: Boolean = false
 ) {
     BuiltInWatchFaceSurface(
         watchFaceId = watchFaceId,
@@ -216,6 +230,9 @@ fun BuiltInWatchFacePreview(
         uiStyle = uiStyle,
         photoOptions = photoOptions,
         videoOptions = videoOptions,
+        showChargingPowerText = showChargingPowerText,
+        showStatusIndicators = showStatusIndicators,
+        hasNotifications = hasNotifications,
         clockOverride = clockOverride,
         onLongPress = null,
         showClock = showClock,
@@ -232,6 +249,9 @@ private fun BuiltInWatchFaceSurface(
     uiStyle: UiStyle,
     photoOptions: BuiltInWatchFaceOptions,
     videoOptions: BuiltInWatchFaceOptions,
+    showChargingPowerText: Boolean,
+    showStatusIndicators: Boolean,
+    hasNotifications: Boolean,
     clockOverride: ClockSnapshot?,
     onLongPress: (() -> Unit)?,
     showClock: Boolean,
@@ -328,6 +348,7 @@ private fun BuiltInWatchFaceSurface(
                 palette = clockPalette,
                 typeface = typeface,
                 chargingSnapshot = chargingSnapshot,
+                showChargingPowerText = showChargingPowerText,
                 fallbackTitle = when (watchFaceId) {
                     BUILT_IN_PHOTO_WATCHFACE_ID -> if (photoPath.isNullOrBlank()) "\u672A\u8BBE\u7F6E\u56FE\u7247" else null
                     BUILT_IN_VIDEO_WATCHFACE_ID -> if (videoPath.isNullOrBlank()) "\u672A\u8BBE\u7F6E\u89C6\u9891" else null
@@ -338,6 +359,16 @@ private fun BuiltInWatchFaceSurface(
                     BUILT_IN_VIDEO_WATCHFACE_ID -> if (videoPath.isNullOrBlank()) "\u5728\u8868\u76D8\u8BBE\u7F6E\u91CC\u9009\u62E9\u4E00\u4E2A\u89C6\u9891" else null
                     else -> null
                 }
+            )
+        }
+
+        if (showClock && showStatusIndicators) {
+            WatchFaceStatusIndicators(
+                chargingSnapshot = chargingSnapshot,
+                hasNotifications = hasNotifications,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 18.dp)
             )
         }
     }
@@ -433,9 +464,48 @@ fun ClockOverlayPreview(
         palette = palette,
         typeface = WatchFaceTypeface(androidTypeface = null, fontFamily = null),
         chargingSnapshot = ChargingSnapshot(),
+        showChargingPowerText = true,
         fallbackTitle = fallbackTitle,
         fallbackSubtitle = fallbackSubtitle
     )
+}
+
+@Composable
+private fun WatchFaceStatusIndicators(
+    chargingSnapshot: ChargingSnapshot,
+    hasNotifications: Boolean,
+    modifier: Modifier = Modifier
+) {
+    if (!chargingSnapshot.charging && !hasNotifications) return
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (chargingSnapshot.charging) {
+            Box(
+                modifier = Modifier
+                    .width(34.dp)
+                    .height(24.dp)
+                    .background(Color(0xFF22C55E).copy(alpha = 0.92f), RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "\u26A1",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+        if (hasNotifications) {
+            Box(
+                modifier = Modifier
+                    .size(9.dp)
+                    .background(Color(0xFFFF3B30), CircleShape)
+            )
+        }
+    }
 }
 
 @Composable
@@ -446,17 +516,19 @@ private fun ClockOverlay(
     palette: ClockPalette,
     typeface: WatchFaceTypeface,
     chargingSnapshot: ChargingSnapshot,
+    showChargingPowerText: Boolean,
     fallbackTitle: String? = null,
     fallbackSubtitle: String? = null
 ) {
     val effectivePalette = resolveClockTextPalette(options, palette)
+    val chargingTextSnapshot = if (showChargingPowerText) chargingSnapshot else ChargingSnapshot()
     if (options.clockStyle == WatchFaceClockStyle.MD3E_CLOCK && !compact) {
         Md3eClockOverlay(
             clock = clock,
             options = options,
             palette = effectivePalette,
             typeface = typeface,
-            chargingSnapshot = chargingSnapshot,
+            chargingSnapshot = chargingTextSnapshot,
             fallbackTitle = fallbackTitle,
             fallbackSubtitle = fallbackSubtitle
         )
@@ -468,7 +540,7 @@ private fun ClockOverlay(
             options = options,
             palette = effectivePalette,
             typeface = typeface,
-            chargingSnapshot = chargingSnapshot,
+            chargingSnapshot = chargingTextSnapshot,
             fallbackTitle = fallbackTitle,
             fallbackSubtitle = fallbackSubtitle
         )
@@ -480,7 +552,7 @@ private fun ClockOverlay(
             options = options,
             palette = effectivePalette,
             typeface = typeface,
-            chargingSnapshot = chargingSnapshot,
+            chargingSnapshot = chargingTextSnapshot,
             fallbackTitle = fallbackTitle,
             fallbackSubtitle = fallbackSubtitle
         )
@@ -519,7 +591,7 @@ private fun ClockOverlay(
                     color = effectivePalette.dateColor
                 )
             }
-            chargingSpeedLabel(chargingSnapshot)?.let {
+            chargingSpeedLabel(chargingTextSnapshot)?.let {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = it,
@@ -1175,8 +1247,10 @@ fun rememberAppListSeedColor(
     photoPath: String?,
     videoPath: String?,
     photoOptions: BuiltInWatchFaceOptions,
-    videoOptions: BuiltInWatchFaceOptions
+    videoOptions: BuiltInWatchFaceOptions,
+    enabled: Boolean = true
 ): Color {
+    if (!enabled) return Color.Transparent
     val activeOptions = when (watchFaceId) {
         BUILT_IN_PHOTO_WATCHFACE_ID -> photoOptions
         BUILT_IN_VIDEO_WATCHFACE_ID -> videoOptions
