@@ -876,7 +876,7 @@ private fun Md3eShapePickerRow(
 ) {
     Row(
         modifier = Modifier
-            .fillMaxWidth()
+            .fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
     ) {
         SmallChoiceChip(
@@ -1013,7 +1013,7 @@ private fun PositionPickerRow(
 ) {
     Column(
         modifier = Modifier
-            .fillMaxWidth()
+            .fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         listOf(
