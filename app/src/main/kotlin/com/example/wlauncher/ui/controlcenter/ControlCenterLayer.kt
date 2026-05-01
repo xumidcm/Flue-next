@@ -694,12 +694,21 @@ private fun setBrightness(context: Context, value: Float) {
 }
 
 private fun readConnectivitySnapshot(context: Context): ConnectivitySnapshot {
+    if (ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_NETWORK_STATE
+        ) != PackageManager.PERMISSION_GRANTED
+    ) {
+        return ConnectivitySnapshot()
+    }
     val manager = context.getSystemService(ConnectivityManager::class.java) ?: return ConnectivitySnapshot()
-    val capabilities = manager.getNetworkCapabilities(manager.activeNetwork) ?: return ConnectivitySnapshot()
-    return ConnectivitySnapshot(
-        wifiActive = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
-        cellularActive = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
-    )
+    return runCatching {
+        val capabilities = manager.getNetworkCapabilities(manager.activeNetwork) ?: return@runCatching ConnectivitySnapshot()
+        ConnectivitySnapshot(
+            wifiActive = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+            cellularActive = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+        )
+    }.getOrDefault(ConnectivitySnapshot())
 }
 
 private fun isBluetoothLikelyEnabled(context: Context): Boolean {
