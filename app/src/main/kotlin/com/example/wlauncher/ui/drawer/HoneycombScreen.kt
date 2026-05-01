@@ -112,6 +112,8 @@ fun HoneycombScreen(
     topFadeRangeDp: Int = 56,
     bottomFadeRangeDp: Int = 56,
     fastScrollOptimizationEnabled: Boolean = true,
+    active: Boolean = true,
+    leftSafeInsetDp: Int = 0,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
     onLongClick: (AppInfo) -> Unit = {},
@@ -127,7 +129,9 @@ fun HoneycombScreen(
             iconShadowEnabled = iconShadowEnabled,
             themeColor = themeColor,
             darkMode = darkMode,
-            columns = (narrowCols + 1).coerceIn(4, 6),
+            columns = (narrowCols + 1).coerceIn(3, 6),
+            active = active,
+            leftSafeInsetDp = leftSafeInsetDp,
             onAppClick = onAppClick,
             onLongClick = onLongClick,
             onExcludeApp = onExcludeApp,
@@ -169,12 +173,15 @@ fun HoneycombScreen(
         val density = LocalDensity.current
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
-        val screenCenterX = screenWidthPx / 2f
+        val leftSafeInsetPx = with(density) { leftSafeInsetDp.coerceIn(0, 96).dp.toPx() }
+            .coerceAtMost(screenWidthPx * 0.36f)
+        val contentWidthPx = (screenWidthPx - leftSafeInsetPx).coerceAtLeast(screenWidthPx * 0.55f)
+        val screenCenterX = leftSafeInsetPx + contentWidthPx / 2f
         val screenCenterY = screenHeightPx / 2f
-        val screenRadius = minOf(screenWidthPx, screenHeightPx) / 2f
+        val screenRadius = minOf(contentWidthPx, screenHeightPx) / 2f
 
         val maxCols = narrowCols + 1
-        val availableWidth = screenWidthPx - with(density) { 20.dp.toPx() }
+        val availableWidth = contentWidthPx - with(density) { 20.dp.toPx() }
         val iconSizePx = (availableWidth / (maxCols + 0.35f)).coerceIn(
             with(density) { 54.dp.toPx() },
             with(density) { 84.dp.toPx() }
@@ -257,6 +264,18 @@ fun HoneycombScreen(
             val clampedAnimated = scrollOffset.value.coerceIn(minScroll, maxScroll)
             if (clampedAnimated != scrollOffset.value) {
                 scrollOffset.snapTo(clampedAnimated)
+            }
+        }
+        LaunchedEffect(active, minScroll, maxScroll) {
+            if (!active) {
+                longPressedApp = null
+                glidePressedKey = null
+                dragFromIndex = null
+                dragCurrentIndex = null
+                dragPointer = null
+                dragApp = null
+                directScrollOffset = Float.NaN
+                scrollOffset.snapTo(scrollOffset.value.coerceIn(minScroll, maxScroll))
             }
         }
         LaunchedEffect(fastScrollOptimizationEnabled) {
@@ -962,6 +981,8 @@ private fun MaterialDenseGridScreen(
     themeColor: Color,
     darkMode: Boolean,
     columns: Int,
+    active: Boolean,
+    leftSafeInsetDp: Int,
     onAppClick: (AppInfo, Offset) -> Unit,
     onLongClick: (AppInfo) -> Unit,
     onExcludeApp: (AppInfo) -> Unit,
@@ -979,6 +1000,13 @@ private fun MaterialDenseGridScreen(
     val overscroll = remember { Animatable(0f) }
     val topReturnThresholdPx = with(density) { 72.dp.toPx() }
     val overscrollLimitPx = with(density) { 140.dp.toPx() }
+
+    LaunchedEffect(active) {
+        if (!active) {
+            longPressedApp = null
+            overscroll.snapTo(0f)
+        }
+    }
 
     val nestedScrollConnection = remember(gridState, onScrollToTop) {
         object : NestedScrollConnection {
@@ -1085,13 +1113,15 @@ private fun MaterialDenseGridScreen(
             }
     ) {
         val screenWidthPx = with(density) { maxWidth.toPx() }
+        val leftSafeInset = leftSafeInsetDp.coerceIn(0, 96).dp.coerceAtMost(maxWidth * 0.36f)
         val horizontalPaddingPx = with(density) { 8.dp.toPx() }
+        val leftPaddingPx = with(density) { (8.dp + leftSafeInset).toPx() }
         val itemGapPx = with(density) { 4.dp.toPx() }
         LazyVerticalGrid(
             columns = GridCells.Fixed(columns),
             state = gridState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+            contentPadding = PaddingValues(start = 8.dp + leftSafeInset, top = 8.dp, end = 8.dp, bottom = 8.dp),
             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
             verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
         ) {
@@ -1127,9 +1157,9 @@ private fun MaterialDenseGridScreen(
                             indication = null,
                             onClick = {
                                 val col = index % columns
-                                val usableWidth = screenWidthPx - horizontalPaddingPx * 2f - itemGapPx * (columns - 1)
+                                val usableWidth = screenWidthPx - leftPaddingPx - horizontalPaddingPx - itemGapPx * (columns - 1)
                                 val cellWidth = usableWidth / columns
-                                val centerX = horizontalPaddingPx + col * (cellWidth + itemGapPx) + cellWidth / 2f
+                                val centerX = leftPaddingPx + col * (cellWidth + itemGapPx) + cellWidth / 2f
                                 onAppClick(
                                     app,
                                     Offset(

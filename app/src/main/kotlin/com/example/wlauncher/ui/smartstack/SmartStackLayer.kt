@@ -22,6 +22,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -71,6 +72,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -81,19 +83,22 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -127,15 +132,10 @@ import kotlin.math.floor
 
 private const val SIDE_SCREEN_CONTENT_WIDTH_RATIO = 0.884f
 private const val SIDE_SCREEN_DISMISS_THRESHOLD = 86f
-private const val SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_RATIO = 0.78f
-private const val SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_MIN = 300f
-private const val SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS = 0.6f
-private const val SIDE_SCREEN_NOTIFICATION_FLING_VELOCITY = 1350f
 private const val STACKED_PREVIEW_TRANSLATION_DP = 28
 private const val STACKED_PREVIEW_HORIZONTAL_INSET_DP = 4
 private const val SIDE_SCREEN_APP_WIDGET_HOST_ID = 1024
 private const val SIDE_SCREEN_SHORTCUT_MENU_TRIGGER_MS = 410L
-private const val SIDE_SCREEN_WIDGET_MENU_TRIGGER_MS = 410L
 
 private sealed interface SideScreenModalState {
     data object None : SideScreenModalState
@@ -143,8 +143,8 @@ private sealed interface SideScreenModalState {
     data object WidgetPicker : SideScreenModalState
     data class ShortcutActions(val slotIndex: Int, val app: AppInfo) : SideScreenModalState
     data class RemoveShortcut(val slotIndex: Int) : SideScreenModalState
-    data class WidgetActions(val widgetIndex: Int) : SideScreenModalState
-    data class RemoveWidget(val widgetIndex: Int) : SideScreenModalState
+    data class WidgetActions(val card: SideScreenWidgetCardItem) : SideScreenModalState
+    data class RemoveWidget(val card: SideScreenWidgetCardItem) : SideScreenModalState
 }
 
 private data class SideScreenClockSnapshot(val time: String, val date: String)
@@ -195,6 +195,7 @@ fun SmartStackLayer(
     onOpenNotifications: () -> Unit,
     onNotificationTransitionProgressChange: (Float) -> Unit,
     onNotificationTransitionRelease: (Boolean) -> Unit,
+    onOpenNotification: (String, Offset) -> Unit,
     onLaunchApp: (AppInfo, Offset) -> Unit,
     onSetShortcut: (Int, String?) -> Unit,
     onRemoveShortcut: (Int) -> Unit,
@@ -209,8 +210,6 @@ fun SmartStackLayer(
     showSteps: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val density = LocalDensity.current
-    val configuration = LocalConfiguration.current
     val clock = rememberClockSnapshot()
     val battery = rememberBatterySnapshot()
     val stepPermissionGranted = rememberActivityRecognitionPermission(showSteps)
@@ -226,14 +225,6 @@ fun SmartStackLayer(
     val appWidgetManager = remember(context) { AppWidgetManager.getInstance(context) }
     val appWidgetHost = remember(context) { AppWidgetHost(context, SIDE_SCREEN_APP_WIDGET_HOST_ID) }
     var pendingWidgetSelection by remember { mutableStateOf<PendingWidgetSelection?>(null) }
-    val notificationDragRangePx = remember(configuration.screenHeightDp, density) {
-        maxOf(
-            with(density) { configuration.screenHeightDp.dp.toPx() } * SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_RATIO,
-            SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_MIN
-        )
-    }
-    val notificationReleaseThresholdPx = notificationDragRangePx * SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS
-
     fun clearAllocatedWidget(slotIndex: Int) {
         widgetRepository.extractWidgetId(sideScreenWidgetSlots.getOrNull(slotIndex))?.let { widgetId ->
             runCatching { appWidgetHost.deleteAppWidgetId(widgetId) }
@@ -312,18 +303,58 @@ fun SmartStackLayer(
     var modalState by remember { mutableStateOf<SideScreenModalState>(SideScreenModalState.None) }
     var dragDx by remember { mutableFloatStateOf(0f) }
     var dragDy by remember { mutableFloatStateOf(0f) }
-    var dragVelocityY by remember { mutableFloatStateOf(0f) }
     var lastDragEventUptime by remember { mutableStateOf(0L) }
-    var overscrollTarget by remember { mutableFloatStateOf(0f) }
     var transitionInFlight by remember { mutableStateOf(false) }
-    val overscrollY by animateFloatAsState(overscrollTarget, spring(stiffness = 440f, dampingRatio = 0.78f), label = "side_overscroll")
-    val contentTranslationY = if (notificationsSceneActive || transitionInFlight) 0f else overscrollY
+    val sideListState = rememberLazyListState()
+    val sideOverscroll = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val contentTranslationY = if (notificationsSceneActive || transitionInFlight) 0f else sideOverscroll.value
+    val sideNestedScrollConnection = remember(sideListState, notificationsSceneActive, transitionInFlight) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput || notificationsSceneActive || transitionInFlight) {
+                    return Offset.Zero
+                }
+                val atTop = sideListState.firstVisibleItemIndex == 0 && sideListState.firstVisibleItemScrollOffset == 0
+                val lastVisible = sideListState.layoutInfo.visibleItemsInfo.lastOrNull()
+                val atBottom = lastVisible != null &&
+                    lastVisible.index >= sideListState.layoutInfo.totalItemsCount - 1 &&
+                    lastVisible.offset + lastVisible.size <= sideListState.layoutInfo.viewportEndOffset
+                when {
+                    available.y > 0f && atTop -> {
+                        scope.launch { sideOverscroll.snapTo((sideOverscroll.value + available.y * 0.35f).coerceAtMost(140f)) }
+                        return Offset(0f, available.y)
+                    }
+                    available.y < 0f && atBottom -> {
+                        scope.launch { sideOverscroll.snapTo((sideOverscroll.value + available.y * 0.35f).coerceAtLeast(-140f)) }
+                        return Offset(0f, available.y)
+                    }
+                    sideOverscroll.value > 0f && available.y < 0f -> {
+                        scope.launch { sideOverscroll.snapTo((sideOverscroll.value + available.y).coerceAtLeast(0f)) }
+                        return Offset(0f, available.y)
+                    }
+                    sideOverscroll.value < 0f && available.y > 0f -> {
+                        scope.launch { sideOverscroll.snapTo((sideOverscroll.value + available.y).coerceAtMost(0f)) }
+                        return Offset(0f, available.y)
+                    }
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (sideOverscroll.value != 0f) {
+                    sideOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                    return available
+                }
+                return Velocity.Zero
+            }
+        }
+    }
 
     LaunchedEffect(notificationsSceneActive) {
-        overscrollTarget = 0f
+        sideOverscroll.snapTo(0f)
         dragDx = 0f
         dragDy = 0f
-        dragVelocityY = 0f
         lastDragEventUptime = 0L
         transitionInFlight = false
     }
@@ -348,27 +379,14 @@ fun SmartStackLayer(
                     onDragStart = {
                         dragDx = 0f
                         dragDy = 0f
-                        dragVelocityY = 0f
                         lastDragEventUptime = 0L
                     },
                     onDrag = { change, dragAmount ->
-                        if (lastDragEventUptime != 0L) {
-                            val deltaMs = (change.uptimeMillis - lastDragEventUptime).coerceAtLeast(1L)
-                            val instantVelocityY = dragAmount.y / deltaMs * 1000f
-                            dragVelocityY = if (dragVelocityY == 0f) {
-                                instantVelocityY
-                            } else {
-                                dragVelocityY * 0.35f + instantVelocityY * 0.65f
-                            }
-                        }
                         lastDragEventUptime = change.uptimeMillis
                         dragDx += dragAmount.x
                         dragDy += dragAmount.y
-                        if (abs(dragDx) > abs(dragDy)) {
-                            if (dragDx < 0f) change.consume()
-                        } else {
+                        if (abs(dragDx) > abs(dragDy) && dragDx < 0f) {
                             change.consume()
-                            overscrollTarget = (overscrollTarget + dragAmount.y * 0.35f).coerceIn(-180f, 120f)
                         }
                     },
                     onDragEnd = {
@@ -376,28 +394,22 @@ fun SmartStackLayer(
 
                         when {
                             dismissToFace -> {
-                                overscrollTarget = 0f
                                 dragDx = 0f
                                 dragDy = 0f
-                                dragVelocityY = 0f
                                 lastDragEventUptime = 0L
                                 onRevealTargetChange(null)
                                 onDismissToFace()
                             }
                             else -> {
-                                overscrollTarget = 0f
                                 dragDx = 0f
                                 dragDy = 0f
-                                dragVelocityY = 0f
                                 lastDragEventUptime = 0L
                             }
                         }
                     },
                     onDragCancel = {
-                        overscrollTarget = 0f
                         dragDx = 0f
                         dragDy = 0f
-                        dragVelocityY = 0f
                         lastDragEventUptime = 0L
                     }
                 )
@@ -406,66 +418,92 @@ fun SmartStackLayer(
         val widthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
         val heightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
         val contentWidth = maxWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
-        val scrollState = rememberScrollState()
 
-        Column(
+        LazyColumn(
+            state = sideListState,
             modifier = Modifier
                 .fillMaxSize()
+                .nestedScroll(sideNestedScrollConnection)
                 .graphicsLayer { translationY = contentTranslationY }
-                .verticalScroll(scrollState)
-                .padding(top = 10.dp, bottom = 74.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(horizontal = 0.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            contentPadding = PaddingValues(top = 10.dp, bottom = 74.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text(clock.time, color = launcherStyle.titleColor, fontSize = 31.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(6.dp))
-            Text(clock.date, color = WatchColors.TextSecondary, fontSize = 17.sp, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.height(14.dp))
-            QuickPanel(
-                width = contentWidth,
-                rows = visibleShortcutRows,
-                cols = visibleShortcutCols,
-                items = shortcutItems,
-                slotCenters = slotCenters,
-                onAdd = { onRevealTargetChange(null); modalState = SideScreenModalState.ShortcutPicker(it) },
-                onOpenActions = { slot, app ->
-                    onRevealTargetChange(null)
-                    modalState = SideScreenModalState.ShortcutActions(slot, app)
-                },
-                onSwap = onSwapShortcut,
-                onClickApp = { slot, app ->
-                    val center = slotCenters[slot] ?: Offset(widthPx / 2f, heightPx / 2f)
-                    onRevealTargetChange(null)
-                    onLaunchApp(app, Offset(center.x / widthPx, center.y / heightPx))
-                }
-            )
-            Spacer(Modifier.height(14.dp))
-            SideScreenSectionHeader(
-                title = "小组件",
-                width = contentWidth,
-                actionLabel = "添加",
-                onAction = {
-                    onRevealTargetChange(null)
-                    modalState = SideScreenModalState.WidgetPicker
-                }
-            )
-            Spacer(Modifier.height(10.dp))
+            item("clock_time") {
+                Text(
+                    clock.time,
+                    color = launcherStyle.titleColor,
+                    fontSize = 31.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            item("clock_date") {
+                Text(
+                    clock.date,
+                    color = WatchColors.TextSecondary,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            item("quick_panel") {
+                QuickPanel(
+                    width = contentWidth,
+                    rows = visibleShortcutRows,
+                    cols = visibleShortcutCols,
+                    items = shortcutItems,
+                    slotCenters = slotCenters,
+                    onAdd = { onRevealTargetChange(null); modalState = SideScreenModalState.ShortcutPicker(it) },
+                    onOpenActions = { slot, app ->
+                        onRevealTargetChange(null)
+                        modalState = SideScreenModalState.ShortcutActions(slot, app)
+                    },
+                    onCloseActions = {
+                        if (modalState is SideScreenModalState.ShortcutActions) {
+                            modalState = SideScreenModalState.None
+                        }
+                    },
+                    onSwap = onSwapShortcut,
+                    onClickApp = { slot, app ->
+                        val center = slotCenters[slot] ?: Offset(widthPx / 2f, heightPx / 2f)
+                        onRevealTargetChange(null)
+                        onLaunchApp(app, Offset(center.x / widthPx, center.y / heightPx))
+                    }
+                )
+            }
+            item("widget_header") {
+                SideScreenSectionHeader(
+                    title = "小组件",
+                    width = contentWidth,
+                    actionLabel = "添加",
+                    onAction = {
+                        onRevealTargetChange(null)
+                        modalState = SideScreenModalState.WidgetPicker
+                    }
+                )
+            }
             if (visibleWidgetCards.isEmpty()) {
-                EmptyWidgetCard(width = contentWidth)
+                item("empty_widget") {
+                    EmptyWidgetCard(width = contentWidth)
+                }
             } else {
-                Column(
-                    Modifier
-                        .width(contentWidth)
-                        .animateContentSize(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    visibleWidgetCards.forEach { card ->
+                items(
+                    items = visibleWidgetCards,
+                    key = { "widget_${it.widgetIndex}_${it.widget.widgetKey}_${it.widget.widgetId}" },
+                    contentType = { "side_widget" }
+                ) { card ->
+                    Box(Modifier.width(contentWidth).animateContentSize()) {
                         WidgetCard(
                             widget = card.widget,
                             widgetRepository = widgetRepository,
                             appWidgetHost = appWidgetHost,
                             onLongPress = {
                                 onRevealTargetChange(null)
-                                modalState = SideScreenModalState.WidgetActions(card.widgetIndex)
+                                modalState = SideScreenModalState.WidgetActions(card)
                             },
                             onMeasuredHeight = { heightPx ->
                                 if (heightPx > 0) {
@@ -477,18 +515,19 @@ fun SmartStackLayer(
                 }
             }
             if (notificationsEnabled) {
-                Spacer(Modifier.height(16.dp))
-                SideScreenSectionHeader(
-                    title = "通知",
-                    width = contentWidth
-                )
-                Spacer(Modifier.height(10.dp))
-                Column(
-                    Modifier
-                        .width(contentWidth)
-                        .animateContentSize(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
+                item("notification_header") {
+                    SideScreenSectionHeader(
+                        title = "通知",
+                        width = contentWidth
+                    )
+                }
+                item("notification_preview") {
+                    Column(
+                        Modifier
+                            .width(contentWidth)
+                            .animateContentSize(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
                     when {
                         !notificationAccessGranted -> PreviewInfoCard("开启通知访问", "授权后所有通知会直接显示在这里", onOpenNotifications)
                         previewGroups.isEmpty() -> PreviewInfoCard("暂无通知", "新的通知会直接排列在小组件下方", onOpenNotifications)
@@ -506,12 +545,13 @@ fun SmartStackLayer(
                                         if (row.hiddenCount > 0) {
                                             StackedPreviewCard(entry, row.hiddenCount, onOpenNotifications)
                                         } else {
-                                            PreviewPill(entry, onOpenNotifications)
+                                            PreviewPill(entry) { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) }
                                         }
                                     }
                                 }
                             }
                         }
+                    }
                     }
                 }
             }
@@ -601,24 +641,29 @@ fun SmartStackLayer(
             }
         }
         is SideScreenModalState.WidgetActions -> {
-            val widgetCardIndex = widgetCards.indexOfFirst { it.widgetIndex == state.widgetIndex }
-            val widget = widgetCards.getOrNull(widgetCardIndex)?.widget
-            if (widget != null) {
+            val selected = state.card
+            val widgetCardIndex = widgetCards.indexOfFirst {
+                it.widgetIndex == selected.widgetIndex &&
+                    it.widget.widgetKey == selected.widget.widgetKey &&
+                    it.widget.widgetId == selected.widget.widgetId
+            }
+            val currentCard = widgetCards.getOrNull(widgetCardIndex)
+            if (currentCard != null) {
                 WidgetActionOverlay(
-                    widget = widget,
+                    widget = currentCard.widget,
                     canMoveUp = widgetCardIndex > 0,
                     canMoveDown = widgetCardIndex in 0 until widgetCards.lastIndex,
                     onMoveUp = {
                         val previousIndex = widgetCards.getOrNull(widgetCardIndex - 1)?.widgetIndex ?: return@WidgetActionOverlay
-                        onSwapWidget(state.widgetIndex, previousIndex)
+                        onSwapWidget(currentCard.widgetIndex, previousIndex)
                     },
                     onMoveDown = {
                         val nextIndex = widgetCards.getOrNull(widgetCardIndex + 1)?.widgetIndex ?: return@WidgetActionOverlay
-                        onSwapWidget(state.widgetIndex, nextIndex)
+                        onSwapWidget(currentCard.widgetIndex, nextIndex)
                     },
                     onRemove = {
-                        clearAllocatedWidget(state.widgetIndex)
-                        onRemoveWidget(state.widgetIndex)
+                        clearAllocatedWidget(currentCard.widgetIndex)
+                        onRemoveWidget(currentCard.widgetIndex)
                     },
                     onDismiss = { modalState = SideScreenModalState.None }
                 )
@@ -627,14 +672,19 @@ fun SmartStackLayer(
             }
         }
         is SideScreenModalState.RemoveWidget -> {
-            val widget = widgetCards.firstOrNull { it.widgetIndex == state.widgetIndex }?.widget
-            if (widget != null) {
+            val selected = state.card
+            val currentCard = widgetCards.firstOrNull {
+                it.widgetIndex == selected.widgetIndex &&
+                    it.widget.widgetKey == selected.widget.widgetKey &&
+                    it.widget.widgetId == selected.widget.widgetId
+            }
+            if (currentCard != null) {
                 RemoveOverlay(
                     app = null,
-                    widget = widget,
+                    widget = currentCard.widget,
                     onRemove = {
-                        clearAllocatedWidget(state.widgetIndex)
-                        onRemoveWidget(state.widgetIndex)
+                        clearAllocatedWidget(currentCard.widgetIndex)
+                        onRemoveWidget(currentCard.widgetIndex)
                     },
                     onDismiss = { modalState = SideScreenModalState.None }
                 )
@@ -654,6 +704,7 @@ fun SmartStackLayer(
     slotCenters: MutableMap<Int, Offset>,
     onAdd: (Int) -> Unit,
     onOpenActions: (Int, AppInfo) -> Unit,
+    onCloseActions: () -> Unit,
     onSwap: (Int, Int) -> Unit,
     onClickApp: (Int, AppInfo) -> Unit
 ) {
@@ -704,9 +755,9 @@ fun SmartStackLayer(
                                                 is PressHoldResult.LongPress -> {
                                                     vibrateHaptic(context)
                                                     hold.change.consume()
-                                                    draggingSlot = slot
                                                     dragOffset = Offset.Zero
                                                     dragMoved = false
+                                                    onOpenActions(slot, item)
 
                                                     while (true) {
                                                         val event = awaitPointerEvent()
@@ -718,7 +769,11 @@ fun SmartStackLayer(
                                                         val delta = change.positionChange()
                                                         if (delta != Offset.Zero) {
                                                             dragOffset += delta
-                                                            dragMoved = dragOffset.getDistance() > dragThresholdPx
+                                                            if (!dragMoved && dragOffset.getDistance() > dragThresholdPx) {
+                                                                dragMoved = true
+                                                                draggingSlot = slot
+                                                                onCloseActions()
+                                                            }
                                                             change.consume()
                                                         }
                                                     }
@@ -733,8 +788,6 @@ fun SmartStackLayer(
                                                     }
                                                     if (dragMoved && target != null) {
                                                         onSwap(slot, target)
-                                                    } else if (!dragMoved) {
-                                                        onOpenActions(slot, item)
                                                     }
                                                     draggingSlot = null
                                                     dragOffset = Offset.Zero
@@ -790,28 +843,11 @@ private fun WidgetCard(
         val minHeight = providerInfo?.minHeight?.takeIf { it > 0 } ?: 1
         (minWidth.toFloat() / minHeight.toFloat()).coerceIn(0.5f, 2.5f)
     }
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        if (isPressed) 0.988f else 1f,
-        spring(stiffness = 860f, dampingRatio = 0.78f),
-        label = "widget_card_scale"
-    )
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .onGloballyPositioned { coordinates -> onMeasuredHeight(coordinates.size.height) }
             .clip(RoundedCornerShape(24.dp))
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
-            .combinedClickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = {},
-                onLongClick = onLongPress
-            )
     ) {
         if (providerInfo != null && widget.widgetId != -1) {
             val widgetBindTag = remember(widget.widgetId, providerInfo) {
@@ -823,6 +859,7 @@ private fun WidgetCard(
                         setAppWidget(widget.widgetId, providerInfo)
                         tag = widgetBindTag
                         setOnLongClickListener {
+                            vibrateHaptic(context)
                             onLongPress()
                             true
                         }
@@ -851,13 +888,33 @@ private fun WidgetCard(
                     .background(Color(0xFF1F2937))
             )
         } else {
+            val interactionSource = remember { MutableInteractionSource() }
+            val isPressed by interactionSource.collectIsPressedAsState()
+            val scale by animateFloatAsState(
+                if (isPressed) 0.988f else 1f,
+                spring(stiffness = 860f, dampingRatio = 0.78f),
+                label = "widget_unavailable_scale"
+            )
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(widgetAspectRatio)
                     .heightIn(min = minWidgetHeight)
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                    }
                     .clip(RoundedCornerShape(24.dp))
-                    .background(Color(0xFF1F2937)),
+                    .background(Color(0xFF1F2937))
+                    .combinedClickable(
+                        interactionSource = interactionSource,
+                        indication = null,
+                        onClick = {},
+                        onLongClick = {
+                            vibrateHaptic(context)
+                            onLongPress()
+                        }
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -867,29 +924,6 @@ private fun WidgetCard(
                 )
             }
         }
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .pointerInput(widget.widgetKey, onLongPress) {
-                    awaitEachGesture {
-                        val down = awaitPrimaryDown()
-                        when (val hold = awaitLongPressOrRelease(
-                            pointerId = down.id,
-                            downPosition = down.position,
-                            timeoutMillis = SIDE_SCREEN_WIDGET_MENU_TRIGGER_MS
-                        )) {
-                            is PressHoldResult.LongPress -> {
-                                vibrateHaptic(context)
-                                hold.change.consume()
-                                onLongPress()
-                                consumeUntilRelease(down.id)
-                            }
-                            PressHoldResult.Released,
-                            PressHoldResult.Cancelled -> Unit
-                        }
-                    }
-                }
-        )
     }
 }
 
@@ -1371,8 +1405,7 @@ private fun ShortcutPickerRow(
         Modifier
             .fillMaxSize()
             .graphicsLayer { this.alpha = alpha }
-            .background(Color.Black.copy(alpha = 0.72f))
-            .consumeModalPointers(),
+            .background(Color.Black.copy(alpha = 0.72f)),
         contentAlignment = Alignment.Center
     ) {
         Box(
@@ -1386,18 +1419,8 @@ private fun ShortcutPickerRow(
                     scaleX = scale
                     scaleY = scale
                 }
-                .consumeModalPointers()
         ) {
             content(::dismiss)
-        }
-    }
-}
-
-private fun Modifier.consumeModalPointers(): Modifier = pointerInput(Unit) {
-    awaitPointerEventScope {
-        while (true) {
-            val event = awaitPointerEvent(PointerEventPass.Final)
-            event.changes.forEach { it.consume() }
         }
     }
 }
@@ -1425,15 +1448,6 @@ private suspend fun AwaitPointerEventScope.awaitLongPressOrRelease(
     if (result != null) return result
     val current = currentEvent.changes.firstOrNull { it.id == pointerId && it.pressed }
     return current?.let(PressHoldResult::LongPress) ?: PressHoldResult.Cancelled
-}
-
-private suspend fun AwaitPointerEventScope.consumeUntilRelease(pointerId: PointerId) {
-    while (true) {
-        val event = awaitPointerEvent()
-        val change = event.changes.firstOrNull { it.id == pointerId } ?: break
-        change.consume()
-        if (!change.pressed) break
-    }
 }
 
 private suspend fun AwaitPointerEventScope.awaitPrimaryDown(): PointerInputChange {

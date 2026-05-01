@@ -217,6 +217,7 @@ private fun SettingsRootScreen(
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsStateWithLifecycle()
     val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsStateWithLifecycle()
     val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsStateWithLifecycle()
+    val appListLeftSafeInsetDp by vm.appListLeftSafeInsetDp.collectAsStateWithLifecycle()
     val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsStateWithLifecycle()
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
@@ -780,10 +781,21 @@ private fun SettingsRootScreen(
                     title = "蜂窝列数",
                     value = honeycombCols.toFloat(),
                     valueText = "$honeycombCols 列",
-                    range = 3f..6f,
+                    range = 2f..5f,
                     steps = 2,
                     onValueChange = { vm.setHoneycombCols(it.toInt()) },
                     scale = itemFisheye(listState, "honeycomb_cols", screenCenterY, screenHeightPx)
+                )
+            }
+            item("app_list_left_safe_inset") {
+                SettingsSliderRow(
+                    title = if (isZh) "应用列表左侧安全区" else "App List Left Safe Area",
+                    value = appListLeftSafeInsetDp.toFloat(),
+                    valueText = "${appListLeftSafeInsetDp}dp",
+                    range = 0f..96f,
+                    steps = 11,
+                    onValueChange = { vm.setAppListLeftSafeInsetDp(it.toInt()) },
+                    scale = itemFisheye(listState, "app_list_left_safe_inset", screenCenterY, screenHeightPx)
                 )
             }
             item("top_blur") {

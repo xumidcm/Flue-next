@@ -170,6 +170,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsStateWithLifecycle()
     val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsStateWithLifecycle()
     val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsStateWithLifecycle()
+    val appListLeftSafeInsetDp by vm.appListLeftSafeInsetDp.collectAsStateWithLifecycle()
     val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsStateWithLifecycle()
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
@@ -479,6 +480,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         topFadeRangeDp = honeycombTopFade,
                         bottomFadeRangeDp = honeycombBottomFade,
                         fastScrollOptimizationEnabled = honeycombFastScrollOptimization,
+                        active = screenState == ScreenState.Apps,
+                        leftSafeInsetDp = appListLeftSafeInsetDp,
                         fisheyeEnabled = appListFisheyeEnabled,
                         fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                         twoToneIconsEnabled = twoToneIconsEnabled,
@@ -500,6 +503,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         suppressHeavyEffects = reduceLegacyDrawerEffects,
                         topFadeRangeDp = honeycombTopFade,
                         bottomFadeRangeDp = honeycombBottomFade,
+                        active = screenState == ScreenState.Apps,
+                        leftSafeInsetDp = appListLeftSafeInsetDp,
                         fisheyeEnabled = appListFisheyeEnabled,
                         fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                         twoToneIconsEnabled = twoToneIconsEnabled,
@@ -573,9 +578,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         notificationTransitionProgress = 0f,
                         revealedNotificationTarget = revealedNotificationTarget,
                         onRevealTargetChange = vm::setRevealedNotificationTarget,
-                        onOpenNotifications = {},
+                        onOpenNotifications = {
+                            vm.setRevealedNotificationTarget(null)
+                            settleNotificationTransition(1f)
+                        },
                         onNotificationTransitionProgressChange = {},
                         onNotificationTransitionRelease = {},
+                        onOpenNotification = { key, origin ->
+                            vm.openNotification(key, origin, ScreenState.Stack, 0L)
+                        },
                         onLaunchApp = { appInfo, origin ->
                             launchAppFromLauncher(appInfo, origin, ScreenState.Stack)
                         },

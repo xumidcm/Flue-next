@@ -12,6 +12,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -33,6 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.animateColorAsState
@@ -43,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
@@ -51,6 +54,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -59,11 +63,16 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.home.BuiltInWatchFacePreview
@@ -86,6 +95,8 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 const val EXTRA_INTERNAL_WATCHFACE_ID = "internal_watchface_id"
+
+private val LocalWatchFaceConfigScrollState = staticCompositionLocalOf<ScrollState?> { null }
 
 class InternalWatchFaceConfigActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -322,22 +333,62 @@ private fun InternalWatchFaceConfigScreen(
     val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
+    val overscroll = remember { Animatable(0f) }
+    val nestedScrollConnection = remember(scrollState) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput) return Offset.Zero
+                val atTop = scrollState.value == 0
+                val atBottom = scrollState.maxValue > 0 && scrollState.value >= scrollState.maxValue
+                when {
+                    available.y > 0f && atTop -> {
+                        scope.launch { overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtMost(140f)) }
+                        return Offset(0f, available.y)
+                    }
+                    available.y < 0f && atBottom -> {
+                        scope.launch { overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtLeast(-140f)) }
+                        return Offset(0f, available.y)
+                    }
+                    overscroll.value > 0f && available.y < 0f -> {
+                        scope.launch { overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(0f)) }
+                        return Offset(0f, available.y)
+                    }
+                    overscroll.value < 0f && available.y > 0f -> {
+                        scope.launch { overscroll.snapTo((overscroll.value + available.y).coerceAtMost(0f)) }
+                        return Offset(0f, available.y)
+                    }
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (overscroll.value != 0f) {
+                    overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                    return available
+                }
+                return Velocity.Zero
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         focusRequester.requestFocusAfterFirstFrame()
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(launcherStyle.screenBackground)
-            .flueRotaryScrollable(focusRequester, 0.9f) { rotaryDelta ->
-                scope.launch { scrollState.scrollBy(-rotaryDelta) }
-            }
-            .verticalScroll(scrollState)
-            .padding(horizontal = 18.dp, vertical = 22.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    CompositionLocalProvider(LocalWatchFaceConfigScrollState provides scrollState) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(launcherStyle.screenBackground)
+                .flueRotaryScrollable(focusRequester, 0.9f) { rotaryDelta ->
+                    scope.launch { scrollState.scrollBy(-rotaryDelta) }
+                }
+                .nestedScroll(nestedScrollConnection)
+                .graphicsLayer { translationY = overscroll.value }
+                .verticalScroll(scrollState)
+                .padding(horizontal = 18.dp, vertical = 22.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
         Text(
             text = if (isPhoto) "\u56FE\u7247\u8868\u76D8\u8BBE\u7F6E" else "\u89C6\u9891\u8868\u76D8\u8BBE\u7F6E",
             color = launcherStyle.titleColor,
@@ -714,6 +765,7 @@ private fun InternalWatchFaceConfigScreen(
             persistPendingChanges()
             onBack()
         }
+        }
     }
 }
 
@@ -795,7 +847,10 @@ private fun ClockStylePickerRow(
     current: WatchFaceClockStyle,
     onSelect: (WatchFaceClockStyle) -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(
+        modifier = Modifier.fishtailScale(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
@@ -835,7 +890,9 @@ private fun Md3eShapePickerRow(
     onSelect: (WatchFaceMd3eShape) -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .fishtailScale(),
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
     ) {
         SmallChoiceChip(
@@ -889,6 +946,7 @@ private fun CustomTextField(
         ),
         modifier = Modifier
             .fillMaxWidth()
+            .fishtailScale()
             .clip(RoundedCornerShape(18.dp))
     )
 }
@@ -906,6 +964,7 @@ private fun ColorRgbSliderGroup(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .fishtailScale()
             .clip(RoundedCornerShape(18.dp))
             .background(WatchColors.SurfaceGlass)
             .padding(horizontal = 14.dp, vertical = 12.dp)
@@ -971,7 +1030,9 @@ private fun PositionPickerRow(
     onSelect: (WatchClockPosition) -> Unit
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .fishtailScale(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         listOf(
@@ -1138,11 +1199,13 @@ private fun ToggleRow(
 @Composable
 private fun Modifier.fishtailScale(): Modifier {
     val density = androidx.compose.ui.platform.LocalDensity.current
+    val scrollState = LocalWatchFaceConfigScrollState.current
+    val flattenAtBottom = scrollState?.let { it.maxValue > 0 && it.value >= it.maxValue - 2 } == true
     val screenCenter = with(density) {
         androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp.toPx() / 2f
     }
     var itemCenter by remember { mutableFloatStateOf(screenCenter) }
-    val scale = if (itemCenter <= screenCenter) {
+    val scale = if (flattenAtBottom || itemCenter <= screenCenter) {
         1f
     } else {
         val normalized = ((itemCenter - screenCenter) / screenCenter).coerceIn(0f, 1f)

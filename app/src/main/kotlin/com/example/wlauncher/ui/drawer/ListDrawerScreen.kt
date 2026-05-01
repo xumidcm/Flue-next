@@ -111,6 +111,8 @@ fun ListDrawerScreen(
     iconSize: Dp = 48.dp,
     topFadeRangeDp: Int = 56,
     bottomFadeRangeDp: Int = 56,
+    active: Boolean = true,
+    leftSafeInsetDp: Int = 0,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
     onLongClick: (AppInfo) -> Unit = {},
@@ -166,6 +168,12 @@ fun ListDrawerScreen(
     LaunchedEffect(focusReady) {
         if (focusReady) {
             focusRequester.requestFocusAfterFirstFrame()
+        }
+    }
+
+    LaunchedEffect(active) {
+        if (!active) {
+            overscroll.snapTo(0f)
         }
     }
 
@@ -409,7 +417,8 @@ fun ListDrawerScreen(
             val topEdgeBlurZonePx = with(density) { topFadeRangeDp.coerceIn(0, 220).dp.toPx() }
             val bottomEdgeBlurZonePx = with(density) { bottomFadeRangeDp.coerceIn(0, 220).dp.toPx() }
             val estimatedItemHeight = iconSize.coerceAtLeast(48.dp) + 20.dp
-            val centeredPadding = 8.dp
+            val centeredPadding = ((maxHeight - estimatedItemHeight) / 2f).coerceAtLeast(8.dp)
+            val leftSafeInset = leftSafeInsetDp.coerceIn(0, 96).dp.coerceAtMost(maxWidth * 0.36f)
             val dragRowShift = dragFromIndex?.let { itemHeights[it] } ?: with(density) { estimatedItemHeight.toPx() }
             val dragOverlayHeightPx = dragFromIndex?.let { itemHeights[it] } ?: with(density) { (iconSize + 20.dp).toPx() }
             val visibleInfoByIndex by remember {
@@ -471,7 +480,7 @@ fun ListDrawerScreen(
                 contentPadding = PaddingValues(
                     top = centeredPadding,
                     bottom = centeredPadding,
-                    start = 12.dp,
+                    start = 12.dp + leftSafeInset,
                     end = 12.dp
                 ),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -486,7 +495,7 @@ fun ListDrawerScreen(
                         itemInfo = itemInfo,
                         screenCenterY = screenCenterY,
                         screenHeight = screenHeightPx,
-                        fisheyeEnabled = fisheyeEnabled && !reduceListVisualLoad
+                        fisheyeEnabled = fisheyeEnabled
                     )
                     val rowCenterY = itemCenters[index] ?: itemInfo?.let { it.offset + it.size / 2f } ?: screenCenterY
                     val flowOffset = computeFastFlowOffset(

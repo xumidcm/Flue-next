@@ -80,6 +80,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_HONEYCOMB_BOTTOM_FADE = intPreferencesKey("honeycomb_bottom_fade")
         val KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION = booleanPreferencesKey("honeycomb_fast_scroll_optimization")
         val KEY_APP_LIST_FISHEYE = booleanPreferencesKey("app_list_fisheye_enabled")
+        val KEY_APP_LIST_LEFT_SAFE_INSET_DP = intPreferencesKey("app_list_left_safe_inset_dp")
         val KEY_FAST_FLOW_ANIMATION = booleanPreferencesKey("fast_flow_animation_enabled")
         val KEY_TWO_TONE_ICONS = booleanPreferencesKey("two_tone_icons_enabled")
         val KEY_ICON_SHADOW = booleanPreferencesKey("app_icon_shadow_enabled")
@@ -256,6 +257,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val honeycombFastScrollOptimization: StateFlow<Boolean> = _honeycombFastScrollOptimization.asStateFlow()
     private val _appListFisheyeEnabled = MutableStateFlow(true)
     val appListFisheyeEnabled: StateFlow<Boolean> = _appListFisheyeEnabled.asStateFlow()
+    private val _appListLeftSafeInsetDp = MutableStateFlow(0)
+    val appListLeftSafeInsetDp: StateFlow<Int> = _appListLeftSafeInsetDp.asStateFlow()
     private val _fastFlowAnimationEnabled = MutableStateFlow(false)
     val fastFlowAnimationEnabled: StateFlow<Boolean> = _fastFlowAnimationEnabled.asStateFlow()
     private val _twoToneIconsEnabled = MutableStateFlow(false)
@@ -563,7 +566,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     appRepository.setCustomOrder(loadedOrder)
                 }
 
-                val loadedHoneycombCols = (prefs[KEY_HONEYCOMB_COLS] ?: 3).coerceIn(3, 6)
+                val loadedHoneycombCols = (prefs[KEY_HONEYCOMB_COLS] ?: 3).coerceIn(2, 5)
                 if (_honeycombCols.value != loadedHoneycombCols) _honeycombCols.value = loadedHoneycombCols
 
                 val loadedTopBlur = (prefs[KEY_HONEYCOMB_TOP_BLUR] ?: 4).coerceIn(0, 48)
@@ -586,6 +589,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedFisheyeEnabled = prefs[KEY_APP_LIST_FISHEYE] ?: true
                 if (_appListFisheyeEnabled.value != loadedFisheyeEnabled) {
                     _appListFisheyeEnabled.value = loadedFisheyeEnabled
+                }
+
+                val loadedLeftSafeInset = (prefs[KEY_APP_LIST_LEFT_SAFE_INSET_DP] ?: 0).coerceIn(0, 96)
+                if (_appListLeftSafeInsetDp.value != loadedLeftSafeInset) {
+                    _appListLeftSafeInsetDp.value = loadedLeftSafeInset
                 }
 
                 val loadedFastFlowEnabled = prefs[KEY_FAST_FLOW_ANIMATION] ?: false
@@ -1035,7 +1043,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setHoneycombCols(cols: Int) {
-        _honeycombCols.value = cols.coerceIn(3, 6)
+        _honeycombCols.value = cols.coerceIn(2, 5)
         val savedValue = _honeycombCols.value
         persistDebounced("key_honeycomb_cols") { store.edit { it[KEY_HONEYCOMB_COLS] = savedValue } }
     }
@@ -1072,6 +1080,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setAppListFisheyeEnabled(enabled: Boolean) {
         _appListFisheyeEnabled.value = enabled
         persist { store.edit { it[KEY_APP_LIST_FISHEYE] = enabled } }
+    }
+
+    fun setAppListLeftSafeInsetDp(value: Int) {
+        _appListLeftSafeInsetDp.value = value.coerceIn(0, 96)
+        val savedValue = _appListLeftSafeInsetDp.value
+        persistDebounced("key_app_list_left_safe_inset_dp") {
+            store.edit { it[KEY_APP_LIST_LEFT_SAFE_INSET_DP] = savedValue }
+        }
     }
 
     fun setFastFlowAnimationEnabled(enabled: Boolean) {
@@ -1558,6 +1574,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _honeycombBottomFade.value = 30
         _honeycombFastScrollOptimization.value = true
         _appListFisheyeEnabled.value = true
+        _appListLeftSafeInsetDp.value = 0
         _fastFlowAnimationEnabled.value = false
         _twoToneIconsEnabled.value = false
         _iconShadowEnabled.value = true
@@ -1631,6 +1648,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_HONEYCOMB_BOTTOM_FADE] = 30
                 it[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION] = true
                 it[KEY_APP_LIST_FISHEYE] = true
+                it[KEY_APP_LIST_LEFT_SAFE_INSET_DP] = 0
                 it[KEY_FAST_FLOW_ANIMATION] = false
                 it[KEY_TWO_TONE_ICONS] = false
                 it[KEY_ICON_SHADOW] = true
