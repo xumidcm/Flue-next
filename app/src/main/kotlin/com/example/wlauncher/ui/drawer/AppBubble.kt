@@ -11,7 +11,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,7 +41,7 @@ fun AppBubble(
     pressAnimationDelayMillis: Int = 0,
     pressAnimationDurationMillis: Int = 180,
     onPressedChange: (Boolean) -> Unit = {},
-    shape: Shape = CircleShape,
+    shape: Shape = RoundedCornerShape(16.dp),
     gesturesEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {

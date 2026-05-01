@@ -1709,7 +1709,7 @@ private fun AboutCard(scale: Float, onDonateClick: () -> Unit) {
             Spacer(modifier = Modifier.height(18.dp))
             ActionCard(
                 title = "加入交流群获取更新",
-                subtitle = "缇ゅ彿 $COMMUNITY_GROUP_NUMBER",
+                subtitle = "群号 $COMMUNITY_GROUP_NUMBER",
                 onClick = {
                     context.startActivity(
                         Intent(

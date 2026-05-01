@@ -30,7 +30,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -207,7 +206,7 @@ fun AppShortcutOverlay(
                     contentDescription = null,
                     modifier = Modifier
                         .size(88.dp)
-                        .clip(CircleShape),
+                        .clip(RoundedCornerShape(24.dp)),
                     contentScale = ContentScale.Crop
                 )
                 Spacer(modifier = Modifier.height(6.dp))

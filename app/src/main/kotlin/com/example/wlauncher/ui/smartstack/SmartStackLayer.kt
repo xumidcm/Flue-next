@@ -106,6 +106,7 @@ import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.WidgetInfo
+import com.flue.launcher.data.model.iconForDisplay
 import com.flue.launcher.FlueApplication
 import com.flue.launcher.data.repository.WidgetRepository
 import com.flue.launcher.ui.common.instantPressGesture
@@ -168,6 +169,13 @@ private data class PendingWidgetSelection(
     val slotIndex: Int,
     val widget: WidgetInfo,
     val appWidgetId: Int
+)
+
+private data class WidgetPickerApp(
+    val packageName: String,
+    val label: String,
+    val icon: ImageBitmap?,
+    val widgets: List<WidgetInfo>
 )
 private sealed interface PreviewRow {
     data class Group(val group: NotificationGroupUi, val entries: List<NotificationEntryUi>, val hiddenCount: Int) : PreviewRow
@@ -616,6 +624,7 @@ fun SmartStackLayer(
             onDismiss = { modalState = SideScreenModalState.None }
         )
         SideScreenModalState.WidgetPicker -> WidgetPickerOverlay(
+            apps = apps,
             widgetRepository = widgetRepository,
             onSelectWidget = { widget ->
                 val emptyWidgetIndex = sideScreenWidgetSlots.indexOfFirst { it.isNullOrBlank() }
@@ -1339,15 +1348,45 @@ private fun ShortcutPickerOverlay(
 
 @Composable
 private fun WidgetPickerOverlay(
+    apps: List<AppInfo>,
     widgetRepository: WidgetRepository,
     onSelectWidget: (WidgetInfo) -> Unit,
     onDismiss: () -> Unit
 ) {
     val widgetPickerItems = remember(widgetRepository) { widgetRepository.getAllWidgets() }
+    val launcherAppsByPackage = remember(apps) {
+        apps.filterNot { it.isBuiltInSettingsEntry }
+            .groupBy { it.packageName }
+            .mapValues { it.value.minByOrNull { app -> app.label.length } ?: it.value.first() }
+    }
+    val pickerApps = remember(widgetPickerItems, launcherAppsByPackage) {
+        widgetPickerItems
+            .groupBy { it.packageName }
+            .map { (packageName, widgets) ->
+                val launcherApp = launcherAppsByPackage[packageName]
+                WidgetPickerApp(
+                    packageName = packageName,
+                    label = launcherApp?.label ?: packageName.substringAfterLast('.'),
+                    icon = launcherApp?.iconForDisplay(useTwoTone = false, blurred = false),
+                    widgets = widgets.sortedBy { it.label.lowercase(Locale.getDefault()) }
+                )
+            }
+            .sortedBy { it.label.lowercase(Locale.getDefault()) }
+    }
+    var selectedPackage by remember { mutableStateOf<String?>(null) }
+    val selectedApp = selectedPackage?.let { selected ->
+        pickerApps.firstOrNull { it.packageName == selected }
+    }
     val listState = rememberLazyListState()
     ModalShell(onDismiss) { dismiss ->
         Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFF1E1E1E)).padding(vertical = 12.dp)) {
-            Text("添加小组件", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 10.dp))
+            Text(
+                selectedApp?.label ?: "添加小组件",
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 10.dp)
+            )
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -1362,9 +1401,25 @@ private fun WidgetPickerOverlay(
                             Text("未找到可用的小组件", color = WatchColors.TextTertiary, fontSize = 14.sp)
                         }
                     }
-                } else {
+                } else if (selectedApp == null) {
                     items(
-                        items = widgetPickerItems,
+                        items = pickerApps,
+                        key = { it.packageName },
+                        contentType = { "widget_app_picker" }
+                    ) { app ->
+                        WidgetPickerAppRow(
+                            app = app,
+                            onClick = {
+                                selectedPackage = app.packageName
+                            }
+                        )
+                    }
+                } else {
+                    item("back_to_widget_apps") {
+                        WidgetPickerBackRow(onClick = { selectedPackage = null })
+                    }
+                    items(
+                        items = selectedApp.widgets,
                         key = { it.widgetKey },
                         contentType = { "widget_picker" }
                     ) { widget ->
@@ -1378,6 +1433,78 @@ private fun WidgetPickerOverlay(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun WidgetPickerBackRow(onClick: () -> Unit) {
+    val pressed = rememberPressedState()
+    val isPressed by pressed
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (isPressed) Color(0xFF303030) else Color.Transparent)
+            .instantPressGesture(pressed, onClick = onClick)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("返回应用列表", color = WatchColors.TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun WidgetPickerAppRow(
+    app: WidgetPickerApp,
+    onClick: () -> Unit
+) {
+    val pressed = rememberPressedState()
+    val isPressed by pressed
+    val scale by animateFloatAsState(
+        if (isPressed) 0.985f else 1f,
+        spring(stiffness = 880f, dampingRatio = 0.8f),
+        label = "widget_app_picker_row"
+    )
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (isPressed) Color(0xFF303030) else Color.Transparent)
+            .instantPressGesture(pressed, onClick = onClick)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (app.icon != null) {
+            Image(
+                bitmap = app.icon,
+                contentDescription = app.label,
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(12.dp)),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Box(
+                Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF007AFF)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(app.label.take(1), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(app.label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Text("${app.widgets.size} 个小组件", color = WatchColors.TextTertiary, fontSize = 11.sp, maxLines = 1)
         }
     }
 }
@@ -1411,7 +1538,7 @@ private fun WidgetPickerRow(
         Box(
             Modifier
                 .size(42.dp)
-                .clip(CircleShape)
+                .clip(RoundedCornerShape(12.dp))
                 .background(Color(0xFF007AFF)),
             contentAlignment = Alignment.Center
         ) {

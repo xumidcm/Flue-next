@@ -485,17 +485,12 @@ private fun WatchFaceStatusIndicators(
         if (chargingSnapshot.charging) {
             Box(
                 modifier = Modifier
-                    .width(34.dp)
-                    .height(24.dp)
-                    .background(Color(0xFF22C55E).copy(alpha = 0.92f), RoundedCornerShape(12.dp)),
+                    .width(30.dp)
+                    .height(22.dp)
+                    .background(Color(0xFF22C55E).copy(alpha = 0.92f), RoundedCornerShape(11.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = "\u26A1",
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                ChargingBoltGlyph()
             }
         }
         if (hasNotifications) {
@@ -505,6 +500,24 @@ private fun WatchFaceStatusIndicators(
                     .background(Color(0xFFFF3B30), CircleShape)
             )
         }
+    }
+}
+
+@Composable
+private fun ChargingBoltGlyph(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.width(12.dp).height(15.dp)) {
+        val w = size.width
+        val h = size.height
+        val path = Path().apply {
+            moveTo(w * 0.58f, 0f)
+            lineTo(w * 0.20f, h * 0.55f)
+            lineTo(w * 0.47f, h * 0.55f)
+            lineTo(w * 0.34f, h)
+            lineTo(w * 0.82f, h * 0.40f)
+            lineTo(w * 0.54f, h * 0.40f)
+            close()
+        }
+        drawPath(path = path, color = Color.White)
     }
 }
 
