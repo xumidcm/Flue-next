@@ -98,6 +98,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_SHOW_NOTIFICATION = booleanPreferencesKey("show_notification")
         val KEY_NOTIFICATION_SETTING_MIGRATED = booleanPreferencesKey("notification_setting_migrated")
         val KEY_SHOW_WIDGETS = booleanPreferencesKey("show_widgets")
+        val KEY_SHOW_WIDGET_PAGE = booleanPreferencesKey("show_widget_page")
+        val KEY_SHOW_CONTROL_CENTER = booleanPreferencesKey("show_control_center")
         val KEY_WATCHFACE_CHARGING_POWER_TEXT = booleanPreferencesKey("watchface_charging_power_text")
         val KEY_WATCHFACE_STATUS_INDICATORS = booleanPreferencesKey("watchface_status_indicators")
         val KEY_SIDE_SCREEN_SECTION_ORDER = stringPreferencesKey("side_screen_section_order")
@@ -306,6 +308,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val showNotification: StateFlow<Boolean> = _showNotification.asStateFlow()
     private val _showWidgets = MutableStateFlow(true)
     val showWidgets: StateFlow<Boolean> = _showWidgets.asStateFlow()
+    private val _showWidgetPage = MutableStateFlow(true)
+    val showWidgetPage: StateFlow<Boolean> = _showWidgetPage.asStateFlow()
+    private val _showControlCenter = MutableStateFlow(true)
+    val showControlCenter: StateFlow<Boolean> = _showControlCenter.asStateFlow()
     private val _watchFaceChargingPowerText = MutableStateFlow(true)
     val watchFaceChargingPowerText: StateFlow<Boolean> = _watchFaceChargingPowerText.asStateFlow()
     private val _watchFaceStatusIndicators = MutableStateFlow(true)
@@ -715,6 +721,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _showWidgets.value = loadedShowWidgets
                 }
 
+                val loadedShowWidgetPage = prefs[KEY_SHOW_WIDGET_PAGE] ?: true
+                if (_showWidgetPage.value != loadedShowWidgetPage) {
+                    _showWidgetPage.value = loadedShowWidgetPage
+                }
+
+                val loadedShowControlCenter = prefs[KEY_SHOW_CONTROL_CENTER] ?: true
+                if (_showControlCenter.value != loadedShowControlCenter) {
+                    _showControlCenter.value = loadedShowControlCenter
+                }
+
                 val loadedSectionOrder = parseSideScreenSectionOrder(prefs[KEY_SIDE_SCREEN_SECTION_ORDER])
                 if (_sideScreenSectionOrder.value != loadedSectionOrder) {
                     _sideScreenSectionOrder.value = loadedSectionOrder
@@ -945,6 +961,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _screenState.value = when {
             state == ScreenState.Notifications && !_sideScreenEnabled.value -> ScreenState.Face
             state == ScreenState.Notifications && !_showNotification.value -> ScreenState.Stack
+            state == ScreenState.Widgets && !_showWidgetPage.value -> ScreenState.Face
+            state == ScreenState.ControlCenter && !_showControlCenter.value -> ScreenState.Face
             else -> state
         }
         _revealedNotificationTarget.value = null
@@ -1064,6 +1082,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             ScreenState.Settings -> _screenState.value = ScreenState.Apps
             ScreenState.Stack -> _screenState.value = ScreenState.Face
             ScreenState.Notifications -> _screenState.value = if (_sideScreenEnabled.value) ScreenState.Stack else ScreenState.Face
+            ScreenState.Widgets -> _screenState.value = ScreenState.Face
             ScreenState.ControlCenter -> _screenState.value = ScreenState.Face
         }
     }
@@ -1260,6 +1279,22 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setShowWidgets(show: Boolean) {
         _showWidgets.value = show
         persist { store.edit { it[KEY_SHOW_WIDGETS] = show } }
+    }
+
+    fun setShowWidgetPage(show: Boolean) {
+        _showWidgetPage.value = show
+        if (!show && _screenState.value == ScreenState.Widgets) {
+            _screenState.value = ScreenState.Face
+        }
+        persist { store.edit { it[KEY_SHOW_WIDGET_PAGE] = show } }
+    }
+
+    fun setShowControlCenter(show: Boolean) {
+        _showControlCenter.value = show
+        if (!show && _screenState.value == ScreenState.ControlCenter) {
+            _screenState.value = ScreenState.Face
+        }
+        persist { store.edit { it[KEY_SHOW_CONTROL_CENTER] = show } }
     }
 
     fun moveSideSection(section: SideScreenSection, direction: Int) {
@@ -1738,6 +1773,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _showStepCount.value = true
         _showNotification.value = true
         _showWidgets.value = true
+        _showWidgetPage.value = true
+        _showControlCenter.value = true
         _watchFaceChargingPowerText.value = true
         _watchFaceStatusIndicators.value = true
         _sideScreenSectionOrder.value = defaultSideScreenSectionOrder()
@@ -1820,6 +1857,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_LEGACY_CIRCULAR_ICONS] = true
                 it[KEY_SHOW_NOTIFICATION] = true
                 it[KEY_SHOW_WIDGETS] = true
+                it[KEY_SHOW_WIDGET_PAGE] = true
+                it[KEY_SHOW_CONTROL_CENTER] = true
                 it[KEY_WATCHFACE_CHARGING_POWER_TEXT] = true
                 it[KEY_WATCHFACE_STATUS_INDICATORS] = true
                 it[KEY_SIDE_SCREEN_SECTION_ORDER] = serializeSideScreenSectionOrder(defaultSideScreenSectionOrder())

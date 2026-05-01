@@ -267,7 +267,8 @@ private fun SettingsRootScreen(
     val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
     val launcherStyle = LauncherTheme.style
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
-    val showWidgets by vm.showWidgets.collectAsStateWithLifecycle()
+    val showWidgetPage by vm.showWidgetPage.collectAsStateWithLifecycle()
+    val showControlCenter by vm.showControlCenter.collectAsStateWithLifecycle()
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val headerTime = rememberSettingsHeaderTime()
@@ -713,7 +714,7 @@ private fun SettingsRootScreen(
             item("side_screen_toggle") {
                 SettingsSwitchRow(
                     title = if (isZh) "副一屏" else "Side Screen",
-                    subtitle = if (isZh) "从表盘右滑进入快捷启动、小组件和通知流" else "Swipe right from the watch face to open quick launch, widgets, and notifications",
+                    subtitle = if (isZh) "从表盘右滑进入快捷启动和通知预览" else "Swipe right from the watch face to open quick launch and notification previews",
                     checked = sideScreenEnabled,
                     onToggle = vm::setSideScreenEnabled,
                     scale = itemFisheye(listState, "side_screen_toggle", screenCenterY, screenHeightPx)
@@ -723,7 +724,7 @@ private fun SettingsRootScreen(
                 SettingsSwitchRow(
                     title = if (isZh) "显示通知" else "Show Notifications",
                     subtitle = if (showNotification) {
-                        if (isZh) "所有通知会直接显示在副一屏小组件下方" else "Show all notifications directly below the widget area on the side screen"
+                        if (isZh) "通知预览会显示在副一屏快捷启动下方" else "Show notification previews below quick launch on the side screen"
                     } else {
                         if (isZh) "隐藏副一屏里的通知列表" else "Hide notifications from the side screen"
                     },
@@ -735,16 +736,28 @@ private fun SettingsRootScreen(
             }
             item("widget_center_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "显示小组件" else "Show Widgets",
-                    subtitle = if (showWidgets) {
-                        if (isZh) "副一屏显示小组件区和添加入口" else "Show the widget section and add entry on the side screen"
+                    title = if (isZh) "显示小组件页" else "Show Widget Page",
+                    subtitle = if (showWidgetPage) {
+                        if (isZh) "从表盘左滑进入独立小组件页面" else "Swipe left from the watch face to open the widget page"
                     } else {
-                        if (isZh) "隐藏副一屏小组件区" else "Hide the widget section from the side screen"
+                        if (isZh) "关闭左滑小组件页面入口" else "Disable the swipe-left widget page"
                     },
-                    checked = showWidgets,
-                    enabled = sideScreenEnabled,
-                    onToggle = vm::setShowWidgets,
+                    checked = showWidgetPage,
+                    onToggle = vm::setShowWidgetPage,
                     scale = itemFisheye(listState, "widget_center_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            item("control_center_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "显示控制中心" else "Show Control Center",
+                    subtitle = if (showControlCenter) {
+                        if (isZh) "从表盘下拉进入亮度、音量和快捷开关" else "Pull down from the watch face for brightness, volume, and quick toggles"
+                    } else {
+                        if (isZh) "关闭表盘下拉控制中心入口" else "Disable the pull-down control center"
+                    },
+                    checked = showControlCenter,
+                    onToggle = vm::setShowControlCenter,
+                    scale = itemFisheye(listState, "control_center_toggle", screenCenterY, screenHeightPx)
                 )
             }
             item("side_screen_shortcut_rows") {

@@ -20,6 +20,9 @@ enum class ScreenState {
     /** 通知中心 */
     Notifications,
 
+    /** 独立小组件页 */
+    Widgets,
+
     /** 控制中心 */
     ControlCenter,
 

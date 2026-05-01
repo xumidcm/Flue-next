@@ -14,6 +14,7 @@ fun GestureHost(
     modifier: Modifier = Modifier,
     sideScreenEnabled: Boolean = false,
     showNotification: Boolean = true,
+    showWidgetPage: Boolean = true,
     showControlCenter: Boolean = false,
     content: @Composable () -> Unit
 ) {
@@ -47,7 +48,10 @@ fun GestureHost(
                                     } else if (isHorizontal && totalDx > 80 && sideScreenEnabled) {
                                         onStateChange(ScreenState.Stack)
                                         change.consume()
-                                    } else if (isHorizontal && totalDx < -80 && showControlCenter) {
+                                    } else if (isHorizontal && totalDx < -80 && showWidgetPage) {
+                                        onStateChange(ScreenState.Widgets)
+                                        change.consume()
+                                    } else if (isVertical && totalDy > 80 && showControlCenter) {
                                         onStateChange(ScreenState.ControlCenter)
                                         change.consume()
                                     }
@@ -55,8 +59,15 @@ fun GestureHost(
 
                                 ScreenState.Notifications -> Unit
 
-                                ScreenState.ControlCenter -> {
+                                ScreenState.Widgets -> {
                                     if (isHorizontal && totalDx > 80) {
+                                        onStateChange(ScreenState.Face)
+                                        change.consume()
+                                    }
+                                }
+
+                                ScreenState.ControlCenter -> {
+                                    if (isVertical && totalDy < -80) {
                                         onStateChange(ScreenState.Face)
                                         change.consume()
                                     }

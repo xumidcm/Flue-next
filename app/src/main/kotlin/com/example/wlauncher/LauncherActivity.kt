@@ -54,6 +54,7 @@ import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.anim.appListLayerValues
 import com.flue.launcher.ui.anim.faceLayerValues
 import com.flue.launcher.ui.anim.scaleBlurAlpha
+import com.flue.launcher.ui.controlcenter.ControlCenterLayer
 import com.flue.launcher.ui.drawer.HoneycombScreen
 import com.flue.launcher.ui.drawer.ListDrawerScreen
 import com.flue.launcher.ui.home.WatchFaceLayer
@@ -63,6 +64,7 @@ import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.navigation.ScreenState
 import com.flue.launcher.ui.notification.NotificationLayer
 import com.flue.launcher.ui.smartstack.SmartStackLayer
+import com.flue.launcher.ui.smartstack.WidgetPageLayer
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
@@ -177,7 +179,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
     val showStepCount by vm.showStepCount.collectAsStateWithLifecycle()
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
-    val showWidgets by vm.showWidgets.collectAsStateWithLifecycle()
+    val showWidgetPage by vm.showWidgetPage.collectAsStateWithLifecycle()
+    val showControlCenter by vm.showControlCenter.collectAsStateWithLifecycle()
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val sideScreenSectionOrder by vm.sideScreenSectionOrder.collectAsStateWithLifecycle()
@@ -380,6 +383,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
             animationSpec = tween(durationMillis = SIDE_SCREEN_TRANSITION_MS),
             label = "side_page_progress"
         )
+        val widgetPageProgress by animateFloatAsState(
+            targetValue = if (showWidgetPage && screenState == ScreenState.Widgets) 1f else 0f,
+            animationSpec = tween(durationMillis = SIDE_SCREEN_TRANSITION_MS),
+            label = "widget_page_progress"
+        )
+        val controlCenterProgress by animateFloatAsState(
+            targetValue = if (showControlCenter && screenState == ScreenState.ControlCenter) 1f else 0f,
+            animationSpec = tween(durationMillis = SIDE_SCREEN_TRANSITION_MS),
+            label = "control_center_progress"
+        )
         val faceAnimState = when (screenState) {
             ScreenState.Stack, ScreenState.Notifications -> ScreenState.Face
             else -> screenState
@@ -395,14 +408,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
             notificationTargetProgress = target.coerceIn(0f, 1f)
         }
         val sideScreenVisible = sidePageProgress > 0.001f || screenState == ScreenState.Stack || screenState == ScreenState.Notifications
-        val sideSceneOverlayActive = sideScreenVisible
+        val widgetPageVisible = widgetPageProgress > 0.001f || screenState == ScreenState.Widgets
+        val controlCenterVisible = controlCenterProgress > 0.001f || screenState == ScreenState.ControlCenter
+        val sideSceneOverlayActive = sideScreenVisible || widgetPageVisible || controlCenterVisible
 
         GestureHost(
             screenState = screenState,
             onStateChange = { vm.setState(it) },
             sideScreenEnabled = sideScreenEnabled,
             showNotification = false,
-            showControlCenter = false,
+            showWidgetPage = showWidgetPage,
+            showControlCenter = showControlCenter,
             modifier = Modifier.fillMaxSize()
         ) {
             Box(
@@ -595,7 +611,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         sideScreenShortcuts = sideScreenShortcuts,
                         sideScreenWidgetSlots = sideScreenWidgetSlots,
                         previewGroups = notificationGroups,
-                        showWidgets = showWidgets,
+                        showWidgets = false,
                         sectionOrder = sideScreenSectionOrder,
                         leftSafeInsetDp = appListLeftSafeInsetDp,
                         notificationsEnabled = notificationsEnabled,
@@ -631,6 +647,44 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onDismissNotification = vm::dismissNotification,
                         onDismissToFace = { vm.setState(ScreenState.Face) },
                         showSteps = showStepCount
+                    )
+                }
+            }
+
+            if (showWidgetPage && widgetPageVisible) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(4.2f)
+                        .graphicsLayer {
+                            translationX = (1f - widgetPageProgress) * screenWidthPx
+                            alpha = widgetPageProgress.coerceIn(0f, 1f)
+                        }
+                ) {
+                    val sideScreenWidgetSlots by vm.sideScreenWidgetSlots.collectAsStateWithLifecycle()
+                    WidgetPageLayer(
+                        apps = apps,
+                        sideScreenWidgetSlots = sideScreenWidgetSlots,
+                        leftSafeInsetDp = appListLeftSafeInsetDp,
+                        onSetWidget = vm::setWidgetSlot,
+                        onSwapWidget = vm::swapWidgetSlots,
+                        onRemoveWidget = vm::removeWidgetSlot
+                    )
+                }
+            }
+
+            if (showControlCenter && controlCenterVisible) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(4.4f)
+                        .graphicsLayer {
+                            translationY = (controlCenterProgress - 1f) * screenHeightPx
+                            alpha = controlCenterProgress.coerceIn(0f, 1f)
+                        }
+                ) {
+                    ControlCenterLayer(
+                        leftSafeInsetDp = appListLeftSafeInsetDp
                     )
                 }
             }
