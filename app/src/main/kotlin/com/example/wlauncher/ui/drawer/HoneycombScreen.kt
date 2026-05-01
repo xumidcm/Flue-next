@@ -102,6 +102,7 @@ fun HoneycombScreen(
     fisheyeEnabled: Boolean = true,
     fastFlowAnimationEnabled: Boolean = false,
     twoToneIconsEnabled: Boolean = false,
+    iconShadowEnabled: Boolean = true,
     themeColor: Color = Color(0xFF7BE8FF),
     uiStyle: UiStyle = UiStyle.APPLE_WATCH,
     darkMode: Boolean = true,
@@ -123,6 +124,7 @@ fun HoneycombScreen(
             apps = apps,
             blurEnabled = blurEnabled,
             twoToneIconsEnabled = twoToneIconsEnabled,
+            iconShadowEnabled = iconShadowEnabled,
             themeColor = themeColor,
             darkMode = darkMode,
             columns = (narrowCols + 1).coerceIn(4, 6),
@@ -532,19 +534,17 @@ fun HoneycombScreen(
                             directScrollOffset = current
                             if (current >= maxScroll - iconSizePx * 0.45f && velocity > 800f) {
                                 val returnStart = current
-                                scope.launch {
-                                    scrollOffset.snapTo(returnStart)
-                                    directScrollOffset = Float.NaN
-                                    launch {
-                                        scrollOffset.animateTo(
-                                            maxScroll,
-                                            spring(dampingRatio = 0.64f, stiffness = 360f)
-                                        )
-                                    }
-                                }
+                            scope.launch {
+                                scrollOffset.snapTo(returnStart)
+                                directScrollOffset = Float.NaN
+                                scrollOffset.animateTo(
+                                    maxScroll,
+                                    spring(dampingRatio = 0.64f, stiffness = 360f)
+                                )
                                 onScrollToTop()
-                                return@detectDragGestures
                             }
+                            return@detectDragGestures
+                        }
                             scope.launch {
                                 scrollOffset.snapTo(current)
                                 directScrollOffset = Float.NaN
@@ -789,7 +789,7 @@ fun HoneycombScreen(
                                     settlingKey == app.componentKey -> 0f
                                     else -> if (fisheyeEnabled) scale.coerceIn(0.24f, 1f) else 1f
                                 }
-                                shadowElevation = if (reduceVisualLoad) 0f else 8.dp.toPx()
+                                shadowElevation = if (iconShadowEnabled) 8.dp.toPx() else 0f
                                 shape = CircleShape
                             }
                             .platformBlur(
@@ -849,7 +849,7 @@ fun HoneycombScreen(
                             scaleX = dragScale
                             scaleY = dragScale
                             alpha = if (fisheyeEnabled) dragScale.coerceIn(0.24f, 1f) else 1f
-                            shadowElevation = 12.dp.toPx()
+                            shadowElevation = if (iconShadowEnabled) 12.dp.toPx() else 0f
                             shape = CircleShape
                         }
                 )
@@ -904,7 +904,7 @@ fun HoneycombScreen(
                         scaleX = scale
                         scaleY = scale
                         alpha = if (fisheyeEnabled) scale.coerceIn(0.24f, 1f) else 1f
-                        shadowElevation = 12.dp.toPx()
+                        shadowElevation = if (iconShadowEnabled) 12.dp.toPx() else 0f
                         shape = CircleShape
                     }
             )
@@ -958,6 +958,7 @@ private fun MaterialDenseGridScreen(
     apps: List<AppInfo>,
     blurEnabled: Boolean,
     twoToneIconsEnabled: Boolean,
+    iconShadowEnabled: Boolean,
     themeColor: Color,
     darkMode: Boolean,
     columns: Int,
@@ -1017,10 +1018,11 @@ private fun MaterialDenseGridScreen(
 
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (overscroll.value != 0f) {
-                    if (overscroll.value >= topReturnThresholdPx) {
+                    val shouldReturnToFace = overscroll.value >= topReturnThresholdPx
+                    overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                    if (shouldReturnToFace) {
                         onScrollToTop()
                     }
-                    overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
                     return available
                 }
                 return Velocity.Zero
@@ -1071,11 +1073,12 @@ private fun MaterialDenseGridScreen(
                         if (event.changes.none { it.pressed }) break
                     }
                     if (overscroll.value != 0f) {
-                        if (overscroll.value >= topReturnThresholdPx) {
-                            onScrollToTop()
-                        }
+                        val shouldReturnToFace = overscroll.value >= topReturnThresholdPx
                         scope.launch {
                             overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                            if (shouldReturnToFace) {
+                                onScrollToTop()
+                            }
                         }
                     }
                 }
@@ -1114,6 +1117,10 @@ private fun MaterialDenseGridScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(0.92f)
+                        .graphicsLayer {
+                            shadowElevation = if (iconShadowEnabled) 8.dp.toPx() else 0f
+                            shape = launcherStyle.bubbleShape
+                        }
                         .clip(launcherStyle.bubbleShape)
                         .combinedClickable(
                             interactionSource = interactionSource,

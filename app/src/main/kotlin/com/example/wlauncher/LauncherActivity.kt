@@ -172,6 +172,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsStateWithLifecycle()
     val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsStateWithLifecycle()
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
+    val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
     val showStepCount by vm.showStepCount.collectAsStateWithLifecycle()
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
     val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
@@ -286,13 +287,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
     }
     val launchAppFromLauncher: (AppInfo, Offset, ScreenState) -> Unit = { appInfo, origin, returnState ->
-        if (appInfo.isBuiltInSettingsEntry) {
-            context.startActivity(Intent(context, SettingsActivity::class.java))
-            (context as? Activity)?.applyFadeOpenTransition()
-        } else {
-            val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
-            vm.openApp(appInfo, origin, launchDelay, returnState)
-        }
+        val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
+        vm.openApp(appInfo, origin, launchDelay, returnState)
     }
     var prevState by remember { mutableStateOf(screenState) }
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
@@ -486,6 +482,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         fisheyeEnabled = appListFisheyeEnabled,
                         fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                         twoToneIconsEnabled = twoToneIconsEnabled,
+                        iconShadowEnabled = iconShadowEnabled,
                         themeColor = appListThemeColor,
                         uiStyle = uiStyle,
                         darkMode = effectiveDarkMode,
@@ -506,6 +503,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         fisheyeEnabled = appListFisheyeEnabled,
                         fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                         twoToneIconsEnabled = twoToneIconsEnabled,
+                        iconShadowEnabled = iconShadowEnabled,
                         themeColor = appListThemeColor,
                         uiStyle = uiStyle,
                         darkMode = effectiveDarkMode,

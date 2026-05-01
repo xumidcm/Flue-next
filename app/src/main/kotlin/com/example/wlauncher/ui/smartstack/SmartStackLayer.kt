@@ -29,8 +29,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -79,8 +80,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -92,6 +97,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.WidgetInfo
@@ -111,6 +117,7 @@ import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -127,6 +134,9 @@ private const val SIDE_SCREEN_NOTIFICATION_FLING_VELOCITY = 1350f
 private const val STACKED_PREVIEW_TRANSLATION_DP = 28
 private const val STACKED_PREVIEW_HORIZONTAL_INSET_DP = 4
 private const val SIDE_SCREEN_APP_WIDGET_HOST_ID = 1024
+private const val SIDE_SCREEN_SHORTCUT_MENU_TRIGGER_MS = 410L
+private const val SIDE_SCREEN_WIDGET_MENU_TRIGGER_MS = 410L
+
 private sealed interface SideScreenModalState {
     data object None : SideScreenModalState
     data class ShortcutPicker(val slotIndex: Int) : SideScreenModalState
@@ -160,6 +170,12 @@ private data class PendingWidgetSelection(
 private sealed interface PreviewRow {
     data class Group(val group: NotificationGroupUi, val entries: List<NotificationEntryUi>, val hiddenCount: Int) : PreviewRow
     data class Aggregate(val leadEntry: NotificationEntryUi, val hiddenCount: Int) : PreviewRow
+}
+
+private sealed interface PressHoldResult {
+    data class LongPress(val change: PointerInputChange) : PressHoldResult
+    data object Released : PressHoldResult
+    data object Cancelled : PressHoldResult
 }
 
 @Composable
@@ -474,8 +490,8 @@ fun SmartStackLayer(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     when {
-                        !notificationAccessGranted -> PreviewInfoCard("寮€鍚€氱煡璁块棶", "鎺堟潈鍚庢墍鏈夐€氱煡浼氱洿鎺ユ樉绀哄湪杩欓噷", onOpenNotifications)
-                        previewGroups.isEmpty() -> PreviewInfoCard("鏆傛棤閫氱煡", "鏂扮殑閫氱煡浼氱洿鎺ユ帓鍒楀湪灏忕粍浠朵笅鏂?", onOpenNotifications)
+                        !notificationAccessGranted -> PreviewInfoCard("开启通知访问", "授权后所有通知会直接显示在这里", onOpenNotifications)
+                        previewGroups.isEmpty() -> PreviewInfoCard("暂无通知", "新的通知会直接排列在小组件下方", onOpenNotifications)
                         else -> buildPreviewRows(previewGroups, maxRows = 3).forEach { row ->
                             when (row) {
                                 is PreviewRow.Aggregate -> StackedPreviewCard(row.leadEntry, row.hiddenCount, onOpenNotifications)
@@ -650,9 +666,8 @@ fun SmartStackLayer(
     val bubbleSize = ((width - 28.dp - horizontalSpacing * (cols - 1)) / cols)
         .coerceIn(44.dp, 58.dp)
     var draggingSlot by remember { mutableStateOf<Int?>(null) }
-    var dragPointer by remember { mutableStateOf<Offset?>(null) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
     var dragMoved by remember { mutableStateOf(false) }
-    var dragDistance by remember { mutableFloatStateOf(0f) }
     Box(
         Modifier
             .width(width)
@@ -675,57 +690,74 @@ fun SmartStackLayer(
                                 }
                                 else -> {
                                     val dragModifier = Modifier.pointerInput(item.componentKey, slot, slotCenters) {
-                                        detectDragGesturesAfterLongPress(
-                                            onDragStart = {
-                                                vibrateHaptic(context)
-                                                draggingSlot = slot
-                                                dragPointer = slotCenters[slot]
-                                                dragMoved = false
-                                                dragDistance = 0f
-                                            },
-                                            onDrag = { change, dragAmount ->
-                                                change.consume()
-                                                val current = dragPointer ?: slotCenters[slot] ?: Offset.Zero
-                                                dragPointer = current + dragAmount
-                                                dragDistance += dragAmount.getDistance()
-                                                if (dragDistance > dragThresholdPx) {
-                                                    dragMoved = true
+                                        awaitEachGesture {
+                                            val down = awaitPrimaryDown()
+                                            when (val hold = awaitLongPressOrRelease(
+                                                pointerId = down.id,
+                                                downPosition = down.position,
+                                                timeoutMillis = SIDE_SCREEN_SHORTCUT_MENU_TRIGGER_MS
+                                            )) {
+                                                PressHoldResult.Cancelled -> Unit
+                                                PressHoldResult.Released -> {
+                                                    onClickApp(slot, item)
                                                 }
-                                            },
-                                            onDragEnd = {
-                                                val pointer = dragPointer
-                                                val target = pointer?.let { release ->
-                                                    slotCenters
-                                                        .filterKeys { it != slot }
-                                                        .minByOrNull { (_, center) -> (center - release).getDistance() }
-                                                        ?.takeIf { (_, center) -> (center - release).getDistance() <= dropThresholdPx }
-                                                        ?.key
+                                                is PressHoldResult.LongPress -> {
+                                                    vibrateHaptic(context)
+                                                    hold.change.consume()
+                                                    draggingSlot = slot
+                                                    dragOffset = Offset.Zero
+                                                    dragMoved = false
+
+                                                    while (true) {
+                                                        val event = awaitPointerEvent()
+                                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                                        if (!change.pressed) {
+                                                            change.consume()
+                                                            break
+                                                        }
+                                                        val delta = change.positionChange()
+                                                        if (delta != Offset.Zero) {
+                                                            dragOffset += delta
+                                                            dragMoved = dragOffset.getDistance() > dragThresholdPx
+                                                            change.consume()
+                                                        }
+                                                    }
+
+                                                    val release = slotCenters[slot]?.let { it + dragOffset }
+                                                    val target = release?.let { pointer ->
+                                                        slotCenters
+                                                            .filterKeys { it != slot }
+                                                            .minByOrNull { (_, center) -> (center - pointer).getDistance() }
+                                                            ?.takeIf { (_, center) -> (center - pointer).getDistance() <= dropThresholdPx }
+                                                            ?.key
+                                                    }
+                                                    if (dragMoved && target != null) {
+                                                        onSwap(slot, target)
+                                                    } else if (!dragMoved) {
+                                                        onOpenActions(slot, item)
+                                                    }
+                                                    draggingSlot = null
+                                                    dragOffset = Offset.Zero
+                                                    dragMoved = false
                                                 }
-                                                if (dragMoved && target != null) {
-                                                    onSwap(slot, target)
-                                                } else if (!dragMoved) {
-                                                    onOpenActions(slot, item)
-                                                }
-                                                draggingSlot = null
-                                                dragPointer = null
-                                                dragMoved = false
-                                                dragDistance = 0f
-                                            },
-                                            onDragCancel = {
-                                                draggingSlot = null
-                                                dragPointer = null
-                                                dragMoved = false
-                                                dragDistance = 0f
                                             }
-                                        )
+                                        }
                                     }
+                                    val itemDragOffset = if (draggingSlot == slot) dragOffset else Offset.Zero
                                     AppBubble(
                                         item.cachedIcon,
                                         bubbleSize,
-                                        onClick = { onClickApp(slot, item) },
+                                        onClick = {},
                                         onLongClick = null,
                                         forcePressed = draggingSlot == slot,
+                                        gesturesEnabled = false,
                                         modifier = dragModifier
+                                            .zIndex(if (draggingSlot == slot) 6f else 0f)
+                                            .graphicsLayer {
+                                                translationX = itemDragOffset.x
+                                                translationY = itemDragOffset.y
+                                                shadowElevation = if (draggingSlot == slot) 12.dp.toPx() else 0f
+                                            }
                                     )
                                 }
                             }
@@ -748,6 +780,7 @@ private fun WidgetCard(
     onLongPress: () -> Unit,
     onMeasuredHeight: (Int) -> Unit
 ) {
+    val context = LocalContext.current
     val providerInfo = remember(widgetRepository, widget.widgetKey) {
         widgetRepository.findProviderInfo(widget.widgetKey)
     }
@@ -828,12 +861,35 @@ private fun WidgetCard(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "灏忕粍浠朵笉鍙敤",
+                    text = "小组件不可用",
                     color = WatchColors.TextSecondary,
                     fontSize = 13.sp
                 )
             }
         }
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .pointerInput(widget.widgetKey, onLongPress) {
+                    awaitEachGesture {
+                        val down = awaitPrimaryDown()
+                        when (val hold = awaitLongPressOrRelease(
+                            pointerId = down.id,
+                            downPosition = down.position,
+                            timeoutMillis = SIDE_SCREEN_WIDGET_MENU_TRIGGER_MS
+                        )) {
+                            is PressHoldResult.LongPress -> {
+                                vibrateHaptic(context)
+                                hold.change.consume()
+                                onLongPress()
+                                consumeUntilRelease(down.id)
+                            }
+                            PressHoldResult.Released,
+                            PressHoldResult.Cancelled -> Unit
+                        }
+                    }
+                }
+        )
     }
 }
 
@@ -965,7 +1021,7 @@ private fun EmptyWidgetCard(width: Dp) {
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text = "杩樻病鏈夊皬缁勪欢锛岀偣鍙充笂瑙掓坊鍔?",
+            text = "还没有小组件，点右上角添加",
             color = WatchColors.TextSecondary,
             fontSize = 13.sp
         )
@@ -1094,6 +1150,10 @@ private fun ShortcutPickerOverlay(
             Text("添加快捷启动", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 10.dp))
             LazyColumn(
                 state = listState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false),
+                contentPadding = PaddingValues(horizontal = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 items(
@@ -1127,6 +1187,10 @@ private fun WidgetPickerOverlay(
             Text("添加小组件", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 10.dp))
             LazyColumn(
                 state = listState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false),
+                contentPadding = PaddingValues(horizontal = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 if (widgetPickerItems.isEmpty()) {
@@ -1296,7 +1360,6 @@ private fun ShortcutPickerRow(
 
 @Composable private fun ModalShell(onDismissRequest: () -> Unit, content: @Composable (dismiss: () -> Unit) -> Unit) {
     val dismissInteraction = remember { MutableInteractionSource() }
-    val blockInteraction = remember { MutableInteractionSource() }
     var visible by remember { mutableStateOf(false) }
     fun dismiss() { visible = false }
     LaunchedEffect(Unit) { visible = true }
@@ -1304,8 +1367,29 @@ private fun ShortcutPickerRow(
     LaunchedEffect(visible) { if (!visible) { delay(220); onDismissRequest() } }
     val alpha by animateFloatAsState(if (visible) 1f else 0f, spring(stiffness = 720f, dampingRatio = 0.85f), label = "modal_alpha")
     val scale by animateFloatAsState(if (visible) 1f else 0.84f, spring(stiffness = 700f, dampingRatio = 0.8f), label = "modal_scale")
-    Box(Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha }.background(Color.Black.copy(alpha = 0.72f)).clickable(indication = null, interactionSource = dismissInteraction) { dismiss() }.consumeModalPointers(), contentAlignment = Alignment.Center) {
-        Box(Modifier.graphicsLayer { scaleX = scale; scaleY = scale }.clickable(indication = null, interactionSource = blockInteraction) {}.consumeModalPointers()) { content(::dismiss) }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .graphicsLayer { this.alpha = alpha }
+            .background(Color.Black.copy(alpha = 0.72f))
+            .consumeModalPointers(),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .clickable(indication = null, interactionSource = dismissInteraction) { dismiss() }
+        )
+        Box(
+            Modifier
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }
+                .consumeModalPointers()
+        ) {
+            content(::dismiss)
+        }
     }
 }
 
@@ -1318,12 +1402,54 @@ private fun Modifier.consumeModalPointers(): Modifier = pointerInput(Unit) {
     }
 }
 
+private suspend fun AwaitPointerEventScope.awaitLongPressOrRelease(
+    pointerId: PointerId,
+    downPosition: Offset,
+    timeoutMillis: Long
+): PressHoldResult {
+    val result = withTimeoutOrNull(timeoutMillis) {
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull { it.id == pointerId }
+                ?: return@withTimeoutOrNull PressHoldResult.Cancelled
+            if (!change.pressed) {
+                return@withTimeoutOrNull PressHoldResult.Released
+            }
+            if ((change.position - downPosition).getDistance() > viewConfiguration.touchSlop) {
+                return@withTimeoutOrNull PressHoldResult.Cancelled
+            }
+        }
+        @Suppress("UNREACHABLE_CODE")
+        PressHoldResult.Cancelled
+    }
+    if (result != null) return result
+    val current = currentEvent.changes.firstOrNull { it.id == pointerId && it.pressed }
+    return current?.let(PressHoldResult::LongPress) ?: PressHoldResult.Cancelled
+}
+
+private suspend fun AwaitPointerEventScope.consumeUntilRelease(pointerId: PointerId) {
+    while (true) {
+        val event = awaitPointerEvent()
+        val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+        change.consume()
+        if (!change.pressed) break
+    }
+}
+
+private suspend fun AwaitPointerEventScope.awaitPrimaryDown(): PointerInputChange {
+    while (true) {
+        val event = awaitPointerEvent()
+        val change = event.changes.firstOrNull { it.pressed }
+        if (change != null) return change
+    }
+}
+
 @Composable private fun rememberClockSnapshot(): SideScreenClockSnapshot {
     var snapshot by remember { mutableStateOf(SideScreenClockSnapshot("--:--", "--")) }
     LaunchedEffect(Unit) {
         while (true) {
             val now = Date(); val locale = Locale.getDefault()
-            snapshot = SideScreenClockSnapshot(SimpleDateFormat("HH:mm", locale).format(now), if (locale.language.startsWith("zh")) SimpleDateFormat("M鏈坉鏃?EEEE", Locale.CHINA).format(now) else SimpleDateFormat("MMM d, EEEE", locale).format(now))
+            snapshot = SideScreenClockSnapshot(SimpleDateFormat("HH:mm", locale).format(now), if (locale.language.startsWith("zh")) SimpleDateFormat("M月d日 EEEE", Locale.CHINA).format(now) else SimpleDateFormat("MMM d, EEEE", locale).format(now))
             delay(1000)
         }
     }

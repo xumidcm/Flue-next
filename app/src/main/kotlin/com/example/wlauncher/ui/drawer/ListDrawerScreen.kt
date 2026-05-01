@@ -104,6 +104,7 @@ fun ListDrawerScreen(
     fisheyeEnabled: Boolean = true,
     fastFlowAnimationEnabled: Boolean = false,
     twoToneIconsEnabled: Boolean = false,
+    iconShadowEnabled: Boolean = true,
     themeColor: Color = Color(0xFF7BE8FF),
     uiStyle: UiStyle = UiStyle.APPLE_WATCH,
     darkMode: Boolean = true,
@@ -266,10 +267,12 @@ fun ListDrawerScreen(
                                 if (dragFromIndex != null || longPressedApp != null) return Velocity.Zero
                                 val atTop = !listState.canScrollBackward
                                 if ((overscroll.value > 80f || available.y > 1200f) && atTop) {
+                                    overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
                                     onScrollToTop()
                                     return available
                                 }
                                 if (overscroll.value != 0f) {
+                                    overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
                                     return available
                                 }
                                 return Velocity.Zero
@@ -650,7 +653,7 @@ fun ListDrawerScreen(
                             scaleX = 0.965f
                             scaleY = 0.965f
                             alpha = 0.98f
-                            shadowElevation = 18.dp.toPx()
+                            shadowElevation = if (iconShadowEnabled) 18.dp.toPx() else 0f
                         }
                         .background(appPalette.item, launcherStyle.compactShape)
                         .padding(horizontal = 28.dp, vertical = 10.dp),

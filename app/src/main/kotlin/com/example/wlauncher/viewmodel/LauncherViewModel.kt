@@ -21,7 +21,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.flue.launcher.FlueApplication
 import com.flue.launcher.data.model.AppInfo
-import com.flue.launcher.data.model.BUILTIN_SETTINGS_ENTRY_COMPONENT
 import com.flue.launcher.data.model.iconForDisplay
 import com.flue.launcher.iconpack.IconPackDescriptor
 import com.flue.launcher.iconpack.IconPackScanner
@@ -83,6 +82,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_APP_LIST_FISHEYE = booleanPreferencesKey("app_list_fisheye_enabled")
         val KEY_FAST_FLOW_ANIMATION = booleanPreferencesKey("fast_flow_animation_enabled")
         val KEY_TWO_TONE_ICONS = booleanPreferencesKey("two_tone_icons_enabled")
+        val KEY_ICON_SHADOW = booleanPreferencesKey("app_icon_shadow_enabled")
         val KEY_SHOW_STEP_COUNT = booleanPreferencesKey("show_step_count")
         val KEY_SHOW_NOTIFICATION = booleanPreferencesKey("show_notification")
         val KEY_NOTIFICATION_SETTING_MIGRATED = booleanPreferencesKey("notification_setting_migrated")
@@ -260,6 +260,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val fastFlowAnimationEnabled: StateFlow<Boolean> = _fastFlowAnimationEnabled.asStateFlow()
     private val _twoToneIconsEnabled = MutableStateFlow(false)
     val twoToneIconsEnabled: StateFlow<Boolean> = _twoToneIconsEnabled.asStateFlow()
+    private val _iconShadowEnabled = MutableStateFlow(true)
+    val iconShadowEnabled: StateFlow<Boolean> = _iconShadowEnabled.asStateFlow()
     private val _showStepCount = MutableStateFlow(true)
     val showStepCount: StateFlow<Boolean> = _showStepCount.asStateFlow()
 
@@ -597,6 +599,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     appRepository.setTwoToneIconsEnabled(loadedTwoToneIcons)
                 }
 
+                val loadedIconShadow = prefs[KEY_ICON_SHADOW] ?: true
+                if (_iconShadowEnabled.value != loadedIconShadow) {
+                    _iconShadowEnabled.value = loadedIconShadow
+                }
+
                 val loadedShowStepCount = prefs[KEY_SHOW_STEP_COUNT] ?: true
                 if (_showStepCount.value != loadedShowStepCount) {
                     _showStepCount.value = loadedShowStepCount
@@ -844,15 +851,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         launchDelayMs: Long = _splashDelay.value.toLong(),
         returnState: ScreenState = ScreenState.Apps
     ) {
-        if (appInfo.componentKey == BUILTIN_SETTINGS_ENTRY_COMPONENT) {
-            val application = getApplication<Application>()
-            application.startActivity(
-                Intent(application, com.flue.launcher.SettingsActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-            )
-            return
-        }
         if (appInfo.packageName == getApplication<Application>().packageName) {
             Toast.makeText(getApplication(), "已阻止启动自身应用", Toast.LENGTH_SHORT).show()
             return
@@ -1086,6 +1084,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _twoToneIconsEnabled.value = enabled
         appRepository.setTwoToneIconsEnabled(enabled)
         persist { store.edit { it[KEY_TWO_TONE_ICONS] = enabled } }
+    }
+
+    fun setIconShadowEnabled(enabled: Boolean) {
+        _iconShadowEnabled.value = enabled
+        persist { store.edit { it[KEY_ICON_SHADOW] = enabled } }
     }
 
     fun setShowStepCountEnabled(enabled: Boolean) {
@@ -1557,6 +1560,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appListFisheyeEnabled.value = true
         _fastFlowAnimationEnabled.value = false
         _twoToneIconsEnabled.value = false
+        _iconShadowEnabled.value = true
         _showStepCount.value = true
         _showNotification.value = true
         _hiddenApps.value = emptySet()
@@ -1629,6 +1633,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_APP_LIST_FISHEYE] = true
                 it[KEY_FAST_FLOW_ANIMATION] = false
                 it[KEY_TWO_TONE_ICONS] = false
+                it[KEY_ICON_SHADOW] = true
                 it[KEY_SHOW_STEP_COUNT] = true
                 it[KEY_LEGACY_CIRCULAR_ICONS] = true
                 it[KEY_SHOW_NOTIFICATION] = true

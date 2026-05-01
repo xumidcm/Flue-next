@@ -42,6 +42,7 @@ fun AppBubble(
     pressAnimationDurationMillis: Int = 180,
     onPressedChange: (Boolean) -> Unit = {},
     shape: Shape = CircleShape,
+    gesturesEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -81,11 +82,17 @@ fun AppBubble(
                     Modifier
                 }
             )
-            .combinedClickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick,
-                onLongClick = onLongClick
+            .then(
+                if (gesturesEnabled) {
+                    Modifier.combinedClickable(
+                        interactionSource = interactionSource,
+                        indication = null,
+                        onClick = onClick,
+                        onLongClick = onLongClick
+                    )
+                } else {
+                    Modifier
+                }
             ),
         contentAlignment = Alignment.Center
     ) {
