@@ -183,8 +183,9 @@ fun ListDrawerScreen(
 
     LaunchedEffect(active) {
         if (!active) {
-            overscroll.snapTo(0f)
-            returnTriggered = false
+            if (!returnTriggered) {
+                overscroll.snapTo(0f)
+            }
         } else {
             returnTriggered = false
         }
@@ -268,6 +269,7 @@ fun ListDrawerScreen(
                                     onScrollToTop()
                                     scope.launch {
                                         overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                                        returnTriggered = false
                                     }
                                     return Offset(0f, available.y)
                                 }
@@ -293,6 +295,7 @@ fun ListDrawerScreen(
                                     onScrollToTop()
                                     scope.launch {
                                         overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                                        returnTriggered = false
                                     }
                                     return Offset(0f, available.y)
                                 }
@@ -314,6 +317,7 @@ fun ListDrawerScreen(
                                         onScrollToTop()
                                     }
                                     overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                                    returnTriggered = false
                                     return available
                                 }
                                 if (overscroll.value != 0f) {
@@ -340,6 +344,7 @@ fun ListDrawerScreen(
                                     onScrollToTop()
                                 }
                                 overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                                returnTriggered = false
                             }
                         }
                     }
@@ -492,6 +497,9 @@ fun ListDrawerScreen(
                     listState.layoutInfo.visibleItemsInfo
                 }
             }
+            val fisheyeVisibleItems = listState.layoutInfo.visibleItemsInfo
+            val fisheyeScrollTick = listState.firstVisibleItemIndex * 100_000 +
+                listState.firstVisibleItemScrollOffset
             val dragRowShift = dragFromIndex?.let {
                 itemHeights[it] ?: visibleItems.firstOrNull { item -> item.index == it }?.size?.toFloat()
             } ?: with(density) { estimatedItemHeight.toPx() }
@@ -562,12 +570,13 @@ fun ListDrawerScreen(
                     key = { _, app -> app.componentKey },
                     contentType = { _, _ -> "app_row" }
                 ) { index, app ->
-                    val itemInfo = visibleItems.firstOrNull { it.index == index }
+                    val itemInfo = fisheyeVisibleItems.firstOrNull { it.index == index }
                     val itemScale = computeItemScale(
                         itemInfo = itemInfo,
                         screenCenterY = listViewportCenterY,
                         screenHeight = screenHeightPx,
-                        fisheyeEnabled = fisheyeEnabled
+                        fisheyeEnabled = fisheyeEnabled,
+                        scrollTick = fisheyeScrollTick
                     )
                     val rowCenterY = itemInfo?.let { it.offset + it.size / 2f } ?: listViewportCenterY
                     val flowOffset = computeFastFlowOffset(
@@ -839,11 +848,13 @@ private fun findListItemCenter(
     return itemCenters[index] ?: fallback
 }
 
+@Suppress("UNUSED_PARAMETER")
 private fun computeItemScale(
     itemInfo: androidx.compose.foundation.lazy.LazyListItemInfo?,
     screenCenterY: Float,
     screenHeight: Float,
-    fisheyeEnabled: Boolean
+    fisheyeEnabled: Boolean,
+    scrollTick: Int = 0
 ): Float {
     if (!fisheyeEnabled) return 1f
     if (itemInfo == null) return 0.85f

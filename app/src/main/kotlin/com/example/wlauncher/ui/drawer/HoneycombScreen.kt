@@ -164,6 +164,7 @@ fun HoneycombScreen(
     var wheelMomentumJob by remember { mutableStateOf<Job?>(null) }
     var initialScrollPositionResolved by remember { mutableStateOf(false) }
     var directScrollOffset by remember { mutableFloatStateOf(Float.NaN) }
+    var returnTriggered by remember { mutableStateOf(false) }
     var fastScrollActive by remember { mutableStateOf(false) }
     var fastScrollResetJob by remember { mutableStateOf<Job?>(null) }
     val appPalette = appListPalette(themeColor, darkMode, uiStyle, useWatchFaceColors)
@@ -284,8 +285,12 @@ fun HoneycombScreen(
                 dragCurrentIndex = null
                 dragPointer = null
                 dragApp = null
-                directScrollOffset = Float.NaN
-                scrollOffset.snapTo(scrollOffset.value.coerceIn(minScroll, maxScroll))
+                if (!returnTriggered) {
+                    directScrollOffset = Float.NaN
+                    scrollOffset.snapTo(scrollOffset.value.coerceIn(minScroll, maxScroll))
+                }
+            } else {
+                returnTriggered = false
             }
         }
         LaunchedEffect(fastScrollOptimizationEnabled) {
@@ -530,6 +535,10 @@ fun HoneycombScreen(
                         },
                         onDrag = { change, dragAmount ->
                             if (dragFromIndex != null || longPressedApp != null) return@detectDragGestures
+                            if (returnTriggered) {
+                                change.consume()
+                                return@detectDragGestures
+                            }
                             change.consume()
                             velocityTracker.addPosition(change.uptimeMillis, change.position)
                             val hoverIndex = findNearestHoneycombIndex(
@@ -551,9 +560,27 @@ fun HoneycombScreen(
                                 markFastScrollActive(180L)
                             }
                             val dampedDrag = if (overscroll != 0f) dragAmount.y * 0.28f else dragAmount.y
-                            directScrollOffset = current + dampedDrag
+                            val nextScroll = current + dampedDrag
+                            directScrollOffset = nextScroll
+                            if (nextScroll >= maxScroll + iconSizePx * 0.28f) {
+                                returnTriggered = true
+                                onScrollToTop()
+                                scope.launch {
+                                    scrollOffset.snapTo(nextScroll)
+                                    directScrollOffset = Float.NaN
+                                    scrollOffset.animateTo(
+                                        maxScroll,
+                                        spring(dampingRatio = 0.64f, stiffness = 360f)
+                                    )
+                                    returnTriggered = false
+                                }
+                            }
                         },
                         onDragEnd = {
+                            if (returnTriggered) {
+                                glidePressedKey = null
+                                return@detectDragGestures
+                            }
                             val velocity = velocityTracker.calculateVelocity().y
                             val current = currentScrollOffsetValue()
                             glidePressedKey = null
@@ -562,21 +589,23 @@ fun HoneycombScreen(
                             }
                             directScrollOffset = current
                             if (
-                                current >= maxScroll + iconSizePx * 0.45f ||
-                                (current >= maxScroll - iconSizePx * 0.45f && velocity > 800f)
+                                current >= maxScroll + iconSizePx * 0.28f ||
+                                (current >= maxScroll - iconSizePx * 0.35f && velocity > 700f)
                             ) {
                                 val returnStart = current
-                            scope.launch {
-                                scrollOffset.snapTo(returnStart)
-                                directScrollOffset = Float.NaN
-                                scrollOffset.animateTo(
-                                    maxScroll,
-                                    spring(dampingRatio = 0.64f, stiffness = 360f)
-                                )
+                                returnTriggered = true
                                 onScrollToTop()
+                                scope.launch {
+                                    scrollOffset.snapTo(returnStart)
+                                    directScrollOffset = Float.NaN
+                                    scrollOffset.animateTo(
+                                        maxScroll,
+                                        spring(dampingRatio = 0.64f, stiffness = 360f)
+                                    )
+                                    returnTriggered = false
+                                }
+                                return@detectDragGestures
                             }
-                            return@detectDragGestures
-                        }
                             scope.launch {
                                 scrollOffset.snapTo(current)
                                 directScrollOffset = Float.NaN
@@ -1014,6 +1043,7 @@ private fun MaterialDenseGridScreen(
     val effectiveColumns = (columns / appListScale).roundToInt().coerceIn(2, 10)
     var focusReady by remember { mutableStateOf(false) }
     var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
+    var returnTriggered by remember { mutableStateOf(false) }
     val overscroll = remember { Animatable(0f) }
     val topReturnThresholdPx = with(density) { 72.dp.toPx() }
     val overscrollLimitPx = with(density) { 140.dp.toPx() }
@@ -1021,7 +1051,11 @@ private fun MaterialDenseGridScreen(
     LaunchedEffect(active) {
         if (!active) {
             longPressedApp = null
-            overscroll.snapTo(0f)
+            if (!returnTriggered) {
+                overscroll.snapTo(0f)
+            }
+        } else {
+            returnTriggered = false
         }
     }
 
@@ -1035,8 +1069,19 @@ private fun MaterialDenseGridScreen(
                     lastVisible.index >= gridState.layoutInfo.totalItemsCount - 1 &&
                     lastVisible.offset.y + lastVisible.size.height <= gridState.layoutInfo.viewportEndOffset
                 if (available.y > 0f && atTop) {
+                    val next = (overscroll.value + available.y).coerceAtMost(overscrollLimitPx)
+                    if (!returnTriggered && next >= topReturnThresholdPx) {
+                        returnTriggered = true
+                        onScrollToTop()
+                        scope.launch {
+                            overscroll.snapTo(next)
+                            overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                            returnTriggered = false
+                        }
+                        return Offset(0f, available.y)
+                    }
                     scope.launch {
-                        overscroll.snapTo((overscroll.value + available.y).coerceAtMost(overscrollLimitPx))
+                        overscroll.snapTo(next)
                     }
                     return Offset(0f, available.y)
                 }
@@ -1064,10 +1109,12 @@ private fun MaterialDenseGridScreen(
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (overscroll.value != 0f) {
                     val shouldReturnToFace = overscroll.value >= topReturnThresholdPx
-                    overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-                    if (shouldReturnToFace) {
+                    if (shouldReturnToFace && !returnTriggered) {
+                        returnTriggered = true
                         onScrollToTop()
                     }
+                    overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                    returnTriggered = false
                     return available
                 }
                 return Velocity.Zero
@@ -1120,10 +1167,12 @@ private fun MaterialDenseGridScreen(
                     if (overscroll.value != 0f) {
                         val shouldReturnToFace = overscroll.value >= topReturnThresholdPx
                         scope.launch {
-                            overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-                            if (shouldReturnToFace) {
+                            if (shouldReturnToFace && !returnTriggered) {
+                                returnTriggered = true
                                 onScrollToTop()
                             }
+                            overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                            returnTriggered = false
                         }
                     }
                 }

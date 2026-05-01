@@ -7,8 +7,10 @@ import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Typeface as AndroidTypeface
+import android.media.AudioManager
 import android.media.MediaMetadataRetriever
 import android.os.BatteryManager
+import android.os.Build
 import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.VideoView
@@ -202,6 +204,7 @@ fun WatchFaceLayer(
         clockOverride = null,
         onLongPress = onLongPress,
         showClock = true,
+        keepVideoAliveWhenHidden = true,
         modifier = modifier
     )
 }
@@ -236,6 +239,7 @@ fun BuiltInWatchFacePreview(
         clockOverride = clockOverride,
         onLongPress = null,
         showClock = showClock,
+        keepVideoAliveWhenHidden = false,
         modifier = modifier
     )
 }
@@ -255,6 +259,7 @@ private fun BuiltInWatchFaceSurface(
     clockOverride: ClockSnapshot?,
     onLongPress: (() -> Unit)?,
     showClock: Boolean,
+    keepVideoAliveWhenHidden: Boolean,
     modifier: Modifier = Modifier
 ) {
     val activeOptions = when (watchFaceId) {
@@ -307,7 +312,12 @@ private fun BuiltInWatchFaceSurface(
             }
 
             BUILT_IN_VIDEO_WATCHFACE_ID -> {
-                MediaVideoBackground(videoPath, isFaceVisible, videoOptions.cropToFill)
+                MediaVideoBackground(
+                    path = videoPath,
+                    isFaceVisible = isFaceVisible,
+                    fillScreen = videoOptions.cropToFill,
+                    keepAliveWhenHidden = keepVideoAliveWhenHidden
+                )
             }
 
             else -> {
@@ -405,16 +415,21 @@ private fun MediaImageBackground(path: String?) {
 }
 
 @Composable
-private fun MediaVideoBackground(path: String?, isFaceVisible: Boolean, fillScreen: Boolean) {
+private fun MediaVideoBackground(
+    path: String?,
+    isFaceVisible: Boolean,
+    fillScreen: Boolean,
+    keepAliveWhenHidden: Boolean
+) {
     val filePath = path?.takeIf { File(it).exists() }
-    if (!isFaceVisible) {
+    if (!isFaceVisible && !keepAliveWhenHidden) {
         MediaVideoThumbnail(filePath)
         return
     }
     AndroidView(
         factory = { context -> InternalLoopingVideoView(context) },
         update = { view ->
-            view.bind(filePath, isFaceVisible, fillScreen)
+            view.bind(filePath, isFaceVisible || keepAliveWhenHidden, fillScreen)
         },
         modifier = Modifier.fillMaxSize()
     )
@@ -1599,6 +1614,9 @@ private class InternalLoopingVideoView(context: Context) : FrameLayout(context) 
     private var videoHeight: Int = 0
 
     init {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            videoView.setAudioFocusRequest(AudioManager.AUDIOFOCUS_NONE)
+        }
         addView(
             videoView,
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
