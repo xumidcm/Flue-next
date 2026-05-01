@@ -1605,7 +1605,6 @@ private fun horizontalAlignment(position: WatchClockPosition): Alignment.Horizon
 private class InternalLoopingVideoView(context: Context) : FrameLayout(context), TextureView.SurfaceTextureListener {
     private val textureView = TextureView(context).apply {
         surfaceTextureListener = this@InternalLoopingVideoView
-        setBackgroundColor(android.graphics.Color.BLACK)
     }
     private val placeholder = TextView(context).apply {
         text = ""
@@ -1623,6 +1622,7 @@ private class InternalLoopingVideoView(context: Context) : FrameLayout(context),
     private var surface: Surface? = null
 
     init {
+        setBackgroundColor(android.graphics.Color.BLACK)
         addView(
             textureView,
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
