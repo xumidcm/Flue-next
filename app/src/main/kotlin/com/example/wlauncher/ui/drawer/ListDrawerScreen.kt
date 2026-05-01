@@ -1,6 +1,5 @@
 package com.flue.launcher.ui.drawer
 
-import android.os.Build
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
@@ -58,7 +57,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -111,6 +109,8 @@ fun ListDrawerScreen(
     iconSize: Dp = 48.dp,
     topFadeRangeDp: Int = 56,
     bottomFadeRangeDp: Int = 56,
+    topBlurRadiusDp: Float = LIST_EDGE_ITEM_BLUR_DP,
+    bottomBlurRadiusDp: Float = LIST_EDGE_ITEM_BLUR_DP,
     active: Boolean = true,
     leftSafeInsetDp: Int = 0,
     appListScalePercent: Int = 100,
@@ -131,8 +131,6 @@ fun ListDrawerScreen(
     val effectiveEdgeBlur = edgeBlurEnabled && !suppressHeavyEffects
 
     var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
-    val itemCenters = remember { mutableMapOf<Int, Float>() }
-    val itemHeights = remember { mutableMapOf<Int, Float>() }
     val overscroll = remember { Animatable(0f) }
     var dragFromIndex by remember { mutableStateOf<Int?>(null) }
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
@@ -147,11 +145,6 @@ fun ListDrawerScreen(
     var wheelMomentumJob by remember { mutableStateOf<Job?>(null) }
     var fastScrollActive by remember { mutableStateOf(false) }
     var fastScrollResetJob by remember { mutableStateOf<Job?>(null) }
-    val visibleIndexes by remember {
-        derivedStateOf {
-            listState.layoutInfo.visibleItemsInfo.map { it.index }
-        }
-    }
     val overscrollLimitPx = with(density) { configuration.screenHeightDp.dp.toPx() / 2f }
     val topReturnThresholdPx = with(density) { 72.dp.toPx() }
     val launcherStyle = LauncherTheme.style
@@ -162,16 +155,6 @@ fun ListDrawerScreen(
     val scaledRowHorizontalPadding = (16.dp * appListScale).coerceIn(10.dp, 32.dp)
     val scaledIconTextGap = (14.dp * appListScale).coerceIn(8.dp, 28.dp)
     val scaledTextSizeSp = (16f * appListScale).coerceIn(10f, 32f).sp
-
-    LaunchedEffect(visibleIndexes, dragFromIndex, dragCurrentIndex, apps.size) {
-        val retain = buildSet {
-            addAll(visibleIndexes)
-            dragFromIndex?.let(::add)
-            dragCurrentIndex?.let(::add)
-        }
-        itemCenters.keys.retainAll(retain)
-        itemHeights.keys.retainAll(retain)
-    }
 
     LaunchedEffect(focusReady) {
         if (focusReady) {
@@ -319,15 +302,18 @@ fun ListDrawerScreen(
                     val maxDistancePx = with(density) { 72.dp.toPx() }
                     val menuDragStartPx = with(density) { LIST_MENU_DRAG_START_DP.dp.toPx() }
                     awaitEachGesture {
-                        val releaseOverlayHeightPx = dragFromIndex?.let { itemHeights[it] }
-                            ?: with(density) { (scaledIconSize + scaledRowVerticalPadding * 2f).toPx() }
                         val down = awaitPrimaryDown()
                         val startIndex = findNearestListIndex(
                             pointerY = down.position.y,
-                            itemCenters = itemCenters,
+                            visibleItems = listState.layoutInfo.visibleItemsInfo,
                             maxDistance = maxDistancePx
                         ) ?: return@awaitEachGesture
                         val app = apps.getOrNull(startIndex) ?: return@awaitEachGesture
+                        val releaseOverlayHeightPx = findListItemHeight(
+                            index = startIndex,
+                            visibleItems = listState.layoutInfo.visibleItemsInfo,
+                            fallback = with(density) { (scaledIconSize + scaledRowVerticalPadding * 2f).toPx() }
+                        )
                         glidePressedIndex = startIndex
                         val longPress = awaitLongPressByTimeoutOrCancel(
                             pointerId = down.id,
@@ -374,7 +360,11 @@ fun ListDrawerScreen(
                             val activeFromIndex = dragFromIndex
                             if (dragActive && activeFromIndex != null) {
                                 dragPointerY = pointerY
-                                val anchorCenter = itemCenters[activeFromIndex] ?: pointerY
+                                val anchorCenter = findListItemCenter(
+                                    index = activeFromIndex,
+                                    visibleItems = listState.layoutInfo.visibleItemsInfo,
+                                    fallback = pointerY
+                                )
                                 dragOffsetY = pointerY - anchorCenter
                                 if (abs(dragOffsetY) > menuDragStartPx * 0.35f) {
                                     hasDragged = true
@@ -382,7 +372,7 @@ fun ListDrawerScreen(
 
                                 dragCurrentIndex = findNearestListIndex(
                                     pointerY = pointerY,
-                                    itemCenters = itemCenters,
+                                    visibleItems = listState.layoutInfo.visibleItemsInfo,
                                     maxDistance = Float.MAX_VALUE
                                 ) ?: dragCurrentIndex
                                 if (change.position != change.previousPosition) {
@@ -399,7 +389,11 @@ fun ListDrawerScreen(
                                 releaseOverlayHeightPx * 0.5f,
                                 size.height.toFloat() - releaseOverlayHeightPx * 0.5f
                             )
-                            val targetCenter = (itemCenters[to] ?: releaseCenter).coerceIn(
+                            val targetCenter = findListItemCenter(
+                                index = to,
+                                visibleItems = listState.layoutInfo.visibleItemsInfo,
+                                fallback = releaseCenter
+                            ).coerceIn(
                                 releaseOverlayHeightPx * 0.5f,
                                 size.height.toFloat() - releaseOverlayHeightPx * 0.5f
                             )
@@ -450,19 +444,20 @@ fun ListDrawerScreen(
             val fastFlowSlowTopY = screenHeightPx * FAST_FLOW_SLOW_TOP_FRACTION
             val fastFlowSlowBottomY = screenHeightPx * FAST_FLOW_SLOW_BOTTOM_FRACTION
             val autoScrollEdgePx = with(density) { LIST_AUTO_SCROLL_EDGE_DP.dp.toPx() }
-            val topEdgeBlurZonePx = with(density) { topFadeRangeDp.coerceIn(0, 220).dp.toPx() }
-            val bottomEdgeBlurZonePx = with(density) { bottomFadeRangeDp.coerceIn(0, 220).dp.toPx() }
             val estimatedItemHeight = scaledIconSize.coerceAtLeast(24.dp) + scaledRowVerticalPadding * 2f
             val centeredPadding = ((maxHeight - estimatedItemHeight) / 2f).coerceAtLeast(8.dp)
             val leftSafeInset = leftSafeInsetDp.coerceIn(0, 128).dp.coerceAtMost(maxWidth * 0.36f)
-            val dragRowShift = dragFromIndex?.let { itemHeights[it] } ?: with(density) { estimatedItemHeight.toPx() }
-            val dragOverlayHeightPx = dragFromIndex?.let { itemHeights[it] }
-                ?: with(density) { (scaledIconSize + scaledRowVerticalPadding * 2f).toPx() }
             val visibleInfoByIndex by remember {
                 derivedStateOf {
                     listState.layoutInfo.visibleItemsInfo.associateBy { it.index }
                 }
             }
+            val dragRowShift = dragFromIndex?.let {
+                visibleInfoByIndex[it]?.size?.toFloat()
+            } ?: with(density) { estimatedItemHeight.toPx() }
+            val dragOverlayHeightPx = dragFromIndex?.let {
+                visibleInfoByIndex[it]?.size?.toFloat()
+            } ?: with(density) { (scaledIconSize + scaledRowVerticalPadding * 2f).toPx() }
             val reduceListVisualLoad = (fastScrollActive || listState.isScrollInProgress) &&
                 dragFromIndex == null &&
                 longPressedApp == null
@@ -492,11 +487,15 @@ fun ListDrawerScreen(
                             if (autoScrollVelocity != 0f) {
                                 pendingScrollDelta = autoScrollVelocity * frameDeltaSeconds
                             }
-                            val anchorCenter = itemCenters[activeFromIndex] ?: pointerY
+                            val anchorCenter = findListItemCenter(
+                                index = activeFromIndex,
+                                visibleItems = listState.layoutInfo.visibleItemsInfo,
+                                fallback = pointerY
+                            )
                             dragOffsetY = pointerY - anchorCenter
                             dragCurrentIndex = findNearestListIndex(
                                 pointerY = pointerY,
-                                itemCenters = itemCenters,
+                                visibleItems = listState.layoutInfo.visibleItemsInfo,
                                 maxDistance = Float.MAX_VALUE
                             ) ?: dragCurrentIndex
                         }
@@ -545,32 +544,15 @@ fun ListDrawerScreen(
                             dragFromIndex == null &&
                             longPressedApp == null
                     )
-                    val itemBlur = computeVerticalEdgeBlur(
-                        centerY = itemInfo?.let { it.offset + it.size / 2f } ?: listViewportCenterY,
-                        screenHeight = screenHeightPx,
-                        topBlurZonePx = topEdgeBlurZonePx,
-                        bottomBlurZonePx = bottomEdgeBlurZonePx,
-                        maxBlurDp = LIST_EDGE_ITEM_BLUR_DP
-                    )
-                    val effectiveItemBlur = reduceListBlurForFastScroll(itemBlur, reduceListVisualLoad)
-                    val useBlurredIcon = (
-                        Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
-                        blurEnabled &&
-                        effectiveEdgeBlur &&
-                        effectiveItemBlur > 0.5f
-                    )
                     val displayIcon = remember(
                         app.componentKey,
                         app.cachedIcon,
-                        app.cachedBlurredIcon,
                         app.cachedTwoToneIcon,
-                        app.cachedTwoToneBlurredIcon,
-                        twoToneIconsEnabled,
-                        useBlurredIcon
+                        twoToneIconsEnabled
                     ) {
                         app.iconForDisplay(
                             useTwoTone = twoToneIconsEnabled,
-                            blurred = useBlurredIcon
+                            blurred = false
                         )
                     }
                     val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
@@ -614,11 +596,6 @@ fun ListDrawerScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .onGloballyPositioned { coords ->
-                                val posY = coords.positionInRoot().y
-                                itemCenters[index] = posY + coords.size.height / 2f
-                                itemHeights[index] = coords.size.height.toFloat()
-                            }
                             .graphicsLayer {
                                 val targetScale = itemScale * pressedScale
                                 translationY = if (isDragged) 0f else displayDisplacement + flowOffset
@@ -632,13 +609,6 @@ fun ListDrawerScreen(
                                     1f
                                 }
                             }
-                            .platformBlur(
-                                effectiveItemBlur,
-                                blurEnabled &&
-                                    effectiveEdgeBlur &&
-                                    !reduceListVisualLoad &&
-                                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-                            )
                             .background(appPalette.item, launcherStyle.compactShape)
                             .background(appPalette.itemPressedOverlay.copy(alpha = pressedOverlay), launcherStyle.compactShape)
                             .combinedClickable(
@@ -646,7 +616,7 @@ fun ListDrawerScreen(
                                 indication = null,
                                 onClick = {
                                     if (longPressedApp != null || dragFromIndex != null) return@combinedClickable
-                                    val centerY = itemCenters[index] ?: screenCenterY
+                                    val centerY = rowCenterY.coerceIn(0f, screenHeightPx)
                                     onAppClick(app, Offset(0.15f, centerY / screenHeightPx))
                                 }
                             )
@@ -683,17 +653,9 @@ fun ListDrawerScreen(
                 else -> Float.NaN
             }
             if (draggedApp != null && !overlayCenterY.isNaN()) {
-                val draggedBlur = computeVerticalEdgeBlur(
-                    centerY = overlayCenterY,
-                    screenHeight = screenHeightPx,
-                    topBlurZonePx = topEdgeBlurZonePx,
-                    bottomBlurZonePx = bottomEdgeBlurZonePx,
-                    maxBlurDp = LIST_EDGE_ITEM_BLUR_DP
-                )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .platformBlur(draggedBlur, blurEnabled && effectiveEdgeBlur && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
                         .graphicsLayer {
                             translationY = overlayCenterY - dragOverlayHeightPx / 2f
                             scaleX = 0.965f
@@ -705,16 +667,10 @@ fun ListDrawerScreen(
                             .padding(horizontal = (28.dp * appListScale).coerceIn(14.dp, 40.dp), vertical = scaledRowVerticalPadding),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val overlayUseBlurredIcon = (
-                        Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
-                            blurEnabled &&
-                            effectiveEdgeBlur &&
-                            draggedBlur > 0.5f
-                        )
                     Image(
                         bitmap = draggedApp.iconForDisplay(
                             useTwoTone = twoToneIconsEnabled,
-                            blurred = overlayUseBlurredIcon
+                            blurred = false
                         ),
                         contentDescription = draggedApp.label,
                         modifier = Modifier
@@ -733,7 +689,7 @@ fun ListDrawerScreen(
             }
         }
 
-        if (blurEnabled && effectiveEdgeBlur && !(fastScrollActive || listState.isScrollInProgress)) {
+        if (topFadeRangeDp > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -748,8 +704,10 @@ fun ListDrawerScreen(
                             )
                         )
                     )
-                    .platformBlur(LIST_EDGE_ITEM_BLUR_DP, true)
+                    .platformBlur(topBlurRadiusDp, blurEnabled && effectiveEdgeBlur)
             )
+        }
+        if (bottomFadeRangeDp > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -764,25 +722,7 @@ fun ListDrawerScreen(
                             )
                         )
                     )
-                    .platformBlur(LIST_EDGE_ITEM_BLUR_DP, true)
-            )
-        }
-        if (topFadeRangeDp > 0) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .height(topFadeRangeDp.dp)
-                    .background(Brush.verticalGradient(listOf(appPalette.fadeEdge, Color.Transparent)))
-            )
-        }
-        if (bottomFadeRangeDp > 0) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .height(bottomFadeRangeDp.dp)
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, appPalette.fadeEdge)))
+                    .platformBlur(bottomBlurRadiusDp, blurEnabled && effectiveEdgeBlur)
             )
         }
     }
@@ -835,19 +775,37 @@ private fun listDisplacementForIndex(
 
 private fun findNearestListIndex(
     pointerY: Float,
-    itemCenters: Map<Int, Float>,
+    visibleItems: List<androidx.compose.foundation.lazy.LazyListItemInfo>,
     maxDistance: Float
 ): Int? {
     var bestIndex: Int? = null
     var bestDistance = Float.MAX_VALUE
-    itemCenters.forEach { (index, centerY) ->
+    visibleItems.forEach { item ->
+        val centerY = item.offset + item.size / 2f
         val distance = abs(centerY - pointerY)
         if (distance < bestDistance && distance <= maxDistance) {
             bestDistance = distance
-            bestIndex = index
+            bestIndex = item.index
         }
     }
     return bestIndex
+}
+
+private fun findListItemCenter(
+    index: Int,
+    visibleItems: List<androidx.compose.foundation.lazy.LazyListItemInfo>,
+    fallback: Float
+): Float {
+    val item = visibleItems.firstOrNull { it.index == index } ?: return fallback
+    return item.offset + item.size / 2f
+}
+
+private fun findListItemHeight(
+    index: Int,
+    visibleItems: List<androidx.compose.foundation.lazy.LazyListItemInfo>,
+    fallback: Float
+): Float {
+    return visibleItems.firstOrNull { it.index == index }?.size?.toFloat() ?: fallback
 }
 
 private fun computeItemScale(
@@ -885,32 +843,6 @@ private fun computeFastFlowOffset(
         else -> screenCenterY + (rowCenterY - screenCenterY) * FAST_FLOW_SLOW_SCALE
     }
     return (transformedY - rowCenterY).coerceIn(-FAST_FLOW_MAX_OFFSET_PX, FAST_FLOW_MAX_OFFSET_PX)
-}
-
-private fun computeVerticalEdgeBlur(
-    centerY: Float,
-    screenHeight: Float,
-    topBlurZonePx: Float,
-    bottomBlurZonePx: Float,
-    maxBlurDp: Float
-): Float {
-    val topStrength = if (topBlurZonePx <= 0f) {
-        0f
-    } else {
-        (1f - (centerY / topBlurZonePx)).coerceIn(0f, 1f)
-    }
-    val bottomDistance = screenHeight - centerY
-    val bottomStrength = if (bottomBlurZonePx <= 0f) {
-        0f
-    } else {
-        (1f - (bottomDistance / bottomBlurZonePx)).coerceIn(0f, 1f)
-    }
-    return maxOf(topStrength, bottomStrength) * maxBlurDp
-}
-
-private fun reduceListBlurForFastScroll(blurDp: Float, reduced: Boolean): Float {
-    if (!reduced) return blurDp
-    return 0f
 }
 
 private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awaitLongPressByTimeoutOrCancel(

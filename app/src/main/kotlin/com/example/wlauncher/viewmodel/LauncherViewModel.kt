@@ -150,6 +150,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         private const val SIDE_SCREEN_WIDGET_CAPACITY = 8
         private const val APP_LIST_LEFT_SAFE_INSET_MAX_DP = 128
         private const val XIAOMI_17_PRO_SAFE_INSET_DP = 96
+
+        private fun normalizeEdgeBlurTenths(value: Int): Int {
+            return ((value.coerceIn(5, 50) / 5f).roundToInt() * 5).coerceIn(5, 50)
+        }
+
+        private fun normalizeEdgeBlurTenths(value: Float): Int {
+            return ((value.coerceIn(0.5f, 5f) * 2f).roundToInt() * 5).coerceIn(5, 50)
+        }
     }
 
     private val store = application.dataStore
@@ -619,7 +627,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 val loadedEdgeBlurTenths = (prefs[KEY_HONEYCOMB_EDGE_BLUR_TENTHS]
                     ?: (((loadedTopBlur + loadedBottomBlur) / 2f) * 10f).roundToInt())
-                    .coerceIn(1, 50)
+                    .let(::normalizeEdgeBlurTenths)
                 val loadedEdgeBlurRadius = loadedEdgeBlurTenths / 10f
                 if (_honeycombEdgeBlurRadius.value != loadedEdgeBlurRadius) {
                     _honeycombEdgeBlurRadius.value = loadedEdgeBlurRadius
@@ -1154,7 +1162,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setHoneycombEdgeBlurRadius(value: Float) {
-        val savedTenths = (value * 10f).roundToInt().coerceIn(1, 50)
+        val savedTenths = normalizeEdgeBlurTenths(value)
         _honeycombEdgeBlurRadius.value = savedTenths / 10f
         persistDebounced("key_honeycomb_edge_blur_tenths") {
             store.edit { it[KEY_HONEYCOMB_EDGE_BLUR_TENTHS] = savedTenths }

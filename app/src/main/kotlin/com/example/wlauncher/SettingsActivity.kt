@@ -867,8 +867,8 @@ private fun SettingsRootScreen(
                     title = if (isZh) "边缘模糊半径" else "Edge Blur Radius",
                     value = honeycombEdgeBlurRadius,
                     valueText = "%.1f dp".format(java.util.Locale.US, honeycombEdgeBlurRadius),
-                    range = 0.1f..5f,
-                    steps = 48,
+                    range = 0.5f..5f,
+                    steps = 8,
                     onValueChange = vm::setHoneycombEdgeBlurRadius,
                     enabled = blurEnabled && edgeBlurEnabled,
                     scale = itemFisheye(listState, "edge_blur_radius", screenCenterY, screenHeightPx)

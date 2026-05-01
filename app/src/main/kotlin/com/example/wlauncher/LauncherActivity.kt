@@ -522,6 +522,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         suppressHeavyEffects = reduceLegacyDrawerEffects,
                         topFadeRangeDp = honeycombTopFade,
                         bottomFadeRangeDp = honeycombBottomFade,
+                        topBlurRadiusDp = honeycombEdgeBlurRadius,
+                        bottomBlurRadiusDp = honeycombEdgeBlurRadius,
                         active = screenState == ScreenState.Apps,
                         leftSafeInsetDp = appListLeftSafeInsetDp,
                         appListScalePercent = appListScalePercent,
