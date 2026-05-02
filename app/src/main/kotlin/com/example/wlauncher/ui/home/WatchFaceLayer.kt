@@ -170,9 +170,27 @@ private object WatchFacePaletteCache {
 }
 
 private data class WatchFaceTypeface(
-    val androidTypeface: AndroidTypeface?,
-    val fontFamily: FontFamily?
-)
+    val androidTypeface: AndroidTypeface? = null,
+    val boldAndroidTypeface: AndroidTypeface? = null,
+    val fontFamily: FontFamily? = null,
+    val boldFontFamily: FontFamily? = null
+) {
+    fun platformTypeface(bold: Boolean): AndroidTypeface? {
+        return if (bold) {
+            boldAndroidTypeface ?: androidTypeface
+        } else {
+            androidTypeface ?: boldAndroidTypeface
+        }
+    }
+
+    fun family(bold: Boolean): FontFamily? {
+        return if (bold) {
+            boldFontFamily ?: fontFamily
+        } else {
+            fontFamily ?: boldFontFamily
+        }
+    }
+}
 
 private data class ChargingSnapshot(
     val charging: Boolean = false,
@@ -289,7 +307,7 @@ private fun BuiltInWatchFaceSurface(
     } else {
         defaultClockPalette(watchFaceId)
     }
-    val typeface = if (showClock) rememberWatchFaceTypeface(activeOptions.fontPath) else WatchFaceTypeface(null, null)
+    val typeface = if (showClock) rememberWatchFaceTypeface(activeOptions.fontPath) else WatchFaceTypeface()
     val chargingSnapshot = if (showClock) rememberChargingSnapshot() else ChargingSnapshot()
     val launcherStyle = LauncherTheme.style
     val backgroundModifier = modifier
@@ -481,7 +499,7 @@ fun ClockOverlayPreview(
             boldClock = boldClock
         ),
         palette = palette,
-        typeface = WatchFaceTypeface(androidTypeface = null, fontFamily = null),
+        typeface = WatchFaceTypeface(),
         chargingSnapshot = ChargingSnapshot(),
         showChargingPowerText = true,
         fallbackTitle = fallbackTitle,
@@ -601,7 +619,7 @@ private fun ClockOverlay(
                 text = clock.time,
                 fontSize = if (compact) 32.sp else options.clockSizeSp.sp,
                 fontWeight = if (options.boldClock) FontWeight.Bold else FontWeight.W200,
-                fontFamily = typeface.fontFamily,
+                fontFamily = typeface.family(options.boldClock),
                 color = effectivePalette.timeColor,
                 letterSpacing = 2.sp
             )
@@ -738,7 +756,8 @@ private fun Md3AnalogClockOverlay(
                     color = primary.toArgb()
                     textAlign = android.graphics.Paint.Align.CENTER
                     textSize = side * 0.075f
-                    this.typeface = typeface.androidTypeface ?: AndroidTypeface.create(AndroidTypeface.DEFAULT, AndroidTypeface.NORMAL)
+                    this.typeface = typeface.platformTypeface(false)
+                        ?: AndroidTypeface.create(AndroidTypeface.DEFAULT, AndroidTypeface.NORMAL)
                 }
                 val textRadius = radius - 34.dp.toPx()
                 for (number in 1..12) {
@@ -976,7 +995,7 @@ private fun Md3eClockOverlay(
             drawPath(path = blobPath, color = colors.faceColor)
 
             drawIntoCanvas { canvas ->
-                val selectedTypeface = typeface.androidTypeface
+                val selectedTypeface = typeface.platformTypeface(true)
                     ?: AndroidTypeface.create(AndroidTypeface.DEFAULT, AndroidTypeface.BOLD)
                 val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                     color = colors.textColor.toArgb()
@@ -1184,9 +1203,14 @@ private fun rememberWatchFaceTypeface(fontPath: String?): WatchFaceTypeface {
         val androidTypeface = runCatching {
             file?.takeIf { it.exists() }?.let(AndroidTypeface::createFromFile)
         }.getOrNull()
+        val boldTypeface = androidTypeface?.let {
+            runCatching { AndroidTypeface.create(it, AndroidTypeface.BOLD) }.getOrNull()
+        }
         WatchFaceTypeface(
             androidTypeface = androidTypeface,
-            fontFamily = androidTypeface?.let { FontFamily(ComposeTypeface(it)) }
+            boldAndroidTypeface = boldTypeface,
+            fontFamily = androidTypeface?.let { FontFamily(ComposeTypeface(it)) },
+            boldFontFamily = boldTypeface?.let { FontFamily(ComposeTypeface(it)) }
         )
     }
 }

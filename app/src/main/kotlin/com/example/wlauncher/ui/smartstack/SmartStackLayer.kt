@@ -51,7 +51,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.animateItemPlacement
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -70,11 +72,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -124,6 +128,7 @@ import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.viewmodel.SideScreenSection
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.text.NumberFormat
@@ -171,6 +176,20 @@ private data class PendingWidgetSelection(
     val widget: WidgetInfo,
     val appWidgetId: Int
 )
+
+private fun SideScreenWidgetCardItem.stableKey(): String {
+    return if (widget.widgetId != -1) {
+        "widget_${widget.widgetId}"
+    } else {
+        "widget_${widget.widgetKey}_$widgetIndex"
+    }
+}
+
+private fun <T> MutableList<T>.moveItem(fromIndex: Int, toIndex: Int) {
+    if (fromIndex == toIndex || fromIndex !in indices || toIndex !in indices) return
+    val item = removeAt(fromIndex)
+    add(toIndex, item)
+}
 
 private data class WidgetPickerApp(
     val packageName: String,
@@ -305,11 +324,16 @@ fun SmartStackLayer(
             widgetRepository.parseSlotValue(raw)?.let { SideScreenWidgetCardItem(index, it) }
         }
     }
-    val visibleWidgetCards = remember(widgetCards) {
-        emptyList<SideScreenWidgetCardItem>()
+    val visibleWidgetCards = remember(widgetCards, showWidgets) {
+        if (showWidgets) widgetCards else emptyList()
     }
-    val orderedSections = remember(notificationsEnabled) {
-        if (notificationsEnabled) listOf(SideScreenSection.Notifications) else emptyList()
+    val orderedSections = remember(notificationsEnabled, showWidgets, sectionOrder) {
+        sectionOrder.filter { section ->
+            when (section) {
+                SideScreenSection.Widgets -> showWidgets
+                SideScreenSection.Notifications -> notificationsEnabled
+            }
+        }
     }
     DisposableEffect(appWidgetHost, visibleWidgetCards.isNotEmpty()) {
         if (visibleWidgetCards.isNotEmpty()) {
@@ -479,6 +503,7 @@ fun SmartStackLayer(
                     width = contentWidth,
                     rows = visibleShortcutRows,
                     cols = visibleShortcutCols,
+                    expandedBackground = orderedSections.isEmpty(),
                     items = shortcutItems,
                     slotCenters = slotCenters,
                     onAdd = { onRevealTargetChange(null); modalState = SideScreenModalState.ShortcutPicker(it) },
@@ -617,10 +642,9 @@ fun SmartStackLayer(
             apps = apps,
             widgetRepository = widgetRepository,
             onSelectWidget = { widget ->
-                val emptyWidgetIndex = sideScreenWidgetSlots.indexOfFirst { it.isNullOrBlank() }
-                val targetIndex = if (emptyWidgetIndex >= 0) emptyWidgetIndex else sideScreenWidgetSlots.lastIndex
+                val targetIndex = sideScreenWidgetSlots.size
                 val providerInfo = widgetRepository.findProviderInfo(widget.widgetKey)
-                if (providerInfo != null && targetIndex >= 0) {
+                if (providerInfo != null) {
                     discardPendingWidgetSelection()
                     clearAllocatedWidget(targetIndex)
                     val appWidgetId = runCatching { appWidgetHost.allocateAppWidgetId() }.getOrNull()
@@ -768,6 +792,7 @@ fun WidgetPageLayer(
 ) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
+    val density = LocalDensity.current
     val launcherStyle = LauncherTheme.style
     val widgetRepository = remember(context) { FlueApplication.repositories(context).widgetRepository }
     val appWidgetManager = remember(context) { AppWidgetManager.getInstance(context) }
@@ -775,17 +800,22 @@ fun WidgetPageLayer(
     val listState = rememberLazyListState()
     val overscroll = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
-    val widgetCardHeightsPx = remember { mutableStateMapOf<Int, Int>() }
     val widgetCards = remember(sideScreenWidgetSlots, widgetRepository) {
         sideScreenWidgetSlots.mapIndexedNotNull { index, raw ->
             widgetRepository.parseSlotValue(raw)?.let { SideScreenWidgetCardItem(index, it) }
         }
     }
+    val previewCards = remember { mutableStateListOf<SideScreenWidgetCardItem>() }
     var editMode by remember { mutableStateOf(false) }
     var showPicker by remember { mutableStateOf(false) }
     var pendingWidgetSelection by remember { mutableStateOf<PendingWidgetSelection?>(null) }
-    var draggingWidgetIndex by remember { mutableStateOf<Int?>(null) }
+    var draggingWidgetKey by remember { mutableStateOf<String?>(null) }
+    var draggingOriginIndex by remember { mutableIntStateOf(-1) }
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    var autoScrollDeltaPx by remember { mutableFloatStateOf(0f) }
+    var listViewportHeightPx by remember { mutableIntStateOf(0) }
+    val widgetBorderHotspotPx = with(density) { 18.dp.toPx() }
+    val autoScrollEdgePx = with(density) { 84.dp.toPx() }
 
     fun clearAllocatedWidget(slotIndex: Int) {
         widgetRepository.extractWidgetId(sideScreenWidgetSlots.getOrNull(slotIndex))?.let { widgetId ->
@@ -854,6 +884,52 @@ fun WidgetPageLayer(
         }
     }
 
+    fun visibleInfoForKey(cardKey: String): LazyListItemInfo? {
+        return listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == cardKey }
+    }
+
+    fun updateAutoScroll(cardKey: String?) {
+        if (cardKey == null || listViewportHeightPx == 0) {
+            autoScrollDeltaPx = 0f
+            return
+        }
+        val itemInfo = visibleInfoForKey(cardKey) ?: run {
+            autoScrollDeltaPx = 0f
+            return
+        }
+        val centerY = itemInfo.offset + itemInfo.size / 2f + dragOffsetY
+        autoScrollDeltaPx = when {
+            centerY < autoScrollEdgePx -> -(((autoScrollEdgePx - centerY) / autoScrollEdgePx).coerceIn(0f, 1f) * 28f)
+            centerY > listViewportHeightPx - autoScrollEdgePx -> {
+                (((centerY - (listViewportHeightPx - autoScrollEdgePx)) / autoScrollEdgePx).coerceIn(0f, 1f) * 28f)
+            }
+            else -> 0f
+        }
+    }
+
+    fun updatePreviewOrder(cardKey: String) {
+        val currentIndex = previewCards.indexOfFirst { it.stableKey() == cardKey }
+        if (currentIndex < 0) return
+        val currentInfo = visibleInfoForKey(cardKey) ?: return
+        val draggedCenterY = currentInfo.offset + currentInfo.size / 2f + dragOffsetY
+        val target = listState.layoutInfo.visibleItemsInfo
+            .mapNotNull { info ->
+                val key = info.key as? String ?: return@mapNotNull null
+                if (key == cardKey) return@mapNotNull null
+                val previewIndex = previewCards.indexOfFirst { it.stableKey() == key }
+                if (previewIndex < 0) return@mapNotNull null
+                previewIndex to info
+            }
+            .minByOrNull { (_, info) ->
+                abs((info.offset + info.size / 2f) - draggedCenterY)
+            }
+        if (target != null && target.first != currentIndex) {
+            previewCards.moveItem(currentIndex, target.first)
+            dragOffsetY -= (target.second.offset - currentInfo.offset).toFloat()
+        }
+        updateAutoScroll(cardKey)
+    }
+
     val nestedScrollConnection = remember(listState) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -895,13 +971,29 @@ fun WidgetPageLayer(
     }
 
     LaunchedEffect(widgetCards) {
-        val activeWidgetIndexes = widgetCards.map(SideScreenWidgetCardItem::widgetIndex).toSet()
-        widgetCardHeightsPx.keys.toList().forEach { widgetIndex ->
-            if (widgetIndex !in activeWidgetIndexes) {
-                widgetCardHeightsPx.remove(widgetIndex)
-            }
+        if (draggingWidgetKey == null) {
+            previewCards.clear()
+            previewCards.addAll(widgetCards)
         }
-        if (widgetCards.isEmpty()) editMode = false
+        if (widgetCards.isEmpty()) {
+            editMode = false
+            draggingOriginIndex = -1
+        }
+    }
+
+    LaunchedEffect(draggingWidgetKey, autoScrollDeltaPx) {
+        val cardKey = draggingWidgetKey ?: return@LaunchedEffect
+        if (autoScrollDeltaPx == 0f) return@LaunchedEffect
+        while (isActive && draggingWidgetKey == cardKey && autoScrollDeltaPx != 0f) {
+            val consumed = listState.scrollBy(autoScrollDeltaPx)
+            if (consumed == 0f) {
+                autoScrollDeltaPx = 0f
+                break
+            }
+            dragOffsetY += consumed
+            updatePreviewOrder(cardKey)
+            withFrameNanos { }
+        }
     }
 
     BoxWithConstraints(
@@ -919,6 +1011,7 @@ fun WidgetPageLayer(
                 .fillMaxSize()
                 .nestedScroll(nestedScrollConnection)
                 .graphicsLayer { translationY = overscroll.value }
+                .onSizeChanged { listViewportHeightPx = it.height }
                 .padding(start = leftSafeInset),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -954,64 +1047,107 @@ fun WidgetPageLayer(
                     EmptyWidgetCard(width = contentWidth)
                 }
             } else {
+                val displayedCards = if (previewCards.isEmpty()) widgetCards else previewCards
                 items(
-                    items = widgetCards,
-                    key = { "widget_page_${it.widgetIndex}_${it.widget.widgetKey}_${it.widget.widgetId}" },
+                    items = displayedCards,
+                    key = { it.stableKey() },
                     contentType = { "widget_page_card" }
                 ) { card ->
-                    val isDragging = draggingWidgetIndex == card.widgetIndex
-                    val cardHeightPx = widgetCardHeightsPx[card.widgetIndex]?.coerceAtLeast(1) ?: 1
+                    val cardKey = card.stableKey()
+                    val isDragging = draggingWidgetKey == cardKey
+                    val shellShape = RoundedCornerShape(28.dp)
                     Box(
                         modifier = Modifier
                             .width(contentWidth)
+                            .animateItemPlacement()
                             .zIndex(if (isDragging) 4f else 0f)
                             .graphicsLayer {
                                 translationY = if (isDragging) dragOffsetY else 0f
                                 shadowElevation = if (isDragging) 14.dp.toPx() else 0f
                             }
                     ) {
-                        WidgetCard(
-                            widget = card.widget,
-                            widgetRepository = widgetRepository,
-                            appWidgetHost = appWidgetHost,
-                            onLongPress = null,
-                            onMeasuredHeight = { heightPx ->
-                                if (heightPx > 0) widgetCardHeightsPx[card.widgetIndex] = heightPx
-                            }
-                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(shellShape)
+                                .background(Color.White.copy(alpha = if (editMode) 0.05f else 0.03f))
+                                .pointerInput(editMode, cardKey) {
+                                    if (editMode) return@pointerInput
+                                    awaitEachGesture {
+                                        val down = awaitPrimaryDown()
+                                        val widthPx = size.width.toFloat()
+                                        val heightPx = size.height.toFloat()
+                                        val isBorderPress =
+                                            down.position.x <= widgetBorderHotspotPx ||
+                                                down.position.x >= widthPx - widgetBorderHotspotPx ||
+                                                down.position.y <= widgetBorderHotspotPx ||
+                                                down.position.y >= heightPx - widgetBorderHotspotPx
+                                        if (!isBorderPress) return@awaitEachGesture
+                                        when (val hold = awaitLongPressOrRelease(
+                                            pointerId = down.id,
+                                            downPosition = down.position,
+                                            timeoutMillis = SIDE_SCREEN_SHORTCUT_MENU_TRIGGER_MS
+                                        )) {
+                                            is PressHoldResult.LongPress -> {
+                                                vibrateHaptic(context)
+                                                hold.change.consume()
+                                                editMode = true
+                                            }
+                                            PressHoldResult.Cancelled,
+                                            PressHoldResult.Released -> Unit
+                                        }
+                                    }
+                                }
+                                .padding(4.dp)
+                        ) {
+                            WidgetCard(
+                                widget = card.widget,
+                                widgetRepository = widgetRepository,
+                                appWidgetHost = appWidgetHost,
+                                onLongPress = null,
+                                onMeasuredHeight = {}
+                            )
+                        }
                         if (editMode) {
                             Box(
                                 modifier = Modifier
                                     .matchParentSize()
-                                    .clip(RoundedCornerShape(24.dp))
+                                    .clip(shellShape)
                                     .background(Color.Black.copy(alpha = 0.08f))
-                                    .pointerInput(card.widgetIndex, widgetCards, cardHeightPx) {
+                                    .pointerInput(cardKey, displayedCards) {
                                         detectDragGesturesAfterLongPress(
                                             onDragStart = {
                                                 vibrateHaptic(context)
-                                                draggingWidgetIndex = card.widgetIndex
+                                                draggingWidgetKey = cardKey
+                                                draggingOriginIndex = card.widgetIndex
                                                 dragOffsetY = 0f
+                                                updateAutoScroll(cardKey)
                                             },
                                             onDragCancel = {
-                                                draggingWidgetIndex = null
+                                                draggingWidgetKey = null
+                                                draggingOriginIndex = -1
                                                 dragOffsetY = 0f
+                                                autoScrollDeltaPx = 0f
+                                                previewCards.clear()
+                                                previewCards.addAll(widgetCards)
                                             },
                                             onDragEnd = {
-                                                val visualIndex = widgetCards.indexOfFirst { it.widgetIndex == card.widgetIndex }
-                                                val targetCard = when {
-                                                    dragOffsetY > cardHeightPx * 0.55f -> widgetCards.getOrNull(visualIndex + 1)
-                                                    dragOffsetY < -cardHeightPx * 0.55f -> widgetCards.getOrNull(visualIndex - 1)
-                                                    else -> null
+                                                val targetIndex = previewCards.indexOfFirst { it.stableKey() == cardKey }
+                                                if (draggingOriginIndex >= 0 &&
+                                                    targetIndex >= 0 &&
+                                                    targetIndex != draggingOriginIndex
+                                                ) {
+                                                    onSwapWidget(draggingOriginIndex, targetIndex)
                                                 }
-                                                if (targetCard != null) {
-                                                    onSwapWidget(card.widgetIndex, targetCard.widgetIndex)
-                                                }
-                                                draggingWidgetIndex = null
+                                                draggingWidgetKey = null
+                                                draggingOriginIndex = -1
                                                 dragOffsetY = 0f
+                                                autoScrollDeltaPx = 0f
                                             },
                                             onDrag = { change, dragAmount ->
                                                 change.consume()
                                                 dragOffsetY += dragAmount.y
+                                                updatePreviewOrder(cardKey)
                                             }
                                         )
                                     }
@@ -1049,10 +1185,9 @@ fun WidgetPageLayer(
             apps = apps,
             widgetRepository = widgetRepository,
             onSelectWidget = { widget ->
-                val emptyWidgetIndex = sideScreenWidgetSlots.indexOfFirst { it.isNullOrBlank() }
-                val targetIndex = if (emptyWidgetIndex >= 0) emptyWidgetIndex else sideScreenWidgetSlots.lastIndex
+                val targetIndex = sideScreenWidgetSlots.size
                 val providerInfo = widgetRepository.findProviderInfo(widget.widgetKey)
-                if (providerInfo != null && targetIndex >= 0) {
+                if (providerInfo != null) {
                     discardPendingWidgetSelection()
                     clearAllocatedWidget(targetIndex)
                     val appWidgetId = runCatching { appWidgetHost.allocateAppWidgetId() }.getOrNull()
@@ -1119,6 +1254,7 @@ private fun WidgetPageChip(
     width: androidx.compose.ui.unit.Dp,
     rows: Int,
     cols: Int,
+    expandedBackground: Boolean,
     items: List<AppInfo?>,
     slotCenters: MutableMap<Int, Offset>,
     onAdd: (Int) -> Unit,
@@ -1131,19 +1267,25 @@ private fun WidgetPageChip(
     val density = LocalDensity.current
     val dragThresholdPx = with(density) { 10.dp.toPx() }
     val dropThresholdPx = with(density) { 68.dp.toPx() }
-    val horizontalSpacing = 12.dp
-    val verticalSpacing = 12.dp
+    val horizontalSpacing = if (expandedBackground) 10.dp else 12.dp
+    val verticalSpacing = if (expandedBackground) 14.dp else 12.dp
     val bubbleSize = ((width - 28.dp - horizontalSpacing * (cols - 1)) / cols)
-        .coerceIn(44.dp, 58.dp)
+        .coerceIn(46.dp, if (expandedBackground) 64.dp else 58.dp)
+    val minPanelHeight = if (expandedBackground) {
+        bubbleSize * rows + verticalSpacing * (rows - 1) + 118.dp
+    } else {
+        Dp.Unspecified
+    }
     var draggingSlot by remember { mutableStateOf<Int?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
     var dragMoved by remember { mutableStateOf(false) }
     Box(
         Modifier
             .width(width)
+            .heightIn(min = minPanelHeight)
             .clip(RoundedCornerShape(28.dp))
             .background(Color(0xFF353535))
-            .padding(14.dp)
+            .padding(horizontal = 14.dp, vertical = if (expandedBackground) 18.dp else 14.dp)
     ) {
         Column(Modifier.fillMaxWidth()) {
             items.chunked(cols).take(rows).forEachIndexed { rowIndex, row ->

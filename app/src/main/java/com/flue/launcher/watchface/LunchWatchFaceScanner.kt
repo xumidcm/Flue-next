@@ -118,7 +118,7 @@ object LunchWatchFaceScanner {
 
     fun loadPreviewDrawable(context: Context, descriptor: LunchWatchFaceDescriptor): Drawable? {
         if (descriptor.isBuiltin) {
-            return ContextCompat.getDrawable(context, R.mipmap.ic_launcher_round)
+            return ContextCompat.getDrawable(context, R.mipmap.ic_launcher_foreground)
         }
         val packageName = descriptor.packageName ?: return null
         return runCatching {
@@ -162,4 +162,3 @@ object LunchWatchFaceScanner {
         }.getOrNull()
     }
 }
-

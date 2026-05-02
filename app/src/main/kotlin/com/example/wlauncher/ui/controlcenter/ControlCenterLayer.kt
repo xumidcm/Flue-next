@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothAdapter
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.media.AudioManager
@@ -16,9 +17,12 @@ import android.media.session.PlaybackState
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
+import android.net.wifi.WifiManager
+import android.os.BatteryManager
 import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
+import android.telephony.TelephonyManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResultLauncher
@@ -47,7 +51,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BatteryFull
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.DoNotDisturbOn
@@ -74,7 +77,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -90,12 +97,14 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import com.flue.launcher.service.WLauncherNotificationListener
+import com.flue.launcher.ui.common.WatchBatteryPill
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private data class ControlCenterMediaState(
@@ -117,6 +126,11 @@ private data class ConnectivitySnapshot(
     val cellularActive: Boolean = false
 )
 
+private data class BatteryStatusSnapshot(
+    val level: Int = 0,
+    val charging: Boolean = false
+)
+
 @Composable
 fun ControlCenterLayer(
     leftSafeInsetDp: Int,
@@ -128,16 +142,20 @@ fun ControlCenterLayer(
     var mediaVolume by remember(context) {
         mutableFloatStateOf(readMusicVolume(audioManager))
     }
+    var pendingRequestedMediaVolume by remember(context) { mutableStateOf<Float?>(null) }
     var brightness by remember(context) {
         mutableFloatStateOf(readBrightness(context))
     }
-    var batteryLevel by remember(context) { mutableIntStateOf(0) }
+    var batteryStatus by remember(context) { mutableStateOf(readBatteryStatus(context)) }
     var timeText by remember { mutableStateOf("--:--") }
     var connectivity by remember(context) { mutableStateOf(readConnectivitySnapshot(context)) }
     var bluetoothEnabled by remember(context) { mutableStateOf(isBluetoothLikelyEnabled(context)) }
     var dndEnabled by remember(context) { mutableStateOf(isDndEnabled(context)) }
     val mediaState = rememberMediaState(context)
     val leftSafeInset = leftSafeInsetDp.coerceIn(0, 128).dp
+    val internetPanelLauncher = rememberLauncherForActivityResult(StartActivityForResult()) {
+        connectivity = readConnectivitySnapshot(context)
+    }
     val bluetoothEnableLauncher = rememberLauncherForActivityResult(StartActivityForResult()) {
         bluetoothEnabled = isBluetoothLikelyEnabled(context)
     }
@@ -152,11 +170,17 @@ fun ControlCenterLayer(
 
     LaunchedEffect(context) {
         while (true) {
-            batteryLevel = context.getSystemService(android.os.BatteryManager::class.java)
-                ?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
-                ?.coerceIn(0, 100) ?: 0
+            batteryStatus = readBatteryStatus(context)
             timeText = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-            mediaVolume = readMusicVolume(audioManager)
+            val polledMediaVolume = readMusicVolume(audioManager)
+            val requestedMediaVolume = pendingRequestedMediaVolume
+            when {
+                requestedMediaVolume == null -> mediaVolume = polledMediaVolume
+                abs(polledMediaVolume - quantizeMusicVolume(audioManager, requestedMediaVolume)) > 0.001f -> {
+                    pendingRequestedMediaVolume = null
+                    mediaVolume = polledMediaVolume
+                }
+            }
             brightness = readBrightness(context)
             connectivity = readConnectivitySnapshot(context)
             bluetoothEnabled = isBluetoothLikelyEnabled(context)
@@ -182,24 +206,33 @@ fun ControlCenterLayer(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.BatteryFull, null, tint = launcherStyle.titleColor, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("$batteryLevel%", color = launcherStyle.titleColor, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                }
+                WatchBatteryPill(
+                    level = batteryStatus.level,
+                    charging = batteryStatus.charging,
+                    sizeScale = 0.92f
+                )
                 Text(timeText, color = launcherStyle.titleColor, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 6.dp),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     ControlToggle(
                         icon = Icons.Filled.Wifi,
                         label = "WiFi",
                         active = connectivity.wifiActive,
-                        onClick = { connectivity = readConnectivitySnapshot(context) },
+                        onClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                openInternetConnectivityPanel(context, internetPanelLauncher)
+                            } else if (!toggleWifiLegacy(context)) {
+                                openSettings(context, Settings.ACTION_WIFI_SETTINGS)
+                            }
+                            connectivity = readConnectivitySnapshot(context)
+                        },
                         onLongClick = { openSettings(context, Settings.ACTION_WIFI_SETTINGS) }
                     )
                     ControlToggle(
@@ -207,13 +240,13 @@ fun ControlCenterLayer(
                         label = "蓝牙",
                         active = bluetoothEnabled,
                         onClick = {
-                            bluetoothEnabled = !bluetoothEnabled
                             requestBluetoothToggle(
                                 context = context,
                                 enableLauncher = bluetoothEnableLauncher,
                                 permissionLauncher = bluetoothPermissionLauncher,
                                 onPermissionPending = { pendingBluetoothEnable = true }
                             )
+                            bluetoothEnabled = isBluetoothLikelyEnabled(context)
                         },
                         onLongClick = { openSettings(context, Settings.ACTION_BLUETOOTH_SETTINGS) }
                     )
@@ -221,7 +254,14 @@ fun ControlCenterLayer(
                         icon = Icons.Filled.NetworkCell,
                         label = "流量",
                         active = connectivity.cellularActive,
-                        onClick = { connectivity = readConnectivitySnapshot(context) },
+                        onClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                openInternetConnectivityPanel(context, internetPanelLauncher)
+                            } else {
+                                openSettings(context, Settings.ACTION_WIRELESS_SETTINGS)
+                            }
+                            connectivity = readConnectivitySnapshot(context)
+                        },
                         onLongClick = { openSettings(context, Settings.ACTION_WIRELESS_SETTINGS) }
                     )
                     ControlToggle(
@@ -233,7 +273,7 @@ fun ControlCenterLayer(
                             toggleDnd(context)
                             dndEnabled = isDndEnabled(context)
                         },
-                        onLongClick = { openSettings(context, Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS) }
+                        onLongClick = { openDndSettings(context) }
                     )
                 }
 
@@ -243,6 +283,7 @@ fun ControlCenterLayer(
                     value = mediaVolume,
                     onValueChange = { value ->
                         mediaVolume = value
+                        pendingRequestedMediaVolume = value
                         setMusicVolume(audioManager, value)
                     }
                 )
@@ -292,7 +333,7 @@ private fun ControlToggle(
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier
-                .size(52.dp)
+                .size(58.dp)
                 .graphicsLayer {
                     scaleX = targetScale
                     scaleY = targetScale
@@ -311,11 +352,11 @@ private fun ControlToggle(
                 imageVector = icon,
                 contentDescription = label,
                 tint = if (active) Color.Black else Color.White,
-                modifier = Modifier.size(24.dp)
+                modifier = Modifier.size(26.dp)
             )
         }
-        Spacer(Modifier.height(5.dp))
-        Text(label, color = WatchColors.TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(7.dp))
+        Text(label, color = WatchColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -401,36 +442,41 @@ private fun MediaControlCard(
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.Top
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            mediaState.title,
-                            color = Color.White,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            mediaState.artist,
-                            color = Color.White.copy(alpha = 0.72f),
-                            fontSize = 11.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    if (mediaState.appIcon != null) {
-                        Image(
-                            bitmap = mediaState.appIcon,
-                            contentDescription = null,
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        val titleEndPadding = if (mediaState.appIcon != null) 34.dp else 0.dp
+                        Column(
                             modifier = Modifier
-                                .size(28.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable(onClick = onOpenApp),
-                            contentScale = ContentScale.Crop
-                        )
+                                .fillMaxWidth()
+                                .padding(end = titleEndPadding)
+                        ) {
+                            OverflowFadeText(
+                                text = mediaState.title,
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = mediaState.artist,
+                                color = Color.White.copy(alpha = 0.72f),
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        if (mediaState.appIcon != null) {
+                            Image(
+                                bitmap = mediaState.appIcon,
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .size(28.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable(onClick = onOpenApp),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
                     }
                 }
                 Column {
@@ -440,18 +486,24 @@ private fun MediaControlCard(
                     )
                 }
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    MediaButton(Icons.Filled.SkipPrevious) {
-                        mediaState.controller?.transportControls?.skipToPrevious()
-                    }
-                    MediaButton(if (mediaState.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow) {
-                        val controls = mediaState.controller?.transportControls
-                        if (mediaState.playing) controls?.pause() else controls?.play()
-                    }
-                    MediaButton(Icons.Filled.SkipNext) {
-                        mediaState.controller?.transportControls?.skipToNext()
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        MediaButton(Icons.Filled.SkipPrevious) {
+                            mediaState.controller?.transportControls?.skipToPrevious()
+                        }
+                        MediaButton(if (mediaState.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow) {
+                            val controls = mediaState.controller?.transportControls
+                            if (mediaState.playing) controls?.pause() else controls?.play()
+                        }
+                        MediaButton(Icons.Filled.SkipNext) {
+                            mediaState.controller?.transportControls?.skipToNext()
+                        }
                     }
                 }
             }
@@ -460,7 +512,51 @@ private fun MediaControlCard(
 }
 
 @Composable
-@OptIn(ExperimentalFoundationApi::class)
+private fun OverflowFadeText(
+    text: String,
+    color: Color,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+    fontWeight: FontWeight
+) {
+    var hasOverflow by remember(text) { mutableStateOf(false) }
+    val fadeModifier = if (hasOverflow) {
+        Modifier
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithCache {
+                val fadeWidthPx = 26.dp.toPx().coerceAtMost(size.width)
+                val solidStop = if (size.width == 0f) 0f else {
+                    ((size.width - fadeWidthPx) / size.width).coerceIn(0f, 1f)
+                }
+                val fadeBrush = Brush.horizontalGradient(
+                    colorStops = arrayOf(
+                        0f to Color.Black,
+                        solidStop to Color.Black,
+                        1f to Color.Transparent
+                    )
+                )
+                onDrawWithContent {
+                    drawContent()
+                    drawRect(brush = fadeBrush, blendMode = BlendMode.DstIn)
+                }
+            }
+    } else {
+        Modifier
+    }
+    Text(
+        text = text,
+        color = color,
+        fontSize = fontSize,
+        fontWeight = fontWeight,
+        maxLines = 1,
+        overflow = TextOverflow.Clip,
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(fadeModifier),
+        onTextLayout = { hasOverflow = it.hasVisualOverflow }
+    )
+}
+
+@Composable
 private fun MediaProgressSection(
     mediaState: ControlCenterMediaState,
     modifier: Modifier = Modifier
@@ -544,12 +640,24 @@ private fun MediaProgressSection(
 
 @Composable
 private fun MediaButton(icon: ImageVector, onClick: () -> Unit) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.88f else 1f, label = "media_button_scale")
+    val backgroundAlpha by animateFloatAsState(if (pressed) 0.28f else 0.18f, label = "media_button_alpha")
     Box(
         modifier = Modifier
-            .size(32.dp)
+            .size(36.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.18f))
-            .clickable(onClick = onClick),
+            .background(Color.White.copy(alpha = backgroundAlpha))
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            ),
         contentAlignment = Alignment.Center
     ) {
         Icon(icon, null, tint = Color.White, modifier = Modifier.size(20.dp))
@@ -657,10 +765,31 @@ private fun averageBitmapColor(bitmap: Bitmap): Color {
     return Color(android.graphics.Color.rgb(r, g, b))
 }
 
+private fun readBatteryStatus(context: Context): BatteryStatusSnapshot {
+    val batteryManager = context.getSystemService(BatteryManager::class.java)
+    val level = batteryManager
+        ?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        ?.coerceIn(0, 100)
+        ?: 0
+    val batteryIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    val status = batteryIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
+    val plugged = batteryIntent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+    val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+        status == BatteryManager.BATTERY_STATUS_FULL ||
+        plugged != 0
+    return BatteryStatusSnapshot(level = level, charging = charging)
+}
+
 private fun readMusicVolume(audioManager: AudioManager?): Float {
     if (audioManager == null) return 0f
     val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
     return audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / max
+}
+
+private fun quantizeMusicVolume(audioManager: AudioManager?, value: Float): Float {
+    if (audioManager == null) return value.coerceIn(0f, 1f)
+    val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+    return ((value.coerceIn(0f, 1f) * max).roundToInt().coerceIn(0, max)).toFloat() / max
 }
 
 private fun setMusicVolume(audioManager: AudioManager?, value: Float) {
@@ -694,27 +823,14 @@ private fun setBrightness(context: Context, value: Float) {
 }
 
 private fun readConnectivitySnapshot(context: Context): ConnectivitySnapshot {
-    if (ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_NETWORK_STATE
-        ) != PackageManager.PERMISSION_GRANTED
-    ) {
-        return ConnectivitySnapshot()
-    }
-    val manager = context.getSystemService(ConnectivityManager::class.java) ?: return ConnectivitySnapshot()
-    return runCatching {
-        val capabilities = manager.getNetworkCapabilities(manager.activeNetwork) ?: return@runCatching ConnectivitySnapshot()
-        ConnectivitySnapshot(
-            wifiActive = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
-            cellularActive = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
-        )
-    }.getOrDefault(ConnectivitySnapshot())
+    return ConnectivitySnapshot(
+        wifiActive = isWifiEnabled(context),
+        cellularActive = isCellularDataEnabled(context)
+    )
 }
 
 private fun isBluetoothLikelyEnabled(context: Context): Boolean {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-        ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
-    ) {
+    if (!hasBluetoothAccessPermission(context)) {
         return false
     }
     return runCatching { BluetoothAdapter.getDefaultAdapter()?.isEnabled == true }.getOrDefault(false)
@@ -726,19 +842,20 @@ private fun requestBluetoothToggle(
     permissionLauncher: ActivityResultLauncher<String>,
     onPermissionPending: () -> Unit
 ) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-        ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
-    ) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !hasBluetoothAccessPermission(context)) {
         onPermissionPending()
         permissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
         return
     }
     val adapter = runCatching { BluetoothAdapter.getDefaultAdapter() }.getOrNull() ?: return
-    if (!adapter.isEnabled) {
+    val enabled = runCatching { adapter.isEnabled }.getOrDefault(false)
+    if (!enabled) {
         requestBluetoothEnable(enableLauncher)
-    } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+    } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
         @Suppress("DEPRECATION")
         runCatching { adapter.disable() }
+    } else {
+        openSettings(context, Settings.ACTION_BLUETOOTH_SETTINGS)
     }
 }
 
@@ -766,6 +883,17 @@ private fun toggleDnd(context: Context) {
     manager.setInterruptionFilter(next)
 }
 
+private fun openDndSettings(context: Context) {
+    val actions = listOf(
+        "android.settings.ZEN_MODE_SETTINGS",
+        "android.settings.ZEN_MODE_PRIORITY_SETTINGS",
+        Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS
+    )
+    val action = actions.firstOrNull { Intent(it).resolveActivity(context.packageManager) != null }
+        ?: Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS
+    openSettings(context, action)
+}
+
 private fun openSettings(context: Context, action: String, data: Uri? = null) {
     runCatching {
         context.startActivity(
@@ -775,4 +903,83 @@ private fun openSettings(context: Context, action: String, data: Uri? = null) {
             }
         )
     }
+}
+
+private fun hasBluetoothAccessPermission(context: Context): Boolean {
+    val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        Manifest.permission.BLUETOOTH_CONNECT
+    } else {
+        Manifest.permission.BLUETOOTH
+    }
+    return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+}
+
+private fun openInternetConnectivityPanel(
+    context: Context,
+    launcher: ActivityResultLauncher<Intent>
+) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val intent = Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY)
+        val resolved = intent.resolveActivity(context.packageManager)
+        if (resolved != null) {
+            runCatching { launcher.launch(intent) }.onSuccess { return }
+        }
+    }
+    openSettings(context, Settings.ACTION_WIRELESS_SETTINGS)
+}
+
+private fun toggleWifiLegacy(context: Context): Boolean {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) return false
+    if (ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CHANGE_WIFI_STATE
+        ) != PackageManager.PERMISSION_GRANTED
+    ) {
+        return false
+    }
+    val wifiManager = context.applicationContext.getSystemService(WifiManager::class.java) ?: return false
+    return runCatching {
+        @Suppress("DEPRECATION")
+        wifiManager.setWifiEnabled(!isWifiEnabled(context))
+    }.getOrDefault(false)
+}
+
+private fun isWifiEnabled(context: Context): Boolean {
+    if (ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_WIFI_STATE
+        ) != PackageManager.PERMISSION_GRANTED
+    ) {
+        return false
+    }
+    val wifiManager = context.applicationContext.getSystemService(WifiManager::class.java) ?: return false
+    return runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            when (wifiManager.wifiState) {
+                WifiManager.WIFI_STATE_ENABLED,
+                WifiManager.WIFI_STATE_ENABLING -> true
+                else -> false
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            wifiManager.isWifiEnabled
+        }
+    }.getOrDefault(false)
+}
+
+private fun isCellularDataEnabled(context: Context): Boolean {
+    if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)) {
+        return false
+    }
+    val telephonyManager = context.getSystemService(TelephonyManager::class.java) ?: return false
+    return runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            telephonyManager.isDataEnabled
+        } else {
+            val manager = context.getSystemService(ConnectivityManager::class.java)
+                ?: return@runCatching false
+            val capabilities = manager.getNetworkCapabilities(manager.activeNetwork)
+            capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true
+        }
+    }.getOrDefault(false)
 }

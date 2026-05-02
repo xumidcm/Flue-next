@@ -149,7 +149,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_SIDE_SCREEN_SHORTCUT_ROWS = intPreferencesKey("side_screen_shortcut_rows")
         val KEY_SIDE_SCREEN_SHORTCUT_COLS = intPreferencesKey("side_screen_shortcut_cols")
         private const val SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY = 12
-        private const val SIDE_SCREEN_WIDGET_CAPACITY = 8
         private const val APP_LIST_LEFT_SAFE_INSET_MAX_DP = 128
         private const val XIAOMI_17_PRO_SAFE_INSET_DP = 96
 
@@ -188,42 +187,44 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _sideScreenShortcuts = MutableStateFlow(List(SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY) { null as String? })
     val sideScreenShortcuts: StateFlow<List<String?>> = _sideScreenShortcuts.asStateFlow()
 
-    private val _sideScreenWidgetSlots = MutableStateFlow(List(SIDE_SCREEN_WIDGET_CAPACITY) { null as String? })
+    private val _sideScreenWidgetSlots = MutableStateFlow(emptyList<String?>())
     val sideScreenWidgetSlots: StateFlow<List<String?>> = _sideScreenWidgetSlots.asStateFlow()
 
     fun setWidgetSlot(slotIndex: Int, slotValue: String?) {
-        if (slotIndex !in 0 until SIDE_SCREEN_WIDGET_CAPACITY) return
-        val next = _sideScreenWidgetSlots.value.toMutableList().apply {
-            this[slotIndex] = slotValue?.takeIf { it.isNotBlank() }
+        if (slotIndex < 0) return
+        val normalizedValue = slotValue?.takeIf { it.isNotBlank() }
+        val next = _sideScreenWidgetSlots.value.toMutableList()
+        when {
+            slotIndex < next.size && normalizedValue == null -> next.removeAt(slotIndex)
+            slotIndex < next.size -> next[slotIndex] = normalizedValue
+            slotIndex == next.size && normalizedValue != null -> next.add(normalizedValue)
+            else -> return
         }
-        _sideScreenWidgetSlots.value = next
-        persist {
-            store.edit { prefs ->
-                val serialized = serializeSideScreenWidgets(next)
-                if (serialized.isEmpty()) {
-                    prefs.remove(KEY_SIDE_SCREEN_WIDGETS)
-                } else {
-                    prefs[KEY_SIDE_SCREEN_WIDGETS] = serialized
-                }
-            }
-        }
+        updateSideScreenWidgets(next)
     }
 
     fun removeWidgetSlot(slotIndex: Int) {
-        setWidgetSlot(slotIndex, null)
+        if (slotIndex !in _sideScreenWidgetSlots.value.indices) return
+        val next = _sideScreenWidgetSlots.value.toMutableList().apply { removeAt(slotIndex) }
+        updateSideScreenWidgets(next)
     }
 
     fun swapWidgetSlots(fromIndex: Int, toIndex: Int) {
         if (fromIndex == toIndex) return
-        if (fromIndex !in 0 until SIDE_SCREEN_WIDGET_CAPACITY || toIndex !in 0 until SIDE_SCREEN_WIDGET_CAPACITY) return
-        val next = _sideScreenWidgetSlots.value.toMutableList()
-        val item = next[fromIndex]
-        next[fromIndex] = next[toIndex]
-        next[toIndex] = item
-        _sideScreenWidgetSlots.value = next
+        val current = _sideScreenWidgetSlots.value
+        if (fromIndex !in current.indices || toIndex !in current.indices) return
+        val next = current.toMutableList()
+        val item = next.removeAt(fromIndex)
+        next.add(toIndex, item)
+        updateSideScreenWidgets(next)
+    }
+
+    private fun updateSideScreenWidgets(widgets: List<String?>) {
+        val normalized = widgets.mapNotNull { value -> value?.takeIf { it.isNotBlank() } }
+        _sideScreenWidgetSlots.value = normalized
         persist {
             store.edit { prefs ->
-                val serialized = serializeSideScreenWidgets(next)
+                val serialized = serializeSideScreenWidgets(normalized)
                 if (serialized.isEmpty()) {
                     prefs.remove(KEY_SIDE_SCREEN_WIDGETS)
                 } else {
@@ -1748,7 +1749,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _sideScreenShortcutRows.value = 2
         _sideScreenShortcutCols.value = 3
         _sideScreenShortcuts.value = List(SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY) { null }
-        _sideScreenWidgetSlots.value = List(SIDE_SCREEN_WIDGET_CAPACITY) { null }
+        _sideScreenWidgetSlots.value = emptyList()
         _blurEnabled.value = defaultBlurEnabled
         _edgeBlurEnabled.value = false
         _lowResIcons.value = false
@@ -1993,18 +1994,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun parseSideScreenWidgets(raw: String?): List<String?> {
-        val parts = raw
+        return raw
             ?.split(if (raw.contains('|')) '|' else ',')
-            ?.map { it.ifBlank { null } }
+            ?.mapNotNull { it.takeIf { value -> value.isNotBlank() } }
             .orEmpty()
-        return List(SIDE_SCREEN_WIDGET_CAPACITY) { index -> parts.getOrNull(index) }
     }
 
     private fun serializeSideScreenWidgets(widgets: List<String?>): String {
-        val normalized = List(SIDE_SCREEN_WIDGET_CAPACITY) { index ->
-            widgets.getOrNull(index)?.takeIf { it.isNotBlank() } ?: ""
-        }
-        return if (normalized.all(String::isEmpty)) "" else normalized.joinToString("|")
+        return widgets
+            .mapNotNull { value -> value?.takeIf { it.isNotBlank() } }
+            .joinToString("|")
     }
 
     private fun defaultSideScreenSectionOrder(): List<SideScreenSection> {

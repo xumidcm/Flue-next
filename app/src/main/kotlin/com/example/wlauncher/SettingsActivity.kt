@@ -1674,7 +1674,7 @@ private fun AboutCard(scale: Float, onDonateClick: () -> Unit) {
                 contentAlignment = Alignment.Center
             ) {
                 Image(
-                    painter = painterResource(id = R.mipmap.ic_launcher_round),
+                    painter = painterResource(id = R.mipmap.ic_launcher_foreground),
                     contentDescription = null,
                     modifier = Modifier
                         .size(76.dp)

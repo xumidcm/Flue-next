@@ -354,6 +354,58 @@ class AppRepository(private val context: Context) {
         return bitmap
     }
 
+    private fun stripEdgeBlackMatte(source: Bitmap): Bitmap {
+        if (source.width <= 1 || source.height <= 1) return source
+        val width = source.width
+        val height = source.height
+        val pixels = IntArray(width * height)
+        source.getPixels(pixels, 0, width, 0, 0, width, height)
+        val visited = BooleanArray(pixels.size)
+        val queue = IntArray(pixels.size)
+        var head = 0
+        var tail = 0
+        var cleared = 0
+
+        fun isMattePixel(index: Int): Boolean {
+            val pixel = pixels[index]
+            val alpha = Color.alpha(pixel)
+            if (alpha == 0 || alpha >= 248) return false
+            return Color.red(pixel) <= 28 &&
+                Color.green(pixel) <= 28 &&
+                Color.blue(pixel) <= 28
+        }
+
+        fun enqueue(index: Int) {
+            if (visited[index] || !isMattePixel(index)) return
+            visited[index] = true
+            queue[tail++] = index
+        }
+
+        for (x in 0 until width) {
+            enqueue(x)
+            enqueue((height - 1) * width + x)
+        }
+        for (y in 1 until height - 1) {
+            enqueue(y * width)
+            enqueue(y * width + width - 1)
+        }
+
+        while (head < tail) {
+            val index = queue[head++]
+            pixels[index] = Color.TRANSPARENT
+            cleared += 1
+            val x = index % width
+            val y = index / width
+            if (x > 0) enqueue(index - 1)
+            if (x < width - 1) enqueue(index + 1)
+            if (y > 0) enqueue(index - width)
+            if (y < height - 1) enqueue(index + width)
+        }
+
+        if (cleared == 0) return source
+        return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
+    }
+
     private fun createCircularBitmap(source: Bitmap, edgeInsetPx: Float = 0f): Bitmap {
         val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
@@ -476,7 +528,7 @@ class AppRepository(private val context: Context) {
         val iconDrawable = ContextCompat.getDrawable(context, R.mipmap.ic_settings_launcher) ?: return null
         val iconCacheKey = "builtin_settings|$iconSize|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
         val cachedIcons = getOrCreateIconSet(iconCacheKey) {
-            val baseBitmap = drawableToBitmap(iconDrawable, iconSize)
+            val baseBitmap = stripEdgeBlackMatte(drawableToBitmap(iconDrawable, iconSize))
             val sharp = baseBitmap.asImageBitmap()
             val softened = createSoftenedBitmap(baseBitmap).asImageBitmap()
             val twoToneBitmap = if (useTwoToneIconsSnapshot) createTwoToneBitmap(iconDrawable, iconSize) else null
