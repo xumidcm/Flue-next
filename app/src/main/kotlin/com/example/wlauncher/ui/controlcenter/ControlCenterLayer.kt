@@ -515,11 +515,11 @@ private fun MediaControlCard(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(146.dp)
+            .height(156.dp)
             .clip(RoundedCornerShape(32.dp))
             .background(bg.copy(alpha = 0.88f))
             .clickable(onClick = onOpenApp)
-            .padding(10.dp)
+            .padding(12.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxSize(),
@@ -527,7 +527,7 @@ private fun MediaControlCard(
         ) {
             Box(
                 modifier = Modifier
-                    .size(126.dp)
+                    .size(132.dp)
                     .clip(RoundedCornerShape(24.dp))
                     .background(Color.Black.copy(alpha = 0.22f)),
                 contentAlignment = Alignment.Center
@@ -549,8 +549,9 @@ private fun MediaControlCard(
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .height(126.dp),
-                verticalArrangement = Arrangement.Top
+                    .fillMaxHeight()
+                    .padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -591,14 +592,10 @@ private fun MediaControlCard(
                         }
                     }
                 }
-                Spacer(Modifier.weight(1f))
-                Column {
-                    MediaProgressSection(
-                        mediaState = mediaState,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                Spacer(Modifier.height(14.dp))
+                MediaProgressSection(
+                    mediaState = mediaState,
+                    modifier = Modifier.fillMaxWidth()
+                )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center,

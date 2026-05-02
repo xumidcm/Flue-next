@@ -389,7 +389,7 @@ fun SmartStackLayer(
         scope.launch { sideOverscroll.snapTo(next) }
     }
 
-    val sideNestedScrollConnection = remember(sideListState, notificationsSceneActive, transitionInFlight) {
+    val sideNestedScrollConnection = remember(sideListState, notificationsEnabled, notificationsSceneActive, transitionInFlight) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 if (source != NestedScrollSource.UserInput || notificationsSceneActive || transitionInFlight) {
@@ -405,7 +405,7 @@ fun SmartStackLayer(
                         applySideOverscroll(available.y)
                         return Offset(0f, available.y)
                     }
-                    available.y < 0f && atBottom -> {
+                    available.y < 0f && atBottom && !notificationsEnabled -> {
                         applySideOverscroll(available.y)
                         return Offset(0f, available.y)
                     }
@@ -413,7 +413,7 @@ fun SmartStackLayer(
                         applySideOverscroll(available.y)
                         return Offset(0f, available.y)
                     }
-                    sideOverscroll.value < 0f && available.y > 0f -> {
+                    sideOverscroll.value < 0f && available.y > 0f && !notificationsEnabled -> {
                         applySideOverscroll(available.y)
                         return Offset(0f, available.y)
                     }
@@ -464,6 +464,12 @@ fun SmartStackLayer(
                         lastDragEventUptime = 0L
                     },
                     onDrag = { change, dragAmount ->
+                        val listAtTop = sideListState.firstVisibleItemIndex == 0 &&
+                            sideListState.firstVisibleItemScrollOffset == 0
+                        val lastVisible = sideListState.layoutInfo.visibleItemsInfo.lastOrNull()
+                        val listAtBottom = lastVisible != null &&
+                            lastVisible.index >= sideListState.layoutInfo.totalItemsCount - 1 &&
+                            lastVisible.offset + lastVisible.size <= sideListState.layoutInfo.viewportEndOffset
                         if (lastDragEventUptime != 0L) {
                             val deltaMs = (change.uptimeMillis - lastDragEventUptime).coerceAtLeast(1L)
                             val instantVelocityY = dragAmount.y / deltaMs * 1000f
@@ -479,6 +485,16 @@ fun SmartStackLayer(
                         if (abs(dragDx) > abs(dragDy)) {
                             if (dragDx < 0f) change.consume()
                         } else if (sideOverscroll.value != 0f) {
+                            change.consume()
+                            applySideOverscroll(dragAmount.y)
+                        } else if (
+                            !notificationsEnabled &&
+                            (
+                                visibleWidgetCards.isEmpty() ||
+                                    (dragAmount.y > 0f && listAtTop) ||
+                                    (dragAmount.y < 0f && listAtBottom)
+                                )
+                        ) {
                             change.consume()
                             applySideOverscroll(dragAmount.y)
                         } else if (notificationsEnabled && (dragDy < 0f || notificationTransitionProgress > 0f)) {
@@ -610,7 +626,7 @@ fun SmartStackLayer(
             )
             if (showNotificationPreview) {
                 if (showWidgets && visibleWidgetCards.isNotEmpty()) {
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(10.dp))
                 } else {
                     Spacer(Modifier.weight(1f))
                 }
@@ -667,7 +683,7 @@ fun SmartStackLayer(
                     }
                 }
                 if (!showWidgets || visibleWidgetCards.isEmpty()) {
-                    Spacer(Modifier.height(52.dp))
+                    Spacer(Modifier.height(64.dp))
                 }
             }
             if (showWidgets && visibleWidgetCards.isNotEmpty()) {
