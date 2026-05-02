@@ -134,6 +134,7 @@ private data class BatteryStatusSnapshot(
 @Composable
 fun ControlCenterLayer(
     leftSafeInsetDp: Int,
+    showMusicControls: Boolean,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -195,11 +196,11 @@ fun ControlCenterLayer(
             .clip(RoundedCornerShape(40.dp))
             .background(launcherStyle.screenBackground)
             .padding(start = leftSafeInset)
-            .padding(horizontal = 18.dp, vertical = 16.dp)
+            .padding(horizontal = 20.dp, vertical = 12.dp)
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -214,11 +215,10 @@ fun ControlCenterLayer(
                 Text(timeText, color = launcherStyle.titleColor, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
             }
 
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 6.dp),
+                        .fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     ControlToggle(
@@ -297,10 +297,12 @@ fun ControlCenterLayer(
                     }
                 )
 
-                MediaControlCard(
-                    mediaState = mediaState,
-                    onOpenApp = { openMusicApp(context, mediaState.appPackage) }
-                )
+                if (showMusicControls) {
+                    MediaControlCard(
+                        mediaState = mediaState,
+                        onOpenApp = { openMusicApp(context, mediaState.appPackage) }
+                    )
+                }
             }
         }
     }
@@ -333,7 +335,7 @@ private fun ControlToggle(
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier
-                .size(58.dp)
+                .size(56.dp)
                 .graphicsLayer {
                     scaleX = targetScale
                     scaleY = targetScale
@@ -355,7 +357,7 @@ private fun ControlToggle(
                 modifier = Modifier.size(26.dp)
             )
         }
-        Spacer(Modifier.height(7.dp))
+        Spacer(Modifier.height(6.dp))
         Text(label, color = WatchColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     }
 }
@@ -371,16 +373,16 @@ private fun ControlSliderCard(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(58.dp)
+            .height(46.dp)
             .clip(RoundedCornerShape(28.dp))
             .background(launcherStyle.cardColor)
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 13.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(icon, null, tint = launcherStyle.bodyColor, modifier = Modifier.size(22.dp))
-        Spacer(Modifier.width(10.dp))
-        Text(label, color = launcherStyle.bodyColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(9.dp))
+        Text(label, color = launcherStyle.bodyColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.width(8.dp))
         Slider(
             value = value.coerceIn(0f, 1f),
             onValueChange = onValueChange,
@@ -403,11 +405,11 @@ private fun MediaControlCard(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(146.dp)
+            .height(132.dp)
             .clip(RoundedCornerShape(32.dp))
             .background(bg.copy(alpha = 0.88f))
             .clickable(onClick = onOpenApp)
-            .padding(10.dp)
+            .padding(9.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxSize(),
@@ -415,8 +417,8 @@ private fun MediaControlCard(
         ) {
             Box(
                 modifier = Modifier
-                    .size(126.dp)
-                    .clip(RoundedCornerShape(24.dp))
+                    .size(112.dp)
+                    .clip(RoundedCornerShape(22.dp))
                     .background(Color.Black.copy(alpha = 0.22f)),
                 contentAlignment = Alignment.Center
             ) {
@@ -426,18 +428,18 @@ private fun MediaControlCard(
                         contentDescription = null,
                         modifier = Modifier
                             .fillMaxSize()
-                            .clip(RoundedCornerShape(24.dp)),
+                            .clip(RoundedCornerShape(22.dp)),
                         contentScale = ContentScale.Crop
                     )
                 } else {
                     Icon(Icons.Filled.MusicNote, null, tint = Color.White, modifier = Modifier.size(34.dp))
                 }
             }
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(10.dp))
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .height(126.dp),
+                    .height(112.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
@@ -454,13 +456,13 @@ private fun MediaControlCard(
                             OverflowFadeText(
                                 text = mediaState.title,
                                 color = Color.White,
-                                fontSize = 15.sp,
+                                fontSize = 14.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
                                 text = mediaState.artist,
                                 color = Color.White.copy(alpha = 0.72f),
-                                fontSize = 11.sp,
+                                fontSize = 10.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -491,7 +493,7 @@ private fun MediaControlCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         MediaButton(Icons.Filled.SkipPrevious) {
@@ -646,7 +648,7 @@ private fun MediaButton(icon: ImageVector, onClick: () -> Unit) {
     val backgroundAlpha by animateFloatAsState(if (pressed) 0.28f else 0.18f, label = "media_button_alpha")
     Box(
         modifier = Modifier
-            .size(36.dp)
+            .size(32.dp)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -660,7 +662,7 @@ private fun MediaButton(icon: ImageVector, onClick: () -> Unit) {
             ),
         contentAlignment = Alignment.Center
     ) {
-        Icon(icon, null, tint = Color.White, modifier = Modifier.size(20.dp))
+        Icon(icon, null, tint = Color.White, modifier = Modifier.size(18.dp))
     }
 }
 

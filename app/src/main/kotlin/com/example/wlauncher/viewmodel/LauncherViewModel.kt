@@ -100,6 +100,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_SHOW_WIDGETS = booleanPreferencesKey("show_widgets")
         val KEY_SHOW_WIDGET_PAGE = booleanPreferencesKey("show_widget_page")
         val KEY_SHOW_CONTROL_CENTER = booleanPreferencesKey("show_control_center")
+        val KEY_SHOW_MUSIC_CONTROLS = booleanPreferencesKey("show_music_controls")
         val KEY_WATCHFACE_CHARGING_POWER_TEXT = booleanPreferencesKey("watchface_charging_power_text")
         val KEY_WATCHFACE_STATUS_INDICATORS = booleanPreferencesKey("watchface_status_indicators")
         val KEY_SIDE_SCREEN_SECTION_ORDER = stringPreferencesKey("side_screen_section_order")
@@ -313,6 +314,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val showWidgetPage: StateFlow<Boolean> = _showWidgetPage.asStateFlow()
     private val _showControlCenter = MutableStateFlow(true)
     val showControlCenter: StateFlow<Boolean> = _showControlCenter.asStateFlow()
+    private val _showMusicControls = MutableStateFlow(true)
+    val showMusicControls: StateFlow<Boolean> = _showMusicControls.asStateFlow()
     private val _watchFaceChargingPowerText = MutableStateFlow(true)
     val watchFaceChargingPowerText: StateFlow<Boolean> = _watchFaceChargingPowerText.asStateFlow()
     private val _watchFaceStatusIndicators = MutableStateFlow(true)
@@ -730,6 +733,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedShowControlCenter = prefs[KEY_SHOW_CONTROL_CENTER] ?: true
                 if (_showControlCenter.value != loadedShowControlCenter) {
                     _showControlCenter.value = loadedShowControlCenter
+                }
+
+                val loadedShowMusicControls = prefs[KEY_SHOW_MUSIC_CONTROLS] ?: true
+                if (_showMusicControls.value != loadedShowMusicControls) {
+                    _showMusicControls.value = loadedShowMusicControls
                 }
 
                 val loadedSectionOrder = parseSideScreenSectionOrder(prefs[KEY_SIDE_SCREEN_SECTION_ORDER])
@@ -1298,6 +1306,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_SHOW_CONTROL_CENTER] = show } }
     }
 
+    fun setShowMusicControls(show: Boolean) {
+        _showMusicControls.value = show
+        persist { store.edit { it[KEY_SHOW_MUSIC_CONTROLS] = show } }
+    }
+
     fun moveSideSection(section: SideScreenSection, direction: Int) {
         if (direction == 0) return
         val current = normalizeSideScreenSectionOrder(_sideScreenSectionOrder.value).toMutableList()
@@ -1776,6 +1789,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _showWidgets.value = true
         _showWidgetPage.value = true
         _showControlCenter.value = true
+        _showMusicControls.value = true
         _watchFaceChargingPowerText.value = true
         _watchFaceStatusIndicators.value = true
         _sideScreenSectionOrder.value = defaultSideScreenSectionOrder()
@@ -1860,6 +1874,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_SHOW_WIDGETS] = true
                 it[KEY_SHOW_WIDGET_PAGE] = true
                 it[KEY_SHOW_CONTROL_CENTER] = true
+                it[KEY_SHOW_MUSIC_CONTROLS] = true
                 it[KEY_WATCHFACE_CHARGING_POWER_TEXT] = true
                 it[KEY_WATCHFACE_STATUS_INDICATORS] = true
                 it[KEY_SIDE_SCREEN_SECTION_ORDER] = serializeSideScreenSectionOrder(defaultSideScreenSectionOrder())

@@ -101,6 +101,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -143,6 +144,10 @@ import kotlin.math.floor
 
 private const val SIDE_SCREEN_CONTENT_WIDTH_RATIO = 0.884f
 private const val SIDE_SCREEN_DISMISS_THRESHOLD = 86f
+private const val SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_RATIO = 0.78f
+private const val SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_MIN = 300f
+private const val SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS = 0.6f
+private const val SIDE_SCREEN_NOTIFICATION_FLING_VELOCITY = 1350f
 private const val STACKED_PREVIEW_TRANSLATION_DP = 28
 private const val STACKED_PREVIEW_HORIZONTAL_INSET_DP = 4
 private const val SIDE_SCREEN_APP_WIDGET_HOST_ID = 1024
@@ -251,6 +256,8 @@ fun SmartStackLayer(
 ) {
     val clock = rememberClockSnapshot()
     val battery = rememberBatterySnapshot()
+    val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
     val stepPermissionGranted = rememberActivityRecognitionPermission(showSteps)
     val stepSnapshot = rememberStepSnapshot(showSteps, stepPermissionGranted)
     val slotCenters = remember { mutableStateMapOf<Int, Offset>() }
@@ -330,14 +337,26 @@ fun SmartStackLayer(
     val visibleWidgetCards = remember(widgetCards, showWidgets) {
         if (showWidgets) widgetCards else emptyList()
     }
-    val orderedSections = remember(notificationsEnabled, showWidgets, sectionOrder) {
-        sectionOrder.filter { section ->
-            when (section) {
-                SideScreenSection.Widgets -> showWidgets
-                SideScreenSection.Notifications -> notificationsEnabled
-            }
-        }
+    val showNotificationPreview = notificationsEnabled
+    val shortcutPanelRows = if (showNotificationPreview) {
+        minOf(visibleShortcutRows, 2)
+    } else {
+        visibleShortcutRows
     }
+    val shortcutPanelItemCount = shortcutPanelRows * visibleShortcutCols
+    val quickPanelItems = remember(shortcutItems, shortcutPanelItemCount) {
+        shortcutItems.take(shortcutPanelItemCount)
+    }
+    val previewRows = remember(previewGroups, showNotificationPreview) {
+        if (showNotificationPreview) buildPreviewRows(previewGroups, maxRows = 1) else emptyList()
+    }
+    val notificationDragRangePx = remember(configuration.screenHeightDp, density) {
+        maxOf(
+            with(density) { configuration.screenHeightDp.dp.toPx() } * SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_RATIO,
+            SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_MIN
+        )
+    }
+    val notificationReleaseThresholdPx = notificationDragRangePx * SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS
     DisposableEffect(appWidgetHost, visibleWidgetCards.isNotEmpty()) {
         if (visibleWidgetCards.isNotEmpty()) {
             runCatching { appWidgetHost.startListening() }
@@ -352,6 +371,7 @@ fun SmartStackLayer(
     var modalState by remember { mutableStateOf<SideScreenModalState>(SideScreenModalState.None) }
     var dragDx by remember { mutableFloatStateOf(0f) }
     var dragDy by remember { mutableFloatStateOf(0f) }
+    var dragVelocityY by remember { mutableFloatStateOf(0f) }
     var lastDragEventUptime by remember { mutableStateOf(0L) }
     var transitionInFlight by remember { mutableStateOf(false) }
     val sideListState = rememberLazyListState()
@@ -404,6 +424,7 @@ fun SmartStackLayer(
         sideOverscroll.snapTo(0f)
         dragDx = 0f
         dragDy = 0f
+        dragVelocityY = 0f
         lastDragEventUptime = 0L
         transitionInFlight = false
     }
@@ -428,38 +449,76 @@ fun SmartStackLayer(
                     onDragStart = {
                         dragDx = 0f
                         dragDy = 0f
+                        dragVelocityY = 0f
                         lastDragEventUptime = 0L
                     },
                     onDrag = { change, dragAmount ->
+                        if (lastDragEventUptime != 0L) {
+                            val deltaMs = (change.uptimeMillis - lastDragEventUptime).coerceAtLeast(1L)
+                            val instantVelocityY = dragAmount.y / deltaMs * 1000f
+                            dragVelocityY = if (dragVelocityY == 0f) {
+                                instantVelocityY
+                            } else {
+                                dragVelocityY * 0.35f + instantVelocityY * 0.65f
+                            }
+                        }
                         lastDragEventUptime = change.uptimeMillis
                         dragDx += dragAmount.x
                         dragDy += dragAmount.y
-                        if (abs(dragDx) > abs(dragDy) && dragDx < 0f) {
+                        if (abs(dragDx) > abs(dragDy)) {
+                            if (dragDx < 0f) change.consume()
+                        } else if (notificationsEnabled && (dragDy < 0f || notificationTransitionProgress > 0f)) {
                             change.consume()
+                            onNotificationTransitionProgressChange(
+                                (-dragDy / notificationDragRangePx).coerceIn(0f, 1f)
+                            )
                         }
                     },
                     onDragEnd = {
+                        val verticalIntent = abs(dragDy) > abs(dragDx) ||
+                            abs(dragVelocityY) > SIDE_SCREEN_NOTIFICATION_FLING_VELOCITY
                         val dismissToFace = dragDx < -SIDE_SCREEN_DISMISS_THRESHOLD && abs(dragDx) > abs(dragDy)
+                        val openNotifications = notificationsEnabled &&
+                            verticalIntent &&
+                            (
+                                dragDy < -notificationReleaseThresholdPx ||
+                                    notificationTransitionProgress > SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS ||
+                                    dragVelocityY < -SIDE_SCREEN_NOTIFICATION_FLING_VELOCITY
+                                )
 
                         when {
                             dismissToFace -> {
                                 dragDx = 0f
                                 dragDy = 0f
+                                dragVelocityY = 0f
                                 lastDragEventUptime = 0L
+                                onNotificationTransitionRelease(false)
                                 onRevealTargetChange(null)
                                 onDismissToFace()
+                            }
+                            openNotifications -> {
+                                dragDx = 0f
+                                dragDy = 0f
+                                dragVelocityY = 0f
+                                lastDragEventUptime = 0L
+                                onRevealTargetChange(null)
+                                onNotificationTransitionRelease(true)
                             }
                             else -> {
                                 dragDx = 0f
                                 dragDy = 0f
+                                dragVelocityY = 0f
                                 lastDragEventUptime = 0L
+                                onNotificationTransitionRelease(false)
                             }
                         }
                     },
                     onDragCancel = {
                         dragDx = 0f
                         dragDy = 0f
+                        dragVelocityY = 0f
                         lastDragEventUptime = 0L
+                        onNotificationTransitionRelease(false)
                     }
                 )
             }
@@ -470,152 +529,163 @@ fun SmartStackLayer(
         val availableWidth = maxWidth - leftSafeInset
         val contentWidth = availableWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
 
-        LazyColumn(
-            state = sideListState,
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .nestedScroll(sideNestedScrollConnection)
                 .graphicsLayer { translationY = contentTranslationY }
-                .padding(start = leftSafeInset),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            contentPadding = PaddingValues(top = 10.dp, bottom = 74.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .padding(start = leftSafeInset)
+                .padding(top = 10.dp, bottom = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            item("clock_time") {
-                Text(
-                    clock.time,
-                    color = launcherStyle.titleColor,
-                    fontSize = 31.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            item("clock_date") {
-                Text(
-                    clock.date,
-                    color = WatchColors.TextSecondary,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Medium,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            item("quick_panel") {
-                QuickPanel(
-                    width = contentWidth,
-                    rows = visibleShortcutRows,
-                    cols = visibleShortcutCols,
-                    expandedBackground = orderedSections.isEmpty(),
-                    items = shortcutItems,
-                    slotCenters = slotCenters,
-                    onAdd = { onRevealTargetChange(null); modalState = SideScreenModalState.ShortcutPicker(it) },
-                    onOpenActions = { slot, app ->
-                        onRevealTargetChange(null)
-                        modalState = SideScreenModalState.ShortcutActions(slot, app)
-                    },
-                    onCloseActions = {
-                        if (modalState is SideScreenModalState.ShortcutActions) {
-                            modalState = SideScreenModalState.None
-                        }
-                    },
-                    onSwap = onSwapShortcut,
-                    onClickApp = { slot, app ->
-                        val center = slotCenters[slot] ?: Offset(widthPx / 2f, heightPx / 2f)
-                        onRevealTargetChange(null)
-                        onLaunchApp(app, Offset(center.x / widthPx, center.y / heightPx))
+            Text(
+                clock.time,
+                color = launcherStyle.titleColor,
+                fontSize = 31.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                clock.date,
+                color = WatchColors.TextSecondary,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(14.dp))
+            QuickPanel(
+                width = contentWidth,
+                rows = shortcutPanelRows,
+                cols = visibleShortcutCols,
+                expandedBackground = !showNotificationPreview && visibleWidgetCards.isEmpty(),
+                items = quickPanelItems,
+                slotCenters = slotCenters,
+                onAdd = { onRevealTargetChange(null); modalState = SideScreenModalState.ShortcutPicker(it) },
+                onOpenActions = { slot, app ->
+                    onRevealTargetChange(null)
+                    modalState = SideScreenModalState.ShortcutActions(slot, app)
+                },
+                onCloseActions = {
+                    if (modalState is SideScreenModalState.ShortcutActions) {
+                        modalState = SideScreenModalState.None
                     }
+                },
+                onSwap = onSwapShortcut,
+                onClickApp = { slot, app ->
+                    val center = slotCenters[slot] ?: Offset(widthPx / 2f, heightPx / 2f)
+                    onRevealTargetChange(null)
+                    onLaunchApp(app, Offset(center.x / widthPx, center.y / heightPx))
+                }
+            )
+            if (showNotificationPreview) {
+                Spacer(Modifier.height(16.dp))
+                SideScreenSectionHeader(
+                    title = "通知",
+                    width = contentWidth
                 )
-            }
-            orderedSections.forEach { section ->
-                when (section) {
-                    SideScreenSection.Widgets -> {
-                        item("widget_header") {
-                            SideScreenSectionHeader(
-                                title = "小组件",
-                                width = contentWidth,
-                                actionLabel = "添加",
-                                onAction = {
-                                    onRevealTargetChange(null)
-                                    modalState = SideScreenModalState.WidgetPicker
-                                },
-                                onLongPress = {
-                                    onRevealTargetChange(null)
-                                    modalState = SideScreenModalState.SectionActions(SideScreenSection.Widgets)
-                                }
-                            )
-                        }
-                        if (visibleWidgetCards.isEmpty()) {
-                            item("empty_widget") {
-                                EmptyWidgetCard(width = contentWidth)
-                            }
-                        } else {
-                            items(
-                                items = visibleWidgetCards,
-                                key = { "widget_${it.widgetIndex}_${it.widget.widgetKey}_${it.widget.widgetId}" },
-                                contentType = { "side_widget" }
-                            ) { card ->
-                                Box(Modifier.width(contentWidth).animateContentSize()) {
-                                    WidgetCard(
-                                        widget = card.widget,
-                                        widgetRepository = widgetRepository,
-                                        appWidgetHost = appWidgetHost,
-                                        onLongPress = {
-                                            onRevealTargetChange(null)
-                                            modalState = SideScreenModalState.WidgetActions(card)
-                                        },
-                                        onMeasuredHeight = { heightPx ->
-                                            if (heightPx > 0) {
-                                                widgetCardHeightsPx[card.widgetIndex] = heightPx
-                                            }
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    SideScreenSection.Notifications -> {
-                        item("notification_header") {
-                            SideScreenSectionHeader(
-                                title = "通知",
-                                width = contentWidth
-                            )
-                        }
-                        item("notification_preview") {
-                            Column(
-                                Modifier
-                                    .width(contentWidth)
-                                    .animateContentSize(),
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                when {
-                                    !notificationAccessGranted -> PreviewInfoCard("开启通知访问", "授权后通知预览会显示在这里", onOpenNotifications)
-                                    previewGroups.isEmpty() -> PreviewInfoCard("暂无通知", "新的通知会显示在快捷启动下方", onOpenNotifications)
-                                    else -> buildPreviewRows(previewGroups, maxRows = 3).forEach { row ->
-                                        when (row) {
-                                            is PreviewRow.Aggregate -> StackedPreviewCard(row.leadEntry, row.hiddenCount, onOpenNotifications)
-                                            is PreviewRow.Group -> row.entries.forEach { entry ->
-                                                SwipeRevealDeleteContainer(
-                                                    target = NotificationRevealTarget.Entry(entry.key),
-                                                    revealedTarget = revealedNotificationTarget,
-                                                    onRevealTargetChange = onRevealTargetChange,
-                                                    enabled = entry.isClearable,
-                                                    onDelete = { onDismissNotification(entry.key) }
-                                                ) {
-                                                    if (row.hiddenCount > 0) {
-                                                        StackedPreviewCard(entry, row.hiddenCount, onOpenNotifications)
-                                                    } else {
-                                                        PreviewPill(
-                                                            entry = entry,
-                                                            onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) }
-                                                        )
-                                                    }
+                Spacer(Modifier.height(8.dp))
+                Column(
+                    Modifier
+                        .width(contentWidth)
+                        .animateContentSize(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    when {
+                        !notificationAccessGranted -> PreviewInfoCard("开启通知访问", "副一屏上滑进入通知中心后完成授权", onOpenNotifications)
+                        previewGroups.isEmpty() -> PreviewInfoCard("暂无通知", "副一屏上滑可打开通知中心", onOpenNotifications)
+                        else -> previewRows.forEach { row ->
+                            when (row) {
+                                is PreviewRow.Aggregate -> StackedPreviewCard(row.leadEntry, row.hiddenCount, onOpenNotifications)
+                                is PreviewRow.Group -> {
+                                    val entry = row.entries.firstOrNull()
+                                    if (entry != null) {
+                                        SwipeRevealDeleteContainer(
+                                            target = if (row.hiddenCount > 0) {
+                                                NotificationRevealTarget.Group(row.group.packageName)
+                                            } else {
+                                                NotificationRevealTarget.Entry(entry.key)
+                                            },
+                                            revealedTarget = revealedNotificationTarget,
+                                            onRevealTargetChange = onRevealTargetChange,
+                                            enabled = if (row.hiddenCount > 0) {
+                                                row.group.entries.any(NotificationEntryUi::isClearable)
+                                            } else {
+                                                entry.isClearable
+                                            },
+                                            onDelete = {
+                                                if (row.hiddenCount > 0) {
+                                                    onDismissGroup(row.group.packageName)
+                                                } else {
+                                                    onDismissNotification(entry.key)
                                                 }
+                                            },
+                                            actionHeight = 72.dp
+                                        ) {
+                                            if (row.hiddenCount > 0) {
+                                                StackedPreviewCard(entry, row.hiddenCount, onOpenNotifications)
+                                            } else {
+                                                PreviewPill(
+                                                    entry = entry,
+                                                    onClick = onOpenNotifications
+                                                )
                                             }
                                         }
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+            if (showWidgets && visibleWidgetCards.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                LazyColumn(
+                    state = sideListState,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .nestedScroll(sideNestedScrollConnection),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    contentPadding = PaddingValues(bottom = 54.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    item("widget_header") {
+                        SideScreenSectionHeader(
+                            title = "小组件",
+                            width = contentWidth,
+                            actionLabel = "添加",
+                            onAction = {
+                                onRevealTargetChange(null)
+                                modalState = SideScreenModalState.WidgetPicker
+                            },
+                            onLongPress = {
+                                onRevealTargetChange(null)
+                                modalState = SideScreenModalState.SectionActions(SideScreenSection.Widgets)
+                            }
+                        )
+                    }
+                    items(
+                        items = visibleWidgetCards,
+                        key = { "widget_${it.widgetIndex}_${it.widget.widgetKey}_${it.widget.widgetId}" },
+                        contentType = { "side_widget" }
+                    ) { card ->
+                        Box(Modifier.width(contentWidth).animateContentSize()) {
+                            WidgetCard(
+                                widget = card.widget,
+                                widgetRepository = widgetRepository,
+                                appWidgetHost = appWidgetHost,
+                                onLongPress = {
+                                    onRevealTargetChange(null)
+                                    modalState = SideScreenModalState.WidgetActions(card)
+                                },
+                                onMeasuredHeight = { heightPx ->
+                                    if (heightPx > 0) {
+                                        widgetCardHeightsPx[card.widgetIndex] = heightPx
+                                    }
+                                }
+                            )
                         }
                     }
                 }
@@ -1242,6 +1312,7 @@ private fun WidgetEditIconButton(
     val density = LocalDensity.current
     val dragThresholdPx = with(density) { 10.dp.toPx() }
     val dropThresholdPx = with(density) { 68.dp.toPx() }
+    val visibleSlots = remember(rows, cols) { (0 until rows * cols).toSet() }
     val panelHeight = if (expandedBackground) width else Dp.Unspecified
     val gridGap = if (expandedBackground) 18.dp else 12.dp
     val panelHorizontalPadding = if (expandedBackground) gridGap else 14.dp
@@ -1276,7 +1347,11 @@ private fun WidgetEditIconButton(
             items.chunked(cols).take(rows).forEachIndexed { rowIndex, row ->
                 Row(
                     Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(horizontalSpacing, Alignment.CenterHorizontally)
+                    horizontalArrangement = if (expandedBackground) {
+                        Arrangement.spacedBy(horizontalSpacing, Alignment.CenterHorizontally)
+                    } else {
+                        Arrangement.SpaceEvenly
+                    }
                 ) {
                     row.forEachIndexed { colIndex, item ->
                         val slot = rowIndex * cols + colIndex
@@ -1327,7 +1402,7 @@ private fun WidgetEditIconButton(
                                                     val release = slotCenters[slot]?.let { it + dragOffset }
                                                     val target = release?.let { pointer ->
                                                         slotCenters
-                                                            .filterKeys { it != slot }
+                                                            .filterKeys { it != slot && it in visibleSlots }
                                                             .minByOrNull { (_, center) -> (center - pointer).getDistance() }
                                                             ?.takeIf { (_, center) -> (center - pointer).getDistance() <= dropThresholdPx }
                                                             ?.key

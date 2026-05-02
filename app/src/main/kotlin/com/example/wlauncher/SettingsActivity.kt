@@ -269,6 +269,7 @@ private fun SettingsRootScreen(
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
     val showWidgetPage by vm.showWidgetPage.collectAsStateWithLifecycle()
     val showControlCenter by vm.showControlCenter.collectAsStateWithLifecycle()
+    val showMusicControls by vm.showMusicControls.collectAsStateWithLifecycle()
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val headerTime = rememberSettingsHeaderTime()
@@ -758,6 +759,20 @@ private fun SettingsRootScreen(
                     checked = showControlCenter,
                     onToggle = vm::setShowControlCenter,
                     scale = itemFisheye(listState, "control_center_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            item("music_controls_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "音乐控制卡片" else "Music Controls",
+                    subtitle = if (showMusicControls) {
+                        if (isZh) "控制中心显示当前媒体播放卡片" else "Show the media card in Control Center"
+                    } else {
+                        if (isZh) "隐藏控制中心里的音乐控制卡片" else "Hide the media card from Control Center"
+                    },
+                    checked = showMusicControls,
+                    enabled = showControlCenter,
+                    onToggle = vm::setShowMusicControls,
+                    scale = itemFisheye(listState, "music_controls_toggle", screenCenterY, screenHeightPx)
                 )
             }
             item("side_screen_shortcut_rows") {

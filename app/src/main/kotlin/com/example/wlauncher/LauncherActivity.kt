@@ -186,8 +186,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val sideScreenSectionOrder by vm.sideScreenSectionOrder.collectAsStateWithLifecycle()
     val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
     val notificationAccessGranted by vm.notificationAccessGranted.collectAsStateWithLifecycle()
+    val sideScreenPreviewGroups by vm.sideScreenPreviewGroups.collectAsStateWithLifecycle()
     val notificationGroups by vm.notificationGroups.collectAsStateWithLifecycle()
     val revealedNotificationTarget by vm.revealedNotificationTarget.collectAsStateWithLifecycle()
+    val showMusicControls by vm.showMusicControls.collectAsStateWithLifecycle()
     val launchSourceState by vm.launchSourceState.collectAsStateWithLifecycle()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsStateWithLifecycle()
     val selectedWatchFace by vm.selectedWatchFace.collectAsStateWithLifecycle()
@@ -610,14 +612,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         shortcutCols = sideScreenShortcutCols,
                         sideScreenShortcuts = sideScreenShortcuts,
                         sideScreenWidgetSlots = sideScreenWidgetSlots,
-                        previewGroups = notificationGroups,
+                        previewGroups = sideScreenPreviewGroups,
                         showWidgets = false,
                         sectionOrder = sideScreenSectionOrder,
                         leftSafeInsetDp = appListLeftSafeInsetDp,
                         notificationsEnabled = notificationsEnabled,
                         notificationAccessGranted = notificationAccessGranted,
-                        notificationsSceneActive = false,
-                        notificationTransitionProgress = 0f,
+                        notificationsSceneActive = notificationSceneActive,
+                        notificationTransitionProgress = notificationProgress,
                         revealedNotificationTarget = revealedNotificationTarget,
                         onRevealTargetChange = vm::setRevealedNotificationTarget,
                         onOpenNotifications = {
@@ -625,8 +627,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             vm.setState(ScreenState.Notifications)
                             settleNotificationTransition(1f)
                         },
-                        onNotificationTransitionProgressChange = {},
-                        onNotificationTransitionRelease = {},
+                        onNotificationTransitionProgressChange = updateNotificationTransitionProgress,
+                        onNotificationTransitionRelease = { open ->
+                            if (open) {
+                                vm.setRevealedNotificationTarget(null)
+                                vm.setState(ScreenState.Notifications)
+                                settleNotificationTransition(1f)
+                            } else {
+                                settleNotificationTransition(0f)
+                            }
+                        },
                         onOpenNotification = { key, origin ->
                             vm.openNotification(key, origin, ScreenState.Stack, 0L)
                         },
@@ -684,7 +694,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         }
                 ) {
                     ControlCenterLayer(
-                        leftSafeInsetDp = appListLeftSafeInsetDp
+                        leftSafeInsetDp = appListLeftSafeInsetDp,
+                        showMusicControls = showMusicControls
                     )
                 }
             }
