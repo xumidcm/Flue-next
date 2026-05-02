@@ -913,18 +913,20 @@ fun WidgetPageLayer(
         if (currentIndex < 0) return
         val currentInfo = visibleInfoForKey(cardKey) ?: return
         val draggedCenterY = currentInfo.offset + currentInfo.size / 2f + dragOffsetY
-        val target = listState.layoutInfo.visibleItemsInfo
-            .mapNotNull { info ->
-                val key = info.key as? String ?: return@mapNotNull null
-                if (key == cardKey) return@mapNotNull null
-                val previewIndex = previewCards.indexOfFirst { it.stableKey() == key }
-                if (previewIndex < 0) return@mapNotNull null
-                previewIndex to info
+        val previousCardKey = previewCards.getOrNull(currentIndex - 1)?.stableKey()
+        val nextCardKey = previewCards.getOrNull(currentIndex + 1)?.stableKey()
+        val previousInfo = previousCardKey?.let(::visibleInfoForKey)
+        val nextInfo = nextCardKey?.let(::visibleInfoForKey)
+        val target = when {
+            previousInfo != null && draggedCenterY < previousInfo.offset + previousInfo.size / 2f -> {
+                currentIndex - 1 to previousInfo
             }
-            .minByOrNull { (_, info) ->
-                abs((info.offset + info.size / 2f) - draggedCenterY)
+            nextInfo != null && draggedCenterY > nextInfo.offset + nextInfo.size / 2f -> {
+                currentIndex + 1 to nextInfo
             }
-        if (target != null && target.first != currentIndex) {
+            else -> null
+        }
+        if (target != null) {
             previewCards.moveItem(currentIndex, target.first)
             dragOffsetY -= (target.second.offset - currentInfo.offset).toFloat()
         }
@@ -1267,12 +1269,15 @@ private fun WidgetPageChip(
     val density = LocalDensity.current
     val dragThresholdPx = with(density) { 10.dp.toPx() }
     val dropThresholdPx = with(density) { 68.dp.toPx() }
-    val horizontalSpacing = if (expandedBackground) 10.dp else 12.dp
-    val verticalSpacing = if (expandedBackground) 14.dp else 12.dp
-    val bubbleSize = ((width - 28.dp - horizontalSpacing * (cols - 1)) / cols)
-        .coerceIn(46.dp, if (expandedBackground) 64.dp else 58.dp)
+    val panelHorizontalPadding = if (expandedBackground) 12.dp else 14.dp
+    val panelVerticalPadding = if (expandedBackground) 20.dp else 14.dp
+    val horizontalSpacing = if (expandedBackground) 14.dp else 12.dp
+    val verticalSpacing = if (expandedBackground) 16.dp else 12.dp
+    val bubbleSize = ((width - panelHorizontalPadding * 2 - horizontalSpacing * (cols - 1)) / cols)
+        .coerceIn(46.dp, if (expandedBackground) 70.dp else 58.dp)
     val minPanelHeight = if (expandedBackground) {
-        bubbleSize * rows + verticalSpacing * (rows - 1) + 118.dp
+        (bubbleSize * rows + verticalSpacing * (rows - 1) + panelVerticalPadding * 2)
+            .coerceAtLeast(width)
     } else {
         Dp.Unspecified
     }
@@ -1285,9 +1290,13 @@ private fun WidgetPageChip(
             .heightIn(min = minPanelHeight)
             .clip(RoundedCornerShape(28.dp))
             .background(Color(0xFF353535))
-            .padding(horizontal = 14.dp, vertical = if (expandedBackground) 18.dp else 14.dp)
+            .padding(horizontal = panelHorizontalPadding, vertical = panelVerticalPadding),
+        contentAlignment = Alignment.Center
     ) {
-        Column(Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = if (expandedBackground) Arrangement.Center else Arrangement.Top
+        ) {
             items.chunked(cols).take(rows).forEachIndexed { rowIndex, row ->
                 Row(
                     Modifier.fillMaxWidth(),
