@@ -42,10 +42,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -190,17 +192,28 @@ fun ControlCenterLayer(
         }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(40.dp))
             .background(launcherStyle.screenBackground)
             .padding(start = leftSafeInset)
-            .padding(horizontal = 20.dp, vertical = 12.dp)
     ) {
+        val compact = showMusicControls && maxHeight < 520.dp
+        val verticalPadding = if (compact) 10.dp else 16.dp
+        val outerSpacing = if (compact) 8.dp else 14.dp
+        val controlsSpacing = if (compact) 6.dp else 14.dp
+        val toggleRowTopPadding = if (compact) 0.dp else 6.dp
+        val toggleSize = if (compact) 54.dp else 58.dp
+        val toggleIconSize = if (compact) 24.dp else 26.dp
+        val toggleLabelGap = if (compact) 4.dp else 7.dp
+        val sliderHeight = if (compact) 42.dp else 58.dp
+        val sliderHorizontalPadding = if (compact) 12.dp else 14.dp
         Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 18.dp, vertical = verticalPadding),
+            verticalArrangement = Arrangement.spacedBy(outerSpacing)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -215,16 +228,20 @@ fun ControlCenterLayer(
                 Text(timeText, color = launcherStyle.titleColor, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
             }
 
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(controlsSpacing)) {
                 Row(
                     modifier = Modifier
-                        .fillMaxWidth(),
+                        .fillMaxWidth()
+                        .padding(top = toggleRowTopPadding),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     ControlToggle(
                         icon = Icons.Filled.Wifi,
                         label = "WiFi",
                         active = connectivity.wifiActive,
+                        size = toggleSize,
+                        iconSize = toggleIconSize,
+                        labelGap = toggleLabelGap,
                         onClick = {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                                 openInternetConnectivityPanel(context, internetPanelLauncher)
@@ -239,6 +256,9 @@ fun ControlCenterLayer(
                         icon = Icons.Filled.Bluetooth,
                         label = "蓝牙",
                         active = bluetoothEnabled,
+                        size = toggleSize,
+                        iconSize = toggleIconSize,
+                        labelGap = toggleLabelGap,
                         onClick = {
                             requestBluetoothToggle(
                                 context = context,
@@ -254,6 +274,9 @@ fun ControlCenterLayer(
                         icon = Icons.Filled.NetworkCell,
                         label = "流量",
                         active = connectivity.cellularActive,
+                        size = toggleSize,
+                        iconSize = toggleIconSize,
+                        labelGap = toggleLabelGap,
                         onClick = {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                                 openInternetConnectivityPanel(context, internetPanelLauncher)
@@ -268,6 +291,9 @@ fun ControlCenterLayer(
                         icon = Icons.Filled.DoNotDisturbOn,
                         label = "勿扰",
                         active = dndEnabled,
+                        size = toggleSize,
+                        iconSize = toggleIconSize,
+                        labelGap = toggleLabelGap,
                         onClick = {
                             dndEnabled = !dndEnabled
                             toggleDnd(context)
@@ -281,6 +307,8 @@ fun ControlCenterLayer(
                     icon = Icons.Filled.VolumeUp,
                     label = "音量",
                     value = mediaVolume,
+                    height = sliderHeight,
+                    horizontalPadding = sliderHorizontalPadding,
                     onValueChange = { value ->
                         mediaVolume = value
                         pendingRequestedMediaVolume = value
@@ -291,6 +319,8 @@ fun ControlCenterLayer(
                     icon = Icons.Filled.Brightness6,
                     label = "亮度",
                     value = brightness,
+                    height = sliderHeight,
+                    horizontalPadding = sliderHorizontalPadding,
                     onValueChange = { value ->
                         brightness = value
                         setBrightness(context, value)
@@ -314,6 +344,9 @@ private fun ControlToggle(
     icon: ImageVector,
     label: String,
     active: Boolean,
+    size: androidx.compose.ui.unit.Dp,
+    iconSize: androidx.compose.ui.unit.Dp,
+    labelGap: androidx.compose.ui.unit.Dp,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -335,7 +368,7 @@ private fun ControlToggle(
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier
-                .size(56.dp)
+                .size(size)
                 .graphicsLayer {
                     scaleX = targetScale
                     scaleY = targetScale
@@ -354,10 +387,10 @@ private fun ControlToggle(
                 imageVector = icon,
                 contentDescription = label,
                 tint = if (active) Color.Black else Color.White,
-                modifier = Modifier.size(26.dp)
+                modifier = Modifier.size(iconSize)
             )
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(labelGap))
         Text(label, color = WatchColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     }
 }
@@ -367,16 +400,18 @@ private fun ControlSliderCard(
     icon: ImageVector,
     label: String,
     value: Float,
+    height: androidx.compose.ui.unit.Dp,
+    horizontalPadding: androidx.compose.ui.unit.Dp,
     onValueChange: (Float) -> Unit
 ) {
     val launcherStyle = LauncherTheme.style
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(46.dp)
+            .height(height)
             .clip(RoundedCornerShape(28.dp))
             .background(launcherStyle.cardColor)
-            .padding(horizontal = 13.dp),
+            .padding(horizontal = horizontalPadding),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(icon, null, tint = launcherStyle.bodyColor, modifier = Modifier.size(22.dp))
@@ -405,11 +440,11 @@ private fun MediaControlCard(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(132.dp)
+            .height(146.dp)
             .clip(RoundedCornerShape(32.dp))
             .background(bg.copy(alpha = 0.88f))
             .clickable(onClick = onOpenApp)
-            .padding(9.dp)
+            .padding(10.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxSize(),
@@ -417,8 +452,8 @@ private fun MediaControlCard(
         ) {
             Box(
                 modifier = Modifier
-                    .size(112.dp)
-                    .clip(RoundedCornerShape(22.dp))
+                    .size(126.dp)
+                    .clip(RoundedCornerShape(24.dp))
                     .background(Color.Black.copy(alpha = 0.22f)),
                 contentAlignment = Alignment.Center
             ) {
@@ -428,18 +463,18 @@ private fun MediaControlCard(
                         contentDescription = null,
                         modifier = Modifier
                             .fillMaxSize()
-                            .clip(RoundedCornerShape(22.dp)),
+                            .clip(RoundedCornerShape(24.dp)),
                         contentScale = ContentScale.Crop
                     )
                 } else {
                     Icon(Icons.Filled.MusicNote, null, tint = Color.White, modifier = Modifier.size(34.dp))
                 }
             }
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(12.dp))
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .height(112.dp),
+                    .height(126.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
@@ -456,13 +491,13 @@ private fun MediaControlCard(
                             OverflowFadeText(
                                 text = mediaState.title,
                                 color = Color.White,
-                                fontSize = 14.sp,
+                                fontSize = 15.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Text(
                                 text = mediaState.artist,
                                 color = Color.White.copy(alpha = 0.72f),
-                                fontSize = 10.sp,
+                                fontSize = 11.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -493,7 +528,7 @@ private fun MediaControlCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         MediaButton(Icons.Filled.SkipPrevious) {
@@ -648,7 +683,7 @@ private fun MediaButton(icon: ImageVector, onClick: () -> Unit) {
     val backgroundAlpha by animateFloatAsState(if (pressed) 0.28f else 0.18f, label = "media_button_alpha")
     Box(
         modifier = Modifier
-            .size(32.dp)
+            .requiredSize(36.dp)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -662,7 +697,7 @@ private fun MediaButton(icon: ImageVector, onClick: () -> Unit) {
             ),
         contentAlignment = Alignment.Center
     ) {
-        Icon(icon, null, tint = Color.White, modifier = Modifier.size(18.dp))
+        Icon(icon, null, tint = Color.White, modifier = Modifier.size(20.dp))
     }
 }
 

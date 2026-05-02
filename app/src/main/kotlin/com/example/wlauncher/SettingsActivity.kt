@@ -205,8 +205,6 @@ private fun SettingsRootScreen(
     val watchFaceLastError by vm.watchFaceLastError.collectAsStateWithLifecycle()
     val layoutMode by vm.layoutMode.collectAsStateWithLifecycle()
     val sideScreenEnabled by vm.sideScreenEnabled.collectAsStateWithLifecycle()
-    val sideScreenShortcutRows by vm.sideScreenShortcutRows.collectAsStateWithLifecycle()
-    val sideScreenShortcutCols by vm.sideScreenShortcutCols.collectAsStateWithLifecycle()
     val blurEnabled by vm.blurEnabled.collectAsStateWithLifecycle()
     val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsStateWithLifecycle()
     val lowResIcons by vm.lowResIcons.collectAsStateWithLifecycle()
@@ -773,30 +771,6 @@ private fun SettingsRootScreen(
                     enabled = showControlCenter,
                     onToggle = vm::setShowMusicControls,
                     scale = itemFisheye(listState, "music_controls_toggle", screenCenterY, screenHeightPx)
-                )
-            }
-            item("side_screen_shortcut_rows") {
-                SettingsSliderRow(
-                    title = if (isZh) "快捷启动行数" else "Quick Launch Rows",
-                    value = sideScreenShortcutRows.toFloat(),
-                    valueText = if (isZh) "$sideScreenShortcutRows 行" else "$sideScreenShortcutRows rows",
-                    range = 1f..3f,
-                    steps = 1,
-                    onValueChange = { vm.setSideScreenShortcutRows(it.toInt()) },
-                    scale = itemFisheye(listState, "side_screen_shortcut_rows", screenCenterY, screenHeightPx),
-                    enabled = sideScreenEnabled
-                )
-            }
-            item("side_screen_shortcut_cols") {
-                SettingsSliderRow(
-                    title = if (isZh) "快捷启动列数" else "Quick Launch Columns",
-                    value = sideScreenShortcutCols.toFloat(),
-                    valueText = if (isZh) "$sideScreenShortcutCols 列" else "$sideScreenShortcutCols columns",
-                    range = 2f..4f,
-                    steps = 1,
-                    onValueChange = { vm.setSideScreenShortcutCols(it.toInt()) },
-                    scale = itemFisheye(listState, "side_screen_shortcut_cols", screenCenterY, screenHeightPx),
-                    enabled = sideScreenEnabled
                 )
             }
             item("blur_toggle") {

@@ -219,8 +219,6 @@ private sealed interface PressHoldResult {
 @Composable
 fun SmartStackLayer(
     apps: List<AppInfo>,
-    shortcutRows: Int,
-    shortcutCols: Int,
     sideScreenShortcuts: List<String?>,
     sideScreenWidgetSlots: List<String?>,
     previewGroups: List<NotificationGroupUi>,
@@ -262,9 +260,8 @@ fun SmartStackLayer(
     val stepSnapshot = rememberStepSnapshot(showSteps, stepPermissionGranted)
     val slotCenters = remember { mutableStateMapOf<Int, Offset>() }
     val widgetCardHeightsPx = remember { mutableStateMapOf<Int, Int>() }
-    val visibleShortcutRows = shortcutRows.coerceIn(1, 3)
-    val visibleShortcutCols = shortcutCols.coerceIn(2, 4)
-    val visibleShortcutCount = visibleShortcutRows * visibleShortcutCols
+    val showNotificationPreview = notificationsEnabled
+    val visibleShortcutCount = if (showNotificationPreview) 6 else 9
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
     val widgetRepository = remember(context) { FlueApplication.repositories(context).widgetRepository }
@@ -336,16 +333,6 @@ fun SmartStackLayer(
     }
     val visibleWidgetCards = remember(widgetCards, showWidgets) {
         if (showWidgets) widgetCards else emptyList()
-    }
-    val showNotificationPreview = notificationsEnabled
-    val shortcutPanelRows = if (showNotificationPreview) {
-        minOf(visibleShortcutRows, 2)
-    } else {
-        visibleShortcutRows
-    }
-    val shortcutPanelItemCount = shortcutPanelRows * visibleShortcutCols
-    val quickPanelItems = remember(shortcutItems, shortcutPanelItemCount) {
-        shortcutItems.take(shortcutPanelItemCount)
     }
     val previewRows = remember(previewGroups, showNotificationPreview) {
         if (showNotificationPreview) buildPreviewRows(previewGroups, maxRows = 1) else emptyList()
@@ -528,6 +515,11 @@ fun SmartStackLayer(
         val leftSafeInset = leftSafeInsetDp.coerceIn(0, 128).dp.coerceAtMost(maxWidth * 0.36f)
         val availableWidth = maxWidth - leftSafeInset
         val contentWidth = availableWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
+        val quickHeight = if (showNotificationPreview) {
+            (contentWidth * 0.58f).coerceAtLeast(152.dp)
+        } else {
+            (contentWidth * 0.88f).coerceAtLeast(226.dp)
+        }
 
         Column(
             modifier = Modifier
@@ -557,10 +549,8 @@ fun SmartStackLayer(
             Spacer(Modifier.height(14.dp))
             QuickPanel(
                 width = contentWidth,
-                rows = shortcutPanelRows,
-                cols = visibleShortcutCols,
-                expandedBackground = !showNotificationPreview && visibleWidgetCards.isEmpty(),
-                items = quickPanelItems,
+                height = quickHeight,
+                items = shortcutItems,
                 slotCenters = slotCenters,
                 onAdd = { onRevealTargetChange(null); modalState = SideScreenModalState.ShortcutPicker(it) },
                 onOpenActions = { slot, app ->
@@ -580,12 +570,11 @@ fun SmartStackLayer(
                 }
             )
             if (showNotificationPreview) {
-                Spacer(Modifier.height(16.dp))
-                SideScreenSectionHeader(
-                    title = "通知",
-                    width = contentWidth
-                )
-                Spacer(Modifier.height(8.dp))
+                if (showWidgets && visibleWidgetCards.isNotEmpty()) {
+                    Spacer(Modifier.height(16.dp))
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
                 Column(
                     Modifier
                         .width(contentWidth)
@@ -637,6 +626,9 @@ fun SmartStackLayer(
                             }
                         }
                     }
+                }
+                if (!showWidgets || visibleWidgetCards.isEmpty()) {
+                    Spacer(Modifier.height(52.dp))
                 }
             }
             if (showWidgets && visibleWidgetCards.isNotEmpty()) {
@@ -1297,9 +1289,7 @@ private fun WidgetEditIconButton(
 
 @Composable private fun QuickPanel(
     width: androidx.compose.ui.unit.Dp,
-    rows: Int,
-    cols: Int,
-    expandedBackground: Boolean,
+    height: androidx.compose.ui.unit.Dp,
     items: List<AppInfo?>,
     slotCenters: MutableMap<Int, Offset>,
     onAdd: (Int) -> Unit,
@@ -1312,49 +1302,30 @@ private fun WidgetEditIconButton(
     val density = LocalDensity.current
     val dragThresholdPx = with(density) { 10.dp.toPx() }
     val dropThresholdPx = with(density) { 68.dp.toPx() }
-    val visibleSlots = remember(rows, cols) { (0 until rows * cols).toSet() }
-    val panelHeight = if (expandedBackground) width else Dp.Unspecified
-    val gridGap = if (expandedBackground) 18.dp else 12.dp
-    val panelHorizontalPadding = if (expandedBackground) gridGap else 14.dp
-    val panelVerticalPadding = if (expandedBackground) gridGap else 14.dp
-    val horizontalSpacing = gridGap
-    val verticalSpacing = gridGap
-    val bubbleByWidth = (width - panelHorizontalPadding * 2 - horizontalSpacing * (cols - 1)) / cols
-    val bubbleByHeight = if (expandedBackground) {
-        (panelHeight - panelVerticalPadding * 2 - verticalSpacing * (rows - 1)) / rows
-    } else {
-        Dp.Unspecified
-    }
-    val maxBubbleSize = if (expandedBackground) 70.dp else 58.dp
-    val bubbleSize = (if (expandedBackground) minOf(bubbleByWidth, bubbleByHeight) else bubbleByWidth)
-        .coerceIn(46.dp, maxBubbleSize)
+    val visibleSlots = remember(items.size) { items.indices.toSet() }
+    val bubbleSize = 58.dp
     var draggingSlot by remember { mutableStateOf<Int?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
     var dragMoved by remember { mutableStateOf(false) }
     Box(
         Modifier
             .width(width)
-            .then(if (expandedBackground) Modifier.height(panelHeight) else Modifier)
+            .height(height)
             .clip(RoundedCornerShape(28.dp))
             .background(Color(0xFF353535))
-            .padding(horizontal = panelHorizontalPadding, vertical = panelVerticalPadding),
-        contentAlignment = Alignment.Center
+            .padding(14.dp)
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = if (expandedBackground) Arrangement.Center else Arrangement.Top
+            Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
-            items.chunked(cols).take(rows).forEachIndexed { rowIndex, row ->
+            items.chunked(3).forEachIndexed { rowIndex, row ->
                 Row(
                     Modifier.fillMaxWidth(),
-                    horizontalArrangement = if (expandedBackground) {
-                        Arrangement.spacedBy(horizontalSpacing, Alignment.CenterHorizontally)
-                    } else {
-                        Arrangement.SpaceEvenly
-                    }
+                    horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
                     row.forEachIndexed { colIndex, item ->
-                        val slot = rowIndex * cols + colIndex
+                        val slot = rowIndex * 3 + colIndex
                         Box(Modifier.onGloballyPositioned { c -> val p = c.positionInRoot(); slotCenters[slot] = Offset(p.x + c.size.width / 2f, p.y + c.size.height / 2f) }, contentAlignment = Alignment.Center) {
                             when (item) {
                                 null -> {
@@ -1437,9 +1408,8 @@ private fun WidgetEditIconButton(
                             }
                         }
                     }
-                    repeat(cols - row.size) { Spacer(Modifier.size(bubbleSize)) }
+                    repeat(3 - row.size) { Spacer(Modifier.size(bubbleSize)) }
                 }
-                if (rowIndex < rows - 1) Spacer(Modifier.height(verticalSpacing))
             }
         }
     }

@@ -82,7 +82,6 @@ import kotlinx.coroutines.launch
 
 private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
 private const val SIDE_SCREEN_TRANSITION_MS = 260
-private const val SIDE_SCREEN_EXIT_OVERSHOOT = 1.08f
 private const val NOTIFICATION_TRANSITION_MS = 240
 
 class LauncherActivity : ComponentActivity() {
@@ -155,8 +154,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val layoutMode by vm.layoutMode.collectAsStateWithLifecycle()
     val themeMode by vm.themeMode.collectAsStateWithLifecycle()
     val sideScreenEnabled by vm.sideScreenEnabled.collectAsStateWithLifecycle()
-    val sideScreenShortcutRows by vm.sideScreenShortcutRows.collectAsStateWithLifecycle()
-    val sideScreenShortcutCols by vm.sideScreenShortcutCols.collectAsStateWithLifecycle()
     val sideScreenShortcuts by vm.sideScreenShortcuts.collectAsStateWithLifecycle()
     val blurEnabled by vm.blurEnabled.collectAsStateWithLifecycle()
     val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsStateWithLifecycle()
@@ -373,7 +370,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val density = LocalDensity.current
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
-        val sideSceneTravelPx = screenWidthPx * SIDE_SCREEN_EXIT_OVERSHOOT
         val notificationProgress = notificationTransition.value.coerceIn(0f, 1f)
         val keepNotificationLayer = notificationProgress > 0.001f || notificationSceneActive || notificationGestureActive
         val sidePageProgress by animateFloatAsState(
@@ -395,10 +391,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             animationSpec = tween(durationMillis = SIDE_SCREEN_TRANSITION_MS),
             label = "control_center_progress"
         )
-        val faceAnimState = when (screenState) {
-            ScreenState.Stack, ScreenState.Notifications -> ScreenState.Face
-            else -> screenState
-        }
+        val faceAnimState = screenState
         val updateNotificationTransitionProgress: (Float) -> Unit = { progress ->
             notificationGestureActive = true
             launcherScope.launch {
@@ -429,7 +422,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .zIndex(if (screenState == ScreenState.Face && !sideSceneOverlayActive) 3f else 1f)
                     .graphicsLayer {
                         clip = true
-                        translationX = sidePageProgress * sideSceneTravelPx
                     }
                     .scaleBlurAlpha(
                         targetValues = faceLayerValues(faceAnimState, uiStyle),
@@ -600,7 +592,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         .fillMaxSize()
                         .zIndex(4f)
                         .graphicsLayer {
-                            translationX = (sidePageProgress - 1f) * sideSceneTravelPx
+                            translationX = (sidePageProgress - 1f) * screenWidthPx
                             alpha = sidePageProgress.coerceIn(0f, 1f) *
                                 (1f - 0.58f * notificationProgress)
                         }
@@ -608,8 +600,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     val sideScreenWidgetSlots by vm.sideScreenWidgetSlots.collectAsStateWithLifecycle()
                     SmartStackLayer(
                         apps = apps,
-                        shortcutRows = sideScreenShortcutRows,
-                        shortcutCols = sideScreenShortcutCols,
                         sideScreenShortcuts = sideScreenShortcuts,
                         sideScreenWidgetSlots = sideScreenWidgetSlots,
                         previewGroups = sideScreenPreviewGroups,
