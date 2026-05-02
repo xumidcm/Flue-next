@@ -200,9 +200,18 @@ fun ControlCenterLayer(
             .padding(start = leftSafeInset)
     ) {
         val compact = showMusicControls && maxHeight < 520.dp
+        val spacious = !showMusicControls
         val verticalPadding = if (compact) 10.dp else 16.dp
-        val outerSpacing = if (compact) 8.dp else 14.dp
-        val controlsSpacing = if (compact) 6.dp else 14.dp
+        val outerSpacing = when {
+            compact -> 8.dp
+            spacious -> 18.dp
+            else -> 14.dp
+        }
+        val controlsSpacing = when {
+            compact -> 6.dp
+            spacious -> 20.dp
+            else -> 14.dp
+        }
         val toggleRowTopPadding = if (compact) 0.dp else 6.dp
         val toggleSize = if (compact) 54.dp else 58.dp
         val toggleIconSize = if (compact) 24.dp else 26.dp

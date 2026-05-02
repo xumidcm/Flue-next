@@ -197,11 +197,13 @@ class AppRepository(private val context: Context) {
                 val resolvedIconDrawable = packedIcon ?: ri.loadIcon(pm)
                 val baseBitmap = if (useLegacyCircularIconsSnapshot && packedIcon == null) {
                     createCircularBitmap(
-                        drawableToBitmap(resolvedIconDrawable, iconSize),
+                        stripEdgeBlackMatte(drawableToBitmap(resolvedIconDrawable, iconSize)),
                         edgeInsetPx = iconSize * 0.005f
                     )
                 } else {
-                    resolvedIconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
+                    stripEdgeBlackMatte(
+                        resolvedIconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
+                    )
                 }
                 val sharp = baseBitmap.asImageBitmap()
                 val softened = createSoftenedBitmap(baseBitmap).asImageBitmap()

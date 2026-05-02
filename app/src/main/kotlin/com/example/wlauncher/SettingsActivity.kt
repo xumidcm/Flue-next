@@ -1,6 +1,8 @@
 package com.flue.launcher
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
@@ -133,6 +135,8 @@ import java.util.Locale
 
 private const val ABOUT_VERSION = "beta1.4"
 private const val COMMUNITY_GROUP_NUMBER = "1097162313"
+private const val AUTHOR_QQ_NUMBER = "3513903055"
+private const val AUTHOR_BILIBILI_URL = "https://m.bilibili.com/space/1609437970"
 private const val DIAGNOSTIC_LOG_DURATION_MS = 5 * 60 * 1000L
 private const val COMMUNITY_GROUP_URL = "https://qun.qq.com/universal-share/share?ac=1&authKey=5CJC0tNLWsy3YWzGlPbqt%2F5kv%2BYZuJ8y8IVj%2B1UnIeLyR2DWR6QjWtM%2B4HXxH%2BKJ&busi_data=eyJncm91cENvZGUiOiIxMDk3MTYyMzEzIiwidG9rZW4iOiJlMGFBc1VpRXRROE1mS3J5SHgxRjFudmxXY0FuSnRQd2hOWWl6WllFMmlxNTErNWdadXJ5U1ozMmdzUSszaGNYIiwidWluIjoiMzUxMzkwMzA1NSJ9&data=YK52b80xUVwmcLWmSneKQMdVZodE4vTpsqmSb60ykXudbVCfa6AskMHxvqjhAjervNeE4exll-kQw5w-EifYOg&svctype=4&tempid=h5_group_info"
 const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
@@ -1638,6 +1642,19 @@ private fun ActionCard(
 private fun AboutCard(scale: Float, onDonateClick: () -> Unit) {
     val launcherStyle = LauncherTheme.style
     val context = LocalContext.current
+    fun openAuthorProfile() {
+        context.startActivity(
+            Intent(
+                Intent.ACTION_VIEW,
+                android.net.Uri.parse(AUTHOR_BILIBILI_URL)
+            )
+        )
+    }
+    fun copyAuthorQq() {
+        val clipboard = context.getSystemService(ClipboardManager::class.java)
+        clipboard?.setPrimaryClip(ClipData.newPlainText("QQ", AUTHOR_QQ_NUMBER))
+        Toast.makeText(context, "已复制 QQ：$AUTHOR_QQ_NUMBER", Toast.LENGTH_SHORT).show()
+    }
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -1663,11 +1680,12 @@ private fun AboutCard(scale: Float, onDonateClick: () -> Unit) {
                 contentAlignment = Alignment.Center
             ) {
                 Image(
-                    painter = painterResource(id = R.mipmap.ic_launcher_foreground),
+                    painter = painterResource(id = R.mipmap.ic_launcher_round),
                     contentDescription = null,
                     modifier = Modifier
                         .size(76.dp)
-                        .clip(RoundedCornerShape(22.dp))
+                        .clip(RoundedCornerShape(22.dp)),
+                    contentScale = ContentScale.Crop
                 )
             }
             Spacer(modifier = Modifier.height(14.dp))
@@ -1682,12 +1700,30 @@ private fun AboutCard(scale: Float, onDonateClick: () -> Unit) {
                     modifier = Modifier
                         .size(30.dp)
                         .clip(CircleShape)
+                        .clickable(onClick = ::openAuthorProfile)
                 )
                 Spacer(modifier = Modifier.width(10.dp))
                 Column {
-                    Text("柚子柚子皮", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text(
+                        "柚子柚子皮",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(onClick = ::openAuthorProfile)
+                            .padding(horizontal = 2.dp, vertical = 1.dp)
+                    )
                     Spacer(modifier = Modifier.height(2.dp))
-                    Text("QQ：513903055", color = WatchColors.TextTertiary, fontSize = 11.sp)
+                    Text(
+                        "QQ：$AUTHOR_QQ_NUMBER",
+                        color = WatchColors.TextTertiary,
+                        fontSize = 11.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(onClick = ::copyAuthorQq)
+                            .padding(horizontal = 2.dp, vertical = 1.dp)
+                    )
                 }
             }
             Spacer(modifier = Modifier.height(12.dp))
