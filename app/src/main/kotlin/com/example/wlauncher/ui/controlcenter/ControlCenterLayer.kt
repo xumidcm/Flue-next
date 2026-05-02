@@ -48,10 +48,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Brightness6
@@ -200,10 +198,8 @@ fun ControlCenterLayer(
             .padding(horizontal = 18.dp, vertical = 16.dp)
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -404,25 +400,13 @@ private fun MediaControlCard(
     onOpenApp: () -> Unit
 ) {
     val bg = mediaState.artworkColor
-    val interactionSource = remember { MutableInteractionSource() }
-    val pressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.982f else 1f, label = "media_card_scale")
-    val backgroundAlpha by animateFloatAsState(if (pressed) 0.94f else 0.88f, label = "media_card_alpha")
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(146.dp)
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
             .clip(RoundedCornerShape(32.dp))
-            .background(bg.copy(alpha = backgroundAlpha))
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onOpenApp
-            )
+            .background(bg.copy(alpha = 0.88f))
+            .clickable(onClick = onOpenApp)
             .padding(10.dp)
     ) {
         Row(

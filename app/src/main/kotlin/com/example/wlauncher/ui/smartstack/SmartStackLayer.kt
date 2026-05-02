@@ -32,8 +32,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -52,7 +50,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -63,6 +60,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -72,13 +71,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -806,17 +803,10 @@ fun WidgetPageLayer(
             widgetRepository.parseSlotValue(raw)?.let { SideScreenWidgetCardItem(index, it) }
         }
     }
-    val previewCards = remember { mutableStateListOf<SideScreenWidgetCardItem>() }
     var editMode by remember { mutableStateOf(false) }
     var showPicker by remember { mutableStateOf(false) }
     var pendingWidgetSelection by remember { mutableStateOf<PendingWidgetSelection?>(null) }
-    var draggingWidgetKey by remember { mutableStateOf<String?>(null) }
-    var draggingOriginIndex by remember { mutableIntStateOf(-1) }
-    var dragOffsetY by remember { mutableFloatStateOf(0f) }
-    var autoScrollDeltaPx by remember { mutableFloatStateOf(0f) }
-    var listViewportHeightPx by remember { mutableIntStateOf(0) }
     val widgetBorderHotspotPx = with(density) { 18.dp.toPx() }
-    val autoScrollEdgePx = with(density) { 84.dp.toPx() }
 
     fun clearAllocatedWidget(slotIndex: Int) {
         widgetRepository.extractWidgetId(sideScreenWidgetSlots.getOrNull(slotIndex))?.let { widgetId ->
@@ -885,54 +875,6 @@ fun WidgetPageLayer(
         }
     }
 
-    fun visibleInfoForKey(cardKey: String): LazyListItemInfo? {
-        return listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == cardKey }
-    }
-
-    fun updateAutoScroll(cardKey: String?) {
-        if (cardKey == null || listViewportHeightPx == 0) {
-            autoScrollDeltaPx = 0f
-            return
-        }
-        val itemInfo = visibleInfoForKey(cardKey) ?: run {
-            autoScrollDeltaPx = 0f
-            return
-        }
-        val centerY = itemInfo.offset + itemInfo.size / 2f + dragOffsetY
-        autoScrollDeltaPx = when {
-            centerY < autoScrollEdgePx -> -(((autoScrollEdgePx - centerY) / autoScrollEdgePx).coerceIn(0f, 1f) * 28f)
-            centerY > listViewportHeightPx - autoScrollEdgePx -> {
-                (((centerY - (listViewportHeightPx - autoScrollEdgePx)) / autoScrollEdgePx).coerceIn(0f, 1f) * 28f)
-            }
-            else -> 0f
-        }
-    }
-
-    fun updatePreviewOrder(cardKey: String) {
-        val currentIndex = previewCards.indexOfFirst { it.stableKey() == cardKey }
-        if (currentIndex < 0) return
-        val currentInfo = visibleInfoForKey(cardKey) ?: return
-        val draggedCenterY = currentInfo.offset + currentInfo.size / 2f + dragOffsetY
-        val previousCardKey = previewCards.getOrNull(currentIndex - 1)?.stableKey()
-        val nextCardKey = previewCards.getOrNull(currentIndex + 1)?.stableKey()
-        val previousInfo = previousCardKey?.let(::visibleInfoForKey)
-        val nextInfo = nextCardKey?.let(::visibleInfoForKey)
-        val target = when {
-            previousInfo != null && draggedCenterY < previousInfo.offset + previousInfo.size / 2f -> {
-                currentIndex - 1 to previousInfo
-            }
-            nextInfo != null && draggedCenterY > nextInfo.offset + nextInfo.size / 2f -> {
-                currentIndex + 1 to nextInfo
-            }
-            else -> null
-        }
-        if (target != null) {
-            previewCards.moveItem(currentIndex, target.first)
-            dragOffsetY -= (target.second.offset - currentInfo.offset).toFloat()
-        }
-        updateAutoScroll(cardKey)
-    }
-
     val nestedScrollConnection = remember(listState) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -974,28 +916,8 @@ fun WidgetPageLayer(
     }
 
     LaunchedEffect(widgetCards) {
-        if (draggingWidgetKey == null) {
-            previewCards.clear()
-            previewCards.addAll(widgetCards)
-        }
         if (widgetCards.isEmpty()) {
             editMode = false
-            draggingOriginIndex = -1
-        }
-    }
-
-    LaunchedEffect(draggingWidgetKey, autoScrollDeltaPx) {
-        val cardKey = draggingWidgetKey ?: return@LaunchedEffect
-        if (autoScrollDeltaPx == 0f) return@LaunchedEffect
-        while (isActive && draggingWidgetKey == cardKey && autoScrollDeltaPx != 0f) {
-            val consumed = listState.scrollBy(autoScrollDeltaPx)
-            if (consumed == 0f) {
-                autoScrollDeltaPx = 0f
-                break
-            }
-            dragOffsetY += consumed
-            updatePreviewOrder(cardKey)
-            withFrameNanos { }
         }
     }
 
@@ -1014,7 +936,6 @@ fun WidgetPageLayer(
                 .fillMaxSize()
                 .nestedScroll(nestedScrollConnection)
                 .graphicsLayer { translationY = overscroll.value }
-                .onSizeChanged { listViewportHeightPx = it.height }
                 .padding(start = leftSafeInset),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1050,23 +971,17 @@ fun WidgetPageLayer(
                     EmptyWidgetCard(width = contentWidth)
                 }
             } else {
-                val displayedCards = if (previewCards.isEmpty()) widgetCards else previewCards
                 items(
-                    items = displayedCards,
+                    items = widgetCards,
                     key = { it.stableKey() },
                     contentType = { "widget_page_card" }
                 ) { card ->
                     val cardKey = card.stableKey()
-                    val isDragging = draggingWidgetKey == cardKey
+                    val cardIndex = widgetCards.indexOfFirst { it.stableKey() == cardKey }
                     val shellShape = RoundedCornerShape(28.dp)
                     Box(
                         modifier = Modifier
                             .width(contentWidth)
-                            .zIndex(if (isDragging) 4f else 0f)
-                            .graphicsLayer {
-                                translationY = if (isDragging) dragOffsetY else 0f
-                                shadowElevation = if (isDragging) 14.dp.toPx() else 0f
-                            }
                     ) {
                         Box(
                             modifier = Modifier
@@ -1111,69 +1026,63 @@ fun WidgetPageLayer(
                             )
                         }
                         if (editMode) {
+                            val blockerInteraction = remember { MutableInteractionSource() }
                             Box(
                                 modifier = Modifier
                                     .matchParentSize()
                                     .clip(shellShape)
                                     .background(Color.Black.copy(alpha = 0.08f))
-                                    .pointerInput(cardKey, displayedCards) {
-                                        detectDragGesturesAfterLongPress(
-                                            onDragStart = {
-                                                vibrateHaptic(context)
-                                                draggingWidgetKey = cardKey
-                                                draggingOriginIndex = card.widgetIndex
-                                                dragOffsetY = 0f
-                                                updateAutoScroll(cardKey)
-                                            },
-                                            onDragCancel = {
-                                                draggingWidgetKey = null
-                                                draggingOriginIndex = -1
-                                                dragOffsetY = 0f
-                                                autoScrollDeltaPx = 0f
-                                                previewCards.clear()
-                                                previewCards.addAll(widgetCards)
-                                            },
-                                            onDragEnd = {
-                                                val targetIndex = previewCards.indexOfFirst { it.stableKey() == cardKey }
-                                                if (draggingOriginIndex >= 0 &&
-                                                    targetIndex >= 0 &&
-                                                    targetIndex != draggingOriginIndex
-                                                ) {
-                                                    onSwapWidget(draggingOriginIndex, targetIndex)
-                                                }
-                                                draggingWidgetKey = null
-                                                draggingOriginIndex = -1
-                                                dragOffsetY = 0f
-                                                autoScrollDeltaPx = 0f
-                                            },
-                                            onDrag = { change, dragAmount ->
-                                                change.consume()
-                                                dragOffsetY += dragAmount.y
-                                                updatePreviewOrder(cardKey)
-                                            }
-                                        )
-                                    }
+                                    .clickable(
+                                        interactionSource = blockerInteraction,
+                                        indication = null,
+                                        onClick = {}
+                                    )
                             )
-                            Box(
+                            Row(
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)
-                                    .padding(8.dp)
-                                    .size(30.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFFE53935))
-                                    .clickable {
+                                    .padding(8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                WidgetEditIconButton(
+                                    enabled = cardIndex > 0,
+                                    backgroundColor = Color.White.copy(alpha = 0.18f),
+                                    onClick = {
+                                        val previousIndex = widgetCards.getOrNull(cardIndex - 1)?.widgetIndex
+                                            ?: return@WidgetEditIconButton
+                                        onSwapWidget(card.widgetIndex, previousIndex)
+                                    }
+                                ) {
+                                    Icon(Icons.Filled.KeyboardArrowUp, null, tint = Color.White, modifier = Modifier.size(22.dp))
+                                }
+                                WidgetEditIconButton(
+                                    enabled = cardIndex in 0 until widgetCards.lastIndex,
+                                    backgroundColor = Color.White.copy(alpha = 0.18f),
+                                    onClick = {
+                                        val nextIndex = widgetCards.getOrNull(cardIndex + 1)?.widgetIndex
+                                            ?: return@WidgetEditIconButton
+                                        onSwapWidget(card.widgetIndex, nextIndex)
+                                    }
+                                ) {
+                                    Icon(Icons.Filled.KeyboardArrowDown, null, tint = Color.White, modifier = Modifier.size(22.dp))
+                                }
+                                WidgetEditIconButton(
+                                    enabled = true,
+                                    backgroundColor = Color(0xFFE53935),
+                                    onClick = {
                                         clearAllocatedWidget(card.widgetIndex)
                                         onRemoveWidget(card.widgetIndex)
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "-",
-                                    color = Color.White,
-                                    fontSize = 22.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    textAlign = TextAlign.Center
-                                )
+                                    }
+                                ) {
+                                    Text(
+                                        text = "-",
+                                        color = Color.White,
+                                        fontSize = 22.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
                             }
                         }
                     }
@@ -1252,6 +1161,26 @@ private fun WidgetPageChip(
     }
 }
 
+@Composable
+private fun WidgetEditIconButton(
+    enabled: Boolean,
+    backgroundColor: Color,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    val alpha = if (enabled) 1f else 0.34f
+    Box(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .background(backgroundColor.copy(alpha = backgroundColor.alpha * alpha))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        content()
+    }
+}
+
 @Composable private fun QuickPanel(
     width: androidx.compose.ui.unit.Dp,
     rows: Int,
@@ -1269,25 +1198,28 @@ private fun WidgetPageChip(
     val density = LocalDensity.current
     val dragThresholdPx = with(density) { 10.dp.toPx() }
     val dropThresholdPx = with(density) { 68.dp.toPx() }
-    val panelHorizontalPadding = if (expandedBackground) 12.dp else 14.dp
-    val panelVerticalPadding = if (expandedBackground) 20.dp else 14.dp
-    val horizontalSpacing = if (expandedBackground) 14.dp else 12.dp
-    val verticalSpacing = if (expandedBackground) 16.dp else 12.dp
-    val bubbleSize = ((width - panelHorizontalPadding * 2 - horizontalSpacing * (cols - 1)) / cols)
-        .coerceIn(46.dp, if (expandedBackground) 70.dp else 58.dp)
-    val minPanelHeight = if (expandedBackground) {
-        (bubbleSize * rows + verticalSpacing * (rows - 1) + panelVerticalPadding * 2)
-            .coerceAtLeast(width)
+    val panelHeight = if (expandedBackground) width else Dp.Unspecified
+    val gridGap = if (expandedBackground) 18.dp else 12.dp
+    val panelHorizontalPadding = if (expandedBackground) gridGap else 14.dp
+    val panelVerticalPadding = if (expandedBackground) gridGap else 14.dp
+    val horizontalSpacing = gridGap
+    val verticalSpacing = gridGap
+    val bubbleByWidth = (width - panelHorizontalPadding * 2 - horizontalSpacing * (cols - 1)) / cols
+    val bubbleByHeight = if (expandedBackground) {
+        (panelHeight - panelVerticalPadding * 2 - verticalSpacing * (rows - 1)) / rows
     } else {
         Dp.Unspecified
     }
+    val maxBubbleSize = if (expandedBackground) 70.dp else 58.dp
+    val bubbleSize = (if (expandedBackground) minOf(bubbleByWidth, bubbleByHeight) else bubbleByWidth)
+        .coerceIn(46.dp, maxBubbleSize)
     var draggingSlot by remember { mutableStateOf<Int?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
     var dragMoved by remember { mutableStateOf(false) }
     Box(
         Modifier
             .width(width)
-            .heightIn(min = minPanelHeight)
+            .then(if (expandedBackground) Modifier.height(panelHeight) else Modifier)
             .clip(RoundedCornerShape(28.dp))
             .background(Color(0xFF353535))
             .padding(horizontal = panelHorizontalPadding, vertical = panelVerticalPadding),
