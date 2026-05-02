@@ -152,6 +152,8 @@ private const val STACKED_PREVIEW_TRANSLATION_DP = 28
 private const val STACKED_PREVIEW_HORIZONTAL_INSET_DP = 4
 private const val SIDE_SCREEN_APP_WIDGET_HOST_ID = 1024
 private const val SIDE_SCREEN_SHORTCUT_MENU_TRIGGER_MS = 410L
+private const val SIDE_SCREEN_OVERSCROLL_LIMIT = 140f
+private const val SIDE_SCREEN_OVERSCROLL_RESISTANCE = 0.35f
 
 private sealed interface SideScreenModalState {
     data object None : SideScreenModalState
@@ -365,6 +367,28 @@ fun SmartStackLayer(
     val sideOverscroll = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
     val contentTranslationY = if (notificationsSceneActive || transitionInFlight) 0f else sideOverscroll.value
+
+    fun releaseSideOverscroll() {
+        scope.launch {
+            if (sideOverscroll.value != 0f) {
+                sideOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+            }
+        }
+    }
+
+    fun applySideOverscroll(delta: Float) {
+        val next = when {
+            sideOverscroll.value > 0f && delta < 0f -> (sideOverscroll.value + delta).coerceAtLeast(0f)
+            sideOverscroll.value < 0f && delta > 0f -> (sideOverscroll.value + delta).coerceAtMost(0f)
+            delta > 0f -> (sideOverscroll.value + delta * SIDE_SCREEN_OVERSCROLL_RESISTANCE)
+                .coerceIn(0f, SIDE_SCREEN_OVERSCROLL_LIMIT)
+            delta < 0f -> (sideOverscroll.value + delta * SIDE_SCREEN_OVERSCROLL_RESISTANCE)
+                .coerceIn(-SIDE_SCREEN_OVERSCROLL_LIMIT, 0f)
+            else -> sideOverscroll.value
+        }
+        scope.launch { sideOverscroll.snapTo(next) }
+    }
+
     val sideNestedScrollConnection = remember(sideListState, notificationsSceneActive, transitionInFlight) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -378,19 +402,19 @@ fun SmartStackLayer(
                     lastVisible.offset + lastVisible.size <= sideListState.layoutInfo.viewportEndOffset
                 when {
                     available.y > 0f && atTop -> {
-                        scope.launch { sideOverscroll.snapTo((sideOverscroll.value + available.y * 0.35f).coerceAtMost(140f)) }
+                        applySideOverscroll(available.y)
                         return Offset(0f, available.y)
                     }
                     available.y < 0f && atBottom -> {
-                        scope.launch { sideOverscroll.snapTo((sideOverscroll.value + available.y * 0.35f).coerceAtLeast(-140f)) }
+                        applySideOverscroll(available.y)
                         return Offset(0f, available.y)
                     }
                     sideOverscroll.value > 0f && available.y < 0f -> {
-                        scope.launch { sideOverscroll.snapTo((sideOverscroll.value + available.y).coerceAtLeast(0f)) }
+                        applySideOverscroll(available.y)
                         return Offset(0f, available.y)
                     }
                     sideOverscroll.value < 0f && available.y > 0f -> {
-                        scope.launch { sideOverscroll.snapTo((sideOverscroll.value + available.y).coerceAtMost(0f)) }
+                        applySideOverscroll(available.y)
                         return Offset(0f, available.y)
                     }
                 }
@@ -454,11 +478,22 @@ fun SmartStackLayer(
                         dragDy += dragAmount.y
                         if (abs(dragDx) > abs(dragDy)) {
                             if (dragDx < 0f) change.consume()
+                        } else if (sideOverscroll.value != 0f) {
+                            change.consume()
+                            applySideOverscroll(dragAmount.y)
                         } else if (notificationsEnabled && (dragDy < 0f || notificationTransitionProgress > 0f)) {
                             change.consume()
                             onNotificationTransitionProgressChange(
                                 (-dragDy / notificationDragRangePx).coerceIn(0f, 1f)
                             )
+                        } else if (
+                            notificationsEnabled &&
+                            dragDy > 0f &&
+                            (visibleWidgetCards.isEmpty() ||
+                                (sideListState.firstVisibleItemIndex == 0 && sideListState.firstVisibleItemScrollOffset == 0))
+                        ) {
+                            change.consume()
+                            applySideOverscroll(dragAmount.y)
                         }
                     },
                     onDragEnd = {
@@ -481,6 +516,7 @@ fun SmartStackLayer(
                                 lastDragEventUptime = 0L
                                 onNotificationTransitionRelease(false)
                                 onRevealTargetChange(null)
+                                releaseSideOverscroll()
                                 onDismissToFace()
                             }
                             openNotifications -> {
@@ -489,6 +525,7 @@ fun SmartStackLayer(
                                 dragVelocityY = 0f
                                 lastDragEventUptime = 0L
                                 onRevealTargetChange(null)
+                                releaseSideOverscroll()
                                 onNotificationTransitionRelease(true)
                             }
                             else -> {
@@ -496,6 +533,7 @@ fun SmartStackLayer(
                                 dragDy = 0f
                                 dragVelocityY = 0f
                                 lastDragEventUptime = 0L
+                                releaseSideOverscroll()
                                 onNotificationTransitionRelease(false)
                             }
                         }
@@ -505,6 +543,7 @@ fun SmartStackLayer(
                         dragDy = 0f
                         dragVelocityY = 0f
                         lastDragEventUptime = 0L
+                        releaseSideOverscroll()
                         onNotificationTransitionRelease(false)
                     }
                 )

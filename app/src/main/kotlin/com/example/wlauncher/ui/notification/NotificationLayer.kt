@@ -82,12 +82,14 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.absoluteValue
 
 private const val NOTIFICATION_CARD_WIDTH_RATIO = 0.86f
 private const val NOTIFICATION_TOP_SAFE_PADDING_DP = 22
 private const val NOTIFICATION_TOP_OVERSCROLL_LIMIT = 72f
 private const val NOTIFICATION_TOP_OVERSCROLL_TRIGGER = 56f
 private const val NOTIFICATION_BOTTOM_OVERSCROLL_LIMIT = -96f
+private const val NOTIFICATION_OVERSCROLL_RESISTANCE = 0.35f
 private const val NOTIFICATION_DISMISS_DRAG_RANGE_RATIO = 0.78f
 private const val NOTIFICATION_DISMISS_DRAG_RANGE_MIN = 300f
 private const val NOTIFICATION_DISMISS_RELEASE_PROGRESS = 0.6f
@@ -136,6 +138,29 @@ fun NotificationLayer(
     var dismissDragVelocityY by remember { mutableFloatStateOf(0f) }
     var lastDismissDragEventUptime by remember { mutableStateOf(0L) }
     var topDismissArmed by remember { mutableStateOf(false) }
+
+    fun applyOverscroll(delta: Float): Float {
+        val next = when {
+            overscroll.value > 0f && delta < 0f -> (overscroll.value + delta).coerceAtLeast(0f)
+            overscroll.value < 0f && delta > 0f -> (overscroll.value + delta).coerceAtMost(0f)
+            delta > 0f -> (overscroll.value + delta * NOTIFICATION_OVERSCROLL_RESISTANCE)
+                .coerceIn(0f, NOTIFICATION_TOP_OVERSCROLL_LIMIT)
+            delta < 0f -> (overscroll.value + delta * NOTIFICATION_OVERSCROLL_RESISTANCE)
+                .coerceIn(NOTIFICATION_BOTTOM_OVERSCROLL_LIMIT, 0f)
+            else -> overscroll.value
+        }
+        scope.launch { overscroll.snapTo(next) }
+        return next
+    }
+
+    fun releaseOverscroll() {
+        scope.launch {
+            if (overscroll.value != 0f) {
+                overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+            }
+        }
+    }
+
     LaunchedEffect(isActive) {
         if (!isActive) {
             dismissTransitionInFlight = false
@@ -175,6 +200,7 @@ fun NotificationLayer(
         dismissDragVelocityY = 0f
         lastDismissDragEventUptime = 0L
         topDismissArmed = false
+        releaseOverscroll()
         onTransitionRelease(shouldDismiss)
     }
     val closeIfPulled: suspend () -> Unit = {
@@ -184,7 +210,7 @@ fun NotificationLayer(
                 onRevealTargetChange(null)
                 releaseDismissDrag()
             } else if (overscroll.value != 0f) {
-                overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                releaseOverscroll()
             }
         }
     }
@@ -208,15 +234,21 @@ fun NotificationLayer(
                 lastDismissDragEventUptime = change.uptimeMillis
                 if (dragAmount > 0f || dismissDragDistance > 0f) {
                     change.consume()
-                    updateDismissDrag(dragAmount)
+                    if (dismissDragDistance > 0f) {
+                        val currentDrag = dismissDragDistance
+                        updateDismissDrag(dragAmount)
+                        if (dragAmount < 0f && dragAmount.absoluteValue > currentDrag) {
+                            applyOverscroll(dragAmount + currentDrag)
+                        }
+                    } else {
+                        val newOverscroll = applyOverscroll(dragAmount)
+                        if (topDismissArmed && newOverscroll >= NOTIFICATION_TOP_OVERSCROLL_TRIGGER) {
+                            updateDismissDrag(dragAmount)
+                        }
+                    }
                 } else if (dragAmount < 0f || overscroll.value != 0f) {
                     change.consume()
-                    scope.launch {
-                        overscroll.snapTo(
-                            (overscroll.value + dragAmount * 0.35f)
-                                .coerceIn(NOTIFICATION_BOTTOM_OVERSCROLL_LIMIT, 0f)
-                        )
-                    }
+                    applyOverscroll(dragAmount)
                 }
             },
             onDragEnd = {
@@ -233,11 +265,7 @@ fun NotificationLayer(
                     lastDismissDragEventUptime = 0L
                     onTransitionRelease(false)
                 }
-                scope.launch {
-                    if (overscroll.value != 0f) {
-                        overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-                    }
-                }
+                releaseOverscroll()
             }
         )
     }
@@ -258,28 +286,23 @@ fun NotificationLayer(
                     if (dismissDragDistance > 0f) {
                         updateDismissDrag(available.y)
                     } else {
-                        scope.launch {
-                            val newOverscroll = (overscroll.value + available.y * 0.35f)
-                                .coerceIn(0f, NOTIFICATION_TOP_OVERSCROLL_LIMIT)
-                            overscroll.snapTo(newOverscroll)
-                            if (topDismissArmed && newOverscroll >= NOTIFICATION_TOP_OVERSCROLL_TRIGGER) {
-                                updateDismissDrag(available.y)
-                            }
+                        val newOverscroll = applyOverscroll(available.y)
+                        if (topDismissArmed && newOverscroll >= NOTIFICATION_TOP_OVERSCROLL_TRIGGER) {
+                            updateDismissDrag(available.y)
                         }
                     }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 if (available.y < 0f && atBottom) {
-                    scope.launch {
-                        overscroll.snapTo(
-                            (overscroll.value + available.y * 0.35f)
-                                .coerceAtLeast(NOTIFICATION_BOTTOM_OVERSCROLL_LIMIT)
-                        )
-                    }
+                    applyOverscroll(available.y)
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 if (dismissDragDistance > 0f && available.y < 0f) {
+                    val currentDrag = dismissDragDistance
                     updateDismissDrag(available.y)
+                    if (available.y.absoluteValue > currentDrag) {
+                        applyOverscroll(available.y + currentDrag)
+                    }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 if (overscroll.value != 0f && ((overscroll.value > 0f && available.y < 0f) || (overscroll.value < 0f && available.y > 0f))) {
@@ -301,7 +324,7 @@ fun NotificationLayer(
                 if (dismissDragDistance > 0f) {
                     dismissDragVelocityY = available.y
                     releaseDismissDrag()
-                    return available
+                    return Velocity.Zero
                 }
                 if (overscroll.value != 0f) {
                     overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))

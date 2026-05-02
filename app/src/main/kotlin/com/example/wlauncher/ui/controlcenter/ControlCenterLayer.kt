@@ -28,12 +28,16 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -88,10 +92,13 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -103,11 +110,16 @@ import com.flue.launcher.ui.common.WatchBatteryPill
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+private const val CONTROL_CENTER_OVERSCROLL_LIMIT = 96f
+private const val CONTROL_CENTER_OVERSCROLL_RESISTANCE = 0.35f
 
 private data class ControlCenterMediaState(
     val controller: MediaController? = null,
@@ -155,6 +167,8 @@ fun ControlCenterLayer(
     var bluetoothEnabled by remember(context) { mutableStateOf(isBluetoothLikelyEnabled(context)) }
     var dndEnabled by remember(context) { mutableStateOf(isDndEnabled(context)) }
     val mediaState = rememberMediaState(context)
+    val overscroll = remember { Animatable(0f) }
+    val overscrollScope = androidx.compose.runtime.rememberCoroutineScope()
     val leftSafeInset = leftSafeInsetDp.coerceIn(0, 128).dp
     val internetPanelLauncher = rememberLauncherForActivityResult(StartActivityForResult()) {
         connectivity = readConnectivitySnapshot(context)
@@ -191,12 +205,52 @@ fun ControlCenterLayer(
             delay(250)
         }
     }
+    val greetingText = remember(timeText) { controlCenterGreeting() }
+    val touchSlop = LocalViewConfiguration.current.touchSlop
 
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(40.dp))
             .background(launcherStyle.screenBackground)
+            .pointerInput(touchSlop) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var pointerId = down.id
+                    var totalY = 0f
+                    var totalX = 0f
+                    var dragging = false
+
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == pointerId }
+                            ?: event.changes.firstOrNull { it.pressed }
+                            ?: break
+                        if (!change.pressed || change.changedToUpIgnoreConsumed()) break
+                        pointerId = change.id
+                        val delta = change.positionChange()
+                        totalX += delta.x
+                        totalY += delta.y
+                        if (!dragging && abs(totalY) > touchSlop && abs(totalY) > abs(totalX)) {
+                            dragging = true
+                        }
+                        if (dragging && (delta.y > 0f || overscroll.value > 0f)) {
+                            change.consume()
+                            val next = (if (delta.y > 0f) {
+                                overscroll.value + delta.y * CONTROL_CENTER_OVERSCROLL_RESISTANCE
+                            } else {
+                                overscroll.value + delta.y
+                            }).coerceIn(0f, CONTROL_CENTER_OVERSCROLL_LIMIT)
+                            overscrollScope.launch { overscroll.snapTo(next) }
+                        }
+                    }
+                    if (overscroll.value != 0f) {
+                        overscrollScope.launch {
+                            overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                        }
+                    }
+                }
+            }
             .padding(start = leftSafeInset)
     ) {
         val compact = showMusicControls && maxHeight < 520.dp
@@ -212,6 +266,7 @@ fun ControlCenterLayer(
             spacious -> 20.dp
             else -> 14.dp
         }
+        val footerTopGap = if (compact) 0.dp else 4.dp
         val toggleRowTopPadding = if (compact) 0.dp else 6.dp
         val toggleSize = if (compact) 54.dp else 58.dp
         val toggleIconSize = if (compact) 24.dp else 26.dp
@@ -221,6 +276,7 @@ fun ControlCenterLayer(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .graphicsLayer { translationY = overscroll.value }
                 .padding(horizontal = 18.dp, vertical = verticalPadding),
             verticalArrangement = Arrangement.spacedBy(outerSpacing)
         ) {
@@ -343,6 +399,16 @@ fun ControlCenterLayer(
                     )
                 }
             }
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = greetingText,
+                color = WatchColors.TextTertiary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .padding(top = footerTopGap)
+            )
         }
     }
 }
@@ -484,7 +550,7 @@ private fun MediaControlCard(
                 modifier = Modifier
                     .weight(1f)
                     .height(126.dp),
-                verticalArrangement = Arrangement.SpaceBetween
+                verticalArrangement = Arrangement.Top
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -525,12 +591,14 @@ private fun MediaControlCard(
                         }
                     }
                 }
+                Spacer(Modifier.weight(1f))
                 Column {
                     MediaProgressSection(
                         mediaState = mediaState,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+                Spacer(Modifier.height(14.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center,
@@ -707,6 +775,15 @@ private fun MediaButton(icon: ImageVector, onClick: () -> Unit) {
         contentAlignment = Alignment.Center
     ) {
         Icon(icon, null, tint = Color.White, modifier = Modifier.size(20.dp))
+    }
+}
+
+private fun controlCenterGreeting(now: Calendar = Calendar.getInstance()): String {
+    val hour = now.get(Calendar.HOUR_OF_DAY)
+    return when (hour) {
+        in 5..10 -> "早好～"
+        in 11..16 -> "午好～"
+        else -> "晚好～"
     }
 }
 
