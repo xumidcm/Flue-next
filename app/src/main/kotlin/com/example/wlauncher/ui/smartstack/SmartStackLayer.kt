@@ -23,8 +23,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -806,7 +811,10 @@ fun WidgetPageLayer(
     var editMode by remember { mutableStateOf(false) }
     var showPicker by remember { mutableStateOf(false) }
     var pendingWidgetSelection by remember { mutableStateOf<PendingWidgetSelection?>(null) }
+    var movingWidgetKey by remember { mutableStateOf<String?>(null) }
+    val movingWidgetOffset = remember { Animatable(0f) }
     val widgetBorderHotspotPx = with(density) { 18.dp.toPx() }
+    val widgetMoveDistancePx = with(density) { 46.dp.toPx() }
 
     fun clearAllocatedWidget(slotIndex: Int) {
         widgetRepository.extractWidgetId(sideScreenWidgetSlots.getOrNull(slotIndex))?.let { widgetId ->
@@ -919,6 +927,24 @@ fun WidgetPageLayer(
         if (widgetCards.isEmpty()) {
             editMode = false
         }
+        if (movingWidgetKey != null && widgetCards.none { it.stableKey() == movingWidgetKey }) {
+            movingWidgetKey = null
+        }
+    }
+
+    fun moveWidgetWithAnimation(card: SideScreenWidgetCardItem, target: SideScreenWidgetCardItem, direction: Int) {
+        if (movingWidgetKey != null || direction == 0) return
+        movingWidgetKey = card.stableKey()
+        scope.launch {
+            movingWidgetOffset.snapTo(0f)
+            movingWidgetOffset.animateTo(
+                widgetMoveDistancePx * direction.coerceIn(-1, 1),
+                animationSpec = tween(durationMillis = 120)
+            )
+            onSwapWidget(card.widgetIndex, target.widgetIndex)
+            movingWidgetOffset.snapTo(0f)
+            movingWidgetKey = null
+        }
     }
 
     BoxWithConstraints(
@@ -979,9 +1005,27 @@ fun WidgetPageLayer(
                     val cardKey = card.stableKey()
                     val cardIndex = widgetCards.indexOfFirst { it.stableKey() == cardKey }
                     val shellShape = RoundedCornerShape(28.dp)
+                    val editJiggle = rememberInfiniteTransition(label = "widget_edit_jiggle_$cardKey")
+                    val jiggleRotation by editJiggle.animateFloat(
+                        initialValue = -0.35f,
+                        targetValue = 0.35f,
+                        animationSpec = infiniteRepeatable(
+                            animation = keyframes {
+                                durationMillis = 170
+                                -0.35f at 0
+                                0.35f at 85
+                                -0.35f at 170
+                            }
+                        ),
+                        label = "widget_edit_jiggle_rotation_$cardKey"
+                    )
                     Box(
                         modifier = Modifier
                             .width(contentWidth)
+                            .graphicsLayer {
+                                translationY = if (movingWidgetKey == cardKey) movingWidgetOffset.value else 0f
+                                rotationZ = if (editMode) jiggleRotation else 0f
+                            }
                     ) {
                         Box(
                             modifier = Modifier
@@ -1046,23 +1090,23 @@ fun WidgetPageLayer(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 WidgetEditIconButton(
-                                    enabled = cardIndex > 0,
-                                    backgroundColor = Color.White.copy(alpha = 0.18f),
+                                    enabled = movingWidgetKey == null && cardIndex > 0,
+                                    backgroundColor = Color(0xFF1976D2),
                                     onClick = {
-                                        val previousIndex = widgetCards.getOrNull(cardIndex - 1)?.widgetIndex
+                                        val previous = widgetCards.getOrNull(cardIndex - 1)
                                             ?: return@WidgetEditIconButton
-                                        onSwapWidget(card.widgetIndex, previousIndex)
+                                        moveWidgetWithAnimation(card, previous, -1)
                                     }
                                 ) {
                                     Icon(Icons.Filled.KeyboardArrowUp, null, tint = Color.White, modifier = Modifier.size(22.dp))
                                 }
                                 WidgetEditIconButton(
-                                    enabled = cardIndex in 0 until widgetCards.lastIndex,
-                                    backgroundColor = Color.White.copy(alpha = 0.18f),
+                                    enabled = movingWidgetKey == null && cardIndex in 0 until widgetCards.lastIndex,
+                                    backgroundColor = Color(0xFF1976D2),
                                     onClick = {
-                                        val nextIndex = widgetCards.getOrNull(cardIndex + 1)?.widgetIndex
+                                        val next = widgetCards.getOrNull(cardIndex + 1)
                                             ?: return@WidgetEditIconButton
-                                        onSwapWidget(card.widgetIndex, nextIndex)
+                                        moveWidgetWithAnimation(card, next, 1)
                                     }
                                 ) {
                                     Icon(Icons.Filled.KeyboardArrowDown, null, tint = Color.White, modifier = Modifier.size(22.dp))

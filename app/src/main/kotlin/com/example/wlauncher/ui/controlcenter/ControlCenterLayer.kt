@@ -199,7 +199,7 @@ fun ControlCenterLayer(
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.SpaceBetween
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -296,12 +296,12 @@ fun ControlCenterLayer(
                         setBrightness(context, value)
                     }
                 )
-            }
 
-            MediaControlCard(
-                mediaState = mediaState,
-                onOpenApp = { openMusicApp(context, mediaState.appPackage) }
-            )
+                MediaControlCard(
+                    mediaState = mediaState,
+                    onOpenApp = { openMusicApp(context, mediaState.appPackage) }
+                )
+            }
         }
     }
 }
