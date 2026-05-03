@@ -8,7 +8,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.scrollBy
@@ -607,20 +606,9 @@ fun ListDrawerScreen(
                     val isDragged = dragFromIndex == index
                     val isSettling = settlingKey == app.componentKey
                     val isGlidePressed = glidePressedIndex == index
-                    val showMenuBorder = longPressedApp?.componentKey == app.componentKey &&
+                    val showMenuBackground = longPressedApp?.componentKey == app.componentKey &&
                         dragFromIndex == null
-                    val menuBorderColor = if (useWatchFaceColors && themeColor.alpha > 0.01f) {
-                        themeColor.copy(alpha = if (darkMode) 0.66f else 0.48f)
-                    } else {
-                        appPalette.text.copy(alpha = if (darkMode) 0.42f else 0.30f)
-                    }
-                    val showRowBorder = rowBorderEnabled || showMenuBorder
-                    val rowBorderColor = if (showMenuBorder) {
-                        menuBorderColor
-                    } else {
-                        appPalette.text.copy(alpha = if (darkMode) 0.18f else 0.14f)
-                    }
-                    val rowBorderWidth = if (showMenuBorder) 1.5.dp else 1.dp
+                    val showRowBackground = rowBorderEnabled || showMenuBackground
                     val displacedTarget = listDisplacementForIndex(
                         index = index,
                         dragFromIndex = dragFromIndex,
@@ -675,15 +663,14 @@ fun ListDrawerScreen(
                                     1f
                                 }
                             }
-                            .background(appPalette.item, launcherStyle.compactShape)
-                            .background(appPalette.itemPressedOverlay.copy(alpha = pressedOverlay), launcherStyle.compactShape)
                             .then(
-                                if (showRowBorder) {
-                                    Modifier.border(rowBorderWidth, rowBorderColor, launcherStyle.compactShape)
+                                if (showRowBackground) {
+                                    Modifier.background(appPalette.item, launcherStyle.compactShape)
                                 } else {
                                     Modifier
                                 }
                             )
+                            .background(appPalette.itemPressedOverlay.copy(alpha = pressedOverlay), launcherStyle.compactShape)
                             .combinedClickable(
                                 interactionSource = interactionSource,
                                 indication = null,
@@ -736,14 +723,9 @@ fun ListDrawerScreen(
                             alpha = 0.98f
                             shadowElevation = if (iconShadowEnabled) 18.dp.toPx() else 0f
                         }
-                        .background(appPalette.item, launcherStyle.compactShape)
                         .then(
                             if (rowBorderEnabled) {
-                                Modifier.border(
-                                    1.dp,
-                                    appPalette.text.copy(alpha = if (darkMode) 0.18f else 0.14f),
-                                    launcherStyle.compactShape
-                                )
+                                Modifier.background(appPalette.item, launcherStyle.compactShape)
                             } else {
                                 Modifier
                             }

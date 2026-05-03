@@ -65,7 +65,7 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.NetworkCell
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Settings as SettingsIcon
+import androidx.compose.material.icons.outlined.Settings as SettingsIcon
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.VolumeUp
@@ -437,8 +437,13 @@ private fun SystemSettingsButton(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
+    val launcherStyle = LauncherTheme.style
     val scale by animateFloatAsState(if (pressed) 0.88f else 1f, label = "system_settings_scale")
-    val backgroundColor = if (pressed) Color(0xFF424242) else Color(0xFF2C2C2E)
+    val iconTint = if (pressed) {
+        launcherStyle.titleColor.copy(alpha = 0.56f)
+    } else {
+        launcherStyle.titleColor
+    }
 
     Box(
         modifier = modifier
@@ -447,8 +452,6 @@ private fun SystemSettingsButton(
                 scaleX = scale
                 scaleY = scale
             }
-            .clip(CircleShape)
-            .background(backgroundColor)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -457,9 +460,9 @@ private fun SystemSettingsButton(
         contentAlignment = Alignment.Center
     ) {
         Icon(
-            imageVector = Icons.Filled.SettingsIcon,
+            imageVector = Icons.Outlined.SettingsIcon,
             contentDescription = "系统设置",
-            tint = Color.White,
+            tint = iconTint,
             modifier = Modifier.size(iconSize)
         )
     }

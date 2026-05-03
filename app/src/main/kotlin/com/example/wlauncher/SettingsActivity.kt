@@ -841,11 +841,11 @@ private fun SettingsRootScreen(
             }
             item("app_list_row_border") {
                 SettingsSwitchRow(
-                    title = if (isZh) "列表模式边框" else "List Row Borders",
+                    title = if (isZh) "列表模式底色遮罩" else "List Row Background",
                     subtitle = if (appListRowBorderEnabled) {
-                        if (isZh) "列表布局中每排应用显示细边框" else "Show a thin border around each list row"
+                        if (isZh) "列表布局中每排应用显示底色遮罩" else "Show the tinted background behind each list row"
                     } else {
-                        if (isZh) "列表布局中不显示每排应用边框" else "Hide borders from list rows"
+                        if (isZh) "列表布局中不显示每排应用底色遮罩" else "Hide the list row background tint"
                     },
                     checked = appListRowBorderEnabled,
                     enabled = layoutMode == LayoutMode.List,

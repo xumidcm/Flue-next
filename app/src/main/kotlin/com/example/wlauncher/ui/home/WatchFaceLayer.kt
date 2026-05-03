@@ -56,6 +56,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
@@ -514,23 +515,13 @@ private fun WatchFaceStatusIndicators(
     modifier: Modifier = Modifier
 ) {
     if (!chargingSnapshot.charging && !hasNotifications) return
-    Row(
+    Box(
         modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
-        verticalAlignment = Alignment.CenterVertically
+        contentAlignment = Alignment.Center
     ) {
         if (chargingSnapshot.charging) {
-            Box(
-                modifier = Modifier
-                    .width(30.dp)
-                    .height(22.dp)
-                    .background(Color(0xFF22C55E).copy(alpha = 0.92f), RoundedCornerShape(11.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                ChargingBoltGlyph()
-            }
-        }
-        if (hasNotifications) {
+            ChargingBoltGlyph()
+        } else if (hasNotifications) {
             Box(
                 modifier = Modifier
                     .size(9.dp)
@@ -542,19 +533,29 @@ private fun WatchFaceStatusIndicators(
 
 @Composable
 private fun ChargingBoltGlyph(modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.width(12.dp).height(15.dp)) {
+    Canvas(modifier = modifier.width(15.dp).height(19.dp)) {
         val w = size.width
         val h = size.height
         val path = Path().apply {
-            moveTo(w * 0.58f, 0f)
-            lineTo(w * 0.20f, h * 0.55f)
-            lineTo(w * 0.47f, h * 0.55f)
-            lineTo(w * 0.34f, h)
-            lineTo(w * 0.82f, h * 0.40f)
-            lineTo(w * 0.54f, h * 0.40f)
+            moveTo(w * 0.58f, h * 0.04f)
+            lineTo(w * 0.24f, h * 0.54f)
+            lineTo(w * 0.47f, h * 0.54f)
+            lineTo(w * 0.36f, h * 0.96f)
+            lineTo(w * 0.78f, h * 0.40f)
+            lineTo(w * 0.55f, h * 0.40f)
             close()
         }
-        drawPath(path = path, color = Color.White)
+        val boltColor = Color(0xFF22C55E)
+        drawPath(path = path, color = boltColor)
+        drawPath(
+            path = path,
+            color = boltColor,
+            style = Stroke(
+                width = size.minDimension * 0.12f,
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
+            )
+        )
     }
 }
 
