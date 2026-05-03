@@ -1451,6 +1451,7 @@ private fun WidgetEditIconButton(
                                         onLongClick = null,
                                         forcePressed = draggingSlot == slot,
                                         gesturesEnabled = false,
+                                        shape = CircleShape,
                                         modifier = dragModifier
                                             .zIndex(if (draggingSlot == slot) 6f else 0f)
                                             .graphicsLayer {
