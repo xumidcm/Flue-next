@@ -398,6 +398,7 @@ fun ControlCenterLayer(
                         .fillMaxWidth()
                         .padding(top = toggleRowTopPadding)
                 ) {
+                    val toggleViewportWidth = maxWidth
                     if (toggleRowFits) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -480,7 +481,7 @@ fun ControlCenterLayer(
                         ) {
                             Row(
                                 modifier = Modifier
-                                    .widthIn(min = maxWidth)
+                                    .widthIn(min = toggleViewportWidth)
                                     .graphicsLayer { translationX = toggleOverscroll.value },
                                 horizontalArrangement = Arrangement.spacedBy(toggleRowSpacing),
                                 verticalAlignment = Alignment.CenterVertically
