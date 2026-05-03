@@ -131,7 +131,6 @@ class WLauncherNotificationListener : NotificationListenerService() {
                 Log.e(TAG, "Failed to read active notifications", error)
             }
             .getOrDefault(emptyArray())
-            .toList()
         val pm = applicationContext.packageManager
         val visibleSbns = sbns
             .filter { shouldDisplayNotification(it, sbns) }
@@ -174,7 +173,7 @@ class WLauncherNotificationListener : NotificationListenerService() {
 
     private fun shouldDisplayNotification(
         sbn: StatusBarNotification,
-        allNotifications: List<StatusBarNotification>
+        allNotifications: Array<StatusBarNotification>
     ): Boolean {
         if (isServiceLikeNotification(sbn)) return false
         if (!hasVisiblePayload(sbn)) return false
@@ -200,7 +199,7 @@ class WLauncherNotificationListener : NotificationListenerService() {
 
     private fun findGroupSummary(
         groupKey: String,
-        allNotifications: List<StatusBarNotification>
+        allNotifications: Array<StatusBarNotification>
     ): StatusBarNotification? {
         return allNotifications.firstOrNull { candidate ->
             candidate.groupKey == groupKey &&
