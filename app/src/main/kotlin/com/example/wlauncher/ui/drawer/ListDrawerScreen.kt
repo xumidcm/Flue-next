@@ -116,6 +116,7 @@ fun ListDrawerScreen(
     leftSafeInsetDp: Int = 0,
     appListScalePercent: Int = 100,
     useWatchFaceColors: Boolean = true,
+    rowBorderEnabled: Boolean = false,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
     onLongClick: (AppInfo) -> Unit = {},
@@ -613,6 +614,13 @@ fun ListDrawerScreen(
                     } else {
                         appPalette.text.copy(alpha = if (darkMode) 0.42f else 0.30f)
                     }
+                    val showRowBorder = rowBorderEnabled || showMenuBorder
+                    val rowBorderColor = if (showMenuBorder) {
+                        menuBorderColor
+                    } else {
+                        appPalette.text.copy(alpha = if (darkMode) 0.18f else 0.14f)
+                    }
+                    val rowBorderWidth = if (showMenuBorder) 1.5.dp else 1.dp
                     val displacedTarget = listDisplacementForIndex(
                         index = index,
                         dragFromIndex = dragFromIndex,
@@ -670,8 +678,8 @@ fun ListDrawerScreen(
                             .background(appPalette.item, launcherStyle.compactShape)
                             .background(appPalette.itemPressedOverlay.copy(alpha = pressedOverlay), launcherStyle.compactShape)
                             .then(
-                                if (showMenuBorder) {
-                                    Modifier.border(1.5.dp, menuBorderColor, launcherStyle.compactShape)
+                                if (showRowBorder) {
+                                    Modifier.border(rowBorderWidth, rowBorderColor, launcherStyle.compactShape)
                                 } else {
                                     Modifier
                                 }
@@ -729,7 +737,18 @@ fun ListDrawerScreen(
                             shadowElevation = if (iconShadowEnabled) 18.dp.toPx() else 0f
                         }
                         .background(appPalette.item, launcherStyle.compactShape)
-                            .padding(horizontal = (28.dp * appListScale).coerceIn(14.dp, 40.dp), vertical = scaledRowVerticalPadding),
+                        .then(
+                            if (rowBorderEnabled) {
+                                Modifier.border(
+                                    1.dp,
+                                    appPalette.text.copy(alpha = if (darkMode) 0.18f else 0.14f),
+                                    launcherStyle.compactShape
+                                )
+                            } else {
+                                Modifier
+                            }
+                        )
+                        .padding(horizontal = (28.dp * appListScale).coerceIn(14.dp, 40.dp), vertical = scaledRowVerticalPadding),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Image(

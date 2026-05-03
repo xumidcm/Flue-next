@@ -91,9 +91,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_APP_LIST_LEFT_SAFE_INSET_DP = intPreferencesKey("app_list_left_safe_inset_dp")
         val KEY_APP_LIST_SCALE_PERCENT = intPreferencesKey("app_list_scale_percent")
         val KEY_APP_LIST_WATCHFACE_COLORS = booleanPreferencesKey("app_list_watchface_colors")
+        val KEY_APP_LIST_ROW_BORDER = booleanPreferencesKey("app_list_row_border_enabled")
         val KEY_FAST_FLOW_ANIMATION = booleanPreferencesKey("fast_flow_animation_enabled")
         val KEY_TWO_TONE_ICONS = booleanPreferencesKey("two_tone_icons_enabled")
         val KEY_ICON_SHADOW = booleanPreferencesKey("app_icon_shadow_enabled")
+        val KEY_CLASSIC_RETURN_ANIMATION = booleanPreferencesKey("classic_return_animation_enabled")
         val KEY_SHOW_STEP_COUNT = booleanPreferencesKey("show_step_count")
         val KEY_SHOW_NOTIFICATION = booleanPreferencesKey("show_notification")
         val KEY_NOTIFICATION_SETTING_MIGRATED = booleanPreferencesKey("notification_setting_migrated")
@@ -294,12 +296,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val appListScalePercent: StateFlow<Int> = _appListScalePercent.asStateFlow()
     private val _appListWatchFaceColors = MutableStateFlow(true)
     val appListWatchFaceColors: StateFlow<Boolean> = _appListWatchFaceColors.asStateFlow()
+    private val _appListRowBorderEnabled = MutableStateFlow(false)
+    val appListRowBorderEnabled: StateFlow<Boolean> = _appListRowBorderEnabled.asStateFlow()
     private val _fastFlowAnimationEnabled = MutableStateFlow(false)
     val fastFlowAnimationEnabled: StateFlow<Boolean> = _fastFlowAnimationEnabled.asStateFlow()
     private val _twoToneIconsEnabled = MutableStateFlow(false)
     val twoToneIconsEnabled: StateFlow<Boolean> = _twoToneIconsEnabled.asStateFlow()
     private val _iconShadowEnabled = MutableStateFlow(true)
     val iconShadowEnabled: StateFlow<Boolean> = _iconShadowEnabled.asStateFlow()
+    private val _classicReturnAnimationEnabled = MutableStateFlow(false)
+    val classicReturnAnimationEnabled: StateFlow<Boolean> = _classicReturnAnimationEnabled.asStateFlow()
     private val _showStepCount = MutableStateFlow(true)
     val showStepCount: StateFlow<Boolean> = _showStepCount.asStateFlow()
 
@@ -675,6 +681,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListWatchFaceColors.value = loadedAppListWatchFaceColors
                 }
 
+                val loadedAppListRowBorder = prefs[KEY_APP_LIST_ROW_BORDER] ?: false
+                if (_appListRowBorderEnabled.value != loadedAppListRowBorder) {
+                    _appListRowBorderEnabled.value = loadedAppListRowBorder
+                }
+
                 val loadedFastFlowEnabled = prefs[KEY_FAST_FLOW_ANIMATION] ?: false
                 if (_fastFlowAnimationEnabled.value != loadedFastFlowEnabled) {
                     _fastFlowAnimationEnabled.value = loadedFastFlowEnabled
@@ -689,6 +700,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedIconShadow = prefs[KEY_ICON_SHADOW] ?: true
                 if (_iconShadowEnabled.value != loadedIconShadow) {
                     _iconShadowEnabled.value = loadedIconShadow
+                }
+
+                val loadedClassicReturnAnimation = prefs[KEY_CLASSIC_RETURN_ANIMATION] ?: false
+                if (_classicReturnAnimationEnabled.value != loadedClassicReturnAnimation) {
+                    _classicReturnAnimationEnabled.value = loadedClassicReturnAnimation
                 }
 
                 val loadedShowStepCount = prefs[KEY_SHOW_STEP_COUNT] ?: true
@@ -1240,6 +1256,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_APP_LIST_WATCHFACE_COLORS] = enabled } }
     }
 
+    fun setAppListRowBorderEnabled(enabled: Boolean) {
+        _appListRowBorderEnabled.value = enabled
+        persist { store.edit { it[KEY_APP_LIST_ROW_BORDER] = enabled } }
+    }
+
     fun setFastFlowAnimationEnabled(enabled: Boolean) {
         _fastFlowAnimationEnabled.value = enabled
         persist { store.edit { it[KEY_FAST_FLOW_ANIMATION] = enabled } }
@@ -1255,6 +1276,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setIconShadowEnabled(enabled: Boolean) {
         _iconShadowEnabled.value = enabled
         persist { store.edit { it[KEY_ICON_SHADOW] = enabled } }
+    }
+
+    fun setClassicReturnAnimationEnabled(enabled: Boolean) {
+        _classicReturnAnimationEnabled.value = enabled
+        persist { store.edit { it[KEY_CLASSIC_RETURN_ANIMATION] = enabled } }
     }
 
     fun setShowStepCountEnabled(enabled: Boolean) {
@@ -1781,9 +1807,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appListLeftSafeInsetDp.value = 0
         _appListScalePercent.value = 100
         _appListWatchFaceColors.value = true
+        _appListRowBorderEnabled.value = false
         _fastFlowAnimationEnabled.value = false
         _twoToneIconsEnabled.value = false
         _iconShadowEnabled.value = true
+        _classicReturnAnimationEnabled.value = false
         _showStepCount.value = true
         _showNotification.value = true
         _showWidgets.value = true
@@ -1865,9 +1893,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_APP_LIST_LEFT_SAFE_INSET_DP] = 0
                 it[KEY_APP_LIST_SCALE_PERCENT] = 100
                 it[KEY_APP_LIST_WATCHFACE_COLORS] = true
+                it[KEY_APP_LIST_ROW_BORDER] = false
                 it[KEY_FAST_FLOW_ANIMATION] = false
                 it[KEY_TWO_TONE_ICONS] = false
                 it[KEY_ICON_SHADOW] = true
+                it[KEY_CLASSIC_RETURN_ANIMATION] = false
                 it[KEY_SHOW_STEP_COUNT] = true
                 it[KEY_LEGACY_CIRCULAR_ICONS] = true
                 it[KEY_SHOW_NOTIFICATION] = true

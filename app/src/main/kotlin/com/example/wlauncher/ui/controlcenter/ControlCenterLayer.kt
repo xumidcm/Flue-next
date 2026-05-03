@@ -282,28 +282,30 @@ fun ControlCenterLayer(
                 .padding(horizontal = 18.dp, vertical = verticalPadding),
             verticalArrangement = Arrangement.spacedBy(outerSpacing)
         ) {
-            Box(
-                modifier = Modifier.fillMaxWidth(),
-            ) {
+            Box(modifier = Modifier.fillMaxWidth()) {
                 WatchBatteryPill(
                     level = batteryStatus.level,
                     charging = batteryStatus.charging,
-                    sizeScale = 0.92f,
+                    sizeScale = if (compact) 1.04f else 1.15f,
                     modifier = Modifier.align(Alignment.CenterStart)
                 )
-                SystemSettingsButton(
-                    size = if (compact) 34.dp else 38.dp,
-                    iconSize = if (compact) 19.dp else 21.dp,
-                    modifier = Modifier.align(Alignment.Center),
-                    onClick = { openSettings(context, Settings.ACTION_SETTINGS) }
-                )
-                Text(
-                    timeText,
-                    color = launcherStyle.titleColor,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.align(Alignment.CenterEnd)
-                )
+                Row(
+                    modifier = Modifier.align(Alignment.CenterEnd),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    SystemSettingsButton(
+                        size = if (compact) 26.dp else 28.dp,
+                        iconSize = if (compact) 15.dp else 17.dp,
+                        onClick = { openSettings(context, Settings.ACTION_SETTINGS) }
+                    )
+                    Text(
+                        timeText,
+                        color = launcherStyle.titleColor,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(controlsSpacing)) {

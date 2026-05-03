@@ -224,9 +224,11 @@ private fun SettingsRootScreen(
     val appListLeftSafeInsetDp by vm.appListLeftSafeInsetDp.collectAsStateWithLifecycle()
     val appListScalePercent by vm.appListScalePercent.collectAsStateWithLifecycle()
     val appListWatchFaceColors by vm.appListWatchFaceColors.collectAsStateWithLifecycle()
+    val appListRowBorderEnabled by vm.appListRowBorderEnabled.collectAsStateWithLifecycle()
     val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsStateWithLifecycle()
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
+    val classicReturnAnimationEnabled by vm.classicReturnAnimationEnabled.collectAsStateWithLifecycle()
     val showStepCount by vm.showStepCount.collectAsStateWithLifecycle()
     val builtInPhotoPath by vm.builtInPhotoPath.collectAsStateWithLifecycle()
     val builtInVideoPath by vm.builtInVideoPath.collectAsStateWithLifecycle()
@@ -837,6 +839,20 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "app_list_scale", screenCenterY, screenHeightPx)
                 )
             }
+            item("app_list_row_border") {
+                SettingsSwitchRow(
+                    title = if (isZh) "列表模式边框" else "List Row Borders",
+                    subtitle = if (appListRowBorderEnabled) {
+                        if (isZh) "列表布局中每排应用显示细边框" else "Show a thin border around each list row"
+                    } else {
+                        if (isZh) "列表布局中不显示每排应用边框" else "Hide borders from list rows"
+                    },
+                    checked = appListRowBorderEnabled,
+                    enabled = layoutMode == LayoutMode.List,
+                    onToggle = vm::setAppListRowBorderEnabled,
+                    scale = itemFisheye(listState, "app_list_row_border", screenCenterY, screenHeightPx)
+                )
+            }
             item("app_list_watchface_colors") {
                 SettingsSwitchRow(
                     title = if (isZh) "应用列表表盘取色" else "Watch Face App List Colors",
@@ -964,7 +980,7 @@ private fun SettingsRootScreen(
             }
             item("fast_flow_animation") {
                 SettingsSwitchRow(
-                    title = if (isZh) "快速流动动画" else "Fast Flow Animation",
+                    title = if (isZh) "快速流逝动画" else "Fast Flow Animation",
                     subtitle = if (isZh) "仅作用于蜂窝模式，越远离屏幕中心滚动越快" else "Honeycomb only; icons farther from center move faster while scrolling",
                     checked = fastFlowAnimationEnabled,
                     onToggle = vm::setFastFlowAnimationEnabled,
@@ -1005,6 +1021,19 @@ private fun SettingsRootScreen(
                     checked = animationOverrideEnabled,
                     onToggle = { vm.setAnimationOverrideEnabled(it) },
                     scale = itemFisheye(listState, "anim_override", screenCenterY, screenHeightPx)
+                )
+            }
+            item("classic_return_animation") {
+                SettingsSwitchRow(
+                    title = if (isZh) "经典返回动画" else "Classic Return Animation",
+                    subtitle = if (classicReturnAnimationEnabled) {
+                        if (isZh) "返回应用列表时从屏幕中间缩放" else "Return to the app list from the screen center"
+                    } else {
+                        if (isZh) "返回应用列表时跟随应用图标位置缩放" else "Return to the app list from the launched app icon"
+                    },
+                    checked = classicReturnAnimationEnabled,
+                    onToggle = vm::setClassicReturnAnimationEnabled,
+                    scale = itemFisheye(listState, "classic_return_animation", screenCenterY, screenHeightPx)
                 )
             }
             item("hide_from_recents") {
