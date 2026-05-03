@@ -8,6 +8,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.scrollBy
@@ -605,6 +606,13 @@ fun ListDrawerScreen(
                     val isDragged = dragFromIndex == index
                     val isSettling = settlingKey == app.componentKey
                     val isGlidePressed = glidePressedIndex == index
+                    val showMenuBorder = longPressedApp?.componentKey == app.componentKey &&
+                        dragFromIndex == null
+                    val menuBorderColor = if (useWatchFaceColors && themeColor.alpha > 0.01f) {
+                        themeColor.copy(alpha = if (darkMode) 0.66f else 0.48f)
+                    } else {
+                        appPalette.text.copy(alpha = if (darkMode) 0.42f else 0.30f)
+                    }
                     val displacedTarget = listDisplacementForIndex(
                         index = index,
                         dragFromIndex = dragFromIndex,
@@ -661,6 +669,13 @@ fun ListDrawerScreen(
                             }
                             .background(appPalette.item, launcherStyle.compactShape)
                             .background(appPalette.itemPressedOverlay.copy(alpha = pressedOverlay), launcherStyle.compactShape)
+                            .then(
+                                if (showMenuBorder) {
+                                    Modifier.border(1.5.dp, menuBorderColor, launcherStyle.compactShape)
+                                } else {
+                                    Modifier
+                                }
+                            )
                             .combinedClickable(
                                 interactionSource = interactionSource,
                                 indication = null,

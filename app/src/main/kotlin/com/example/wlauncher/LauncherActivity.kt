@@ -583,7 +583,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         appListScalePercent = appListScalePercent,
                         useWatchFaceColors = appListWatchFaceColors,
                         fisheyeEnabled = appListFisheyeEnabled,
-                        fastFlowAnimationEnabled = fastFlowAnimationEnabled,
+                        fastFlowAnimationEnabled = false,
                         twoToneIconsEnabled = twoToneIconsEnabled,
                         iconShadowEnabled = effectiveIconShadowEnabled,
                         themeColor = appListThemeColor,

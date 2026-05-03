@@ -65,6 +65,7 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.NetworkCell
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings as SettingsIcon
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.VolumeUp
@@ -281,17 +282,28 @@ fun ControlCenterLayer(
                 .padding(horizontal = 18.dp, vertical = verticalPadding),
             verticalArrangement = Arrangement.spacedBy(outerSpacing)
         ) {
-            Row(
+            Box(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
             ) {
                 WatchBatteryPill(
                     level = batteryStatus.level,
                     charging = batteryStatus.charging,
-                    sizeScale = 0.92f
+                    sizeScale = 0.92f,
+                    modifier = Modifier.align(Alignment.CenterStart)
                 )
-                Text(timeText, color = launcherStyle.titleColor, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                SystemSettingsButton(
+                    size = if (compact) 34.dp else 38.dp,
+                    iconSize = if (compact) 19.dp else 21.dp,
+                    modifier = Modifier.align(Alignment.Center),
+                    onClick = { openSettings(context, Settings.ACTION_SETTINGS) }
+                )
+                Text(
+                    timeText,
+                    color = launcherStyle.titleColor,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.align(Alignment.CenterEnd)
+                )
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(controlsSpacing)) {
@@ -411,6 +423,43 @@ fun ControlCenterLayer(
                     .padding(top = footerTopGap)
             )
         }
+    }
+}
+
+@Composable
+private fun SystemSettingsButton(
+    size: androidx.compose.ui.unit.Dp,
+    iconSize: androidx.compose.ui.unit.Dp,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.88f else 1f, label = "system_settings_scale")
+    val backgroundColor = if (pressed) Color(0xFF424242) else Color(0xFF2C2C2E)
+
+    Box(
+        modifier = modifier
+            .size(size)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(CircleShape)
+            .background(backgroundColor)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Filled.SettingsIcon,
+            contentDescription = "系统设置",
+            tint = Color.White,
+            modifier = Modifier.size(iconSize)
+        )
     }
 }
 

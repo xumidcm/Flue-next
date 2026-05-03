@@ -965,7 +965,7 @@ private fun SettingsRootScreen(
             item("fast_flow_animation") {
                 SettingsSwitchRow(
                     title = if (isZh) "快速流动动画" else "Fast Flow Animation",
-                    subtitle = if (isZh) "开启后越远离屏幕中心，滚动速度越快" else "Icons farther from center move faster while scrolling",
+                    subtitle = if (isZh) "仅作用于蜂窝模式，越远离屏幕中心滚动越快" else "Honeycomb only; icons farther from center move faster while scrolling",
                     checked = fastFlowAnimationEnabled,
                     onToggle = vm::setFastFlowAnimationEnabled,
                     scale = itemFisheye(listState, "fast_flow_animation", screenCenterY, screenHeightPx)
