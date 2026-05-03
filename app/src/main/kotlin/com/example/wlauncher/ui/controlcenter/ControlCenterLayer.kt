@@ -275,7 +275,7 @@ fun ControlCenterLayer(
         val toggleLabelGap = if (compact) 4.dp else 7.dp
         val sliderHeight = if (compact) 42.dp else 58.dp
         val sliderHorizontalPadding = if (compact) 12.dp else 14.dp
-        val topStatusHorizontalInset = if (compact) 6.dp else 8.dp
+        val topStatusHorizontalInset = if (compact) 10.dp else 14.dp
         Column(
             modifier = Modifier
                 .fillMaxSize()
