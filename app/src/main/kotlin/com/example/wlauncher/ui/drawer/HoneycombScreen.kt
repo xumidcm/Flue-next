@@ -793,7 +793,7 @@ fun HoneycombScreen(
                                 Build.VERSION.SDK_INT < Build.VERSION_CODES.S
                         ),
                         size = iconSizeDp,
-                        tintColor = appPalette.item,
+                        tintColor = Color.Transparent,
                         shape = launcherStyle.bubbleShape,
                         onClick = {
                             if (longPressedApp == null && dragFromIndex == null) {
@@ -896,7 +896,7 @@ fun HoneycombScreen(
                         blurred = blurEnabled && effectiveEdgeBlur && dragOverlayBlur > 0.5f && Build.VERSION.SDK_INT < Build.VERSION_CODES.S
                     ),
                     size = iconSizeDp,
-                    tintColor = appPalette.item,
+                    tintColor = Color.Transparent,
                     shape = launcherStyle.bubbleShape,
                     onClick = {},
                     onLongClick = null,
@@ -944,7 +944,7 @@ fun HoneycombScreen(
                     blurred = blurEnabled && effectiveEdgeBlur && settlingBlur > 0.5f && Build.VERSION.SDK_INT < Build.VERSION_CODES.S
                 ),
                 size = iconSizeDp,
-                tintColor = appPalette.item,
+                tintColor = Color.Transparent,
                 shape = launcherStyle.bubbleShape,
                 onClick = {},
                 forcePressed = false,

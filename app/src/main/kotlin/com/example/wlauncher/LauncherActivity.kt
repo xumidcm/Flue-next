@@ -83,6 +83,8 @@ import kotlinx.coroutines.launch
 private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
 private const val SIDE_SCREEN_TRANSITION_MS = 260
 private const val NOTIFICATION_TRANSITION_MS = 240
+private const val APP_LIST_OPEN_SHADOW_DELAY_MS = 280L
+private const val APP_LIST_RETURN_SHADOW_DELAY_MS = 520L
 private const val APP_LIST_RETURN_ORIGIN_HOLD_MS = 520L
 
 class LauncherActivity : ComponentActivity() {
@@ -305,9 +307,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
     var prevState by remember { mutableStateOf(screenState) }
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
     val isOpeningAppList = prevState == ScreenState.Face && screenState == ScreenState.Apps
+    val isEnteringAppList = prevState != ScreenState.Apps && screenState == ScreenState.Apps
     var appListReturnOriginActive by remember {
         mutableStateOf(screenState == ScreenState.App && launchSourceState == ScreenState.Apps)
     }
+    var appListShadowsReady by remember { mutableStateOf(screenState == ScreenState.Apps) }
     LaunchedEffect(screenState, launchSourceState) {
         if (launchSourceState != ScreenState.Apps) {
             appListReturnOriginActive = false
@@ -327,6 +331,22 @@ fun LauncherScreen(vm: LauncherViewModel) {
             else -> appListReturnOriginActive = false
         }
     }
+    LaunchedEffect(screenState, iconShadowEnabled) {
+        if (!iconShadowEnabled || screenState != ScreenState.Apps) {
+            appListShadowsReady = false
+            return@LaunchedEffect
+        }
+        appListShadowsReady = false
+        val shadowDelayMs = when {
+            isReturningFromApp -> APP_LIST_RETURN_SHADOW_DELAY_MS
+            isEnteringAppList -> APP_LIST_OPEN_SHADOW_DELAY_MS
+            else -> 0L
+        }
+        if (shadowDelayMs > 0L) {
+            delay(shadowDelayMs)
+        }
+        appListShadowsReady = true
+    }
     LaunchedEffect(screenState) { prevState = screenState }
     val launcherScope = rememberCoroutineScope()
     var retainedLaunchIcon by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
@@ -341,7 +361,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         appListReturnOriginActive && !classicReturnAnimationEnabled -> appOpenOrigin
         else -> null
     }
-    val effectiveIconShadowEnabled = iconShadowEnabled
+    val effectiveIconShadowEnabled = iconShadowEnabled && appListShadowsReady
     val fadeLaunch = launchSourceState == ScreenState.Stack || launchSourceState == ScreenState.Notifications
 
     LaunchedEffect(notificationSceneActive) {
