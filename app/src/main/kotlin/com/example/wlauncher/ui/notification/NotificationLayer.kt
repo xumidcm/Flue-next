@@ -70,6 +70,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -115,6 +116,8 @@ fun NotificationLayer(
     onToggleGroup: (String) -> Unit,
     onDismissGroup: (String) -> Unit,
     onDismissNotification: (String) -> Unit,
+    onDismissAllNotifications: () -> Unit,
+    onRunNotificationAction: (String) -> Boolean,
     onOpenNotification: (String, Offset) -> Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -133,6 +136,9 @@ fun NotificationLayer(
     val overscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val launcherStyle = LauncherTheme.style
+    val hasClearableNotifications = notificationGroups.any { group ->
+        group.entries.any(NotificationEntryUi::isClearable)
+    }
     var dismissTransitionInFlight by remember { mutableStateOf(false) }
     var dismissDragDistance by remember { mutableFloatStateOf(0f) }
     var dismissDragVelocityY by remember { mutableFloatStateOf(0f) }
@@ -397,12 +403,21 @@ fun NotificationLayer(
                                 onToggleGroup = { onToggleGroup(group.packageName) },
                                 onDismissGroup = { onDismissGroup(group.packageName) },
                                 onDismissNotification = onDismissNotification,
+                                onRunNotificationAction = onRunNotificationAction,
                                 onOpenNotification = onOpenNotification
                             )
                         }
                     }
                 }
             }
+        }
+        if (hasClearableNotifications) {
+            ClearAllButton(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 50.dp),
+                onClick = onDismissAllNotifications
+            )
         }
         WatchBatteryPill(
             level = batteryStatus.level,
@@ -435,6 +450,7 @@ private fun NotificationGroupSection(
     onToggleGroup: () -> Unit,
     onDismissGroup: () -> Unit,
     onDismissNotification: (String) -> Unit,
+    onRunNotificationAction: (String) -> Boolean,
     onOpenNotification: (String, Offset) -> Boolean
 ) {
     Column(
@@ -456,6 +472,7 @@ private fun NotificationGroupSection(
             onToggleGroup = onToggleGroup,
             onDismissGroup = onDismissGroup,
             onDismissNotification = onDismissNotification,
+            onRunNotificationAction = onRunNotificationAction,
             onOpenNotification = onOpenNotification
         )
     }
@@ -470,6 +487,7 @@ private fun NotificationGroupBody(
     onToggleGroup: () -> Unit,
     onDismissGroup: () -> Unit,
     onDismissNotification: (String) -> Unit,
+    onRunNotificationAction: (String) -> Boolean,
     onOpenNotification: (String, Offset) -> Boolean
 ) {
     val hasMultipleEntries = group.entries.size > 1
@@ -505,7 +523,8 @@ private fun NotificationGroupBody(
                             entry = entry,
                             subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
                             trailing = formatNotificationTime(entry.time),
-                            onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) }
+                            onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) },
+                            onRunNotificationAction = onRunNotificationAction
                         )
                     }
                 }
@@ -542,7 +561,8 @@ private fun NotificationGroupBody(
                     entry = entry,
                     subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
                     trailing = formatNotificationTime(entry.time),
-                    onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) }
+                    onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) },
+                    onRunNotificationAction = onRunNotificationAction
                 )
             }
         }
@@ -650,11 +670,17 @@ private fun NotificationCard(
     subtitle: String,
     trailing: String,
     onClick: () -> Unit,
+    onRunNotificationAction: (String) -> Boolean = { false },
     onMeasuredHeight: ((Int) -> Unit)? = null
 ) {
     val pressed = rememberPressedState()
     val isPressed by pressed
     val launcherStyle = LauncherTheme.style
+    val cardColor = if (launcherStyle.cardColor.alpha < 0.35f) {
+        if (launcherStyle.titleColor == Color.White) Color(0xFF353535) else Color(0xFFE8E8ED)
+    } else {
+        launcherStyle.cardColor
+    }
     val scale by animateFloatAsState(if (isPressed) 0.968f else 1f, spring(stiffness = 860f, dampingRatio = 0.72f), label = "notif_card")
     Box(
         Modifier
@@ -664,7 +690,7 @@ private fun NotificationCard(
             }
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(RoundedCornerShape(28.dp))
-            .background(launcherStyle.cardColor)
+            .background(cardColor)
             .instantPressGesture(
                 pressed,
                 enabled = entry.key == "perm" || entry.key == "empty" || entry.contentIntentAvailable,
@@ -672,19 +698,98 @@ private fun NotificationCard(
             )
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            NotificationIcon(entry.icon)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(entry.title.ifBlank { entry.appLabel }, color = launcherStyle.titleColor, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(2.dp))
-                Text(subtitle, color = WatchColors.TextSecondary, fontSize = 13.sp, maxLines = 2)
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                NotificationIcon(entry.icon)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(entry.title.ifBlank { entry.appLabel }, color = launcherStyle.titleColor, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(2.dp))
+                    Text(subtitle, color = WatchColors.TextSecondary, fontSize = 13.sp, maxLines = 2)
+                }
+                if (trailing.isNotBlank()) {
+                    Spacer(Modifier.width(10.dp))
+                    Text(trailing, color = launcherStyle.bodyColor, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                }
             }
-            if (trailing.isNotBlank()) {
-                Spacer(Modifier.width(10.dp))
-                Text(trailing, color = launcherStyle.bodyColor, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            if (entry.actions.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    entry.actions.take(3).forEach { action ->
+                        NotificationActionButton(
+                            title = action.title,
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                onRunNotificationAction(action.key)
+                            }
+                        )
+                    }
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun NotificationActionButton(
+    title: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val launcherStyle = LauncherTheme.style
+    val pressed = rememberPressedState()
+    val isPressed by pressed
+    val scale by animateFloatAsState(if (isPressed) 0.955f else 1f, spring(stiffness = 820f, dampingRatio = 0.76f), label = "notif_action")
+    Box(
+        modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(RoundedCornerShape(999.dp))
+            .background(launcherStyle.topBarChipColor)
+            .instantPressGesture(pressed, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = title,
+            color = launcherStyle.topBarTextColor,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun ClearAllButton(
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val launcherStyle = LauncherTheme.style
+    val pressed = rememberPressedState()
+    val isPressed by pressed
+    val scale by animateFloatAsState(if (isPressed) 0.955f else 1f, spring(stiffness = 820f, dampingRatio = 0.76f), label = "notif_clear_all")
+    Box(
+        modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(RoundedCornerShape(999.dp))
+            .background(launcherStyle.topBarChipColor)
+            .instantPressGesture(pressed, onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "全部清除",
+            color = launcherStyle.topBarTextColor,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 

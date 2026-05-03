@@ -713,10 +713,19 @@ fun SmartStackLayer(
                     }
                     items(
                         items = visibleWidgetCards,
-                        key = { "widget_${it.widgetIndex}_${it.widget.widgetKey}_${it.widget.widgetId}" },
+                        key = { it.stableKey() },
                         contentType = { "side_widget" }
                     ) { card ->
-                        Box(Modifier.width(contentWidth).animateContentSize()) {
+                        Box(
+                            Modifier
+                                .width(contentWidth)
+                                .animateItem(
+                                    fadeInSpec = tween(180),
+                                    placementSpec = spring(stiffness = 520f, dampingRatio = 0.84f),
+                                    fadeOutSpec = tween(180)
+                                )
+                                .animateContentSize()
+                        ) {
                             WidgetCard(
                                 widget = card.widget,
                                 widgetRepository = widgetRepository,
@@ -927,10 +936,7 @@ fun WidgetPageLayer(
     var editMode by remember { mutableStateOf(false) }
     var showPicker by remember { mutableStateOf(false) }
     var pendingWidgetSelection by remember { mutableStateOf<PendingWidgetSelection?>(null) }
-    var movingWidgetKey by remember { mutableStateOf<String?>(null) }
-    val movingWidgetOffset = remember { Animatable(0f) }
     val widgetBorderHotspotPx = with(density) { 18.dp.toPx() }
-    val widgetMoveDistancePx = with(density) { 46.dp.toPx() }
 
     fun clearAllocatedWidget(slotIndex: Int) {
         widgetRepository.extractWidgetId(sideScreenWidgetSlots.getOrNull(slotIndex))?.let { widgetId ->
@@ -1043,24 +1049,6 @@ fun WidgetPageLayer(
         if (widgetCards.isEmpty()) {
             editMode = false
         }
-        if (movingWidgetKey != null && widgetCards.none { it.stableKey() == movingWidgetKey }) {
-            movingWidgetKey = null
-        }
-    }
-
-    fun moveWidgetWithAnimation(card: SideScreenWidgetCardItem, target: SideScreenWidgetCardItem, direction: Int) {
-        if (movingWidgetKey != null || direction == 0) return
-        movingWidgetKey = card.stableKey()
-        scope.launch {
-            movingWidgetOffset.snapTo(0f)
-            movingWidgetOffset.animateTo(
-                widgetMoveDistancePx * direction.coerceIn(-1, 1),
-                animationSpec = tween(durationMillis = 120)
-            )
-            onSwapWidget(card.widgetIndex, target.widgetIndex)
-            movingWidgetOffset.snapTo(0f)
-            movingWidgetKey = null
-        }
     }
 
     BoxWithConstraints(
@@ -1138,8 +1126,12 @@ fun WidgetPageLayer(
                     Box(
                         modifier = Modifier
                             .width(contentWidth)
+                            .animateItem(
+                                fadeInSpec = tween(180),
+                                placementSpec = spring(stiffness = 520f, dampingRatio = 0.84f),
+                                fadeOutSpec = tween(180)
+                            )
                             .graphicsLayer {
-                                translationY = if (movingWidgetKey == cardKey) movingWidgetOffset.value else 0f
                                 rotationZ = if (editMode) jiggleRotation else 0f
                             }
                     ) {
@@ -1206,23 +1198,23 @@ fun WidgetPageLayer(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 WidgetEditIconButton(
-                                    enabled = movingWidgetKey == null && cardIndex > 0,
+                                    enabled = cardIndex > 0,
                                     backgroundColor = Color(0xFF1976D2),
                                     onClick = {
                                         val previous = widgetCards.getOrNull(cardIndex - 1)
                                             ?: return@WidgetEditIconButton
-                                        moveWidgetWithAnimation(card, previous, -1)
+                                        onSwapWidget(card.widgetIndex, previous.widgetIndex)
                                     }
                                 ) {
                                     Icon(Icons.Filled.KeyboardArrowUp, null, tint = Color.White, modifier = Modifier.size(22.dp))
                                 }
                                 WidgetEditIconButton(
-                                    enabled = movingWidgetKey == null && cardIndex in 0 until widgetCards.lastIndex,
+                                    enabled = cardIndex in 0 until widgetCards.lastIndex,
                                     backgroundColor = Color(0xFF1976D2),
                                     onClick = {
                                         val next = widgetCards.getOrNull(cardIndex + 1)
                                             ?: return@WidgetEditIconButton
-                                        moveWidgetWithAnimation(card, next, 1)
+                                        onSwapWidget(card.widgetIndex, next.widgetIndex)
                                     }
                                 ) {
                                     Icon(Icons.Filled.KeyboardArrowDown, null, tint = Color.White, modifier = Modifier.size(22.dp))
@@ -1809,6 +1801,11 @@ private fun EmptyWidgetCard(width: Dp) {
     onMeasuredHeight: ((Int) -> Unit)? = null
 ) {
     val launcherStyle = LauncherTheme.style
+    val cardColor = if (launcherStyle.cardColor.alpha < 0.35f) {
+        if (launcherStyle.titleColor == Color.White) Color(0xFF353535) else Color(0xFFE8E8ED)
+    } else {
+        launcherStyle.cardColor
+    }
     val pressed = rememberPressedState(); val isPressed by pressed
     val scale by animateFloatAsState(if (isPressed) 0.968f else 1f, spring(stiffness = 860f, dampingRatio = 0.72f), label = "preview_scale")
     Box(
@@ -1819,7 +1816,7 @@ private fun EmptyWidgetCard(width: Dp) {
             }
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(RoundedCornerShape(28.dp))
-            .background(launcherStyle.cardColor)
+            .background(cardColor)
             .instantPressGesture(pressed, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {

@@ -32,7 +32,13 @@ data class NotifData(
     val contentIntentAvailable: Boolean,
     val isGroupSummary: Boolean,
     val isOngoing: Boolean,
-    val isForegroundService: Boolean
+    val isForegroundService: Boolean,
+    val actions: List<NotifActionData> = emptyList()
+)
+
+data class NotifActionData(
+    val key: String,
+    val title: String
 )
 
 class WLauncherNotificationListener : NotificationListenerService() {
@@ -51,6 +57,7 @@ class WLauncherNotificationListener : NotificationListenerService() {
 
         private var instance: WLauncherNotificationListener? = null
         private val pendingIntentMap = mutableMapOf<String, PendingIntent?>()
+        private val pendingActionIntentMap = mutableMapOf<String, PendingIntent>()
         private val packageIconCache = mutableMapOf<String, ImageBitmap?>()
 
         fun isConnected() = instance != null
@@ -80,6 +87,19 @@ class WLauncherNotificationListener : NotificationListenerService() {
                 pendingIntent.send()
             }.isSuccess
         }
+
+        fun runNotificationAction(actionKey: String): Boolean {
+            val pendingIntent = synchronized(pendingActionIntentMap) {
+                pendingActionIntentMap[actionKey]
+            } ?: return false
+            return runCatching {
+                pendingIntent.send()
+            }.isSuccess
+        }
+
+        private fun actionKey(notificationKey: String, actionIndex: Int): String {
+            return "$notificationKey/action/$actionIndex"
+        }
     }
 
     override fun onListenerConnected() {
@@ -93,6 +113,7 @@ class WLauncherNotificationListener : NotificationListenerService() {
         Log.d(TAG, "Notification listener disconnected")
         _notifications.value = emptyList()
         synchronized(pendingIntentMap) { pendingIntentMap.clear() }
+        synchronized(pendingActionIntentMap) { pendingActionIntentMap.clear() }
         synchronized(packageIconCache) { packageIconCache.clear() }
     }
 
@@ -139,6 +160,19 @@ class WLauncherNotificationListener : NotificationListenerService() {
                     ?.contentIntent
             }
         }
+        synchronized(pendingActionIntentMap) {
+            pendingActionIntentMap.clear()
+            parsedNotifications.forEach { notification ->
+                val sbn = sbns.firstOrNull { it.key == notification.key } ?: return@forEach
+                sbn.notification.actions.orEmpty().forEachIndexed { index, action ->
+                    val actionIntent = action.actionIntent
+                    val title = action.title?.toString()?.trim().orEmpty()
+                    if (actionIntent != null && title.isNotBlank()) {
+                        pendingActionIntentMap[actionKey(sbn.key, index)] = actionIntent
+                    }
+                }
+            }
+        }
         Log.d(TAG, "Notification refresh complete: active=${sbns.size}, visible=${parsedNotifications.size}")
     }
 
@@ -168,7 +202,18 @@ class WLauncherNotificationListener : NotificationListenerService() {
             contentIntentAvailable = notification.contentIntent != null,
             isGroupSummary = flags and Notification.FLAG_GROUP_SUMMARY != 0,
             isOngoing = flags and Notification.FLAG_ONGOING_EVENT != 0,
-            isForegroundService = flags and Notification.FLAG_FOREGROUND_SERVICE != 0
+            isForegroundService = flags and Notification.FLAG_FOREGROUND_SERVICE != 0,
+            actions = notification.actions.orEmpty().mapIndexedNotNull { index, action ->
+                val title = action.title?.toString()?.trim().orEmpty()
+                if (title.isBlank() || action.actionIntent == null) {
+                    null
+                } else {
+                    NotifActionData(
+                        key = actionKey(sbn.key, index),
+                        title = title
+                    )
+                }
+            }
         )
     }
 

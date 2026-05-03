@@ -35,12 +35,11 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -80,6 +79,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -98,6 +98,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -115,6 +116,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import com.flue.launcher.service.WLauncherNotificationListener
 import com.flue.launcher.ui.common.WatchBatteryPill
+import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.delay
@@ -128,6 +130,9 @@ import kotlin.math.roundToInt
 
 private const val CONTROL_CENTER_OVERSCROLL_LIMIT = 96f
 private const val CONTROL_CENTER_OVERSCROLL_RESISTANCE = 0.35f
+private const val CONTROL_CENTER_MIN_PRESS_MS = 140L
+private const val MEDIA_PROGRESS_COLLAPSED_HEIGHT_DP = 4f
+private const val MEDIA_PROGRESS_EXPANDED_HEIGHT_DP = 8f
 
 private data class ControlCenterMediaState(
     val controller: MediaController? = null,
@@ -715,8 +720,8 @@ private fun SystemSettingsButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val pressed by interactionSource.collectIsPressedAsState()
+    val pressedState = rememberPressedState()
+    val pressed by pressedState
     val launcherStyle = LauncherTheme.style
     val scale by animateFloatAsState(if (pressed) 0.88f else 1f, label = "system_settings_scale")
     val iconTint = if (pressed) {
@@ -732,11 +737,7 @@ private fun SystemSettingsButton(
                 scaleX = scale
                 scaleY = scale
             }
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick
-            ),
+            .controlCenterPressGesture(pressedState, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Icon(
@@ -760,8 +761,8 @@ private fun ControlToggle(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val pressed by interactionSource.collectIsPressedAsState()
+    val pressedState = rememberPressedState()
+    val pressed by pressedState
     val targetScale by animateFloatAsState(
         when {
             pressed -> 0.88f
@@ -785,9 +786,8 @@ private fun ControlToggle(
                 }
                 .clip(CircleShape)
                 .background(buttonColor)
-                .combinedClickable(
-                    interactionSource = interactionSource,
-                    indication = null,
+                .controlCenterPressGesture(
+                    pressedState = pressedState,
                     onClick = onClick,
                     onLongClick = onLongClick
                 ),
@@ -1041,15 +1041,25 @@ private fun MediaProgressSection(
 ) {
     var widthPx by remember { mutableIntStateOf(1) }
     var dragging by remember { mutableStateOf(false) }
+    var skipNextProgressSync by remember(mediaState.controller, mediaState.durationMs) {
+        mutableStateOf(false)
+    }
     var localProgress by remember(mediaState.controller, mediaState.durationMs) {
         mutableFloatStateOf(mediaState.progress.coerceIn(0f, 1f))
     }
     LaunchedEffect(mediaState.progress, dragging) {
         if (!dragging) {
+            if (skipNextProgressSync) {
+                skipNextProgressSync = false
+                return@LaunchedEffect
+            }
             localProgress = mediaState.progress.coerceIn(0f, 1f)
         }
     }
-    val trackHeight by animateFloatAsState(if (dragging) 8f else 4f, label = "media_progress_height")
+    val trackHeight by animateFloatAsState(
+        if (dragging) MEDIA_PROGRESS_EXPANDED_HEIGHT_DP else MEDIA_PROGRESS_COLLAPSED_HEIGHT_DP,
+        label = "media_progress_height"
+    )
     fun seekToProgress(progress: Float) {
         val duration = mediaState.durationMs
         if (duration <= 0L) return
@@ -1062,24 +1072,38 @@ private fun MediaProgressSection(
                 .height(22.dp)
                 .onSizeChanged { widthPx = it.width.coerceAtLeast(1) }
                 .pointerInput(mediaState.controller, mediaState.durationMs) {
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = { offset ->
-                            dragging = true
-                            localProgress = (offset.x / widthPx).coerceIn(0f, 1f)
-                        },
-                        onDragCancel = {
-                            dragging = false
-                            localProgress = mediaState.progress.coerceIn(0f, 1f)
-                        },
-                        onDragEnd = {
-                            seekToProgress(localProgress)
-                            dragging = false
-                        },
-                        onDrag = { change, dragAmount ->
-                            change.consume()
-                            localProgress = (localProgress + dragAmount.x / widthPx).coerceIn(0f, 1f)
+                    val dragHitHeightPx = MEDIA_PROGRESS_EXPANDED_HEIGHT_DP.dp.toPx()
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val centerY = size.height / 2f
+                        val withinTrack = abs(down.position.y - centerY) <= dragHitHeightPx / 2f
+                        if (!withinTrack || mediaState.durationMs <= 0L) {
+                            return@awaitEachGesture
                         }
-                    )
+                        down.consume()
+                        fun updateProgressFromX(x: Float) {
+                            localProgress = (x / widthPx).coerceIn(0f, 1f)
+                        }
+                        try {
+                            dragging = true
+                            updateProgressFromX(down.position.x)
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id }
+                                    ?: event.changes.firstOrNull()
+                                    ?: break
+                                if (!change.pressed || change.changedToUpIgnoreConsumed()) {
+                                    break
+                                }
+                                updateProgressFromX(change.position.x)
+                                change.consume()
+                            }
+                            skipNextProgressSync = true
+                            seekToProgress(localProgress)
+                        } finally {
+                            dragging = false
+                        }
+                    }
                 },
             contentAlignment = Alignment.CenterStart
         ) {
@@ -1123,8 +1147,8 @@ private fun MediaButton(
     iconSize: androidx.compose.ui.unit.Dp = 20.dp,
     onClick: () -> Unit
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val pressed by interactionSource.collectIsPressedAsState()
+    val pressedState = rememberPressedState()
+    val pressed by pressedState
     val scale by animateFloatAsState(if (pressed) 0.88f else 1f, label = "media_button_scale")
     val backgroundAlpha by animateFloatAsState(if (pressed) 0.28f else 0.18f, label = "media_button_alpha")
     Box(
@@ -1136,14 +1160,38 @@ private fun MediaButton(
             }
             .clip(CircleShape)
             .background(Color.White.copy(alpha = backgroundAlpha))
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick
-            ),
+            .controlCenterPressGesture(pressedState, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Icon(icon, null, tint = Color.White, modifier = Modifier.size(iconSize))
+    }
+}
+
+private fun Modifier.controlCenterPressGesture(
+    pressedState: MutableState<Boolean>,
+    enabled: Boolean = true,
+    onLongClick: (() -> Unit)? = null,
+    onClick: () -> Unit
+): Modifier {
+    if (!enabled) return this
+    return pointerInput(onClick, onLongClick, enabled) {
+        detectTapGestures(
+            onPress = {
+                pressedState.value = true
+                try {
+                    tryAwaitRelease()
+                    delay(CONTROL_CENTER_MIN_PRESS_MS)
+                } finally {
+                    pressedState.value = false
+                }
+            },
+            onTap = {
+                onClick()
+            },
+            onLongPress = {
+                onLongClick?.invoke()
+            }
+        )
     }
 }
 

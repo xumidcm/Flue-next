@@ -822,6 +822,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onToggleGroup = vm::toggleNotificationGroup,
                         onDismissGroup = vm::dismissNotificationGroup,
                         onDismissNotification = vm::dismissNotification,
+                        onDismissAllNotifications = vm::dismissAllNotifications,
+                        onRunNotificationAction = vm::runNotificationAction,
                         onOpenNotification = { key, origin ->
                             vm.openNotification(key, origin, ScreenState.Notifications, 0L)
                         }
