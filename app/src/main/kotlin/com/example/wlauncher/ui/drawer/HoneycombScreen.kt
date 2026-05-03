@@ -132,7 +132,7 @@ fun HoneycombScreen(
             iconShadowEnabled = iconShadowEnabled,
             themeColor = themeColor,
             darkMode = darkMode,
-            columns = (narrowCols + 1).coerceIn(3, 6),
+            columns = (narrowCols + 1).coerceIn(2, 6),
             active = active,
             leftSafeInsetDp = leftSafeInsetDp,
             appListScalePercent = appListScalePercent,
@@ -1056,7 +1056,7 @@ private fun MaterialDenseGridScreen(
         label = "material_grid_icon_shadow"
     )
     val appListScale = appListScalePercent.coerceIn(50, 200) / 100f
-    val effectiveColumns = (columns / appListScale).roundToInt().coerceIn(2, 10)
+    val effectiveColumns = (columns / appListScale).roundToInt().coerceIn(1, 10)
     var focusReady by remember { mutableStateOf(false) }
     var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
     var returnTriggered by remember { mutableStateOf(false) }

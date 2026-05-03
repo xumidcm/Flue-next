@@ -90,6 +90,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_APP_LIST_FISHEYE = booleanPreferencesKey("app_list_fisheye_enabled")
         val KEY_APP_LIST_LEFT_SAFE_INSET_DP = intPreferencesKey("app_list_left_safe_inset_dp")
         val KEY_APP_LIST_SCALE_PERCENT = intPreferencesKey("app_list_scale_percent")
+        val KEY_GLOBAL_UI_SCALE_PERCENT = intPreferencesKey("global_ui_scale_percent")
         val KEY_APP_LIST_WATCHFACE_COLORS = booleanPreferencesKey("app_list_watchface_colors")
         val KEY_APP_LIST_ROW_BORDER = booleanPreferencesKey("app_list_row_border_enabled")
         val KEY_FAST_FLOW_ANIMATION = booleanPreferencesKey("fast_flow_animation_enabled")
@@ -294,6 +295,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val appListLeftSafeInsetDp: StateFlow<Int> = _appListLeftSafeInsetDp.asStateFlow()
     private val _appListScalePercent = MutableStateFlow(100)
     val appListScalePercent: StateFlow<Int> = _appListScalePercent.asStateFlow()
+    private val _globalUiScalePercent = MutableStateFlow(100)
+    val globalUiScalePercent: StateFlow<Int> = _globalUiScalePercent.asStateFlow()
     private val _appListWatchFaceColors = MutableStateFlow(true)
     val appListWatchFaceColors: StateFlow<Boolean> = _appListWatchFaceColors.asStateFlow()
     private val _appListRowBorderEnabled = MutableStateFlow(false)
@@ -632,7 +635,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     0
                 }
 
-                val loadedHoneycombCols = (prefs[KEY_HONEYCOMB_COLS] ?: honeycombColsDefault).coerceIn(2, 5)
+                val loadedHoneycombCols = (prefs[KEY_HONEYCOMB_COLS] ?: honeycombColsDefault).coerceIn(1, 5)
                 if (_honeycombCols.value != loadedHoneycombCols) _honeycombCols.value = loadedHoneycombCols
 
                 val loadedTopBlur = (prefs[KEY_HONEYCOMB_TOP_BLUR] ?: 4).coerceIn(0, 48)
@@ -674,6 +677,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedAppListScale = (prefs[KEY_APP_LIST_SCALE_PERCENT] ?: 100).coerceIn(50, 200)
                 if (_appListScalePercent.value != loadedAppListScale) {
                     _appListScalePercent.value = loadedAppListScale
+                }
+
+                val loadedGlobalUiScale = (prefs[KEY_GLOBAL_UI_SCALE_PERCENT] ?: 100).coerceIn(80, 130)
+                if (_globalUiScalePercent.value != loadedGlobalUiScale) {
+                    _globalUiScalePercent.value = loadedGlobalUiScale
                 }
 
                 val loadedAppListWatchFaceColors = prefs[KEY_APP_LIST_WATCHFACE_COLORS] ?: true
@@ -1188,7 +1196,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setHoneycombCols(cols: Int) {
-        _honeycombCols.value = cols.coerceIn(2, 5)
+        _honeycombCols.value = cols.coerceIn(1, 5)
         val savedValue = _honeycombCols.value
         persistDebounced("key_honeycomb_cols") { store.edit { it[KEY_HONEYCOMB_COLS] = savedValue } }
     }
@@ -1248,6 +1256,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val savedValue = _appListScalePercent.value
         persistDebounced("key_app_list_scale_percent") {
             store.edit { it[KEY_APP_LIST_SCALE_PERCENT] = savedValue }
+        }
+    }
+
+    fun setGlobalUiScalePercent(value: Int) {
+        _globalUiScalePercent.value = value.coerceIn(80, 130)
+        val savedValue = _globalUiScalePercent.value
+        persistDebounced("key_global_ui_scale_percent") {
+            store.edit { it[KEY_GLOBAL_UI_SCALE_PERCENT] = savedValue }
         }
     }
 
@@ -1806,6 +1822,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appListFisheyeEnabled.value = true
         _appListLeftSafeInsetDp.value = 0
         _appListScalePercent.value = 100
+        _globalUiScalePercent.value = 100
         _appListWatchFaceColors.value = true
         _appListRowBorderEnabled.value = false
         _fastFlowAnimationEnabled.value = false
@@ -1892,6 +1909,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_APP_LIST_FISHEYE] = true
                 it[KEY_APP_LIST_LEFT_SAFE_INSET_DP] = 0
                 it[KEY_APP_LIST_SCALE_PERCENT] = 100
+                it[KEY_GLOBAL_UI_SCALE_PERCENT] = 100
                 it[KEY_APP_LIST_WATCHFACE_COLORS] = true
                 it[KEY_APP_LIST_ROW_BORDER] = false
                 it[KEY_FAST_FLOW_ANIMATION] = false

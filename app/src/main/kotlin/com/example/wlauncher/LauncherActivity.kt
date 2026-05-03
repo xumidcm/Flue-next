@@ -66,6 +66,7 @@ import com.flue.launcher.ui.notification.NotificationLayer
 import com.flue.launcher.ui.smartstack.SmartStackLayer
 import com.flue.launcher.ui.smartstack.WidgetPageLayer
 import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.WatchLauncherTheme
@@ -105,8 +106,11 @@ class LauncherActivity : ComponentActivity() {
             vm = viewModel
             val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
             val uiStyle by viewModel.uiStyle.collectAsStateWithLifecycle()
+            val globalUiScalePercent by viewModel.globalUiScalePercent.collectAsStateWithLifecycle()
             WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle) {
-                LauncherScreen(viewModel)
+                ProvideGlobalUiScale(globalUiScalePercent) {
+                    LauncherScreen(viewModel)
+                }
             }
         }
     }

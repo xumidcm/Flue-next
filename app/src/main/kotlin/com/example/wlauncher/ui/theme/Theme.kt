@@ -5,6 +5,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 
 // UI 风格
 enum class UiStyle {
@@ -70,4 +74,20 @@ fun WatchLauncherTheme(
             content = content
         )
     }
+}
+
+@Composable
+fun ProvideGlobalUiScale(
+    scalePercent: Int,
+    content: @Composable () -> Unit
+) {
+    val baseDensity = LocalDensity.current
+    val scale = scalePercent.coerceIn(80, 130) / 100f
+    val scaledDensity = remember(baseDensity, scale) {
+        Density(
+            density = baseDensity.density * scale,
+            fontScale = baseDensity.fontScale
+        )
+    }
+    CompositionLocalProvider(LocalDensity provides scaledDensity, content = content)
 }

@@ -75,6 +75,7 @@ import com.flue.launcher.ui.home.FIXED_PREVIEW_CLOCK
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.util.RecentsVisibility
@@ -100,11 +101,14 @@ class InternalWatchFaceConfigActivity : ComponentActivity() {
             val viewModel: LauncherViewModel = viewModel()
             val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
             val uiStyle by viewModel.uiStyle.collectAsStateWithLifecycle()
+            val globalUiScalePercent by viewModel.globalUiScalePercent.collectAsStateWithLifecycle()
             WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle) {
-                InternalWatchFaceConfigScreen(
-                    watchFaceId = watchFaceId,
-                    onBack = { finish() }
-                )
+                ProvideGlobalUiScale(globalUiScalePercent) {
+                    InternalWatchFaceConfigScreen(
+                        watchFaceId = watchFaceId,
+                        onBack = { finish() }
+                    )
+                }
             }
         }
     }

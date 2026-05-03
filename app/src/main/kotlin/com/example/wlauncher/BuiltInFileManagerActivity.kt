@@ -64,6 +64,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.util.RecentsVisibility
@@ -101,21 +102,24 @@ class BuiltInFileManagerActivity : ComponentActivity() {
             val viewModel: LauncherViewModel = viewModel()
             val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
             val uiStyle by viewModel.uiStyle.collectAsStateWithLifecycle()
+            val globalUiScalePercent by viewModel.globalUiScalePercent.collectAsStateWithLifecycle()
             WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle) {
-                BuiltInFileManagerScreen(
-                    mode = mode,
-                    hasPermission = permissionState.value,
-                    onRequestPermission = {
-                        if (requiredPermission != null) {
-                            permissionLauncher.launch(requiredPermission)
-                        }
-                    },
-                    onPick = { uri ->
-                        setResult(RESULT_OK, Intent().putExtra(EXTRA_FILE_MANAGER_RESULT_URI, uri.toString()))
-                        finish()
-                    },
-                    onBack = { finish() }
-                )
+                ProvideGlobalUiScale(globalUiScalePercent) {
+                    BuiltInFileManagerScreen(
+                        mode = mode,
+                        hasPermission = permissionState.value,
+                        onRequestPermission = {
+                            if (requiredPermission != null) {
+                                permissionLauncher.launch(requiredPermission)
+                            }
+                        },
+                        onPick = { uri ->
+                            setResult(RESULT_OK, Intent().putExtra(EXTRA_FILE_MANAGER_RESULT_URI, uri.toString()))
+                            finish()
+                        },
+                        onBack = { finish() }
+                    )
+                }
             }
         }
     }

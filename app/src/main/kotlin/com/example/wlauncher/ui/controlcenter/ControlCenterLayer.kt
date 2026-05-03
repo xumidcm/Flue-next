@@ -36,8 +36,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -55,8 +54,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Brightness6
@@ -94,16 +96,17 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
@@ -169,8 +172,103 @@ fun ControlCenterLayer(
     var bluetoothEnabled by remember(context) { mutableStateOf(isBluetoothLikelyEnabled(context)) }
     var dndEnabled by remember(context) { mutableStateOf(isDndEnabled(context)) }
     val mediaState = rememberMediaState(context)
-    val overscroll = remember { Animatable(0f) }
+    val verticalScrollState = rememberScrollState()
+    val toggleScrollState = rememberScrollState()
+    val verticalOverscroll = remember { Animatable(0f) }
+    val toggleOverscroll = remember { Animatable(0f) }
     val overscrollScope = androidx.compose.runtime.rememberCoroutineScope()
+    val verticalElasticScroll = remember(verticalScrollState) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(
+                available: androidx.compose.ui.geometry.Offset,
+                source: NestedScrollSource
+            ): androidx.compose.ui.geometry.Offset {
+                if (source != NestedScrollSource.UserInput) return androidx.compose.ui.geometry.Offset.Zero
+                val atTop = verticalScrollState.value <= 0
+                if (available.y > 0f && atTop) {
+                    overscrollScope.launch {
+                        verticalOverscroll.snapTo(
+                            (verticalOverscroll.value + available.y * CONTROL_CENTER_OVERSCROLL_RESISTANCE)
+                                .coerceAtMost(CONTROL_CENTER_OVERSCROLL_LIMIT)
+                        )
+                    }
+                    return androidx.compose.ui.geometry.Offset(0f, available.y)
+                }
+                if (verticalOverscroll.value > 0f && available.y < 0f) {
+                    overscrollScope.launch {
+                        verticalOverscroll.snapTo((verticalOverscroll.value + available.y).coerceAtLeast(0f))
+                    }
+                    return androidx.compose.ui.geometry.Offset(0f, available.y)
+                }
+                if (verticalOverscroll.value < 0f && available.y > 0f) {
+                    overscrollScope.launch {
+                        verticalOverscroll.snapTo((verticalOverscroll.value + available.y).coerceAtMost(0f))
+                    }
+                    return androidx.compose.ui.geometry.Offset(0f, available.y)
+                }
+                return androidx.compose.ui.geometry.Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (verticalOverscroll.value != 0f) {
+                    verticalOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                    return available
+                }
+                return Velocity.Zero
+            }
+        }
+    }
+    val toggleElasticScroll = remember(toggleScrollState) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(
+                available: androidx.compose.ui.geometry.Offset,
+                source: NestedScrollSource
+            ): androidx.compose.ui.geometry.Offset {
+                if (source != NestedScrollSource.UserInput) return androidx.compose.ui.geometry.Offset.Zero
+                val atStart = toggleScrollState.value <= 0
+                val atEnd = toggleScrollState.value >= toggleScrollState.maxValue
+                if (available.x > 0f && atStart) {
+                    overscrollScope.launch {
+                        toggleOverscroll.snapTo(
+                            (toggleOverscroll.value + available.x * CONTROL_CENTER_OVERSCROLL_RESISTANCE)
+                                .coerceAtMost(CONTROL_CENTER_OVERSCROLL_LIMIT)
+                        )
+                    }
+                    return androidx.compose.ui.geometry.Offset(available.x, 0f)
+                }
+                if (available.x < 0f && atEnd) {
+                    overscrollScope.launch {
+                        toggleOverscroll.snapTo(
+                            (toggleOverscroll.value + available.x * CONTROL_CENTER_OVERSCROLL_RESISTANCE)
+                                .coerceAtLeast(-CONTROL_CENTER_OVERSCROLL_LIMIT)
+                        )
+                    }
+                    return androidx.compose.ui.geometry.Offset(available.x, 0f)
+                }
+                if (toggleOverscroll.value > 0f && available.x < 0f) {
+                    overscrollScope.launch {
+                        toggleOverscroll.snapTo((toggleOverscroll.value + available.x).coerceAtLeast(0f))
+                    }
+                    return androidx.compose.ui.geometry.Offset(available.x, 0f)
+                }
+                if (toggleOverscroll.value < 0f && available.x > 0f) {
+                    overscrollScope.launch {
+                        toggleOverscroll.snapTo((toggleOverscroll.value + available.x).coerceAtMost(0f))
+                    }
+                    return androidx.compose.ui.geometry.Offset(available.x, 0f)
+                }
+                return androidx.compose.ui.geometry.Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (toggleOverscroll.value != 0f) {
+                    toggleOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                    return available
+                }
+                return Velocity.Zero
+            }
+        }
+    }
     val leftSafeInset = leftSafeInsetDp.coerceIn(0, 128).dp
     val internetPanelLauncher = rememberLauncherForActivityResult(StartActivityForResult()) {
         connectivity = readConnectivitySnapshot(context)
@@ -208,79 +306,60 @@ fun ControlCenterLayer(
         }
     }
     val greetingText = remember(timeText) { controlCenterGreeting() }
-    val touchSlop = LocalViewConfiguration.current.touchSlop
 
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(40.dp))
             .background(launcherStyle.screenBackground)
-            .pointerInput(touchSlop) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    var pointerId = down.id
-                    var totalY = 0f
-                    var totalX = 0f
-                    var dragging = false
-
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == pointerId }
-                            ?: event.changes.firstOrNull { it.pressed }
-                            ?: break
-                        if (!change.pressed || change.changedToUpIgnoreConsumed()) break
-                        pointerId = change.id
-                        val delta = change.positionChange()
-                        totalX += delta.x
-                        totalY += delta.y
-                        if (!dragging && abs(totalY) > touchSlop && abs(totalY) > abs(totalX)) {
-                            dragging = true
-                        }
-                        if (dragging && (delta.y > 0f || overscroll.value > 0f)) {
-                            change.consume()
-                            val next = (if (delta.y > 0f) {
-                                overscroll.value + delta.y * CONTROL_CENTER_OVERSCROLL_RESISTANCE
-                            } else {
-                                overscroll.value + delta.y
-                            }).coerceIn(0f, CONTROL_CENTER_OVERSCROLL_LIMIT)
-                            overscrollScope.launch { overscroll.snapTo(next) }
-                        }
-                    }
-                    if (overscroll.value != 0f) {
-                        overscrollScope.launch {
-                            overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-                        }
-                    }
-                }
-            }
             .padding(start = leftSafeInset)
     ) {
-        val compact = showMusicControls && maxHeight < 520.dp
-        val spacious = !showMusicControls
-        val verticalPadding = if (compact) 10.dp else 16.dp
-        val outerSpacing = when {
-            compact -> 8.dp
-            spacious -> 18.dp
-            else -> 14.dp
+        val verticalPadding = 16.dp
+        val outerSpacing = if (showMusicControls) 14.dp else 18.dp
+        val controlsSpacing = if (showMusicControls) 14.dp else 20.dp
+        val footerTopGap = 4.dp
+        val toggleRowTopPadding = 6.dp
+        val toggleSize = 58.dp
+        val toggleIconSize = 26.dp
+        val toggleLabelGap = 7.dp
+        val sliderHeight = 58.dp
+        val sliderHorizontalPadding = 14.dp
+        val topStatusHorizontalInset = 20.dp
+        val contentHorizontalPadding = 18.dp
+        val toggleRowSpacing = 14.dp
+        val toggleRowRequiredWidth = toggleSize * 4f + toggleRowSpacing * 3f
+        val availableToggleRowWidth = (maxWidth - contentHorizontalPadding * 2f).coerceAtLeast(0.dp)
+        val toggleRowFits = availableToggleRowWidth >= toggleRowRequiredWidth
+        val estimatedControlsHeight = toggleSize +
+            controlsSpacing +
+            sliderHeight +
+            controlsSpacing +
+            sliderHeight +
+            if (showMusicControls) controlsSpacing + 156.dp else 0.dp
+        val estimatedContentHeight = verticalPadding * 2f +
+            32.dp +
+            outerSpacing +
+            estimatedControlsHeight +
+            20.dp +
+            footerTopGap
+        val verticalScrollEnabled = estimatedContentHeight > maxHeight
+        LaunchedEffect(verticalScrollEnabled, toggleRowFits) {
+            verticalOverscroll.snapTo(0f)
+            toggleOverscroll.snapTo(0f)
         }
-        val controlsSpacing = when {
-            compact -> 6.dp
-            spacious -> 20.dp
-            else -> 14.dp
+        val contentModifier = if (verticalScrollEnabled) {
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer { translationY = verticalOverscroll.value }
+                .nestedScroll(verticalElasticScroll)
+                .verticalScroll(verticalScrollState)
+        } else {
+            Modifier.fillMaxSize()
         }
-        val footerTopGap = if (compact) 0.dp else 4.dp
-        val toggleRowTopPadding = if (compact) 0.dp else 6.dp
-        val toggleSize = if (compact) 54.dp else 58.dp
-        val toggleIconSize = if (compact) 24.dp else 26.dp
-        val toggleLabelGap = if (compact) 4.dp else 7.dp
-        val sliderHeight = if (compact) 42.dp else 58.dp
-        val sliderHorizontalPadding = if (compact) 12.dp else 14.dp
-        val topStatusHorizontalInset = if (compact) 14.dp else 20.dp
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer { translationY = overscroll.value }
-                .padding(horizontal = 18.dp, vertical = verticalPadding),
+                .then(contentModifier)
+                .padding(horizontal = contentHorizontalPadding, vertical = verticalPadding),
             verticalArrangement = Arrangement.spacedBy(outerSpacing)
         ) {
             Box(
@@ -291,7 +370,7 @@ fun ControlCenterLayer(
                 WatchBatteryPill(
                     level = batteryStatus.level,
                     charging = batteryStatus.charging,
-                    sizeScale = if (compact) 1.04f else 1.15f,
+                    sizeScale = 1.15f,
                     modifier = Modifier.align(Alignment.CenterStart)
                 )
                 Row(
@@ -300,8 +379,8 @@ fun ControlCenterLayer(
                     horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
                     SystemSettingsButton(
-                        size = if (compact) 26.dp else 28.dp,
-                        iconSize = if (compact) 15.dp else 17.dp,
+                        size = 28.dp,
+                        iconSize = 17.dp,
                         onClick = { openSettings(context, Settings.ACTION_SETTINGS) }
                     )
                     Text(
@@ -314,78 +393,167 @@ fun ControlCenterLayer(
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(controlsSpacing)) {
-                Row(
+                BoxWithConstraints(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = toggleRowTopPadding),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .padding(top = toggleRowTopPadding)
                 ) {
-                    ControlToggle(
-                        icon = Icons.Filled.Wifi,
-                        label = "WiFi",
-                        active = connectivity.wifiActive,
-                        size = toggleSize,
-                        iconSize = toggleIconSize,
-                        labelGap = toggleLabelGap,
-                        onClick = {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                openInternetConnectivityPanel(context, internetPanelLauncher)
-                            } else if (!toggleWifiLegacy(context)) {
-                                openSettings(context, Settings.ACTION_WIFI_SETTINGS)
-                            }
-                            connectivity = readConnectivitySnapshot(context)
-                        },
-                        onLongClick = { openSettings(context, Settings.ACTION_WIFI_SETTINGS) }
-                    )
-                    ControlToggle(
-                        icon = Icons.Filled.Bluetooth,
-                        label = "蓝牙",
-                        active = bluetoothEnabled,
-                        size = toggleSize,
-                        iconSize = toggleIconSize,
-                        labelGap = toggleLabelGap,
-                        onClick = {
-                            requestBluetoothToggle(
-                                context = context,
-                                enableLauncher = bluetoothEnableLauncher,
-                                permissionLauncher = bluetoothPermissionLauncher,
-                                onPermissionPending = { pendingBluetoothEnable = true }
+                    if (toggleRowFits) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            ControlToggle(
+                                icon = Icons.Filled.Wifi,
+                                label = "WiFi",
+                                active = connectivity.wifiActive,
+                                size = toggleSize,
+                                iconSize = toggleIconSize,
+                                labelGap = toggleLabelGap,
+                                onClick = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                        openInternetConnectivityPanel(context, internetPanelLauncher)
+                                    } else if (!toggleWifiLegacy(context)) {
+                                        openSettings(context, Settings.ACTION_WIFI_SETTINGS)
+                                    }
+                                    connectivity = readConnectivitySnapshot(context)
+                                },
+                                onLongClick = { openSettings(context, Settings.ACTION_WIFI_SETTINGS) }
                             )
-                            bluetoothEnabled = isBluetoothLikelyEnabled(context)
-                        },
-                        onLongClick = { openSettings(context, Settings.ACTION_BLUETOOTH_SETTINGS) }
-                    )
-                    ControlToggle(
-                        icon = Icons.Filled.NetworkCell,
-                        label = "流量",
-                        active = connectivity.cellularActive,
-                        size = toggleSize,
-                        iconSize = toggleIconSize,
-                        labelGap = toggleLabelGap,
-                        onClick = {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                openInternetConnectivityPanel(context, internetPanelLauncher)
-                            } else {
-                                openSettings(context, Settings.ACTION_WIRELESS_SETTINGS)
+                            ControlToggle(
+                                icon = Icons.Filled.Bluetooth,
+                                label = "蓝牙",
+                                active = bluetoothEnabled,
+                                size = toggleSize,
+                                iconSize = toggleIconSize,
+                                labelGap = toggleLabelGap,
+                                onClick = {
+                                    requestBluetoothToggle(
+                                        context = context,
+                                        enableLauncher = bluetoothEnableLauncher,
+                                        permissionLauncher = bluetoothPermissionLauncher,
+                                        onPermissionPending = { pendingBluetoothEnable = true }
+                                    )
+                                    bluetoothEnabled = isBluetoothLikelyEnabled(context)
+                                },
+                                onLongClick = { openSettings(context, Settings.ACTION_BLUETOOTH_SETTINGS) }
+                            )
+                            ControlToggle(
+                                icon = Icons.Filled.NetworkCell,
+                                label = "流量",
+                                active = connectivity.cellularActive,
+                                size = toggleSize,
+                                iconSize = toggleIconSize,
+                                labelGap = toggleLabelGap,
+                                onClick = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                        openInternetConnectivityPanel(context, internetPanelLauncher)
+                                    } else {
+                                        openSettings(context, Settings.ACTION_WIRELESS_SETTINGS)
+                                    }
+                                    connectivity = readConnectivitySnapshot(context)
+                                },
+                                onLongClick = { openSettings(context, Settings.ACTION_WIRELESS_SETTINGS) }
+                            )
+                            ControlToggle(
+                                icon = Icons.Filled.DoNotDisturbOn,
+                                label = "勿扰",
+                                active = dndEnabled,
+                                size = toggleSize,
+                                iconSize = toggleIconSize,
+                                labelGap = toggleLabelGap,
+                                onClick = {
+                                    dndEnabled = !dndEnabled
+                                    toggleDnd(context)
+                                    dndEnabled = isDndEnabled(context)
+                                },
+                                onLongClick = { openDndSettings(context) }
+                            )
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .nestedScroll(toggleElasticScroll)
+                                .horizontalScroll(toggleScrollState)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .widthIn(min = maxWidth)
+                                    .graphicsLayer { translationX = toggleOverscroll.value },
+                                horizontalArrangement = Arrangement.spacedBy(toggleRowSpacing),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                ControlToggle(
+                                    icon = Icons.Filled.Wifi,
+                                    label = "WiFi",
+                                    active = connectivity.wifiActive,
+                                    size = toggleSize,
+                                    iconSize = toggleIconSize,
+                                    labelGap = toggleLabelGap,
+                                    onClick = {
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                            openInternetConnectivityPanel(context, internetPanelLauncher)
+                                        } else if (!toggleWifiLegacy(context)) {
+                                            openSettings(context, Settings.ACTION_WIFI_SETTINGS)
+                                        }
+                                        connectivity = readConnectivitySnapshot(context)
+                                    },
+                                    onLongClick = { openSettings(context, Settings.ACTION_WIFI_SETTINGS) }
+                                )
+                                ControlToggle(
+                                    icon = Icons.Filled.Bluetooth,
+                                    label = "蓝牙",
+                                    active = bluetoothEnabled,
+                                    size = toggleSize,
+                                    iconSize = toggleIconSize,
+                                    labelGap = toggleLabelGap,
+                                    onClick = {
+                                        requestBluetoothToggle(
+                                            context = context,
+                                            enableLauncher = bluetoothEnableLauncher,
+                                            permissionLauncher = bluetoothPermissionLauncher,
+                                            onPermissionPending = { pendingBluetoothEnable = true }
+                                        )
+                                        bluetoothEnabled = isBluetoothLikelyEnabled(context)
+                                    },
+                                    onLongClick = { openSettings(context, Settings.ACTION_BLUETOOTH_SETTINGS) }
+                                )
+                                ControlToggle(
+                                    icon = Icons.Filled.NetworkCell,
+                                    label = "流量",
+                                    active = connectivity.cellularActive,
+                                    size = toggleSize,
+                                    iconSize = toggleIconSize,
+                                    labelGap = toggleLabelGap,
+                                    onClick = {
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                            openInternetConnectivityPanel(context, internetPanelLauncher)
+                                        } else {
+                                            openSettings(context, Settings.ACTION_WIRELESS_SETTINGS)
+                                        }
+                                        connectivity = readConnectivitySnapshot(context)
+                                    },
+                                    onLongClick = { openSettings(context, Settings.ACTION_WIRELESS_SETTINGS) }
+                                )
+                                ControlToggle(
+                                    icon = Icons.Filled.DoNotDisturbOn,
+                                    label = "勿扰",
+                                    active = dndEnabled,
+                                    size = toggleSize,
+                                    iconSize = toggleIconSize,
+                                    labelGap = toggleLabelGap,
+                                    onClick = {
+                                        dndEnabled = !dndEnabled
+                                        toggleDnd(context)
+                                        dndEnabled = isDndEnabled(context)
+                                    },
+                                    onLongClick = { openDndSettings(context) }
+                                )
                             }
-                            connectivity = readConnectivitySnapshot(context)
-                        },
-                        onLongClick = { openSettings(context, Settings.ACTION_WIRELESS_SETTINGS) }
-                    )
-                    ControlToggle(
-                        icon = Icons.Filled.DoNotDisturbOn,
-                        label = "勿扰",
-                        active = dndEnabled,
-                        size = toggleSize,
-                        iconSize = toggleIconSize,
-                        labelGap = toggleLabelGap,
-                        onClick = {
-                            dndEnabled = !dndEnabled
-                            toggleDnd(context)
-                            dndEnabled = isDndEnabled(context)
-                        },
-                        onLongClick = { openDndSettings(context) }
-                    )
+                        }
+                    }
                 }
 
                 ControlSliderCard(
@@ -419,7 +587,11 @@ fun ControlCenterLayer(
                     )
                 }
             }
-            Spacer(Modifier.weight(1f))
+            if (verticalScrollEnabled) {
+                Spacer(Modifier.height(4.dp))
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
             Text(
                 text = greetingText,
                 color = WatchColors.TextTertiary,
