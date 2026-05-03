@@ -150,10 +150,11 @@ private const val CONTROL_CENTER_OVERSCROLL_RESISTANCE = 0.35f
 private const val CONTROL_CENTER_MIN_PRESS_MS = 140L
 private const val MEDIA_PROGRESS_COLLAPSED_HEIGHT_DP = 4f
 private const val MEDIA_PROGRESS_EXPANDED_HEIGHT_DP = 8f
-private const val MEDIA_PROGRESS_HIT_HEIGHT_DP = 12f
+private const val MEDIA_PROGRESS_HIT_HEIGHT_DP = 20f
 private const val MUSIC_TEXT_MARQUEE_INITIAL_DELAY_MS = 650L
 private const val MUSIC_TEXT_MARQUEE_SPEED_DP_PER_SECOND = 34f
 private const val MUSIC_TEXT_FADE_EDGE_DP = 18f
+private const val MUSIC_TEXT_MARQUEE_SIDE_PADDING_DP = 8f
 
 private data class ControlCenterMediaState(
     val controller: MediaController? = null,
@@ -1102,6 +1103,7 @@ private fun OneShotMarqueeText(
     val density = LocalDensity.current
     val textMeasurer = rememberTextMeasurer()
     val textStyle = TextStyle(fontSize = fontSize, fontWeight = fontWeight)
+    val sidePaddingPx = with(density) { MUSIC_TEXT_MARQUEE_SIDE_PADDING_DP.dp.toPx() }
     val measuredRawTextWidthPx = textMeasurer.measure(
         text = AnnotatedString(text),
         style = textStyle,
@@ -1110,24 +1112,16 @@ private fun OneShotMarqueeText(
     ).size.width
     var containerWidthPx by remember { mutableIntStateOf(0) }
     val hasOverflow = containerWidthPx > 0 && measuredRawTextWidthPx > containerWidthPx
-    val displayText = if (hasOverflow) " $text " else text
     val measuredDisplayTextWidthPx = if (hasOverflow) {
-        textMeasurer.measure(
-            text = AnnotatedString(displayText),
-            style = textStyle,
-            maxLines = 1,
-            softWrap = false
-        ).size.width
-    } else {
-        measuredRawTextWidthPx
-    }
+        measuredRawTextWidthPx + sidePaddingPx * 2f
+    } else measuredRawTextWidthPx.toFloat()
     val marqueeOffset = remember(text) { Animatable(0f) }
 
     LaunchedEffect(text, hasOverflow, measuredDisplayTextWidthPx, containerWidthPx) {
         marqueeOffset.snapTo(0f)
         if (hasOverflow) {
             delay(MUSIC_TEXT_MARQUEE_INITIAL_DELAY_MS)
-            val distancePx = (measuredDisplayTextWidthPx - containerWidthPx).coerceAtLeast(0).toFloat()
+            val distancePx = (sidePaddingPx + measuredRawTextWidthPx - containerWidthPx).coerceAtLeast(0f)
             val durationMs = ((distancePx / density.density) / MUSIC_TEXT_MARQUEE_SPEED_DP_PER_SECOND * 1000f)
                 .roundToInt()
                 .coerceAtLeast(900)
@@ -1140,8 +1134,9 @@ private fun OneShotMarqueeText(
 
     val offsetPx = marqueeOffset.value
     val showLeftFade = hasOverflow && offsetPx > 0.5f
-    val showRightFade = hasOverflow && offsetPx > 0.5f &&
-        measuredDisplayTextWidthPx - offsetPx > containerWidthPx + 0.5f
+    val showRightFade = hasOverflow &&
+        offsetPx > 0.5f &&
+        measuredRawTextWidthPx + sidePaddingPx - offsetPx > containerWidthPx + 0.5f
     val fadeModifier = if (showLeftFade || showRightFade) {
         Modifier
             .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
@@ -1190,7 +1185,7 @@ private fun OneShotMarqueeText(
             Modifier.fillMaxWidth()
         }
         Text(
-            text = displayText,
+            text = text,
             color = color,
             fontSize = fontSize,
             fontWeight = fontWeight,
@@ -1198,7 +1193,7 @@ private fun OneShotMarqueeText(
             softWrap = false,
             overflow = TextOverflow.Clip,
             modifier = Modifier
-                .graphicsLayer { translationX = -offsetPx }
+                .graphicsLayer { translationX = if (hasOverflow) sidePaddingPx - offsetPx else 0f }
                 .then(textWidthModifier)
         )
     }
