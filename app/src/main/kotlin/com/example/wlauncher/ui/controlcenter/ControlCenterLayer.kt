@@ -275,6 +275,7 @@ fun ControlCenterLayer(
         val toggleLabelGap = if (compact) 4.dp else 7.dp
         val sliderHeight = if (compact) 42.dp else 58.dp
         val sliderHorizontalPadding = if (compact) 12.dp else 14.dp
+        val topStatusHorizontalInset = if (compact) 6.dp else 8.dp
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -282,7 +283,11 @@ fun ControlCenterLayer(
                 .padding(horizontal = 18.dp, vertical = verticalPadding),
             verticalArrangement = Arrangement.spacedBy(outerSpacing)
         ) {
-            Box(modifier = Modifier.fillMaxWidth()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = topStatusHorizontalInset)
+            ) {
                 WatchBatteryPill(
                     level = batteryStatus.level,
                     charging = batteryStatus.charging,

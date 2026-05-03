@@ -161,6 +161,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val blurEnabled by vm.blurEnabled.collectAsStateWithLifecycle()
     val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsStateWithLifecycle()
     val apps by vm.apps.collectAsStateWithLifecycle()
+    val allApps by vm.allApps.collectAsStateWithLifecycle()
     val appOpenOrigin by vm.appOpenOrigin.collectAsStateWithLifecycle()
     val splashIcon by vm.splashIcon.collectAsStateWithLifecycle()
     val splashDelay by vm.splashDelay.collectAsStateWithLifecycle()
@@ -650,7 +651,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 ) {
                     val sideScreenWidgetSlots by vm.sideScreenWidgetSlots.collectAsStateWithLifecycle()
                     SmartStackLayer(
-                        apps = apps,
+                        apps = allApps,
                         sideScreenShortcuts = sideScreenShortcuts,
                         sideScreenWidgetSlots = sideScreenWidgetSlots,
                         previewGroups = sideScreenPreviewGroups,
@@ -714,7 +715,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 ) {
                     val sideScreenWidgetSlots by vm.sideScreenWidgetSlots.collectAsStateWithLifecycle()
                     WidgetPageLayer(
-                        apps = apps,
+                        apps = allApps,
                         sideScreenWidgetSlots = sideScreenWidgetSlots,
                         leftSafeInsetDp = appListLeftSafeInsetDp,
                         onSetWidget = vm::setWidgetSlot,
