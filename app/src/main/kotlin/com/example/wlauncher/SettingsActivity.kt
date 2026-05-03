@@ -111,6 +111,7 @@ import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.settings.WatchFaceSettingCard
 import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.LocalGlobalUiScale
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
@@ -1212,6 +1213,7 @@ private fun SettingsPageScaffold(
 ) {
     val launcherStyle = LauncherTheme.style
     val context = LocalContext.current
+    val globalUiScale = LocalGlobalUiScale.current
     val leftSafeInsetDp = LocalSettingsLeftSafeInsetDp.current
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = initialFirstVisibleItemIndex,
@@ -1283,7 +1285,7 @@ private fun SettingsPageScaffold(
     ) {
         val screenHeightPx = constraints.maxHeight.toFloat()
         val screenCenterY = screenHeightPx / 2f
-        val leftSafeInset = leftSafeInsetDp.coerceIn(0, 168).dp.coerceAtMost(maxWidth * 0.44f)
+        val leftSafeInset = (leftSafeInsetDp.coerceIn(0, 168) / globalUiScale).dp.coerceAtMost(maxWidth * 0.44f)
 
         LazyColumn(
             state = listState,

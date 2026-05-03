@@ -72,6 +72,7 @@ import com.flue.launcher.ui.input.flueDrawerRotaryScrollable
 import com.flue.launcher.ui.input.normalizeDrawerScrollDelta
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.LocalGlobalUiScale
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.util.fisheyeScale
 import com.flue.launcher.util.generateHoneycombRows
@@ -147,6 +148,7 @@ fun HoneycombScreen(
     }
 
     val context = LocalContext.current
+    val globalUiScale = LocalGlobalUiScale.current
     val launcherStyle = LauncherTheme.style
     val focusRequester = remember { FocusRequester() }
     var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
@@ -179,7 +181,7 @@ fun HoneycombScreen(
         val density = LocalDensity.current
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
-        val leftSafeInsetPx = with(density) { leftSafeInsetDp.coerceIn(0, 168).dp.toPx() }
+        val leftSafeInsetPx = with(density) { (leftSafeInsetDp.coerceIn(0, 168) / globalUiScale).dp.toPx() }
             .coerceAtMost(screenWidthPx * 0.44f)
         val iconShadowElevationPx by animateFloatAsState(
             targetValue = if (iconShadowEnabled) with(density) { 8.dp.toPx() } else 0f,
@@ -1050,6 +1052,7 @@ private fun MaterialDenseGridScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val globalUiScale = LocalGlobalUiScale.current
     val density = LocalDensity.current
     val focusRequester = remember { FocusRequester() }
     val gridState = rememberLazyGridState()
@@ -1206,7 +1209,7 @@ private fun MaterialDenseGridScreen(
             }
     ) {
         val screenWidthPx = with(density) { maxWidth.toPx() }
-        val leftSafeInset = leftSafeInsetDp.coerceIn(0, 168).dp.coerceAtMost(maxWidth * 0.44f)
+        val leftSafeInset = (leftSafeInsetDp.coerceIn(0, 168) / globalUiScale).dp.coerceAtMost(maxWidth * 0.44f)
         val horizontalPaddingPx = with(density) { 8.dp.toPx() }
         val leftPaddingPx = with(density) { (8.dp + leftSafeInset).toPx() }
         val itemGapPx = with(density) { 4.dp.toPx() }

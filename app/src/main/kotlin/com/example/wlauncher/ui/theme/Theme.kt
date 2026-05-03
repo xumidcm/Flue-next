@@ -6,6 +6,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
@@ -51,6 +52,8 @@ enum class ThemeMode {
     LIGHT
 }
 
+val LocalGlobalUiScale = compositionLocalOf { 1f }
+
 @Composable
 fun WatchLauncherTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
@@ -89,5 +92,9 @@ fun ProvideGlobalUiScale(
             fontScale = baseDensity.fontScale
         )
     }
-    CompositionLocalProvider(LocalDensity provides scaledDensity, content = content)
+    CompositionLocalProvider(
+        LocalDensity provides scaledDensity,
+        LocalGlobalUiScale provides scale,
+        content = content
+    )
 }

@@ -74,6 +74,7 @@ import com.flue.launcher.ui.input.flueDrawerRotaryScrollable
 import com.flue.launcher.ui.input.normalizeDrawerScrollDelta
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.LocalGlobalUiScale
 import com.flue.launcher.ui.theme.UiStyle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -127,6 +128,7 @@ fun ListDrawerScreen(
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
     val context = LocalContext.current
+    val globalUiScale = LocalGlobalUiScale.current
     val scope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
     val effectiveEdgeBlur = edgeBlurEnabled && !suppressHeavyEffects
@@ -497,7 +499,7 @@ fun ListDrawerScreen(
             val autoScrollEdgePx = with(density) { LIST_AUTO_SCROLL_EDGE_DP.dp.toPx() }
             val estimatedItemHeight = scaledIconSize.coerceAtLeast(24.dp) + scaledRowVerticalPadding * 2f
             val centeredPadding = ((maxHeight - estimatedItemHeight) / 2f).coerceAtLeast(8.dp)
-            val leftSafeInset = leftSafeInsetDp.coerceIn(0, 168).dp.coerceAtMost(maxWidth * 0.44f)
+            val leftSafeInset = (leftSafeInsetDp.coerceIn(0, 168) / globalUiScale).dp.coerceAtMost(maxWidth * 0.44f)
             val visibleItems by remember {
                 derivedStateOf {
                     listState.layoutInfo.visibleItemsInfo
