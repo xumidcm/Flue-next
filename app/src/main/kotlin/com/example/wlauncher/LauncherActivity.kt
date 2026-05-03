@@ -83,6 +83,9 @@ import kotlinx.coroutines.launch
 private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
 private const val SIDE_SCREEN_TRANSITION_MS = 260
 private const val NOTIFICATION_TRANSITION_MS = 240
+private const val APP_LIST_OPEN_SHADOW_DELAY_MS = 280L
+private const val APP_LIST_RETURN_SHADOW_DELAY_MS = 520L
+private const val APP_LIST_RETURN_ORIGIN_HOLD_MS = 520L
 
 class LauncherActivity : ComponentActivity() {
 
@@ -302,6 +305,46 @@ fun LauncherScreen(vm: LauncherViewModel) {
     var prevState by remember { mutableStateOf(screenState) }
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
     val isOpeningAppList = prevState == ScreenState.Face && screenState == ScreenState.Apps
+    val isEnteringAppList = prevState != ScreenState.Apps && screenState == ScreenState.Apps
+    var appListReturnOriginActive by remember {
+        mutableStateOf(screenState == ScreenState.App && launchSourceState == ScreenState.Apps)
+    }
+    var appListShadowsReady by remember { mutableStateOf(screenState == ScreenState.Apps) }
+    LaunchedEffect(screenState, launchSourceState) {
+        if (launchSourceState != ScreenState.Apps) {
+            appListReturnOriginActive = false
+            return@LaunchedEffect
+        }
+        when (screenState) {
+            ScreenState.App -> appListReturnOriginActive = true
+            ScreenState.Apps -> {
+                if (appListReturnOriginActive || isReturningFromApp) {
+                    appListReturnOriginActive = true
+                    delay(APP_LIST_RETURN_ORIGIN_HOLD_MS)
+                    appListReturnOriginActive = false
+                } else {
+                    appListReturnOriginActive = false
+                }
+            }
+            else -> appListReturnOriginActive = false
+        }
+    }
+    LaunchedEffect(screenState, iconShadowEnabled) {
+        if (!iconShadowEnabled || screenState != ScreenState.Apps) {
+            appListShadowsReady = false
+            return@LaunchedEffect
+        }
+        appListShadowsReady = false
+        val shadowDelayMs = when {
+            isReturningFromApp -> APP_LIST_RETURN_SHADOW_DELAY_MS
+            isEnteringAppList -> APP_LIST_OPEN_SHADOW_DELAY_MS
+            else -> 0L
+        }
+        if (shadowDelayMs > 0L) {
+            delay(shadowDelayMs)
+        }
+        appListShadowsReady = true
+    }
     LaunchedEffect(screenState) { prevState = screenState }
     val launcherScope = rememberCoroutineScope()
     var retainedLaunchIcon by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
@@ -310,8 +353,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
     var notificationGestureActive by remember { mutableStateOf(false) }
     var notificationTargetProgress by remember { mutableFloatStateOf(if (notificationSceneActive) 1f else 0f) }
 
-    val useOrigin = (screenState == ScreenState.App || isReturningFromApp) &&
-        launchSourceState == ScreenState.Apps
+    val useOrigin = launchSourceState == ScreenState.Apps &&
+        (screenState == ScreenState.App || appListReturnOriginActive)
+    val effectiveIconShadowEnabled = iconShadowEnabled && appListShadowsReady
     val fadeLaunch = launchSourceState == ScreenState.Stack || launchSourceState == ScreenState.Notifications
 
     LaunchedEffect(notificationSceneActive) {
@@ -514,7 +558,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         fisheyeEnabled = appListFisheyeEnabled,
                         fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                         twoToneIconsEnabled = twoToneIconsEnabled,
-                        iconShadowEnabled = iconShadowEnabled,
+                        iconShadowEnabled = effectiveIconShadowEnabled,
                         themeColor = appListThemeColor,
                         uiStyle = uiStyle,
                         darkMode = effectiveDarkMode,
@@ -541,7 +585,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         fisheyeEnabled = appListFisheyeEnabled,
                         fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                         twoToneIconsEnabled = twoToneIconsEnabled,
-                        iconShadowEnabled = iconShadowEnabled,
+                        iconShadowEnabled = effectiveIconShadowEnabled,
                         themeColor = appListThemeColor,
                         uiStyle = uiStyle,
                         darkMode = effectiveDarkMode,

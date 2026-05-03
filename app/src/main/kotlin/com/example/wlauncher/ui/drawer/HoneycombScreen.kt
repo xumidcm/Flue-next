@@ -181,6 +181,16 @@ fun HoneycombScreen(
         val screenHeightPx = with(density) { maxHeight.toPx() }
         val leftSafeInsetPx = with(density) { leftSafeInsetDp.coerceIn(0, 128).dp.toPx() }
             .coerceAtMost(screenWidthPx * 0.36f)
+        val iconShadowElevationPx by animateFloatAsState(
+            targetValue = if (iconShadowEnabled) with(density) { 8.dp.toPx() } else 0f,
+            animationSpec = tween(durationMillis = if (iconShadowEnabled) 120 else 0),
+            label = "honeycomb_icon_shadow"
+        )
+        val overlayShadowElevationPx by animateFloatAsState(
+            targetValue = if (iconShadowEnabled) with(density) { 12.dp.toPx() } else 0f,
+            animationSpec = tween(durationMillis = if (iconShadowEnabled) 120 else 0),
+            label = "honeycomb_overlay_shadow"
+        )
         val contentWidthPx = (screenWidthPx - leftSafeInsetPx).coerceAtLeast(screenWidthPx * 0.55f)
         val screenCenterX = leftSafeInsetPx + contentWidthPx / 2f
         val screenCenterY = screenHeightPx / 2f
@@ -845,12 +855,13 @@ fun HoneycombScreen(
                                 }
                                 scaleX = scale * neighborScale
                                 scaleY = scale * neighborScale
-                                alpha = when {
+                                val itemAlpha = when {
                                     isDragged -> 0f
                                     settlingKey == app.componentKey -> 0f
                                     else -> if (fisheyeEnabled) scale.coerceIn(0.24f, 1f) else 1f
                                 }
-                                shadowElevation = if (iconShadowEnabled) 8.dp.toPx() else 0f
+                                alpha = itemAlpha
+                                shadowElevation = if (itemAlpha > 0.001f) iconShadowElevationPx else 0f
                                 shape = CircleShape
                             }
                             .platformBlur(
@@ -910,7 +921,7 @@ fun HoneycombScreen(
                             scaleX = dragScale
                             scaleY = dragScale
                             alpha = if (fisheyeEnabled) dragScale.coerceIn(0.24f, 1f) else 1f
-                            shadowElevation = if (iconShadowEnabled) 12.dp.toPx() else 0f
+                            shadowElevation = overlayShadowElevationPx
                             shape = CircleShape
                         }
                 )
@@ -965,7 +976,7 @@ fun HoneycombScreen(
                         scaleX = scale
                         scaleY = scale
                         alpha = if (fisheyeEnabled) scale.coerceIn(0.24f, 1f) else 1f
-                        shadowElevation = if (iconShadowEnabled) 12.dp.toPx() else 0f
+                        shadowElevation = overlayShadowElevationPx
                         shape = CircleShape
                     }
             )
@@ -1039,6 +1050,11 @@ private fun MaterialDenseGridScreen(
     val scope = rememberCoroutineScope()
     val launcherStyle = LauncherTheme.style
     val appPalette = appListPalette(themeColor, darkMode, UiStyle.MATERIAL_3, useWatchFaceColors)
+    val iconShadowElevationPx by animateFloatAsState(
+        targetValue = if (iconShadowEnabled) with(density) { 8.dp.toPx() } else 0f,
+        animationSpec = tween(durationMillis = if (iconShadowEnabled) 120 else 0),
+        label = "material_grid_icon_shadow"
+    )
     val appListScale = appListScalePercent.coerceIn(50, 200) / 100f
     val effectiveColumns = (columns / appListScale).roundToInt().coerceIn(2, 10)
     var focusReady by remember { mutableStateOf(false) }
@@ -1214,7 +1230,7 @@ private fun MaterialDenseGridScreen(
                         .fillMaxWidth()
                         .aspectRatio(0.92f)
                         .graphicsLayer {
-                            shadowElevation = if (iconShadowEnabled) 8.dp.toPx() else 0f
+                            shadowElevation = iconShadowElevationPx
                             shape = launcherStyle.bubbleShape
                         }
                         .clip(launcherStyle.bubbleShape)
