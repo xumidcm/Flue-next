@@ -151,6 +151,7 @@ private const val CONTROL_CENTER_MIN_PRESS_MS = 140L
 private const val MEDIA_PROGRESS_COLLAPSED_HEIGHT_DP = 4f
 private const val MEDIA_PROGRESS_EXPANDED_HEIGHT_DP = 8f
 private const val MEDIA_PROGRESS_HIT_HEIGHT_DP = 20f
+private const val MEDIA_PROGRESS_SEEK_SYNC_HOLD_MS = 1200L
 private const val MUSIC_TEXT_MARQUEE_INITIAL_DELAY_MS = 650L
 private const val MUSIC_TEXT_MARQUEE_SPEED_DP_PER_SECOND = 34f
 private const val MUSIC_TEXT_FADE_EDGE_DP = 18f
@@ -1133,10 +1134,12 @@ private fun OneShotMarqueeText(
     }
 
     val offsetPx = marqueeOffset.value
-    val showLeftFade = hasOverflow && offsetPx > 0.5f
+    val fadeActivationOffsetPx = sidePaddingPx + 0.5f
+    val hiddenRightPx = measuredRawTextWidthPx + sidePaddingPx - offsetPx - containerWidthPx
+    val showLeftFade = hasOverflow && offsetPx > fadeActivationOffsetPx
     val showRightFade = hasOverflow &&
-        offsetPx > 0.5f &&
-        measuredRawTextWidthPx + sidePaddingPx - offsetPx > containerWidthPx + 0.5f
+        offsetPx > fadeActivationOffsetPx &&
+        hiddenRightPx > sidePaddingPx + 0.5f
     val fadeModifier = if (showLeftFade || showRightFade) {
         Modifier
             .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
@@ -1209,16 +1212,32 @@ private fun MediaProgressSection(
     val currentGestureLockChange by rememberUpdatedState(onGestureLockChange)
     var widthPx by remember { mutableIntStateOf(1) }
     var dragging by remember { mutableStateOf(false) }
-    var skipNextProgressSync by remember(mediaState.appPackage, mediaState.title, mediaState.durationMs) {
-        mutableStateOf(false)
+    var skipNextProgressSync by remember { mutableStateOf(false) }
+    var seekSyncHoldUntilMs by remember { mutableStateOf(0L) }
+    var activeMediaIdentity by remember {
+        mutableStateOf(mediaState.appPackage to mediaState.title)
     }
-    var localProgress by remember(mediaState.appPackage, mediaState.title, mediaState.durationMs) {
+    var localProgress by remember {
         mutableFloatStateOf(mediaState.progress.coerceIn(0f, 1f))
+    }
+    LaunchedEffect(mediaState.appPackage, mediaState.title, dragging) {
+        val mediaIdentity = mediaState.appPackage to mediaState.title
+        if (!dragging && activeMediaIdentity != mediaIdentity) {
+            activeMediaIdentity = mediaIdentity
+            skipNextProgressSync = false
+            seekSyncHoldUntilMs = 0L
+            localProgress = mediaState.progress.coerceIn(0f, 1f)
+        }
     }
     LaunchedEffect(mediaState.progress, dragging) {
         if (!dragging) {
+            val now = SystemClock.uptimeMillis()
+            if (now < seekSyncHoldUntilMs) {
+                return@LaunchedEffect
+            }
             if (skipNextProgressSync) {
                 skipNextProgressSync = false
+                seekSyncHoldUntilMs = now + MEDIA_PROGRESS_SEEK_SYNC_HOLD_MS
                 return@LaunchedEffect
             }
             localProgress = mediaState.progress.coerceIn(0f, 1f)
@@ -1239,7 +1258,7 @@ private fun MediaProgressSection(
                 .fillMaxWidth()
                 .height(22.dp)
                 .onSizeChanged { widthPx = it.width.coerceAtLeast(1) }
-                .pointerInput(mediaState.appPackage, mediaState.title, mediaState.durationMs) {
+                .pointerInput(Unit) {
                     val dragHitHeightPx = MEDIA_PROGRESS_HIT_HEIGHT_DP.dp.toPx()
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
