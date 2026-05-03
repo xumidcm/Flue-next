@@ -33,13 +33,7 @@ data class NotifData(
     val contentIntentAvailable: Boolean,
     val isGroupSummary: Boolean,
     val isOngoing: Boolean,
-    val isForegroundService: Boolean,
-    val actions: List<NotifActionData>
-)
-
-data class NotifActionData(
-    val key: String,
-    val title: String
+    val isForegroundService: Boolean
 )
 
 class WLauncherNotificationListener : NotificationListenerService() {
@@ -59,7 +53,6 @@ class WLauncherNotificationListener : NotificationListenerService() {
 
         private var instance: WLauncherNotificationListener? = null
         private val pendingIntentMap = mutableMapOf<String, PendingIntent?>()
-        private val pendingActionIntentMap = mutableMapOf<String, PendingIntent>()
         private val packageIconCache = mutableMapOf<String, ImageBitmap?>()
 
         fun isConnected() = instance != null
@@ -89,17 +82,6 @@ class WLauncherNotificationListener : NotificationListenerService() {
                 pendingIntent.send()
             }.isSuccess
         }
-
-        fun runNotificationAction(actionKey: String): Boolean {
-            val pendingIntent = synchronized(pendingActionIntentMap) { pendingActionIntentMap[actionKey] } ?: return false
-            return runCatching {
-                pendingIntent.send()
-            }.isSuccess
-        }
-
-        private fun actionKey(notificationKey: String, actionIndex: Int): String {
-            return "$notificationKey/action/$actionIndex"
-        }
     }
 
     override fun onListenerConnected() {
@@ -113,7 +95,6 @@ class WLauncherNotificationListener : NotificationListenerService() {
         Log.d(TAG, "Notification listener disconnected")
         _notifications.value = emptyList()
         synchronized(pendingIntentMap) { pendingIntentMap.clear() }
-        synchronized(pendingActionIntentMap) { pendingActionIntentMap.clear() }
         synchronized(packageIconCache) { packageIconCache.clear() }
     }
 
@@ -132,11 +113,16 @@ class WLauncherNotificationListener : NotificationListenerService() {
             }
             .getOrDefault(emptyArray())
         val pm = applicationContext.packageManager
-        val visibleSbns = sbns
-            .filter { shouldDisplayNotification(it, sbns) }
+        val parsedNotifications = sbns
+            .filter { sbn ->
+                val flags = sbn.notification.flags
+                val isGroupSummary = flags and Notification.FLAG_GROUP_SUMMARY != 0
+                val isOngoing = flags and Notification.FLAG_ONGOING_EVENT != 0
+                val isForegroundService = flags and Notification.FLAG_FOREGROUND_SERVICE != 0
+                !isGroupSummary && !isOngoing && !isForegroundService
+            }
             .sortedByDescending { it.postTime }
             .take(20)
-        val parsedNotifications = visibleSbns
             .mapNotNull { sbn ->
                 runCatching { buildNotifData(pm, sbn) }
                     .onFailure { error ->
@@ -146,90 +132,16 @@ class WLauncherNotificationListener : NotificationListenerService() {
             }
 
         _notifications.value = parsedNotifications
-        val visibleKeys = parsedNotifications.asSequence().map { it.key }.toSet()
         synchronized(pendingIntentMap) {
             pendingIntentMap.clear()
-            visibleSbns.forEach { sbn ->
-                if (sbn.key in visibleKeys) {
-                    pendingIntentMap[sbn.key] = sbn.notification.contentIntent
-                }
-            }
-        }
-        synchronized(pendingActionIntentMap) {
-            pendingActionIntentMap.clear()
-            visibleSbns.forEach { sbn ->
-                if (sbn.key in visibleKeys) {
-                    sbn.notification.actions.orEmpty().forEachIndexed { index, action ->
-                        val actionIntent = action.actionIntent
-                        if (actionIntent != null && !action.title.isNullOrBlank()) {
-                            pendingActionIntentMap[actionKey(sbn.key, index)] = actionIntent
-                        }
-                    }
-                }
+            parsedNotifications.forEach { notification ->
+                pendingIntentMap[notification.key] = sbns
+                    .firstOrNull { it.key == notification.key }
+                    ?.notification
+                    ?.contentIntent
             }
         }
         Log.d(TAG, "Notification refresh complete: active=${sbns.size}, visible=${parsedNotifications.size}")
-    }
-
-    private fun shouldDisplayNotification(
-        sbn: StatusBarNotification,
-        allNotifications: Array<StatusBarNotification>
-    ): Boolean {
-        if (isServiceLikeNotification(sbn)) return false
-        if (!hasVisiblePayload(sbn)) return false
-
-        val isGroupSummary = sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0
-        if (!isGroupSummary) {
-            val groupKey = sbn.groupKey ?: return true
-            val textSummary = findGroupSummary(groupKey, allNotifications)
-                ?.takeIf { !isServiceLikeNotification(it) && hasVisibleTextPayload(it) }
-            return hasVisibleTextPayload(sbn) || textSummary == null
-        }
-
-        val groupKey = sbn.groupKey ?: return true
-        val hasDisplayableChild = allNotifications.any { child ->
-            child.key != sbn.key &&
-                child.groupKey == groupKey &&
-                (child.notification.flags and Notification.FLAG_GROUP_SUMMARY) == 0 &&
-                !isServiceLikeNotification(child) &&
-                hasVisibleTextPayload(child)
-        }
-        return !hasDisplayableChild
-    }
-
-    private fun findGroupSummary(
-        groupKey: String,
-        allNotifications: Array<StatusBarNotification>
-    ): StatusBarNotification? {
-        return allNotifications.firstOrNull { candidate ->
-            candidate.groupKey == groupKey &&
-                (candidate.notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0
-        }
-    }
-
-    private fun isServiceLikeNotification(sbn: StatusBarNotification): Boolean {
-        val flags = sbn.notification.flags
-        val isOngoing = flags and Notification.FLAG_ONGOING_EVENT != 0
-        val isForegroundService = flags and Notification.FLAG_FOREGROUND_SERVICE != 0
-        return (isOngoing || isForegroundService) && !sbn.isClearable
-    }
-
-    private fun hasVisiblePayload(sbn: StatusBarNotification): Boolean {
-        val notification = sbn.notification
-        return hasVisibleTextPayload(sbn) ||
-            notification.contentIntent != null ||
-            notification.actions.orEmpty().any { !it.title.isNullOrBlank() && it.actionIntent != null }
-    }
-
-    private fun hasVisibleTextPayload(sbn: StatusBarNotification): Boolean {
-        val extras = sbn.notification.extras
-        return !extras.getCharSequence(Notification.EXTRA_TITLE).isNullOrBlank() ||
-            !extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE).isNullOrBlank() ||
-            !extras.getCharSequence(Notification.EXTRA_TEXT).isNullOrBlank() ||
-            !extras.getCharSequence(Notification.EXTRA_BIG_TEXT).isNullOrBlank() ||
-            !extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT).isNullOrBlank() ||
-            extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
-                ?.any { !it.isNullOrBlank() } == true
     }
 
     private fun buildNotifData(
@@ -250,51 +162,16 @@ class WLauncherNotificationListener : NotificationListenerService() {
             packageName = sbn.packageName,
             groupKey = sbn.groupKey,
             appLabel = appLabel,
-            title = resolveNotificationTitle(extras),
-            text = resolveNotificationText(extras),
+            title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: "",
+            text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: "",
             time = sbn.postTime,
             icon = resolveNotificationIcon(sbn, notification),
             isClearable = sbn.isClearable,
             contentIntentAvailable = notification.contentIntent != null,
             isGroupSummary = flags and Notification.FLAG_GROUP_SUMMARY != 0,
             isOngoing = flags and Notification.FLAG_ONGOING_EVENT != 0,
-            isForegroundService = flags and Notification.FLAG_FOREGROUND_SERVICE != 0,
-            actions = notification.actions.orEmpty().mapIndexedNotNull { index, action ->
-                val title = action.title?.toString()?.trim().orEmpty()
-                if (title.isBlank() || action.actionIntent == null) {
-                    null
-                } else {
-                    NotifActionData(
-                        key = actionKey(sbn.key, index),
-                        title = title
-                    )
-                }
-            }
+            isForegroundService = flags and Notification.FLAG_FOREGROUND_SERVICE != 0
         )
-    }
-
-    private fun resolveNotificationTitle(extras: Bundle): String {
-        return extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
-            .ifBlank {
-                extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString()?.trim().orEmpty()
-            }
-    }
-
-    private fun resolveNotificationText(extras: Bundle): String {
-        return extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()
-            .ifBlank {
-                extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.trim().orEmpty()
-            }
-            .ifBlank {
-                extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT)?.toString()?.trim().orEmpty()
-            }
-            .ifBlank {
-                extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
-                    ?.lastOrNull()
-                    ?.toString()
-                    ?.trim()
-                    .orEmpty()
-            }
     }
 
     private fun resolveNotificationIcon(

@@ -28,7 +28,6 @@ import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.navigation.ScreenState
-import com.flue.launcher.ui.notification.NotificationActionUi
 import com.flue.launcher.ui.notification.NotificationEntryUi
 import com.flue.launcher.ui.notification.NotificationGroupUi
 import com.flue.launcher.ui.notification.NotificationRevealTarget
@@ -1788,12 +1787,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _revealedNotificationTarget.value = null
     }
 
-    fun runNotificationAction(actionKey: String): Boolean {
-        if (actionKey.isBlank()) return false
-        _revealedNotificationTarget.value = null
-        return WLauncherNotificationListener.runNotificationAction(actionKey)
-    }
-
     fun setRevealedNotificationTarget(target: NotificationRevealTarget?) {
         _revealedNotificationTarget.value = target
     }
@@ -2197,13 +2190,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                             isClearable = item.isClearable,
                             contentIntentAvailable = item.contentIntentAvailable,
                             isOngoing = item.isOngoing,
-                            isForegroundService = item.isForegroundService,
-                            actions = item.actions.map { action ->
-                                NotificationActionUi(
-                                    key = action.key,
-                                    title = action.title
-                                )
-                            }
+                            isForegroundService = item.isForegroundService
                         )
                     }
                 val latest = children.first()

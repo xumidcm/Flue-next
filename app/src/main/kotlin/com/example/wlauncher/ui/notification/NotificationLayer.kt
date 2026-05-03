@@ -70,7 +70,6 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -117,7 +116,6 @@ fun NotificationLayer(
     onDismissGroup: (String) -> Unit,
     onDismissNotification: (String) -> Unit,
     onOpenNotification: (String, Offset) -> Boolean,
-    onNotificationAction: (String) -> Boolean,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -399,8 +397,7 @@ fun NotificationLayer(
                                 onToggleGroup = { onToggleGroup(group.packageName) },
                                 onDismissGroup = { onDismissGroup(group.packageName) },
                                 onDismissNotification = onDismissNotification,
-                                onOpenNotification = onOpenNotification,
-                                onNotificationAction = onNotificationAction
+                                onOpenNotification = onOpenNotification
                             )
                         }
                     }
@@ -438,8 +435,7 @@ private fun NotificationGroupSection(
     onToggleGroup: () -> Unit,
     onDismissGroup: () -> Unit,
     onDismissNotification: (String) -> Unit,
-    onOpenNotification: (String, Offset) -> Boolean,
-    onNotificationAction: (String) -> Boolean
+    onOpenNotification: (String, Offset) -> Boolean
 ) {
     Column(
         modifier = modifier.width(width),
@@ -460,8 +456,7 @@ private fun NotificationGroupSection(
             onToggleGroup = onToggleGroup,
             onDismissGroup = onDismissGroup,
             onDismissNotification = onDismissNotification,
-            onOpenNotification = onOpenNotification,
-            onNotificationAction = onNotificationAction
+            onOpenNotification = onOpenNotification
         )
     }
 }
@@ -475,8 +470,7 @@ private fun NotificationGroupBody(
     onToggleGroup: () -> Unit,
     onDismissGroup: () -> Unit,
     onDismissNotification: (String) -> Unit,
-    onOpenNotification: (String, Offset) -> Boolean,
-    onNotificationAction: (String) -> Boolean
+    onOpenNotification: (String, Offset) -> Boolean
 ) {
     val hasMultipleEntries = group.entries.size > 1
     AnimatedContent(
@@ -511,8 +505,7 @@ private fun NotificationGroupBody(
                             entry = entry,
                             subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
                             trailing = formatNotificationTime(entry.time),
-                            onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) },
-                            onNotificationAction = onNotificationAction
+                            onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) }
                         )
                     }
                 }
@@ -549,8 +542,7 @@ private fun NotificationGroupBody(
                     entry = entry,
                     subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
                     trailing = formatNotificationTime(entry.time),
-                    onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) },
-                    onNotificationAction = onNotificationAction
+                    onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) }
                 )
             }
         }
@@ -658,23 +650,12 @@ private fun NotificationCard(
     subtitle: String,
     trailing: String,
     onClick: () -> Unit,
-    onNotificationAction: (String) -> Boolean = { false },
     onMeasuredHeight: ((Int) -> Unit)? = null
 ) {
     val pressed = rememberPressedState()
     val isPressed by pressed
     val launcherStyle = LauncherTheme.style
     val scale by animateFloatAsState(if (isPressed) 0.968f else 1f, spring(stiffness = 860f, dampingRatio = 0.72f), label = "notif_card")
-    val cardCanOpen = entry.key == "perm" || entry.key == "empty" || entry.contentIntentAvailable
-    val cardClickModifier = if (entry.actions.isEmpty()) {
-        Modifier.instantPressGesture(
-            pressed,
-            enabled = cardCanOpen,
-            onClick = onClick
-        )
-    } else {
-        Modifier
-    }
     Box(
         Modifier
             .width(width)
@@ -684,106 +665,26 @@ private fun NotificationCard(
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(RoundedCornerShape(28.dp))
             .background(launcherStyle.cardColor)
-            .then(cardClickModifier)
+            .instantPressGesture(
+                pressed,
+                enabled = entry.key == "perm" || entry.key == "empty" || entry.contentIntentAvailable,
+                onClick = onClick
+            )
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
-        Column {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .then(
-                        if (entry.actions.isNotEmpty()) {
-                            Modifier.instantPressGesture(
-                                pressed,
-                                enabled = cardCanOpen,
-                                onClick = onClick
-                            )
-                        } else {
-                            Modifier
-                        }
-                    ),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                NotificationIcon(entry.icon)
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(entry.title.ifBlank { entry.appLabel }, color = launcherStyle.titleColor, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(2.dp))
-                    Text(subtitle, color = WatchColors.TextSecondary, fontSize = 13.sp, maxLines = 2)
-                }
-                if (trailing.isNotBlank()) {
-                    Spacer(Modifier.width(10.dp))
-                    Text(trailing, color = launcherStyle.bodyColor, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            NotificationIcon(entry.icon)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(entry.title.ifBlank { entry.appLabel }, color = launcherStyle.titleColor, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(2.dp))
+                Text(subtitle, color = WatchColors.TextSecondary, fontSize = 13.sp, maxLines = 2)
             }
-            if (entry.actions.isNotEmpty()) {
-                Spacer(Modifier.height(10.dp))
-                NotificationActionRow(
-                    actions = entry.actions,
-                    onNotificationAction = onNotificationAction
-                )
+            if (trailing.isNotBlank()) {
+                Spacer(Modifier.width(10.dp))
+                Text(trailing, color = launcherStyle.bodyColor, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             }
         }
-    }
-}
-
-@Composable
-private fun NotificationActionRow(
-    actions: List<NotificationActionUi>,
-    onNotificationAction: (String) -> Boolean
-) {
-    val visibleActions = actions.take(3)
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        visibleActions.chunked(2).forEach { rowActions ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                rowActions.forEach { action ->
-                    NotificationActionButton(
-                        action = action,
-                        onNotificationAction = onNotificationAction,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-                if (rowActions.size == 1 && visibleActions.size > 1) {
-                    Spacer(Modifier.weight(1f))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NotificationActionButton(
-    action: NotificationActionUi,
-    onNotificationAction: (String) -> Boolean,
-    modifier: Modifier = Modifier
-) {
-    val pressed = rememberPressedState()
-    val isPressed by pressed
-    val launcherStyle = LauncherTheme.style
-    val scale by animateFloatAsState(if (isPressed) 0.96f else 1f, spring(stiffness = 820f, dampingRatio = 0.74f), label = "notif_action")
-    Box(
-        modifier
-            .height(32.dp)
-            .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(RoundedCornerShape(16.dp))
-            .background(launcherStyle.topBarChipColor)
-            .instantPressGesture(pressed) {
-                onNotificationAction(action.key)
-            }
-            .padding(horizontal = 10.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = action.title,
-            color = launcherStyle.topBarTextColor,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
     }
 }
 
