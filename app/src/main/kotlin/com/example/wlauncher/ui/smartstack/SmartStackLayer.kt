@@ -625,11 +625,7 @@ fun SmartStackLayer(
                 }
             )
             if (showNotificationPreview) {
-                if (showWidgets && visibleWidgetCards.isNotEmpty()) {
-                    Spacer(Modifier.height(10.dp))
-                } else {
-                    Spacer(Modifier.weight(1f))
-                }
+                Spacer(Modifier.height(16.dp))
                 Column(
                     Modifier
                         .width(contentWidth)
