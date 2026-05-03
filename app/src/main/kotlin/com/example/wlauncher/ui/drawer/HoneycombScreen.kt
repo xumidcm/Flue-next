@@ -301,6 +301,7 @@ fun HoneycombScreen(
                 }
             } else {
                 returnTriggered = false
+                focusRequester.requestFocusAfterFirstFrame()
             }
         }
         LaunchedEffect(fastScrollOptimizationEnabled) {
@@ -1072,6 +1073,7 @@ private fun MaterialDenseGridScreen(
             }
         } else {
             returnTriggered = false
+            focusRequester.requestFocusAfterFirstFrame()
         }
     }
 

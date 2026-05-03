@@ -7,6 +7,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.rotary.onPreRotaryScrollEvent
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
 import kotlin.math.abs
 import kotlin.math.sign
 
@@ -29,19 +31,19 @@ fun tunedRotaryScrollDelta(verticalScrollPixels: Float, multiplier: Float = 1f):
     val magnitude = abs(verticalScrollPixels)
     if (magnitude < 0.01f) return 0f
 
-    // Wear OS crown/bezel hardware differs a lot. Watch4-style bezel pulses are often
-    // extremely small, so we give tiny deltas a minimum usable step instead of treating
-    // them as noise.
+    // Rotary hardware reports very different units across Wear OS and Android watches.
+    // Keep tiny pulses usable, but cap large pulses so one crown tick cannot jump pages.
     val tunedMagnitude = when {
-        magnitude < 0.12f -> 18f
-        magnitude < 0.28f -> 24f
-        magnitude < 0.75f -> magnitude * 42f
-        magnitude < 2.5f -> magnitude * 18f
-        magnitude < 8f -> magnitude * 6f
-        magnitude < 24f -> magnitude * 2.4f
-        else -> magnitude * 1.15f
+        magnitude < 0.12f -> 10f
+        magnitude < 0.28f -> 14f
+        magnitude < 0.75f -> magnitude * 24f
+        magnitude < 2.5f -> magnitude * 12f
+        magnitude < 8f -> magnitude * 5f
+        magnitude < 24f -> magnitude * 2.2f
+        else -> 64f
     }
-    return sign(verticalScrollPixels) * tunedMagnitude * multiplier
+    val maxStep = 72f * multiplier.coerceIn(0.5f, 1.25f)
+    return sign(verticalScrollPixels) * (tunedMagnitude * multiplier).coerceAtMost(maxStep)
 }
 
 fun normalizeDrawerScrollDelta(
@@ -58,35 +60,77 @@ fun normalizeDrawerScrollDelta(
 
     val tunedMagnitude = when (source) {
         DrawerInputSource.Rotary -> when {
-            magnitude < 0.10f -> 22f
-            magnitude < 0.24f -> 30f
-            magnitude < 0.75f -> magnitude * 50f
-            magnitude < 2.5f -> magnitude * 22f
-            magnitude < 8f -> magnitude * 7f
-            magnitude < 24f -> magnitude * 2.8f
-            else -> magnitude * 1.25f
+            magnitude < 0.10f -> 10f
+            magnitude < 0.24f -> 14f
+            magnitude < 0.75f -> magnitude * 24f
+            magnitude < 2.5f -> magnitude * 12f
+            magnitude < 8f -> magnitude * 5f
+            magnitude < 24f -> magnitude * 2f
+            else -> 58f
         }
         DrawerInputSource.MouseWheel -> when {
-            magnitude < 0.24f -> 44f
-            magnitude < 1.2f -> magnitude * 72f
-            magnitude < 4f -> magnitude * 52f
-            else -> magnitude * 40f
+            magnitude < 0.24f -> 18f
+            magnitude < 1.2f -> magnitude * 34f
+            magnitude < 4f -> magnitude * 28f
+            else -> 76f
         }
     }
 
     val modeMultiplier = when (mode) {
         DrawerInputMode.Honeycomb -> when (source) {
-            DrawerInputSource.Rotary -> 0.80f
-            DrawerInputSource.MouseWheel -> 0.86f
+            DrawerInputSource.Rotary -> 0.68f
+            DrawerInputSource.MouseWheel -> 0.76f
         }
         DrawerInputMode.List -> when (source) {
-            DrawerInputSource.Rotary -> 1.02f
-            DrawerInputSource.MouseWheel -> 1.08f
+            DrawerInputSource.Rotary -> 0.82f
+            DrawerInputSource.MouseWheel -> 0.92f
+        }
+    }
+    val maxStep = when (mode) {
+        DrawerInputMode.Honeycomb -> when (source) {
+            DrawerInputSource.Rotary -> 54f
+            DrawerInputSource.MouseWheel -> 72f
+        }
+        DrawerInputMode.List -> when (source) {
+            DrawerInputSource.Rotary -> 64f
+            DrawerInputSource.MouseWheel -> 82f
         }
     }
 
-    return sign(signedInput) * tunedMagnitude * modeMultiplier
+    return sign(signedInput) * (tunedMagnitude * modeMultiplier).coerceAtMost(maxStep)
 }
+
+private fun Modifier.restoreRotaryFocusOnTouch(focusRequester: FocusRequester): Modifier =
+    pointerInput(focusRequester) {
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent()
+                if (event.type == PointerEventType.Press) {
+                    runCatching { focusRequester.requestFocus() }
+                }
+            }
+        }
+    }
+
+private fun Modifier.tunedPointerWheelScrollable(
+    multiplier: Float,
+    onScroll: (Float) -> Unit
+): Modifier =
+    pointerInput(multiplier) {
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent()
+                if (event.type == PointerEventType.Scroll) {
+                    val rawDelta = event.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+                    val tuned = tunedRotaryScrollDelta(rawDelta, multiplier)
+                    if (tuned != 0f) {
+                        onScroll(-tuned)
+                        event.changes.forEach { it.consume() }
+                    }
+                }
+            }
+        }
+    }
 
 fun Modifier.flueRotaryScrollable(
     focusRequester: FocusRequester,
@@ -101,10 +145,12 @@ fun Modifier.flueRotaryScrollable(
     }
 
     return this
-        .focusRequester(focusRequester)
-        .focusable()
         .onPreRotaryScrollEvent { consume(it.verticalScrollPixels) }
         .onRotaryScrollEvent { consume(it.verticalScrollPixels) }
+        .tunedPointerWheelScrollable(multiplier, onScroll)
+        .restoreRotaryFocusOnTouch(focusRequester)
+        .focusRequester(focusRequester)
+        .focusable()
 }
 
 fun Modifier.flueDrawerRotaryScrollable(
@@ -124,8 +170,9 @@ fun Modifier.flueDrawerRotaryScrollable(
     }
 
     return this
-        .focusRequester(focusRequester)
-        .focusable()
         .onPreRotaryScrollEvent { consume(it.verticalScrollPixels) }
         .onRotaryScrollEvent { consume(it.verticalScrollPixels) }
+        .restoreRotaryFocusOnTouch(focusRequester)
+        .focusRequester(focusRequester)
+        .focusable()
 }

@@ -135,7 +135,7 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
-private const val ABOUT_VERSION = "beta1.4"
+private const val ABOUT_VERSION = "beta1.4.1"
 private const val COMMUNITY_GROUP_NUMBER = "1097162313"
 private const val AUTHOR_QQ_NUMBER = "3513903055"
 private const val AUTHOR_BILIBILI_URL = "https://m.bilibili.com/space/1609437970"
@@ -674,7 +674,7 @@ private fun SettingsRootScreen(
             }
             item("display_size_menu") {
                 SettingsCategoryCard(
-                    title = if (isZh) "显示大小" else "Display Size",
+                    title = if (isZh) "显示适配" else "Display Fit",
                     subtitle = if (isZh) "全局 UI、应用列表大小和安全区" else "Global UI, app list size, and safe area",
                     onClick = { navigateTo(SettingsDestination.DISPLAY_SIZE) },
                     scale = itemFisheye(listState, "display_size_menu", screenCenterY, screenHeightPx)
@@ -817,7 +817,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.DISPLAY_SIZE -> SettingsPageScaffold(
-            title = if (isZh) "显示大小" else "Display Size",
+            title = if (isZh) "显示适配" else "Display Fit",
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.DISPLAY_SIZE).index,

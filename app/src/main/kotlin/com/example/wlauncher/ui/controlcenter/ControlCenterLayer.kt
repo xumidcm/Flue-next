@@ -754,102 +754,134 @@ private fun MediaControlCard(
             .clickable(onClick = onOpenApp)
             .padding(12.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxSize(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(132.dp)
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(Color.Black.copy(alpha = 0.22f)),
-                contentAlignment = Alignment.Center
-            ) {
-                if (mediaState.artwork != null) {
-                    Image(
-                        bitmap = mediaState.artwork,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(RoundedCornerShape(24.dp)),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
-                    Icon(Icons.Filled.MusicNote, null, tint = Color.White, modifier = Modifier.size(34.dp))
-                }
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val artworkGap = 12.dp
+            val preferredArtworkSize = 132.dp
+            val minArtworkSize = 96.dp
+            val preferredControlsWidth = 36.dp * 3f + 8.dp * 2f
+            val artworkSize = if (maxWidth >= preferredArtworkSize + artworkGap + preferredControlsWidth) {
+                preferredArtworkSize
+            } else {
+                (maxWidth - artworkGap - preferredControlsWidth).coerceIn(minArtworkSize, preferredArtworkSize)
             }
-            Spacer(Modifier.width(12.dp))
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .padding(vertical = 4.dp),
-                verticalArrangement = Arrangement.SpaceBetween
+
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Top
+                Box(
+                    modifier = Modifier
+                        .size(artworkSize)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(Color.Black.copy(alpha = 0.22f)),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Box(modifier = Modifier.fillMaxWidth()) {
-                        val titleEndPadding = if (mediaState.appIcon != null) 34.dp else 0.dp
-                        Column(
+                    if (mediaState.artwork != null) {
+                        Image(
+                            bitmap = mediaState.artwork,
+                            contentDescription = null,
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(end = titleEndPadding)
-                        ) {
-                            OverflowFadeText(
-                                text = mediaState.title,
-                                color = Color.White,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = mediaState.artist,
-                                color = Color.White.copy(alpha = 0.72f),
-                                fontSize = 11.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        if (mediaState.appIcon != null) {
-                            Image(
-                                bitmap = mediaState.appIcon,
-                                contentDescription = null,
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .size(28.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable(onClick = onOpenApp),
-                                contentScale = ContentScale.Crop
-                            )
-                        }
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(24.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Icon(Icons.Filled.MusicNote, null, tint = Color.White, modifier = Modifier.size(34.dp))
                     }
                 }
-                MediaProgressSection(
-                    mediaState = mediaState,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
+                Spacer(Modifier.width(artworkGap))
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .padding(vertical = 4.dp),
+                    verticalArrangement = Arrangement.SpaceBetween
                 ) {
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.Top
                     ) {
-                        MediaButton(Icons.Filled.SkipPrevious) {
-                            mediaState.controller?.transportControls?.skipToPrevious()
-                        }
-                        MediaButton(if (mediaState.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow) {
-                            val controls = mediaState.controller?.transportControls
-                            if (mediaState.playing) controls?.pause() else controls?.play()
-                        }
-                        MediaButton(Icons.Filled.SkipNext) {
-                            mediaState.controller?.transportControls?.skipToNext()
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            val titleEndPadding = if (mediaState.appIcon != null) 34.dp else 0.dp
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(end = titleEndPadding)
+                            ) {
+                                OverflowFadeText(
+                                    text = mediaState.title,
+                                    color = Color.White,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = mediaState.artist,
+                                    color = Color.White.copy(alpha = 0.72f),
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            if (mediaState.appIcon != null) {
+                                Image(
+                                    bitmap = mediaState.appIcon,
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .size(28.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable(onClick = onOpenApp),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
                         }
                     }
+                    MediaProgressSection(
+                        mediaState = mediaState,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    MediaControlsRow(mediaState = mediaState, modifier = Modifier.fillMaxWidth())
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MediaControlsRow(
+    mediaState: ControlCenterMediaState,
+    modifier: Modifier = Modifier
+) {
+    BoxWithConstraints(modifier = modifier, contentAlignment = Alignment.Center) {
+        val preferredButtonSize = 36.dp
+        val minButtonSize = 24.dp
+        val preferredSpacing = 8.dp
+        val minSpacing = 4.dp
+        val buttonSize = if (maxWidth >= preferredButtonSize * 3f + preferredSpacing * 2f) {
+            preferredButtonSize
+        } else {
+            ((maxWidth - minSpacing * 2f) / 3f).coerceIn(minButtonSize, preferredButtonSize)
+        }
+        val buttonSpacing = ((maxWidth - buttonSize * 3f) / 2f).coerceIn(minSpacing, preferredSpacing)
+        val iconSize = (buttonSize * 0.56f).coerceIn(16.dp, 20.dp)
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(buttonSpacing),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            MediaButton(Icons.Filled.SkipPrevious, size = buttonSize, iconSize = iconSize) {
+                mediaState.controller?.transportControls?.skipToPrevious()
+            }
+            MediaButton(
+                icon = if (mediaState.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                size = buttonSize,
+                iconSize = iconSize
+            ) {
+                val controls = mediaState.controller?.transportControls
+                if (mediaState.playing) controls?.pause() else controls?.play()
+            }
+            MediaButton(Icons.Filled.SkipNext, size = buttonSize, iconSize = iconSize) {
+                mediaState.controller?.transportControls?.skipToNext()
             }
         }
     }
@@ -983,14 +1015,19 @@ private fun MediaProgressSection(
 }
 
 @Composable
-private fun MediaButton(icon: ImageVector, onClick: () -> Unit) {
+private fun MediaButton(
+    icon: ImageVector,
+    size: androidx.compose.ui.unit.Dp = 36.dp,
+    iconSize: androidx.compose.ui.unit.Dp = 20.dp,
+    onClick: () -> Unit
+) {
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(if (pressed) 0.88f else 1f, label = "media_button_scale")
     val backgroundAlpha by animateFloatAsState(if (pressed) 0.28f else 0.18f, label = "media_button_alpha")
     Box(
         modifier = Modifier
-            .requiredSize(36.dp)
+            .requiredSize(size)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -1004,7 +1041,7 @@ private fun MediaButton(icon: ImageVector, onClick: () -> Unit) {
             ),
         contentAlignment = Alignment.Center
     ) {
-        Icon(icon, null, tint = Color.White, modifier = Modifier.size(20.dp))
+        Icon(icon, null, tint = Color.White, modifier = Modifier.size(iconSize))
     }
 }
 

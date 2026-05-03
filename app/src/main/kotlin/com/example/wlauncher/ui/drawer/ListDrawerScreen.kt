@@ -189,6 +189,7 @@ fun ListDrawerScreen(
             }
         } else {
             returnTriggered = false
+            focusRequester.requestFocusAfterFirstFrame()
         }
     }
 
