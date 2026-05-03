@@ -4,7 +4,9 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.activity.compose.setContent
@@ -51,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.data.model.AppInfo
+import com.flue.launcher.service.FlueAccessibilityService
 import com.flue.launcher.ui.anim.appListLayerValues
 import com.flue.launcher.ui.anim.faceLayerValues
 import com.flue.launcher.ui.anim.scaleBlurAlpha
@@ -190,6 +193,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val showControlCenter by vm.showControlCenter.collectAsStateWithLifecycle()
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
+    val doubleTapLockScreenEnabled by vm.doubleTapLockScreenEnabled.collectAsStateWithLifecycle()
+    val powerMenuButtonEnabled by vm.powerMenuButtonEnabled.collectAsStateWithLifecycle()
     val sideScreenSectionOrder by vm.sideScreenSectionOrder.collectAsStateWithLifecycle()
     val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
     val notificationAccessGranted by vm.notificationAccessGranted.collectAsStateWithLifecycle()
@@ -304,6 +309,28 @@ fun LauncherScreen(vm: LauncherViewModel) {
             )
             (context as? Activity)?.applyFadeOpenTransition()
             Unit
+        }
+    }
+    val openAccessibilitySettings: () -> Unit = remember(context) {
+        {
+            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            Unit
+        }
+    }
+    val lockScreenWithAccessibility: () -> Unit = remember(context, openAccessibilitySettings) {
+        {
+            if (!FlueAccessibilityService.lockScreen()) {
+                Toast.makeText(context, "请先授权 Flue 无障碍服务", Toast.LENGTH_SHORT).show()
+                openAccessibilitySettings()
+            }
+        }
+    }
+    val openPowerDialogWithAccessibility: () -> Unit = remember(context, openAccessibilitySettings) {
+        {
+            if (!FlueAccessibilityService.openPowerDialog()) {
+                Toast.makeText(context, "请先授权 Flue 无障碍服务", Toast.LENGTH_SHORT).show()
+                openAccessibilitySettings()
+            }
         }
     }
     val launchAppFromLauncher: (AppInfo, Offset, ScreenState) -> Unit = { appInfo, origin, returnState ->
@@ -516,7 +543,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             showChargingPowerText = watchFaceChargingPowerText,
                             showStatusIndicators = watchFaceStatusIndicators,
                             hasNotifications = showNotification && notificationGroups.isNotEmpty(),
-                            onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null
+                            onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
+                            onDoubleTap = if (
+                                doubleTapLockScreenEnabled &&
+                                launcherInteractive &&
+                                screenState == ScreenState.Face &&
+                                !sideSceneOverlayActive
+                            ) lockScreenWithAccessibility else null
                         )
                     } else {
                         LunchWatchFaceHost(
@@ -524,6 +557,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
                             refreshToken = watchFaceRefreshToken,
                             onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
+                            onDoubleTap = if (
+                                doubleTapLockScreenEnabled &&
+                                launcherInteractive &&
+                                screenState == ScreenState.Face &&
+                                !sideSceneOverlayActive
+                            ) lockScreenWithAccessibility else null,
                             onLoadFailure = { descriptor, error ->
                                 val rootCause = generateSequence(error) { it.cause }.last()
                                 vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
@@ -743,7 +782,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     ControlCenterLayer(
                         leftSafeInsetDp = appListLeftSafeInsetDp,
                         showMusicControls = showMusicControls,
-                        onDismissToFace = { vm.setState(ScreenState.Face) }
+                        onDismissToFace = { vm.setState(ScreenState.Face) },
+                        showPowerButton = powerMenuButtonEnabled,
+                        onPowerClick = openPowerDialogWithAccessibility
                     )
                 }
             }

@@ -6,7 +6,9 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.PowerManager
+import android.view.GestureDetector
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -24,6 +26,7 @@ fun LunchWatchFaceHost(
     refreshToken: Int,
     onLoadFailure: (LunchWatchFaceDescriptor, Throwable) -> Unit,
     onLongPress: (() -> Unit)? = null,
+    onDoubleTap: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     AndroidView(
@@ -31,12 +34,14 @@ fun LunchWatchFaceHost(
             LunchWatchFaceHostView(context).apply {
                 setFailureHandler(onLoadFailure)
                 setLongPressHandler(onLongPress)
+                setDoubleTapHandler(onDoubleTap)
             }
         },
         modifier = modifier.fillMaxSize(),
         update = { host ->
             host.setFailureHandler(onLoadFailure)
             host.setLongPressHandler(onLongPress)
+            host.setDoubleTapHandler(onDoubleTap)
             host.bind(descriptor, isFaceVisible, refreshToken)
         }
     )
@@ -50,6 +55,18 @@ private class LunchWatchFaceHostView(context: Context) : FrameLayout(context) {
     private var bridge: WatchFaceBridge? = null
     private var failureHandler: ((LunchWatchFaceDescriptor, Throwable) -> Unit)? = null
     private var longPressHandler: (() -> Unit)? = null
+    private var doubleTapHandler: (() -> Unit)? = null
+
+    private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+        override fun onDoubleTap(e: MotionEvent): Boolean {
+            doubleTapHandler?.invoke()
+            return doubleTapHandler != null
+        }
+
+        override fun onLongPress(e: MotionEvent) {
+            longPressHandler?.invoke()
+        }
+    })
 
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -83,11 +100,6 @@ private class LunchWatchFaceHostView(context: Context) : FrameLayout(context) {
     init {
         layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         setBackgroundColor(android.graphics.Color.BLACK)
-        isLongClickable = true
-        setOnLongClickListener {
-            longPressHandler?.invoke()
-            longPressHandler != null
-        }
     }
 
     fun setFailureHandler(handler: (LunchWatchFaceDescriptor, Throwable) -> Unit) {
@@ -96,6 +108,15 @@ private class LunchWatchFaceHostView(context: Context) : FrameLayout(context) {
 
     fun setLongPressHandler(handler: (() -> Unit)?) {
         longPressHandler = handler
+    }
+
+    fun setDoubleTapHandler(handler: (() -> Unit)?) {
+        doubleTapHandler = handler
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        gestureDetector.onTouchEvent(event)
+        return super.dispatchTouchEvent(event)
     }
 
     fun bind(descriptor: LunchWatchFaceDescriptor, isFaceVisible: Boolean, refreshToken: Int) {

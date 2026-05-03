@@ -104,6 +104,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_SHOW_WIDGET_PAGE = booleanPreferencesKey("show_widget_page")
         val KEY_SHOW_CONTROL_CENTER = booleanPreferencesKey("show_control_center")
         val KEY_SHOW_MUSIC_CONTROLS = booleanPreferencesKey("show_music_controls")
+        val KEY_DOUBLE_TAP_LOCK_SCREEN = booleanPreferencesKey("double_tap_lock_screen_enabled")
+        val KEY_POWER_MENU_BUTTON = booleanPreferencesKey("power_menu_button_enabled")
         val KEY_WATCHFACE_CHARGING_POWER_TEXT = booleanPreferencesKey("watchface_charging_power_text")
         val KEY_WATCHFACE_STATUS_INDICATORS = booleanPreferencesKey("watchface_status_indicators")
         val KEY_SIDE_SCREEN_SECTION_ORDER = stringPreferencesKey("side_screen_section_order")
@@ -325,6 +327,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val showControlCenter: StateFlow<Boolean> = _showControlCenter.asStateFlow()
     private val _showMusicControls = MutableStateFlow(true)
     val showMusicControls: StateFlow<Boolean> = _showMusicControls.asStateFlow()
+    private val _doubleTapLockScreenEnabled = MutableStateFlow(false)
+    val doubleTapLockScreenEnabled: StateFlow<Boolean> = _doubleTapLockScreenEnabled.asStateFlow()
+    private val _powerMenuButtonEnabled = MutableStateFlow(false)
+    val powerMenuButtonEnabled: StateFlow<Boolean> = _powerMenuButtonEnabled.asStateFlow()
     private val _watchFaceChargingPowerText = MutableStateFlow(true)
     val watchFaceChargingPowerText: StateFlow<Boolean> = _watchFaceChargingPowerText.asStateFlow()
     private val _watchFaceStatusIndicators = MutableStateFlow(true)
@@ -762,6 +768,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedShowMusicControls = prefs[KEY_SHOW_MUSIC_CONTROLS] ?: true
                 if (_showMusicControls.value != loadedShowMusicControls) {
                     _showMusicControls.value = loadedShowMusicControls
+                }
+
+                val loadedDoubleTapLockScreen = prefs[KEY_DOUBLE_TAP_LOCK_SCREEN] ?: false
+                if (_doubleTapLockScreenEnabled.value != loadedDoubleTapLockScreen) {
+                    _doubleTapLockScreenEnabled.value = loadedDoubleTapLockScreen
+                }
+
+                val loadedPowerMenuButton = prefs[KEY_POWER_MENU_BUTTON] ?: false
+                if (_powerMenuButtonEnabled.value != loadedPowerMenuButton) {
+                    _powerMenuButtonEnabled.value = loadedPowerMenuButton
                 }
 
                 val loadedSectionOrder = parseSideScreenSectionOrder(prefs[KEY_SIDE_SCREEN_SECTION_ORDER])
@@ -1353,6 +1369,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_SHOW_MUSIC_CONTROLS] = show } }
     }
 
+    fun setDoubleTapLockScreenEnabled(enabled: Boolean) {
+        _doubleTapLockScreenEnabled.value = enabled
+        persist { store.edit { it[KEY_DOUBLE_TAP_LOCK_SCREEN] = enabled } }
+    }
+
+    fun setPowerMenuButtonEnabled(enabled: Boolean) {
+        _powerMenuButtonEnabled.value = enabled
+        persist { store.edit { it[KEY_POWER_MENU_BUTTON] = enabled } }
+    }
+
     fun moveSideSection(section: SideScreenSection, direction: Int) {
         if (direction == 0) return
         val current = normalizeSideScreenSectionOrder(_sideScreenSectionOrder.value).toMutableList()
@@ -1835,6 +1861,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _showWidgetPage.value = true
         _showControlCenter.value = true
         _showMusicControls.value = true
+        _doubleTapLockScreenEnabled.value = false
+        _powerMenuButtonEnabled.value = false
         _watchFaceChargingPowerText.value = true
         _watchFaceStatusIndicators.value = true
         _sideScreenSectionOrder.value = defaultSideScreenSectionOrder()
@@ -1923,6 +1951,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_SHOW_WIDGET_PAGE] = true
                 it[KEY_SHOW_CONTROL_CENTER] = true
                 it[KEY_SHOW_MUSIC_CONTROLS] = true
+                it[KEY_DOUBLE_TAP_LOCK_SCREEN] = false
+                it[KEY_POWER_MENU_BUTTON] = false
                 it[KEY_WATCHFACE_CHARGING_POWER_TEXT] = true
                 it[KEY_WATCHFACE_STATUS_INDICATORS] = true
                 it[KEY_SIDE_SCREEN_SECTION_ORDER] = serializeSideScreenSectionOrder(defaultSideScreenSectionOrder())

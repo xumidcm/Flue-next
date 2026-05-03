@@ -68,6 +68,7 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.NetworkCell
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.outlined.Settings as SettingsIcon
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -157,6 +158,8 @@ fun ControlCenterLayer(
     leftSafeInsetDp: Int,
     showMusicControls: Boolean,
     onDismissToFace: () -> Unit,
+    showPowerButton: Boolean = false,
+    onPowerClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -182,7 +185,7 @@ fun ControlCenterLayer(
     val toggleOverscroll = remember { Animatable(0f) }
     val overscrollScope = androidx.compose.runtime.rememberCoroutineScope()
     var bottomDismissArmed by remember { mutableStateOf(false) }
-    var fullScreenDismissDy by remember { mutableFloatStateOf(0f) }
+    var fullScreenDismissTriggered by remember { mutableStateOf(false) }
     val verticalElasticScroll = remember(verticalScrollState) {
         object : NestedScrollConnection {
             override fun onPreScroll(
@@ -383,7 +386,7 @@ fun ControlCenterLayer(
         LaunchedEffect(verticalScrollEnabled, toggleRowFits) {
             verticalOverscroll.snapTo(0f)
             toggleOverscroll.snapTo(0f)
-            fullScreenDismissDy = 0f
+            fullScreenDismissTriggered = false
             bottomDismissArmed = false
         }
         val verticalElasticModifier = Modifier
@@ -398,7 +401,7 @@ fun ControlCenterLayer(
             verticalElasticModifier.pointerInput(Unit) {
                 detectDragGestures(
                     onDragStart = {
-                        fullScreenDismissDy = 0f
+                        fullScreenDismissTriggered = false
                     },
                     onDrag = { change, dragAmount ->
                         if (abs(dragAmount.y) >= abs(dragAmount.x)) {
@@ -410,11 +413,11 @@ fun ControlCenterLayer(
                                     dragAmount.y > 0f ->
                                         (verticalOverscroll.value + dragAmount.y * CONTROL_CENTER_OVERSCROLL_RESISTANCE)
                                             .coerceAtMost(CONTROL_CENTER_OVERSCROLL_LIMIT)
-                                    dragAmount.y < 0f -> {
-                                        fullScreenDismissDy += dragAmount.y
-                                        if (fullScreenDismissDy <= -48f) {
-                                            onDismissToFace()
-                                        }
+                                    dragAmount.y < 0f -> if (!fullScreenDismissTriggered) {
+                                        fullScreenDismissTriggered = true
+                                        onDismissToFace()
+                                        verticalOverscroll.value
+                                    } else {
                                         verticalOverscroll.value
                                     }
                                     else -> verticalOverscroll.value
@@ -424,7 +427,7 @@ fun ControlCenterLayer(
                         }
                     },
                     onDragEnd = {
-                        fullScreenDismissDy = 0f
+                        fullScreenDismissTriggered = false
                         overscrollScope.launch {
                             if (verticalOverscroll.value != 0f) {
                                 verticalOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
@@ -432,7 +435,7 @@ fun ControlCenterLayer(
                         }
                     },
                     onDragCancel = {
-                        fullScreenDismissDy = 0f
+                        fullScreenDismissTriggered = false
                         overscrollScope.launch {
                             if (verticalOverscroll.value != 0f) {
                                 verticalOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
@@ -464,7 +467,18 @@ fun ControlCenterLayer(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
+                    if (showPowerButton) {
+                        SystemSettingsButton(
+                            icon = Icons.Filled.PowerSettingsNew,
+                            contentDescription = "电源选项",
+                            size = 28.dp,
+                            iconSize = 17.dp,
+                            onClick = onPowerClick
+                        )
+                    }
                     SystemSettingsButton(
+                        icon = Icons.Outlined.SettingsIcon,
+                        contentDescription = "系统设置",
                         size = 28.dp,
                         iconSize = 17.dp,
                         onClick = { openSettings(context, Settings.ACTION_SETTINGS) }
@@ -694,6 +708,8 @@ fun ControlCenterLayer(
 
 @Composable
 private fun SystemSettingsButton(
+    icon: ImageVector,
+    contentDescription: String,
     size: androidx.compose.ui.unit.Dp,
     iconSize: androidx.compose.ui.unit.Dp,
     modifier: Modifier = Modifier,
@@ -724,8 +740,8 @@ private fun SystemSettingsButton(
         contentAlignment = Alignment.Center
     ) {
         Icon(
-            imageVector = Icons.Outlined.SettingsIcon,
-            contentDescription = "系统设置",
+            imageVector = icon,
+            contentDescription = contentDescription,
             tint = iconTint,
             modifier = Modifier.size(iconSize)
         )

@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.os.Bundle
+import android.provider.Settings as AndroidSettings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -104,6 +105,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dudu.wearlauncher.utils.ILog
 import com.flue.launcher.data.model.AppInfo
+import com.flue.launcher.service.FlueAccessibilityService
 import com.flue.launcher.ui.common.bottomFisheyeScale
 import com.flue.launcher.ui.drawer.vibrateHaptic
 import com.flue.launcher.ui.input.flueRotaryScrollable
@@ -284,8 +286,11 @@ private fun SettingsRootScreen(
     val showWidgetPage by vm.showWidgetPage.collectAsStateWithLifecycle()
     val showControlCenter by vm.showControlCenter.collectAsStateWithLifecycle()
     val showMusicControls by vm.showMusicControls.collectAsStateWithLifecycle()
+    val doubleTapLockScreenEnabled by vm.doubleTapLockScreenEnabled.collectAsStateWithLifecycle()
+    val powerMenuButtonEnabled by vm.powerMenuButtonEnabled.collectAsStateWithLifecycle()
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
+    val accessibilityServiceConnected by FlueAccessibilityService.connected.collectAsStateWithLifecycle()
     val headerTime = rememberSettingsHeaderTime()
     val isZh = remember(context.resources.configuration) {
         context.resources.configuration.locales[0]?.language?.startsWith("zh") == true
@@ -299,6 +304,13 @@ private fun SettingsRootScreen(
                 vm.setBuiltInWatchFaceFontPath(savedPath)
                 Toast.makeText(context, "表盘字体已更新", Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+    val openAccessibilitySettings = remember(context) {
+        {
+            Toast.makeText(context, "请在无障碍中授权 Flue 辅助控制", Toast.LENGTH_SHORT).show()
+            context.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS))
+            Unit
         }
     }
 
@@ -943,6 +955,43 @@ private fun SettingsRootScreen(
                     enabled = showControlCenter,
                     onToggle = vm::setShowMusicControls,
                     scale = itemFisheye(listState, "music_controls_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            item("double_tap_lock_screen") {
+                SettingsSwitchRow(
+                    title = if (isZh) "双击表盘息屏" else "Double Tap to Lock",
+                    subtitle = if (accessibilityServiceConnected) {
+                        if (isZh) "已授权无障碍，双击表盘会立即息屏" else "Accessibility is enabled; double tap the watch face to lock the screen"
+                    } else {
+                        if (isZh) "开启后跳转无障碍授权，仅用于双击息屏" else "Requires Accessibility; used only for double-tap screen lock"
+                    },
+                    checked = doubleTapLockScreenEnabled,
+                    onToggle = { enabled ->
+                        vm.setDoubleTapLockScreenEnabled(enabled)
+                        if (enabled && !accessibilityServiceConnected) {
+                            openAccessibilitySettings()
+                        }
+                    },
+                    scale = itemFisheye(listState, "double_tap_lock_screen", screenCenterY, screenHeightPx)
+                )
+            }
+            item("power_menu_button") {
+                SettingsSwitchRow(
+                    title = if (isZh) "控制中心电源按钮" else "Control Center Power Button",
+                    subtitle = if (accessibilityServiceConnected) {
+                        if (isZh) "已授权无障碍，点击控制中心电源图标会打开电源选项" else "Accessibility is enabled; the power icon opens power options"
+                    } else {
+                        if (isZh) "开启后跳转无障碍授权，仅用于打开电源选项" else "Requires Accessibility; used only to open power options"
+                    },
+                    checked = powerMenuButtonEnabled,
+                    enabled = true,
+                    onToggle = { enabled ->
+                        vm.setPowerMenuButtonEnabled(enabled)
+                        if (enabled && !accessibilityServiceConnected) {
+                            openAccessibilitySettings()
+                        }
+                    },
+                    scale = itemFisheye(listState, "power_menu_button", screenCenterY, screenHeightPx)
                 )
             }
             item("watchface_status_indicators") {

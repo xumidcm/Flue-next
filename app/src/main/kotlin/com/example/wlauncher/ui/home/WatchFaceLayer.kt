@@ -211,6 +211,7 @@ fun WatchFaceLayer(
     showStatusIndicators: Boolean = true,
     hasNotifications: Boolean = false,
     onLongPress: (() -> Unit)? = null,
+    onDoubleTap: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     BuiltInWatchFaceSurface(
@@ -226,6 +227,7 @@ fun WatchFaceLayer(
         hasNotifications = hasNotifications,
         clockOverride = null,
         onLongPress = onLongPress,
+        onDoubleTap = onDoubleTap,
         showClock = true,
         keepVideoAliveWhenHidden = true,
         modifier = modifier
@@ -261,6 +263,7 @@ fun BuiltInWatchFacePreview(
         hasNotifications = hasNotifications,
         clockOverride = clockOverride,
         onLongPress = null,
+        onDoubleTap = null,
         showClock = showClock,
         keepVideoAliveWhenHidden = false,
         modifier = modifier
@@ -281,6 +284,7 @@ private fun BuiltInWatchFaceSurface(
     hasNotifications: Boolean,
     clockOverride: ClockSnapshot?,
     onLongPress: (() -> Unit)?,
+    onDoubleTap: (() -> Unit)?,
     showClock: Boolean,
     keepVideoAliveWhenHidden: Boolean,
     modifier: Modifier = Modifier
@@ -314,9 +318,12 @@ private fun BuiltInWatchFaceSurface(
     val backgroundModifier = modifier
         .fillMaxSize()
         .then(
-            if (onLongPress != null) {
-                Modifier.pointerInput(onLongPress) {
-                    detectTapGestures(onLongPress = { onLongPress() })
+            if (onLongPress != null || onDoubleTap != null) {
+                Modifier.pointerInput(onLongPress, onDoubleTap) {
+                    detectTapGestures(
+                        onLongPress = onLongPress?.let { handler -> { _ -> handler() } },
+                        onDoubleTap = onDoubleTap?.let { handler -> { _ -> handler() } }
+                    )
                 }
             } else {
                 Modifier
