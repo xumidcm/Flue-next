@@ -98,6 +98,9 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.AwaitPointerEventScope
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -1174,24 +1177,48 @@ private fun Modifier.controlCenterPressGesture(
     onClick: () -> Unit
 ): Modifier {
     if (!enabled) return this
-    return pointerInput(onClick, onLongClick, enabled) {
-        detectTapGestures(
-            onPress = {
+    return this
+        .pointerInput(pressedState, enabled) {
+            awaitEachGesture {
+                val down = awaitControlCenterPressDown()
+                val startTime = SystemClock.elapsedRealtime()
                 pressedState.value = true
                 try {
-                    tryAwaitRelease()
-                    delay(CONTROL_CENTER_MIN_PRESS_MS)
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed || change.changedToUpIgnoreConsumed()) {
+                            break
+                        }
+                        if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                            break
+                        }
+                    }
                 } finally {
+                    val remaining = CONTROL_CENTER_MIN_PRESS_MS - (SystemClock.elapsedRealtime() - startTime)
+                    if (remaining > 0L) delay(remaining)
                     pressedState.value = false
                 }
-            },
-            onTap = {
-                onClick()
-            },
-            onLongPress = {
-                onLongClick?.invoke()
             }
-        )
+        }
+        .pointerInput(onClick, onLongClick, enabled) {
+            detectTapGestures(
+                onTap = {
+                    onClick()
+                },
+                onLongPress = {
+                    onLongClick?.invoke()
+                }
+            )
+        }
+}
+
+private suspend fun AwaitPointerEventScope.awaitControlCenterPressDown(): PointerInputChange {
+    while (true) {
+        val event = awaitPointerEvent(PointerEventPass.Initial)
+        val change = event.changes.firstOrNull { it.pressed && !it.previousPressed }
+            ?: event.changes.firstOrNull { it.pressed }
+        if (change != null) return change
     }
 }
 
