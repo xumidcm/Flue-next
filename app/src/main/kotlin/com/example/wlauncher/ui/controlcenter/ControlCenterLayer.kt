@@ -95,6 +95,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -1101,21 +1102,32 @@ private fun OneShotMarqueeText(
     val density = LocalDensity.current
     val textMeasurer = rememberTextMeasurer()
     val textStyle = TextStyle(fontSize = fontSize, fontWeight = fontWeight)
-    val measuredTextWidthPx = textMeasurer.measure(
+    val measuredRawTextWidthPx = textMeasurer.measure(
         text = AnnotatedString(text),
         style = textStyle,
         maxLines = 1,
         softWrap = false
     ).size.width
     var containerWidthPx by remember { mutableIntStateOf(0) }
-    val hasOverflow = containerWidthPx > 0 && measuredTextWidthPx > containerWidthPx
+    val hasOverflow = containerWidthPx > 0 && measuredRawTextWidthPx > containerWidthPx
+    val displayText = if (hasOverflow) " $text " else text
+    val measuredDisplayTextWidthPx = if (hasOverflow) {
+        textMeasurer.measure(
+            text = AnnotatedString(displayText),
+            style = textStyle,
+            maxLines = 1,
+            softWrap = false
+        ).size.width
+    } else {
+        measuredRawTextWidthPx
+    }
     val marqueeOffset = remember(text) { Animatable(0f) }
 
-    LaunchedEffect(text, hasOverflow, measuredTextWidthPx, containerWidthPx) {
+    LaunchedEffect(text, hasOverflow, measuredDisplayTextWidthPx, containerWidthPx) {
         marqueeOffset.snapTo(0f)
         if (hasOverflow) {
             delay(MUSIC_TEXT_MARQUEE_INITIAL_DELAY_MS)
-            val distancePx = (measuredTextWidthPx - containerWidthPx).coerceAtLeast(0).toFloat()
+            val distancePx = (measuredDisplayTextWidthPx - containerWidthPx).coerceAtLeast(0).toFloat()
             val durationMs = ((distancePx / density.density) / MUSIC_TEXT_MARQUEE_SPEED_DP_PER_SECOND * 1000f)
                 .roundToInt()
                 .coerceAtLeast(900)
@@ -1128,7 +1140,8 @@ private fun OneShotMarqueeText(
 
     val offsetPx = marqueeOffset.value
     val showLeftFade = hasOverflow && offsetPx > 0.5f
-    val showRightFade = hasOverflow && measuredTextWidthPx - offsetPx > containerWidthPx + 0.5f
+    val showRightFade = hasOverflow && offsetPx > 0.5f &&
+        measuredDisplayTextWidthPx - offsetPx > containerWidthPx + 0.5f
     val fadeModifier = if (showLeftFade || showRightFade) {
         Modifier
             .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
@@ -1172,12 +1185,12 @@ private fun OneShotMarqueeText(
             .then(fadeModifier)
     ) {
         val textWidthModifier = if (hasOverflow) {
-            Modifier.requiredWidth(with(density) { measuredTextWidthPx.toDp() })
+            Modifier.requiredWidth(with(density) { measuredDisplayTextWidthPx.toDp() })
         } else {
             Modifier.fillMaxWidth()
         }
         Text(
-            text = text,
+            text = displayText,
             color = color,
             fontSize = fontSize,
             fontWeight = fontWeight,
@@ -1197,12 +1210,14 @@ private fun MediaProgressSection(
     onGestureLockChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val currentMediaState by rememberUpdatedState(mediaState)
+    val currentGestureLockChange by rememberUpdatedState(onGestureLockChange)
     var widthPx by remember { mutableIntStateOf(1) }
     var dragging by remember { mutableStateOf(false) }
-    var skipNextProgressSync by remember(mediaState.controller, mediaState.durationMs) {
+    var skipNextProgressSync by remember(mediaState.appPackage, mediaState.title, mediaState.durationMs) {
         mutableStateOf(false)
     }
-    var localProgress by remember(mediaState.controller, mediaState.durationMs) {
+    var localProgress by remember(mediaState.appPackage, mediaState.title, mediaState.durationMs) {
         mutableFloatStateOf(mediaState.progress.coerceIn(0f, 1f))
     }
     LaunchedEffect(mediaState.progress, dragging) {
@@ -1219,9 +1234,9 @@ private fun MediaProgressSection(
         label = "media_progress_height"
     )
     fun seekToProgress(progress: Float) {
-        val duration = mediaState.durationMs
+        val duration = currentMediaState.durationMs
         if (duration <= 0L) return
-        mediaState.controller?.transportControls?.seekTo((progress.coerceIn(0f, 1f) * duration).toLong())
+        currentMediaState.controller?.transportControls?.seekTo((progress.coerceIn(0f, 1f) * duration).toLong())
     }
     Column(modifier = modifier) {
         Box(
@@ -1229,13 +1244,13 @@ private fun MediaProgressSection(
                 .fillMaxWidth()
                 .height(22.dp)
                 .onSizeChanged { widthPx = it.width.coerceAtLeast(1) }
-                .pointerInput(mediaState.controller, mediaState.durationMs, onGestureLockChange) {
+                .pointerInput(mediaState.appPackage, mediaState.title, mediaState.durationMs) {
                     val dragHitHeightPx = MEDIA_PROGRESS_HIT_HEIGHT_DP.dp.toPx()
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         val centerY = size.height / 2f
                         val withinTrack = abs(down.position.y - centerY) <= dragHitHeightPx / 2f
-                        if (!withinTrack || mediaState.durationMs <= 0L) {
+                        if (!withinTrack || currentMediaState.durationMs <= 0L) {
                             return@awaitEachGesture
                         }
                         down.consume()
@@ -1245,7 +1260,7 @@ private fun MediaProgressSection(
                             localProgress = (startProgress + deltaX / widthPx).coerceIn(0f, 1f)
                         }
                         try {
-                            onGestureLockChange(true)
+                            currentGestureLockChange(true)
                             dragging = true
                             while (true) {
                                 val event = awaitPointerEvent()
@@ -1262,7 +1277,7 @@ private fun MediaProgressSection(
                             seekToProgress(localProgress)
                         } finally {
                             dragging = false
-                            onGestureLockChange(false)
+                            currentGestureLockChange(false)
                         }
                     }
                 },
