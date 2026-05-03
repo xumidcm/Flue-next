@@ -14,7 +14,13 @@ data class NotificationEntryUi(
     val isClearable: Boolean,
     val contentIntentAvailable: Boolean,
     val isOngoing: Boolean,
-    val isForegroundService: Boolean
+    val isForegroundService: Boolean,
+    val actions: List<NotificationActionUi> = emptyList()
+)
+
+data class NotificationActionUi(
+    val key: String,
+    val title: String
 )
 
 data class NotificationGroupUi(

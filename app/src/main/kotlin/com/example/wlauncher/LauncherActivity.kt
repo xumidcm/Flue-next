@@ -824,7 +824,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onDismissNotification = vm::dismissNotification,
                         onOpenNotification = { key, origin ->
                             vm.openNotification(key, origin, ScreenState.Notifications, 0L)
-                        }
+                        },
+                        onNotificationAction = vm::runNotificationAction
                     )
                 }
             }
