@@ -7,15 +7,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlin.math.abs
 
-private enum class PageDragTarget {
-    OpenStack,
-    CloseStack,
-    OpenWidgets,
-    CloseWidgets,
-    OpenControlCenter,
-    OpenApps
-}
-
 @Composable
 fun GestureHost(
     screenState: ScreenState,
@@ -25,18 +16,11 @@ fun GestureHost(
     showNotification: Boolean = true,
     showWidgetPage: Boolean = true,
     showControlCenter: Boolean = false,
-    onSideProgressChange: (Float) -> Unit = {},
-    onSideRelease: (Boolean) -> Unit = {},
-    onWidgetProgressChange: (Float) -> Unit = {},
-    onWidgetRelease: (Boolean) -> Unit = {},
-    onControlCenterProgressChange: (Float) -> Unit = {},
-    onControlCenterRelease: (Boolean) -> Unit = {},
     content: @Composable () -> Unit
 ) {
     var totalDx by remember { mutableFloatStateOf(0f) }
     var totalDy by remember { mutableFloatStateOf(0f) }
-    var dragTarget by remember { mutableStateOf<PageDragTarget?>(null) }
-    var pageProgress by remember { mutableFloatStateOf(0f) }
+    var consumed by remember { mutableStateOf(false) }
 
     Box(
         modifier = modifier
@@ -45,96 +29,58 @@ fun GestureHost(
                     onDragStart = {
                         totalDx = 0f
                         totalDy = 0f
-                        dragTarget = null
-                        pageProgress = 0f
+                        consumed = false
                     },
                     onDrag = { change, dragAmount ->
                         totalDx += dragAmount.x
                         totalDy += dragAmount.y
 
-                        if (dragTarget == null && (abs(totalDx) > 12 || abs(totalDy) > 12)) {
+                        if (!consumed && (abs(totalDx) > 80 || abs(totalDy) > 80)) {
+                            consumed = true
                             val isVertical = abs(totalDy) > abs(totalDx)
                             val isHorizontal = !isVertical
-                            dragTarget = when (screenState) {
+
+                            when (screenState) {
                                 ScreenState.Face -> {
-                                    when {
-                                        isVertical && totalDy < -12 -> PageDragTarget.OpenApps
-                                        isHorizontal && totalDx > 12 && sideScreenEnabled -> PageDragTarget.OpenStack
-                                        isHorizontal && totalDx < -12 && showWidgetPage -> PageDragTarget.OpenWidgets
-                                        isVertical && totalDy > 12 && showControlCenter -> PageDragTarget.OpenControlCenter
-                                        else -> null
+                                    if (isVertical && totalDy < -80) {
+                                        onStateChange(ScreenState.Apps)
+                                        change.consume()
+                                    } else if (isHorizontal && totalDx > 80 && sideScreenEnabled) {
+                                        onStateChange(ScreenState.Stack)
+                                        change.consume()
+                                    } else if (isHorizontal && totalDx < -80 && showWidgetPage) {
+                                        onStateChange(ScreenState.Widgets)
+                                        change.consume()
+                                    } else if (isVertical && totalDy > 80 && showControlCenter) {
+                                        onStateChange(ScreenState.ControlCenter)
+                                        change.consume()
                                     }
                                 }
 
-                                ScreenState.Notifications -> null
+                                ScreenState.Notifications -> Unit
 
                                 ScreenState.Widgets -> {
-                                    if (isHorizontal && totalDx > 12) PageDragTarget.CloseWidgets else null
+                                    if (isHorizontal && totalDx > 80) {
+                                        onStateChange(ScreenState.Face)
+                                        change.consume()
+                                    }
                                 }
 
-                                ScreenState.ControlCenter -> null
+                                ScreenState.ControlCenter -> Unit
 
-                                ScreenState.Apps -> null
-                                ScreenState.App -> null
-                                ScreenState.Settings -> null
+                                ScreenState.Apps -> Unit
+                                ScreenState.App -> Unit
+                                ScreenState.Settings -> Unit
                                 ScreenState.Stack -> {
-                                    if (isHorizontal && totalDx < -12) PageDragTarget.CloseStack else null
+                                    if (isHorizontal && totalDx < -80) {
+                                        onStateChange(ScreenState.Face)
+                                        change.consume()
+                                    }
                                 }
                             }
                         }
-
-                        val target = dragTarget ?: return@detectDragGestures
-                        val horizontalRange = (size.width * 0.42f).coerceAtLeast(120f)
-                        val verticalRange = (size.height * 0.36f).coerceAtLeast(120f)
-                        pageProgress = when (target) {
-                            PageDragTarget.OpenStack -> (totalDx / horizontalRange).coerceIn(0f, 1f)
-                            PageDragTarget.CloseStack -> (1f + totalDx / horizontalRange).coerceIn(0f, 1f)
-                            PageDragTarget.OpenWidgets -> (-totalDx / horizontalRange).coerceIn(0f, 1f)
-                            PageDragTarget.CloseWidgets -> (1f - totalDx / horizontalRange).coerceIn(0f, 1f)
-                            PageDragTarget.OpenControlCenter -> (totalDy / verticalRange).coerceIn(0f, 1f)
-                            PageDragTarget.OpenApps -> 0f
-                        }
-                        when (target) {
-                            PageDragTarget.OpenStack,
-                            PageDragTarget.CloseStack -> onSideProgressChange(pageProgress)
-                            PageDragTarget.OpenWidgets,
-                            PageDragTarget.CloseWidgets -> onWidgetProgressChange(pageProgress)
-                            PageDragTarget.OpenControlCenter -> onControlCenterProgressChange(pageProgress)
-                            PageDragTarget.OpenApps -> {
-                                if (totalDy < -80) {
-                                    onStateChange(ScreenState.Apps)
-                                    dragTarget = null
-                                }
-                            }
-                        }
-                        change.consume()
                     },
-                    onDragEnd = {
-                        when (dragTarget) {
-                            PageDragTarget.OpenStack -> onSideRelease(pageProgress > 0.45f)
-                            PageDragTarget.CloseStack -> onSideRelease(pageProgress > 0.55f)
-                            PageDragTarget.OpenWidgets -> onWidgetRelease(pageProgress > 0.45f)
-                            PageDragTarget.CloseWidgets -> onWidgetRelease(pageProgress > 0.55f)
-                            PageDragTarget.OpenControlCenter -> onControlCenterRelease(pageProgress > 0.45f)
-                            PageDragTarget.OpenApps,
-                            null -> Unit
-                        }
-                        dragTarget = null
-                        pageProgress = 0f
-                    },
-                    onDragCancel = {
-                        when (dragTarget) {
-                            PageDragTarget.OpenStack -> onSideRelease(false)
-                            PageDragTarget.CloseStack -> onSideRelease(true)
-                            PageDragTarget.OpenWidgets -> onWidgetRelease(false)
-                            PageDragTarget.CloseWidgets -> onWidgetRelease(true)
-                            PageDragTarget.OpenControlCenter -> onControlCenterRelease(false)
-                            PageDragTarget.OpenApps,
-                            null -> Unit
-                        }
-                        dragTarget = null
-                        pageProgress = 0f
-                    }
+                    onDragEnd = {}
                 )
             }
     ) {

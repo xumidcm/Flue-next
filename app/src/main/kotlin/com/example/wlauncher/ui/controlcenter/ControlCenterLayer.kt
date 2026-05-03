@@ -84,7 +84,6 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -105,7 +104,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import com.flue.launcher.ui.theme.LocalGlobalUiScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -158,14 +156,12 @@ private data class BatteryStatusSnapshot(
 fun ControlCenterLayer(
     leftSafeInsetDp: Int,
     showMusicControls: Boolean,
-    onTransitionProgressChange: (Float) -> Unit,
-    onTransitionRelease: (Boolean) -> Unit,
+    onDismissToFace: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val launcherStyle = LauncherTheme.style
     val globalUiScale = LocalGlobalUiScale.current
-    val density = LocalDensity.current
     val audioManager = remember(context) { context.getSystemService(AudioManager::class.java) }
     var mediaVolume by remember(context) {
         mutableFloatStateOf(readMusicVolume(audioManager))
@@ -185,27 +181,8 @@ fun ControlCenterLayer(
     val verticalOverscroll = remember { Animatable(0f) }
     val toggleOverscroll = remember { Animatable(0f) }
     val overscrollScope = androidx.compose.runtime.rememberCoroutineScope()
-    val currentOnTransitionProgressChange by rememberUpdatedState(onTransitionProgressChange)
-    val currentOnTransitionRelease by rememberUpdatedState(onTransitionRelease)
-    val bottomDismissDragRangePx = remember(density) { with(density) { 156.dp.toPx() } }
-    val bottomDismissThresholdPx = remember(density) { with(density) { 92.dp.toPx() } }
     var bottomDismissArmed by remember { mutableStateOf(false) }
-    var bottomDismissDistance by remember { mutableFloatStateOf(0f) }
-    fun resetBottomDismiss() {
-        bottomDismissArmed = false
-        bottomDismissDistance = 0f
-    }
-    fun updateBottomDismissDistance(distance: Float) {
-        bottomDismissDistance = distance.coerceIn(0f, bottomDismissDragRangePx)
-        currentOnTransitionProgressChange((1f - bottomDismissDistance / bottomDismissDragRangePx).coerceIn(0f, 1f))
-    }
-    fun releaseBottomDismiss() {
-        if (bottomDismissDistance > 0f) {
-            val shouldDismiss = bottomDismissArmed && bottomDismissDistance >= bottomDismissThresholdPx
-            currentOnTransitionRelease(shouldDismiss)
-        }
-        resetBottomDismiss()
-    }
+    var fullScreenDismissDy by remember { mutableFloatStateOf(0f) }
     val verticalElasticScroll = remember(verticalScrollState) {
         object : NestedScrollConnection {
             override fun onPreScroll(
@@ -216,10 +193,6 @@ fun ControlCenterLayer(
                 val atTop = verticalScrollState.value <= 0
                 val atBottom = verticalScrollState.maxValue > 0 &&
                     verticalScrollState.value >= verticalScrollState.maxValue
-                if (bottomDismissDistance > 0f && available.y > 0f) {
-                    updateBottomDismissDistance(bottomDismissDistance - available.y)
-                    return androidx.compose.ui.geometry.Offset(0f, available.y)
-                }
                 if (available.y > 0f && atTop) {
                     overscrollScope.launch {
                         verticalOverscroll.snapTo(
@@ -231,7 +204,7 @@ fun ControlCenterLayer(
                 }
                 if (available.y < 0f && atBottom) {
                     if (bottomDismissArmed) {
-                        updateBottomDismissDistance(bottomDismissDistance - available.y)
+                        onDismissToFace()
                     } else {
                         overscrollScope.launch {
                             verticalOverscroll.snapTo(
@@ -258,10 +231,6 @@ fun ControlCenterLayer(
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (bottomDismissDistance > 0f) {
-                    releaseBottomDismiss()
-                    return available
-                }
                 if (verticalOverscroll.value != 0f) {
                     verticalOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
                     return available
@@ -279,9 +248,8 @@ fun ControlCenterLayer(
                 if (!pressed && isPressed) {
                     bottomDismissArmed = verticalScrollState.maxValue > 0 &&
                         verticalScrollState.value >= verticalScrollState.maxValue
-                    bottomDismissDistance = 0f
                 } else if (pressed && !isPressed) {
-                    releaseBottomDismiss()
+                    bottomDismissArmed = false
                 }
                 pressed = isPressed
             }
@@ -415,17 +383,23 @@ fun ControlCenterLayer(
         LaunchedEffect(verticalScrollEnabled, toggleRowFits) {
             verticalOverscroll.snapTo(0f)
             toggleOverscroll.snapTo(0f)
+            fullScreenDismissDy = 0f
+            bottomDismissArmed = false
         }
         val verticalElasticModifier = Modifier
             .fillMaxSize()
-            .then(trackDismissPointer)
             .graphicsLayer { translationY = verticalOverscroll.value }
-            .nestedScroll(verticalElasticScroll)
         val contentModifier = if (verticalScrollEnabled) {
-            verticalElasticModifier.verticalScroll(verticalScrollState)
+            verticalElasticModifier
+                .then(trackDismissPointer)
+                .nestedScroll(verticalElasticScroll)
+                .verticalScroll(verticalScrollState)
         } else {
             verticalElasticModifier.pointerInput(Unit) {
                 detectDragGestures(
+                    onDragStart = {
+                        fullScreenDismissDy = 0f
+                    },
                     onDrag = { change, dragAmount ->
                         if (abs(dragAmount.y) >= abs(dragAmount.x)) {
                             change.consume()
@@ -433,14 +407,16 @@ fun ControlCenterLayer(
                                 val next = when {
                                     verticalOverscroll.value > 0f && dragAmount.y < 0f ->
                                         (verticalOverscroll.value + dragAmount.y).coerceAtLeast(0f)
-                                    verticalOverscroll.value < 0f && dragAmount.y > 0f ->
-                                        (verticalOverscroll.value + dragAmount.y).coerceAtMost(0f)
                                     dragAmount.y > 0f ->
                                         (verticalOverscroll.value + dragAmount.y * CONTROL_CENTER_OVERSCROLL_RESISTANCE)
                                             .coerceAtMost(CONTROL_CENTER_OVERSCROLL_LIMIT)
-                                    dragAmount.y < 0f ->
-                                        (verticalOverscroll.value + dragAmount.y * CONTROL_CENTER_OVERSCROLL_RESISTANCE)
-                                            .coerceAtLeast(-CONTROL_CENTER_OVERSCROLL_LIMIT)
+                                    dragAmount.y < 0f -> {
+                                        fullScreenDismissDy += dragAmount.y
+                                        if (fullScreenDismissDy <= -48f) {
+                                            onDismissToFace()
+                                        }
+                                        verticalOverscroll.value
+                                    }
                                     else -> verticalOverscroll.value
                                 }
                                 verticalOverscroll.snapTo(next)
@@ -448,6 +424,7 @@ fun ControlCenterLayer(
                         }
                     },
                     onDragEnd = {
+                        fullScreenDismissDy = 0f
                         overscrollScope.launch {
                             if (verticalOverscroll.value != 0f) {
                                 verticalOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
@@ -455,6 +432,7 @@ fun ControlCenterLayer(
                         }
                     },
                     onDragCancel = {
+                        fullScreenDismissDy = 0f
                         overscrollScope.launch {
                             if (verticalOverscroll.value != 0f) {
                                 verticalOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))

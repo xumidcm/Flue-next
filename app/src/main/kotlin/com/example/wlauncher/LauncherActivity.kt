@@ -11,6 +11,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -359,27 +360,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val notificationTransition = remember { Animatable(if (notificationSceneActive) 1f else 0f) }
     var notificationGestureActive by remember { mutableStateOf(false) }
     var notificationTargetProgress by remember { mutableFloatStateOf(if (notificationSceneActive) 1f else 0f) }
-    val sidePageTransition = remember {
-        Animatable(if (sideScreenEnabled && (screenState == ScreenState.Stack || screenState == ScreenState.Notifications)) 1f else 0f)
-    }
-    var sidePageGestureActive by remember { mutableStateOf(false) }
-    var sidePageTargetProgress by remember {
-        mutableFloatStateOf(if (sideScreenEnabled && (screenState == ScreenState.Stack || screenState == ScreenState.Notifications)) 1f else 0f)
-    }
-    val widgetPageTransition = remember {
-        Animatable(if (showWidgetPage && screenState == ScreenState.Widgets) 1f else 0f)
-    }
-    var widgetPageGestureActive by remember { mutableStateOf(false) }
-    var widgetPageTargetProgress by remember {
-        mutableFloatStateOf(if (showWidgetPage && screenState == ScreenState.Widgets) 1f else 0f)
-    }
-    val controlCenterTransition = remember {
-        Animatable(if (showControlCenter && screenState == ScreenState.ControlCenter) 1f else 0f)
-    }
-    var controlCenterGestureActive by remember { mutableStateOf(false) }
-    var controlCenterTargetProgress by remember {
-        mutableFloatStateOf(if (showControlCenter && screenState == ScreenState.ControlCenter) 1f else 0f)
-    }
 
     val appListTransformOrigin = when {
         launchSourceState != ScreenState.Apps -> null
@@ -402,43 +382,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 notificationTargetProgress,
                 tween(durationMillis = NOTIFICATION_TRANSITION_MS)
             )
-        }
-    }
-
-    LaunchedEffect(screenState, sideScreenEnabled) {
-        if (!sidePageGestureActive) {
-            sidePageTargetProgress =
-                if (sideScreenEnabled && (screenState == ScreenState.Stack || screenState == ScreenState.Notifications)) 1f else 0f
-        }
-    }
-
-    LaunchedEffect(sidePageTargetProgress, sidePageGestureActive) {
-        if (!sidePageGestureActive) {
-            sidePageTransition.animateTo(sidePageTargetProgress, tween(durationMillis = SIDE_SCREEN_TRANSITION_MS))
-        }
-    }
-
-    LaunchedEffect(screenState, showWidgetPage) {
-        if (!widgetPageGestureActive) {
-            widgetPageTargetProgress = if (showWidgetPage && screenState == ScreenState.Widgets) 1f else 0f
-        }
-    }
-
-    LaunchedEffect(widgetPageTargetProgress, widgetPageGestureActive) {
-        if (!widgetPageGestureActive) {
-            widgetPageTransition.animateTo(widgetPageTargetProgress, tween(durationMillis = SIDE_SCREEN_TRANSITION_MS))
-        }
-    }
-
-    LaunchedEffect(screenState, showControlCenter) {
-        if (!controlCenterGestureActive) {
-            controlCenterTargetProgress = if (showControlCenter && screenState == ScreenState.ControlCenter) 1f else 0f
-        }
-    }
-
-    LaunchedEffect(controlCenterTargetProgress, controlCenterGestureActive) {
-        if (!controlCenterGestureActive) {
-            controlCenterTransition.animateTo(controlCenterTargetProgress, tween(durationMillis = SIDE_SCREEN_TRANSITION_MS))
         }
     }
 
@@ -485,37 +428,26 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val screenHeightPx = with(density) { maxHeight.toPx() }
         val notificationProgress = notificationTransition.value.coerceIn(0f, 1f)
         val keepNotificationLayer = notificationProgress > 0.001f || notificationSceneActive || notificationGestureActive
-        val sidePageProgress = sidePageTransition.value.coerceIn(0f, 1f)
-        val widgetPageProgress = widgetPageTransition.value.coerceIn(0f, 1f)
-        val controlCenterProgress = controlCenterTransition.value.coerceIn(0f, 1f)
+        val sidePageProgress by animateFloatAsState(
+            targetValue = if (sideScreenEnabled && (screenState == ScreenState.Stack || screenState == ScreenState.Notifications)) {
+                1f
+            } else {
+                0f
+            },
+            animationSpec = tween(durationMillis = SIDE_SCREEN_TRANSITION_MS),
+            label = "side_page_progress"
+        )
+        val widgetPageProgress by animateFloatAsState(
+            targetValue = if (showWidgetPage && screenState == ScreenState.Widgets) 1f else 0f,
+            animationSpec = tween(durationMillis = SIDE_SCREEN_TRANSITION_MS),
+            label = "widget_page_progress"
+        )
+        val controlCenterProgress by animateFloatAsState(
+            targetValue = if (showControlCenter && screenState == ScreenState.ControlCenter) 1f else 0f,
+            animationSpec = tween(durationMillis = SIDE_SCREEN_TRANSITION_MS),
+            label = "control_center_progress"
+        )
         val faceAnimState = screenState
-        val updateSideTransitionProgress: (Float) -> Unit = { progress ->
-            sidePageGestureActive = true
-            launcherScope.launch { sidePageTransition.snapTo(progress.coerceIn(0f, 1f)) }
-        }
-        val settleSideTransition: (Boolean) -> Unit = { open ->
-            sidePageGestureActive = false
-            sidePageTargetProgress = if (open) 1f else 0f
-            vm.setState(if (open) ScreenState.Stack else ScreenState.Face)
-        }
-        val updateWidgetTransitionProgress: (Float) -> Unit = { progress ->
-            widgetPageGestureActive = true
-            launcherScope.launch { widgetPageTransition.snapTo(progress.coerceIn(0f, 1f)) }
-        }
-        val settleWidgetTransition: (Boolean) -> Unit = { open ->
-            widgetPageGestureActive = false
-            widgetPageTargetProgress = if (open) 1f else 0f
-            vm.setState(if (open) ScreenState.Widgets else ScreenState.Face)
-        }
-        val updateControlCenterTransitionProgress: (Float) -> Unit = { progress ->
-            controlCenterGestureActive = true
-            launcherScope.launch { controlCenterTransition.snapTo(progress.coerceIn(0f, 1f)) }
-        }
-        val settleControlCenterTransition: (Boolean) -> Unit = { open ->
-            controlCenterGestureActive = false
-            controlCenterTargetProgress = if (open) 1f else 0f
-            vm.setState(if (open) ScreenState.ControlCenter else ScreenState.Face)
-        }
         val updateNotificationTransitionProgress: (Float) -> Unit = { progress ->
             notificationGestureActive = true
             launcherScope.launch {
@@ -526,9 +458,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
             notificationGestureActive = false
             notificationTargetProgress = target.coerceIn(0f, 1f)
         }
-        val sideScreenVisible = sidePageProgress > 0.001f || screenState == ScreenState.Stack || screenState == ScreenState.Notifications || sidePageGestureActive
-        val widgetPageVisible = widgetPageProgress > 0.001f || screenState == ScreenState.Widgets || widgetPageGestureActive
-        val controlCenterVisible = controlCenterProgress > 0.001f || screenState == ScreenState.ControlCenter || controlCenterGestureActive
+        val sideScreenVisible = sidePageProgress > 0.001f || screenState == ScreenState.Stack || screenState == ScreenState.Notifications
+        val widgetPageVisible = widgetPageProgress > 0.001f || screenState == ScreenState.Widgets
+        val controlCenterVisible = controlCenterProgress > 0.001f || screenState == ScreenState.ControlCenter
         val sideSceneOverlayActive = sideScreenVisible || widgetPageVisible || controlCenterVisible
 
         GestureHost(
@@ -538,12 +470,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
             showNotification = false,
             showWidgetPage = showWidgetPage,
             showControlCenter = showControlCenter,
-            onSideProgressChange = updateSideTransitionProgress,
-            onSideRelease = settleSideTransition,
-            onWidgetProgressChange = updateWidgetTransitionProgress,
-            onWidgetRelease = settleWidgetTransition,
-            onControlCenterProgressChange = updateControlCenterTransitionProgress,
-            onControlCenterRelease = settleControlCenterTransition,
             modifier = Modifier.fillMaxSize()
         ) {
             Box(
@@ -776,7 +702,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onMoveSection = vm::moveSideSection,
                         onDismissGroup = vm::dismissNotificationGroup,
                         onDismissNotification = vm::dismissNotification,
-                        onDismissToFace = { settleSideTransition(false) },
+                        onDismissToFace = { vm.setState(ScreenState.Face) },
                         showSteps = showStepCount
                     )
                 }
@@ -817,8 +743,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     ControlCenterLayer(
                         leftSafeInsetDp = appListLeftSafeInsetDp,
                         showMusicControls = showMusicControls,
-                        onTransitionProgressChange = updateControlCenterTransitionProgress,
-                        onTransitionRelease = { dismiss -> settleControlCenterTransition(!dismiss) }
+                        onDismissToFace = { vm.setState(ScreenState.Face) }
                     )
                 }
             }
