@@ -230,7 +230,11 @@ fun ListDrawerScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(appPalette.background)
-                    .flueDrawerRotaryScrollable(focusRequester, DrawerInputMode.List) { rotaryDelta ->
+                    .flueDrawerRotaryScrollable(
+                        focusRequester,
+                        DrawerInputMode.List,
+                        onRotaryScroll = { vibrateHaptic(context) }
+                    ) { rotaryDelta ->
                         wheelMomentumJob?.cancel()
                         scope.launch {
                             markFastScrollActive(180L)
@@ -493,7 +497,7 @@ fun ListDrawerScreen(
             val autoScrollEdgePx = with(density) { LIST_AUTO_SCROLL_EDGE_DP.dp.toPx() }
             val estimatedItemHeight = scaledIconSize.coerceAtLeast(24.dp) + scaledRowVerticalPadding * 2f
             val centeredPadding = ((maxHeight - estimatedItemHeight) / 2f).coerceAtLeast(8.dp)
-            val leftSafeInset = leftSafeInsetDp.coerceIn(0, 128).dp.coerceAtMost(maxWidth * 0.36f)
+            val leftSafeInset = leftSafeInsetDp.coerceIn(0, 168).dp.coerceAtMost(maxWidth * 0.44f)
             val visibleItems by remember {
                 derivedStateOf {
                     listState.layoutInfo.visibleItemsInfo

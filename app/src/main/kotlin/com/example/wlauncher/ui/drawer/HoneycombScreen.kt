@@ -179,8 +179,8 @@ fun HoneycombScreen(
         val density = LocalDensity.current
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
-        val leftSafeInsetPx = with(density) { leftSafeInsetDp.coerceIn(0, 128).dp.toPx() }
-            .coerceAtMost(screenWidthPx * 0.36f)
+        val leftSafeInsetPx = with(density) { leftSafeInsetDp.coerceIn(0, 168).dp.toPx() }
+            .coerceAtMost(screenWidthPx * 0.44f)
         val iconShadowElevationPx by animateFloatAsState(
             targetValue = if (iconShadowEnabled) with(density) { 8.dp.toPx() } else 0f,
             animationSpec = tween(durationMillis = if (iconShadowEnabled) 120 else 0),
@@ -366,7 +366,11 @@ fun HoneycombScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .background(appPalette.background)
-                .flueDrawerRotaryScrollable(focusRequester, DrawerInputMode.Honeycomb) { rotaryDelta ->
+                .flueDrawerRotaryScrollable(
+                    focusRequester,
+                    DrawerInputMode.Honeycomb,
+                    onRotaryScroll = { vibrateHaptic(context) }
+                ) { rotaryDelta ->
                     launchWheelScroll(-rotaryDelta)
                 }
                 .onGloballyPositioned {
@@ -1045,6 +1049,7 @@ private fun MaterialDenseGridScreen(
     onScrollToTop: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val density = LocalDensity.current
     val focusRequester = remember { FocusRequester() }
     val gridState = rememberLazyGridState()
@@ -1150,7 +1155,11 @@ private fun MaterialDenseGridScreen(
         modifier = modifier
             .fillMaxSize()
             .background(appPalette.background)
-            .flueDrawerRotaryScrollable(focusRequester, DrawerInputMode.Honeycomb) { rotaryDelta ->
+            .flueDrawerRotaryScrollable(
+                focusRequester,
+                DrawerInputMode.Honeycomb,
+                onRotaryScroll = { vibrateHaptic(context) }
+            ) { rotaryDelta ->
                 scope.launch { gridState.scrollBy(-rotaryDelta) }
             }
             .nestedScroll(nestedScrollConnection)
@@ -1197,7 +1206,7 @@ private fun MaterialDenseGridScreen(
             }
     ) {
         val screenWidthPx = with(density) { maxWidth.toPx() }
-        val leftSafeInset = leftSafeInsetDp.coerceIn(0, 128).dp.coerceAtMost(maxWidth * 0.36f)
+        val leftSafeInset = leftSafeInsetDp.coerceIn(0, 168).dp.coerceAtMost(maxWidth * 0.44f)
         val horizontalPaddingPx = with(density) { 8.dp.toPx() }
         val leftPaddingPx = with(density) { (8.dp + leftSafeInset).toPx() }
         val itemGapPx = with(density) { 4.dp.toPx() }

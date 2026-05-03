@@ -154,6 +154,7 @@ private data class BatteryStatusSnapshot(
 fun ControlCenterLayer(
     leftSafeInsetDp: Int,
     showMusicControls: Boolean,
+    onDismissToFace: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -177,7 +178,7 @@ fun ControlCenterLayer(
     val verticalOverscroll = remember { Animatable(0f) }
     val toggleOverscroll = remember { Animatable(0f) }
     val overscrollScope = androidx.compose.runtime.rememberCoroutineScope()
-    val verticalElasticScroll = remember(verticalScrollState) {
+    val verticalElasticScroll = remember(verticalScrollState, onDismissToFace) {
         object : NestedScrollConnection {
             override fun onPreScroll(
                 available: androidx.compose.ui.geometry.Offset,
@@ -185,6 +186,8 @@ fun ControlCenterLayer(
             ): androidx.compose.ui.geometry.Offset {
                 if (source != NestedScrollSource.UserInput) return androidx.compose.ui.geometry.Offset.Zero
                 val atTop = verticalScrollState.value <= 0
+                val atBottom = verticalScrollState.maxValue > 0 &&
+                    verticalScrollState.value >= verticalScrollState.maxValue
                 if (available.y > 0f && atTop) {
                     overscrollScope.launch {
                         verticalOverscroll.snapTo(
@@ -192,6 +195,10 @@ fun ControlCenterLayer(
                                 .coerceAtMost(CONTROL_CENTER_OVERSCROLL_LIMIT)
                         )
                     }
+                    return androidx.compose.ui.geometry.Offset(0f, available.y)
+                }
+                if (available.y < 0f && atBottom) {
+                    onDismissToFace()
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 if (verticalOverscroll.value > 0f && available.y < 0f) {
@@ -269,7 +276,7 @@ fun ControlCenterLayer(
             }
         }
     }
-    val leftSafeInset = leftSafeInsetDp.coerceIn(0, 128).dp
+    val leftSafeInset = leftSafeInsetDp.coerceIn(0, 168).dp
     val internetPanelLauncher = rememberLauncherForActivityResult(StartActivityForResult()) {
         connectivity = readConnectivitySnapshot(context)
     }

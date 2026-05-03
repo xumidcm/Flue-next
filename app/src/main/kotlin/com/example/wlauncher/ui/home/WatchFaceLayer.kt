@@ -1308,6 +1308,9 @@ fun rememberAppListSeedColor(
     enabled: Boolean = true
 ): Color {
     if (!enabled) return Color.Transparent
+    if (watchFaceId !in setOf(BUILT_IN_WATCHFACE_ID, BUILT_IN_PHOTO_WATCHFACE_ID, BUILT_IN_VIDEO_WATCHFACE_ID)) {
+        return Color.Transparent
+    }
     val activeOptions = when (watchFaceId) {
         BUILT_IN_PHOTO_WATCHFACE_ID -> photoOptions
         BUILT_IN_VIDEO_WATCHFACE_ID -> videoOptions

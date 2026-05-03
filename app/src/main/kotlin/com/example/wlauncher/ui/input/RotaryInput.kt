@@ -135,11 +135,13 @@ private fun Modifier.tunedPointerWheelScrollable(
 fun Modifier.flueRotaryScrollable(
     focusRequester: FocusRequester,
     multiplier: Float = 1f,
+    onRotaryScroll: (() -> Unit)? = null,
     onScroll: (Float) -> Unit
 ): Modifier {
     fun consume(deltaPixels: Float): Boolean {
         val tuned = tunedRotaryScrollDelta(deltaPixels, multiplier)
         if (tuned == 0f) return false
+        onRotaryScroll?.invoke()
         onScroll(tuned)
         return true
     }
@@ -156,6 +158,7 @@ fun Modifier.flueRotaryScrollable(
 fun Modifier.flueDrawerRotaryScrollable(
     focusRequester: FocusRequester,
     mode: DrawerInputMode,
+    onRotaryScroll: (() -> Unit)? = null,
     onScroll: (Float) -> Unit
 ): Modifier {
     fun consume(deltaPixels: Float): Boolean {
@@ -165,6 +168,7 @@ fun Modifier.flueDrawerRotaryScrollable(
             mode = mode
         )
         if (tuned == 0f) return false
+        onRotaryScroll?.invoke()
         onScroll(tuned)
         return true
     }

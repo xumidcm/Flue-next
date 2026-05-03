@@ -82,7 +82,7 @@ fun ProvideGlobalUiScale(
     content: @Composable () -> Unit
 ) {
     val baseDensity = LocalDensity.current
-    val scale = scalePercent.coerceIn(80, 130) / 100f
+    val scale = scalePercent.coerceIn(50, 150) / 100f
     val scaledDensity = remember(baseDensity, scale) {
         Density(
             density = baseDensity.density * scale,

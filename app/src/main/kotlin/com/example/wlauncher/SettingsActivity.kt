@@ -105,6 +105,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dudu.wearlauncher.utils.ILog
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.common.bottomFisheyeScale
+import com.flue.launcher.ui.drawer.vibrateHaptic
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.navigation.LayoutMode
@@ -829,9 +830,11 @@ private fun SettingsRootScreen(
                     title = if (isZh) "全局 UI 大小" else "Global UI Size",
                     value = globalUiScalePercent.toFloat(),
                     valueText = "${globalUiScalePercent}%",
-                    range = 80f..130f,
+                    localValueText = { "${it.roundToInt()}%" },
+                    range = 50f..150f,
                     steps = 9,
-                    onValueChange = { vm.setGlobalUiScalePercent(it.roundToInt()) },
+                    onValueChange = {},
+                    onValueChangeFinished = { vm.setGlobalUiScalePercent(it.roundToInt()) },
                     scale = itemFisheye(listState, "global_ui_scale", screenCenterY, screenHeightPx)
                 )
             }
@@ -862,8 +865,8 @@ private fun SettingsRootScreen(
                     title = if (isZh) "应用列表左侧安全区" else "App List Left Safe Area",
                     value = appListLeftSafeInsetDp.toFloat(),
                     valueText = "${appListLeftSafeInsetDp}dp",
-                    range = 0f..128f,
-                    steps = 15,
+                    range = 0f..168f,
+                    steps = 13,
                     onValueChange = { vm.setAppListLeftSafeInsetDp(it.toInt()) },
                     scale = itemFisheye(listState, "app_list_left_safe_inset", screenCenterY, screenHeightPx)
                 )
@@ -1208,6 +1211,7 @@ private fun SettingsPageScaffold(
     content: LazyListScope.(LazyListState, Float, Float, Set<Any>) -> Unit
 ) {
     val launcherStyle = LauncherTheme.style
+    val context = LocalContext.current
     val leftSafeInsetDp = LocalSettingsLeftSafeInsetDp.current
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = initialFirstVisibleItemIndex,
@@ -1279,13 +1283,17 @@ private fun SettingsPageScaffold(
     ) {
         val screenHeightPx = constraints.maxHeight.toFloat()
         val screenCenterY = screenHeightPx / 2f
-        val leftSafeInset = leftSafeInsetDp.coerceIn(0, 128).dp.coerceAtMost(maxWidth * 0.36f)
+        val leftSafeInset = leftSafeInsetDp.coerceIn(0, 168).dp.coerceAtMost(maxWidth * 0.44f)
 
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .flueRotaryScrollable(focusRequester, rotaryScrollMultiplier) { rotaryDelta ->
+                .flueRotaryScrollable(
+                    focusRequester,
+                    rotaryScrollMultiplier,
+                    onRotaryScroll = { vibrateHaptic(context) }
+                ) { rotaryDelta ->
                     scope.launch {
                         listState.scrollBy(-rotaryDelta)
                     }
@@ -1616,9 +1624,11 @@ private fun SettingsSliderRow(
     title: String,
     value: Float,
     valueText: String,
+    localValueText: ((Float) -> String)? = null,
     range: ClosedFloatingPointRange<Float>,
     steps: Int,
     onValueChange: (Float) -> Unit,
+    onValueChangeFinished: ((Float) -> Unit)? = null,
     scale: Float,
     enabled: Boolean = true
 ) {
@@ -1641,13 +1651,18 @@ private fun SettingsSliderRow(
         Column {
             Text(title, color = launcherStyle.titleColor, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             Spacer(modifier = Modifier.height(4.dp))
-            Text(valueText, color = launcherStyle.secondaryTextColor, fontSize = 12.sp)
+            Text(localValueText?.invoke(localValue) ?: valueText, color = launcherStyle.secondaryTextColor, fontSize = 12.sp)
             Spacer(modifier = Modifier.height(8.dp))
             Slider(
                 value = localValue,
                 onValueChange = {
                     localValue = it
-                    onValueChange(it)
+                    if (onValueChangeFinished == null) {
+                        onValueChange(it)
+                    }
+                },
+                onValueChangeFinished = {
+                    onValueChangeFinished?.invoke(localValue)
                 },
                 valueRange = range,
                 steps = steps,

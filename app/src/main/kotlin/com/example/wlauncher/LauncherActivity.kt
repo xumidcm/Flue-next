@@ -287,8 +287,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
         videoPath = builtInVideoPath,
         photoOptions = photoWatchOptions,
         videoOptions = videoWatchOptions,
-        enabled = appListWatchFaceColors
+        enabled = appListWatchFaceColors && selectedWatchFace.isBuiltin
     )
+    val useAppListWatchFaceColors = appListWatchFaceColors && selectedWatchFace.isBuiltin
     val layerBlurEnabled =
         blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
@@ -565,7 +566,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         active = screenState == ScreenState.Apps,
                         leftSafeInsetDp = appListLeftSafeInsetDp,
                         appListScalePercent = appListScalePercent,
-                        useWatchFaceColors = appListWatchFaceColors,
+                        useWatchFaceColors = useAppListWatchFaceColors,
                         fisheyeEnabled = appListFisheyeEnabled,
                         fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                         twoToneIconsEnabled = twoToneIconsEnabled,
@@ -592,7 +593,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         active = screenState == ScreenState.Apps,
                         leftSafeInsetDp = appListLeftSafeInsetDp,
                         appListScalePercent = appListScalePercent,
-                        useWatchFaceColors = appListWatchFaceColors,
+                        useWatchFaceColors = useAppListWatchFaceColors,
                         rowBorderEnabled = appListRowBorderEnabled,
                         fisheyeEnabled = appListFisheyeEnabled,
                         fastFlowAnimationEnabled = false,
@@ -741,7 +742,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 ) {
                     ControlCenterLayer(
                         leftSafeInsetDp = appListLeftSafeInsetDp,
-                        showMusicControls = showMusicControls
+                        showMusicControls = showMusicControls,
+                        onDismissToFace = { vm.setState(ScreenState.Face) }
                     )
                 }
             }

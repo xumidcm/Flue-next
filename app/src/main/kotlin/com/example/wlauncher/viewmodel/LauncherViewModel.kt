@@ -153,7 +153,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_SIDE_SCREEN_SHORTCUT_ROWS = intPreferencesKey("side_screen_shortcut_rows")
         val KEY_SIDE_SCREEN_SHORTCUT_COLS = intPreferencesKey("side_screen_shortcut_cols")
         private const val SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY = 12
-        private const val APP_LIST_LEFT_SAFE_INSET_MAX_DP = 128
+        private const val APP_LIST_LEFT_SAFE_INSET_MAX_DP = 168
         private const val XIAOMI_17_PRO_SAFE_INSET_DP = 96
 
         private fun normalizeEdgeBlurTenths(value: Int): Int {
@@ -679,7 +679,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListScalePercent.value = loadedAppListScale
                 }
 
-                val loadedGlobalUiScale = (prefs[KEY_GLOBAL_UI_SCALE_PERCENT] ?: 100).coerceIn(80, 130)
+                val loadedGlobalUiScale = (prefs[KEY_GLOBAL_UI_SCALE_PERCENT] ?: 100).coerceIn(50, 150)
                 if (_globalUiScalePercent.value != loadedGlobalUiScale) {
                     _globalUiScalePercent.value = loadedGlobalUiScale
                 }
@@ -1260,7 +1260,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setGlobalUiScalePercent(value: Int) {
-        _globalUiScalePercent.value = value.coerceIn(80, 130)
+        _globalUiScalePercent.value = value.coerceIn(50, 150)
         val savedValue = _globalUiScalePercent.value
         persistDebounced("key_global_ui_scale_percent") {
             store.edit { it[KEY_GLOBAL_UI_SCALE_PERCENT] = savedValue }
