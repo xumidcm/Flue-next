@@ -28,9 +28,18 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -52,6 +61,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -89,6 +99,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
@@ -98,9 +109,6 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.AwaitPointerEventScope
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -109,9 +117,14 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import com.flue.launcher.ui.theme.LocalGlobalUiScale
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.sp
@@ -136,6 +149,10 @@ private const val CONTROL_CENTER_OVERSCROLL_RESISTANCE = 0.35f
 private const val CONTROL_CENTER_MIN_PRESS_MS = 140L
 private const val MEDIA_PROGRESS_COLLAPSED_HEIGHT_DP = 4f
 private const val MEDIA_PROGRESS_EXPANDED_HEIGHT_DP = 8f
+private const val MEDIA_PROGRESS_HIT_HEIGHT_DP = 12f
+private const val MUSIC_TEXT_MARQUEE_INITIAL_DELAY_MS = 650L
+private const val MUSIC_TEXT_MARQUEE_SPEED_DP_PER_SECOND = 34f
+private const val MUSIC_TEXT_FADE_EDGE_DP = 18f
 
 private data class ControlCenterMediaState(
     val controller: MediaController? = null,
@@ -194,13 +211,24 @@ fun ControlCenterLayer(
     val overscrollScope = androidx.compose.runtime.rememberCoroutineScope()
     var bottomDismissArmed by remember { mutableStateOf(false) }
     var fullScreenDismissTriggered by remember { mutableStateOf(false) }
-    val verticalElasticScroll = remember(verticalScrollState) {
+    var controlCenterGestureLocked by remember { mutableStateOf(false) }
+    val lockControlCenterGesture: (Boolean) -> Unit = remember {
+        { locked ->
+            controlCenterGestureLocked = locked
+            if (locked) {
+                bottomDismissArmed = false
+                fullScreenDismissTriggered = false
+            }
+        }
+    }
+    val verticalElasticScroll = remember(verticalScrollState, controlCenterGestureLocked) {
         object : NestedScrollConnection {
             override fun onPreScroll(
                 available: androidx.compose.ui.geometry.Offset,
                 source: NestedScrollSource
             ): androidx.compose.ui.geometry.Offset {
                 if (source != NestedScrollSource.UserInput) return androidx.compose.ui.geometry.Offset.Zero
+                if (controlCenterGestureLocked) return androidx.compose.ui.geometry.Offset(0f, available.y)
                 val atTop = verticalScrollState.value <= 0
                 val atBottom = verticalScrollState.maxValue > 0 &&
                     verticalScrollState.value >= verticalScrollState.maxValue
@@ -242,6 +270,7 @@ fun ControlCenterLayer(
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
+                if (controlCenterGestureLocked) return available
                 if (verticalOverscroll.value != 0f) {
                     verticalOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
                     return available
@@ -250,11 +279,16 @@ fun ControlCenterLayer(
             }
         }
     }
-    val trackDismissPointer = Modifier.pointerInput(verticalScrollState) {
+    val trackDismissPointer = Modifier.pointerInput(verticalScrollState, controlCenterGestureLocked) {
         awaitPointerEventScope {
             var pressed = false
             while (true) {
                 val event = awaitPointerEvent()
+                if (controlCenterGestureLocked) {
+                    bottomDismissArmed = false
+                    pressed = event.changes.any { it.pressed }
+                    continue
+                }
                 val isPressed = event.changes.any { it.pressed }
                 if (!pressed && isPressed) {
                     bottomDismissArmed = verticalScrollState.maxValue > 0 &&
@@ -406,12 +440,16 @@ fun ControlCenterLayer(
                 .nestedScroll(verticalElasticScroll)
                 .verticalScroll(verticalScrollState)
         } else {
-            verticalElasticModifier.pointerInput(Unit) {
+            verticalElasticModifier.pointerInput(controlCenterGestureLocked) {
                 detectDragGestures(
                     onDragStart = {
                         fullScreenDismissTriggered = false
                     },
                     onDrag = { change, dragAmount ->
+                        if (controlCenterGestureLocked) {
+                            change.consume()
+                            return@detectDragGestures
+                        }
                         if (abs(dragAmount.y) >= abs(dragAmount.x)) {
                             change.consume()
                             overscrollScope.launch {
@@ -481,6 +519,7 @@ fun ControlCenterLayer(
                             contentDescription = "电源选项",
                             size = 28.dp,
                             iconSize = 17.dp,
+                            onGestureLockChange = lockControlCenterGesture,
                             onClick = onPowerClick
                         )
                     }
@@ -489,6 +528,7 @@ fun ControlCenterLayer(
                         contentDescription = "系统设置",
                         size = 28.dp,
                         iconSize = 17.dp,
+                        onGestureLockChange = lockControlCenterGesture,
                         onClick = { openSettings(context, Settings.ACTION_SETTINGS) }
                     )
                     Text(
@@ -520,6 +560,7 @@ fun ControlCenterLayer(
                                 size = toggleSize,
                                 iconSize = toggleIconSize,
                                 labelGap = toggleLabelGap,
+                                onGestureLockChange = lockControlCenterGesture,
                                 onClick = {
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                                         openInternetConnectivityPanel(context, internetPanelLauncher)
@@ -537,6 +578,7 @@ fun ControlCenterLayer(
                                 size = toggleSize,
                                 iconSize = toggleIconSize,
                                 labelGap = toggleLabelGap,
+                                onGestureLockChange = lockControlCenterGesture,
                                 onClick = {
                                     requestBluetoothToggle(
                                         context = context,
@@ -555,6 +597,7 @@ fun ControlCenterLayer(
                                 size = toggleSize,
                                 iconSize = toggleIconSize,
                                 labelGap = toggleLabelGap,
+                                onGestureLockChange = lockControlCenterGesture,
                                 onClick = {
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                                         openInternetConnectivityPanel(context, internetPanelLauncher)
@@ -572,6 +615,7 @@ fun ControlCenterLayer(
                                 size = toggleSize,
                                 iconSize = toggleIconSize,
                                 labelGap = toggleLabelGap,
+                                onGestureLockChange = lockControlCenterGesture,
                                 onClick = {
                                     dndEnabled = !dndEnabled
                                     toggleDnd(context)
@@ -601,6 +645,7 @@ fun ControlCenterLayer(
                                     size = toggleSize,
                                     iconSize = toggleIconSize,
                                     labelGap = toggleLabelGap,
+                                    onGestureLockChange = lockControlCenterGesture,
                                     onClick = {
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                                             openInternetConnectivityPanel(context, internetPanelLauncher)
@@ -618,6 +663,7 @@ fun ControlCenterLayer(
                                     size = toggleSize,
                                     iconSize = toggleIconSize,
                                     labelGap = toggleLabelGap,
+                                    onGestureLockChange = lockControlCenterGesture,
                                     onClick = {
                                         requestBluetoothToggle(
                                             context = context,
@@ -636,6 +682,7 @@ fun ControlCenterLayer(
                                     size = toggleSize,
                                     iconSize = toggleIconSize,
                                     labelGap = toggleLabelGap,
+                                    onGestureLockChange = lockControlCenterGesture,
                                     onClick = {
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                                             openInternetConnectivityPanel(context, internetPanelLauncher)
@@ -653,6 +700,7 @@ fun ControlCenterLayer(
                                     size = toggleSize,
                                     iconSize = toggleIconSize,
                                     labelGap = toggleLabelGap,
+                                    onGestureLockChange = lockControlCenterGesture,
                                     onClick = {
                                         dndEnabled = !dndEnabled
                                         toggleDnd(context)
@@ -692,6 +740,7 @@ fun ControlCenterLayer(
                 if (showMusicControls) {
                     MediaControlCard(
                         mediaState = mediaState,
+                        onGestureLockChange = lockControlCenterGesture,
                         onOpenApp = { openMusicApp(context, mediaState.appPackage) }
                     )
                 }
@@ -721,6 +770,7 @@ private fun SystemSettingsButton(
     size: androidx.compose.ui.unit.Dp,
     iconSize: androidx.compose.ui.unit.Dp,
     modifier: Modifier = Modifier,
+    onGestureLockChange: (Boolean) -> Unit = {},
     onClick: () -> Unit
 ) {
     val pressedState = rememberPressedState()
@@ -740,7 +790,11 @@ private fun SystemSettingsButton(
                 scaleX = scale
                 scaleY = scale
             }
-            .controlCenterPressGesture(pressedState, onClick = onClick),
+            .controlCenterPressGesture(
+                pressedState = pressedState,
+                onGestureLockChange = onGestureLockChange,
+                onClick = onClick
+            ),
         contentAlignment = Alignment.Center
     ) {
         Icon(
@@ -761,6 +815,7 @@ private fun ControlToggle(
     size: androidx.compose.ui.unit.Dp,
     iconSize: androidx.compose.ui.unit.Dp,
     labelGap: androidx.compose.ui.unit.Dp,
+    onGestureLockChange: (Boolean) -> Unit = {},
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -791,6 +846,7 @@ private fun ControlToggle(
                 .background(buttonColor)
                 .controlCenterPressGesture(
                     pressedState = pressedState,
+                    onGestureLockChange = onGestureLockChange,
                     onClick = onClick,
                     onLongClick = onLongClick
                 ),
@@ -847,6 +903,7 @@ private fun ControlSliderCard(
 @Composable
 private fun MediaControlCard(
     mediaState: ControlCenterMediaState,
+    onGestureLockChange: (Boolean) -> Unit,
     onOpenApp: () -> Unit
 ) {
     val bg = mediaState.artworkColor
@@ -913,18 +970,17 @@ private fun MediaControlCard(
                                     .fillMaxWidth()
                                     .padding(end = titleEndPadding)
                             ) {
-                                OverflowFadeText(
+                                AnimatedMusicText(
                                     text = mediaState.title,
                                     color = Color.White,
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.SemiBold
                                 )
-                                Text(
+                                AnimatedMusicText(
                                     text = mediaState.artist,
                                     color = Color.White.copy(alpha = 0.72f),
                                     fontSize = 11.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    fontWeight = FontWeight.Normal
                                 )
                             }
                             if (mediaState.appIcon != null) {
@@ -943,9 +999,14 @@ private fun MediaControlCard(
                     }
                     MediaProgressSection(
                         mediaState = mediaState,
+                        onGestureLockChange = onGestureLockChange,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    MediaControlsRow(mediaState = mediaState, modifier = Modifier.fillMaxWidth())
+                    MediaControlsRow(
+                        mediaState = mediaState,
+                        onGestureLockChange = onGestureLockChange,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
         }
@@ -955,6 +1016,7 @@ private fun MediaControlCard(
 @Composable
 private fun MediaControlsRow(
     mediaState: ControlCenterMediaState,
+    onGestureLockChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(modifier = modifier, contentAlignment = Alignment.Center) {
@@ -974,18 +1036,29 @@ private fun MediaControlsRow(
             horizontalArrangement = Arrangement.spacedBy(buttonSpacing),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            MediaButton(Icons.Filled.SkipPrevious, size = buttonSize, iconSize = iconSize) {
+            MediaButton(
+                Icons.Filled.SkipPrevious,
+                size = buttonSize,
+                iconSize = iconSize,
+                onGestureLockChange = onGestureLockChange
+            ) {
                 mediaState.controller?.transportControls?.skipToPrevious()
             }
             MediaButton(
                 icon = if (mediaState.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                 size = buttonSize,
-                iconSize = iconSize
+                iconSize = iconSize,
+                onGestureLockChange = onGestureLockChange
             ) {
                 val controls = mediaState.controller?.transportControls
                 if (mediaState.playing) controls?.pause() else controls?.play()
             }
-            MediaButton(Icons.Filled.SkipNext, size = buttonSize, iconSize = iconSize) {
+            MediaButton(
+                Icons.Filled.SkipNext,
+                size = buttonSize,
+                iconSize = iconSize,
+                onGestureLockChange = onGestureLockChange
+            ) {
                 mediaState.controller?.transportControls?.skipToNext()
             }
         }
@@ -993,27 +1066,95 @@ private fun MediaControlsRow(
 }
 
 @Composable
-private fun OverflowFadeText(
+private fun AnimatedMusicText(
     text: String,
     color: Color,
-    fontSize: androidx.compose.ui.unit.TextUnit,
+    fontSize: TextUnit,
     fontWeight: FontWeight
 ) {
-    var hasOverflow by remember(text) { mutableStateOf(false) }
-    val fadeModifier = if (hasOverflow) {
+    AnimatedContent(
+        targetState = text,
+        transitionSpec = {
+            (fadeIn(animationSpec = tween(450, easing = FastOutSlowInEasing)) +
+                slideInVertically(animationSpec = tween(450, easing = FastOutSlowInEasing)) { it / 2 }) togetherWith
+                (fadeOut(animationSpec = tween(300, easing = FastOutSlowInEasing)) +
+                    slideOutHorizontally(animationSpec = tween(300, easing = FastOutSlowInEasing)) { -it / 3 })
+        },
+        label = "music_text_switch"
+    ) { targetText ->
+        OneShotMarqueeText(
+            text = targetText,
+            color = color,
+            fontSize = fontSize,
+            fontWeight = fontWeight
+        )
+    }
+}
+
+@Composable
+private fun OneShotMarqueeText(
+    text: String,
+    color: Color,
+    fontSize: TextUnit,
+    fontWeight: FontWeight
+) {
+    val density = LocalDensity.current
+    val textMeasurer = rememberTextMeasurer()
+    val textStyle = TextStyle(fontSize = fontSize, fontWeight = fontWeight)
+    val measuredTextWidthPx = textMeasurer.measure(
+        text = AnnotatedString(text),
+        style = textStyle,
+        maxLines = 1,
+        softWrap = false
+    ).size.width
+    var containerWidthPx by remember { mutableIntStateOf(0) }
+    val hasOverflow = containerWidthPx > 0 && measuredTextWidthPx > containerWidthPx
+    val marqueeOffset = remember(text) { Animatable(0f) }
+
+    LaunchedEffect(text, hasOverflow, measuredTextWidthPx, containerWidthPx) {
+        marqueeOffset.snapTo(0f)
+        if (hasOverflow) {
+            delay(MUSIC_TEXT_MARQUEE_INITIAL_DELAY_MS)
+            val distancePx = (measuredTextWidthPx - containerWidthPx).coerceAtLeast(0).toFloat()
+            val durationMs = ((distancePx / density.density) / MUSIC_TEXT_MARQUEE_SPEED_DP_PER_SECOND * 1000f)
+                .roundToInt()
+                .coerceAtLeast(900)
+            marqueeOffset.animateTo(
+                targetValue = distancePx,
+                animationSpec = tween(durationMillis = durationMs, easing = LinearEasing)
+            )
+        }
+    }
+
+    val offsetPx = marqueeOffset.value
+    val showLeftFade = hasOverflow && offsetPx > 0.5f
+    val showRightFade = hasOverflow && measuredTextWidthPx - offsetPx > containerWidthPx + 0.5f
+    val fadeModifier = if (showLeftFade || showRightFade) {
         Modifier
             .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
             .drawWithCache {
-                val fadeWidthPx = 26.dp.toPx().coerceAtMost(size.width)
-                val solidStop = if (size.width == 0f) 0f else {
-                    ((size.width - fadeWidthPx) / size.width).coerceIn(0f, 1f)
-                }
+                val fadeWidthPx = MUSIC_TEXT_FADE_EDGE_DP.dp.toPx().coerceAtMost(size.width / 2f)
+                val leftStop = if (size.width == 0f) 0f else (fadeWidthPx / size.width).coerceIn(0f, 1f)
+                val rightStart = if (size.width == 0f) 1f else ((size.width - fadeWidthPx) / size.width).coerceIn(0f, 1f)
                 val fadeBrush = Brush.horizontalGradient(
-                    colorStops = arrayOf(
-                        0f to Color.Black,
-                        solidStop to Color.Black,
-                        1f to Color.Transparent
-                    )
+                    colorStops = when {
+                        showLeftFade && showRightFade -> arrayOf(
+                            0f to Color.Transparent,
+                            leftStop to Color.Black,
+                            rightStart to Color.Black,
+                            1f to Color.Transparent
+                        )
+                        showLeftFade -> arrayOf(
+                            0f to Color.Transparent,
+                            leftStop to Color.Black,
+                            1f to Color.Black
+                        )
+                        else -> arrayOf(
+                            0f to Color.Black,
+                            rightStart to Color.Black,
+                            1f to Color.Transparent
+                        )
+                    }
                 )
                 onDrawWithContent {
                     drawContent()
@@ -1023,23 +1164,37 @@ private fun OverflowFadeText(
     } else {
         Modifier
     }
-    Text(
-        text = text,
-        color = color,
-        fontSize = fontSize,
-        fontWeight = fontWeight,
-        maxLines = 1,
-        overflow = TextOverflow.Clip,
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .then(fadeModifier),
-        onTextLayout = { hasOverflow = it.hasVisualOverflow }
-    )
+            .clipToBounds()
+            .onSizeChanged { containerWidthPx = it.width.coerceAtLeast(0) }
+            .then(fadeModifier)
+    ) {
+        val textWidthModifier = if (hasOverflow) {
+            Modifier.requiredWidth(with(density) { measuredTextWidthPx.toDp() })
+        } else {
+            Modifier.fillMaxWidth()
+        }
+        Text(
+            text = text,
+            color = color,
+            fontSize = fontSize,
+            fontWeight = fontWeight,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Clip,
+            modifier = Modifier
+                .graphicsLayer { translationX = -offsetPx }
+                .then(textWidthModifier)
+        )
+    }
 }
 
 @Composable
 private fun MediaProgressSection(
     mediaState: ControlCenterMediaState,
+    onGestureLockChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var widthPx by remember { mutableIntStateOf(1) }
@@ -1074,8 +1229,8 @@ private fun MediaProgressSection(
                 .fillMaxWidth()
                 .height(22.dp)
                 .onSizeChanged { widthPx = it.width.coerceAtLeast(1) }
-                .pointerInput(mediaState.controller, mediaState.durationMs) {
-                    val dragHitHeightPx = MEDIA_PROGRESS_EXPANDED_HEIGHT_DP.dp.toPx()
+                .pointerInput(mediaState.controller, mediaState.durationMs, onGestureLockChange) {
+                    val dragHitHeightPx = MEDIA_PROGRESS_HIT_HEIGHT_DP.dp.toPx()
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         val centerY = size.height / 2f
@@ -1084,12 +1239,14 @@ private fun MediaProgressSection(
                             return@awaitEachGesture
                         }
                         down.consume()
-                        fun updateProgressFromX(x: Float) {
-                            localProgress = (x / widthPx).coerceIn(0f, 1f)
+                        val startX = down.position.x
+                        val startProgress = localProgress.coerceIn(0f, 1f)
+                        fun updateProgressFromDelta(deltaX: Float) {
+                            localProgress = (startProgress + deltaX / widthPx).coerceIn(0f, 1f)
                         }
                         try {
+                            onGestureLockChange(true)
                             dragging = true
-                            updateProgressFromX(down.position.x)
                             while (true) {
                                 val event = awaitPointerEvent()
                                 val change = event.changes.firstOrNull { it.id == down.id }
@@ -1098,13 +1255,14 @@ private fun MediaProgressSection(
                                 if (!change.pressed || change.changedToUpIgnoreConsumed()) {
                                     break
                                 }
-                                updateProgressFromX(change.position.x)
+                                updateProgressFromDelta(change.position.x - startX)
                                 change.consume()
                             }
                             skipNextProgressSync = true
                             seekToProgress(localProgress)
                         } finally {
                             dragging = false
+                            onGestureLockChange(false)
                         }
                     }
                 },
@@ -1148,6 +1306,7 @@ private fun MediaButton(
     icon: ImageVector,
     size: androidx.compose.ui.unit.Dp = 36.dp,
     iconSize: androidx.compose.ui.unit.Dp = 20.dp,
+    onGestureLockChange: (Boolean) -> Unit = {},
     onClick: () -> Unit
 ) {
     val pressedState = rememberPressedState()
@@ -1163,7 +1322,11 @@ private fun MediaButton(
             }
             .clip(CircleShape)
             .background(Color.White.copy(alpha = backgroundAlpha))
-            .controlCenterPressGesture(pressedState, onClick = onClick),
+            .controlCenterPressGesture(
+                pressedState = pressedState,
+                onGestureLockChange = onGestureLockChange,
+                onClick = onClick
+            ),
         contentAlignment = Alignment.Center
     ) {
         Icon(icon, null, tint = Color.White, modifier = Modifier.size(iconSize))
@@ -1174,51 +1337,32 @@ private fun Modifier.controlCenterPressGesture(
     pressedState: MutableState<Boolean>,
     enabled: Boolean = true,
     onLongClick: (() -> Unit)? = null,
+    onGestureLockChange: (Boolean) -> Unit = {},
     onClick: () -> Unit
 ): Modifier {
     if (!enabled) return this
-    return this
-        .pointerInput(pressedState, enabled) {
-            awaitEachGesture {
-                val down = awaitControlCenterPressDown()
+    return pointerInput(onClick, onLongClick, onGestureLockChange, enabled) {
+        detectTapGestures(
+            onPress = {
                 val startTime = SystemClock.elapsedRealtime()
+                onGestureLockChange(true)
                 pressedState.value = true
                 try {
-                    while (true) {
-                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (!change.pressed || change.changedToUpIgnoreConsumed()) {
-                            break
-                        }
-                        if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
-                            break
-                        }
-                    }
-                } finally {
+                    tryAwaitRelease()
                     val remaining = CONTROL_CENTER_MIN_PRESS_MS - (SystemClock.elapsedRealtime() - startTime)
                     if (remaining > 0L) delay(remaining)
+                } finally {
                     pressedState.value = false
+                    onGestureLockChange(false)
                 }
+            },
+            onTap = {
+                onClick()
+            },
+            onLongPress = {
+                onLongClick?.invoke()
             }
-        }
-        .pointerInput(onClick, onLongClick, enabled) {
-            detectTapGestures(
-                onTap = {
-                    onClick()
-                },
-                onLongPress = {
-                    onLongClick?.invoke()
-                }
-            )
-        }
-}
-
-private suspend fun AwaitPointerEventScope.awaitControlCenterPressDown(): PointerInputChange {
-    while (true) {
-        val event = awaitPointerEvent(PointerEventPass.Initial)
-        val change = event.changes.firstOrNull { it.pressed && !it.previousPressed }
-            ?: event.changes.firstOrNull { it.pressed }
-        if (change != null) return change
+        )
     }
 }
 
