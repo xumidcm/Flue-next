@@ -82,6 +82,7 @@ private class LunchWatchFaceHostView(context: Context) : FrameLayout(context) {
 
     init {
         layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+        setBackgroundColor(android.graphics.Color.BLACK)
         isLongClickable = true
         setOnLongClickListener {
             longPressHandler?.invoke()
@@ -145,6 +146,9 @@ private class LunchWatchFaceHostView(context: Context) : FrameLayout(context) {
         runCatching {
             val result = LunchWatchFaceRuntime.loadExternalWatchFace(context, descriptor)
             bridge = result.bridge
+            if (result.view.background == null) {
+                result.view.setBackgroundColor(android.graphics.Color.BLACK)
+            }
             addView(result.view, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
             dispatchScreenState()
             dispatchVisibility()
