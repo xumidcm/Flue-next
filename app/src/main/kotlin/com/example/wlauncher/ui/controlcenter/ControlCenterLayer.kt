@@ -61,7 +61,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
-import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -120,10 +119,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import com.flue.launcher.ui.theme.LocalGlobalUiScale
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -150,11 +146,12 @@ private const val CONTROL_CENTER_OVERSCROLL_RESISTANCE = 0.35f
 private const val CONTROL_CENTER_MIN_PRESS_MS = 140L
 private const val MEDIA_PROGRESS_COLLAPSED_HEIGHT_DP = 4f
 private const val MEDIA_PROGRESS_EXPANDED_HEIGHT_DP = 8f
-private const val MEDIA_PROGRESS_HIT_HEIGHT_DP = 20f
+private const val MEDIA_PROGRESS_HIT_HEIGHT_DP = 24f
 private const val MEDIA_PROGRESS_SEEK_SYNC_HOLD_MS = 1200L
 private const val MUSIC_TEXT_MARQUEE_INITIAL_DELAY_MS = 650L
 private const val MUSIC_TEXT_MARQUEE_SPEED_DP_PER_SECOND = 34f
 private const val MUSIC_TEXT_FADE_EDGE_DP = 18f
+private const val MUSIC_TEXT_FADE_TRANSITION_MS = 180
 private const val MUSIC_TEXT_MARQUEE_SIDE_PADDING_DP = 8f
 
 private data class ControlCenterMediaState(
@@ -1102,45 +1099,61 @@ private fun OneShotMarqueeText(
     fontWeight: FontWeight
 ) {
     val density = LocalDensity.current
-    val textMeasurer = rememberTextMeasurer()
-    val textStyle = TextStyle(fontSize = fontSize, fontWeight = fontWeight)
-    val sidePaddingPx = with(density) { MUSIC_TEXT_MARQUEE_SIDE_PADDING_DP.dp.toPx() }
-    val measuredRawTextWidthPx = textMeasurer.measure(
-        text = AnnotatedString(text),
-        style = textStyle,
-        maxLines = 1,
-        softWrap = false
-    ).size.width
+    val sidePadding = MUSIC_TEXT_MARQUEE_SIDE_PADDING_DP.dp
+    val sidePaddingPx = with(density) { sidePadding.toPx() }
+    val fadeEdgePx = with(density) { MUSIC_TEXT_FADE_EDGE_DP.dp.toPx() }
     var containerWidthPx by remember { mutableIntStateOf(0) }
-    val hasOverflow = containerWidthPx > 0 && measuredRawTextWidthPx > containerWidthPx
-    val measuredDisplayTextWidthPx = if (hasOverflow) {
-        measuredRawTextWidthPx + sidePaddingPx * 2f
-    } else measuredRawTextWidthPx.toFloat()
-    val marqueeOffset = remember(text) { Animatable(0f) }
+    var rawTextWidthPx by remember(text) { mutableIntStateOf(0) }
+    var contentWidthPx by remember { mutableIntStateOf(0) }
+    val hasOverflow = containerWidthPx > 0 &&
+        rawTextWidthPx > 0 &&
+        rawTextWidthPx + sidePaddingPx * 2f > containerWidthPx.toFloat()
+    val contentLayoutReady = !hasOverflow ||
+        contentWidthPx.toFloat() >= rawTextWidthPx + sidePaddingPx * 2f - 1f
+    val marqueeScrollState = rememberScrollState()
+    val scrollTargetPx = if (hasOverflow && contentLayoutReady) {
+        (contentWidthPx - containerWidthPx).coerceAtLeast(0)
+    } else {
+        0
+    }
 
-    LaunchedEffect(text, hasOverflow, measuredDisplayTextWidthPx, containerWidthPx) {
-        marqueeOffset.snapTo(0f)
-        if (hasOverflow) {
+    LaunchedEffect(text, hasOverflow, scrollTargetPx, density.density) {
+        marqueeScrollState.scrollTo(0)
+        if (hasOverflow && scrollTargetPx > 0) {
             delay(MUSIC_TEXT_MARQUEE_INITIAL_DELAY_MS)
-            val distancePx = (sidePaddingPx + measuredRawTextWidthPx - containerWidthPx).coerceAtLeast(0f)
-            val durationMs = ((distancePx / density.density) / MUSIC_TEXT_MARQUEE_SPEED_DP_PER_SECOND * 1000f)
+            val durationMs = ((scrollTargetPx / density.density) / MUSIC_TEXT_MARQUEE_SPEED_DP_PER_SECOND * 1000f)
                 .roundToInt()
                 .coerceAtLeast(900)
-            marqueeOffset.animateTo(
-                targetValue = distancePx,
+            marqueeScrollState.animateScrollTo(
+                value = scrollTargetPx,
                 animationSpec = tween(durationMillis = durationMs, easing = LinearEasing)
             )
         }
     }
 
-    val offsetPx = marqueeOffset.value
-    val fadeActivationOffsetPx = sidePaddingPx + 0.5f
-    val hiddenRightPx = measuredRawTextWidthPx + sidePaddingPx - offsetPx - containerWidthPx
-    val showLeftFade = hasOverflow && offsetPx > fadeActivationOffsetPx
-    val showRightFade = hasOverflow &&
-        offsetPx > fadeActivationOffsetPx &&
-        hiddenRightPx > sidePaddingPx + 0.5f
-    val fadeModifier = if (showLeftFade || showRightFade) {
+    val scrollOffsetPx = marqueeScrollState.value.toFloat()
+    val remainingScrollPx = (scrollTargetPx - marqueeScrollState.value).coerceAtLeast(0).toFloat()
+    val leftFadeTarget = if (hasOverflow && fadeEdgePx > 0f) {
+        (scrollOffsetPx / fadeEdgePx).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val rightFadeTarget = if (hasOverflow && fadeEdgePx > 0f) {
+        (remainingScrollPx / fadeEdgePx).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val leftFadeAlpha by animateFloatAsState(
+        targetValue = leftFadeTarget,
+        animationSpec = tween(durationMillis = MUSIC_TEXT_FADE_TRANSITION_MS, easing = FastOutSlowInEasing),
+        label = "music_text_left_edge_fade"
+    )
+    val rightFadeAlpha by animateFloatAsState(
+        targetValue = rightFadeTarget,
+        animationSpec = tween(durationMillis = MUSIC_TEXT_FADE_TRANSITION_MS, easing = FastOutSlowInEasing),
+        label = "music_text_right_edge_fade"
+    )
+    val fadeModifier = if (hasOverflow || leftFadeAlpha > 0.001f || rightFadeAlpha > 0.001f) {
         Modifier
             .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
             .drawWithCache {
@@ -1148,24 +1161,12 @@ private fun OneShotMarqueeText(
                 val leftStop = if (size.width == 0f) 0f else (fadeWidthPx / size.width).coerceIn(0f, 1f)
                 val rightStart = if (size.width == 0f) 1f else ((size.width - fadeWidthPx) / size.width).coerceIn(0f, 1f)
                 val fadeBrush = Brush.horizontalGradient(
-                    colorStops = when {
-                        showLeftFade && showRightFade -> arrayOf(
-                            0f to Color.Transparent,
-                            leftStop to Color.Black,
-                            rightStart to Color.Black,
-                            1f to Color.Transparent
-                        )
-                        showLeftFade -> arrayOf(
-                            0f to Color.Transparent,
-                            leftStop to Color.Black,
-                            1f to Color.Black
-                        )
-                        else -> arrayOf(
-                            0f to Color.Black,
-                            rightStart to Color.Black,
-                            1f to Color.Transparent
-                        )
-                    }
+                    colorStops = arrayOf(
+                        0f to Color.Black.copy(alpha = 1f - leftFadeAlpha.coerceIn(0f, 1f)),
+                        leftStop to Color.Black,
+                        rightStart to Color.Black,
+                        1f to Color.Black.copy(alpha = 1f - rightFadeAlpha.coerceIn(0f, 1f))
+                    )
                 )
                 onDrawWithContent {
                     drawContent()
@@ -1182,23 +1183,29 @@ private fun OneShotMarqueeText(
             .onSizeChanged { containerWidthPx = it.width.coerceAtLeast(0) }
             .then(fadeModifier)
     ) {
-        val textWidthModifier = if (hasOverflow) {
-            Modifier.requiredWidth(with(density) { measuredDisplayTextWidthPx.toDp() })
-        } else {
-            Modifier.fillMaxWidth()
-        }
-        Text(
-            text = text,
-            color = color,
-            fontSize = fontSize,
-            fontWeight = fontWeight,
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Clip,
+        Row(
             modifier = Modifier
-                .graphicsLayer { translationX = if (hasOverflow) sidePaddingPx - offsetPx else 0f }
-                .then(textWidthModifier)
-        )
+                .horizontalScroll(marqueeScrollState, enabled = false)
+                .onSizeChanged { contentWidthPx = it.width.coerceAtLeast(0) },
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (hasOverflow) {
+                Spacer(Modifier.width(sidePadding))
+            }
+            Text(
+                text = text,
+                color = color,
+                fontSize = fontSize,
+                fontWeight = fontWeight,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Clip,
+                onTextLayout = { rawTextWidthPx = it.size.width.coerceAtLeast(0) }
+            )
+            if (hasOverflow) {
+                Spacer(Modifier.width(sidePadding))
+            }
+        }
     }
 }
 
@@ -1256,7 +1263,7 @@ private fun MediaProgressSection(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(22.dp)
+                .height(MEDIA_PROGRESS_HIT_HEIGHT_DP.dp)
                 .onSizeChanged { widthPx = it.width.coerceAtLeast(1) }
                 .pointerInput(Unit) {
                     val dragHitHeightPx = MEDIA_PROGRESS_HIT_HEIGHT_DP.dp.toPx()
