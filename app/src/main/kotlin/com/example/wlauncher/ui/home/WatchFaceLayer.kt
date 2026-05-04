@@ -213,6 +213,9 @@ fun WatchFaceLayer(
     showChargingPowerText: Boolean = true,
     showStatusIndicators: Boolean = true,
     showBottomFade: Boolean = true,
+    bottomFadeColor: Color? = null,
+    bottomFadeHeightDp: Int = 84,
+    bottomFadeBlurRadiusDp: Float = 4f,
     hasNotifications: Boolean = false,
     onLongPress: (() -> Unit)? = null,
     onDoubleTap: (() -> Unit)? = null,
@@ -229,6 +232,9 @@ fun WatchFaceLayer(
         showChargingPowerText = showChargingPowerText,
         showStatusIndicators = showStatusIndicators,
         showBottomFade = showBottomFade,
+        bottomFadeColor = bottomFadeColor,
+        bottomFadeHeightDp = bottomFadeHeightDp,
+        bottomFadeBlurRadiusDp = bottomFadeBlurRadiusDp,
         hasNotifications = hasNotifications,
         clockOverride = null,
         onLongPress = onLongPress,
@@ -254,6 +260,9 @@ fun BuiltInWatchFacePreview(
     showChargingPowerText: Boolean = true,
     showStatusIndicators: Boolean = false,
     showBottomFade: Boolean = true,
+    bottomFadeColor: Color? = null,
+    bottomFadeHeightDp: Int = 84,
+    bottomFadeBlurRadiusDp: Float = 4f,
     hasNotifications: Boolean = false
 ) {
     BuiltInWatchFaceSurface(
@@ -267,6 +276,9 @@ fun BuiltInWatchFacePreview(
         showChargingPowerText = showChargingPowerText,
         showStatusIndicators = showStatusIndicators,
         showBottomFade = showBottomFade,
+        bottomFadeColor = bottomFadeColor,
+        bottomFadeHeightDp = bottomFadeHeightDp,
+        bottomFadeBlurRadiusDp = bottomFadeBlurRadiusDp,
         hasNotifications = hasNotifications,
         clockOverride = clockOverride,
         onLongPress = null,
@@ -289,6 +301,9 @@ private fun BuiltInWatchFaceSurface(
     showChargingPowerText: Boolean,
     showStatusIndicators: Boolean,
     showBottomFade: Boolean,
+    bottomFadeColor: Color?,
+    bottomFadeHeightDp: Int,
+    bottomFadeBlurRadiusDp: Float,
     hasNotifications: Boolean,
     clockOverride: ClockSnapshot?,
     onLongPress: (() -> Unit)?,
@@ -323,6 +338,7 @@ private fun BuiltInWatchFaceSurface(
     val typeface = if (showClock) rememberWatchFaceTypeface(activeOptions.fontPath) else WatchFaceTypeface()
     val chargingSnapshot = if (showClock) rememberChargingSnapshot() else ChargingSnapshot()
     val launcherStyle = LauncherTheme.style
+    val effectiveBottomFadeColor = bottomFadeColor ?: launcherStyle.appListFadeColor
     val backgroundModifier = modifier
         .fillMaxSize()
         .then(
@@ -388,22 +404,22 @@ private fun BuiltInWatchFaceSurface(
                 .background(watchFaceScrimBrush(launcherStyle, uiStyle, showBottomFade))
         )
 
-        if (showBottomFade) {
+        if (showBottomFade && bottomFadeHeightDp > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .height(84.dp)
+                    .height(bottomFadeHeightDp.dp)
                     .background(
                         Brush.verticalGradient(
                             listOf(
                                 Color.Transparent,
-                                launcherStyle.appListFadeColor.copy(alpha = 0.34f),
-                                launcherStyle.appListFadeColor.copy(alpha = 0.78f)
+                                effectiveBottomFadeColor.copy(alpha = 0.28f),
+                                effectiveBottomFadeColor.copy(alpha = 0.82f)
                             )
                         )
                     )
-                    .platformBlur(4f, Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                    .platformBlur(bottomFadeBlurRadiusDp, Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
             )
         }
 

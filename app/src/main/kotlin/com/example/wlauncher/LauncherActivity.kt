@@ -61,6 +61,7 @@ import com.flue.launcher.ui.anim.scaleBlurAlpha
 import com.flue.launcher.ui.controlcenter.ControlCenterLayer
 import com.flue.launcher.ui.drawer.HoneycombScreen
 import com.flue.launcher.ui.drawer.ListDrawerScreen
+import com.flue.launcher.ui.drawer.appListPalette
 import com.flue.launcher.ui.home.WatchFaceLayer
 import com.flue.launcher.ui.home.rememberAppListSeedColor
 import com.flue.launcher.ui.navigation.GestureHost
@@ -300,6 +301,27 @@ fun LauncherScreen(vm: LauncherViewModel) {
         enabled = appListWatchFaceColors && selectedWatchFace.isBuiltin
     )
     val useAppListWatchFaceColors = appListWatchFaceColors && selectedWatchFace.isBuiltin
+    val appListColors = appListPalette(
+        seed = appListThemeColor,
+        darkMode = darkMode,
+        uiStyle = uiStyle,
+        useWatchFaceColor = useAppListWatchFaceColors
+    )
+    val watchFaceFadeSeed = if (uiStyle == UiStyle.MATERIAL_3 && appListThemeColor.alpha <= 0.01f) {
+        launcherStyle.accentColor
+    } else {
+        appListThemeColor
+    }
+    val watchFaceFadePalette = appListPalette(
+        seed = watchFaceFadeSeed,
+        darkMode = darkMode,
+        uiStyle = uiStyle,
+        useWatchFaceColor = if (uiStyle == UiStyle.MATERIAL_3) true else useAppListWatchFaceColors
+    )
+    val launchBackdropColor = when (launchSourceState) {
+        ScreenState.Apps -> appListColors.background
+        else -> launcherStyle.screenBackground
+    }
     val layerBlurEnabled =
         blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
@@ -572,6 +594,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             showChargingPowerText = watchFaceChargingPowerText,
                             showStatusIndicators = watchFaceStatusIndicators,
                             showBottomFade = watchFaceBottomFadeEnabled,
+                            bottomFadeColor = watchFaceFadePalette.fadeEdge,
+                            bottomFadeHeightDp = honeycombBottomFade,
+                            bottomFadeBlurRadiusDp = honeycombEdgeBlurRadius,
                             hasNotifications = showNotification && notificationGroups.isNotEmpty(),
                             onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
                             onDoubleTap = if (
@@ -717,7 +742,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 LaunchBackdropContent(
                     showSplash = effectiveLaunchSplash,
                     icon = effectiveLaunchIcon,
-                    uiStyle = uiStyle
+                    uiStyle = uiStyle,
+                    backgroundColor = launchBackdropColor
                 )
             }
 
@@ -877,13 +903,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
 private fun LaunchBackdropContent(
     showSplash: Boolean,
     icon: androidx.compose.ui.graphics.ImageBitmap?,
-    uiStyle: UiStyle
+    uiStyle: UiStyle,
+    backgroundColor: Color
 ) {
     val launcherStyle = LauncherTheme.style
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(backgroundColor),
         contentAlignment = Alignment.Center
     ) {
         AnimatedVisibility(
