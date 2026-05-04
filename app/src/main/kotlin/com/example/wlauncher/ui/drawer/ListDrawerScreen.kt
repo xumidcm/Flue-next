@@ -142,7 +142,6 @@ fun ListDrawerScreen(
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
     var dragPointerY by remember { mutableFloatStateOf(Float.NaN) }
     var glidePressedIndex by remember { mutableStateOf<Int?>(null) }
-    var initializedAtTop by remember { mutableStateOf(false) }
     var settlingApp by remember { mutableStateOf<AppInfo?>(null) }
     var settlingKey by remember { mutableStateOf<String?>(null) }
     val settlingCenterY = remember { Animatable(0f) }
@@ -220,13 +219,6 @@ fun ListDrawerScreen(
             }
         }
     }
-    LaunchedEffect(apps.size) {
-        if (!initializedAtTop && apps.isNotEmpty()) {
-            listState.scrollToItem(0)
-            initializedAtTop = true
-        }
-    }
-
     Box(modifier = modifier.fillMaxSize()) {
         BoxWithConstraints(
                 modifier = Modifier

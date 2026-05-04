@@ -166,6 +166,7 @@ fun HoneycombScreen(
     var wheelMomentumJob by remember { mutableStateOf<Job?>(null) }
     var initialScrollPositionResolved by remember { mutableStateOf(false) }
     var directScrollOffset by remember { mutableFloatStateOf(Float.NaN) }
+    var dragScrollActive by remember { mutableStateOf(false) }
     var returnTriggered by remember { mutableStateOf(false) }
     var fastScrollActive by remember { mutableStateOf(false) }
     var fastScrollResetJob by remember { mutableStateOf<Job?>(null) }
@@ -227,10 +228,7 @@ fun HoneycombScreen(
         val maxScroll = -minGridY
         val minScroll = -maxGridY
 
-        val scrollOffset = remember(
-            initialScrollPositionResolved,
-            if (initialScrollPositionResolved) 0f else maxScroll
-        ) { Animatable(maxScroll) }
+        val scrollOffset = remember { Animatable(maxScroll) }
         val scope = rememberCoroutineScope()
         val overlayBlurActive = longPressedApp != null && blurEnabled && !suppressHeavyEffects
         val honeycombAutoScrollEdgePx = with(density) { HONEYCOMB_AUTO_SCROLL_EDGE_DP.dp.toPx() }
@@ -272,11 +270,18 @@ fun HoneycombScreen(
                 }
             }
         }
-        LaunchedEffect(apps.size, maxScroll) {
+        LaunchedEffect(apps.size, minScroll, maxScroll, dragScrollActive) {
             if (apps.isEmpty()) {
                 initialScrollPositionResolved = false
             } else if (!initialScrollPositionResolved) {
                 initialScrollPositionResolved = true
+                if (dragScrollActive || !directScrollOffset.isNaN()) {
+                    if (!directScrollOffset.isNaN()) {
+                        directScrollOffset = directScrollOffset.coerceIn(minScroll, maxScroll)
+                    }
+                } else {
+                    scrollOffset.snapTo(maxScroll)
+                }
             }
         }
         LaunchedEffect(minScroll, maxScroll) {
@@ -534,127 +539,150 @@ fun HoneycombScreen(
                 }
                 .pointerInput(apps, positions, minScroll, maxScroll) {
                     val velocityTracker = VelocityTracker()
-                    detectDragGestures(
-                        onDragStart = { startOffset ->
-                            if (dragFromIndex != null || longPressedApp != null) return@detectDragGestures
-                            wheelMomentumJob?.cancel()
-                            scope.launch { scrollOffset.stop() }
-                            directScrollOffset = currentScrollOffsetValue()
-                            velocityTracker.resetTracking()
-                            val hoverIndex = findNearestHoneycombIndex(
-                                pointer = startOffset,
-                                positions = positions,
-                                screenCenterX = screenCenterX,
-                                screenCenterY = screenCenterY + currentScrollOffsetValue(),
-                                maxDistance = iconSizePx * 0.9f
-                            )
-                            glidePressedKey = hoverIndex?.let { apps.getOrNull(it)?.componentKey }
-                        },
-                        onDrag = { change, dragAmount ->
-                            if (dragFromIndex != null || longPressedApp != null) return@detectDragGestures
-                            if (returnTriggered) {
+                    try {
+                        detectDragGestures(
+                            onDragStart = { startOffset ->
+                                if (dragFromIndex != null || longPressedApp != null) return@detectDragGestures
+                                dragScrollActive = true
+                                wheelMomentumJob?.cancel()
+                                scope.launch { scrollOffset.stop() }
+                                directScrollOffset = currentScrollOffsetValue()
+                                velocityTracker.resetTracking()
+                                val hoverIndex = findNearestHoneycombIndex(
+                                    pointer = startOffset,
+                                    positions = positions,
+                                    screenCenterX = screenCenterX,
+                                    screenCenterY = screenCenterY + currentScrollOffsetValue(),
+                                    maxDistance = iconSizePx * 0.9f
+                                )
+                                glidePressedKey = hoverIndex?.let { apps.getOrNull(it)?.componentKey }
+                            },
+                            onDrag = { change, dragAmount ->
+                                if (dragFromIndex != null || longPressedApp != null) return@detectDragGestures
+                                if (returnTriggered) {
+                                    change.consume()
+                                    return@detectDragGestures
+                                }
                                 change.consume()
-                                return@detectDragGestures
-                            }
-                            change.consume()
-                            velocityTracker.addPosition(change.uptimeMillis, change.position)
-                            val hoverIndex = findNearestHoneycombIndex(
-                                pointer = change.position,
-                                positions = positions,
-                                screenCenterX = screenCenterX,
-                                screenCenterY = screenCenterY + currentScrollOffsetValue(),
-                                maxDistance = iconSizePx * 0.9f
-                            )
-                            glidePressedKey = hoverIndex?.let { apps.getOrNull(it)?.componentKey }
-                            val current = currentScrollOffsetValue()
-                            val next = current + dragAmount.y
-                            val overscroll = when {
-                                next > maxScroll -> next - maxScroll
-                                next < minScroll -> next - minScroll
-                                else -> 0f
-                            }
-                            if (abs(dragAmount.y) >= fastDragThresholdPx) {
-                                markFastScrollActive(180L)
-                            }
-                            val dampedDrag = if (overscroll != 0f) dragAmount.y * 0.28f else dragAmount.y
-                            val nextScroll = current + dampedDrag
-                            directScrollOffset = nextScroll
-                            if (nextScroll >= maxScroll + iconSizePx * 0.28f) {
-                                returnTriggered = true
-                                onScrollToTop()
-                                scope.launch {
-                                    scrollOffset.snapTo(nextScroll)
-                                    directScrollOffset = Float.NaN
-                                    scrollOffset.animateTo(
-                                        maxScroll,
-                                        spring(dampingRatio = 0.64f, stiffness = 360f)
-                                    )
-                                    returnTriggered = false
+                                velocityTracker.addPosition(change.uptimeMillis, change.position)
+                                val hoverIndex = findNearestHoneycombIndex(
+                                    pointer = change.position,
+                                    positions = positions,
+                                    screenCenterX = screenCenterX,
+                                    screenCenterY = screenCenterY + currentScrollOffsetValue(),
+                                    maxDistance = iconSizePx * 0.9f
+                                )
+                                glidePressedKey = hoverIndex?.let { apps.getOrNull(it)?.componentKey }
+                                val current = currentScrollOffsetValue()
+                                val next = current + dragAmount.y
+                                val overscroll = when {
+                                    next > maxScroll -> next - maxScroll
+                                    next < minScroll -> next - minScroll
+                                    else -> 0f
                                 }
-                            }
-                        },
-                        onDragEnd = {
-                            if (returnTriggered) {
+                                if (abs(dragAmount.y) >= fastDragThresholdPx) {
+                                    markFastScrollActive(180L)
+                                }
+                                val dampedDrag = if (overscroll != 0f) dragAmount.y * 0.28f else dragAmount.y
+                                val nextScroll = current + dampedDrag
+                                directScrollOffset = nextScroll
+                                if (nextScroll >= maxScroll + iconSizePx * 0.28f) {
+                                    returnTriggered = true
+                                    onScrollToTop()
+                                    scope.launch {
+                                        scrollOffset.snapTo(nextScroll)
+                                        directScrollOffset = Float.NaN
+                                        scrollOffset.animateTo(
+                                            maxScroll,
+                                            spring(dampingRatio = 0.64f, stiffness = 360f)
+                                        )
+                                        returnTriggered = false
+                                        dragScrollActive = false
+                                    }
+                                }
+                            },
+                            onDragEnd = {
+                                if (returnTriggered) {
+                                    glidePressedKey = null
+                                    dragScrollActive = false
+                                    return@detectDragGestures
+                                }
+                                val velocity = velocityTracker.calculateVelocity().y
+                                val current = currentScrollOffsetValue()
                                 glidePressedKey = null
-                                return@detectDragGestures
-                            }
-                            val velocity = velocityTracker.calculateVelocity().y
-                            val current = currentScrollOffsetValue()
-                            glidePressedKey = null
-                            if (abs(velocity) > 1600f) {
-                                markFastScrollActive(260L)
-                            }
-                            directScrollOffset = current
-                            if (
-                                current >= maxScroll + iconSizePx * 0.28f ||
-                                (current >= maxScroll - iconSizePx * 0.35f && velocity > 700f)
-                            ) {
-                                val returnStart = current
-                                returnTriggered = true
-                                onScrollToTop()
-                                scope.launch {
-                                    scrollOffset.snapTo(returnStart)
-                                    directScrollOffset = Float.NaN
-                                    scrollOffset.animateTo(
-                                        maxScroll,
-                                        spring(dampingRatio = 0.64f, stiffness = 360f)
-                                    )
-                                    returnTriggered = false
+                                if (abs(velocity) > 1600f) {
+                                    markFastScrollActive(260L)
                                 }
-                                return@detectDragGestures
-                            }
-                            scope.launch {
-                                scrollOffset.snapTo(current)
-                                directScrollOffset = Float.NaN
-                                if (current < minScroll || current > maxScroll) {
-                                    scrollOffset.animateTo(
-                                        current.coerceIn(minScroll, maxScroll),
-                                        spring(dampingRatio = 0.64f, stiffness = 360f)
-                                    )
-                                } else {
-                                    scrollOffset.animateDecay(velocity, exponentialDecay()) {
-                                        if (value < minScroll || value > maxScroll) {
-                                            scope.launch {
-                                                scrollOffset.animateTo(
-                                                    value.coerceIn(minScroll, maxScroll),
-                                                    spring(dampingRatio = 0.64f, stiffness = 360f)
-                                                )
+                                directScrollOffset = current
+                                if (
+                                    current >= maxScroll + iconSizePx * 0.28f ||
+                                    (current >= maxScroll - iconSizePx * 0.35f && velocity > 700f)
+                                ) {
+                                    val returnStart = current
+                                    returnTriggered = true
+                                    onScrollToTop()
+                                    scope.launch {
+                                        scrollOffset.snapTo(returnStart)
+                                        directScrollOffset = Float.NaN
+                                        scrollOffset.animateTo(
+                                            maxScroll,
+                                            spring(dampingRatio = 0.64f, stiffness = 360f)
+                                        )
+                                        returnTriggered = false
+                                        dragScrollActive = false
+                                    }
+                                    return@detectDragGestures
+                                }
+                                scope.launch {
+                                    try {
+                                        scrollOffset.snapTo(current)
+                                        directScrollOffset = Float.NaN
+                                        if (current < minScroll || current > maxScroll) {
+                                            scrollOffset.animateTo(
+                                                current.coerceIn(minScroll, maxScroll),
+                                                spring(dampingRatio = 0.64f, stiffness = 360f)
+                                            )
+                                        } else {
+                                            scrollOffset.animateDecay(velocity, exponentialDecay()) {
+                                                if (value < minScroll || value > maxScroll) {
+                                                    scope.launch {
+                                                        scrollOffset.animateTo(
+                                                            value.coerceIn(minScroll, maxScroll),
+                                                            spring(dampingRatio = 0.64f, stiffness = 360f)
+                                                        )
+                                                    }
+                                                }
                                             }
                                         }
+                                    } finally {
+                                        dragScrollActive = false
+                                    }
+                                }
+                            },
+                            onDragCancel = {
+                                glidePressedKey = null
+                                val current = currentScrollOffsetValue()
+                                directScrollOffset = current
+                                scope.launch {
+                                    try {
+                                        scrollOffset.snapTo(current)
+                                        directScrollOffset = Float.NaN
+                                    } finally {
+                                        dragScrollActive = false
                                     }
                                 }
                             }
-                        },
-                        onDragCancel = {
-                            glidePressedKey = null
-                            val current = currentScrollOffsetValue()
-                            directScrollOffset = current
+                        )
+                    } finally {
+                        if (dragScrollActive && !returnTriggered) {
+                            val current = currentScrollOffsetValue().coerceIn(minScroll, maxScroll)
                             scope.launch {
                                 scrollOffset.snapTo(current)
                                 directScrollOffset = Float.NaN
+                                dragScrollActive = false
                             }
                         }
-                    )
+                    }
                 }
         ) {
             val visibleTop = -iconSizePx * 1.5f

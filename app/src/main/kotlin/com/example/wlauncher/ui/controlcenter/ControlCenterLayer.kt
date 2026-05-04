@@ -151,7 +151,7 @@ private const val MEDIA_PROGRESS_SEEK_SYNC_HOLD_MS = 1200L
 private const val MUSIC_TEXT_MARQUEE_INITIAL_DELAY_MS = 650L
 private const val MUSIC_TEXT_MARQUEE_SPEED_DP_PER_SECOND = 34f
 private const val MUSIC_TEXT_FADE_EDGE_DP = 18f
-private const val MUSIC_TEXT_FADE_TRANSITION_MS = 180
+private const val MUSIC_TEXT_FADE_TRANSITION_MS = 80
 private const val MUSIC_TEXT_MARQUEE_SIDE_PADDING_DP = 8f
 
 private data class ControlCenterMediaState(
@@ -1107,9 +1107,9 @@ private fun OneShotMarqueeText(
     var contentWidthPx by remember { mutableIntStateOf(0) }
     val hasOverflow = containerWidthPx > 0 &&
         rawTextWidthPx > 0 &&
-        rawTextWidthPx + sidePaddingPx * 2f > containerWidthPx.toFloat()
+        rawTextWidthPx + sidePaddingPx > containerWidthPx.toFloat()
     val contentLayoutReady = !hasOverflow ||
-        contentWidthPx.toFloat() >= rawTextWidthPx + sidePaddingPx * 2f - 1f
+        contentWidthPx.toFloat() >= rawTextWidthPx + sidePaddingPx - 1f
     val marqueeScrollState = rememberScrollState()
     val scrollTargetPx = if (hasOverflow && contentLayoutReady) {
         (contentWidthPx - containerWidthPx).coerceAtLeast(0)
@@ -1134,7 +1134,7 @@ private fun OneShotMarqueeText(
     val scrollOffsetPx = marqueeScrollState.value.toFloat()
     val remainingScrollPx = (scrollTargetPx - marqueeScrollState.value).coerceAtLeast(0).toFloat()
     val leftFadeTarget = if (hasOverflow && fadeEdgePx > 0f) {
-        (scrollOffsetPx / fadeEdgePx).coerceIn(0f, 1f)
+        if (scrollOffsetPx > 0.5f) 1f else 0f
     } else {
         0f
     }
@@ -1189,9 +1189,6 @@ private fun OneShotMarqueeText(
                 .onSizeChanged { contentWidthPx = it.width.coerceAtLeast(0) },
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (hasOverflow) {
-                Spacer(Modifier.width(sidePadding))
-            }
             Text(
                 text = text,
                 color = color,
