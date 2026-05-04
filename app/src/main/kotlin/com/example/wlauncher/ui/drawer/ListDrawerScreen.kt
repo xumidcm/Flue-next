@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -114,6 +115,7 @@ fun ListDrawerScreen(
     active: Boolean = true,
     leftSafeInsetPercent: Int = 0,
     appListScalePercent: Int = 100,
+    entryProgress: Float = 1f,
     useWatchFaceColors: Boolean = true,
     rowBorderEnabled: Boolean = false,
     onAppClick: (AppInfo, Offset) -> Unit,
@@ -158,6 +160,7 @@ fun ListDrawerScreen(
     val topReturnThresholdPx = with(density) { 72.dp.toPx() }
     val launcherStyle = LauncherTheme.style
     val appPalette = appListPalette(themeColor, darkMode, uiStyle, useWatchFaceColors)
+    val entryVisuals = appListEntryVisuals(entryProgress)
     val appListScale = appListScalePercent.coerceIn(50, 200) / 100f
     val scaledIconSize = (iconSize * appListScale).coerceIn(24.dp, 128.dp)
     val scaledRowVerticalPadding = (10.dp * appListScale).coerceIn(4.dp, 24.dp)
@@ -221,7 +224,6 @@ fun ListDrawerScreen(
         BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(appPalette.background)
                     .flueDrawerRotaryScrollable(
                         focusRequester,
                         DrawerInputMode.List,
@@ -490,6 +492,7 @@ fun ListDrawerScreen(
             val estimatedItemHeight = scaledIconSize.coerceAtLeast(24.dp) + scaledRowVerticalPadding * 2f
             val centeredPadding = ((maxHeight - estimatedItemHeight) / 2f).coerceAtLeast(8.dp)
             val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
+            val backgroundDiameter = (if (maxWidth > maxHeight) maxWidth else maxHeight) * 1.38f
             val visibleItems by remember {
                 derivedStateOf {
                     listState.layoutInfo.visibleItemsInfo
@@ -507,6 +510,20 @@ fun ListDrawerScreen(
             val reduceListVisualLoad = (fastScrollActive || listState.isScrollInProgress) &&
                 dragFromIndex == null &&
                 longPressedApp == null
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(backgroundDiameter)
+                    .graphicsLayer {
+                        val backgroundScale = 0.16f + entryVisuals.backgroundProgress * 1.04f
+                        scaleX = backgroundScale
+                        scaleY = backgroundScale
+                        alpha = entryVisuals.backgroundProgress
+                        clip = true
+                        shape = CircleShape
+                    }
+                    .background(appPalette.background, CircleShape)
+            )
             LaunchedEffect(dragFromIndex, screenHeightPx) {
                 var previousFrameNanos = 0L
                 while (dragFromIndex != null) {
@@ -553,8 +570,7 @@ fun ListDrawerScreen(
                 userScrollEnabled = dragFromIndex == null && longPressedApp == null,
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer { translationY = overscroll.value }
-                    .background(appPalette.background),
+                    .graphicsLayer { translationY = overscroll.value },
                 contentPadding = PaddingValues(
                     top = centeredPadding,
                     bottom = centeredPadding,
@@ -652,17 +668,21 @@ fun ListDrawerScreen(
                                 translationY = if (isDragged) 0f else displayDisplacement + flowOffset
                                 scaleX = targetScale
                                 scaleY = targetScale
-                                alpha = if (isDragged || isSettling) {
+                                val rowAlpha = if (isDragged || isSettling) {
                                     0f
                                 } else if (fisheyeEnabled) {
                                     itemScale.coerceIn(0.3f, 1f)
                                 } else {
                                     1f
                                 }
+                                alpha = rowAlpha * entryVisuals.iconProgress
                             }
                             .then(
                                 if (showRowBackground) {
-                                    Modifier.background(appPalette.item, launcherStyle.compactShape)
+                                    Modifier.background(
+                                        appPalette.item.copy(alpha = entryVisuals.surfaceProgress),
+                                        launcherStyle.compactShape
+                                    )
                                 } else {
                                     Modifier
                                 }
@@ -758,6 +778,7 @@ fun ListDrawerScreen(
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
                     .height(topFadeRangeDp.coerceAtLeast(0).dp)
+                    .graphicsLayer { alpha = entryVisuals.edgeProgress }
                     .background(
                         Brush.verticalGradient(
                             listOf(
@@ -776,6 +797,7 @@ fun ListDrawerScreen(
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .height(bottomFadeRangeDp.coerceAtLeast(0).dp)
+                    .graphicsLayer { alpha = entryVisuals.edgeProgress }
                     .background(
                         Brush.verticalGradient(
                             listOf(

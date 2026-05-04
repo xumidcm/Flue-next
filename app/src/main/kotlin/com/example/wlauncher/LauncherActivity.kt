@@ -52,6 +52,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.animation.core.FastOutSlowInEasing
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.service.FlueAccessibilityService
 import com.flue.launcher.ui.anim.appListLayerValues
@@ -339,6 +340,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         vm.openApp(appInfo, origin, launchDelay, returnState)
     }
     var prevState by remember { mutableStateOf(screenState) }
+    val appListEntryProgress = remember { Animatable(if (screenState == ScreenState.Apps) 1f else 0f) }
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
     val isOpeningAppList = prevState == ScreenState.Face && screenState == ScreenState.Apps
     val isEnteringAppList = prevState != ScreenState.Apps && screenState == ScreenState.Apps
@@ -381,7 +383,21 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
         appListShadowsReady = true
     }
-    LaunchedEffect(screenState) { prevState = screenState }
+    LaunchedEffect(screenState) {
+        val previousState = prevState
+        if (previousState == ScreenState.Face && screenState == ScreenState.Apps) {
+            appListEntryProgress.snapTo(0f)
+            appListEntryProgress.animateTo(
+                1f,
+                tween(durationMillis = 520, easing = FastOutSlowInEasing)
+            )
+        } else if (screenState == ScreenState.Apps) {
+            appListEntryProgress.snapTo(1f)
+        } else {
+            appListEntryProgress.snapTo(0f)
+        }
+        prevState = screenState
+    }
     val launcherScope = rememberCoroutineScope()
     var retainedLaunchIcon by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     var retainedLaunchSplash by remember { mutableStateOf(false) }
@@ -606,6 +622,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         active = screenState == ScreenState.Apps,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         appListScalePercent = appListScalePercent,
+                        entryProgress = appListEntryProgress.value,
                         useWatchFaceColors = useAppListWatchFaceColors,
                         fisheyeEnabled = appListFisheyeEnabled,
                         fastFlowAnimationEnabled = fastFlowAnimationEnabled,
@@ -633,6 +650,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         active = screenState == ScreenState.Apps,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         appListScalePercent = appListScalePercent,
+                        entryProgress = appListEntryProgress.value,
                         useWatchFaceColors = useAppListWatchFaceColors,
                         rowBorderEnabled = appListRowBorderEnabled,
                         fisheyeEnabled = appListFisheyeEnabled,

@@ -17,8 +17,10 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
+import android.graphics.PorterDuffXfermode
 import android.graphics.Shader
 import android.graphics.drawable.AdaptiveIconDrawable
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -193,32 +195,13 @@ class AppRepository(private val context: Context) {
             val componentKey = "$packageName/${ri.activityInfo.name}"
             val iconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|$componentKey|$iconSize|${if (useLegacyCircularIconsSnapshot) "legacy" else "plain"}|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
             val cachedIcons = getOrCreateIconSet(iconCacheKey) {
-                val packedIcon = iconPackMapping?.let { IconPackScanner.loadIconDrawable(context, it, componentKey) }
-                val resolvedIconDrawable = packedIcon ?: ri.loadIcon(pm)
-                val baseBitmap = if (useLegacyCircularIconsSnapshot && packedIcon == null) {
-                    createCircularBitmap(
-                        stripEdgeBlackMatte(drawableToBitmap(resolvedIconDrawable, iconSize)),
-                        edgeInsetPx = iconSize * 0.005f
-                    )
-                } else {
-                    stripEdgeBlackMatte(
-                        resolvedIconDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
-                    )
-                }
-                val sharp = baseBitmap.asImageBitmap()
-                val softened = createSoftenedBitmap(baseBitmap).asImageBitmap()
-                val twoToneBitmap = if (useTwoToneIconsSnapshot) {
-                    createTwoToneBitmap(resolvedIconDrawable, iconSize)
-                } else {
-                    null
-                }
-                val twoToneSharp = twoToneBitmap?.asImageBitmap()
-                val twoToneSoftened = twoToneBitmap?.let(::createSoftenedBitmap)?.asImageBitmap()
-                CachedIconSet(
-                    sharp = sharp,
-                    softened = softened,
-                    twoToneSharp = twoToneSharp,
-                    twoToneSoftened = twoToneSoftened
+                createIconSet(
+                    componentKey = componentKey,
+                    iconPackMapping = iconPackMapping,
+                    sourceDrawable = ri.loadIcon(pm),
+                    iconSize = iconSize,
+                    useLegacyCircularIcons = useLegacyCircularIconsSnapshot,
+                    useTwoToneIcons = useTwoToneIconsSnapshot
                 )
             }
             loadedApps += AppInfo(
@@ -307,6 +290,36 @@ class AppRepository(private val context: Context) {
         refreshAsync(iconSize)
     }
 
+    fun loadDisplayIconForPackage(packageName: String, iconSize: Int = currentIconSize): ImageBitmap? {
+        if (packageName.isBlank()) return null
+        return runCatching {
+            val pm = context.packageManager
+            val launchComponent = pm.getLaunchIntentForPackage(packageName)?.component
+            val componentKey = launchComponent?.let { "${it.packageName}/${it.className}" }
+                ?: "$packageName/$packageName"
+            val sourceDrawable = launchComponent?.let {
+                runCatching { pm.getActivityIcon(it) }.getOrNull()
+            } ?: pm.getApplicationIcon(packageName)
+            val iconPackPackageSnapshot = iconPackPackage
+            val useLegacyCircularIconsSnapshot = useLegacyCircularIcons
+            val useTwoToneIconsSnapshot = useTwoToneIcons
+            val iconPackMapping = iconPackPackageSnapshot?.let { IconPackScanner.loadMapping(context, it) }
+            val normalizedIconSize = iconSize.coerceAtLeast(1)
+            val iconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|media|$componentKey|$normalizedIconSize|${if (useLegacyCircularIconsSnapshot) "legacy" else "plain"}|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
+            val cachedIcons = getOrCreateIconSet(iconCacheKey) {
+                createIconSet(
+                    componentKey = componentKey,
+                    iconPackMapping = iconPackMapping,
+                    sourceDrawable = sourceDrawable,
+                    iconSize = normalizedIconSize,
+                    useLegacyCircularIcons = useLegacyCircularIconsSnapshot,
+                    useTwoToneIcons = useTwoToneIconsSnapshot
+                )
+            }
+            if (useTwoToneIconsSnapshot) cachedIcons.twoToneSharp ?: cachedIcons.sharp else cachedIcons.sharp
+        }.getOrNull()
+    }
+
     private fun refreshAsync(iconSize: Int = currentIconSize) {
         synchronized(refreshMonitor) {
             refreshJob?.cancel()
@@ -338,6 +351,100 @@ class AppRepository(private val context: Context) {
                 }
             }
         }
+    }
+
+    private fun createIconSet(
+        componentKey: String,
+        iconPackMapping: IconPackMapping?,
+        sourceDrawable: Drawable,
+        iconSize: Int,
+        useLegacyCircularIcons: Boolean,
+        useTwoToneIcons: Boolean
+    ): CachedIconSet {
+        val packedIcon = iconPackMapping?.let { IconPackScanner.loadIconDrawable(context, it, componentKey) }
+        val fallbackBitmap = if (packedIcon == null && iconPackMapping != null) {
+            createIconPackTemplateBitmap(
+                mapping = iconPackMapping,
+                componentKey = componentKey,
+                sourceDrawable = sourceDrawable,
+                iconSize = iconSize
+            )
+        } else {
+            null
+        }
+        val baseBitmap = when {
+            packedIcon != null -> stripEdgeBlackMatte(
+                packedIcon.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
+            )
+            fallbackBitmap != null -> stripEdgeBlackMatte(fallbackBitmap)
+            useLegacyCircularIcons -> createCircularBitmap(
+                stripEdgeBlackMatte(drawableToBitmap(sourceDrawable, iconSize)),
+                edgeInsetPx = iconSize * 0.005f
+            )
+            else -> stripEdgeBlackMatte(
+                sourceDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
+            )
+        }
+        val twoToneSource = when {
+            packedIcon != null -> packedIcon
+            fallbackBitmap != null -> BitmapDrawable(context.resources, fallbackBitmap)
+            else -> sourceDrawable
+        }
+        val sharp = baseBitmap.asImageBitmap()
+        val softened = createSoftenedBitmap(baseBitmap).asImageBitmap()
+        val twoToneBitmap = if (useTwoToneIcons) {
+            createTwoToneBitmap(twoToneSource, iconSize)
+        } else {
+            null
+        }
+        return CachedIconSet(
+            sharp = sharp,
+            softened = softened,
+            twoToneSharp = twoToneBitmap?.asImageBitmap(),
+            twoToneSoftened = twoToneBitmap?.let(::createSoftenedBitmap)?.asImageBitmap()
+        )
+    }
+
+    private fun createIconPackTemplateBitmap(
+        mapping: IconPackMapping,
+        componentKey: String,
+        sourceDrawable: Drawable,
+        iconSize: Int
+    ): Bitmap? {
+        val template = IconPackScanner.loadTemplateDrawables(context, mapping, componentKey) ?: return null
+        val output = Bitmap.createBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        template.iconBack?.let { drawDrawable(it, canvas, 0, 0, iconSize, iconSize) }
+
+        val iconLayer = Bitmap.createBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
+        val iconCanvas = Canvas(iconLayer)
+        val scaledSize = (iconSize * template.scale).roundToInt().coerceIn(1, iconSize * 2)
+        val inset = ((iconSize - scaledSize) / 2f).roundToInt()
+        drawDrawable(sourceDrawable, iconCanvas, inset, inset, inset + scaledSize, inset + scaledSize)
+        template.iconMask?.let { maskDrawable ->
+            val maskBitmap = drawableToBitmap(maskDrawable, iconSize)
+            val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+                xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+            }
+            iconCanvas.drawBitmap(maskBitmap, 0f, 0f, maskPaint)
+            maskPaint.xfermode = null
+        }
+        canvas.drawBitmap(iconLayer, 0f, 0f, null)
+        template.iconUpon?.let { drawDrawable(it, canvas, 0, 0, iconSize, iconSize) }
+        return output
+    }
+
+    private fun drawDrawable(
+        drawable: Drawable,
+        canvas: Canvas,
+        left: Int,
+        top: Int,
+        right: Int,
+        bottom: Int
+    ) {
+        val copy = drawable.constantState?.newDrawable()?.mutate() ?: drawable.mutate()
+        copy.setBounds(left, top, right, bottom)
+        copy.draw(canvas)
     }
 
     private fun createSoftenedBitmap(source: Bitmap): Bitmap {

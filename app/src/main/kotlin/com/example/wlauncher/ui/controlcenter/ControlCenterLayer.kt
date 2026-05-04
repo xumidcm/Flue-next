@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.os.Bundle
 import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaController
@@ -106,6 +107,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -126,6 +128,8 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
+import androidx.mediarouter.app.SystemOutputSwitcherDialogController
+import com.flue.launcher.FlueApplication
 import com.flue.launcher.service.WLauncherNotificationListener
 import com.flue.launcher.ui.common.WatchBatteryPill
 import com.flue.launcher.ui.common.rememberPressedState
@@ -159,12 +163,20 @@ private data class ControlCenterMediaState(
     val artist: String = "打开音乐应用后会显示控制",
     val artwork: ImageBitmap? = null,
     val appIcon: ImageBitmap? = null,
+    val customActions: List<ControlCenterMediaAction> = emptyList(),
     val artworkColor: Color = Color(0xFF2F3B45),
     val playing: Boolean = false,
     val progress: Float = 0f,
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     val appPackage: String? = null
+)
+
+private data class ControlCenterMediaAction(
+    val action: String,
+    val title: String,
+    val extras: Bundle? = null,
+    val icon: ImageBitmap? = null
 )
 
 private data class ConnectivitySnapshot(
@@ -739,7 +751,12 @@ fun ControlCenterLayer(
                     MediaControlCard(
                         mediaState = mediaState,
                         onGestureLockChange = lockControlCenterGesture,
-                        onOpenApp = { openMusicApp(context, mediaState.appPackage) }
+                        onOpenApp = { openMusicApp(context, mediaState.appPackage) },
+                        onOpenOutputSwitcherOrApp = {
+                            if (!openMediaOutputSwitcher(context)) {
+                                openMusicApp(context, mediaState.appPackage)
+                            }
+                        }
                     )
                 }
             }
@@ -902,7 +919,8 @@ private fun ControlSliderCard(
 private fun MediaControlCard(
     mediaState: ControlCenterMediaState,
     onGestureLockChange: (Boolean) -> Unit,
-    onOpenApp: () -> Unit
+    onOpenApp: () -> Unit,
+    onOpenOutputSwitcherOrApp: () -> Unit
 ) {
     val bg = mediaState.artworkColor
     Box(
@@ -982,15 +1000,13 @@ private fun MediaControlCard(
                                 )
                             }
                             if (mediaState.appIcon != null) {
-                                Image(
-                                    bitmap = mediaState.appIcon,
-                                    contentDescription = null,
+                                MediaAppIconButton(
+                                    icon = mediaState.appIcon,
                                     modifier = Modifier
                                         .align(Alignment.TopEnd)
-                                        .size(28.dp)
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .clickable(onClick = onOpenApp),
-                                    contentScale = ContentScale.Crop
+                                        .size(30.dp),
+                                    onGestureLockChange = onGestureLockChange,
+                                    onClick = onOpenOutputSwitcherOrApp
                                 )
                             }
                         }
@@ -1012,28 +1028,86 @@ private fun MediaControlCard(
 }
 
 @Composable
+private fun MediaAppIconButton(
+    icon: ImageBitmap,
+    modifier: Modifier = Modifier,
+    onGestureLockChange: (Boolean) -> Unit,
+    onClick: () -> Unit
+) {
+    val pressedState = rememberPressedState()
+    val pressed by pressedState
+    val scale by animateFloatAsState(if (pressed) 0.88f else 1f, label = "media_app_icon_scale")
+    val maskAlpha by animateFloatAsState(if (pressed) 0.32f else 0.18f, label = "media_app_icon_mask")
+    Box(
+        modifier = modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = maskAlpha))
+            .controlCenterPressGesture(
+                pressedState = pressedState,
+                onGestureLockChange = onGestureLockChange,
+                onClick = onClick
+            )
+            .padding(2.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Image(
+            bitmap = icon,
+            contentDescription = null,
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(CircleShape),
+            contentScale = ContentScale.Crop
+        )
+    }
+}
+
+@Composable
 private fun MediaControlsRow(
     mediaState: ControlCenterMediaState,
     onGestureLockChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(modifier = modifier, contentAlignment = Alignment.Center) {
+        val customActions = mediaState.customActions.take(2)
         val preferredButtonSize = 36.dp
         val minButtonSize = 24.dp
         val preferredSpacing = 8.dp
         val minSpacing = 4.dp
-        val buttonSize = if (maxWidth >= preferredButtonSize * 3f + preferredSpacing * 2f) {
+        val buttonCount = 3 + customActions.size
+        val buttonCountFloat = buttonCount.toFloat()
+        val gapCountFloat = (buttonCount - 1).coerceAtLeast(1).toFloat()
+        val preferredWidth = preferredButtonSize * buttonCountFloat + preferredSpacing * gapCountFloat
+        val minSpacingWidth = minSpacing * gapCountFloat
+        val buttonSize = if (maxWidth >= preferredWidth) {
             preferredButtonSize
         } else {
-            ((maxWidth - minSpacing * 2f) / 3f).coerceIn(minButtonSize, preferredButtonSize)
+            ((maxWidth - minSpacingWidth) / buttonCountFloat).coerceIn(minButtonSize, preferredButtonSize)
         }
-        val buttonSpacing = ((maxWidth - buttonSize * 3f) / 2f).coerceIn(minSpacing, preferredSpacing)
+        val buttonSpacing = ((maxWidth - buttonSize * buttonCountFloat) / gapCountFloat)
+            .coerceIn(minSpacing, preferredSpacing)
         val iconSize = (buttonSize * 0.56f).coerceIn(16.dp, 20.dp)
 
         Row(
             horizontalArrangement = Arrangement.spacedBy(buttonSpacing),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            customActions.getOrNull(0)?.let { customAction ->
+                MediaCustomActionButton(
+                    action = customAction,
+                    size = buttonSize,
+                    iconSize = iconSize,
+                    onGestureLockChange = onGestureLockChange
+                ) {
+                    mediaState.controller?.transportControls?.sendCustomAction(
+                        customAction.action,
+                        customAction.extras
+                    )
+                }
+            }
             MediaButton(
                 Icons.Filled.SkipPrevious,
                 size = buttonSize,
@@ -1059,6 +1133,68 @@ private fun MediaControlsRow(
             ) {
                 mediaState.controller?.transportControls?.skipToNext()
             }
+            customActions.getOrNull(1)?.let { customAction ->
+                MediaCustomActionButton(
+                    action = customAction,
+                    size = buttonSize,
+                    iconSize = iconSize,
+                    onGestureLockChange = onGestureLockChange
+                ) {
+                    mediaState.controller?.transportControls?.sendCustomAction(
+                        customAction.action,
+                        customAction.extras
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MediaCustomActionButton(
+    action: ControlCenterMediaAction,
+    size: androidx.compose.ui.unit.Dp,
+    iconSize: androidx.compose.ui.unit.Dp,
+    onGestureLockChange: (Boolean) -> Unit,
+    onClick: () -> Unit
+) {
+    val pressedState = rememberPressedState()
+    val pressed by pressedState
+    val scale by animateFloatAsState(if (pressed) 0.88f else 1f, label = "media_custom_button_scale")
+    val backgroundAlpha by animateFloatAsState(if (pressed) 0.30f else 0.18f, label = "media_custom_button_alpha")
+    Box(
+        modifier = Modifier
+            .requiredSize(size)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = backgroundAlpha))
+            .controlCenterPressGesture(
+                pressedState = pressedState,
+                onGestureLockChange = onGestureLockChange,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        if (action.icon != null) {
+            Image(
+                bitmap = action.icon,
+                contentDescription = action.title,
+                modifier = Modifier
+                    .size(iconSize)
+                    .clip(CircleShape),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Text(
+                text = action.title.take(2).ifBlank { "..." },
+                color = Color.White,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1
+            )
         }
     }
 }
@@ -1426,10 +1562,21 @@ private fun readMediaState(context: Context): ControlCenterMediaState {
     }.getOrNull() ?: return ControlCenterMediaState()
     val metadata = controller.metadata
     val playbackState = controller.playbackState
-    val appIconBitmap = loadAppIconBitmap(context, controller.packageName)
+    val appIconBitmap = loadMediaAppIconBitmap(context, controller.packageName)
     val artworkBitmap = metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
         ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
         ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
+    val customActions = playbackState?.customActions.orEmpty().mapNotNull { action ->
+        val title = action.name?.toString().orEmpty()
+        val actionIcon = loadCustomActionIconBitmap(context, controller.packageName, action.icon)
+        if (action.action.isBlank() && title.isBlank()) return@mapNotNull null
+        ControlCenterMediaAction(
+            action = action.action,
+            title = title.ifBlank { action.action },
+            extras = action.extras,
+            icon = actionIcon?.asImageBitmap()
+        )
+    }.take(2)
     val duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION)?.takeIf { it > 0L } ?: 0L
     val rawPosition = playbackState?.position?.coerceAtLeast(0L) ?: 0L
     val position = if (
@@ -1453,6 +1600,7 @@ private fun readMediaState(context: Context): ControlCenterMediaState {
             ?: controller.packageName.substringAfterLast('.'),
         artwork = (artworkBitmap ?: appIconBitmap)?.asImageBitmap(),
         appIcon = appIconBitmap?.asImageBitmap(),
+        customActions = customActions,
         artworkColor = (artworkBitmap ?: appIconBitmap)?.let(::averageBitmapColor) ?: Color(0xFF2F3B45),
         playing = playbackState?.state == PlaybackState.STATE_PLAYING,
         progress = progress,
@@ -1462,9 +1610,29 @@ private fun readMediaState(context: Context): ControlCenterMediaState {
     )
 }
 
-private fun loadAppIconBitmap(context: Context, packageName: String): Bitmap? {
+private fun loadMediaAppIconBitmap(context: Context, packageName: String): Bitmap? {
+    val repositoryIcon = runCatching {
+        FlueApplication.repositories(context).appRepository.loadDisplayIconForPackage(packageName, 128)
+    }.getOrNull()?.asAndroidBitmap()
+    if (repositoryIcon != null) return repositoryIcon
     return runCatching {
         context.packageManager.getApplicationIcon(packageName).toBitmap(width = 128, height = 128)
+    }.getOrNull()
+}
+
+private fun loadCustomActionIconBitmap(
+    context: Context,
+    packageName: String,
+    iconResId: Int
+): Bitmap? {
+    if (iconResId == 0) return null
+    return runCatching {
+        val packContext = context.createPackageContext(
+            packageName,
+            Context.CONTEXT_IGNORE_SECURITY or Context.CONTEXT_INCLUDE_CODE
+        )
+        packContext.resources.getDrawable(iconResId, packContext.theme)
+            .toBitmap(width = 96, height = 96)
     }.getOrNull()
 }
 
@@ -1474,6 +1642,13 @@ private fun openMusicApp(context: Context, packageName: String?) {
         val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return
         context.startActivity(launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
+}
+
+private fun openMediaOutputSwitcher(context: Context): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
+    return runCatching {
+        SystemOutputSwitcherDialogController.showDialog(context)
+    }.getOrDefault(false)
 }
 
 private fun formatMediaTime(timeMs: Long): String {

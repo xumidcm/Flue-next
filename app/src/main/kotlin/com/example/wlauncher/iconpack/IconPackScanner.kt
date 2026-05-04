@@ -9,6 +9,13 @@ import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 
 object IconPackScanner {
+    data class TemplateDrawables(
+        val iconBack: Drawable?,
+        val iconMask: Drawable?,
+        val iconUpon: Drawable?,
+        val scale: Float
+    )
+
     private val PACK_ACTIONS = listOf(
         "org.adw.launcher.THEMES",
         "org.adw.launcher.icons.ACTION_PICK_ICON",
@@ -45,9 +52,13 @@ object IconPackScanner {
                 label = packContext.applicationInfo.loadLabel(context.packageManager).toString()
                     .ifBlank { packageName }
             )
-            val entries = parseAppFilter(packContext)
-            if (entries.isEmpty()) return null
-            IconPackMapping(descriptor = descriptor, componentToDrawable = entries)
+            val parsed = parseAppFilter(packContext)
+            if (parsed.entries.isEmpty() && !parsed.template.hasTemplate) return null
+            IconPackMapping(
+                descriptor = descriptor,
+                componentToDrawable = parsed.entries,
+                template = parsed.template
+            )
         }.getOrNull()
     }
 
@@ -67,27 +78,115 @@ object IconPackScanner {
         }.getOrNull()
     }
 
-    private fun parseAppFilter(packContext: Context): Map<String, String> {
-        val wrapped = openAppFilterParser(packContext) ?: return emptyMap()
+    fun loadTemplateDrawables(
+        context: Context,
+        mapping: IconPackMapping,
+        componentKey: String
+    ): TemplateDrawables? {
+        return runCatching {
+            val template = mapping.template
+            if (!template.hasTemplate) return null
+            val packContext = context.createPackageContext(
+                mapping.descriptor.packageName,
+                Context.CONTEXT_IGNORE_SECURITY or Context.CONTEXT_INCLUDE_CODE
+            )
+            val iconBack = template.iconBacks.takeIf { it.isNotEmpty() }?.let { backs ->
+                val index = Math.floorMod(componentKey.hashCode(), backs.size)
+                loadDrawableByName(packContext, backs[index])
+            }
+            val iconMask = template.iconMask?.let { loadDrawableByName(packContext, it) }
+            val iconUpon = template.iconUpon?.let { loadDrawableByName(packContext, it) }
+            if (iconBack == null && iconMask == null && iconUpon == null) return null
+            TemplateDrawables(
+                iconBack = iconBack,
+                iconMask = iconMask,
+                iconUpon = iconUpon,
+                scale = template.scale.coerceIn(0.3f, 1.4f)
+            )
+        }.getOrNull()
+    }
+
+    private fun parseAppFilter(packContext: Context): ParsedAppFilter {
+        val wrapped = openAppFilterParser(packContext)
+            ?: return ParsedAppFilter(emptyMap(), IconPackTemplate())
         return try {
             val parser = wrapped.parser
             val entries = linkedMapOf<String, String>()
+            val iconBacks = linkedSetOf<String>()
+            var iconMask: String? = null
+            var iconUpon: String? = null
+            var scale = 1f
             var eventType = parser.eventType
             while (eventType != XmlPullParser.END_DOCUMENT) {
-                if (eventType == XmlPullParser.START_TAG && parser.name == "item") {
-                    val component = parser.getAttributeValue(null, "component").orEmpty()
-                    val drawable = parser.getAttributeValue(null, "drawable").orEmpty()
-                    val normalized = normalizeComponent(component)
-                    if (normalized != null && drawable.isNotBlank()) {
-                        entries[normalized] = drawable
+                if (eventType == XmlPullParser.START_TAG) {
+                    when (parser.name) {
+                        "item" -> {
+                            val component = parser.getAttributeValue(null, "component").orEmpty()
+                            val drawable = parser.getAttributeValue(null, "drawable").orEmpty()
+                            val normalized = normalizeComponent(component)
+                            if (normalized != null && drawable.isNotBlank()) {
+                                entries[normalized] = drawable
+                            }
+                        }
+                        "iconback" -> {
+                            iconBacks += parser.drawableAttributeValues()
+                        }
+                        "iconmask" -> {
+                            iconMask = parser.drawableAttributeValues().firstOrNull() ?: iconMask
+                        }
+                        "iconupon" -> {
+                            iconUpon = parser.drawableAttributeValues().firstOrNull() ?: iconUpon
+                        }
+                        "scale" -> {
+                            scale = parser.getAttributeValue(null, "factor")
+                                ?.toFloatOrNull()
+                                ?: parser.getAttributeValue(null, "value")?.toFloatOrNull()
+                                    ?: scale
+                        }
                     }
                 }
                 eventType = parser.next()
             }
-            entries
+            ParsedAppFilter(
+                entries = entries,
+                template = IconPackTemplate(
+                    iconBacks = iconBacks.toList(),
+                    iconMask = iconMask,
+                    iconUpon = iconUpon,
+                    scale = scale
+                )
+            )
         } finally {
             wrapped.close()
         }
+    }
+
+    private fun loadDrawableByName(packContext: Context, drawableName: String): Drawable? {
+        val resources = packContext.resources
+        val packageName = packContext.packageName
+        val resId = resources.getIdentifier(drawableName, "drawable", packageName)
+            .takeIf { it != 0 }
+            ?: resources.getIdentifier(drawableName, "mipmap", packageName)
+        if (resId == 0) return null
+        return resources.getDrawable(resId, packContext.theme)
+    }
+
+    private fun XmlPullParser.drawableAttributeValues(): List<String> {
+        val values = mutableListOf<String>()
+        for (index in 0 until attributeCount) {
+            val name = getAttributeName(index).orEmpty()
+            val value = getAttributeValue(index).orEmpty()
+            if (value.isBlank()) continue
+            if (name.startsWith("img") ||
+                name == "drawable" ||
+                name == "iconback" ||
+                name == "iconmask" ||
+                name == "iconupon"
+            ) {
+                values += value
+            }
+        }
+        return values
     }
 
     private fun openAppFilterParser(packContext: Context): AutoCloseableXmlPullParser? {
@@ -146,4 +245,9 @@ object IconPackScanner {
             closeAction()
         }
     }
+
+    private data class ParsedAppFilter(
+        val entries: Map<String, String>,
+        val template: IconPackTemplate
+    )
 }

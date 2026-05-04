@@ -116,6 +116,7 @@ fun HoneycombScreen(
     active: Boolean = true,
     leftSafeInsetPercent: Int = 0,
     appListScalePercent: Int = 100,
+    entryProgress: Float = 1f,
     useWatchFaceColors: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
@@ -136,6 +137,7 @@ fun HoneycombScreen(
             active = active,
             leftSafeInsetPercent = leftSafeInsetPercent,
             appListScalePercent = appListScalePercent,
+            entryProgress = entryProgress,
             useWatchFaceColors = useWatchFaceColors,
             onAppClick = onAppClick,
             onLongClick = onLongClick,
@@ -211,6 +213,8 @@ fun HoneycombScreen(
         val cellSize = iconSizePx * 1.02f
         val topFadePx = with(density) { topFadeRangeDp.dp.toPx() }
         val bottomFadePx = with(density) { bottomFadeRangeDp.dp.toPx() }
+        val entryVisuals = appListEntryVisuals(entryProgress)
+        val backgroundDiameter = (if (maxWidth > maxHeight) maxWidth else maxHeight) * 1.38f
 
         val positions = remember(apps.size, narrowCols, cellSize) {
             generateHoneycombRows(apps.size, narrowCols, cellSize)
@@ -369,7 +373,6 @@ fun HoneycombScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(appPalette.background)
                 .flueDrawerRotaryScrollable(
                     focusRequester,
                     DrawerInputMode.Honeycomb,
@@ -682,6 +685,21 @@ fun HoneycombScreen(
                     }
                 }
         ) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(backgroundDiameter)
+                    .graphicsLayer {
+                        val backgroundScale = 0.16f + entryVisuals.backgroundProgress * 1.04f
+                        scaleX = backgroundScale
+                        scaleY = backgroundScale
+                        alpha = entryVisuals.backgroundProgress
+                        clip = true
+                        shape = CircleShape
+                    }
+                    .background(appPalette.background, CircleShape)
+            )
+
             val visibleTop = -iconSizePx * 1.5f
             val visibleBottom = screenHeightPx + iconSizePx * 1.5f
             val dragOverlayApp = dragApp
@@ -892,7 +910,7 @@ fun HoneycombScreen(
                                     settlingKey == app.componentKey -> 0f
                                     else -> if (fisheyeEnabled) scale.coerceIn(0.24f, 1f) else 1f
                                 }
-                                alpha = itemAlpha
+                                alpha = itemAlpha * entryVisuals.iconProgress
                                 shadowElevation = if (itemAlpha > 0.001f) iconShadowElevationPx else 0f
                                 shape = CircleShape
                             }
@@ -1020,6 +1038,7 @@ fun HoneycombScreen(
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
                     .height(topFadeRangeDp.dp)
+                    .graphicsLayer { alpha = entryVisuals.edgeProgress }
                     .background(
                         Brush.verticalGradient(
                             listOf(
@@ -1036,6 +1055,7 @@ fun HoneycombScreen(
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .height(bottomFadeRangeDp.dp)
+                    .graphicsLayer { alpha = entryVisuals.edgeProgress }
                     .background(
                         Brush.verticalGradient(
                             listOf(
@@ -1069,6 +1089,7 @@ private fun MaterialDenseGridScreen(
     active: Boolean,
     leftSafeInsetPercent: Int,
     appListScalePercent: Int,
+    entryProgress: Float,
     useWatchFaceColors: Boolean,
     onAppClick: (AppInfo, Offset) -> Unit,
     onLongClick: (AppInfo) -> Unit,
@@ -1083,6 +1104,7 @@ private fun MaterialDenseGridScreen(
     val scope = rememberCoroutineScope()
     val launcherStyle = LauncherTheme.style
     val appPalette = appListPalette(themeColor, darkMode, UiStyle.MATERIAL_3, useWatchFaceColors)
+    val entryVisuals = appListEntryVisuals(entryProgress)
     val iconShadowElevationPx by animateFloatAsState(
         targetValue = if (iconShadowEnabled) with(density) { 8.dp.toPx() } else 0f,
         animationSpec = tween(durationMillis = if (iconShadowEnabled) 120 else 0),
@@ -1181,7 +1203,6 @@ private fun MaterialDenseGridScreen(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            .background(appPalette.background)
             .flueDrawerRotaryScrollable(
                 focusRequester,
                 DrawerInputMode.Honeycomb,
@@ -1233,10 +1254,25 @@ private fun MaterialDenseGridScreen(
             }
     ) {
         val screenWidthPx = with(density) { maxWidth.toPx() }
+        val backgroundDiameter = (if (maxWidth > maxHeight) maxWidth else maxHeight) * 1.38f
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val horizontalPaddingPx = with(density) { 8.dp.toPx() }
         val leftPaddingPx = with(density) { (8.dp + leftSafeInset).toPx() }
         val itemGapPx = with(density) { 4.dp.toPx() }
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .size(backgroundDiameter)
+                .graphicsLayer {
+                    val backgroundScale = 0.16f + entryVisuals.backgroundProgress * 1.04f
+                    scaleX = backgroundScale
+                    scaleY = backgroundScale
+                    alpha = entryVisuals.backgroundProgress
+                    clip = true
+                    shape = CircleShape
+                }
+                .background(appPalette.background, CircleShape)
+        )
         LazyVerticalGrid(
             columns = GridCells.Fixed(effectiveColumns),
             state = gridState,
@@ -1294,7 +1330,8 @@ private fun MaterialDenseGridScreen(
                             }
                         )
                         .background(
-                            color = if (isPressed) launcherStyle.pressedCardColor else appPalette.item,
+                            color = (if (isPressed) launcherStyle.pressedCardColor else appPalette.item)
+                                .copy(alpha = entryVisuals.surfaceProgress),
                             shape = launcherStyle.bubbleShape
                         )
                         .padding(0.dp)
@@ -1309,6 +1346,7 @@ private fun MaterialDenseGridScreen(
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
                                 .fillMaxSize()
+                                .graphicsLayer { alpha = entryVisuals.iconProgress }
                         )
                     }
                 }
