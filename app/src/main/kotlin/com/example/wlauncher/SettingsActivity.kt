@@ -358,6 +358,21 @@ private fun SettingsRootScreen(
     var backupImportOptions by remember { mutableStateOf(FlueBackupOptions()) }
     var backupBusy by remember { mutableStateOf(false) }
     var backupProgress by remember { mutableStateOf<BlockingProgressState?>(null) }
+    val dingDingCatBackupAvailability = remember(dingDingCatImportUnlocked) {
+        FlueBackupOptions(dingDingCatWatchFaces = dingDingCatImportUnlocked)
+    }
+    val effectiveBackupExportOptions = remember(backupExportOptions, dingDingCatBackupAvailability) {
+        backupExportOptions.constrainedBy(dingDingCatBackupAvailability)
+    }
+    val effectiveBackupImportPreview = remember(backupImportPreview, dingDingCatBackupAvailability) {
+        backupImportPreview?.let { preview ->
+            preview.copy(availableOptions = preview.availableOptions.constrainedBy(dingDingCatBackupAvailability))
+        }
+    }
+    val effectiveBackupImportOptions = remember(backupImportOptions, effectiveBackupImportPreview) {
+        val available = effectiveBackupImportPreview?.availableOptions ?: FlueBackupOptions(dingDingCatWatchFaces = false)
+        backupImportOptions.constrainedBy(available)
+    }
     val fontPicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
             val savedPath = InternalWatchFaceStorage.copyFont(context, uri)
@@ -445,7 +460,7 @@ private fun SettingsRootScreen(
                     .onSuccess { preview ->
                         backupImportUri = uri
                         backupImportPreview = preview
-                        backupImportOptions = preview.availableOptions
+                        backupImportOptions = preview.availableOptions.constrainedBy(dingDingCatBackupAvailability)
                     }
                     .onFailure { error ->
                         Toast.makeText(
@@ -1571,20 +1586,22 @@ private fun SettingsRootScreen(
             onScrollChanged = { index, offset -> updateScroll(SettingsDestination.BACKUP_EXPORT, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
             backupOptionRows(
-                options = backupExportOptions,
-                availableOptions = FlueBackupOptions(),
-                onOptionsChange = { backupExportOptions = it },
-                scaleFor = { key -> itemFisheye(listState, key, screenCenterY, screenHeightPx) }
+                listState = listState,
+                screenCenterY = screenCenterY,
+                screenHeightPx = screenHeightPx,
+                options = effectiveBackupExportOptions,
+                availableOptions = dingDingCatBackupAvailability,
+                onOptionsChange = { backupExportOptions = it.constrainedBy(dingDingCatBackupAvailability) }
             )
             item("export_backup_start") {
                 ActionCard(
                     title = "开始导出",
                     subtitle = "选择保存位置后写入 ZIP 备份",
                     onClick = {
-                        if (!backupExportOptions.hasAny) {
+                        if (!effectiveBackupExportOptions.hasAny) {
                             Toast.makeText(context, "至少选择一项", Toast.LENGTH_SHORT).show()
                         } else if (!backupBusy) {
-                            pendingBackupExportOptions = backupExportOptions
+                            pendingBackupExportOptions = effectiveBackupExportOptions
                             backupCreatePicker.launch(vm.suggestedBackupFileName())
                         }
                     },
@@ -1604,7 +1621,7 @@ private fun SettingsRootScreen(
             item("import_backup_pick") {
                 ActionCard(
                     title = "选择备份文件",
-                    subtitle = backupImportPreview?.let { preview ->
+                    subtitle = effectiveBackupImportPreview?.let { preview ->
                         "备份版本 ${preview.appVersion} · ${preview.createdAt.ifBlank { "未知时间" }}"
                     } ?: "选择 Flue ZIP 备份文件",
                     onClick = {
@@ -1622,12 +1639,14 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "import_backup_pick", screenCenterY, screenHeightPx)
                 )
             }
-            backupImportPreview?.let { preview ->
+            effectiveBackupImportPreview?.let { preview ->
                 backupOptionRows(
-                    options = backupImportOptions,
+                    listState = listState,
+                    screenCenterY = screenCenterY,
+                    screenHeightPx = screenHeightPx,
+                    options = effectiveBackupImportOptions,
                     availableOptions = preview.availableOptions,
-                    onOptionsChange = { backupImportOptions = it.constrainedBy(preview.availableOptions) },
-                    scaleFor = { key -> itemFisheye(listState, key, screenCenterY, screenHeightPx) }
+                    onOptionsChange = { backupImportOptions = it.constrainedBy(preview.availableOptions) }
                 )
                 item("import_backup_start") {
                     ActionCard(
@@ -1637,10 +1656,10 @@ private fun SettingsRootScreen(
                             val uri = backupImportUri
                             if (uri == null) {
                                 Toast.makeText(context, "先选择备份文件", Toast.LENGTH_SHORT).show()
-                            } else if (!backupImportOptions.hasAny) {
+                            } else if (!effectiveBackupImportOptions.hasAny) {
                                 Toast.makeText(context, "至少选择一项", Toast.LENGTH_SHORT).show()
                             } else if (!backupBusy) {
-                                val options = backupImportOptions.constrainedBy(preview.availableOptions)
+                                val options = effectiveBackupImportOptions
                                 settingsScope.launch {
                                     backupBusy = true
                                     backupProgress = BlockingProgressState(
@@ -1699,7 +1718,7 @@ private fun SettingsRootScreen(
                             dingDingCatLastVersionTapAt = now
                             if (dingDingCatVersionTapCount >= 5) {
                                 dingDingCatVersionTapCount = 0
-                                vm.setDingDingCatImportUnlocked(true)
+                                vm.setDingDingCatImportUnlocked(!dingDingCatImportUnlocked)
                                 Toast.makeText(context, "nothing...", Toast.LENGTH_SHORT).show()
                             }
                         },
@@ -2697,10 +2716,12 @@ private fun BackupOptionSwitch(
 }
 
 private fun LazyListScope.backupOptionRows(
+    listState: LazyListState,
+    screenCenterY: Float,
+    screenHeightPx: Float,
     options: FlueBackupOptions,
     availableOptions: FlueBackupOptions,
-    onOptionsChange: (FlueBackupOptions) -> Unit,
-    scaleFor: (String) -> Float
+    onOptionsChange: (FlueBackupOptions) -> Unit
 ) {
     if (availableOptions.settings) {
         item("backup_settings") {
@@ -2709,7 +2730,7 @@ private fun LazyListScope.backupOptionRows(
                 subtitle = "桌面外观、性能、开关等通用设置",
                 checked = options.settings,
                 onToggle = { onOptionsChange(options.copy(settings = it)) },
-                scale = scaleFor("backup_settings")
+                scale = itemFisheye(listState, "backup_settings", screenCenterY, screenHeightPx)
             )
         }
     }
@@ -2720,7 +2741,7 @@ private fun LazyListScope.backupOptionRows(
                 subtitle = "恢复时自动舍弃未扫描到的应用",
                 checked = options.appOrder,
                 onToggle = { onOptionsChange(options.copy(appOrder = it)) },
-                scale = scaleFor("backup_app_order")
+                scale = itemFisheye(listState, "backup_app_order", screenCenterY, screenHeightPx)
             )
         }
     }
@@ -2731,7 +2752,7 @@ private fun LazyListScope.backupOptionRows(
                 subtitle = "恢复时自动舍弃未扫描到的小组件",
                 checked = options.widgetOrder,
                 onToggle = { onOptionsChange(options.copy(widgetOrder = it)) },
-                scale = scaleFor("backup_widget_order")
+                scale = itemFisheye(listState, "backup_widget_order", screenCenterY, screenHeightPx)
             )
         }
     }
@@ -2742,7 +2763,7 @@ private fun LazyListScope.backupOptionRows(
                 subtitle = "负一屏分区顺序和快捷方式槽位",
                 checked = options.sideScreenOrder,
                 onToggle = { onOptionsChange(options.copy(sideScreenOrder = it)) },
-                scale = scaleFor("backup_side_screen_order")
+                scale = itemFisheye(listState, "backup_side_screen_order", screenCenterY, screenHeightPx)
             )
         }
     }
@@ -2753,7 +2774,7 @@ private fun LazyListScope.backupOptionRows(
                 subtitle = "图片表盘配置和当前图片",
                 checked = options.photoWatchFace,
                 onToggle = { onOptionsChange(options.copy(photoWatchFace = it)) },
-                scale = scaleFor("backup_photo_watchface")
+                scale = itemFisheye(listState, "backup_photo_watchface", screenCenterY, screenHeightPx)
             )
         }
     }
@@ -2764,7 +2785,7 @@ private fun LazyListScope.backupOptionRows(
                 subtitle = "视频表盘配置和当前视频",
                 checked = options.videoWatchFace,
                 onToggle = { onOptionsChange(options.copy(videoWatchFace = it)) },
-                scale = scaleFor("backup_video_watchface")
+                scale = itemFisheye(listState, "backup_video_watchface", screenCenterY, screenHeightPx)
             )
         }
     }
@@ -2775,7 +2796,7 @@ private fun LazyListScope.backupOptionRows(
                 subtitle = "已经导入的叮叮猫 ZIP 表盘",
                 checked = options.dingDingCatWatchFaces,
                 onToggle = { onOptionsChange(options.copy(dingDingCatWatchFaces = it)) },
-                scale = scaleFor("backup_dingdingcat")
+                scale = itemFisheye(listState, "backup_dingdingcat", screenCenterY, screenHeightPx)
             )
         }
     }

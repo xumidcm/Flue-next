@@ -123,6 +123,7 @@ object FlueBackupManager {
         sideScreenWidgetsKey,
         sideScreenOrderKey,
         lastWatchFaceErrorKey,
+        LauncherViewModel.KEY_DINGDINGCAT_IMPORT_UNLOCKED.name,
         fontPathKey
     ) + photoPreferenceNames + videoPreferenceNames
 
@@ -240,7 +241,8 @@ object FlueBackupManager {
                     prefs.applyPreferenceJson(
                         manifest.optJSONObject("settings"),
                         availableAppKeys = availableAppKeys,
-                        validWidgetKeys = validWidgetKeys
+                        validWidgetKeys = validWidgetKeys,
+                        excludeNames = settingsExcludedNames
                     )
                 }
                 if (selected.appOrder) {
@@ -431,12 +433,14 @@ object FlueBackupManager {
     private fun MutablePreferences.applyPreferenceJson(
         json: JSONObject?,
         availableAppKeys: Set<String> = emptySet(),
-        validWidgetKeys: Set<String> = emptySet()
+        validWidgetKeys: Set<String> = emptySet(),
+        excludeNames: Set<String> = emptySet()
     ) {
         if (json == null) return
         val keys = json.keys()
         while (keys.hasNext()) {
             val name = keys.next()
+            if (name in excludeNames) continue
             val entry = json.optJSONObject(name) ?: continue
             val type = entry.optString("type")
             val value = entry.opt("value") ?: continue
