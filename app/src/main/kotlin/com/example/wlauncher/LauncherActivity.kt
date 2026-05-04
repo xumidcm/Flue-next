@@ -443,6 +443,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
         appListReturnOriginActive && !classicReturnAnimationEnabled -> appOpenOrigin
         else -> null
     }
+    val appListMotionSpec = when {
+        isOpeningAppList -> tween<Float>(durationMillis = 260)
+        uiStyle == UiStyle.MATERIAL_3 && isReturningFromApp -> tween(
+            durationMillis = 260,
+            easing = FastOutSlowInEasing
+        )
+        else -> spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow)
+    }
     val effectiveIconShadowEnabled = iconShadowEnabled && appListShadowsReady
     val fadeLaunch = launchSourceState == ScreenState.Stack || launchSourceState == ScreenState.Notifications
 
@@ -655,13 +663,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled,
                         origin = appListTransformOrigin,
-                        scaleSpec = if (isOpeningAppList) {
-                            tween(durationMillis = 260)
-                        } else {
-                            spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow)
-                        },
+                        scaleSpec = appListMotionSpec,
                         alphaSpec = if (isOpeningAppList) tween(durationMillis = 220) else tween(durationMillis = 400),
-                        blurSpec = if (isOpeningAppList) tween(durationMillis = 220) else tween(durationMillis = 400)
+                        blurSpec = if (isOpeningAppList) tween(durationMillis = 220) else tween(durationMillis = 400),
+                        translationSpec = appListMotionSpec
                     )
             ) {
                 when (layoutMode) {

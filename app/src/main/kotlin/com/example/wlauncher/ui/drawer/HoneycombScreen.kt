@@ -59,6 +59,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
@@ -241,6 +242,7 @@ fun HoneycombScreen(
         val appIndexByKey = remember(apps) {
             apps.mapIndexed { index, app -> app.componentKey to index }.toMap()
         }
+        val appLaunchCenters = remember { mutableMapOf<String, Offset>() }
 
         val minGridY = positions.minOfOrNull { it.y } ?: 0f
         val maxGridY = positions.maxOfOrNull { it.y } ?: 0f
@@ -252,6 +254,12 @@ fun HoneycombScreen(
         val overlayBlurActive = longPressedApp != null && blurEnabled && !suppressHeavyEffects
         val honeycombAutoScrollEdgePx = with(density) { HONEYCOMB_AUTO_SCROLL_EDGE_DP.dp.toPx() }
         val fastDragThresholdPx = with(density) { 10.dp.toPx() }
+        LaunchedEffect(apps) {
+            val validKeys = apps.mapTo(mutableSetOf()) { it.componentKey }
+            appLaunchCenters.keys
+                .filterNot { it in validKeys }
+                .forEach { appLaunchCenters.remove(it) }
+        }
         fun currentScrollOffsetValue(): Float = resolveHoneycombScrollOffset(
             directScrollOffset = directScrollOffset,
             animatedScrollOffset = scrollOffset.value
@@ -882,7 +890,14 @@ fun HoneycombScreen(
                                 )
                                 val sx = clickCenterX + clickEdgeOffsetX
                                 val syPos = clickCenterY + flowOffset + entryOffsetY
-                                onAppClick(app, Offset(sx / screenWidthPx, syPos / screenHeightPx))
+                                val launchCenter = appLaunchCenters[appKey] ?: Offset(sx, syPos)
+                                onAppClick(
+                                    app,
+                                    Offset(
+                                        (launchCenter.x / screenWidthPx).coerceIn(0f, 1f),
+                                        (launchCenter.y / screenHeightPx).coerceIn(0f, 1f)
+                                    )
+                                )
                             }
                         },
                         onLongClick = null,
@@ -938,6 +953,9 @@ fun HoneycombScreen(
                                 alpha = itemAlpha * entryVisuals.iconProgress
                                 shadowElevation = if (itemAlpha > 0.001f) iconShadowElevationPx else 0f
                                 shape = CircleShape
+                            }
+                            .onGloballyPositioned { coords ->
+                                appLaunchCenters[appKey] = coords.boundsInRoot().center
                             }
                             .platformBlur(
                                 effectiveItemBlur,
@@ -1152,6 +1170,7 @@ private fun MaterialDenseGridScreen(
     var returnTriggered by remember { mutableStateOf(false) }
     var materialContainerRoot by remember { mutableStateOf(Offset.Zero) }
     val materialItemBounds = remember { mutableStateMapOf<Int, Rect>() }
+    val materialLaunchCenters = remember { mutableMapOf<Int, Offset>() }
     val overscroll = remember { Animatable(0f) }
     val topReturnThresholdPx = with(density) { 72.dp.toPx() }
     val overscrollLimitPx = with(density) { 140.dp.toPx() }
@@ -1175,6 +1194,9 @@ private fun MaterialDenseGridScreen(
         materialItemBounds.keys
             .filterNot { it in validIndexes }
             .forEach { materialItemBounds.remove(it) }
+        materialLaunchCenters.keys
+            .filterNot { it in validIndexes }
+            .forEach { materialLaunchCenters.remove(it) }
     }
 
     val nestedScrollConnection = remember(gridState, dragFromIndex, longPressedApp, onScrollToTop) {
@@ -1488,6 +1510,7 @@ private fun MaterialDenseGridScreen(
                         .fillMaxWidth()
                         .aspectRatio(0.92f)
                         .onGloballyPositioned { coords ->
+                            materialLaunchCenters[index] = coords.boundsInRoot().center
                             val pos = coords.positionInRoot() - materialContainerRoot
                             val bounds = Rect(
                                 left = pos.x,
@@ -1514,11 +1537,13 @@ private fun MaterialDenseGridScreen(
                             indication = null,
                             onClick = {
                                 if (longPressedApp != null || dragFromIndex != null) return@combinedClickable
+                                val launchCenter = materialLaunchCenters[index]
+                                    ?: Offset(itemCenterX + materialContainerRoot.x, itemCenterY + materialContainerRoot.y)
                                 onAppClick(
                                     app,
                                     Offset(
-                                        x = ((itemCenterX + edgeSpacingOffsetX) / screenWidthPx).coerceIn(0f, 1f),
-                                        y = (itemCenterY / screenHeightPx).coerceIn(0f, 1f)
+                                        x = (launchCenter.x / screenWidthPx).coerceIn(0f, 1f),
+                                        y = (launchCenter.y / screenHeightPx).coerceIn(0f, 1f)
                                     )
                                 )
                             }

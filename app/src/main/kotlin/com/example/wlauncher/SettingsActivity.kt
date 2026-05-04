@@ -152,6 +152,10 @@ const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
 private val LocalSettingsLeftSafeInsetPercent = compositionLocalOf { 0 }
 
+private object DingDingCatImportSession {
+    var unlocked by mutableStateOf(false)
+}
+
 enum class SettingsDestination {
     ROOT,
     WATCH_FACES,
@@ -379,7 +383,7 @@ private fun SettingsRootScreen(
     var hiddenAppsDirty by remember { mutableStateOf(false) }
     var donatePreviewResId by remember { mutableStateOf<Int?>(null) }
     var diagnosticLoggingEnabled by remember { mutableStateOf(ILog.isDiagnosticLoggingEnabled()) }
-    var dingDingCatImportUnlocked by remember { mutableStateOf(false) }
+    val dingDingCatImportUnlocked = DingDingCatImportSession.unlocked
     var dingDingCatVersionTapCount by remember { mutableStateOf(0) }
     var dingDingCatLastVersionTapAt by remember { mutableStateOf(0L) }
     var dingDingCatDeleteTarget by remember { mutableStateOf<LunchWatchFaceDescriptor?>(null) }
@@ -797,13 +801,14 @@ private fun SettingsRootScreen(
                     icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
                     onClick = { vm.refreshWatchFaces(force = true) },
                     onLongPress = {
-                        if (dingDingCatImportUnlocked) {
+                        if (DingDingCatImportSession.unlocked) {
                             dingDingCatZipPicker.launch(
                                 arrayOf(
                                     "application/zip",
                                     "application/x-zip-compressed",
                                     "application/octet-stream",
-                                    "application/*"
+                                    "application/*",
+                                    "*/*"
                                 )
                             )
                         } else {
@@ -1415,7 +1420,7 @@ private fun SettingsRootScreen(
                             dingDingCatLastVersionTapAt = now
                             if (dingDingCatVersionTapCount >= 5) {
                                 dingDingCatVersionTapCount = 0
-                                dingDingCatImportUnlocked = true
+                                DingDingCatImportSession.unlocked = true
                                 Toast.makeText(context, "nothing...", Toast.LENGTH_SHORT).show()
                             }
                         },

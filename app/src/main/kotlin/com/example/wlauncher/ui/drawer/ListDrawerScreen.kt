@@ -56,6 +56,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
@@ -139,6 +140,7 @@ fun ListDrawerScreen(
     var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
     val itemCenters = remember { mutableMapOf<Int, Float>() }
     val itemHeights = remember { mutableMapOf<Int, Float>() }
+    val itemLaunchCenters = remember { mutableMapOf<Int, Offset>() }
     val overscroll = remember { Animatable(0f) }
     var dragFromIndex by remember { mutableStateOf<Int?>(null) }
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
@@ -180,6 +182,7 @@ fun ListDrawerScreen(
         }
         itemCenters.keys.retainAll(retain)
         itemHeights.keys.retainAll(retain)
+        itemLaunchCenters.keys.retainAll(retain)
     }
 
     LaunchedEffect(focusReady) {
@@ -685,7 +688,15 @@ fun ListDrawerScreen(
                                     if (longPressedApp != null || dragFromIndex != null) return@combinedClickable
                                     val centerY = (itemCenters[index] ?: rowCenterY)
                                         .coerceIn(0f, screenHeightPx)
-                                    onAppClick(app, Offset(launchOriginX, centerY / screenHeightPx))
+                                    val launchCenter = itemLaunchCenters[index]
+                                        ?: Offset(launchOriginX * screenWidthPx, centerY)
+                                    onAppClick(
+                                        app,
+                                        Offset(
+                                            (launchCenter.x / screenWidthPx).coerceIn(0f, 1f),
+                                            (launchCenter.y / screenHeightPx).coerceIn(0f, 1f)
+                                        )
+                                    )
                                 }
                             )
                             .padding(horizontal = scaledRowHorizontalPadding, vertical = scaledRowVerticalPadding),
@@ -696,6 +707,9 @@ fun ListDrawerScreen(
                             contentDescription = app.label,
                             modifier = Modifier
                                 .size(scaledIconSize)
+                                .onGloballyPositioned { coords ->
+                                    itemLaunchCenters[index] = coords.boundsInRoot().center
+                                }
                                 .clip(RoundedCornerShape((14.dp * appListScale).coerceIn(10.dp, 24.dp))),
                             contentScale = ContentScale.Crop
                         )
