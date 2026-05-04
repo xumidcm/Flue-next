@@ -596,7 +596,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             showBottomFade = watchFaceBottomFadeEnabled,
                             bottomFadeColor = watchFaceFadePalette.fadeEdge,
                             bottomFadeHeightDp = honeycombBottomFade,
-                            bottomFadeBlurRadiusDp = honeycombEdgeBlurRadius,
+                            bottomFadeBlurRadiusDp = if (blurEnabled && edgeBlurEnabled) honeycombEdgeBlurRadius else 0f,
                             hasNotifications = showNotification && notificationGroups.isNotEmpty(),
                             onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
                             onDoubleTap = if (

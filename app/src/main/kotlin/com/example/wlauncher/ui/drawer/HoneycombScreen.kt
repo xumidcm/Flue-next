@@ -228,6 +228,7 @@ fun HoneycombScreen(
         val topFadePx = with(density) { topFadeRangeDp.dp.toPx() }
         val bottomFadePx = with(density) { bottomFadeRangeDp.dp.toPx() }
         val entryVisuals = appListEntryVisuals(entryProgress)
+        val edgeFadesVisible = active || entryProgress > 0.001f
         val backgroundDiameter = (if (maxWidth > maxHeight) maxWidth else maxHeight) * 1.38f
         val fisheyeRangeMultiplier = fisheyeRangeRows.coerceIn(1, 8) * 0.42f
         val fisheyeMaxDistance = screenRadius * fisheyeRangeMultiplier.coerceAtLeast(0.42f)
@@ -860,16 +861,15 @@ fun HoneycombScreen(
                         shape = launcherStyle.bubbleShape,
                         onClick = {
                             if (longPressedApp == null && dragFromIndex == null) {
-                                val clickPos = if (isDragged) gridPos else visualPos
                                 val flowOffset = honeycombFlowOffset(
                                     enabled = fastFlowAnimationEnabled,
-                                    rowCenterY = screenCenterY + clickPos.y + currentScroll,
+                                    rowCenterY = screenCenterY + slotY + currentScroll,
                                     screenCenterY = screenCenterY,
                                     slowTopY = fastFlowSlowTopY,
                                     slowBottomY = fastFlowSlowBottomY
                                 )
-                                val clickCenterX = screenCenterX + clickPos.x
-                                val clickCenterY = screenCenterY + clickPos.y + currentScroll
+                                val clickCenterX = screenCenterX + slotX
+                                val clickCenterY = screenCenterY + slotY + currentScroll
                                 val clickEdgeOffsetX = edgeSpacingCompressionHorizontalOffset(
                                     centerX = clickCenterX,
                                     rowCenterY = clickCenterY,
@@ -1057,7 +1057,7 @@ fun HoneycombScreen(
             )
         }
 
-        if (active && topFadeRangeDp > 0) {
+        if (edgeFadesVisible && topFadeRangeDp > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -1072,9 +1072,10 @@ fun HoneycombScreen(
                             )
                         )
                     )
+                    .platformBlur(topBlurRadiusDp, blurEnabled && effectiveEdgeBlur)
             )
         }
-        if (active && bottomFadeRangeDp > 0) {
+        if (edgeFadesVisible && bottomFadeRangeDp > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -1089,6 +1090,7 @@ fun HoneycombScreen(
                             )
                         )
                     )
+                    .platformBlur(bottomBlurRadiusDp, blurEnabled && effectiveEdgeBlur)
             )
         }
     }
@@ -1356,9 +1358,6 @@ private fun MaterialDenseGridScreen(
         val entryOffsetY = (1f - entryProgress.coerceIn(0f, 1f)) * screenHeightPx * 0.08f
         val backgroundDiameter = (if (maxWidth > maxHeight) maxWidth else maxHeight) * 1.38f
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
-        val horizontalPaddingPx = with(density) { 8.dp.toPx() }
-        val leftPaddingPx = with(density) { (8.dp + leftSafeInset).toPx() }
-        val itemGapPx = with(density) { 4.dp.toPx() }
         val fisheyeRangePx = (screenHeightPx / effectiveColumns * fisheyeRangeRows.coerceIn(1, 8))
             .coerceIn(screenHeightPx / effectiveColumns, screenHeightPx)
         val fisheyeMinScale = fisheyeMinScale(fisheyeStrengthPercent)
@@ -1515,14 +1514,10 @@ private fun MaterialDenseGridScreen(
                             indication = null,
                             onClick = {
                                 if (longPressedApp != null || dragFromIndex != null) return@combinedClickable
-                                val col = index % effectiveColumns
-                                val usableWidth = screenWidthPx - leftPaddingPx - horizontalPaddingPx - itemGapPx * (effectiveColumns - 1)
-                                val cellWidth = usableWidth / effectiveColumns
-                                val centerX = leftPaddingPx + col * (cellWidth + itemGapPx) + cellWidth / 2f
                                 onAppClick(
                                     app,
                                     Offset(
-                                        x = ((centerX + edgeSpacingOffsetX) / screenWidthPx).coerceIn(0f, 1f),
+                                        x = ((itemCenterX + edgeSpacingOffsetX) / screenWidthPx).coerceIn(0f, 1f),
                                         y = (itemCenterY / screenHeightPx).coerceIn(0f, 1f)
                                     )
                                 )

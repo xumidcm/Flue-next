@@ -419,7 +419,7 @@ private fun BuiltInWatchFaceSurface(
                             )
                         )
                     )
-                    .platformBlur(bottomFadeBlurRadiusDp, Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                    .platformBlur(bottomFadeBlurRadiusDp, bottomFadeBlurRadiusDp > 0f)
             )
         }
 

@@ -457,6 +457,7 @@ fun ListDrawerScreen(
                 }
         ) {
             val screenHeightPx = with(density) { maxHeight.toPx() }
+            val screenWidthPx = with(density) { maxWidth.toPx() }
             val screenCenterY = screenHeightPx / 2f
             val entryOffsetY = (1f - entryProgress.coerceIn(0f, 1f)) * screenHeightPx * 0.08f
             val listViewportCenterY by remember {
@@ -475,6 +476,9 @@ fun ListDrawerScreen(
             val estimatedItemHeight = scaledIconSize.coerceAtLeast(24.dp) + scaledRowVerticalPadding * 2f
             val centeredPadding = ((maxHeight - estimatedItemHeight) / 2f).coerceAtLeast(8.dp)
             val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
+            val launchOriginX = with(density) {
+                (leftSafeInset + 12.dp + scaledRowHorizontalPadding + scaledIconSize * 0.5f).toPx()
+            }.coerceIn(0f, screenWidthPx) / screenWidthPx
             val backgroundDiameter = (if (maxWidth > maxHeight) maxWidth else maxHeight) * 1.38f
             val visibleItems by remember {
                 derivedStateOf {
@@ -681,7 +685,7 @@ fun ListDrawerScreen(
                                     if (longPressedApp != null || dragFromIndex != null) return@combinedClickable
                                     val centerY = (itemCenters[index] ?: rowCenterY)
                                         .coerceIn(0f, screenHeightPx)
-                                    onAppClick(app, Offset(0.15f, centerY / screenHeightPx))
+                                    onAppClick(app, Offset(launchOriginX, centerY / screenHeightPx))
                                 }
                             )
                             .padding(horizontal = scaledRowHorizontalPadding, vertical = scaledRowVerticalPadding),
@@ -759,7 +763,7 @@ fun ListDrawerScreen(
             }
         }
 
-        if (active && topFadeRangeDp > 0) {
+        if ((active || entryProgress > 0.001f) && topFadeRangeDp > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -778,7 +782,7 @@ fun ListDrawerScreen(
                     .platformBlur(topBlurRadiusDp, blurEnabled && effectiveEdgeBlur)
             )
         }
-        if (active && bottomFadeRangeDp > 0) {
+        if ((active || entryProgress > 0.001f) && bottomFadeRangeDp > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
