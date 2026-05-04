@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun Modifier.scaleBlurAlpha(
     targetValues: LayerAnimValues,
+    screenWidth: Float = 0f,
     screenHeight: Float = 0f,
     blurEnabled: Boolean = true,
     origin: Offset? = null,
@@ -25,12 +26,14 @@ fun Modifier.scaleBlurAlpha(
     val animScale = remember { Animatable(targetValues.scale) }
     val animAlpha = remember { Animatable(targetValues.alpha) }
     val animBlur = remember { Animatable(targetValues.blur) }
+    val animTransX = remember { Animatable(targetValues.translationX) }
     val animTransY = remember { Animatable(targetValues.translationY) }
 
     LaunchedEffect(targetValues) {
         launch { animScale.animateTo(targetValues.scale, scaleSpec) }
         launch { animAlpha.animateTo(targetValues.alpha, alphaSpec) }
         launch { animBlur.animateTo(targetValues.blur, blurSpec) }
+        launch { animTransX.animateTo(targetValues.translationX, translationSpec) }
         launch { animTransY.animateTo(targetValues.translationY, translationSpec) }
     }
 
@@ -39,6 +42,7 @@ fun Modifier.scaleBlurAlpha(
             scaleX = animScale.value
             scaleY = animScale.value
             alpha = animAlpha.value
+            translationX = animTransX.value * screenWidth
             translationY = animTransY.value * screenHeight
             if (origin != null) {
                 transformOrigin = TransformOrigin(origin.x, origin.y)

@@ -579,16 +579,6 @@ fun ListDrawerScreen(
                         scrollTick = fisheyeScrollTick
                     )
                     val rowCenterY = itemInfo?.let { it.offset + it.size / 2f } ?: listViewportCenterY
-                    val edgeSpacingOffset = edgeSpacingCompressionOffset(
-                        centerY = rowCenterY,
-                        screenCenterY = listViewportCenterY,
-                        screenHeight = screenHeightPx,
-                        itemSize = with(density) { estimatedItemHeight.toPx() },
-                        strengthPercent = fisheyeStrengthPercent,
-                        enabled = fisheyeEnabled && edgeSpacingCompressionEnabled &&
-                            dragFromIndex == null &&
-                            longPressedApp == null
-                    )
                     val flowOffset = computeFastFlowOffset(
                         rowCenterY = rowCenterY,
                         screenCenterY = listViewportCenterY,
@@ -661,7 +651,7 @@ fun ListDrawerScreen(
                             }
                             .graphicsLayer {
                                 val targetScale = itemScale * pressedScale
-                                translationY = if (isDragged) 0f else displayDisplacement + flowOffset + edgeSpacingOffset
+                                translationY = if (isDragged) 0f else displayDisplacement + flowOffset
                                 scaleX = targetScale
                                 scaleY = targetScale
                                 val rowAlpha = if (isDragged || isSettling) {
@@ -689,7 +679,7 @@ fun ListDrawerScreen(
                                 indication = null,
                                 onClick = {
                                     if (longPressedApp != null || dragFromIndex != null) return@combinedClickable
-                                    val centerY = ((itemCenters[index] ?: rowCenterY) + edgeSpacingOffset)
+                                    val centerY = (itemCenters[index] ?: rowCenterY)
                                         .coerceIn(0f, screenHeightPx)
                                     onAppClick(app, Offset(0.15f, centerY / screenHeightPx))
                                 }

@@ -608,6 +608,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .zIndex(if (keepAppListLayer) 3f else 0f)
                     .scaleBlurAlpha(
                         targetValues = appListLayerValues(screenState, uiStyle),
+                        screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled,
                         origin = appListTransformOrigin,
@@ -882,7 +883,7 @@ private fun LaunchBackdropContent(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(launcherStyle.screenBackground),
+            .background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
         AnimatedVisibility(

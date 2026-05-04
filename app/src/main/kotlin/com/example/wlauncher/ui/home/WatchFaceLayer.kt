@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -81,6 +82,7 @@ import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.LauncherStyle
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.isMaterial
+import com.flue.launcher.ui.anim.platformBlur
 import com.flue.launcher.watchface.WatchClockColorMode
 import com.flue.launcher.watchface.WatchClockPosition
 import com.flue.launcher.watchface.WatchFaceClockStyle
@@ -386,6 +388,25 @@ private fun BuiltInWatchFaceSurface(
                 .background(watchFaceScrimBrush(launcherStyle, uiStyle, showBottomFade))
         )
 
+        if (showBottomFade) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(84.dp)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.Transparent,
+                                launcherStyle.appListFadeColor.copy(alpha = 0.34f),
+                                launcherStyle.appListFadeColor.copy(alpha = 0.78f)
+                            )
+                        )
+                    )
+                    .platformBlur(4f, Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            )
+        }
+
         if (showClock) {
             ClockOverlay(
                 clock = clock,
@@ -425,7 +446,15 @@ private fun watchFaceScrimBrush(
     uiStyle: UiStyle,
     showBottomFade: Boolean
 ): Brush {
-    if (showBottomFade) return launcherStyle.screenScrim
+    if (showBottomFade) {
+        return Brush.verticalGradient(
+            listOf(
+                if (uiStyle.isMaterial) launcherStyle.accentColor.copy(alpha = 0.10f) else Color.Transparent,
+                Color.Transparent,
+                Color.Transparent
+            )
+        )
+    }
     return Brush.verticalGradient(
         listOf(
             if (uiStyle.isMaterial) launcherStyle.accentColor.copy(alpha = 0.10f) else Color.Transparent,

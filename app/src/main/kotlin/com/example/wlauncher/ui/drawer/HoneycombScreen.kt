@@ -834,8 +834,10 @@ fun HoneycombScreen(
                         animationSpec = spring(dampingRatio = 0.80f, stiffness = 360f),
                         label = "honeycomb_slot_y"
                     )
-                    val edgeSpacingOffset = edgeSpacingCompressionOffset(
-                        centerY = screenCenterY + slotY + currentScroll,
+                    val edgeSpacingOffsetX = edgeSpacingCompressionHorizontalOffset(
+                        centerX = screenCenterX + slotX,
+                        rowCenterY = screenCenterY + slotY + currentScroll,
+                        screenCenterX = screenCenterX,
                         screenCenterY = screenCenterY,
                         screenHeight = screenHeightPx,
                         itemSize = iconSizePx,
@@ -866,16 +868,20 @@ fun HoneycombScreen(
                                     slowTopY = fastFlowSlowTopY,
                                     slowBottomY = fastFlowSlowBottomY
                                 )
-                                val sx = screenCenterX + clickPos.x
-                                val clickEdgeOffset = edgeSpacingCompressionOffset(
-                                    centerY = screenCenterY + clickPos.y + currentScroll,
+                                val clickCenterX = screenCenterX + clickPos.x
+                                val clickCenterY = screenCenterY + clickPos.y + currentScroll
+                                val clickEdgeOffsetX = edgeSpacingCompressionHorizontalOffset(
+                                    centerX = clickCenterX,
+                                    rowCenterY = clickCenterY,
+                                    screenCenterX = screenCenterX,
                                     screenCenterY = screenCenterY,
                                     screenHeight = screenHeightPx,
                                     itemSize = iconSizePx,
                                     strengthPercent = fisheyeStrengthPercent,
                                     enabled = fisheyeEnabled && edgeSpacingCompressionEnabled
                                 )
-                                val syPos = screenCenterY + clickPos.y + currentScroll + flowOffset + clickEdgeOffset + entryOffsetY
+                                val sx = clickCenterX + clickEdgeOffsetX
+                                val syPos = clickCenterY + flowOffset + entryOffsetY
                                 onAppClick(app, Offset(sx / screenWidthPx, syPos / screenHeightPx))
                             }
                         },
@@ -897,8 +903,8 @@ fun HoneycombScreen(
                                     slowTopY = fastFlowSlowTopY,
                                     slowBottomY = fastFlowSlowBottomY
                                 )
-                                val posX = screenCenterX + baseX
-                                val pY = screenCenterY + baseY + currentScroll + flowOffset + edgeSpacingOffset + entryOffsetY
+                                val posX = screenCenterX + baseX + edgeSpacingOffsetX
+                                val pY = screenCenterY + baseY + currentScroll + flowOffset + entryOffsetY
                                 var actualCenterX = posX
                                 var actualCenterY = pY
                                 translationX = posX - iconSizePx / 2f
@@ -1433,8 +1439,11 @@ private fun MaterialDenseGridScreen(
                 }
                 val itemAlpha = if (fisheyeEnabled) itemScale.coerceIn(0.24f, 1f) else 1f
                 val itemHeightPx = itemBounds?.height ?: (screenHeightPx / effectiveColumns.coerceAtLeast(1))
-                val edgeSpacingOffset = edgeSpacingCompressionOffset(
-                    centerY = itemCenterY,
+                val itemCenterX = itemBounds?.center?.x ?: screenWidthPx / 2f
+                val edgeSpacingOffsetX = edgeSpacingCompressionHorizontalOffset(
+                    centerX = itemCenterX,
+                    rowCenterY = itemCenterY,
+                    screenCenterX = screenWidthPx / 2f,
                     screenCenterY = screenHeightPx / 2f,
                     screenHeight = screenHeightPx,
                     itemSize = itemHeightPx,
@@ -1453,12 +1462,12 @@ private fun MaterialDenseGridScreen(
                     dragPointer = dragPointer
                 )
                 val animatedDragX by animateFloatAsState(
-                    targetValue = dragTarget.x,
+                    targetValue = dragTarget.x + edgeSpacingOffsetX,
                     animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
                     label = "material_drag_x"
                 )
                 val animatedDragY by animateFloatAsState(
-                    targetValue = dragTarget.y + edgeSpacingOffset,
+                    targetValue = dragTarget.y,
                     animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
                     label = "material_drag_y"
                 )
@@ -1513,8 +1522,8 @@ private fun MaterialDenseGridScreen(
                                 onAppClick(
                                     app,
                                     Offset(
-                                        x = centerX / screenWidthPx,
-                                    y = ((itemCenterY + edgeSpacingOffset) / screenHeightPx).coerceIn(0f, 1f)
+                                        x = ((centerX + edgeSpacingOffsetX) / screenWidthPx).coerceIn(0f, 1f),
+                                        y = (itemCenterY / screenHeightPx).coerceIn(0f, 1f)
                                     )
                                 )
                             }
@@ -1536,6 +1545,14 @@ private fun MaterialDenseGridScreen(
                             contentScale = ContentScale.Fit,
                             modifier = Modifier
                                 .fillMaxSize()
+                                .clip(materialIconShape)
+                                .then(
+                                    if (app.isBuiltInSettingsEntry) {
+                                        Modifier.background(Color(0xFFF4F6FA))
+                                    } else {
+                                        Modifier
+                                    }
+                                )
                         )
                     }
                 }

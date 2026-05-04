@@ -14,6 +14,7 @@ data class LayerAnimValues(
     val scale: Float = 1f,
     val blur: Float = 0f,    // dp
     val alpha: Float = 1f,
+    val translationX: Float = 0f,  // 屏幕宽度比例（-1f = 向左移出, 1f = 向右移出）
     val translationY: Float = 0f  // 屏幕高度比例（-1f = 向上移出, 1f = 向下移出）
 )
 
@@ -52,7 +53,7 @@ fun appListLayerValues(state: ScreenState, uiStyle: UiStyle): LayerAnimValues =
             ScreenState.Face -> LayerAnimValues(scale = 0.88f, blur = 8f, alpha = 0f)
             ScreenState.Apps -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
             ScreenState.Settings -> LayerAnimValues(scale = 0.96f, blur = 4f, alpha = 0.42f)
-            ScreenState.App -> LayerAnimValues(scale = 1.1f, blur = 8f, alpha = 0f)
+            ScreenState.App -> LayerAnimValues(scale = 1f, blur = 4f, alpha = 0f, translationX = -1f)
             else -> LayerAnimValues(scale = 0.88f, blur = 8f, alpha = 0f)
         }
     } else {
