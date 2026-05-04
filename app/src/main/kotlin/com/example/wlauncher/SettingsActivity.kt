@@ -2172,7 +2172,7 @@ private fun SettingsChoiceRow(
                 }
             )
             .border(1.dp, launcherStyle.outlineColor, launcherStyle.compactShape)
-            .instantPressGesture(pressedState, onClick = onClick)
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
         Row(
@@ -2208,8 +2208,8 @@ private fun SettingsSwitchRow(
     reserveLeadingIconSpace: Boolean = false
 ) {
     val launcherStyle = LauncherTheme.style
-    val pressedState = rememberPressedState()
-    val pressed by pressedState
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
     val pressedScale by animateFloatAsState(
         if (pressed) 0.958f else 1f,
         animationSpec = launcherStyle.pressScaleSpec,

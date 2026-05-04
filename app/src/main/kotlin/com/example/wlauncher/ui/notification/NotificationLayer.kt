@@ -405,7 +405,8 @@ fun NotificationLayer(
                                 onDismissGroup = { onDismissGroup(group.packageName) },
                                 onDismissNotification = onDismissNotification,
                                 onRunNotificationAction = onRunNotificationAction,
-                                onOpenNotification = onOpenNotification
+                                onOpenNotification = onOpenNotification,
+                                stackCardColor = stackCardColor
                             )
                         }
                     }
@@ -452,7 +453,8 @@ private fun NotificationGroupSection(
     onDismissGroup: () -> Unit,
     onDismissNotification: (String) -> Unit,
     onRunNotificationAction: (String) -> Boolean,
-    onOpenNotification: (String, Offset) -> Boolean
+    onOpenNotification: (String, Offset) -> Boolean,
+    stackCardColor: Color = Color.Unspecified
 ) {
     Column(
         modifier = modifier.width(width),
@@ -474,7 +476,8 @@ private fun NotificationGroupSection(
             onDismissGroup = onDismissGroup,
             onDismissNotification = onDismissNotification,
             onRunNotificationAction = onRunNotificationAction,
-            onOpenNotification = onOpenNotification
+            onOpenNotification = onOpenNotification,
+            stackCardColor = stackCardColor
         )
     }
 }
@@ -489,7 +492,8 @@ private fun NotificationGroupBody(
     onDismissGroup: () -> Unit,
     onDismissNotification: (String) -> Unit,
     onRunNotificationAction: (String) -> Boolean,
-    onOpenNotification: (String, Offset) -> Boolean
+    onOpenNotification: (String, Offset) -> Boolean,
+    stackCardColor: Color = Color.Unspecified
 ) {
     val hasMultipleEntries = group.entries.size > 1
     AnimatedContent(
