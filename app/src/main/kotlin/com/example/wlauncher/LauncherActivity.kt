@@ -303,7 +303,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val useAppListWatchFaceColors = appListWatchFaceColors && selectedWatchFace.isBuiltin
     val appListColors = appListPalette(
         seed = appListThemeColor,
-        darkMode = darkMode,
+        darkMode = effectiveDarkMode,
         uiStyle = uiStyle,
         useWatchFaceColor = useAppListWatchFaceColors
     )
@@ -314,7 +314,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
     val watchFaceFadePalette = appListPalette(
         seed = watchFaceFadeSeed,
-        darkMode = darkMode,
+        darkMode = effectiveDarkMode,
         uiStyle = uiStyle,
         useWatchFaceColor = if (uiStyle == UiStyle.MATERIAL_3) true else useAppListWatchFaceColors
     )
