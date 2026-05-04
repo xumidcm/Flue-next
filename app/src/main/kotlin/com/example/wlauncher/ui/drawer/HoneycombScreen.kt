@@ -72,7 +72,6 @@ import com.flue.launcher.ui.input.flueDrawerRotaryScrollable
 import com.flue.launcher.ui.input.normalizeDrawerScrollDelta
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.theme.LauncherTheme
-import com.flue.launcher.ui.theme.LocalGlobalUiScale
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.util.fisheyeScale
 import com.flue.launcher.util.generateHoneycombRows
@@ -115,7 +114,7 @@ fun HoneycombScreen(
     bottomFadeRangeDp: Int = 56,
     fastScrollOptimizationEnabled: Boolean = true,
     active: Boolean = true,
-    leftSafeInsetDp: Int = 0,
+    leftSafeInsetPercent: Int = 0,
     appListScalePercent: Int = 100,
     useWatchFaceColors: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,
@@ -135,7 +134,7 @@ fun HoneycombScreen(
             darkMode = darkMode,
             columns = (narrowCols + 1).coerceIn(2, 6),
             active = active,
-            leftSafeInsetDp = leftSafeInsetDp,
+            leftSafeInsetPercent = leftSafeInsetPercent,
             appListScalePercent = appListScalePercent,
             useWatchFaceColors = useWatchFaceColors,
             onAppClick = onAppClick,
@@ -148,7 +147,6 @@ fun HoneycombScreen(
     }
 
     val context = LocalContext.current
-    val globalUiScale = LocalGlobalUiScale.current
     val launcherStyle = LauncherTheme.style
     val focusRequester = remember { FocusRequester() }
     var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
@@ -182,8 +180,7 @@ fun HoneycombScreen(
         val density = LocalDensity.current
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
-        val leftSafeInsetPx = with(density) { (leftSafeInsetDp.coerceIn(0, 168) / globalUiScale).dp.toPx() }
-            .coerceAtMost(screenWidthPx * 0.44f)
+        val leftSafeInsetPx = screenWidthPx * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val iconShadowElevationPx by animateFloatAsState(
             targetValue = if (iconShadowEnabled) with(density) { 8.dp.toPx() } else 0f,
             animationSpec = tween(durationMillis = if (iconShadowEnabled) 120 else 0),
@@ -1070,7 +1067,7 @@ private fun MaterialDenseGridScreen(
     darkMode: Boolean,
     columns: Int,
     active: Boolean,
-    leftSafeInsetDp: Int,
+    leftSafeInsetPercent: Int,
     appListScalePercent: Int,
     useWatchFaceColors: Boolean,
     onAppClick: (AppInfo, Offset) -> Unit,
@@ -1080,7 +1077,6 @@ private fun MaterialDenseGridScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val globalUiScale = LocalGlobalUiScale.current
     val density = LocalDensity.current
     val focusRequester = remember { FocusRequester() }
     val gridState = rememberLazyGridState()
@@ -1237,7 +1233,7 @@ private fun MaterialDenseGridScreen(
             }
     ) {
         val screenWidthPx = with(density) { maxWidth.toPx() }
-        val leftSafeInset = (leftSafeInsetDp.coerceIn(0, 168) / globalUiScale).dp.coerceAtMost(maxWidth * 0.44f)
+        val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val horizontalPaddingPx = with(density) { 8.dp.toPx() }
         val leftPaddingPx = with(density) { (8.dp + leftSafeInset).toPx() }
         val itemGapPx = with(density) { 4.dp.toPx() }

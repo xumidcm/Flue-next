@@ -139,7 +139,7 @@ fun Modifier.flueRotaryScrollable(
     onScroll: (Float) -> Unit
 ): Modifier {
     fun consume(deltaPixels: Float): Boolean {
-        val tuned = tunedRotaryScrollDelta(deltaPixels, multiplier)
+        val tuned = tunedRotaryScrollDelta(-deltaPixels, multiplier)
         if (tuned == 0f) return false
         onRotaryScroll?.invoke()
         onScroll(tuned)
@@ -163,7 +163,7 @@ fun Modifier.flueDrawerRotaryScrollable(
 ): Modifier {
     fun consume(deltaPixels: Float): Boolean {
         val tuned = normalizeDrawerScrollDelta(
-            verticalScrollPixels = deltaPixels,
+            verticalScrollPixels = -deltaPixels,
             source = DrawerInputSource.Rotary,
             mode = mode
         )

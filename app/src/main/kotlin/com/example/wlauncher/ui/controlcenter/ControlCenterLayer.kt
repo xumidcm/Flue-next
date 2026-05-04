@@ -118,7 +118,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import com.flue.launcher.ui.theme.LocalGlobalUiScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
@@ -180,7 +179,7 @@ private data class BatteryStatusSnapshot(
 
 @Composable
 fun ControlCenterLayer(
-    leftSafeInsetDp: Int,
+    leftSafeInsetPercent: Int,
     showMusicControls: Boolean,
     onDismissToFace: () -> Unit,
     showPowerButton: Boolean = false,
@@ -189,7 +188,6 @@ fun ControlCenterLayer(
 ) {
     val context = LocalContext.current
     val launcherStyle = LauncherTheme.style
-    val globalUiScale = LocalGlobalUiScale.current
     val audioManager = remember(context) { context.getSystemService(AudioManager::class.java) }
     var mediaVolume by remember(context) {
         mutableFloatStateOf(readMusicVolume(audioManager))
@@ -351,7 +349,6 @@ fun ControlCenterLayer(
             }
         }
     }
-    val leftSafeInset = (leftSafeInsetDp.coerceIn(0, 168) / globalUiScale).dp
     val internetPanelLauncher = rememberLauncherForActivityResult(StartActivityForResult()) {
         connectivity = readConnectivitySnapshot(context)
     }
@@ -394,8 +391,8 @@ fun ControlCenterLayer(
             .fillMaxSize()
             .clip(RoundedCornerShape(40.dp))
             .background(launcherStyle.screenBackground)
-            .padding(start = leftSafeInset)
     ) {
+        val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val verticalPadding = 16.dp
         val outerSpacing = if (showMusicControls) 14.dp else 18.dp
         val controlsSpacing = if (showMusicControls) 14.dp else 20.dp
@@ -410,7 +407,7 @@ fun ControlCenterLayer(
         val contentHorizontalPadding = 18.dp
         val toggleRowSpacing = 14.dp
         val toggleRowRequiredWidth = toggleSize * 4f + toggleRowSpacing * 3f
-        val availableToggleRowWidth = (maxWidth - contentHorizontalPadding * 2f).coerceAtLeast(0.dp)
+        val availableToggleRowWidth = (maxWidth - leftSafeInset - contentHorizontalPadding * 2f).coerceAtLeast(0.dp)
         val toggleRowFits = availableToggleRowWidth >= toggleRowRequiredWidth
         val estimatedControlsHeight = toggleSize +
             controlsSpacing +
@@ -434,6 +431,7 @@ fun ControlCenterLayer(
         val verticalElasticModifier = Modifier
             .fillMaxSize()
             .graphicsLayer { translationY = verticalOverscroll.value }
+            .padding(start = leftSafeInset)
         val contentModifier = if (verticalScrollEnabled) {
             verticalElasticModifier
                 .then(trackDismissPointer)

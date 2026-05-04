@@ -89,7 +89,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_HONEYCOMB_BOTTOM_FADE = intPreferencesKey("honeycomb_bottom_fade")
         val KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION = booleanPreferencesKey("honeycomb_fast_scroll_optimization")
         val KEY_APP_LIST_FISHEYE = booleanPreferencesKey("app_list_fisheye_enabled")
-        val KEY_APP_LIST_LEFT_SAFE_INSET_DP = intPreferencesKey("app_list_left_safe_inset_dp")
+        val KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT = intPreferencesKey("app_list_left_safe_inset_percent")
         val KEY_APP_LIST_SCALE_PERCENT = intPreferencesKey("app_list_scale_percent")
         val KEY_GLOBAL_UI_SCALE_PERCENT = intPreferencesKey("global_ui_scale_percent")
         val KEY_APP_LIST_WATCHFACE_COLORS = booleanPreferencesKey("app_list_watchface_colors")
@@ -156,8 +156,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_SIDE_SCREEN_SHORTCUT_ROWS = intPreferencesKey("side_screen_shortcut_rows")
         val KEY_SIDE_SCREEN_SHORTCUT_COLS = intPreferencesKey("side_screen_shortcut_cols")
         private const val SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY = 12
-        private const val APP_LIST_LEFT_SAFE_INSET_MAX_DP = 168
-        private const val XIAOMI_17_PRO_SAFE_INSET_DP = 96
+        private const val APP_LIST_LEFT_SAFE_INSET_MAX_PERCENT = 50
 
         private fun normalizeEdgeBlurTenths(value: Int): Int {
             return ((value.coerceIn(5, 50) / 5f).roundToInt() * 5).coerceIn(5, 50)
@@ -294,8 +293,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val honeycombFastScrollOptimization: StateFlow<Boolean> = _honeycombFastScrollOptimization.asStateFlow()
     private val _appListFisheyeEnabled = MutableStateFlow(true)
     val appListFisheyeEnabled: StateFlow<Boolean> = _appListFisheyeEnabled.asStateFlow()
-    private val _appListLeftSafeInsetDp = MutableStateFlow(0)
-    val appListLeftSafeInsetDp: StateFlow<Int> = _appListLeftSafeInsetDp.asStateFlow()
+    private val _appListLeftSafeInsetPercent = MutableStateFlow(0)
+    val appListLeftSafeInsetPercent: StateFlow<Int> = _appListLeftSafeInsetPercent.asStateFlow()
     private val _appListScalePercent = MutableStateFlow(100)
     val appListScalePercent: StateFlow<Int> = _appListScalePercent.asStateFlow()
     private val _globalUiScalePercent = MutableStateFlow(100)
@@ -634,13 +633,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val devicePresetApplied = prefs[KEY_DEVICE_PRESET_APPLIED] ?: false
                 val shouldApplyDevicePreset = !devicePresetApplied && isXiaomi17ProSeriesDevice()
                 val hasSavedHoneycombCols = prefs[KEY_HONEYCOMB_COLS] != null
-                val hasSavedLeftSafeInset = prefs[KEY_APP_LIST_LEFT_SAFE_INSET_DP] != null
                 val honeycombColsDefault = if (shouldApplyDevicePreset && !hasSavedHoneycombCols) 2 else 3
-                val leftSafeInsetDefault = if (shouldApplyDevicePreset && !hasSavedLeftSafeInset) {
-                    XIAOMI_17_PRO_SAFE_INSET_DP
-                } else {
-                    0
-                }
 
                 val loadedHoneycombCols = (prefs[KEY_HONEYCOMB_COLS] ?: honeycombColsDefault).coerceIn(1, 5)
                 if (_honeycombCols.value != loadedHoneycombCols) _honeycombCols.value = loadedHoneycombCols
@@ -675,10 +668,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListFisheyeEnabled.value = loadedFisheyeEnabled
                 }
 
-                val loadedLeftSafeInset = (prefs[KEY_APP_LIST_LEFT_SAFE_INSET_DP] ?: leftSafeInsetDefault)
-                    .coerceIn(0, APP_LIST_LEFT_SAFE_INSET_MAX_DP)
-                if (_appListLeftSafeInsetDp.value != loadedLeftSafeInset) {
-                    _appListLeftSafeInsetDp.value = loadedLeftSafeInset
+                val loadedLeftSafeInset = (prefs[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT] ?: 0)
+                    .coerceIn(0, APP_LIST_LEFT_SAFE_INSET_MAX_PERCENT)
+                if (_appListLeftSafeInsetPercent.value != loadedLeftSafeInset) {
+                    _appListLeftSafeInsetPercent.value = loadedLeftSafeInset
                 }
 
                 val loadedAppListScale = (prefs[KEY_APP_LIST_SCALE_PERCENT] ?: 100).coerceIn(50, 200)
@@ -790,9 +783,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     store.edit {
                         if (shouldApplyDevicePreset && !hasSavedHoneycombCols) {
                             it[KEY_HONEYCOMB_COLS] = 2
-                        }
-                        if (shouldApplyDevicePreset && !hasSavedLeftSafeInset) {
-                            it[KEY_APP_LIST_LEFT_SAFE_INSET_DP] = XIAOMI_17_PRO_SAFE_INSET_DP
                         }
                         it[KEY_DEVICE_PRESET_APPLIED] = true
                     }
@@ -1260,11 +1250,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_APP_LIST_FISHEYE] = enabled } }
     }
 
-    fun setAppListLeftSafeInsetDp(value: Int) {
-        _appListLeftSafeInsetDp.value = value.coerceIn(0, APP_LIST_LEFT_SAFE_INSET_MAX_DP)
-        val savedValue = _appListLeftSafeInsetDp.value
-        persistDebounced("key_app_list_left_safe_inset_dp") {
-            store.edit { it[KEY_APP_LIST_LEFT_SAFE_INSET_DP] = savedValue }
+    fun setAppListLeftSafeInsetPercent(value: Int) {
+        _appListLeftSafeInsetPercent.value = value.coerceIn(0, APP_LIST_LEFT_SAFE_INSET_MAX_PERCENT)
+        val savedValue = _appListLeftSafeInsetPercent.value
+        persistDebounced("key_app_list_left_safe_inset_percent") {
+            store.edit { it[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT] = savedValue }
         }
     }
 
@@ -1866,7 +1856,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _honeycombBottomFade.value = 30
         _honeycombFastScrollOptimization.value = true
         _appListFisheyeEnabled.value = true
-        _appListLeftSafeInsetDp.value = 0
+        _appListLeftSafeInsetPercent.value = 0
         _appListScalePercent.value = 100
         _globalUiScalePercent.value = 100
         _appListWatchFaceColors.value = true
@@ -1955,7 +1945,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_HONEYCOMB_BOTTOM_FADE] = 30
                 it[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION] = true
                 it[KEY_APP_LIST_FISHEYE] = true
-                it[KEY_APP_LIST_LEFT_SAFE_INSET_DP] = 0
+                it[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT] = 0
                 it[KEY_APP_LIST_SCALE_PERCENT] = 100
                 it[KEY_GLOBAL_UI_SCALE_PERCENT] = 100
                 it[KEY_APP_LIST_WATCHFACE_COLORS] = true

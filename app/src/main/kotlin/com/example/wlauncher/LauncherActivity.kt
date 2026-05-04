@@ -179,7 +179,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsStateWithLifecycle()
     val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsStateWithLifecycle()
     val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsStateWithLifecycle()
-    val appListLeftSafeInsetDp by vm.appListLeftSafeInsetDp.collectAsStateWithLifecycle()
+    val appListLeftSafeInsetPercent by vm.appListLeftSafeInsetPercent.collectAsStateWithLifecycle()
     val appListScalePercent by vm.appListScalePercent.collectAsStateWithLifecycle()
     val appListWatchFaceColors by vm.appListWatchFaceColors.collectAsStateWithLifecycle()
     val appListRowBorderEnabled by vm.appListRowBorderEnabled.collectAsStateWithLifecycle()
@@ -604,7 +604,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         bottomFadeRangeDp = honeycombBottomFade,
                         fastScrollOptimizationEnabled = honeycombFastScrollOptimization,
                         active = screenState == ScreenState.Apps,
-                        leftSafeInsetDp = appListLeftSafeInsetDp,
+                        leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         appListScalePercent = appListScalePercent,
                         useWatchFaceColors = useAppListWatchFaceColors,
                         fisheyeEnabled = appListFisheyeEnabled,
@@ -631,7 +631,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         topBlurRadiusDp = honeycombEdgeBlurRadius,
                         bottomBlurRadiusDp = honeycombEdgeBlurRadius,
                         active = screenState == ScreenState.Apps,
-                        leftSafeInsetDp = appListLeftSafeInsetDp,
+                        leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         appListScalePercent = appListScalePercent,
                         useWatchFaceColors = useAppListWatchFaceColors,
                         rowBorderEnabled = appListRowBorderEnabled,
@@ -702,7 +702,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         previewGroups = sideScreenPreviewGroups,
                         showWidgets = false,
                         sectionOrder = sideScreenSectionOrder,
-                        leftSafeInsetDp = appListLeftSafeInsetDp,
+                        leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         notificationsEnabled = notificationsEnabled,
                         notificationAccessGranted = notificationAccessGranted,
                         notificationsSceneActive = notificationSceneActive,
@@ -762,7 +762,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     WidgetPageLayer(
                         apps = allApps,
                         sideScreenWidgetSlots = sideScreenWidgetSlots,
-                        leftSafeInsetDp = appListLeftSafeInsetDp,
+                        leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         onSetWidget = vm::setWidgetSlot,
                         onSwapWidget = vm::swapWidgetSlots,
                         onRemoveWidget = vm::removeWidgetSlot
@@ -781,7 +781,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         }
                 ) {
                     ControlCenterLayer(
-                        leftSafeInsetDp = appListLeftSafeInsetDp,
+                        leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         showMusicControls = showMusicControls,
                         onDismissToFace = { vm.setState(ScreenState.Face) },
                         showPowerButton = powerMenuButtonEnabled,

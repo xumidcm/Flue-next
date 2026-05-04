@@ -129,7 +129,6 @@ import com.flue.launcher.ui.notification.NotificationGroupUi
 import com.flue.launcher.ui.notification.NotificationRevealTarget
 import com.flue.launcher.ui.notification.SwipeRevealDeleteContainer
 import com.flue.launcher.ui.theme.LauncherTheme
-import com.flue.launcher.ui.theme.LocalGlobalUiScale
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.viewmodel.SideScreenSection
 import kotlinx.coroutines.delay
@@ -227,7 +226,7 @@ fun SmartStackLayer(
     previewGroups: List<NotificationGroupUi>,
     showWidgets: Boolean,
     sectionOrder: List<SideScreenSection>,
-    leftSafeInsetDp: Int,
+    leftSafeInsetPercent: Int,
     notificationsEnabled: Boolean,
     notificationAccessGranted: Boolean,
     notificationsSceneActive: Boolean,
@@ -258,7 +257,6 @@ fun SmartStackLayer(
     val clock = rememberClockSnapshot()
     val battery = rememberBatterySnapshot()
     val density = LocalDensity.current
-    val globalUiScale = LocalGlobalUiScale.current
     val configuration = LocalConfiguration.current
     val stepPermissionGranted = rememberActivityRecognitionPermission(showSteps)
     val stepSnapshot = rememberStepSnapshot(showSteps, stepPermissionGranted)
@@ -569,7 +567,7 @@ fun SmartStackLayer(
     ) {
         val widthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
         val heightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
-        val leftSafeInset = (leftSafeInsetDp.coerceIn(0, 168) / globalUiScale).dp.coerceAtMost(maxWidth * 0.44f)
+        val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val availableWidth = maxWidth - leftSafeInset
         val contentWidth = availableWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
         val quickHeight = if (showNotificationPreview) {
@@ -911,7 +909,7 @@ fun SmartStackLayer(
 fun WidgetPageLayer(
     apps: List<AppInfo>,
     sideScreenWidgetSlots: List<String?>,
-    leftSafeInsetDp: Int,
+    leftSafeInsetPercent: Int,
     onSetWidget: (Int, String?) -> Unit,
     onSwapWidget: (Int, Int) -> Unit,
     onRemoveWidget: (Int) -> Unit,
@@ -921,7 +919,6 @@ fun WidgetPageLayer(
     val activity = remember(context) { context.findActivity() }
     val density = LocalDensity.current
     val launcherStyle = LauncherTheme.style
-    val globalUiScale = LocalGlobalUiScale.current
     val widgetRepository = remember(context) { FlueApplication.repositories(context).widgetRepository }
     val appWidgetManager = remember(context) { AppWidgetManager.getInstance(context) }
     val appWidgetHost = remember(context) { AppWidgetHost(context, SIDE_SCREEN_APP_WIDGET_HOST_ID) }
@@ -1057,7 +1054,7 @@ fun WidgetPageLayer(
             .clip(RoundedCornerShape(40.dp))
             .background(launcherStyle.screenBackground)
     ) {
-        val leftSafeInset = (leftSafeInsetDp.coerceIn(0, 168) / globalUiScale).dp.coerceAtMost(maxWidth * 0.44f)
+        val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val availableWidth = maxWidth - leftSafeInset
         val contentWidth = availableWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
         LazyColumn(

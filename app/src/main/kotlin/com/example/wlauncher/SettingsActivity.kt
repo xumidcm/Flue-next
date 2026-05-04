@@ -113,7 +113,6 @@ import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.settings.WatchFaceSettingCard
 import com.flue.launcher.ui.theme.LauncherTheme
-import com.flue.launcher.ui.theme.LocalGlobalUiScale
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
@@ -148,7 +147,7 @@ private const val COMMUNITY_GROUP_URL = "https://qun.qq.com/universal-share/shar
 const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
 const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
-private val LocalSettingsLeftSafeInsetDp = compositionLocalOf { 0 }
+private val LocalSettingsLeftSafeInsetPercent = compositionLocalOf { 0 }
 
 enum class SettingsDestination {
     ROOT,
@@ -265,7 +264,7 @@ private fun SettingsRootScreen(
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsStateWithLifecycle()
     val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsStateWithLifecycle()
     val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsStateWithLifecycle()
-    val appListLeftSafeInsetDp by vm.appListLeftSafeInsetDp.collectAsStateWithLifecycle()
+    val appListLeftSafeInsetPercent by vm.appListLeftSafeInsetPercent.collectAsStateWithLifecycle()
     val appListScalePercent by vm.appListScalePercent.collectAsStateWithLifecycle()
     val globalUiScalePercent by vm.globalUiScalePercent.collectAsStateWithLifecycle()
     val appListWatchFaceColors by vm.appListWatchFaceColors.collectAsStateWithLifecycle()
@@ -433,7 +432,7 @@ private fun SettingsRootScreen(
         pageScrollPositions[target] = SavedScrollPosition(index = index, offset = offset)
     }
 
-    CompositionLocalProvider(LocalSettingsLeftSafeInsetDp provides appListLeftSafeInsetDp) {
+    CompositionLocalProvider(LocalSettingsLeftSafeInsetPercent provides appListLeftSafeInsetPercent) {
         AnimatedContent(
             targetState = destination,
             transitionSpec = {
@@ -934,11 +933,11 @@ private fun SettingsRootScreen(
             item("app_list_left_safe_inset") {
                 SettingsSliderRow(
                     title = if (isZh) "应用列表左侧安全区" else "App List Left Safe Area",
-                    value = appListLeftSafeInsetDp.toFloat(),
-                    valueText = "${appListLeftSafeInsetDp}dp",
-                    range = 0f..168f,
-                    steps = 13,
-                    onValueChange = { vm.setAppListLeftSafeInsetDp(it.toInt()) },
+                    value = appListLeftSafeInsetPercent.toFloat(),
+                    valueText = "${appListLeftSafeInsetPercent}%",
+                    range = 0f..50f,
+                    steps = 49,
+                    onValueChange = { vm.setAppListLeftSafeInsetPercent(it.toInt()) },
                     scale = itemFisheye(listState, "app_list_left_safe_inset", screenCenterY, screenHeightPx)
                 )
             }
@@ -1320,8 +1319,7 @@ private fun SettingsPageScaffold(
 ) {
     val launcherStyle = LauncherTheme.style
     val context = LocalContext.current
-    val globalUiScale = LocalGlobalUiScale.current
-    val leftSafeInsetDp = LocalSettingsLeftSafeInsetDp.current
+    val leftSafeInsetPercent = LocalSettingsLeftSafeInsetPercent.current
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = initialFirstVisibleItemIndex,
         initialFirstVisibleItemScrollOffset = initialFirstVisibleItemScrollOffset
@@ -1392,7 +1390,7 @@ private fun SettingsPageScaffold(
     ) {
         val screenHeightPx = constraints.maxHeight.toFloat()
         val screenCenterY = screenHeightPx / 2f
-        val leftSafeInset = (leftSafeInsetDp.coerceIn(0, 168) / globalUiScale).dp.coerceAtMost(maxWidth * 0.44f)
+        val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
 
         LazyColumn(
             state = listState,
