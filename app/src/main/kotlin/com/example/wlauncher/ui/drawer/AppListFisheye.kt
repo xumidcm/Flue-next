@@ -22,5 +22,7 @@ internal fun edgeSpacingCompressionHorizontalOffset(
     val edgeProgress = (kotlin.math.abs(rowDistanceFromCenter) / (screenHeight * 0.5f)).coerceIn(0f, 1f)
     val eased = edgeProgress * edgeProgress * (3f - 2f * edgeProgress)
     val strength = strengthPercent.coerceIn(0, 200) / 100f
-    return -kotlin.math.sign(horizontalDistance) * itemSize * 0.18f * strength * eased
+    val requested = itemSize * 0.08f * strength * eased
+    val safeTravel = (kotlin.math.abs(horizontalDistance) - itemSize * 0.72f).coerceAtLeast(0f)
+    return -kotlin.math.sign(horizontalDistance) * kotlin.math.min(requested, safeTravel)
 }

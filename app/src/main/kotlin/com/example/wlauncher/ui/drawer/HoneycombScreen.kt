@@ -92,7 +92,7 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
-private const val HONEYCOMB_MENU_TRIGGER_MS = 2_000L
+private const val HONEYCOMB_MENU_TRIGGER_MS = 620L
 private const val HONEYCOMB_MENU_DRAG_START_DP = 20f
 private const val HONEYCOMB_PRESS_DURATION_MS = 200
 private const val HONEYCOMB_AUTO_SCROLL_EDGE_DP = 96f
@@ -449,7 +449,8 @@ fun HoneycombScreen(
                             val longPress = awaitLongPressByTimeoutOrCancel(
                                 pointerId = down.id,
                                 downPosition = down.position,
-                                timeoutMillis = HONEYCOMB_MENU_TRIGGER_MS
+                                timeoutMillis = HONEYCOMB_MENU_TRIGGER_MS,
+                                moveTolerancePx = menuDragStartPx
                             )
                             if (longPress == null) {
                                 glidePressedKey = null
@@ -1171,6 +1172,7 @@ private fun MaterialDenseGridScreen(
     var dragFromIndex by remember { mutableStateOf<Int?>(null) }
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
     var dragPointer by remember { mutableStateOf<Offset?>(null) }
+    var dragStartBounds by remember { mutableStateOf<Rect?>(null) }
     var returnTriggered by remember { mutableStateOf(false) }
     var materialContainerRoot by remember { mutableStateOf(Offset.Zero) }
     val materialItemBounds = remember { mutableStateMapOf<Int, Rect>() }
@@ -1185,6 +1187,7 @@ private fun MaterialDenseGridScreen(
             dragFromIndex = null
             dragCurrentIndex = null
             dragPointer = null
+            dragStartBounds = null
             if (!returnTriggered) {
                 overscroll.snapTo(0f)
             }
@@ -1242,6 +1245,27 @@ private fun MaterialDenseGridScreen(
                     scope.launch {
                         overscroll.snapTo((overscroll.value + available.y).coerceAtMost(0f))
                     }
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (source != NestedScrollSource.UserInput || dragFromIndex != null || longPressedApp != null) return Offset.Zero
+                val atTop = gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
+                if (available.y > 0f && atTop) {
+                    val next = (overscroll.value + available.y).coerceAtMost(overscrollLimitPx)
+                    scope.launch { overscroll.snapTo(next) }
+                    return Offset(0f, available.y)
+                }
+                val atBottom = !gridState.canScrollForward
+                if (available.y < 0f && atBottom) {
+                    val next = (overscroll.value + available.y).coerceAtLeast(-overscrollLimitPx)
+                    scope.launch { overscroll.snapTo(next) }
                     return Offset(0f, available.y)
                 }
                 return Offset.Zero
@@ -1335,7 +1359,8 @@ private fun MaterialDenseGridScreen(
                     val longPress = awaitLongPressByTimeoutOrCancel(
                         pointerId = down.id,
                         downPosition = down.position,
-                        timeoutMillis = HONEYCOMB_MENU_TRIGGER_MS
+                        timeoutMillis = HONEYCOMB_MENU_TRIGGER_MS,
+                        moveTolerancePx = menuDragStartPx
                     ) ?: return@awaitEachGesture
 
                     onLongClick(app)
@@ -1361,6 +1386,7 @@ private fun MaterialDenseGridScreen(
                             dragFromIndex = startIndex
                             dragCurrentIndex = startIndex
                             dragPointer = pointer
+                            dragStartBounds = materialItemBounds[startIndex]
                             vibrateHaptic(context)
                         }
 
@@ -1369,10 +1395,9 @@ private fun MaterialDenseGridScreen(
                             if (movedDistance > menuDragStartPx * 0.35f) {
                                 hasDragged = true
                             }
-                            findMaterialGridIndexAt(
+                            findNearestMaterialGridIndex(
                                 pointer = pointer,
-                                itemBounds = materialItemBounds,
-                                excludedIndex = dragFromIndex
+                                itemBounds = materialItemBounds
                             )?.let { target ->
                                 if (target in apps.indices) dragCurrentIndex = target
                             }
@@ -1392,12 +1417,14 @@ private fun MaterialDenseGridScreen(
                             dragFromIndex = null
                             dragCurrentIndex = null
                             dragPointer = null
+                            dragStartBounds = null
                         }
                         longPressedApp = null
                     } else if (dragActive) {
                         dragFromIndex = null
                         dragCurrentIndex = null
                         dragPointer = null
+                        dragStartBounds = null
                         longPressedApp = null
                     }
                 }
@@ -1439,10 +1466,9 @@ private fun MaterialDenseGridScreen(
                 if (pendingScrollDelta != 0f) {
                     gridState.scrollBy(pendingScrollDelta)
                     dragPointer?.let { pointer ->
-                        findMaterialGridIndexAt(
+                        findNearestMaterialGridIndex(
                             pointer = pointer,
-                            itemBounds = materialItemBounds,
-                            excludedIndex = dragFromIndex
+                            itemBounds = materialItemBounds
                         )?.let { target ->
                             if (target in apps.indices) dragCurrentIndex = target
                         }
@@ -1618,7 +1644,7 @@ private fun MaterialDenseGridScreen(
         val dragOverlayIndex = dragFromIndex
         val dragOverlayApp = dragOverlayIndex?.let { apps.getOrNull(it) }
         val dragOverlayPointer = dragPointer
-        val dragOverlayBounds = dragOverlayIndex?.let { materialItemBounds[it] }
+        val dragOverlayBounds = dragOverlayIndex?.let { materialItemBounds[it] ?: dragStartBounds }
         if (dragOverlayApp != null && dragOverlayPointer != null && dragOverlayBounds != null) {
             val overlayIcon = remember(
                 dragOverlayApp.componentKey,
@@ -1679,6 +1705,24 @@ private fun findMaterialGridIndexAt(
         index != excludedIndex &&
         pointer.x in bounds.left..bounds.right && pointer.y in bounds.top..bounds.bottom
     }?.key
+}
+
+private fun findNearestMaterialGridIndex(
+    pointer: Offset,
+    itemBounds: Map<Int, Rect>,
+    excludedIndex: Int? = null,
+    maxDistance: Float = Float.MAX_VALUE
+): Int? {
+    return itemBounds.entries
+        .asSequence()
+        .filter { (index, _) -> index != excludedIndex }
+        .map { (index, bounds) ->
+            val distance = (pointer - bounds.center).getDistance()
+            index to distance
+        }
+        .filter { (_, distance) -> distance <= maxDistance }
+        .minByOrNull { (_, distance) -> distance }
+        ?.first
 }
 
 private fun materialDraggedTargetOffset(
@@ -1946,7 +1990,8 @@ private fun computeHoneycombEdgeBlur(
 private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awaitLongPressByTimeoutOrCancel(
     pointerId: androidx.compose.ui.input.pointer.PointerId,
     downPosition: Offset,
-    timeoutMillis: Long
+    timeoutMillis: Long,
+    moveTolerancePx: Float = viewConfiguration.touchSlop
 ): androidx.compose.ui.input.pointer.PointerInputChange? {
     val cancelled = withTimeoutOrNull<Boolean>(timeoutMillis) {
         var cancelledByGesture = false
@@ -1961,7 +2006,7 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awa
                 cancelledByGesture = true
                 break
             }
-            if ((change.position - downPosition).getDistance() > viewConfiguration.touchSlop) {
+            if ((change.position - downPosition).getDistance() > moveTolerancePx) {
                 cancelledByGesture = true
                 break
             }

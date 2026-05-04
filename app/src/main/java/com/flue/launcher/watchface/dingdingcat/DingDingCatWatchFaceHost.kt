@@ -545,40 +545,36 @@ private fun drawImageLayer(
     fillScreenBackgroundViewport: RectF?
 ) {
     val piece = selectAnimatedPiece(point, nowMillis, triggeredAt) ?: return
-    val targetWidth = point.width.takeIf { it > 0f } ?: dial.width.toFloat()
-    val targetHeight = point.height.takeIf { it > 0f } ?: dial.height.toFloat()
-    val displayScale = if (
-        point.pointType in setOf("PICTURE_LOOP", "PICTURE_NORMAL", "PIICTURE_NORMAL") &&
-        targetWidth >= dial.width * 0.8f &&
-        targetHeight >= dial.height * 0.8f
-    ) {
-        1f
-    } else {
-        point.scale
-    }
+    val file = File(dial.rootDir, piece)
+    val bounds = DingDingCatBitmapCache.bounds(file) ?: return
+    val area = point.layoutAreaRect(
+        dial = dial,
+        fallbackWidth = bounds.width.toFloat(),
+        fallbackHeight = bounds.height.toFloat()
+    )
+    val stretchToArea = point.shouldStretchBitmapToArea(dial, area, bounds)
+    val displayScale = if (isDingDingCatBackgroundLayer(point, dial)) 1f else point.scale
+    val contentWidth = if (stretchToArea) area.width() * displayScale else bounds.width * point.scale
+    val contentHeight = if (stretchToArea) area.height() * displayScale else bounds.height * point.scale
     val bitmap = DingDingCatBitmapCache.get(
-        file = File(dial.rootDir, piece),
+        file = file,
         allowSample = true,
-        targetWidth = (targetWidth * displayScale).toInt(),
-        targetHeight = (targetHeight * displayScale).toInt()
+        targetWidth = contentWidth.toInt().coerceAtLeast(1),
+        targetHeight = contentHeight.toInt().coerceAtLeast(1)
     ) ?: return
     val dst = if (fillScreenBackgroundViewport != null && isDingDingCatBackgroundLayer(point, dial)) {
         centerCropDestination(
             viewport = fillScreenBackgroundViewport,
-            contentWidth = targetWidth * displayScale,
-            contentHeight = targetHeight * displayScale
+            contentWidth = area.width(),
+            contentHeight = area.height()
         )
     } else {
-        point.destinationRect(
-            dial = dial,
-            contentWidth = targetWidth * displayScale,
-            contentHeight = targetHeight * displayScale
-        )
+        point.alignedRectInArea(area, contentWidth, contentHeight)
     }
     val paint = pointPaint(point)
     if (point.pointType == "PICTURE_COMPASS") {
         canvas.save()
-        canvas.rotate(-compassAzimuthDegrees - point.startValue, dst.centerX(), dst.centerY())
+        canvas.rotate(-compassAzimuthDegrees - point.startValue, area.centerX(), area.centerY())
         canvas.drawBitmap(bitmap, null, dst, paint)
         canvas.restore()
     } else {
@@ -680,21 +676,30 @@ private fun drawProgressImageLayer(
     if (pieces.isEmpty()) return
     val index = ((progressPercent.coerceIn(0, 100) / 100f) * (pieces.size - 1).coerceAtLeast(0)).roundToInt()
     val piece = pieces.getOrNull(index) ?: pieces.firstOrNull() ?: return
-    val bitmap = DingDingCatBitmapCache.get(File(dial.rootDir, piece), allowSample = true) ?: return
-    val targetWidth = point.width.takeIf { it > 0f } ?: bitmap.width.toFloat()
-    val targetHeight = point.height.takeIf { it > 0f } ?: bitmap.height.toFloat()
+    val file = File(dial.rootDir, piece)
+    val bounds = DingDingCatBitmapCache.bounds(file) ?: return
+    val area = point.layoutAreaRect(
+        dial = dial,
+        fallbackWidth = bounds.width.toFloat(),
+        fallbackHeight = bounds.height.toFloat()
+    )
+    val stretchToArea = point.shouldStretchBitmapToArea(dial, area, bounds)
+    val contentWidth = if (stretchToArea) area.width() * point.scale else bounds.width * point.scale
+    val contentHeight = if (stretchToArea) area.height() * point.scale else bounds.height * point.scale
+    val bitmap = DingDingCatBitmapCache.get(
+        file = file,
+        allowSample = true,
+        targetWidth = contentWidth.toInt().coerceAtLeast(1),
+        targetHeight = contentHeight.toInt().coerceAtLeast(1)
+    ) ?: return
     val dst = if (fillScreenBackgroundViewport != null && isDingDingCatBackgroundLayer(point, dial)) {
         centerCropDestination(
             viewport = fillScreenBackgroundViewport,
-            contentWidth = targetWidth * point.scale,
-            contentHeight = targetHeight * point.scale
+            contentWidth = area.width(),
+            contentHeight = area.height()
         )
     } else {
-        point.destinationRect(
-            dial = dial,
-            contentWidth = targetWidth * point.scale,
-            contentHeight = targetHeight * point.scale
-        )
+        point.alignedRectInArea(area, contentWidth, contentHeight)
     }
     canvas.drawBitmap(bitmap, null, dst, pointPaint(point))
 }
@@ -713,16 +718,24 @@ private fun drawPointerLayer(
     hand: DingDingCatPointerHand
 ) {
     val piece = point.pieces.firstOrNull() ?: return
-    val bitmap = DingDingCatBitmapCache.get(File(dial.rootDir, piece), allowSample = true) ?: return
-    val width = (point.width.takeIf { it > 0f } ?: bitmap.width.toFloat()) * point.scale
-    val height = (point.height.takeIf { it > 0f } ?: bitmap.height.toFloat()) * point.scale
-    val dst = point.destinationRect(
+    val file = File(dial.rootDir, piece)
+    val bounds = DingDingCatBitmapCache.bounds(file) ?: return
+    val area = point.layoutAreaRect(
         dial = dial,
-        contentWidth = width,
-        contentHeight = height
+        fallbackWidth = bounds.width.toFloat(),
+        fallbackHeight = bounds.height.toFloat()
     )
-    val centerX = dst.centerX()
-    val centerY = dst.centerY()
+    val width = bounds.width * point.scale
+    val height = bounds.height * point.scale
+    val dst = point.alignedRectInArea(area, width, height)
+    val centerX = area.centerX()
+    val centerY = area.centerY()
+    val bitmap = DingDingCatBitmapCache.get(
+        file = file,
+        allowSample = true,
+        targetWidth = width.toInt().coerceAtLeast(1),
+        targetHeight = height.toInt().coerceAtLeast(1)
+    ) ?: return
     val targetRotation = when (hand) {
         DingDingCatPointerHand.Hour -> {
             val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
@@ -830,14 +843,22 @@ private fun drawAmPm(canvas: AndroidCanvas, dial: DingDingCatDial, point: DingDi
     val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
     val index = if (calendar.get(Calendar.AM_PM) == Calendar.PM) 1 else 0
     val piece = point.pieces.getOrNull(index) ?: point.pieces.firstOrNull() ?: return
-    val bitmap = DingDingCatBitmapCache.get(File(dial.rootDir, piece), allowSample = true) ?: return
-    val width = (point.width.takeIf { it > 0f } ?: bitmap.width.toFloat()) * point.scale
-    val height = (point.height.takeIf { it > 0f } ?: bitmap.height.toFloat()) * point.scale
-    val dst = point.destinationRect(
+    val file = File(dial.rootDir, piece)
+    val bounds = DingDingCatBitmapCache.bounds(file) ?: return
+    val area = point.layoutAreaRect(
         dial = dial,
-        contentWidth = width,
-        contentHeight = height
+        fallbackWidth = bounds.width.toFloat(),
+        fallbackHeight = bounds.height.toFloat()
     )
+    val width = bounds.width * point.scale
+    val height = bounds.height * point.scale
+    val dst = point.alignedRectInArea(area, width, height)
+    val bitmap = DingDingCatBitmapCache.get(
+        file = file,
+        allowSample = true,
+        targetWidth = width.toInt().coerceAtLeast(1),
+        targetHeight = height.toInt().coerceAtLeast(1)
+    ) ?: return
     canvas.drawBitmap(
         bitmap,
         null,
@@ -857,10 +878,10 @@ private fun drawWeek(canvas: AndroidCanvas, dial: DingDingCatDial, point: DingDi
     if (srcRight <= srcLeft) return
     val dstWidth = sliceWidth * point.scale
     val dstHeight = bitmap.height * point.scale
-    val area = point.destinationRect(
+    val area = point.layoutAreaRect(
         dial = dial,
-        contentWidth = point.width.takeIf { it > 0f } ?: dstWidth,
-        contentHeight = point.height.takeIf { it > 0f } ?: dstHeight
+        fallbackWidth = dstWidth,
+        fallbackHeight = dstHeight
     )
     val left = when (resolveHorizontalGravity(point.gravity)) {
         Gravity.CENTER_HORIZONTAL -> area.centerX() - dstWidth / 2f
@@ -1015,9 +1036,7 @@ private fun DingDingCatDrawPoint.containsDesignPoint(dial: DingDingCatDial, poin
 }
 
 private fun DingDingCatDrawPoint.drawBounds(dial: DingDingCatDial): RectF {
-    val width = (this.width.takeIf { it > 0f } ?: dial.width.toFloat()) * this.scale
-    val height = (this.height.takeIf { it > 0f } ?: dial.height.toFloat()) * this.scale
-    return destinationRect(dial, width, height)
+    return layoutAreaRect(dial, this.width.takeIf { it > 0f } ?: dial.width.toFloat(), this.height.takeIf { it > 0f } ?: dial.height.toFloat())
 }
 
 private fun DingDingCatDrawPoint.destinationRect(
@@ -1025,22 +1044,57 @@ private fun DingDingCatDrawPoint.destinationRect(
     contentWidth: Float,
     contentHeight: Float
 ): RectF {
+    val area = layoutAreaRect(
+        dial = dial,
+        fallbackWidth = contentWidth.coerceAtLeast(0f),
+        fallbackHeight = contentHeight.coerceAtLeast(0f)
+    )
+    return alignedRectInArea(area, contentWidth, contentHeight)
+}
+
+private fun DingDingCatDrawPoint.layoutAreaRect(
+    dial: DingDingCatDial,
+    fallbackWidth: Float,
+    fallbackHeight: Float
+): RectF {
+    val width = this.width.takeIf { it > 0f } ?: fallbackWidth
+    val height = this.height.takeIf { it > 0f } ?: fallbackHeight
+    val left = if (hasStartX) startX else 0f
+    val top = if (hasStartY) startY else 0f
+    return RectF(left, top, left + width.coerceAtLeast(0f), top + height.coerceAtLeast(0f))
+}
+
+private fun DingDingCatDrawPoint.alignedRectInArea(
+    area: RectF,
+    contentWidth: Float,
+    contentHeight: Float
+): RectF {
     val width = contentWidth.coerceAtLeast(0f)
     val height = contentHeight.coerceAtLeast(0f)
     val left = when {
-        hasStartX -> startX
-        resolveHorizontalGravity(gravity) == Gravity.CENTER_HORIZONTAL -> (dial.width - width) / 2f
-        resolveHorizontalGravity(gravity) == Gravity.RIGHT -> dial.width - width
-        else -> 0f
+        resolveHorizontalGravity(gravity) == Gravity.CENTER_HORIZONTAL -> area.centerX() - width / 2f
+        resolveHorizontalGravity(gravity) == Gravity.RIGHT -> area.right - width
+        else -> area.left
     }
     val top = when {
-        hasStartY -> startY
-        shouldPinTopWhenPositionMissing(dial, width, height) -> 0f
-        resolveVerticalGravity(gravity) == Gravity.CENTER_VERTICAL -> (dial.height - height) / 2f
-        resolveVerticalGravity(gravity) == Gravity.BOTTOM -> dial.height - height
-        else -> 0f
+        shouldPinTopWhenPositionMissing(area, width, height) -> area.top
+        resolveVerticalGravity(gravity) == Gravity.CENTER_VERTICAL -> area.centerY() - height / 2f
+        resolveVerticalGravity(gravity) == Gravity.BOTTOM -> area.bottom - height
+        else -> area.top
     }
     return RectF(left, top, left + width, top + height)
+}
+
+private fun DingDingCatDrawPoint.shouldStretchBitmapToArea(
+    dial: DingDingCatDial,
+    area: RectF,
+    bounds: DingDingCatBitmapBounds
+): Boolean {
+    if (isDingDingCatBackgroundLayer(this, dial)) return true
+    if (bounds.width <= 0 || bounds.height <= 0) return false
+    val widthRatio = area.width() / bounds.width.toFloat()
+    val heightRatio = area.height() / bounds.height.toFloat()
+    return abs(widthRatio - 1f) <= 0.12f && abs(heightRatio - 1f) <= 0.12f
 }
 
 private fun isDingDingCatBackgroundLayer(point: DingDingCatDrawPoint, dial: DingDingCatDial): Boolean {
@@ -1055,13 +1109,13 @@ private fun isDingDingCatBackgroundLayer(point: DingDingCatDrawPoint, dial: Ding
 }
 
 private fun DingDingCatDrawPoint.shouldPinTopWhenPositionMissing(
-    dial: DingDingCatDial,
+    area: RectF,
     contentWidth: Float,
     contentHeight: Float
 ): Boolean {
     return pointType in setOf("PICTURE_NORMAL", "PIICTURE_NORMAL", "PICTRUE_EFFECT") &&
-        contentWidth >= dial.width * 0.95f &&
-        contentHeight < dial.height * 0.75f
+        contentWidth >= area.width() * 0.95f &&
+        contentHeight < area.height() * 0.75f
 }
 
 private fun DingDingCatDial.animationFrameDelayMs(): Long {
@@ -1153,13 +1207,14 @@ private fun gravitySpecFor(
     bitmapHeight: Int
 ): DingDingCatGravitySpec? {
     if (bitmapWidth <= 0 || bitmapHeight <= 0) return null
-    val left = if (point.hasStartX) point.startX else 0f
-    val top = if (point.hasStartY) point.startY else 0f
-    val width = point.width.takeIf { it > 0f } ?: dial.width.toFloat()
-    val height = point.height.takeIf { it > 0f } ?: dial.height.toFloat()
+    val area = point.layoutAreaRect(
+        dial = dial,
+        fallbackWidth = bitmapWidth.toFloat(),
+        fallbackHeight = bitmapHeight.toFloat()
+    )
     return DingDingCatGravitySpec(
         sourceIndex = point.sourceIndex,
-        area = RectF(left, top, left + width, top + height),
+        area = area,
         halfWidth = bitmapWidth * point.scale / 2f,
         halfHeight = bitmapHeight * point.scale / 2f
     )

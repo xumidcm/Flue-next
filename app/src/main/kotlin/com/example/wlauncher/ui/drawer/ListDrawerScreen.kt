@@ -83,7 +83,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
-private const val LIST_MENU_TRIGGER_MS = 2_000L
+private const val LIST_MENU_TRIGGER_MS = 620L
 private const val LIST_MENU_DRAG_START_DP = 20f
 private const val LIST_AUTO_SCROLL_EDGE_DP = 84f
 private const val LIST_AUTO_SCROLL_MAX_PX = 30f
@@ -165,7 +165,9 @@ fun ListDrawerScreen(
     val overscrollLimitPx = with(density) { configuration.screenHeightDp.dp.toPx() / 2f }
     val topReturnThresholdPx = with(density) { 72.dp.toPx() }
     val launcherStyle = LauncherTheme.style
-    val appPalette = appListPalette(themeColor, darkMode, uiStyle, useWatchFaceColors)
+    val listPaletteStyle = if (uiStyle == UiStyle.MATERIAL_3) UiStyle.APPLE_WATCH else uiStyle
+    val appPalette = appListPalette(themeColor, darkMode, listPaletteStyle, useWatchFaceColors)
+    val rowShape = RoundedCornerShape(18.dp)
     val entryVisuals = appListEntryVisuals(entryProgress)
     val appListScale = appListScalePercent.coerceIn(50, 200) / 100f
     val scaledIconSize = (iconSize * appListScale).coerceIn(24.dp, 128.dp)
@@ -353,7 +355,8 @@ fun ListDrawerScreen(
                         val longPress = awaitLongPressByTimeoutOrCancel(
                             pointerId = down.id,
                             downPosition = down.position,
-                            timeoutMillis = LIST_MENU_TRIGGER_MS
+                            timeoutMillis = LIST_MENU_TRIGGER_MS,
+                            moveTolerancePx = menuDragStartPx
                         )
                         if (longPress == null) {
                             dragPointerY = Float.NaN
@@ -675,13 +678,13 @@ fun ListDrawerScreen(
                                 if (showRowBackground) {
                                     Modifier.background(
                                         appPalette.item.copy(alpha = entryVisuals.surfaceProgress),
-                                        launcherStyle.compactShape
+                                        rowShape
                                     )
                                 } else {
                                     Modifier
                                 }
                             )
-                            .background(appPalette.itemPressedOverlay.copy(alpha = pressedOverlay), launcherStyle.compactShape)
+                            .background(appPalette.itemPressedOverlay.copy(alpha = pressedOverlay), rowShape)
                             .combinedClickable(
                                 interactionSource = interactionSource,
                                 indication = null,
@@ -747,7 +750,7 @@ fun ListDrawerScreen(
                         }
                         .then(
                             if (rowBorderEnabled) {
-                                Modifier.background(appPalette.item, launcherStyle.compactShape)
+                                Modifier.background(appPalette.item, rowShape)
                             } else {
                                 Modifier
                             }
@@ -933,7 +936,8 @@ private fun computeFastFlowOffset(
 private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awaitLongPressByTimeoutOrCancel(
     pointerId: androidx.compose.ui.input.pointer.PointerId,
     downPosition: Offset,
-    timeoutMillis: Long
+    timeoutMillis: Long,
+    moveTolerancePx: Float = viewConfiguration.touchSlop
 ): androidx.compose.ui.input.pointer.PointerInputChange? {
     val cancelled = withTimeoutOrNull<Boolean>(timeoutMillis) {
         var cancelledByGesture = false
@@ -948,7 +952,7 @@ private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awa
                 cancelledByGesture = true
                 break
             }
-            if ((change.position - downPosition).getDistance() > viewConfiguration.touchSlop) {
+            if ((change.position - downPosition).getDistance() > moveTolerancePx) {
                 cancelledByGesture = true
                 break
             }

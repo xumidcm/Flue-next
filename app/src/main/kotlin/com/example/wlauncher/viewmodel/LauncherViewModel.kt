@@ -186,6 +186,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             return ((value.coerceIn(0, APP_LIST_LEFT_SAFE_INSET_MAX_PERCENT) / 5f).roundToInt() * 5)
                 .coerceIn(0, APP_LIST_LEFT_SAFE_INSET_MAX_PERCENT)
         }
+
+        private fun normalizeAppListScalePercent(value: Int): Int {
+            val clamped = value.coerceIn(50, 200)
+            if (clamped == 200) return 200
+            return ((clamped / 10) * 10).coerceIn(50, 200)
+        }
     }
 
     private val store = application.dataStore
@@ -732,7 +738,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListEdgeSpacingCompressionEnabled.value = loadedEdgeSpacingCompression
                 }
 
-                val loadedAppListScale = (prefs[KEY_APP_LIST_SCALE_PERCENT] ?: 100).coerceIn(50, 200)
+                val loadedAppListScale = normalizeAppListScalePercent(prefs[KEY_APP_LIST_SCALE_PERCENT] ?: 100)
                 if (_appListScalePercent.value != loadedAppListScale) {
                     _appListScalePercent.value = loadedAppListScale
                 }
@@ -1366,7 +1372,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setAppListScalePercent(value: Int) {
-        _appListScalePercent.value = value.coerceIn(50, 200)
+        _appListScalePercent.value = normalizeAppListScalePercent(value)
         val savedValue = _appListScalePercent.value
         persistDebounced("key_app_list_scale_percent") {
             store.edit { it[KEY_APP_LIST_SCALE_PERCENT] = savedValue }
@@ -1576,7 +1582,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             _availableWatchFaces.value = scanned
             LunchWatchFaceRegistry.update(scanned)
             watchFaceScanHydrated = true
-            syncSelectedWatchFace()
+            syncSelectedWatchFace(freshScanCompleted = true)
         }
     }
 
@@ -1608,7 +1614,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     it.remove(KEY_LAST_WATCHFACE_ERROR)
                 }
             }
-            syncSelectedWatchFace()
+            syncSelectedWatchFace(freshScanCompleted = true)
             selected
         }
     }
@@ -1671,7 +1677,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     }
                 }
             }
-            syncSelectedWatchFace()
+            syncSelectedWatchFace(freshScanCompleted = true)
             _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
         }
     }
@@ -1685,7 +1691,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 _availableWatchFaces.value = scanned
                 LunchWatchFaceRegistry.update(scanned)
                 watchFaceScanHydrated = true
-                syncSelectedWatchFace()
+                syncSelectedWatchFace(freshScanCompleted = true)
                 _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
                 store.edit {
                     it[KEY_SELECTED_WATCHFACE_ID] = _selectedWatchFaceId.value
@@ -2315,10 +2321,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private fun parseClockPosition(value: String): WatchClockPosition =
         runCatching { WatchClockPosition.valueOf(value) }.getOrDefault(WatchClockPosition.CENTER)
 
-    private fun syncSelectedWatchFace() {
+    private fun syncSelectedWatchFace(freshScanCompleted: Boolean = false) {
         val requestedId = _selectedWatchFaceId.value.ifBlank { BUILT_IN_WATCHFACE_ID }
         val available = _availableWatchFaces.value
         val match = available.firstOrNull { it.id == requestedId }
+        var selectionResolved = true
 
         when {
             match != null -> {
@@ -2329,6 +2336,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 _selectedWatchFace.value.id == requestedId &&
                 _selectedWatchFace.value.isDingDingCat -> {
                 LunchWatchFaceRegistry.setCurrentSelectedId(requestedId)
+            }
+            requestedId.startsWith(DINGDINGCAT_ID_PREFIX) && !freshScanCompleted -> {
+                selectionResolved = false
+                LunchWatchFaceRegistry.setCurrentSelectedId(requestedId)
+                if (watchFaceRefreshJob?.isActive != true) {
+                    refreshWatchFaces(force = true)
+                }
             }
             watchFaceScanHydrated -> {
                 val fallback = available.firstOrNull { it.id == BUILT_IN_WATCHFACE_ID }
@@ -2349,7 +2363,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
         }
 
-        _watchFaceSelectionReady.value = watchFacePrefsHydrated && watchFaceScanHydrated
+        _watchFaceSelectionReady.value = watchFacePrefsHydrated && watchFaceScanHydrated && selectionResolved
     }
 
     private fun refreshIcons() {

@@ -517,7 +517,7 @@ private fun SettingsRootScreen(
         if (state?.completionAction == BlockingProgressCompletionAction.DingDingCatImport) {
             pageScrollPositions.remove(SettingsDestination.WATCH_FACES)
             destination = SettingsDestination.WATCH_FACES
-            if (backStack.isEmpty()) {
+            if (backStack.isEmpty() && !launchConfig.returnToFaceOnBack) {
                 backStack = listOf(SettingsDestination.ROOT)
             }
             settingsScope.launch {
