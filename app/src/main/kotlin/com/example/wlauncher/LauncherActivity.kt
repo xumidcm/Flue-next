@@ -63,6 +63,7 @@ import com.flue.launcher.ui.drawer.HoneycombScreen
 import com.flue.launcher.ui.drawer.ListDrawerScreen
 import com.flue.launcher.ui.drawer.appListPalette
 import com.flue.launcher.ui.home.WatchFaceLayer
+import com.flue.launcher.ui.home.WatchFaceStatusIndicatorOverlay
 import com.flue.launcher.ui.home.rememberAppListSeedColor
 import com.flue.launcher.ui.navigation.GestureHost
 import com.flue.launcher.ui.navigation.LayoutMode
@@ -211,6 +212,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val notificationGroups by vm.notificationGroups.collectAsStateWithLifecycle()
     val revealedNotificationTarget by vm.revealedNotificationTarget.collectAsStateWithLifecycle()
     val showMusicControls by vm.showMusicControls.collectAsStateWithLifecycle()
+    val musicTextSwitchAnimation by vm.musicTextSwitchAnimation.collectAsStateWithLifecycle()
     val launchSourceState by vm.launchSourceState.collectAsStateWithLifecycle()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsStateWithLifecycle()
     val selectedWatchFace by vm.selectedWatchFace.collectAsStateWithLifecycle()
@@ -624,40 +626,58 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             ) lockScreenWithAccessibility else null
                         )
                     } else if (selectedWatchFace.isDingDingCat) {
-                        DingDingCatWatchFaceHost(
-                            descriptor = selectedWatchFace,
-                            isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
-                            refreshToken = watchFaceRefreshToken,
-                            fillScreen = dingDingCatFillScreen,
-                            onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
-                            onDoubleTap = if (
-                                doubleTapLockScreenEnabled &&
-                                launcherInteractive &&
-                                screenState == ScreenState.Face &&
-                                !sideSceneOverlayActive
-                            ) lockScreenWithAccessibility else null,
-                            onLoadFailure = { descriptor, error ->
-                                val rootCause = generateSequence(error) { it.cause }.last()
-                                vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
-                            }
-                        )
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            DingDingCatWatchFaceHost(
+                                descriptor = selectedWatchFace,
+                                isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
+                                refreshToken = watchFaceRefreshToken,
+                                fillScreen = dingDingCatFillScreen,
+                                onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
+                                onDoubleTap = if (
+                                    doubleTapLockScreenEnabled &&
+                                    launcherInteractive &&
+                                    screenState == ScreenState.Face &&
+                                    !sideSceneOverlayActive
+                                ) lockScreenWithAccessibility else null,
+                                onLoadFailure = { descriptor, error ->
+                                    val rootCause = generateSequence(error) { it.cause }.last()
+                                    vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
+                                }
+                            )
+                            WatchFaceStatusIndicatorOverlay(
+                                showStatusIndicators = watchFaceStatusIndicators,
+                                hasNotifications = showNotification && notificationGroups.isNotEmpty(),
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(top = 18.dp)
+                            )
+                        }
                     } else {
-                        LunchWatchFaceHost(
-                            descriptor = selectedWatchFace,
-                            isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
-                            refreshToken = watchFaceRefreshToken,
-                            onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
-                            onDoubleTap = if (
-                                doubleTapLockScreenEnabled &&
-                                launcherInteractive &&
-                                screenState == ScreenState.Face &&
-                                !sideSceneOverlayActive
-                            ) lockScreenWithAccessibility else null,
-                            onLoadFailure = { descriptor, error ->
-                                val rootCause = generateSequence(error) { it.cause }.last()
-                                vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
-                            }
-                        )
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            LunchWatchFaceHost(
+                                descriptor = selectedWatchFace,
+                                isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
+                                refreshToken = watchFaceRefreshToken,
+                                onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
+                                onDoubleTap = if (
+                                    doubleTapLockScreenEnabled &&
+                                    launcherInteractive &&
+                                    screenState == ScreenState.Face &&
+                                    !sideSceneOverlayActive
+                                ) lockScreenWithAccessibility else null,
+                                onLoadFailure = { descriptor, error ->
+                                    val rootCause = generateSequence(error) { it.cause }.last()
+                                    vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
+                                }
+                            )
+                            WatchFaceStatusIndicatorOverlay(
+                                showStatusIndicators = watchFaceStatusIndicators,
+                                hasNotifications = showNotification && notificationGroups.isNotEmpty(),
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(top = 18.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -882,6 +902,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     ControlCenterLayer(
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         showMusicControls = showMusicControls,
+                        musicTextSwitchAnimation = musicTextSwitchAnimation,
                         onDismissToFace = { vm.setState(ScreenState.Face) },
                         showPowerButton = powerMenuButtonEnabled,
                         onPowerClick = openPowerDialogWithAccessibility

@@ -202,6 +202,20 @@ private data class ChargingSnapshot(
 )
 
 @Composable
+fun WatchFaceStatusIndicatorOverlay(
+    showStatusIndicators: Boolean,
+    hasNotifications: Boolean,
+    modifier: Modifier = Modifier
+) {
+    if (!showStatusIndicators) return
+    WatchFaceStatusIndicators(
+        chargingSnapshot = rememberChargingSnapshot(),
+        hasNotifications = hasNotifications,
+        modifier = modifier
+    )
+}
+
+@Composable
 fun WatchFaceLayer(
     watchFaceId: String = BUILT_IN_WATCHFACE_ID,
     photoPath: String? = null,

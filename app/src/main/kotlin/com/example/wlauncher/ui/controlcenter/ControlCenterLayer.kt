@@ -29,12 +29,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -193,6 +187,7 @@ private data class BatteryStatusSnapshot(
 fun ControlCenterLayer(
     leftSafeInsetPercent: Int,
     showMusicControls: Boolean,
+    musicTextSwitchAnimation: String = MusicTextSwitchAnimations.DEFAULT_ID,
     onDismissToFace: () -> Unit,
     showPowerButton: Boolean = false,
     onPowerClick: () -> Unit = {},
@@ -750,6 +745,7 @@ fun ControlCenterLayer(
                 if (showMusicControls) {
                     MediaControlCard(
                         mediaState = mediaState,
+                        musicTextSwitchAnimation = musicTextSwitchAnimation,
                         onGestureLockChange = lockControlCenterGesture,
                         onOpenApp = { openMusicApp(context, mediaState.appPackage) },
                         onOpenOutputSwitcherOrApp = {
@@ -918,6 +914,7 @@ private fun ControlSliderCard(
 @Composable
 private fun MediaControlCard(
     mediaState: ControlCenterMediaState,
+    musicTextSwitchAnimation: String,
     onGestureLockChange: (Boolean) -> Unit,
     onOpenApp: () -> Unit,
     onOpenOutputSwitcherOrApp: () -> Unit
@@ -990,13 +987,15 @@ private fun MediaControlCard(
                                     text = mediaState.title,
                                     color = Color.White,
                                     fontSize = 15.sp,
-                                    fontWeight = FontWeight.SemiBold
+                                    fontWeight = FontWeight.SemiBold,
+                                    animationStyleId = musicTextSwitchAnimation
                                 )
                                 AnimatedMusicText(
                                     text = mediaState.artist,
                                     color = Color.White.copy(alpha = 0.72f),
                                     fontSize = 11.sp,
-                                    fontWeight = FontWeight.Normal
+                                    fontWeight = FontWeight.Normal,
+                                    animationStyleId = musicTextSwitchAnimation
                                 )
                             }
                             if (mediaState.appIcon != null) {
@@ -1203,20 +1202,64 @@ private fun AnimatedMusicText(
     text: String,
     color: Color,
     fontSize: TextUnit,
-    fontWeight: FontWeight
+    fontWeight: FontWeight,
+    animationStyleId: String
 ) {
-    AnimatedContent(
-        targetState = text,
-        transitionSpec = {
-            (fadeIn(animationSpec = tween(260, delayMillis = 300, easing = FastOutSlowInEasing)) +
-                slideInVertically(animationSpec = tween(260, delayMillis = 300, easing = FastOutSlowInEasing)) { it / 2 }) togetherWith
-                (fadeOut(animationSpec = tween(280, easing = FastOutSlowInEasing)) +
-                    slideOutHorizontally(animationSpec = tween(280, easing = FastOutSlowInEasing)) { -it / 3 })
-        },
-        label = "music_text_switch"
-    ) { targetText ->
+    val density = LocalDensity.current
+    val preset = remember(animationStyleId) { MusicTextSwitchAnimations.byId(animationStyleId) }
+    var displayedText by remember { mutableStateOf(text) }
+    var phase by remember { mutableStateOf(MusicTextSwitchPhase.Idle) }
+    val progress = remember { Animatable(1f) }
+    val distancePx = with(density) { 18.dp.toPx() }
+
+    LaunchedEffect(text, animationStyleId) {
+        val currentPreset = MusicTextSwitchAnimations.byId(animationStyleId)
+        if (displayedText == text) {
+            phase = MusicTextSwitchPhase.Idle
+            progress.snapTo(1f)
+            return@LaunchedEffect
+        }
+        phase = MusicTextSwitchPhase.Out
+        progress.snapTo(0f)
+        progress.animateTo(
+            1f,
+            tween(
+                durationMillis = currentPreset.outMotion.durationMs,
+                easing = currentPreset.outMotion.easing
+            )
+        )
+        displayedText = text
+        phase = MusicTextSwitchPhase.In
+        progress.snapTo(0f)
+        progress.animateTo(
+            1f,
+            tween(
+                durationMillis = currentPreset.inMotion.durationMs,
+                easing = currentPreset.inMotion.easing
+            )
+        )
+        phase = MusicTextSwitchPhase.Idle
+        progress.snapTo(1f)
+    }
+
+    val transform = preset.transform(phase, progress.value, distancePx)
+    Box(
+        modifier = Modifier
+            .clipToBounds()
+            .graphicsLayer {
+                alpha = transform.alpha
+                translationX = transform.translationX
+                translationY = transform.translationY
+                scaleX = transform.scale
+                scaleY = transform.scale
+                rotationX = transform.rotationX
+                rotationY = transform.rotationY
+                rotationZ = transform.rotationZ
+                cameraDistance = 12f * density.density
+            }
+    ) {
         OneShotMarqueeText(
-            text = targetText,
+            text = displayedText,
             color = color,
             fontSize = fontSize,
             fontWeight = fontWeight

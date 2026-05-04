@@ -117,6 +117,7 @@ import com.flue.launcher.backup.FlueBackupPreview
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.service.FlueAccessibilityService
 import com.flue.launcher.ui.common.bottomFisheyeScale
+import com.flue.launcher.ui.controlcenter.MusicTextSwitchAnimations
 import com.flue.launcher.ui.drawer.vibrateHaptic
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
@@ -171,6 +172,7 @@ enum class SettingsDestination {
     DISPLAY_SIZE,
     FEATURE_TOGGLES,
     PERFORMANCE,
+    MUSIC_TEXT_ANIMATION,
     TOOLS,
     BACKUP,
     BACKUP_EXPORT,
@@ -304,6 +306,7 @@ private fun SettingsRootScreen(
     val appListWatchFaceColors by vm.appListWatchFaceColors.collectAsStateWithLifecycle()
     val appListRowBorderEnabled by vm.appListRowBorderEnabled.collectAsStateWithLifecycle()
     val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsStateWithLifecycle()
+    val musicTextSwitchAnimation by vm.musicTextSwitchAnimation.collectAsStateWithLifecycle()
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
     val classicReturnAnimationEnabled by vm.classicReturnAnimationEnabled.collectAsStateWithLifecycle()
@@ -1515,6 +1518,15 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "fast_flow_animation", screenCenterY, screenHeightPx)
                 )
             }
+            item("music_text_animation") {
+                val selectedPreset = MusicTextSwitchAnimations.byId(musicTextSwitchAnimation)
+                SettingsCategoryCard(
+                    title = "音乐文字切换动画",
+                    subtitle = selectedPreset.label,
+                    onClick = { navigateTo(SettingsDestination.MUSIC_TEXT_ANIMATION) },
+                    scale = itemFisheye(listState, "music_text_animation", screenCenterY, screenHeightPx)
+                )
+            }
             item("two_tone_icons") {
                 SettingsSwitchRow(
                     title = if (isZh) "双色图标" else "Two-Tone Icons",
@@ -1571,6 +1583,25 @@ private fun SettingsRootScreen(
                     checked = builtInManagerThumbnails,
                     onToggle = { vm.setBuiltInManagerThumbnails(it) },
                     scale = itemFisheye(listState, "builtin_manager_thumbnails", screenCenterY, screenHeightPx)
+                )
+            }
+        }
+
+            SettingsDestination.MUSIC_TEXT_ANIMATION -> SettingsPageScaffold(
+            title = "音乐文字切换动画",
+            onBack = { handleBack() },
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.MUSIC_TEXT_ANIMATION).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.MUSIC_TEXT_ANIMATION).offset,
+            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.MUSIC_TEXT_ANIMATION, index, offset) }
+        ) { listState, screenCenterY, screenHeightPx, _ ->
+            items(MusicTextSwitchAnimations.presets, key = { "music_text_anim_${it.id}" }) { preset ->
+                SettingsChoiceRow(
+                    title = preset.label,
+                    subtitle = preset.subtitle,
+                    selected = MusicTextSwitchAnimations.normalizeId(musicTextSwitchAnimation) == preset.id,
+                    onClick = { vm.setMusicTextSwitchAnimation(preset.id) },
+                    scale = itemFisheye(listState, "music_text_anim_${preset.id}", screenCenterY, screenHeightPx)
                 )
             }
         }
@@ -2118,6 +2149,7 @@ private val SettingsDestination.depth: Int
         SettingsDestination.WATCH_FACE_MORE,
         SettingsDestination.BACKUP,
         SettingsDestination.DONATE -> 2
+        SettingsDestination.MUSIC_TEXT_ANIMATION,
         SettingsDestination.BACKUP_EXPORT,
         SettingsDestination.BACKUP_IMPORT -> 3
         else -> 1
@@ -2566,6 +2598,20 @@ private fun AboutCard(
                         Intent(
                             Intent.ACTION_VIEW,
                             android.net.Uri.parse("https://github.com/dudu-Dev0/Lunch")
+                        )
+                    )
+                },
+                scale = 1f
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            ActionCard(
+                title = "Lyricon",
+                subtitle = "tomakino/lyricon",
+                onClick = {
+                    context.startActivity(
+                        Intent(
+                            Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://github.com/tomakino/lyricon")
                         )
                     )
                 },

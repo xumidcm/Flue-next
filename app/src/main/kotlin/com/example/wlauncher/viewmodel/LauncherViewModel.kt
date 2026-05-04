@@ -38,6 +38,7 @@ import com.flue.launcher.ui.notification.NotificationGroupUi
 import com.flue.launcher.ui.notification.NotificationRevealTarget
 import com.flue.launcher.service.NotifData
 import com.flue.launcher.service.WLauncherNotificationListener
+import com.flue.launcher.ui.controlcenter.MusicTextSwitchAnimations
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
@@ -106,6 +107,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_APP_LIST_WATCHFACE_COLORS = booleanPreferencesKey("app_list_watchface_colors")
         val KEY_APP_LIST_ROW_BORDER = booleanPreferencesKey("app_list_row_border_enabled")
         val KEY_FAST_FLOW_ANIMATION = booleanPreferencesKey("fast_flow_animation_enabled")
+        val KEY_MUSIC_TEXT_SWITCH_ANIMATION = stringPreferencesKey("music_text_switch_animation")
         val KEY_TWO_TONE_ICONS = booleanPreferencesKey("two_tone_icons_enabled")
         val KEY_ICON_SHADOW = booleanPreferencesKey("app_icon_shadow_enabled")
         val KEY_CLASSIC_RETURN_ANIMATION = booleanPreferencesKey("classic_return_animation_enabled")
@@ -339,6 +341,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val appListRowBorderEnabled: StateFlow<Boolean> = _appListRowBorderEnabled.asStateFlow()
     private val _fastFlowAnimationEnabled = MutableStateFlow(false)
     val fastFlowAnimationEnabled: StateFlow<Boolean> = _fastFlowAnimationEnabled.asStateFlow()
+    private val _musicTextSwitchAnimation = MutableStateFlow(MusicTextSwitchAnimations.DEFAULT_ID)
+    val musicTextSwitchAnimation: StateFlow<String> = _musicTextSwitchAnimation.asStateFlow()
     private val _twoToneIconsEnabled = MutableStateFlow(false)
     val twoToneIconsEnabled: StateFlow<Boolean> = _twoToneIconsEnabled.asStateFlow()
     private val _iconShadowEnabled = MutableStateFlow(true)
@@ -761,6 +765,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedFastFlowEnabled = prefs[KEY_FAST_FLOW_ANIMATION] ?: false
                 if (_fastFlowAnimationEnabled.value != loadedFastFlowEnabled) {
                     _fastFlowAnimationEnabled.value = loadedFastFlowEnabled
+                }
+
+                val loadedMusicTextSwitchAnimation = MusicTextSwitchAnimations.normalizeId(
+                    prefs[KEY_MUSIC_TEXT_SWITCH_ANIMATION]
+                )
+                if (_musicTextSwitchAnimation.value != loadedMusicTextSwitchAnimation) {
+                    _musicTextSwitchAnimation.value = loadedMusicTextSwitchAnimation
                 }
 
                 val loadedTwoToneIcons = prefs[KEY_TWO_TONE_ICONS] ?: false
@@ -1400,6 +1411,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setFastFlowAnimationEnabled(enabled: Boolean) {
         _fastFlowAnimationEnabled.value = enabled
         persist { store.edit { it[KEY_FAST_FLOW_ANIMATION] = enabled } }
+    }
+
+    fun setMusicTextSwitchAnimation(id: String) {
+        val normalized = MusicTextSwitchAnimations.normalizeId(id)
+        _musicTextSwitchAnimation.value = normalized
+        persist { store.edit { it[KEY_MUSIC_TEXT_SWITCH_ANIMATION] = normalized } }
     }
 
     fun setTwoToneIconsEnabled(enabled: Boolean) {
@@ -2128,6 +2145,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appListWatchFaceColors.value = true
         _appListRowBorderEnabled.value = false
         _fastFlowAnimationEnabled.value = false
+        _musicTextSwitchAnimation.value = MusicTextSwitchAnimations.DEFAULT_ID
         _twoToneIconsEnabled.value = false
         _iconShadowEnabled.value = true
         _classicReturnAnimationEnabled.value = false
@@ -2225,6 +2243,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_APP_LIST_WATCHFACE_COLORS] = true
                 it[KEY_APP_LIST_ROW_BORDER] = false
                 it[KEY_FAST_FLOW_ANIMATION] = false
+                it[KEY_MUSIC_TEXT_SWITCH_ANIMATION] = MusicTextSwitchAnimations.DEFAULT_ID
                 it[KEY_TWO_TONE_ICONS] = false
                 it[KEY_ICON_SHADOW] = true
                 it[KEY_CLASSIC_RETURN_ANIMATION] = false

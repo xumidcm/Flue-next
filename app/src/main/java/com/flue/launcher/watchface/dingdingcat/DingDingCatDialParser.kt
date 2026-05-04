@@ -59,7 +59,11 @@ object DingDingCatDialParser {
             gravity = optInt("gravity", 0),
             text = optString("text"),
             drawOrder = optInt("drawOrder", index),
-            durationMs = optInt("duaution", optInt("duration", 66)).coerceAtLeast(16),
+            durationMs = when {
+                has("duaution") -> optInt("duaution")
+                has("duration") -> optInt("duration")
+                else -> 0
+            },
             startValue = optFloat("startValue", optFloat("text", 0f)),
             visible = optBoolean("visibility", true),
             netDrawpoint = optBoolean("netDrawpoint", false),
