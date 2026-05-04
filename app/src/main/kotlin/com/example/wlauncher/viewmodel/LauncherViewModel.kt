@@ -21,6 +21,9 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.flue.launcher.FlueApplication
+import com.flue.launcher.backup.FlueBackupManager
+import com.flue.launcher.backup.FlueBackupOptions
+import com.flue.launcher.backup.FlueBackupPreview
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.iconForDisplay
 import com.flue.launcher.iconpack.IconPackDescriptor
@@ -527,6 +530,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private var watchFacePrefsHydrated = false
     private var watchFaceScanHydrated = false
     private var lastWatchFaceRefreshAt = 0L
+    private var watchFaceRefreshJob: Job? = null
     private val pendingWriteJobs = ConcurrentHashMap<String, Job>()
     private var pendingNotificationClearJob: Job? = null
     private var refreshIconsJob: Job? = null
@@ -1534,7 +1538,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastWatchFaceRefreshAt < 25_000L) return
         lastWatchFaceRefreshAt = now
-        viewModelScope.launch {
+        watchFaceRefreshJob?.cancel()
+        watchFaceRefreshJob = viewModelScope.launch {
             val scanned = withContext(Dispatchers.IO) {
                 scanAllWatchFaces()
             }
@@ -1547,10 +1552,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     suspend fun importDingDingCatWatchFace(uri: Uri): Result<LunchWatchFaceDescriptor> {
         return runCatching {
+            watchFaceRefreshJob?.cancel()
             val descriptor = withContext(Dispatchers.IO) {
                 DingDingCatWatchFaceStorage.importZip(getApplication(), uri)
             }
-            val scanned = withContext(Dispatchers.IO) { scanAllWatchFaces() }
+            val scannedRaw = withContext(Dispatchers.IO) { scanAllWatchFaces() }
+            val scanned = if (scannedRaw.any { it.id == descriptor.id }) {
+                scannedRaw
+            } else {
+                scannedRaw + descriptor
+            }
             _availableWatchFaces.value = scanned
             LunchWatchFaceRegistry.update(scanned)
             watchFaceScanHydrated = true
@@ -1560,7 +1571,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             _selectedWatchFace.value = selected
             LunchWatchFaceRegistry.setCurrentSelectedId(selected.id)
             _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
-            persist {
+            lastWatchFaceRefreshAt = SystemClock.elapsedRealtime()
+            withContext(Dispatchers.IO) {
                 store.edit {
                     it[KEY_SELECTED_WATCHFACE_ID] = selected.id
                     it.remove(KEY_LAST_WATCHFACE_ERROR)
@@ -1568,6 +1580,42 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
             syncSelectedWatchFace()
             selected
+        }
+    }
+
+    fun suggestedBackupFileName(): String = FlueBackupManager.suggestedFileName(getApplication())
+
+    suspend fun exportBackup(uri: Uri, options: FlueBackupOptions): Result<Unit> {
+        return runCatching {
+            withContext(Dispatchers.IO) {
+                FlueBackupManager.exportBackup(getApplication(), uri, options)
+            }
+        }
+    }
+
+    suspend fun readBackupPreview(uri: Uri): Result<FlueBackupPreview> {
+        return runCatching {
+            withContext(Dispatchers.IO) {
+                FlueBackupManager.readPreview(getApplication(), uri)
+            }
+        }
+    }
+
+    suspend fun importBackup(uri: Uri, options: FlueBackupOptions): Result<Unit> {
+        return runCatching {
+            val availableAppKeys = allApps.value.ifEmpty { apps.value }.map { it.componentKey }.toSet()
+            withContext(Dispatchers.IO) {
+                FlueBackupManager.importBackup(
+                    context = getApplication(),
+                    sourceUri = uri,
+                    options = options,
+                    availableAppKeys = availableAppKeys,
+                    widgetRepository = repositories.widgetRepository
+                )
+            }
+            refreshWatchFaces(force = true)
+            refreshIconPacks()
+            requestWatchFaceRefresh()
         }
     }
 

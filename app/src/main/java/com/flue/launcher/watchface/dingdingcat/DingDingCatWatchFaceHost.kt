@@ -18,6 +18,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.BatteryManager
+import android.os.SystemClock
 import android.util.LruCache
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -34,7 +35,9 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -42,7 +45,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
@@ -53,6 +58,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
@@ -87,28 +93,89 @@ fun DingDingCatWatchFaceHost(
 
     val batteryLevel = rememberDingDingCatBatteryLevel(context)
     val triggeredAnimations = remember(descriptor.stableKey, refreshToken) { mutableStateMapOf<Int, Long>() }
-    var gravityDragOffset by remember(descriptor.stableKey, refreshToken) { mutableStateOf(Offset.Zero) }
+    val gravityBodies = remember(descriptor.stableKey, refreshToken) { mutableStateMapOf<Int, DingDingCatGravityBody>() }
+    var draggingGravitySource by remember(descriptor.stableKey, refreshToken) { mutableStateOf<Int?>(null) }
+    var canvasSize by remember(descriptor.stableKey, refreshToken) { mutableStateOf(IntSize.Zero) }
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
-    val hasAnimatedLayers = dial?.drawPoints?.any { it.pieces.size > 1 } == true
-    val hasGravityLayers = dial?.drawPoints?.any { it.pointType == "PICTRUE_EFFECT_GRAVITY" } == true
+    val activeDial = dial
+    val gravitySpecs = remember(activeDial, refreshToken) { activeDial?.gravitySpecs().orEmpty() }
+    val hasAnimatedLayers = activeDial?.drawPoints?.any { it.pieces.size > 1 } == true
+    val animationFrameDelayMs = remember(activeDial) { activeDial?.animationFrameDelayMs() ?: 1_000L }
+    val hasGravityLayers = gravitySpecs.isNotEmpty()
     val tiltOffset = rememberDingDingCatTiltOffset(context, isFaceVisible && hasGravityLayers)
-    LaunchedEffect(isFaceVisible, hasAnimatedLayers, descriptor.stableKey) {
+    val currentTilt by rememberUpdatedState(tiltOffset)
+    val currentDraggingGravitySource by rememberUpdatedState(draggingGravitySource)
+    val renderTransform = remember(activeDial, canvasSize) {
+        activeDial?.let { dialValue -> dingDingCatRenderTransform(dialValue, canvasSize) }
+    }
+    LaunchedEffect(gravitySpecs) {
+        syncDingDingCatGravityBodies(gravityBodies, gravitySpecs)
+    }
+    LaunchedEffect(isFaceVisible, hasGravityLayers, descriptor.stableKey, refreshToken, gravitySpecs) {
+        if (!isFaceVisible || !hasGravityLayers) return@LaunchedEffect
+        syncDingDingCatGravityBodies(gravityBodies, gravitySpecs)
+        var lastFrameNanos = withFrameNanos { it }
+        while (isFaceVisible) {
+            val frameNanos = withFrameNanos { it }
+            val dt = ((frameNanos - lastFrameNanos) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
+            lastFrameNanos = frameNanos
+            stepDingDingCatGravityBodies(
+                bodies = gravityBodies,
+                specs = gravitySpecs,
+                tilt = currentTilt,
+                draggingSource = currentDraggingGravitySource,
+                dt = dt
+            )
+        }
+    }
+    LaunchedEffect(isFaceVisible, hasAnimatedLayers, animationFrameDelayMs, descriptor.stableKey) {
         while (isFaceVisible) {
             nowMillis = System.currentTimeMillis()
-            delay(if (hasAnimatedLayers) 66L else 1_000L)
+            delay(if (hasAnimatedLayers) animationFrameDelayMs else 1_000L)
         }
     }
 
     Box(
         modifier = modifier
             .fillMaxSize()
+            .onSizeChanged { canvasSize = it }
             .background(Color.Black)
             .then(
                 if (hasGravityLayers) {
-                    Modifier.pointerInput(descriptor.stableKey, refreshToken) {
-                        detectDragGestures { change, dragAmount ->
+                    Modifier.pointerInput(descriptor.stableKey, refreshToken, gravitySpecs, renderTransform) {
+                        var lastDragAt = 0L
+                        detectDragGestures(
+                            onDragStart = { screenPoint ->
+                                lastDragAt = SystemClock.uptimeMillis()
+                                val transform = renderTransform
+                                val designPoint = transform?.screenToDesign(screenPoint) ?: screenPoint
+                                draggingGravitySource = findNearestDingDingCatGravitySource(
+                                    point = designPoint,
+                                    specs = gravitySpecs,
+                                    bodies = gravityBodies
+                                )
+                            },
+                            onDragEnd = { draggingGravitySource = null },
+                            onDragCancel = { draggingGravitySource = null }
+                        ) { change, dragAmount ->
                             change.consume()
-                            gravityDragOffset += dragAmount
+                            val source = draggingGravitySource ?: gravitySpecs.firstOrNull()?.sourceIndex
+                            val spec = source?.let { value ->
+                                gravitySpecs.firstOrNull { it.sourceIndex == value }
+                            }
+                            if (source != null && spec != null) {
+                                val transform = renderTransform
+                                val designDelta = transform?.screenDeltaToDesign(dragAmount) ?: dragAmount
+                                val now = SystemClock.uptimeMillis()
+                                val dt = ((now - lastDragAt).coerceAtLeast(1L) / 1_000f).coerceAtMost(0.05f)
+                                lastDragAt = now
+                                val body = gravityBodies[source] ?: DingDingCatGravityBody(spec.defaultCenter, Offset.Zero)
+                                val nextCenter = coerceDingDingCatGravityCenter(body.center + designDelta, spec)
+                                gravityBodies[source] = DingDingCatGravityBody(
+                                    center = nextCenter,
+                                    velocity = offsetScale(nextCenter - body.center, 1f / dt)
+                                )
+                            }
                         }
                     }
                 } else {
@@ -158,10 +225,6 @@ fun DingDingCatWatchFaceHost(
                     (size.width - offsetX) / fitScale,
                     (size.height - offsetY) / fitScale
                 )
-                val gravityOffset = Offset(
-                    x = tiltOffset.x * designWidth * 0.08f + gravityDragOffset.x / fitScale,
-                    y = tiltOffset.y * designHeight * 0.08f + gravityDragOffset.y / fitScale
-                )
                 drawIntoCanvas { canvas ->
                     val nativeCanvas = canvas.nativeCanvas
                     nativeCanvas.save()
@@ -176,7 +239,7 @@ fun DingDingCatWatchFaceHost(
                                 nowMillis = nowMillis,
                                 batteryLevel = batteryLevel,
                                 triggeredAnimations = triggeredAnimations,
-                                gravityOffset = gravityOffset,
+                                gravityBodies = gravityBodies,
                                 fillScreenBackgroundViewport = if (fillScreen) screenViewportInDesign else null
                             )
                         }
@@ -256,7 +319,7 @@ private fun drawDingDingCatPoint(
     nowMillis: Long,
     batteryLevel: Int,
     triggeredAnimations: Map<Int, Long>,
-    gravityOffset: Offset,
+    gravityBodies: Map<Int, DingDingCatGravityBody>,
     fillScreenBackgroundViewport: RectF?
 ) {
     when (point.pointType) {
@@ -268,7 +331,7 @@ private fun drawDingDingCatPoint(
             triggeredAnimations[point.sourceIndex],
             fillScreenBackgroundViewport
         )
-        "PICTRUE_EFFECT_GRAVITY" -> drawGravityLayer(canvas, dial, point, gravityOffset)
+        "PICTRUE_EFFECT_GRAVITY" -> drawGravityLayer(canvas, dial, point, gravityBodies[point.sourceIndex])
         "PICTURE_NUM_TIME_HHMM" -> drawNumberStrip(canvas, dial, point, formatTime("HH:mm", nowMillis))
         "PICTURE_NUM_TIME_HHMMSS" -> drawNumberStrip(canvas, dial, point, formatTime("HH:mm:ss", nowMillis))
         "PICTURE_NUM_TIME_HH" -> drawNumberStrip(canvas, dial, point, formatTime("HH", nowMillis))
@@ -329,36 +392,20 @@ private fun drawGravityLayer(
     canvas: AndroidCanvas,
     dial: DingDingCatDial,
     point: DingDingCatDrawPoint,
-    gravityOffset: Offset
+    body: DingDingCatGravityBody?
 ) {
     val piece = point.pieces.firstOrNull() ?: return
     val bitmap = DingDingCatBitmapCache.get(File(dial.rootDir, piece), allowSample = true) ?: return
-    val area = RectF(
-        if (point.hasStartX) point.startX else 0f,
-        if (point.hasStartY) point.startY else 0f,
-        (if (point.hasStartX) point.startX else 0f) + (point.width.takeIf { it > 0f } ?: dial.width.toFloat()),
-        (if (point.hasStartY) point.startY else 0f) + (point.height.takeIf { it > 0f } ?: dial.height.toFloat())
-    )
-    val dstWidth = bitmap.width * point.scale
-    val dstHeight = bitmap.height * point.scale
-    val centerX = coerceDingDingCatCenter(
-        value = area.centerX() + gravityOffset.x,
-        minimum = area.left + dstWidth * 0.25f,
-        maximum = area.right - dstWidth * 0.25f
-    )
-    val centerY = coerceDingDingCatCenter(
-        value = area.centerY() + gravityOffset.y,
-        minimum = area.top + dstHeight * 0.25f,
-        maximum = area.bottom - dstHeight * 0.25f
-    )
+    val spec = gravitySpecFor(dial, point, bitmap.width, bitmap.height) ?: return
+    val center = body?.center?.let { coerceDingDingCatGravityCenter(it, spec) } ?: spec.defaultCenter
     canvas.drawBitmap(
         bitmap,
         null,
         RectF(
-            centerX - dstWidth / 2f,
-            centerY - dstHeight / 2f,
-            centerX + dstWidth / 2f,
-            centerY + dstHeight / 2f
+            center.x - spec.halfWidth,
+            center.y - spec.halfHeight,
+            center.x + spec.halfWidth,
+            center.y + spec.halfHeight
         ),
         pointPaint(point)
     )
@@ -476,22 +523,19 @@ private fun selectAnimatedPiece(point: DingDingCatDrawPoint, nowMillis: Long, tr
     if (point.pieces.size == 1) return point.pieces.first()
     if (isTapTriggeredAnimation(point)) {
         val start = triggeredAt ?: return point.pieces.first()
-        val durationMs = point.animator
-            ?.totalDurationMs
-            ?.takeIf { it > 0 }
-            ?: (point.pieces.size * point.durationMs).coerceAtLeast(point.pieces.size * 16)
+        val frameMs = point.durationMs.toLong().coerceAtLeast(16L)
         val elapsed = nowMillis - start
-        if (elapsed >= durationMs) {
+        val frameIndex = (elapsed / frameMs).toInt()
+        if (frameIndex >= point.pieces.size) {
             return when {
                 point.animator?.endWithStatusGone == true -> null
                 point.animator?.animEndSaveData == true -> point.pieces.last()
                 else -> point.pieces.first()
             }
         }
-        val progress = (elapsed.toFloat() / durationMs).coerceIn(0f, 0.999f)
-        return point.pieces[(progress * point.pieces.size).toInt().coerceIn(0, point.pieces.lastIndex)]
+        return point.pieces[frameIndex.coerceIn(0, point.pieces.lastIndex)]
     }
-    val frameMs = max(point.durationMs.toLong(), 66L)
+    val frameMs = point.durationMs.toLong().coerceAtLeast(16L)
     val index = ((nowMillis / frameMs) % point.pieces.size).toInt()
     return point.pieces[index]
 }
@@ -504,12 +548,199 @@ private fun isTapTriggeredAnimation(point: DingDingCatDrawPoint): Boolean {
 }
 
 private fun isDingDingCatBackgroundLayer(point: DingDingCatDrawPoint, dial: DingDingCatDial): Boolean {
-    return point.pointType == "PICTURE_LOOP" &&
-        point.width >= dial.width * 0.8f &&
-        point.height >= dial.height * 0.8f &&
-        !point.hasStartX &&
-        !point.hasStartY
+    if (point.pointType != "PICTURE_LOOP") return false
+    if (isTapTriggeredAnimation(point)) return false
+    val pointWidth = point.width.takeIf { it > 0f } ?: dial.width.toFloat()
+    val pointHeight = point.height.takeIf { it > 0f } ?: dial.height.toFloat()
+    val coversCanvas = pointWidth >= dial.width * 0.72f && pointHeight >= dial.height * 0.72f
+    val firstImageLayer = dial.drawPoints.firstOrNull { it.pointType == "PICTURE_LOOP" }?.sourceIndex == point.sourceIndex
+    return coversCanvas && firstImageLayer
 }
+
+private fun DingDingCatDial.animationFrameDelayMs(): Long {
+    return drawPoints
+        .asSequence()
+        .filter { it.pieces.size > 1 }
+        .map { it.durationMs.toLong().coerceAtLeast(16L) }
+        .minOrNull()
+        ?: 1_000L
+}
+
+private data class DingDingCatRenderTransform(
+    val scale: Float,
+    val offsetX: Float,
+    val offsetY: Float
+) {
+    fun screenToDesign(point: Offset): Offset {
+        if (scale <= 0f) return point
+        return Offset((point.x - offsetX) / scale, (point.y - offsetY) / scale)
+    }
+
+    fun screenDeltaToDesign(delta: Offset): Offset {
+        if (scale <= 0f) return delta
+        return Offset(delta.x / scale, delta.y / scale)
+    }
+}
+
+private fun dingDingCatRenderTransform(dial: DingDingCatDial, size: IntSize): DingDingCatRenderTransform? {
+    if (size.width <= 0 || size.height <= 0) return null
+    val designWidth = dial.width.toFloat().coerceAtLeast(1f)
+    val designHeight = dial.height.toFloat().coerceAtLeast(1f)
+    val scale = min(size.width / designWidth, size.height / designHeight)
+    if (scale <= 0f) return null
+    return DingDingCatRenderTransform(
+        scale = scale,
+        offsetX = (size.width - designWidth * scale) / 2f,
+        offsetY = (size.height - designHeight * scale) / 2f
+    )
+}
+
+private data class DingDingCatGravitySpec(
+    val sourceIndex: Int,
+    val area: RectF,
+    val halfWidth: Float,
+    val halfHeight: Float
+) {
+    val defaultCenter: Offset = Offset(area.centerX(), area.centerY())
+}
+
+private data class DingDingCatGravityBody(
+    val center: Offset,
+    val velocity: Offset
+)
+
+private fun DingDingCatDial.gravitySpecs(): List<DingDingCatGravitySpec> {
+    return drawPoints.mapNotNull { point ->
+        if (point.pointType != "PICTRUE_EFFECT_GRAVITY") return@mapNotNull null
+        val piece = point.pieces.firstOrNull() ?: return@mapNotNull null
+        val bounds = DingDingCatBitmapCache.bounds(File(rootDir, piece)) ?: return@mapNotNull null
+        gravitySpecFor(this, point, bounds.width, bounds.height)
+    }
+}
+
+private fun gravitySpecFor(
+    dial: DingDingCatDial,
+    point: DingDingCatDrawPoint,
+    bitmapWidth: Int,
+    bitmapHeight: Int
+): DingDingCatGravitySpec? {
+    if (bitmapWidth <= 0 || bitmapHeight <= 0) return null
+    val left = if (point.hasStartX) point.startX else 0f
+    val top = if (point.hasStartY) point.startY else 0f
+    val width = point.width.takeIf { it > 0f } ?: dial.width.toFloat()
+    val height = point.height.takeIf { it > 0f } ?: dial.height.toFloat()
+    return DingDingCatGravitySpec(
+        sourceIndex = point.sourceIndex,
+        area = RectF(left, top, left + width, top + height),
+        halfWidth = bitmapWidth * point.scale / 2f,
+        halfHeight = bitmapHeight * point.scale / 2f
+    )
+}
+
+private fun syncDingDingCatGravityBodies(
+    bodies: MutableMap<Int, DingDingCatGravityBody>,
+    specs: List<DingDingCatGravitySpec>
+) {
+    val liveSources = specs.map { it.sourceIndex }.toSet()
+    bodies.keys.toList().filterNot(liveSources::contains).forEach(bodies::remove)
+    specs.forEach { spec ->
+        val body = bodies[spec.sourceIndex]
+        bodies[spec.sourceIndex] = if (body == null) {
+            DingDingCatGravityBody(spec.defaultCenter, Offset.Zero)
+        } else {
+            body.copy(center = coerceDingDingCatGravityCenter(body.center, spec))
+        }
+    }
+}
+
+private fun stepDingDingCatGravityBodies(
+    bodies: MutableMap<Int, DingDingCatGravityBody>,
+    specs: List<DingDingCatGravitySpec>,
+    tilt: Offset,
+    draggingSource: Int?,
+    dt: Float
+) {
+    val acceleration = Offset(tilt.x * 1_300f, tilt.y * 1_300f)
+    specs.forEach { spec ->
+        if (spec.sourceIndex == draggingSource) return@forEach
+        val body = bodies[spec.sourceIndex] ?: DingDingCatGravityBody(spec.defaultCenter, Offset.Zero)
+        var velocity = body.velocity + offsetScale(acceleration, dt)
+        velocity = offsetScale(velocity, 0.992f)
+        var nextCenter = body.center + offsetScale(velocity, dt)
+
+        val minX = spec.area.left + spec.halfWidth
+        val maxX = spec.area.right - spec.halfWidth
+        val minY = spec.area.top + spec.halfHeight
+        val maxY = spec.area.bottom - spec.halfHeight
+        if (minX <= maxX) {
+            when {
+                nextCenter.x < minX -> {
+                    nextCenter = Offset(minX, nextCenter.y)
+                    velocity = Offset(abs(velocity.x) * 0.58f, velocity.y)
+                }
+                nextCenter.x > maxX -> {
+                    nextCenter = Offset(maxX, nextCenter.y)
+                    velocity = Offset(-abs(velocity.x) * 0.58f, velocity.y)
+                }
+            }
+        } else {
+            nextCenter = Offset(spec.area.centerX(), nextCenter.y)
+            velocity = Offset(0f, velocity.y)
+        }
+        if (minY <= maxY) {
+            when {
+                nextCenter.y < minY -> {
+                    nextCenter = Offset(nextCenter.x, minY)
+                    velocity = Offset(velocity.x, abs(velocity.y) * 0.58f)
+                }
+                nextCenter.y > maxY -> {
+                    nextCenter = Offset(nextCenter.x, maxY)
+                    velocity = Offset(velocity.x, -abs(velocity.y) * 0.58f)
+                }
+            }
+        } else {
+            nextCenter = Offset(nextCenter.x, spec.area.centerY())
+            velocity = Offset(velocity.x, 0f)
+        }
+
+        if (abs(velocity.x) < 2f) velocity = Offset(0f, velocity.y)
+        if (abs(velocity.y) < 2f) velocity = Offset(velocity.x, 0f)
+        bodies[spec.sourceIndex] = DingDingCatGravityBody(nextCenter, velocity)
+    }
+}
+
+private fun findNearestDingDingCatGravitySource(
+    point: Offset,
+    specs: List<DingDingCatGravitySpec>,
+    bodies: Map<Int, DingDingCatGravityBody>
+): Int? {
+    return specs
+        .filter { spec ->
+            point.x in spec.area.left..spec.area.right &&
+                point.y in spec.area.top..spec.area.bottom
+        }
+        .minByOrNull { spec ->
+            val center = bodies[spec.sourceIndex]?.center ?: spec.defaultCenter
+            val dx = point.x - center.x
+            val dy = point.y - center.y
+            dx * dx + dy * dy
+        }
+        ?.sourceIndex
+        ?: specs.firstOrNull()?.sourceIndex
+}
+
+private fun coerceDingDingCatGravityCenter(center: Offset, spec: DingDingCatGravitySpec): Offset {
+    val minX = spec.area.left + spec.halfWidth
+    val maxX = spec.area.right - spec.halfWidth
+    val minY = spec.area.top + spec.halfHeight
+    val maxY = spec.area.bottom - spec.halfHeight
+    return Offset(
+        if (minX <= maxX) center.x.coerceIn(minX, maxX) else spec.area.centerX(),
+        if (minY <= maxY) center.y.coerceIn(minY, maxY) else spec.area.centerY()
+    )
+}
+
+private fun offsetScale(offset: Offset, factor: Float): Offset = Offset(offset.x * factor, offset.y * factor)
 
 private fun centerCropDestination(viewport: RectF, contentWidth: Float, contentHeight: Float): RectF {
     if (contentWidth <= 0f || contentHeight <= 0f) return viewport
@@ -524,10 +755,6 @@ private fun centerCropDestination(viewport: RectF, contentWidth: Float, contentH
         centerX + width / 2f,
         centerY + height / 2f
     )
-}
-
-private fun coerceDingDingCatCenter(value: Float, minimum: Float, maximum: Float): Float {
-    return if (minimum <= maximum) value.coerceIn(minimum, maximum) else (minimum + maximum) / 2f
 }
 
 private fun pointPaint(point: DingDingCatDrawPoint): Paint {
@@ -569,6 +796,7 @@ private object DingDingCatBitmapCache {
     private val cache = object : LruCache<String, Bitmap>(MAX_CACHE_KB) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
     }
+    private val boundsCache = mutableMapOf<String, DingDingCatBitmapBounds>()
 
     fun get(file: File, allowSample: Boolean, targetWidth: Int = 0, targetHeight: Int = 0): Bitmap? {
         if (!file.isFile) return null
@@ -581,6 +809,23 @@ private object DingDingCatBitmapCache {
         ) ?: return null
         cache.put(key, bitmap)
         return bitmap
+    }
+
+    fun bounds(file: File): DingDingCatBitmapBounds? {
+        if (!file.isFile) return null
+        val key = "${file.absolutePath}:${file.lastModified()}"
+        synchronized(boundsCache) {
+            boundsCache[key]?.let { return it }
+        }
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        val result = DingDingCatBitmapBounds(bounds.outWidth, bounds.outHeight).takeIf {
+            it.width > 0 && it.height > 0
+        } ?: return null
+        synchronized(boundsCache) {
+            boundsCache[key] = result
+        }
+        return result
     }
 
     private fun calculateSampleSize(file: File, targetWidth: Int, targetHeight: Int): Int {
@@ -597,6 +842,8 @@ private object DingDingCatBitmapCache {
         return sampleSize.coerceAtLeast(1)
     }
 }
+
+private data class DingDingCatBitmapBounds(val width: Int, val height: Int)
 
 private object DingDingCatTypefaceCache {
     private val cache = mutableMapOf<String, Typeface?>()
