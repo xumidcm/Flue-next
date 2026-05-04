@@ -10,7 +10,8 @@ const val WATCHFACE_REFRESH_ACTION = "com.flue.launcher.action.WATCHFACE_REFRESH
 
 enum class LunchWatchFaceType {
     BUILTIN,
-    EXTERNAL
+    EXTERNAL,
+    DINGDINGCAT
 }
 
 data class LunchWatchFaceDescriptor(
@@ -23,14 +24,17 @@ data class LunchWatchFaceDescriptor(
     val settingsEntryClassName: String? = null,
     val previewResId: Int = 0,
     val previewAssetPath: String? = null,
+    val previewFilePath: String? = null,
     val versionCode: Long = 0,
     val author: String? = null,
     val sourceApkPath: String? = null,
+    val sourceDirPath: String? = null,
     val watchFaceName: String = id,
     val buildConfigClassName: String? = null,
     val supportsSettings: Boolean = false
 ) {
     val isBuiltin: Boolean get() = type == LunchWatchFaceType.BUILTIN
+    val isDingDingCat: Boolean get() = type == LunchWatchFaceType.DINGDINGCAT
     val stableKey: String get() = packageName ?: id
 }
 

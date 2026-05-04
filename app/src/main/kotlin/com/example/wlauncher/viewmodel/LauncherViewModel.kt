@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
@@ -45,6 +46,8 @@ import com.flue.launcher.watchface.WatchFacePhotoCache
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceRegistry
 import com.flue.launcher.watchface.LunchWatchFaceScanner
+import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceScanner
+import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceStorage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -1507,12 +1510,53 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         lastWatchFaceRefreshAt = now
         viewModelScope.launch {
             val scanned = withContext(Dispatchers.IO) {
-                LunchWatchFaceScanner.builtInDescriptors() + LunchWatchFaceScanner.scanInstalled(getApplication())
+                scanAllWatchFaces()
             }
             _availableWatchFaces.value = scanned
             LunchWatchFaceRegistry.update(scanned)
             watchFaceScanHydrated = true
             syncSelectedWatchFace()
+        }
+    }
+
+    suspend fun importDingDingCatWatchFace(uri: Uri): Result<LunchWatchFaceDescriptor> {
+        return runCatching {
+            val descriptor = withContext(Dispatchers.IO) {
+                DingDingCatWatchFaceStorage.importZip(getApplication(), uri)
+            }
+            val scanned = withContext(Dispatchers.IO) { scanAllWatchFaces() }
+            _availableWatchFaces.value = scanned
+            LunchWatchFaceRegistry.update(scanned)
+            watchFaceScanHydrated = true
+            syncSelectedWatchFace()
+            descriptor
+        }
+    }
+
+    suspend fun deleteDingDingCatWatchFace(id: String): Result<Unit> {
+        return runCatching {
+            val descriptor = _availableWatchFaces.value.firstOrNull { it.id == id && it.isDingDingCat }
+                ?: error("叮叮猫表盘不存在")
+            val deleted = withContext(Dispatchers.IO) {
+                DingDingCatWatchFaceStorage.delete(getApplication(), descriptor)
+            }
+            if (!deleted) error("删除失败")
+            val scanned = withContext(Dispatchers.IO) { scanAllWatchFaces() }
+            _availableWatchFaces.value = scanned
+            LunchWatchFaceRegistry.update(scanned)
+            watchFaceScanHydrated = true
+            if (_selectedWatchFaceId.value == id) {
+                _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
+                _watchFaceLastError.value = null
+                persist {
+                    store.edit {
+                        it[KEY_SELECTED_WATCHFACE_ID] = BUILT_IN_WATCHFACE_ID
+                        it.remove(KEY_LAST_WATCHFACE_ERROR)
+                    }
+                }
+            }
+            syncSelectedWatchFace()
+            _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
         }
     }
 
@@ -1527,6 +1571,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it.remove(KEY_LAST_WATCHFACE_ERROR)
             }
         }
+    }
+
+    private fun scanAllWatchFaces(): List<LunchWatchFaceDescriptor> {
+        val context = getApplication<Application>()
+        return LunchWatchFaceScanner.builtInDescriptors() +
+            LunchWatchFaceScanner.scanInstalled(context) +
+            DingDingCatWatchFaceScanner.scanImported(context)
     }
 
     fun fallbackToBuiltIn(error: String? = null) {

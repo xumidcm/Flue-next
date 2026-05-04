@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -59,7 +60,8 @@ fun WatchFaceSettingCard(
     photoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
     videoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
     onSelect: () -> Unit,
-    onOpenSettings: (() -> Unit)? = null
+    onOpenSettings: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null
 ) {
     val cardInteraction = remember { MutableInteractionSource() }
     val cardPressed by cardInteraction.collectIsPressedAsState()
@@ -165,7 +167,18 @@ fun WatchFaceSettingCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (onOpenSettings != null && descriptor.supportsSettings) {
+                if (onDelete != null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(launcherStyle.topBarChipColor)
+                            .clickable(onClick = onDelete)
+                            .padding(8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Filled.Delete, contentDescription = null, tint = Color(0xFFFF6B6B))
+                    }
+                } else if (onOpenSettings != null && descriptor.supportsSettings) {
                     Box(
                         modifier = Modifier
                             .clip(CircleShape)

@@ -60,10 +60,12 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -126,6 +128,7 @@ import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.InternalWatchFaceStorage
+import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceRuntime
 import java.text.SimpleDateFormat
 import kotlinx.coroutines.Dispatchers
@@ -342,6 +345,24 @@ private fun SettingsRootScreen(
             }
         }
     }
+    val dingDingCatZipPicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+        if (uri != null) {
+            settingsScope.launch {
+                val result = vm.importDingDingCatWatchFace(uri)
+                result
+                    .onSuccess { descriptor ->
+                        Toast.makeText(context, "已导入 ${descriptor.displayName}", Toast.LENGTH_SHORT).show()
+                    }
+                    .onFailure { error ->
+                        Toast.makeText(
+                            context,
+                            "导入失败：${error.message ?: error.javaClass.simpleName}",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+            }
+        }
+    }
     val openAccessibilitySettings = remember(context) {
         {
             Toast.makeText(context, "请在无障碍中授权 Flue 辅助控制", Toast.LENGTH_SHORT).show()
@@ -358,7 +379,47 @@ private fun SettingsRootScreen(
     var hiddenAppsDirty by remember { mutableStateOf(false) }
     var donatePreviewResId by remember { mutableStateOf<Int?>(null) }
     var diagnosticLoggingEnabled by remember { mutableStateOf(ILog.isDiagnosticLoggingEnabled()) }
+    var dingDingCatImportUnlocked by remember { mutableStateOf(false) }
+    var dingDingCatVersionTapCount by remember { mutableStateOf(0) }
+    var dingDingCatLastVersionTapAt by remember { mutableStateOf(0L) }
+    var dingDingCatDeleteTarget by remember { mutableStateOf<LunchWatchFaceDescriptor?>(null) }
     val pageScrollPositions = remember { mutableStateMapOf<SettingsDestination, SavedScrollPosition>() }
+
+    dingDingCatDeleteTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { dingDingCatDeleteTarget = null },
+            title = { Text("删除表盘") },
+            text = { Text("删除 ${target.displayName}？这个叮叮猫 ZIP 表盘会从 Flue 私有目录移除。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        dingDingCatDeleteTarget = null
+                        settingsScope.launch {
+                            val result = vm.deleteDingDingCatWatchFace(target.id)
+                            result
+                                .onSuccess {
+                                    Toast.makeText(context, "已删除 ${target.displayName}", Toast.LENGTH_SHORT).show()
+                                }
+                                .onFailure { error ->
+                                    Toast.makeText(
+                                        context,
+                                        "删除失败：${error.message ?: error.javaClass.simpleName}",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                        }
+                    }
+                ) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { dingDingCatDeleteTarget = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 
     LaunchedEffect(hiddenApps) {
         if (!hiddenAppsDirty) {
@@ -716,16 +777,39 @@ private fun SettingsRootScreen(
                     } else {
                         null
                     },
+                    onDelete = if (descriptor.isDingDingCat) {
+                        { dingDingCatDeleteTarget = descriptor }
+                    } else {
+                        null
+                    },
                     scale = itemFisheye(listState, descriptor.id, screenCenterY, screenHeightPx)
                 )
             }
             item("watchface_refresh") {
                 ActionCard(
                     title = "重新扫描表盘",
-                    subtitle = "刷新已安装的 Lunch 兼容表盘",
+                    subtitle = if (dingDingCatImportUnlocked) {
+                        "短按刷新，长按导入叮叮猫 ZIP"
+                    } else {
+                        "刷新已安装的 Lunch 兼容表盘"
+                    },
                     scale = itemFisheye(listState, "watchface_refresh", screenCenterY, screenHeightPx),
                     icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
-                    onClick = { vm.refreshWatchFaces(force = true) }
+                    onClick = { vm.refreshWatchFaces(force = true) },
+                    onLongPress = {
+                        if (dingDingCatImportUnlocked) {
+                            dingDingCatZipPicker.launch(
+                                arrayOf(
+                                    "application/zip",
+                                    "application/x-zip-compressed",
+                                    "application/octet-stream",
+                                    "application/*"
+                                )
+                            )
+                        } else {
+                            Toast.makeText(context, "nothing...", Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 )
             }
         }
@@ -1321,6 +1405,20 @@ private fun SettingsRootScreen(
                 item("about_card") {
                     AboutCard(
                         onDonateClick = { navigateTo(SettingsDestination.DONATE) },
+                        onVersionClick = {
+                            val now = System.currentTimeMillis()
+                            dingDingCatVersionTapCount = if (now - dingDingCatLastVersionTapAt <= 1_800L) {
+                                dingDingCatVersionTapCount + 1
+                            } else {
+                                1
+                            }
+                            dingDingCatLastVersionTapAt = now
+                            if (dingDingCatVersionTapCount >= 5) {
+                                dingDingCatVersionTapCount = 0
+                                dingDingCatImportUnlocked = true
+                                Toast.makeText(context, "nothing...", Toast.LENGTH_SHORT).show()
+                            }
+                        },
                         scale = itemFisheye(listState, "about_card", screenCenterY, screenHeightPx)
                     )
                 }
@@ -1596,16 +1694,26 @@ private fun rememberPressedState(): MutableState<Boolean> = remember { mutableSt
 private fun Modifier.instantPressGesture(
     pressedState: MutableState<Boolean>,
     enabled: Boolean = true,
+    onLongPress: (() -> Unit)? = null,
     onClick: () -> Unit
 ): Modifier {
     if (!enabled) return this
-    return pointerInput(onClick, enabled) {
+    return pointerInput(onClick, onLongPress, enabled) {
+        var longPressConsumed = false
         detectTapGestures(
+            onLongPress = onLongPress?.let { handler ->
+                {
+                    longPressConsumed = true
+                    pressedState.value = false
+                    handler()
+                }
+            },
             onPress = {
+                longPressConsumed = false
                 pressedState.value = true
                 val released = tryAwaitRelease()
                 pressedState.value = false
-                if (released) onClick()
+                if (released && !longPressConsumed) onClick()
             }
         )
     }
@@ -1850,6 +1958,7 @@ private fun ActionCard(
     subtitle: String? = null,
     icon: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
+    onLongPress: (() -> Unit)? = null,
     scale: Float
 ) {
     val launcherStyle = LauncherTheme.style
@@ -1871,7 +1980,7 @@ private fun ActionCard(
             .clip(launcherStyle.compactShape)
             .background(if (pressed) launcherStyle.pressedCardColor else launcherStyle.cardColor)
             .border(1.dp, launcherStyle.outlineColor, launcherStyle.compactShape)
-            .instantPressGesture(pressedState, onClick = onClick)
+            .instantPressGesture(pressedState, onLongPress = onLongPress, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
         Row(
@@ -1896,7 +2005,11 @@ private fun ActionCard(
 }
 
 @Composable
-private fun AboutCard(scale: Float, onDonateClick: () -> Unit) {
+private fun AboutCard(
+    scale: Float,
+    onDonateClick: () -> Unit,
+    onVersionClick: () -> Unit
+) {
     val launcherStyle = LauncherTheme.style
     val context = LocalContext.current
     fun openAuthorProfile() {
@@ -1948,7 +2061,15 @@ private fun AboutCard(scale: Float, onDonateClick: () -> Unit) {
             Spacer(modifier = Modifier.height(14.dp))
             Text("Flue", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(4.dp))
-            Text(ABOUT_VERSION, color = WatchColors.TextTertiary, fontSize = 12.sp)
+            Text(
+                ABOUT_VERSION,
+                color = WatchColors.TextTertiary,
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onVersionClick)
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            )
             Spacer(modifier = Modifier.height(22.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(

@@ -82,6 +82,7 @@ import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceHost
+import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceHost
 import androidx.compose.animation.core.Spring
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -605,6 +606,23 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 screenState == ScreenState.Face &&
                                 !sideSceneOverlayActive
                             ) lockScreenWithAccessibility else null
+                        )
+                    } else if (selectedWatchFace.isDingDingCat) {
+                        DingDingCatWatchFaceHost(
+                            descriptor = selectedWatchFace,
+                            isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
+                            refreshToken = watchFaceRefreshToken,
+                            onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
+                            onDoubleTap = if (
+                                doubleTapLockScreenEnabled &&
+                                launcherInteractive &&
+                                screenState == ScreenState.Face &&
+                                !sideSceneOverlayActive
+                            ) lockScreenWithAccessibility else null,
+                            onLoadFailure = { descriptor, error ->
+                                val rootCause = generateSequence(error) { it.cause }.last()
+                                vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
+                            }
                         )
                     } else {
                         LunchWatchFaceHost(

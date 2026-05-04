@@ -3,12 +3,15 @@
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.os.Build
 import androidx.core.content.ContextCompat
 import com.flue.launcher.R
 import dalvik.system.DexClassLoader
 import org.xmlpull.v1.XmlPullParser
+import java.io.File
 
 object LunchWatchFaceScanner {
     fun builtInDescriptors(): List<LunchWatchFaceDescriptor> = listOf(
@@ -117,6 +120,14 @@ object LunchWatchFaceScanner {
     }
 
     fun loadPreviewDrawable(context: Context, descriptor: LunchWatchFaceDescriptor): Drawable? {
+        descriptor.previewFilePath?.let { previewPath ->
+            val previewFile = File(previewPath)
+            if (previewFile.isFile) {
+                BitmapFactory.decodeFile(previewFile.absolutePath)?.let { bitmap ->
+                    return BitmapDrawable(context.resources, bitmap)
+                }
+            }
+        }
         if (descriptor.isBuiltin) {
             return ContextCompat.getDrawable(context, R.mipmap.ic_launcher_foreground)
         }
