@@ -169,15 +169,20 @@ private data class SavedScrollPosition(
     val offset: Int = 0
 )
 
+private data class SettingsLaunchConfig(
+    val initialDestination: SettingsDestination = SettingsDestination.ROOT,
+    val returnToFaceOnBack: Boolean = false,
+    val requestId: Long = 0L
+)
+
 class SettingsActivity : ComponentActivity() {
+    private var launchRequestId = 0L
+    private var launchConfig by mutableStateOf(SettingsLaunchConfig())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         RecentsVisibility.apply(this)
-        val initialDestination = when (intent.getStringExtra(EXTRA_SETTINGS_DESTINATION)) {
-            SETTINGS_DESTINATION_WATCH_FACES -> SettingsDestination.WATCH_FACES
-            else -> SettingsDestination.ROOT
-        }
-        val returnToFaceOnBack = intent.getBooleanExtra(EXTRA_SETTINGS_RETURN_TO_FACE, false)
+        launchConfig = intent.readSettingsLaunchConfig()
         setContent {
             val viewModel: LauncherViewModel = viewModel()
             val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -187,25 +192,53 @@ class SettingsActivity : ComponentActivity() {
                 ProvideGlobalUiScale(globalUiScalePercent) {
                     SettingsRootScreen(
                         onFinish = { finish() },
-                        initialDestination = initialDestination,
-                        returnToFaceOnBack = returnToFaceOnBack
+                        launchConfig = launchConfig
                     )
                 }
             }
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        launchConfig = intent.readSettingsLaunchConfig()
+    }
+
     override fun finish() {
         super.finish()
         applyFadeCloseTransition()
+    }
+
+    private fun Intent.readSettingsLaunchConfig(): SettingsLaunchConfig {
+        launchRequestId += 1
+        val initialDestination = when (getStringExtra(EXTRA_SETTINGS_DESTINATION)) {
+            SETTINGS_DESTINATION_WATCH_FACES -> SettingsDestination.WATCH_FACES
+            else -> SettingsDestination.ROOT
+        }
+        return SettingsLaunchConfig(
+            initialDestination = initialDestination,
+            returnToFaceOnBack = getBooleanExtra(EXTRA_SETTINGS_RETURN_TO_FACE, false),
+            requestId = launchRequestId
+        )
+    }
+}
+
+private fun initialSettingsBackStack(
+    initialDestination: SettingsDestination,
+    returnToFaceOnBack: Boolean
+): List<SettingsDestination> {
+    return if (initialDestination != SettingsDestination.ROOT && !returnToFaceOnBack) {
+        listOf(SettingsDestination.ROOT)
+    } else {
+        emptyList()
     }
 }
 
 @Composable
 private fun SettingsRootScreen(
     onFinish: () -> Unit,
-    initialDestination: SettingsDestination = SettingsDestination.ROOT,
-    returnToFaceOnBack: Boolean = false
+    launchConfig: SettingsLaunchConfig = SettingsLaunchConfig()
 ) {
     val context = LocalContext.current
     val settingsScope = rememberCoroutineScope()
@@ -314,7 +347,10 @@ private fun SettingsRootScreen(
         }
     }
 
-    var destination by remember(initialDestination) { mutableStateOf(initialDestination) }
+    var destination by remember { mutableStateOf(launchConfig.initialDestination) }
+    var backStack by remember {
+        mutableStateOf(initialSettingsBackStack(launchConfig.initialDestination, launchConfig.returnToFaceOnBack))
+    }
     var hiddenAppsDraft by remember { mutableStateOf(hiddenApps) }
     var hiddenAppsDirty by remember { mutableStateOf(false) }
     var donatePreviewResId by remember { mutableStateOf<Int?>(null) }
@@ -342,30 +378,52 @@ private fun SettingsRootScreen(
         }
     }
 
-    val navigateTo: (SettingsDestination) -> Unit = { next ->
+    LaunchedEffect(launchConfig.requestId) {
+        if (destination == SettingsDestination.HIDDEN_APPS) {
+            commitHiddenAppsDraft()
+        }
+        destination = launchConfig.initialDestination
+        backStack = initialSettingsBackStack(launchConfig.initialDestination, launchConfig.returnToFaceOnBack)
+        donatePreviewResId = null
+    }
+
+    fun leaveDestination(next: SettingsDestination) {
         if (destination == SettingsDestination.HIDDEN_APPS && next != SettingsDestination.HIDDEN_APPS) {
             commitHiddenAppsDraft()
         }
-        destination = next
     }
 
-    val handleBack: () -> Unit = {
-        when (destination) {
-            SettingsDestination.HIDDEN_APPS -> {
-                commitHiddenAppsDraft()
-                if (returnToFaceOnBack) onFinish() else navigateTo(SettingsDestination.ROOT)
+    val navigateTo: (SettingsDestination) -> Unit = { next ->
+        if (next != destination) {
+            leaveDestination(next)
+            backStack = if (backStack.lastOrNull() == next) {
+                backStack.dropLast(1)
+            } else {
+                backStack + destination
             }
-            SettingsDestination.DONATE -> navigateTo(SettingsDestination.ABOUT)
-            SettingsDestination.DISPLAY_SIZE,
-            SettingsDestination.FEATURE_TOGGLES -> navigateTo(SettingsDestination.APPEARANCE)
-            SettingsDestination.ROOT -> onFinish()
-            else -> if (returnToFaceOnBack) onFinish() else navigateTo(SettingsDestination.ROOT)
+            destination = next
         }
     }
 
-    BackHandler(enabled = destination != SettingsDestination.ROOT || returnToFaceOnBack) {
-        handleBack()
+    val handleBack: () -> Unit = handleBack@{
+        if (donatePreviewResId != null) {
+            donatePreviewResId = null
+            return@handleBack
+        }
+        val previous = backStack.lastOrNull()
+        if (previous != null) {
+            leaveDestination(previous)
+            backStack = backStack.dropLast(1)
+            destination = previous
+        } else {
+            if (destination == SettingsDestination.HIDDEN_APPS) {
+                commitHiddenAppsDraft()
+            }
+            onFinish()
+        }
     }
+
+    BackHandler(enabled = true) { handleBack() }
 
     val selectedIconPackLabel = availableIconPacks.firstOrNull { it.packageName == selectedIconPackPackage }?.label
     val scrollFor: (SettingsDestination) -> SavedScrollPosition = { target ->

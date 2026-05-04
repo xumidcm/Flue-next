@@ -247,7 +247,9 @@ class AppRepository(private val context: Context) {
     fun launchApp(appInfo: AppInfo): Boolean {
         if (appInfo.isBuiltInSettingsEntry) {
             val settingsIntent = Intent(context, com.flue.launcher.SettingsActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
             }
             val options = android.app.ActivityOptions.makeCustomAnimation(
                 context,

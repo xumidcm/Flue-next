@@ -306,6 +306,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 Intent(context, SettingsActivity::class.java)
                     .putExtra(EXTRA_SETTINGS_DESTINATION, SETTINGS_DESTINATION_WATCH_FACES)
                     .putExtra(EXTRA_SETTINGS_RETURN_TO_FACE, true)
+                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             )
             (context as? Activity)?.applyFadeOpenTransition()
             Unit
