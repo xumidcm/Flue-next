@@ -89,6 +89,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_HONEYCOMB_BOTTOM_FADE = intPreferencesKey("honeycomb_bottom_fade")
         val KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION = booleanPreferencesKey("honeycomb_fast_scroll_optimization")
         val KEY_APP_LIST_FISHEYE = booleanPreferencesKey("app_list_fisheye_enabled")
+        val KEY_APP_LIST_FISHEYE_RANGE_ROWS = intPreferencesKey("app_list_fisheye_range_rows")
+        val KEY_APP_LIST_FISHEYE_STRENGTH_PERCENT = intPreferencesKey("app_list_fisheye_strength_percent")
         val KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT = intPreferencesKey("app_list_left_safe_inset_percent")
         val KEY_APP_LIST_SCALE_PERCENT = intPreferencesKey("app_list_scale_percent")
         val KEY_GLOBAL_UI_SCALE_PERCENT = intPreferencesKey("global_ui_scale_percent")
@@ -293,6 +295,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val honeycombFastScrollOptimization: StateFlow<Boolean> = _honeycombFastScrollOptimization.asStateFlow()
     private val _appListFisheyeEnabled = MutableStateFlow(true)
     val appListFisheyeEnabled: StateFlow<Boolean> = _appListFisheyeEnabled.asStateFlow()
+    private val _appListFisheyeRangeRows = MutableStateFlow(4)
+    val appListFisheyeRangeRows: StateFlow<Int> = _appListFisheyeRangeRows.asStateFlow()
+    private val _appListFisheyeStrengthPercent = MutableStateFlow(100)
+    val appListFisheyeStrengthPercent: StateFlow<Int> = _appListFisheyeStrengthPercent.asStateFlow()
     private val _appListLeftSafeInsetPercent = MutableStateFlow(0)
     val appListLeftSafeInsetPercent: StateFlow<Int> = _appListLeftSafeInsetPercent.asStateFlow()
     private val _appListScalePercent = MutableStateFlow(100)
@@ -666,6 +672,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedFisheyeEnabled = prefs[KEY_APP_LIST_FISHEYE] ?: true
                 if (_appListFisheyeEnabled.value != loadedFisheyeEnabled) {
                     _appListFisheyeEnabled.value = loadedFisheyeEnabled
+                }
+
+                val loadedFisheyeRangeRows = (prefs[KEY_APP_LIST_FISHEYE_RANGE_ROWS] ?: 4).coerceIn(1, 8)
+                if (_appListFisheyeRangeRows.value != loadedFisheyeRangeRows) {
+                    _appListFisheyeRangeRows.value = loadedFisheyeRangeRows
+                }
+
+                val loadedFisheyeStrength = (prefs[KEY_APP_LIST_FISHEYE_STRENGTH_PERCENT] ?: 100).coerceIn(0, 200)
+                if (_appListFisheyeStrengthPercent.value != loadedFisheyeStrength) {
+                    _appListFisheyeStrengthPercent.value = loadedFisheyeStrength
                 }
 
                 val loadedLeftSafeInset = (prefs[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT] ?: 0)
@@ -1250,6 +1266,22 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_APP_LIST_FISHEYE] = enabled } }
     }
 
+    fun setAppListFisheyeRangeRows(value: Int) {
+        _appListFisheyeRangeRows.value = value.coerceIn(1, 8)
+        val savedValue = _appListFisheyeRangeRows.value
+        persistDebounced("key_app_list_fisheye_range_rows") {
+            store.edit { it[KEY_APP_LIST_FISHEYE_RANGE_ROWS] = savedValue }
+        }
+    }
+
+    fun setAppListFisheyeStrengthPercent(value: Int) {
+        _appListFisheyeStrengthPercent.value = value.coerceIn(0, 200)
+        val savedValue = _appListFisheyeStrengthPercent.value
+        persistDebounced("key_app_list_fisheye_strength_percent") {
+            store.edit { it[KEY_APP_LIST_FISHEYE_STRENGTH_PERCENT] = savedValue }
+        }
+    }
+
     fun setAppListLeftSafeInsetPercent(value: Int) {
         _appListLeftSafeInsetPercent.value = value.coerceIn(0, APP_LIST_LEFT_SAFE_INSET_MAX_PERCENT)
         val savedValue = _appListLeftSafeInsetPercent.value
@@ -1449,9 +1481,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun selectWatchFace(id: String) {
         _selectedWatchFaceId.value = id
+        _watchFaceLastError.value = null
         syncSelectedWatchFace()
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
-        persist { store.edit { it[KEY_SELECTED_WATCHFACE_ID] = id } }
+        persist {
+            store.edit {
+                it[KEY_SELECTED_WATCHFACE_ID] = id
+                it.remove(KEY_LAST_WATCHFACE_ERROR)
+            }
+        }
     }
 
     fun fallbackToBuiltIn(error: String? = null) {
@@ -1856,6 +1894,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _honeycombBottomFade.value = 30
         _honeycombFastScrollOptimization.value = true
         _appListFisheyeEnabled.value = true
+        _appListFisheyeRangeRows.value = 4
+        _appListFisheyeStrengthPercent.value = 100
         _appListLeftSafeInsetPercent.value = 0
         _appListScalePercent.value = 100
         _globalUiScalePercent.value = 100
@@ -1945,6 +1985,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_HONEYCOMB_BOTTOM_FADE] = 30
                 it[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION] = true
                 it[KEY_APP_LIST_FISHEYE] = true
+                it[KEY_APP_LIST_FISHEYE_RANGE_ROWS] = 4
+                it[KEY_APP_LIST_FISHEYE_STRENGTH_PERCENT] = 100
                 it[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT] = 0
                 it[KEY_APP_LIST_SCALE_PERCENT] = 100
                 it[KEY_GLOBAL_UI_SCALE_PERCENT] = 100

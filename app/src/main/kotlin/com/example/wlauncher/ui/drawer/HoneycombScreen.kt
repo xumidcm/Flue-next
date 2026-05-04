@@ -11,6 +11,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Box
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -34,6 +36,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -45,6 +48,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -56,6 +60,7 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Velocity
@@ -101,6 +106,8 @@ fun HoneycombScreen(
     edgeBlurEnabled: Boolean = false,
     suppressHeavyEffects: Boolean = false,
     fisheyeEnabled: Boolean = true,
+    fisheyeRangeRows: Int = 4,
+    fisheyeStrengthPercent: Int = 100,
     fastFlowAnimationEnabled: Boolean = false,
     twoToneIconsEnabled: Boolean = false,
     iconShadowEnabled: Boolean = true,
@@ -138,8 +145,12 @@ fun HoneycombScreen(
             leftSafeInsetPercent = leftSafeInsetPercent,
             appListScalePercent = appListScalePercent,
             entryProgress = entryProgress,
+            fisheyeEnabled = fisheyeEnabled,
+            fisheyeRangeRows = fisheyeRangeRows,
+            fisheyeStrengthPercent = fisheyeStrengthPercent,
             useWatchFaceColors = useWatchFaceColors,
             onAppClick = onAppClick,
+            onReorder = onReorder,
             onLongClick = onLongClick,
             onExcludeApp = onExcludeApp,
             onScrollToTop = onScrollToTop,
@@ -215,6 +226,9 @@ fun HoneycombScreen(
         val bottomFadePx = with(density) { bottomFadeRangeDp.dp.toPx() }
         val entryVisuals = appListEntryVisuals(entryProgress)
         val backgroundDiameter = (if (maxWidth > maxHeight) maxWidth else maxHeight) * 1.38f
+        val fisheyeRangeMultiplier = fisheyeRangeRows.coerceIn(1, 8) * 0.42f
+        val fisheyeMaxDistance = screenRadius * fisheyeRangeMultiplier.coerceAtLeast(0.42f)
+        val fisheyeMinScale = fisheyeMinScale(fisheyeStrengthPercent)
 
         val positions = remember(apps.size, narrowCols, cellSize) {
             generateHoneycombRows(apps.size, narrowCols, cellSize)
@@ -899,7 +913,7 @@ fun HoneycombScreen(
                                 val dy = actualCenterY - screenCenterY
                                 val dist = sqrt(dx * dx + dy * dy)
                                 val scale = if (fisheyeEnabled) {
-                                    fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
+                                    fisheyeScale(dist, fisheyeMaxDistance, minScale = fisheyeMinScale)
                                 } else {
                                     1f
                                 }
@@ -936,7 +950,7 @@ fun HoneycombScreen(
                 val dragDy = scalePointer.y - screenCenterY
                 val dragDist = sqrt(dragDx * dragDx + dragDy * dragDy)
                 val dragScale = if (fisheyeEnabled) {
-                    fisheyeScale(dragDist, screenRadius * 1.65f, minScale = 0.58f)
+                    fisheyeScale(dragDist, fisheyeMaxDistance, minScale = fisheyeMinScale)
                 } else {
                     1f
                 }
@@ -1019,7 +1033,7 @@ fun HoneycombScreen(
                         val dy = settlingY.value - screenCenterY
                         val dist = sqrt(dx * dx + dy * dy)
                         val scale = if (fisheyeEnabled) {
-                            fisheyeScale(dist, screenRadius * 1.65f, minScale = 0.58f)
+                            fisheyeScale(dist, fisheyeMaxDistance, minScale = fisheyeMinScale)
                         } else {
                             1f
                         }
@@ -1090,8 +1104,12 @@ private fun MaterialDenseGridScreen(
     leftSafeInsetPercent: Int,
     appListScalePercent: Int,
     entryProgress: Float,
+    fisheyeEnabled: Boolean,
+    fisheyeRangeRows: Int,
+    fisheyeStrengthPercent: Int,
     useWatchFaceColors: Boolean,
     onAppClick: (AppInfo, Offset) -> Unit,
+    onReorder: (Int, Int) -> Unit,
     onLongClick: (AppInfo) -> Unit,
     onExcludeApp: (AppInfo) -> Unit,
     onScrollToTop: () -> Unit = {},
@@ -1114,7 +1132,12 @@ private fun MaterialDenseGridScreen(
     val effectiveColumns = (columns / appListScale).roundToInt().coerceIn(1, 10)
     var focusReady by remember { mutableStateOf(false) }
     var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
+    var dragFromIndex by remember { mutableStateOf<Int?>(null) }
+    var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
+    var dragPointer by remember { mutableStateOf<Offset?>(null) }
     var returnTriggered by remember { mutableStateOf(false) }
+    var materialContainerRoot by remember { mutableStateOf(Offset.Zero) }
+    val materialItemBounds = remember { mutableStateMapOf<Int, Rect>() }
     val overscroll = remember { Animatable(0f) }
     val topReturnThresholdPx = with(density) { 72.dp.toPx() }
     val overscrollLimitPx = with(density) { 140.dp.toPx() }
@@ -1122,6 +1145,9 @@ private fun MaterialDenseGridScreen(
     LaunchedEffect(active) {
         if (!active) {
             longPressedApp = null
+            dragFromIndex = null
+            dragCurrentIndex = null
+            dragPointer = null
             if (!returnTriggered) {
                 overscroll.snapTo(0f)
             }
@@ -1129,6 +1155,12 @@ private fun MaterialDenseGridScreen(
             returnTriggered = false
             focusRequester.requestFocusAfterFirstFrame()
         }
+    }
+    LaunchedEffect(apps.size) {
+        val validIndexes = apps.indices.toSet()
+        materialItemBounds.keys
+            .filterNot { it in validIndexes }
+            .forEach { materialItemBounds.remove(it) }
     }
 
     val nestedScrollConnection = remember(gridState, onScrollToTop) {
@@ -1213,6 +1245,7 @@ private fun MaterialDenseGridScreen(
             .nestedScroll(nestedScrollConnection)
             .graphicsLayer { translationY = overscroll.value }
             .onGloballyPositioned {
+                materialContainerRoot = it.positionInRoot()
                 if (!focusReady) focusReady = true
             }
             .pointerInput(gridState) {
@@ -1252,13 +1285,65 @@ private fun MaterialDenseGridScreen(
                     }
                 }
             }
+            .pointerInput(apps) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { offset ->
+                        val startIndex = findMaterialGridIndexAt(
+                            pointer = offset,
+                            itemBounds = materialItemBounds
+                        )
+                        val app = if (startIndex != null) apps.getOrNull(startIndex) else null
+                        if (startIndex != null && app != null) {
+                            dragFromIndex = startIndex
+                            dragCurrentIndex = startIndex
+                            dragPointer = offset
+                            longPressedApp = null
+                            onLongClick(app)
+                            vibrateHaptic(context)
+                        }
+                    },
+                    onDrag = { change, _ ->
+                        if (dragFromIndex != null) {
+                            dragPointer = change.position
+                            findMaterialGridIndexAt(
+                                pointer = change.position,
+                                itemBounds = materialItemBounds
+                            )?.let { target ->
+                                if (target in apps.indices) {
+                                    dragCurrentIndex = target
+                                }
+                            }
+                            change.consume()
+                        }
+                    },
+                    onDragEnd = {
+                        val from = dragFromIndex
+                        val to = dragCurrentIndex
+                        if (from != null && to != null && from != to) {
+                            onReorder(from, to)
+                        }
+                        dragFromIndex = null
+                        dragCurrentIndex = null
+                        dragPointer = null
+                    },
+                    onDragCancel = {
+                        dragFromIndex = null
+                        dragCurrentIndex = null
+                        dragPointer = null
+                    }
+                )
+            }
     ) {
         val screenWidthPx = with(density) { maxWidth.toPx() }
+        val screenHeightPx = with(density) { maxHeight.toPx() }
         val backgroundDiameter = (if (maxWidth > maxHeight) maxWidth else maxHeight) * 1.38f
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val horizontalPaddingPx = with(density) { 8.dp.toPx() }
         val leftPaddingPx = with(density) { (8.dp + leftSafeInset).toPx() }
         val itemGapPx = with(density) { 4.dp.toPx() }
+        val fisheyeRangePx = (screenHeightPx / effectiveColumns * fisheyeRangeRows.coerceIn(1, 8))
+            .coerceIn(screenHeightPx / effectiveColumns, screenHeightPx)
+        val fisheyeMinScale = fisheyeMinScale(fisheyeStrengthPercent)
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
@@ -1284,10 +1369,27 @@ private fun MaterialDenseGridScreen(
             itemsIndexed(
                 items = apps,
                 key = { _, app -> app.componentKey },
-                contentType = { _, _ -> "material_dense_app" }
+            contentType = { _, _ -> "material_dense_app" }
             ) { index, app ->
                 val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
                 val isPressed by interactionSource.collectIsPressedAsState()
+                val itemBounds = materialItemBounds[index]
+                val itemCenterY = itemBounds?.center?.y ?: screenHeightPx / 2f
+                val itemScale = if (fisheyeEnabled) {
+                    val dist = abs(itemCenterY - screenHeightPx / 2f)
+                    fisheyeScale(dist, fisheyeRangePx, minScale = fisheyeMinScale)
+                } else {
+                    1f
+                }
+                val itemAlpha = if (fisheyeEnabled) itemScale.coerceIn(0.24f, 1f) else 1f
+                val isDragged = dragFromIndex == index
+                val dragTarget = materialDraggedTargetOffset(
+                    index = index,
+                    dragFromIndex = dragFromIndex,
+                    dragCurrentIndex = dragCurrentIndex,
+                    bounds = itemBounds,
+                    dragPointer = dragPointer
+                )
                 val displayIcon = remember(
                     app.componentKey,
                     app.cachedIcon,
@@ -1303,9 +1405,26 @@ private fun MaterialDenseGridScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(0.92f)
+                        .onGloballyPositioned { coords ->
+                            val pos = coords.positionInRoot() - materialContainerRoot
+                            val bounds = Rect(
+                                left = pos.x,
+                                top = pos.y,
+                                right = pos.x + coords.size.width.toFloat(),
+                                bottom = pos.y + coords.size.height.toFloat()
+                            )
+                            if (materialItemBounds[index] != bounds) {
+                                materialItemBounds[index] = bounds
+                            }
+                        }
                         .graphicsLayer {
                             shadowElevation = iconShadowElevationPx
                             shape = launcherStyle.bubbleShape
+                            translationX = dragTarget.x
+                            translationY = dragTarget.y
+                            scaleX = itemScale
+                            scaleY = itemScale
+                            alpha = if (isDragged) 0.96f else itemAlpha
                         }
                         .clip(launcherStyle.bubbleShape)
                         .combinedClickable(
@@ -1362,6 +1481,37 @@ private fun MaterialDenseGridScreen(
             )
         }
     }
+}
+
+private fun findMaterialGridIndexAt(
+    pointer: Offset,
+    itemBounds: Map<Int, Rect>
+): Int? {
+    return itemBounds.entries.firstOrNull { (_, bounds) ->
+        pointer.x in bounds.left..bounds.right && pointer.y in bounds.top..bounds.bottom
+    }?.key
+}
+
+private fun materialDraggedTargetOffset(
+    index: Int,
+    dragFromIndex: Int?,
+    dragCurrentIndex: Int?,
+    bounds: Rect?,
+    dragPointer: Offset?
+): Offset {
+    if (bounds == null || dragFromIndex == null || dragCurrentIndex == null) return Offset.Zero
+    if (index == dragFromIndex) {
+        val pointer = dragPointer ?: bounds.center
+        return pointer - bounds.center
+    }
+    if (dragFromIndex == dragCurrentIndex) return Offset.Zero
+    val direction = when {
+        dragCurrentIndex > dragFromIndex && index in (dragFromIndex + 1)..dragCurrentIndex -> -1f
+        dragCurrentIndex < dragFromIndex && index in dragCurrentIndex until dragFromIndex -> 1f
+        else -> 0f
+    }
+    if (direction == 0f) return Offset.Zero
+    return Offset(0f, bounds.height * direction)
 }
 
 private fun neighborPressMotion(

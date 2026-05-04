@@ -264,6 +264,8 @@ private fun SettingsRootScreen(
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsStateWithLifecycle()
     val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsStateWithLifecycle()
     val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsStateWithLifecycle()
+    val appListFisheyeRangeRows by vm.appListFisheyeRangeRows.collectAsStateWithLifecycle()
+    val appListFisheyeStrengthPercent by vm.appListFisheyeStrengthPercent.collectAsStateWithLifecycle()
     val appListLeftSafeInsetPercent by vm.appListLeftSafeInsetPercent.collectAsStateWithLifecycle()
     val appListScalePercent by vm.appListScalePercent.collectAsStateWithLifecycle()
     val globalUiScalePercent by vm.globalUiScalePercent.collectAsStateWithLifecycle()
@@ -928,6 +930,33 @@ private fun SettingsRootScreen(
                     steps = 14,
                     onValueChange = { vm.setAppListScalePercent(it.toInt()) },
                     scale = itemFisheye(listState, "app_list_scale", screenCenterY, screenHeightPx)
+                )
+            }
+            item("app_list_fisheye_range_rows") {
+                SettingsSliderRow(
+                    title = if (isZh) "鱼眼生效范围" else "Fisheye Range",
+                    value = appListFisheyeRangeRows.toFloat(),
+                    valueText = if (isZh) "$appListFisheyeRangeRows 行" else "$appListFisheyeRangeRows rows",
+                    localValueText = {
+                        val rows = it.roundToInt()
+                        if (isZh) "$rows 行" else "$rows rows"
+                    },
+                    range = 1f..8f,
+                    steps = 6,
+                    onValueChange = { vm.setAppListFisheyeRangeRows(it.roundToInt()) },
+                    scale = itemFisheye(listState, "app_list_fisheye_range_rows", screenCenterY, screenHeightPx)
+                )
+            }
+            item("app_list_fisheye_strength") {
+                SettingsSliderRow(
+                    title = if (isZh) "鱼眼效果强度" else "Fisheye Strength",
+                    value = appListFisheyeStrengthPercent.toFloat(),
+                    valueText = "${appListFisheyeStrengthPercent}%",
+                    localValueText = { "${it.roundToInt()}%" },
+                    range = 0f..200f,
+                    steps = 19,
+                    onValueChange = { vm.setAppListFisheyeStrengthPercent(it.roundToInt()) },
+                    scale = itemFisheye(listState, "app_list_fisheye_strength", screenCenterY, screenHeightPx)
                 )
             }
             item("app_list_left_safe_inset") {

@@ -101,6 +101,8 @@ fun ListDrawerScreen(
     edgeBlurEnabled: Boolean = false,
     suppressHeavyEffects: Boolean = false,
     fisheyeEnabled: Boolean = true,
+    fisheyeRangeRows: Int = 4,
+    fisheyeStrengthPercent: Int = 100,
     fastFlowAnimationEnabled: Boolean = false,
     twoToneIconsEnabled: Boolean = false,
     iconShadowEnabled: Boolean = true,
@@ -167,6 +169,7 @@ fun ListDrawerScreen(
     val scaledRowHorizontalPadding = (16.dp * appListScale).coerceIn(10.dp, 32.dp)
     val scaledIconTextGap = (14.dp * appListScale).coerceIn(8.dp, 28.dp)
     val scaledTextSizeSp = (16f * appListScale).coerceIn(10f, 32f).sp
+    val fisheyeMinScale = fisheyeMinScale(fisheyeStrengthPercent)
 
     LaunchedEffect(visibleIndexes, dragFromIndex, dragCurrentIndex, apps.size) {
         val retain = buildSet {
@@ -589,6 +592,9 @@ fun ListDrawerScreen(
                         itemInfo = itemInfo,
                         screenCenterY = listViewportCenterY,
                         screenHeight = screenHeightPx,
+                        rowHeight = with(density) { estimatedItemHeight.toPx() },
+                        rangeRows = fisheyeRangeRows,
+                        minScale = fisheyeMinScale,
                         fisheyeEnabled = fisheyeEnabled,
                         scrollTick = fisheyeScrollTick
                     )
@@ -888,16 +894,19 @@ private fun computeItemScale(
     itemInfo: androidx.compose.foundation.lazy.LazyListItemInfo?,
     screenCenterY: Float,
     screenHeight: Float,
+    rowHeight: Float,
+    rangeRows: Int,
+    minScale: Float,
     fisheyeEnabled: Boolean,
     scrollTick: Int = 0
 ): Float {
     if (!fisheyeEnabled) return 1f
-    if (itemInfo == null) return 0.85f
+    if (itemInfo == null) return 1f
     val itemCenterY = itemInfo.offset + itemInfo.size / 2f
     val dist = abs(itemCenterY - screenCenterY)
-    val maxDist = screenHeight / 2f
+    val maxDist = (rowHeight * rangeRows.coerceIn(1, 8)).coerceIn(rowHeight, screenHeight)
     val t = (dist / maxDist).coerceIn(0f, 1f)
-    return 1f - 0.2f * t
+    return 1f - (1f - minScale) * t
 }
 
 private fun computeFastFlowOffset(

@@ -181,6 +181,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsStateWithLifecycle()
     val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsStateWithLifecycle()
     val appListLeftSafeInsetPercent by vm.appListLeftSafeInsetPercent.collectAsStateWithLifecycle()
+    val appListFisheyeRangeRows by vm.appListFisheyeRangeRows.collectAsStateWithLifecycle()
+    val appListFisheyeStrengthPercent by vm.appListFisheyeStrengthPercent.collectAsStateWithLifecycle()
     val appListScalePercent by vm.appListScalePercent.collectAsStateWithLifecycle()
     val appListWatchFaceColors by vm.appListWatchFaceColors.collectAsStateWithLifecycle()
     val appListRowBorderEnabled by vm.appListRowBorderEnabled.collectAsStateWithLifecycle()
@@ -625,6 +627,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         entryProgress = appListEntryProgress.value,
                         useWatchFaceColors = useAppListWatchFaceColors,
                         fisheyeEnabled = appListFisheyeEnabled,
+                        fisheyeRangeRows = appListFisheyeRangeRows,
+                        fisheyeStrengthPercent = appListFisheyeStrengthPercent,
                         fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                         twoToneIconsEnabled = twoToneIconsEnabled,
                         iconShadowEnabled = effectiveIconShadowEnabled,
@@ -654,6 +658,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         useWatchFaceColors = useAppListWatchFaceColors,
                         rowBorderEnabled = appListRowBorderEnabled,
                         fisheyeEnabled = appListFisheyeEnabled,
+                        fisheyeRangeRows = appListFisheyeRangeRows,
+                        fisheyeStrengthPercent = appListFisheyeStrengthPercent,
                         fastFlowAnimationEnabled = false,
                         twoToneIconsEnabled = twoToneIconsEnabled,
                         iconShadowEnabled = effectiveIconShadowEnabled,
