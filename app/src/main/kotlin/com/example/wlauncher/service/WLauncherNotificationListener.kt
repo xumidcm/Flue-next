@@ -1,6 +1,7 @@
 ﻿package com.flue.launcher.service
 
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Person
 import android.content.ComponentName
@@ -10,6 +11,8 @@ import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
+import android.service.notification.NotificationListenerService.Ranking
+import android.service.notification.NotificationListenerService.RankingMap
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import androidx.compose.ui.graphics.ImageBitmap
@@ -33,6 +36,8 @@ data class NotifData(
     val isGroupSummary: Boolean,
     val isOngoing: Boolean,
     val isForegroundService: Boolean,
+    val isSystemHidden: Boolean,
+    val isNoisyOngoing: Boolean,
     val actions: List<NotifActionData> = emptyList()
 )
 
@@ -125,6 +130,10 @@ class WLauncherNotificationListener : NotificationListenerService() {
         refreshNotifications()
     }
 
+    override fun onNotificationRankingUpdate(rankingMap: RankingMap?) {
+        refreshNotifications()
+    }
+
     private fun refreshNotifications() {
         val sbns = runCatching { activeNotifications.orEmpty() }
             .onFailure { error ->
@@ -136,9 +145,7 @@ class WLauncherNotificationListener : NotificationListenerService() {
             .filter { sbn ->
                 val flags = sbn.notification.flags
                 val isGroupSummary = flags and Notification.FLAG_GROUP_SUMMARY != 0
-                val isOngoing = flags and Notification.FLAG_ONGOING_EVENT != 0
-                val isForegroundService = flags and Notification.FLAG_FOREGROUND_SERVICE != 0
-                !isGroupSummary && !isOngoing && !isForegroundService
+                !isGroupSummary
             }
             .sortedByDescending { it.postTime }
             .take(20)
@@ -183,6 +190,8 @@ class WLauncherNotificationListener : NotificationListenerService() {
         val notification = sbn.notification
         val extras = notification.extras
         val flags = notification.flags
+        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
+        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
         val appLabel = try {
             pm.getApplicationLabel(pm.getApplicationInfo(sbn.packageName, 0)).toString()
         } catch (_: Exception) {
@@ -194,8 +203,8 @@ class WLauncherNotificationListener : NotificationListenerService() {
             packageName = sbn.packageName,
             groupKey = sbn.groupKey,
             appLabel = appLabel,
-            title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: "",
-            text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: "",
+            title = title,
+            text = text,
             time = sbn.postTime,
             icon = resolveNotificationIcon(sbn, notification),
             isClearable = sbn.isClearable,
@@ -203,6 +212,8 @@ class WLauncherNotificationListener : NotificationListenerService() {
             isGroupSummary = flags and Notification.FLAG_GROUP_SUMMARY != 0,
             isOngoing = flags and Notification.FLAG_ONGOING_EVENT != 0,
             isForegroundService = flags and Notification.FLAG_FOREGROUND_SERVICE != 0,
+            isSystemHidden = sbn.isSystemHiddenNotification(),
+            isNoisyOngoing = isNoisyOngoingNotification(sbn, appLabel, title, text),
             actions = notification.actions.orEmpty().mapIndexedNotNull { index, action ->
                 val title = action.title?.toString()?.trim().orEmpty()
                 if (title.isBlank() || action.actionIntent == null) {
@@ -215,6 +226,47 @@ class WLauncherNotificationListener : NotificationListenerService() {
                 }
             }
         )
+    }
+
+    private fun StatusBarNotification.isSystemHiddenNotification(): Boolean {
+        val ranking = Ranking()
+        val hasRanking = runCatching {
+            currentRanking.getRanking(key, ranking)
+        }.getOrDefault(false)
+        if (!hasRanking) return false
+
+        return runCatching {
+            val blockedByImportance = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
+                ranking.importance == NotificationManager.IMPORTANCE_NONE
+            val blockedByChannel = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                ranking.channel?.importance == NotificationManager.IMPORTANCE_NONE
+            val suspendedBySystem = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                ranking.isSuspended
+            blockedByImportance || blockedByChannel || suspendedBySystem
+        }.getOrDefault(false)
+    }
+
+    private fun isNoisyOngoingNotification(
+        sbn: StatusBarNotification,
+        appLabel: String,
+        title: String,
+        text: String
+    ): Boolean {
+        val flags = sbn.notification.flags
+        val ongoing = flags and Notification.FLAG_ONGOING_EVENT != 0 ||
+            flags and Notification.FLAG_FOREGROUND_SERVICE != 0
+        if (!ongoing) return false
+        val haystack = listOf(appLabel, title, text, sbn.packageName)
+            .joinToString(" ")
+            .lowercase()
+        return listOf(
+            "正在运行",
+            "正在其他应用上层显示",
+            "正在显示在其他应用上层",
+            "running",
+            "displaying over other apps",
+            "shown over other apps"
+        ).any { token -> token in haystack }
     }
 
     private fun resolveNotificationIcon(

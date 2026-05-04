@@ -1208,10 +1208,10 @@ private fun AnimatedMusicText(
     AnimatedContent(
         targetState = text,
         transitionSpec = {
-            (fadeIn(animationSpec = tween(450, easing = FastOutSlowInEasing)) +
-                slideInVertically(animationSpec = tween(450, easing = FastOutSlowInEasing)) { it / 2 }) togetherWith
-                (fadeOut(animationSpec = tween(300, easing = FastOutSlowInEasing)) +
-                    slideOutHorizontally(animationSpec = tween(300, easing = FastOutSlowInEasing)) { -it / 3 })
+            (fadeIn(animationSpec = tween(260, delayMillis = 300, easing = FastOutSlowInEasing)) +
+                slideInVertically(animationSpec = tween(260, delayMillis = 300, easing = FastOutSlowInEasing)) { it / 2 }) togetherWith
+                (fadeOut(animationSpec = tween(280, easing = FastOutSlowInEasing)) +
+                    slideOutHorizontally(animationSpec = tween(280, easing = FastOutSlowInEasing)) { -it / 3 })
         },
         label = "music_text_switch"
     ) { targetText ->

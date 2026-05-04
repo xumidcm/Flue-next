@@ -28,9 +28,12 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -141,6 +144,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.Date
 import java.util.Locale
@@ -189,8 +193,17 @@ private data class SettingsLaunchConfig(
 private data class BlockingProgressState(
     val title: String,
     val detail: String,
-    val completed: Boolean = false
+    val completed: Boolean = false,
+    val completionAction: BlockingProgressCompletionAction = BlockingProgressCompletionAction.None,
+    val shareUri: Uri? = null
 )
+
+private enum class BlockingProgressCompletionAction {
+    None,
+    ExportBackup,
+    ImportBackup,
+    DingDingCatImport
+}
 
 class SettingsActivity : ComponentActivity() {
     private var launchRequestId = 0L
@@ -336,6 +349,8 @@ private fun SettingsRootScreen(
     val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
     val launcherStyle = LauncherTheme.style
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
+    val showOngoingNotifications by vm.showOngoingNotifications.collectAsStateWithLifecycle()
+    val rotaryHapticsEnabled by vm.rotaryHapticsEnabled.collectAsStateWithLifecycle()
     val showWidgetPage by vm.showWidgetPage.collectAsStateWithLifecycle()
     val showControlCenter by vm.showControlCenter.collectAsStateWithLifecycle()
     val showMusicControls by vm.showMusicControls.collectAsStateWithLifecycle()
@@ -398,11 +413,12 @@ private fun SettingsRootScreen(
                         backupProgress = BlockingProgressState(
                             title = "导入完成",
                             detail = descriptor.displayName,
-                            completed = true
+                            completed = true,
+                            completionAction = BlockingProgressCompletionAction.DingDingCatImport
                         )
-                        delay(820)
                     }
                     .onFailure { error ->
+                        backupProgress = null
                         Toast.makeText(
                             context,
                             "导入失败：${error.message ?: error.javaClass.simpleName}",
@@ -410,7 +426,6 @@ private fun SettingsRootScreen(
                         ).show()
                     }
                 backupBusy = false
-                backupProgress = null
             }
         }
     }
@@ -430,9 +445,10 @@ private fun SettingsRootScreen(
                         backupProgress = BlockingProgressState(
                             title = "导出完成",
                             detail = uri.backupDisplayLabel(),
-                            completed = true
+                            completed = true,
+                            completionAction = BlockingProgressCompletionAction.ExportBackup,
+                            shareUri = uri
                         )
-                        delay(920)
                     }
                     .onFailure { error ->
                         backupProgress = null
@@ -443,7 +459,6 @@ private fun SettingsRootScreen(
                         ).show()
                     }
                 backupBusy = false
-                backupProgress = null
             }
         }
     }
@@ -495,6 +510,22 @@ private fun SettingsRootScreen(
     var dingDingCatDeleteTarget by remember { mutableStateOf<LunchWatchFaceDescriptor?>(null) }
     val pageScrollPositions = remember { mutableStateMapOf<SettingsDestination, SavedScrollPosition>() }
 
+    fun closeBlockingProgressPage() {
+        val state = backupProgress
+        backupProgress = null
+        backupBusy = false
+        if (state?.completionAction == BlockingProgressCompletionAction.DingDingCatImport) {
+            pageScrollPositions.remove(SettingsDestination.WATCH_FACES)
+            destination = SettingsDestination.WATCH_FACES
+            if (backStack.isEmpty()) {
+                backStack = listOf(SettingsDestination.ROOT)
+            }
+            settingsScope.launch {
+                vm.refreshWatchFaces(force = true)
+            }
+        }
+    }
+
     dingDingCatDeleteTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { dingDingCatDeleteTarget = null },
@@ -532,7 +563,11 @@ private fun SettingsRootScreen(
     }
 
     backupProgress?.let { state ->
-        BlockingProgressDialog(state = state)
+        BlockingProgressDialog(
+            state = state,
+            onDismiss = { closeBlockingProgressPage() },
+            onShare = { state.shareUri?.let { shareBackupUri(context, it) } }
+        )
     }
 
     LaunchedEffect(hiddenApps) {
@@ -573,6 +608,9 @@ private fun SettingsRootScreen(
 
     val navigateTo: (SettingsDestination) -> Unit = { next ->
         if (next != destination) {
+            if (next.depth > destination.depth) {
+                pageScrollPositions.remove(next)
+            }
             leaveDestination(next)
             backStack = if (backStack.lastOrNull() == next) {
                 backStack.dropLast(1)
@@ -584,6 +622,10 @@ private fun SettingsRootScreen(
     }
 
     val handleBack: () -> Unit = handleBack@{
+        if (backupProgress?.completed == true) {
+            closeBlockingProgressPage()
+            return@handleBack
+        }
         if (backupBusy) {
             return@handleBack
         }
@@ -880,13 +922,14 @@ private fun SettingsRootScreen(
                         } else {
                             Toast.makeText(context, "nothing...", Toast.LENGTH_SHORT).show()
                         }
-                    }
+                    },
+                    longPressDurationMs = 2_000L
                 )
             }
             item("watchface_more") {
                 SettingsCategoryCard(
                     title = "更多表盘选项",
-                    subtitle = "字体、底部渐隐和叮叮猫铺满全屏",
+                    subtitle = "字体和底部渐隐等表盘选项",
                     onClick = { navigateTo(SettingsDestination.WATCH_FACE_MORE) },
                     scale = itemFisheye(listState, "watchface_more", screenCenterY, screenHeightPx)
                 )
@@ -1244,6 +1287,19 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "app_list_left_safe_inset", screenCenterY, screenHeightPx)
                 )
             }
+            item("rotary_haptics") {
+                SettingsSwitchRow(
+                    title = if (isZh) "表冠滚动震动" else "Rotary Haptics",
+                    subtitle = if (rotaryHapticsEnabled) {
+                        if (isZh) "表冠滚动时保留轻微震动反馈" else "Keep a light pulse while scrolling with the crown"
+                    } else {
+                        if (isZh) "关闭表冠滚动震动反馈" else "Disable crown scroll haptics"
+                    },
+                    checked = rotaryHapticsEnabled,
+                    onToggle = vm::setRotaryHapticsEnabled,
+                    scale = itemFisheye(listState, "rotary_haptics", screenCenterY, screenHeightPx)
+                )
+            }
         }
 
             SettingsDestination.FEATURE_TOGGLES -> SettingsPageScaffold(
@@ -1275,6 +1331,20 @@ private fun SettingsRootScreen(
                     enabled = sideScreenEnabled,
                     onToggle = vm::setShowNotification,
                     scale = itemFisheye(listState, "notification_center_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            item("ongoing_notification_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "显示常驻通知" else "Show Ongoing Notifications",
+                    subtitle = if (showOngoingNotifications) {
+                        if (isZh) "显示有内容价值的常驻通知，过滤系统运行和悬浮窗提示" else "Show useful ongoing notifications while filtering system noise"
+                    } else {
+                        if (isZh) "隐藏常驻通知" else "Hide ongoing notifications"
+                    },
+                    checked = showOngoingNotifications,
+                    enabled = sideScreenEnabled && showNotification,
+                    onToggle = vm::setShowOngoingNotifications,
+                    scale = itemFisheye(listState, "ongoing_notification_toggle", screenCenterY, screenHeightPx)
                 )
             }
             item("widget_center_toggle") {
@@ -1378,7 +1448,7 @@ private fun SettingsRootScreen(
                     subtitle = if (appListWatchFaceColors) {
                         if (isZh) "应用列表背景继续跟随表盘颜色" else "Keep the app list tinted by the watch face"
                     } else {
-                        if (isZh) "应用列表背景固定为纯黑或纯白" else "Use a pure black or pure white app list background"
+                        if (isZh) "应用列表背景固定为黑白，图标遮罩保留系统取色" else "Use black or white background while keeping system-tinted icon masks"
                     },
                     checked = appListWatchFaceColors,
                     onToggle = vm::setAppListWatchFaceColors,
@@ -1651,7 +1721,7 @@ private fun SettingsRootScreen(
                 item("import_backup_start") {
                     ActionCard(
                         title = "开始导入",
-                        subtitle = "恢复所选项目，未扫描到的应用和小组件会自动舍弃",
+                        subtitle = "恢复所选项目",
                         onClick = {
                             val uri = backupImportUri
                             if (uri == null) {
@@ -1672,11 +1742,11 @@ private fun SettingsRootScreen(
                                             backupProgress = BlockingProgressState(
                                                 title = "导入完成",
                                                 detail = options.backupSummaryText(),
-                                                completed = true
+                                                completed = true,
+                                                completionAction = BlockingProgressCompletionAction.ImportBackup
                                             )
                                             backupImportPreview = null
                                             backupImportUri = null
-                                            delay(920)
                                         }
                                         .onFailure { error ->
                                             backupProgress = null
@@ -1687,7 +1757,6 @@ private fun SettingsRootScreen(
                                             ).show()
                                         }
                                     backupBusy = false
-                                    backupProgress = null
                                 }
                             }
                         },
@@ -1998,9 +2067,30 @@ private fun Modifier.instantPressGesture(
     pressedState: MutableState<Boolean>,
     enabled: Boolean = true,
     onLongPress: (() -> Unit)? = null,
+    longPressDurationMs: Long? = null,
     onClick: () -> Unit
 ): Modifier {
     if (!enabled) return this
+    if (onLongPress != null && longPressDurationMs != null) {
+        return pointerInput(onClick, onLongPress, enabled, longPressDurationMs) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                pressedState.value = true
+                var completedBeforeTimeout = false
+                val up = withTimeoutOrNull(longPressDurationMs) {
+                    waitForUpOrCancellation().also { completedBeforeTimeout = true }
+                }
+                if (completedBeforeTimeout) {
+                    pressedState.value = false
+                    if (up != null) onClick()
+                } else {
+                    pressedState.value = false
+                    onLongPress()
+                    waitForUpOrCancellation()
+                }
+            }
+        }
+    }
     return pointerInput(onClick, onLongPress, enabled) {
         var longPressConsumed = false
         detectTapGestures(
@@ -2021,6 +2111,17 @@ private fun Modifier.instantPressGesture(
         )
     }
 }
+
+private val SettingsDestination.depth: Int
+    get() = when (this) {
+        SettingsDestination.ROOT -> 0
+        SettingsDestination.WATCH_FACE_MORE,
+        SettingsDestination.BACKUP,
+        SettingsDestination.DONATE -> 2
+        SettingsDestination.BACKUP_EXPORT,
+        SettingsDestination.BACKUP_IMPORT -> 3
+        else -> 1
+    }
 
 @Composable
 private fun MessageCard(text: String, background: Color, onClick: () -> Unit) {
@@ -2046,8 +2147,8 @@ private fun SettingsChoiceRow(
     scale: Float
 ) {
     val launcherStyle = LauncherTheme.style
-    val pressedState = rememberPressedState()
-    val pressed by pressedState
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
     val pressedScale by animateFloatAsState(
         if (pressed) 0.964f else 1f,
         animationSpec = launcherStyle.pressScaleSpec,
@@ -2139,7 +2240,11 @@ private fun SettingsSwitchRow(
             .clip(launcherStyle.compactShape)
             .background(if (pressed) launcherStyle.pressedCardColor else launcherStyle.cardColor)
             .border(1.dp, launcherStyle.outlineColor, launcherStyle.compactShape)
-            .instantPressGesture(pressedState, enabled = enabled) { onToggle(!checked) }
+            .clickable(
+                enabled = enabled,
+                interactionSource = interaction,
+                indication = null
+            ) { onToggle(!checked) }
             .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
         Row(
@@ -2262,6 +2367,7 @@ private fun ActionCard(
     icon: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
     onLongPress: (() -> Unit)? = null,
+    longPressDurationMs: Long? = null,
     scale: Float
 ) {
     val launcherStyle = LauncherTheme.style
@@ -2283,7 +2389,12 @@ private fun ActionCard(
             .clip(launcherStyle.compactShape)
             .background(if (pressed) launcherStyle.pressedCardColor else launcherStyle.cardColor)
             .border(1.dp, launcherStyle.outlineColor, launcherStyle.compactShape)
-            .instantPressGesture(pressedState, onLongPress = onLongPress, onClick = onClick)
+            .instantPressGesture(
+                pressedState,
+                onLongPress = onLongPress,
+                longPressDurationMs = longPressDurationMs,
+                onClick = onClick
+            )
             .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
         Row(
@@ -2626,7 +2737,7 @@ private fun BackupOptionsDialog(
                         item("backup_app_order") {
                             BackupOptionSwitch(
                                 title = "应用排序",
-                                subtitle = "恢复时自动舍弃未扫描到的应用",
+                                subtitle = "应用列表的排列顺序",
                                 checked = options.appOrder,
                                 onToggle = { onOptionsChange(options.copy(appOrder = it)) }
                             )
@@ -2636,7 +2747,7 @@ private fun BackupOptionsDialog(
                         item("backup_widget_order") {
                             BackupOptionSwitch(
                                 title = "小组件排序",
-                                subtitle = "恢复时自动舍弃未扫描到的小组件",
+                                subtitle = "小组件列表和槽位顺序",
                                 checked = options.widgetOrder,
                                 onToggle = { onOptionsChange(options.copy(widgetOrder = it)) }
                             )
@@ -2738,7 +2849,7 @@ private fun LazyListScope.backupOptionRows(
         item("backup_app_order") {
             BackupOptionSwitch(
                 title = "应用排序",
-                subtitle = "恢复时自动舍弃未扫描到的应用",
+                subtitle = "应用列表的排列顺序",
                 checked = options.appOrder,
                 onToggle = { onOptionsChange(options.copy(appOrder = it)) },
                 scale = itemFisheye(listState, "backup_app_order", screenCenterY, screenHeightPx)
@@ -2749,7 +2860,7 @@ private fun LazyListScope.backupOptionRows(
         item("backup_widget_order") {
             BackupOptionSwitch(
                 title = "小组件排序",
-                subtitle = "恢复时自动舍弃未扫描到的小组件",
+                subtitle = "小组件列表和槽位顺序",
                 checked = options.widgetOrder,
                 onToggle = { onOptionsChange(options.copy(widgetOrder = it)) },
                 scale = itemFisheye(listState, "backup_widget_order", screenCenterY, screenHeightPx)
@@ -2823,11 +2934,15 @@ private fun Uri.backupDisplayLabel(): String {
 }
 
 @Composable
-private fun BlockingProgressDialog(state: BlockingProgressState) {
+private fun BlockingProgressDialog(
+    state: BlockingProgressState,
+    onDismiss: () -> Unit,
+    onShare: () -> Unit
+) {
     Dialog(
-        onDismissRequest = {},
+        onDismissRequest = { if (state.completed) onDismiss() },
         properties = DialogProperties(
-            dismissOnBackPress = false,
+            dismissOnBackPress = state.completed,
             dismissOnClickOutside = false,
             usePlatformDefaultWidth = false
         )
@@ -2835,10 +2950,13 @@ private fun BlockingProgressDialog(state: BlockingProgressState) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.92f)),
+                .background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+                modifier = Modifier.padding(horizontal = 26.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
                 if (state.completed) {
                     Icon(
                         imageVector = Icons.Filled.CheckCircle,
@@ -2853,8 +2971,38 @@ private fun BlockingProgressDialog(state: BlockingProgressState) {
                 Text(state.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(state.detail, color = WatchColors.TextTertiary, fontSize = 12.sp)
+                if (state.completed) {
+                    Spacer(modifier = Modifier.height(22.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        if (state.shareUri != null) {
+                            TextButton(onClick = onShare) {
+                                Text("分享", color = WatchColors.ActiveCyan)
+                            }
+                        }
+                        TextButton(onClick = onDismiss) {
+                            Text("完成", color = WatchColors.ActiveCyan)
+                        }
+                    }
+                }
             }
         }
+    }
+}
+
+private fun shareBackupUri(context: android.content.Context, uri: Uri) {
+    runCatching {
+        context.startActivity(
+            Intent.createChooser(
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "application/zip"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                },
+                "分享配置备份"
+            )
+        )
+    }.onFailure {
+        Toast.makeText(context, "分享失败", Toast.LENGTH_SHORT).show()
     }
 }
 

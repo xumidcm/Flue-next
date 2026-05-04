@@ -119,6 +119,7 @@ fun NotificationLayer(
     onDismissAllNotifications: () -> Unit,
     onRunNotificationAction: (String) -> Boolean,
     onOpenNotification: (String, Offset) -> Boolean,
+    stackCardColor: Color = Color.Unspecified,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -543,6 +544,7 @@ private fun NotificationGroupBody(
                     width = width,
                     leadEntry = group.entries.first(),
                     hiddenCount = group.entries.size - 1,
+                    stackCardColor = stackCardColor,
                     onClick = onToggleGroup
                 )
             }
@@ -619,7 +621,13 @@ private fun GroupHeader(
 }
 
 @Composable
-private fun CollapsedStackCard(width: androidx.compose.ui.unit.Dp, leadEntry: NotificationEntryUi, hiddenCount: Int, onClick: () -> Unit) {
+private fun CollapsedStackCard(
+    width: androidx.compose.ui.unit.Dp,
+    leadEntry: NotificationEntryUi,
+    hiddenCount: Int,
+    stackCardColor: Color = Color.Unspecified,
+    onClick: () -> Unit
+) {
     val stackStrength by animateFloatAsState(
         targetValue = if (hiddenCount > 0) 1f else 0f,
         animationSpec = spring(stiffness = 620f, dampingRatio = 0.82f),
@@ -642,7 +650,7 @@ private fun CollapsedStackCard(width: androidx.compose.ui.unit.Dp, leadEntry: No
                     }
                     .padding(horizontal = COLLAPSED_STACK_HORIZONTAL_INSET_DP.dp)
                     .clip(RoundedCornerShape(28.dp))
-                    .background(if (index == 0) Color(0xFF404040) else Color(0xFF2E2E2E))
+                    .background(notificationStackBackColor(stackCardColor, index))
             )
         }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 2.dp)) {
@@ -798,6 +806,14 @@ private fun NotificationIcon(icon: ImageBitmap?) {
     Box(Modifier.size(46.dp).clip(CircleShape).background(Color(0xFFD9D9D9)), contentAlignment = Alignment.Center) {
         if (icon != null) Image(icon, null, modifier = Modifier.fillMaxSize().clip(CircleShape), filterQuality = FilterQuality.Low, contentScale = ContentScale.Crop)
         else Icon(Icons.Filled.Notifications, null, tint = Color(0xFF2B2B2B), modifier = Modifier.size(24.dp))
+    }
+}
+
+private fun notificationStackBackColor(base: Color, index: Int): Color {
+    return when {
+        base != Color.Unspecified && base.alpha > 0f -> base.copy(alpha = (0.40f - index * 0.08f).coerceIn(0.18f, 0.42f))
+        index == 0 -> Color(0xFF404040)
+        else -> Color(0xFF2E2E2E)
     }
 }
 

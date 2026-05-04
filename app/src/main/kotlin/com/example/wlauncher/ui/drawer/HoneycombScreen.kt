@@ -40,6 +40,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -85,12 +86,13 @@ import com.flue.launcher.util.generateHoneycombRows
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
-private const val HONEYCOMB_MENU_TRIGGER_MS = 410L
+private const val HONEYCOMB_MENU_TRIGGER_MS = 2_000L
 private const val HONEYCOMB_MENU_DRAG_START_DP = 20f
 private const val HONEYCOMB_PRESS_DURATION_MS = 200
 private const val HONEYCOMB_AUTO_SCROLL_EDGE_DP = 96f
@@ -123,6 +125,7 @@ fun HoneycombScreen(
     topFadeRangeDp: Int = 56,
     bottomFadeRangeDp: Int = 56,
     fastScrollOptimizationEnabled: Boolean = true,
+    rotaryHapticsEnabled: Boolean = true,
     active: Boolean = true,
     leftSafeInsetPercent: Int = 0,
     appListScalePercent: Int = 100,
@@ -153,6 +156,7 @@ fun HoneycombScreen(
             fisheyeStrengthPercent = fisheyeStrengthPercent,
             edgeSpacingCompressionEnabled = edgeSpacingCompressionEnabled,
             useWatchFaceColors = useWatchFaceColors,
+            rotaryHapticsEnabled = rotaryHapticsEnabled,
             onAppClick = onAppClick,
             onReorder = onReorder,
             onLongClick = onLongClick,
@@ -403,7 +407,7 @@ fun HoneycombScreen(
                 .flueDrawerRotaryScrollable(
                     focusRequester,
                     DrawerInputMode.Honeycomb,
-                    onRotaryScroll = { vibrateHaptic(context) }
+                    onRotaryScroll = { if (rotaryHapticsEnabled) vibrateHaptic(context) }
                 ) { rotaryDelta ->
                     launchWheelScroll(-rotaryDelta)
                 }
@@ -1139,6 +1143,7 @@ private fun MaterialDenseGridScreen(
     fisheyeStrengthPercent: Int,
     edgeSpacingCompressionEnabled: Boolean,
     useWatchFaceColors: Boolean,
+    rotaryHapticsEnabled: Boolean,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit,
     onLongClick: (AppInfo) -> Unit,
@@ -1197,6 +1202,15 @@ private fun MaterialDenseGridScreen(
             .filterNot { it in validIndexes }
             .forEach { materialLaunchCenters.remove(it) }
     }
+    LaunchedEffect(gridState, apps.size, dragFromIndex, dragCurrentIndex) {
+        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.map { it.index }.toSet() }
+            .collect { visibleIndexes ->
+                val pinned = setOfNotNull(dragFromIndex, dragCurrentIndex)
+                materialItemBounds.keys
+                    .filterNot { it in visibleIndexes || it in pinned }
+                    .forEach { materialItemBounds.remove(it) }
+            }
+    }
 
     val nestedScrollConnection = remember(gridState, dragFromIndex, longPressedApp, onScrollToTop) {
         object : NestedScrollConnection {
@@ -1210,9 +1224,23 @@ private fun MaterialDenseGridScreen(
                     }
                     return Offset(0f, available.y)
                 }
+                val atBottom = !gridState.canScrollForward
+                if (available.y < 0f && atBottom) {
+                    val next = (overscroll.value + available.y).coerceAtLeast(-overscrollLimitPx)
+                    scope.launch {
+                        overscroll.snapTo(next)
+                    }
+                    return Offset(0f, available.y)
+                }
                 if (overscroll.value > 0f && available.y < 0f) {
                     scope.launch {
                         overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(0f))
+                    }
+                    return Offset(0f, available.y)
+                }
+                if (overscroll.value < 0f && available.y > 0f) {
+                    scope.launch {
+                        overscroll.snapTo((overscroll.value + available.y).coerceAtMost(0f))
                     }
                     return Offset(0f, available.y)
                 }
@@ -1248,7 +1276,7 @@ private fun MaterialDenseGridScreen(
             .flueDrawerRotaryScrollable(
                 focusRequester,
                 DrawerInputMode.Honeycomb,
-                onRotaryScroll = { vibrateHaptic(context) }
+                onRotaryScroll = { if (rotaryHapticsEnabled) vibrateHaptic(context) }
             ) { rotaryDelta ->
                 scope.launch { gridState.scrollBy(-rotaryDelta) }
             }
@@ -1343,7 +1371,8 @@ private fun MaterialDenseGridScreen(
                             }
                             findMaterialGridIndexAt(
                                 pointer = pointer,
-                                itemBounds = materialItemBounds
+                                itemBounds = materialItemBounds,
+                                excludedIndex = dragFromIndex
                             )?.let { target ->
                                 if (target in apps.indices) dragCurrentIndex = target
                             }
@@ -1383,6 +1412,8 @@ private fun MaterialDenseGridScreen(
             .coerceIn(screenHeightPx / effectiveColumns, screenHeightPx)
         val fisheyeMinScale = fisheyeMinScale(fisheyeStrengthPercent)
         val autoScrollEdgePx = with(density) { HONEYCOMB_AUTO_SCROLL_EDGE_DP.dp.toPx() }
+        val materialIconShape = RoundedCornerShape((18.dp * appListScale).coerceIn(12.dp, 24.dp))
+        val iconInnerPadding = (3.dp * appListScale).coerceIn(2.dp, 6.dp)
         LaunchedEffect(dragFromIndex, screenHeightPx) {
             var previousFrameNanos = 0L
             while (dragFromIndex != null) {
@@ -1408,7 +1439,11 @@ private fun MaterialDenseGridScreen(
                 if (pendingScrollDelta != 0f) {
                     gridState.scrollBy(pendingScrollDelta)
                     dragPointer?.let { pointer ->
-                        findMaterialGridIndexAt(pointer, materialItemBounds)?.let { target ->
+                        findMaterialGridIndexAt(
+                            pointer = pointer,
+                            itemBounds = materialItemBounds,
+                            excludedIndex = dragFromIndex
+                        )?.let { target ->
                             if (target in apps.indices) dragCurrentIndex = target
                         }
                     }
@@ -1479,7 +1514,7 @@ private fun MaterialDenseGridScreen(
                     dragFromIndex = dragFromIndex,
                     dragCurrentIndex = dragCurrentIndex,
                     bounds = itemBounds,
-                    dragPointer = dragPointer
+                    itemBounds = materialItemBounds
                 )
                 val animatedDragX by animateFloatAsState(
                     targetValue = dragTarget.x + edgeSpacingOffsetX,
@@ -1528,7 +1563,7 @@ private fun MaterialDenseGridScreen(
                             translationY = animatedDragY
                             scaleX = itemScale
                             scaleY = itemScale
-                            alpha = (if (isDragged) 0.96f else itemAlpha) * entryVisuals.iconProgress
+                            alpha = (if (isDragged) 0f else itemAlpha) * entryVisuals.iconProgress
                         }
                         .clip(materialIconShape)
                         .combinedClickable(
@@ -1580,6 +1615,50 @@ private fun MaterialDenseGridScreen(
             }
         }
 
+        val dragOverlayIndex = dragFromIndex
+        val dragOverlayApp = dragOverlayIndex?.let { apps.getOrNull(it) }
+        val dragOverlayPointer = dragPointer
+        val dragOverlayBounds = dragOverlayIndex?.let { materialItemBounds[it] }
+        if (dragOverlayApp != null && dragOverlayPointer != null && dragOverlayBounds != null) {
+            val overlayIcon = remember(
+                dragOverlayApp.componentKey,
+                dragOverlayApp.cachedPlainIcon,
+                dragOverlayApp.cachedPlainTwoToneIcon,
+                twoToneIconsEnabled
+            ) {
+                dragOverlayApp.plainIconForDisplay(
+                    useTwoTone = twoToneIconsEnabled,
+                    blurred = false
+                )
+            }
+            val overlayWidth = with(density) { dragOverlayBounds.width.toDp() }
+            val overlayHeight = with(density) { dragOverlayBounds.height.toDp() }
+            Box(
+                modifier = Modifier
+                    .size(overlayWidth, overlayHeight)
+                    .graphicsLayer {
+                        translationX = dragOverlayPointer.x - dragOverlayBounds.width / 2f
+                        translationY = dragOverlayPointer.y - dragOverlayBounds.height / 2f
+                        shadowElevation = iconShadowElevationPx
+                        shape = materialIconShape
+                        clip = true
+                        scaleX = 1.04f
+                        scaleY = 1.04f
+                    }
+                    .background(appPalette.item, materialIconShape)
+                    .padding(iconInnerPadding)
+            ) {
+                Image(
+                    bitmap = overlayIcon,
+                    contentDescription = dragOverlayApp.label,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(materialIconShape)
+                )
+            }
+        }
+
         longPressedApp?.let { app ->
             AppShortcutOverlay(
                 app = app,
@@ -1593,9 +1672,11 @@ private fun MaterialDenseGridScreen(
 
 private fun findMaterialGridIndexAt(
     pointer: Offset,
-    itemBounds: Map<Int, Rect>
+    itemBounds: Map<Int, Rect>,
+    excludedIndex: Int? = null
 ): Int? {
-    return itemBounds.entries.firstOrNull { (_, bounds) ->
+    return itemBounds.entries.firstOrNull { (index, bounds) ->
+        index != excludedIndex &&
         pointer.x in bounds.left..bounds.right && pointer.y in bounds.top..bounds.bottom
     }?.key
 }
@@ -1605,21 +1686,31 @@ private fun materialDraggedTargetOffset(
     dragFromIndex: Int?,
     dragCurrentIndex: Int?,
     bounds: Rect?,
-    dragPointer: Offset?
+    itemBounds: Map<Int, Rect>
 ): Offset {
     if (bounds == null || dragFromIndex == null || dragCurrentIndex == null) return Offset.Zero
     if (index == dragFromIndex) {
-        val pointer = dragPointer ?: bounds.center
-        return pointer - bounds.center
+        return Offset.Zero
     }
     if (dragFromIndex == dragCurrentIndex) return Offset.Zero
-    val direction = when {
-        dragCurrentIndex > dragFromIndex && index in (dragFromIndex + 1)..dragCurrentIndex -> -1f
-        dragCurrentIndex < dragFromIndex && index in dragCurrentIndex until dragFromIndex -> 1f
-        else -> 0f
+    val targetIndex = materialVisualSlotIndex(index, dragFromIndex, dragCurrentIndex)
+    if (targetIndex == index) return Offset.Zero
+    val targetBounds = itemBounds[targetIndex] ?: return Offset.Zero
+    return targetBounds.center - bounds.center
+}
+
+private fun materialVisualSlotIndex(
+    index: Int,
+    dragFromIndex: Int,
+    dragCurrentIndex: Int
+): Int {
+    if (dragFromIndex == dragCurrentIndex) return index
+    if (index == dragFromIndex) return dragFromIndex
+    return when {
+        dragCurrentIndex > dragFromIndex && index in (dragFromIndex + 1)..dragCurrentIndex -> index - 1
+        dragCurrentIndex < dragFromIndex && index in dragCurrentIndex until dragFromIndex -> index + 1
+        else -> index
     }
-    if (direction == 0f) return Offset.Zero
-    return Offset(0f, bounds.height * direction)
 }
 
 private fun neighborPressMotion(

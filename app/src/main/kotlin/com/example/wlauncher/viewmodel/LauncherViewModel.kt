@@ -36,6 +36,7 @@ import com.flue.launcher.ui.notification.NotificationActionUi
 import com.flue.launcher.ui.notification.NotificationEntryUi
 import com.flue.launcher.ui.notification.NotificationGroupUi
 import com.flue.launcher.ui.notification.NotificationRevealTarget
+import com.flue.launcher.service.NotifData
 import com.flue.launcher.service.WLauncherNotificationListener
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
@@ -110,6 +111,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_CLASSIC_RETURN_ANIMATION = booleanPreferencesKey("classic_return_animation_enabled")
         val KEY_SHOW_STEP_COUNT = booleanPreferencesKey("show_step_count")
         val KEY_SHOW_NOTIFICATION = booleanPreferencesKey("show_notification")
+        val KEY_SHOW_ONGOING_NOTIFICATIONS = booleanPreferencesKey("show_ongoing_notifications")
+        val KEY_ROTARY_HAPTICS_ENABLED = booleanPreferencesKey("rotary_haptics_enabled")
         val KEY_NOTIFICATION_SETTING_MIGRATED = booleanPreferencesKey("notification_setting_migrated")
         val KEY_SHOW_WIDGETS = booleanPreferencesKey("show_widgets")
         val KEY_SHOW_WIDGET_PAGE = booleanPreferencesKey("show_widget_page")
@@ -344,6 +347,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _showNotification = MutableStateFlow(true)
     val showNotification: StateFlow<Boolean> = _showNotification.asStateFlow()
+    private val _showOngoingNotifications = MutableStateFlow(false)
+    val showOngoingNotifications: StateFlow<Boolean> = _showOngoingNotifications.asStateFlow()
+    private val _rotaryHapticsEnabled = MutableStateFlow(true)
+    val rotaryHapticsEnabled: StateFlow<Boolean> = _rotaryHapticsEnabled.asStateFlow()
     private val _showWidgets = MutableStateFlow(true)
     val showWidgets: StateFlow<Boolean> = _showWidgets.asStateFlow()
     private val _showWidgetPage = MutableStateFlow(true)
@@ -541,9 +548,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             combine(
                 WLauncherNotificationListener.notifications,
                 _expandedNotificationGroups,
-                _pendingDismissedNotificationKeys
-            ) { notifications, expandedPackages, pendingDismissedKeys ->
-                val filteredNotifications = notifications.filterNot { it.key in pendingDismissedKeys }
+                _pendingDismissedNotificationKeys,
+                _showOngoingNotifications
+            ) { notifications, expandedPackages, pendingDismissedKeys, showOngoing ->
+                val visibleNotifications = notifications.filter { shouldShowNotification(it, showOngoing) }
+                val filteredNotifications = visibleNotifications.filterNot { it.key in pendingDismissedKeys }
                 val activeNotificationKeys = notifications.asSequence().map { it.key }.toSet()
                 Triple(
                     buildNotificationGroups(filteredNotifications, emptySet()),
@@ -806,6 +815,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                         it[KEY_SHOW_NOTIFICATION] = true
                         it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
                     }
+                }
+
+                val loadedShowOngoingNotifications = prefs[KEY_SHOW_ONGOING_NOTIFICATIONS] ?: false
+                if (_showOngoingNotifications.value != loadedShowOngoingNotifications) {
+                    _showOngoingNotifications.value = loadedShowOngoingNotifications
+                }
+
+                val loadedRotaryHaptics = prefs[KEY_ROTARY_HAPTICS_ENABLED] ?: true
+                if (_rotaryHapticsEnabled.value != loadedRotaryHaptics) {
+                    _rotaryHapticsEnabled.value = loadedRotaryHaptics
                 }
 
                 val loadedShowWidgets = prefs[KEY_SHOW_WIDGETS] ?: true
@@ -1435,6 +1454,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
             }
         }
+    }
+
+    fun setShowOngoingNotifications(show: Boolean) {
+        _showOngoingNotifications.value = show
+        persist { store.edit { it[KEY_SHOW_ONGOING_NOTIFICATIONS] = show } }
+    }
+
+    fun setRotaryHapticsEnabled(enabled: Boolean) {
+        _rotaryHapticsEnabled.value = enabled
+        persist { store.edit { it[KEY_ROTARY_HAPTICS_ENABLED] = enabled } }
     }
 
     fun setShowWidgets(show: Boolean) {
@@ -2098,6 +2127,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _classicReturnAnimationEnabled.value = false
         _showStepCount.value = true
         _showNotification.value = true
+        _showOngoingNotifications.value = false
+        _rotaryHapticsEnabled.value = true
         _showWidgets.value = true
         _showWidgetPage.value = true
         _showControlCenter.value = true
@@ -2194,6 +2225,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_SHOW_STEP_COUNT] = true
                 it[KEY_LEGACY_CIRCULAR_ICONS] = true
                 it[KEY_SHOW_NOTIFICATION] = true
+                it[KEY_SHOW_ONGOING_NOTIFICATIONS] = false
+                it[KEY_ROTARY_HAPTICS_ENABLED] = true
                 it[KEY_SHOW_WIDGETS] = true
                 it[KEY_SHOW_WIDGET_PAGE] = true
                 it[KEY_SHOW_CONTROL_CENTER] = true
@@ -2469,6 +2502,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 )
             }
             .sortedByDescending { it.latestTime }
+    }
+
+    private fun shouldShowNotification(item: NotifData, showOngoing: Boolean): Boolean {
+        if (item.isSystemHidden) return false
+        if (item.isNoisyOngoing) return false
+        return showOngoing || (!item.isOngoing && !item.isForegroundService)
     }
 
     override fun onCleared() {

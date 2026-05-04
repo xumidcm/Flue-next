@@ -195,6 +195,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val classicReturnAnimationEnabled by vm.classicReturnAnimationEnabled.collectAsStateWithLifecycle()
     val showStepCount by vm.showStepCount.collectAsStateWithLifecycle()
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
+    val rotaryHapticsEnabled by vm.rotaryHapticsEnabled.collectAsStateWithLifecycle()
     val showWidgetPage by vm.showWidgetPage.collectAsStateWithLifecycle()
     val showControlCenter by vm.showControlCenter.collectAsStateWithLifecycle()
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
@@ -329,6 +330,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
     val notificationsEnabled = showNotification
     val notificationSceneActive = screenState == ScreenState.Notifications
+    val notificationStackTint = appListColors.item
     val openWatchFaceChooser: () -> Unit = remember(context) {
         {
             context.startActivity(
@@ -688,6 +690,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         topFadeRangeDp = honeycombTopFade,
                         bottomFadeRangeDp = honeycombBottomFade,
                         fastScrollOptimizationEnabled = honeycombFastScrollOptimization,
+                        rotaryHapticsEnabled = rotaryHapticsEnabled,
                         active = screenState == ScreenState.Apps,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         appListScalePercent = appListScalePercent,
@@ -719,6 +722,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         bottomFadeRangeDp = honeycombBottomFade,
                         topBlurRadiusDp = honeycombEdgeBlurRadius,
                         bottomBlurRadiusDp = honeycombEdgeBlurRadius,
+                        rotaryHapticsEnabled = rotaryHapticsEnabled,
                         active = screenState == ScreenState.Apps,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         appListScalePercent = appListScalePercent,
@@ -837,7 +841,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onDismissGroup = vm::dismissNotificationGroup,
                         onDismissNotification = vm::dismissNotification,
                         onDismissToFace = { vm.setState(ScreenState.Face) },
-                        showSteps = showStepCount
+                        showSteps = showStepCount,
+                        stackCardColor = notificationStackTint
                     )
                 }
             }
@@ -921,7 +926,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onRunNotificationAction = vm::runNotificationAction,
                         onOpenNotification = { key, origin ->
                             vm.openNotification(key, origin, ScreenState.Notifications, 0L)
-                        }
+                        },
+                        stackCardColor = notificationStackTint
                     )
                 }
             }

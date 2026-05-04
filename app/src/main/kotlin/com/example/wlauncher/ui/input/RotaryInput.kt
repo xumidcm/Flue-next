@@ -12,6 +12,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import kotlin.math.abs
 import kotlin.math.sign
 
+private const val ROTARY_HAPTIC_MIN_INTERVAL_MS = 90L
+
 enum class DrawerInputMode {
     Honeycomb,
     List
@@ -138,10 +140,17 @@ fun Modifier.flueRotaryScrollable(
     onRotaryScroll: (() -> Unit)? = null,
     onScroll: (Float) -> Unit
 ): Modifier {
+    var lastHapticAt = 0L
     fun consume(deltaPixels: Float): Boolean {
         val tuned = tunedRotaryScrollDelta(-deltaPixels, multiplier)
         if (tuned == 0f) return false
-        onRotaryScroll?.invoke()
+        if (onRotaryScroll != null) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now - lastHapticAt >= ROTARY_HAPTIC_MIN_INTERVAL_MS) {
+                lastHapticAt = now
+                onRotaryScroll()
+            }
+        }
         onScroll(tuned)
         return true
     }
@@ -161,6 +170,7 @@ fun Modifier.flueDrawerRotaryScrollable(
     onRotaryScroll: (() -> Unit)? = null,
     onScroll: (Float) -> Unit
 ): Modifier {
+    var lastHapticAt = 0L
     fun consume(deltaPixels: Float): Boolean {
         val tuned = normalizeDrawerScrollDelta(
             verticalScrollPixels = -deltaPixels,
@@ -168,7 +178,13 @@ fun Modifier.flueDrawerRotaryScrollable(
             mode = mode
         )
         if (tuned == 0f) return false
-        onRotaryScroll?.invoke()
+        if (onRotaryScroll != null) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now - lastHapticAt >= ROTARY_HAPTIC_MIN_INTERVAL_MS) {
+                lastHapticAt = now
+                onRotaryScroll()
+            }
+        }
         onScroll(tuned)
         return true
     }

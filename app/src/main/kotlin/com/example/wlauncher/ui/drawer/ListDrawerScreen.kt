@@ -83,7 +83,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
-private const val LIST_MENU_TRIGGER_MS = 410L
+private const val LIST_MENU_TRIGGER_MS = 2_000L
 private const val LIST_MENU_DRAG_START_DP = 20f
 private const val LIST_AUTO_SCROLL_EDGE_DP = 84f
 private const val LIST_AUTO_SCROLL_MAX_PX = 30f
@@ -116,6 +116,7 @@ fun ListDrawerScreen(
     bottomFadeRangeDp: Int = 56,
     topBlurRadiusDp: Float = LIST_EDGE_ITEM_BLUR_DP,
     bottomBlurRadiusDp: Float = LIST_EDGE_ITEM_BLUR_DP,
+    rotaryHapticsEnabled: Boolean = true,
     active: Boolean = true,
     leftSafeInsetPercent: Int = 0,
     appListScalePercent: Int = 100,
@@ -234,7 +235,7 @@ fun ListDrawerScreen(
                     .flueDrawerRotaryScrollable(
                         focusRequester,
                         DrawerInputMode.List,
-                        onRotaryScroll = { vibrateHaptic(context) }
+                        onRotaryScroll = { if (rotaryHapticsEnabled) vibrateHaptic(context) }
                     ) { rotaryDelta ->
                         wheelMomentumJob?.cancel()
                         scope.launch {

@@ -19,6 +19,25 @@ fun appListPalette(
     useWatchFaceColor: Boolean = true
 ): AppListPalette {
     if (!useWatchFaceColor) {
+        if (uiStyle.isMaterial) {
+            return if (darkMode) {
+                AppListPalette(
+                    background = Color.Black,
+                    item = Color(0xFF202A36).copy(alpha = 0.72f),
+                    itemPressedOverlay = Color(0xFFB8D7FF).copy(alpha = 0.18f),
+                    text = Color.White,
+                    fadeEdge = Color.Black
+                )
+            } else {
+                AppListPalette(
+                    background = Color.White,
+                    item = Color(0xFFE6EEF8).copy(alpha = 0.86f),
+                    itemPressedOverlay = Color(0xFF5E7EA6).copy(alpha = 0.14f),
+                    text = Color(0xFF101010),
+                    fadeEdge = Color.White
+                )
+            }
+        }
         return if (darkMode) {
             AppListPalette(
                 background = Color.Black,

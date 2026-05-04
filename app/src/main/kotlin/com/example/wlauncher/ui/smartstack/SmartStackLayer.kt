@@ -252,6 +252,7 @@ fun SmartStackLayer(
     onDismissNotification: (String) -> Unit,
     onDismissToFace: () -> Unit,
     showSteps: Boolean,
+    stackCardColor: Color = Color.Unspecified,
     modifier: Modifier = Modifier
 ) {
     val clock = rememberClockSnapshot()
@@ -637,7 +638,12 @@ fun SmartStackLayer(
                         previewGroups.isEmpty() -> PreviewInfoCard("暂无通知", "副一屏上滑可打开通知中心", onOpenNotifications)
                         else -> previewRows.forEach { row ->
                             when (row) {
-                                is PreviewRow.Aggregate -> StackedPreviewCard(row.leadEntry, row.hiddenCount, onOpenNotifications)
+                                is PreviewRow.Aggregate -> StackedPreviewCard(
+                                    row.leadEntry,
+                                    row.hiddenCount,
+                                    stackCardColor,
+                                    onOpenNotifications
+                                )
                                 is PreviewRow.Group -> {
                                     val entry = row.entries.firstOrNull()
                                     if (entry != null) {
@@ -664,7 +670,7 @@ fun SmartStackLayer(
                                             actionHeight = 72.dp
                                         ) {
                                             if (row.hiddenCount > 0) {
-                                                StackedPreviewCard(entry, row.hiddenCount, onOpenNotifications)
+                                                StackedPreviewCard(entry, row.hiddenCount, stackCardColor, onOpenNotifications)
                                             } else {
                                                 PreviewPill(
                                                     entry = entry,
@@ -1833,7 +1839,12 @@ private fun EmptyWidgetCard(width: Dp) {
     }
 }
 
-@Composable private fun StackedPreviewCard(entry: NotificationEntryUi, hiddenCount: Int, onClick: () -> Unit) {
+@Composable private fun StackedPreviewCard(
+    entry: NotificationEntryUi,
+    hiddenCount: Int,
+    stackCardColor: Color = Color.Unspecified,
+    onClick: () -> Unit
+) {
     val stackStrength by animateFloatAsState(
         targetValue = if (hiddenCount > 0) 1f else 0f,
         animationSpec = spring(stiffness = 620f, dampingRatio = 0.82f),
@@ -1857,7 +1868,7 @@ private fun EmptyWidgetCard(width: Dp) {
                     .fillMaxWidth()
                     .height(stackCardHeight)
                     .clip(RoundedCornerShape(28.dp))
-                    .background(if (index == 0) Color(0xFF404040) else Color(0xFF2E2E2E))
+                    .background(notificationStackBackColor(stackCardColor, index))
             )
         }
         Column(modifier = Modifier.padding(bottom = 2.dp)) {
@@ -1879,6 +1890,14 @@ private fun EmptyWidgetCard(width: Dp) {
     Box(Modifier.size(46.dp).clip(CircleShape).background(Color(0xFFD9D9D9)), contentAlignment = Alignment.Center) {
         if (icon != null) Image(icon, null, modifier = Modifier.fillMaxSize().clip(CircleShape), filterQuality = FilterQuality.Medium, contentScale = ContentScale.Crop)
         else Icon(Icons.Filled.Notifications, null, tint = Color(0xFF2B2B2B), modifier = Modifier.size(24.dp))
+    }
+}
+
+private fun notificationStackBackColor(base: Color, index: Int): Color {
+    return when {
+        base != Color.Unspecified && base.alpha > 0f -> base.copy(alpha = (0.40f - index * 0.08f).coerceIn(0.18f, 0.42f))
+        index == 0 -> Color(0xFF404040)
+        else -> Color(0xFF2E2E2E)
     }
 }
 
