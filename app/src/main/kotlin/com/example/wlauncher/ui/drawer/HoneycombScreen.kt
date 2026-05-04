@@ -11,7 +11,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Box
@@ -70,6 +69,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.zIndex
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.iconForDisplay
+import com.flue.launcher.data.model.plainIconForDisplay
 import com.flue.launcher.ui.anim.platformBlur
 import com.flue.launcher.ui.input.DrawerInputMode
 import com.flue.launcher.ui.input.DrawerInputSource
@@ -108,6 +108,7 @@ fun HoneycombScreen(
     fisheyeEnabled: Boolean = true,
     fisheyeRangeRows: Int = 4,
     fisheyeStrengthPercent: Int = 100,
+    edgeSpacingCompressionEnabled: Boolean = true,
     fastFlowAnimationEnabled: Boolean = false,
     twoToneIconsEnabled: Boolean = false,
     iconShadowEnabled: Boolean = true,
@@ -148,6 +149,7 @@ fun HoneycombScreen(
             fisheyeEnabled = fisheyeEnabled,
             fisheyeRangeRows = fisheyeRangeRows,
             fisheyeStrengthPercent = fisheyeStrengthPercent,
+            edgeSpacingCompressionEnabled = edgeSpacingCompressionEnabled,
             useWatchFaceColors = useWatchFaceColors,
             onAppClick = onAppClick,
             onReorder = onReorder,
@@ -381,6 +383,7 @@ fun HoneycombScreen(
         }
 
         val currentScroll = currentScrollOffsetValue()
+        val entryOffsetY = (1f - entryProgress.coerceIn(0f, 1f)) * screenHeightPx * 0.08f
         val fastFlowSlowTopY = screenHeightPx * FAST_FLOW_SLOW_TOP_FRACTION
         val fastFlowSlowBottomY = screenHeightPx * FAST_FLOW_SLOW_BOTTOM_FRACTION
 
@@ -600,20 +603,6 @@ fun HoneycombScreen(
                                 val dampedDrag = if (overscroll != 0f) dragAmount.y * 0.28f else dragAmount.y
                                 val nextScroll = current + dampedDrag
                                 directScrollOffset = nextScroll
-                                if (nextScroll >= maxScroll + iconSizePx * 0.28f) {
-                                    returnTriggered = true
-                                    onScrollToTop()
-                                    scope.launch {
-                                        scrollOffset.snapTo(nextScroll)
-                                        directScrollOffset = Float.NaN
-                                        scrollOffset.animateTo(
-                                            maxScroll,
-                                            spring(dampingRatio = 0.64f, stiffness = 360f)
-                                        )
-                                        returnTriggered = false
-                                        dragScrollActive = false
-                                    }
-                                }
                             },
                             onDragEnd = {
                                 if (returnTriggered) {
@@ -628,10 +617,7 @@ fun HoneycombScreen(
                                     markFastScrollActive(260L)
                                 }
                                 directScrollOffset = current
-                                if (
-                                    current >= maxScroll + iconSizePx * 0.28f ||
-                                    (current >= maxScroll - iconSizePx * 0.35f && velocity > 700f)
-                                ) {
+                                if (current >= maxScroll + iconSizePx * 0.28f) {
                                     val returnStart = current
                                     returnTriggered = true
                                     onScrollToTop()
@@ -847,6 +833,16 @@ fun HoneycombScreen(
                         animationSpec = spring(dampingRatio = 0.80f, stiffness = 360f),
                         label = "honeycomb_slot_y"
                     )
+                    val edgeSpacingOffset = edgeSpacingCompressionOffset(
+                        centerY = screenCenterY + slotY + currentScroll,
+                        screenCenterY = screenCenterY,
+                        screenHeight = screenHeightPx,
+                        itemSize = iconSizePx,
+                        strengthPercent = fisheyeStrengthPercent,
+                        enabled = fisheyeEnabled && edgeSpacingCompressionEnabled &&
+                            dragFromIndex == null &&
+                            longPressedApp == null
+                    )
                     val effectiveItemBlur = reduceHoneycombBlurForFastScroll(itemBlur, reduceVisualLoad)
                     AppBubble(
                         icon = app.iconForDisplay(
@@ -870,7 +866,15 @@ fun HoneycombScreen(
                                     slowBottomY = fastFlowSlowBottomY
                                 )
                                 val sx = screenCenterX + clickPos.x
-                                val syPos = screenCenterY + clickPos.y + currentScroll + flowOffset
+                                val clickEdgeOffset = edgeSpacingCompressionOffset(
+                                    centerY = screenCenterY + clickPos.y + currentScroll,
+                                    screenCenterY = screenCenterY,
+                                    screenHeight = screenHeightPx,
+                                    itemSize = iconSizePx,
+                                    strengthPercent = fisheyeStrengthPercent,
+                                    enabled = fisheyeEnabled && edgeSpacingCompressionEnabled
+                                )
+                                val syPos = screenCenterY + clickPos.y + currentScroll + flowOffset + clickEdgeOffset + entryOffsetY
                                 onAppClick(app, Offset(sx / screenWidthPx, syPos / screenHeightPx))
                             }
                         },
@@ -893,7 +897,7 @@ fun HoneycombScreen(
                                     slowBottomY = fastFlowSlowBottomY
                                 )
                                 val posX = screenCenterX + baseX
-                                val pY = screenCenterY + baseY + currentScroll + flowOffset
+                                val pY = screenCenterY + baseY + currentScroll + flowOffset + edgeSpacingOffset + entryOffsetY
                                 var actualCenterX = posX
                                 var actualCenterY = pY
                                 translationX = posX - iconSizePx / 2f
@@ -1046,7 +1050,7 @@ fun HoneycombScreen(
             )
         }
 
-        if (topFadeRangeDp > 0) {
+        if (active && topFadeRangeDp > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -1063,7 +1067,7 @@ fun HoneycombScreen(
                     )
             )
         }
-        if (bottomFadeRangeDp > 0) {
+        if (active && bottomFadeRangeDp > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -1107,6 +1111,7 @@ private fun MaterialDenseGridScreen(
     fisheyeEnabled: Boolean,
     fisheyeRangeRows: Int,
     fisheyeStrengthPercent: Int,
+    edgeSpacingCompressionEnabled: Boolean,
     useWatchFaceColors: Boolean,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit,
@@ -1163,35 +1168,15 @@ private fun MaterialDenseGridScreen(
             .forEach { materialItemBounds.remove(it) }
     }
 
-    val nestedScrollConnection = remember(gridState, onScrollToTop) {
+    val nestedScrollConnection = remember(gridState, dragFromIndex, longPressedApp, onScrollToTop) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (source != NestedScrollSource.UserInput) return Offset.Zero
+                if (source != NestedScrollSource.UserInput || dragFromIndex != null || longPressedApp != null) return Offset.Zero
                 val atTop = gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
-                val lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()
-                val atBottom = lastVisible != null &&
-                    lastVisible.index >= gridState.layoutInfo.totalItemsCount - 1 &&
-                    lastVisible.offset.y + lastVisible.size.height <= gridState.layoutInfo.viewportEndOffset
                 if (available.y > 0f && atTop) {
                     val next = (overscroll.value + available.y).coerceAtMost(overscrollLimitPx)
-                    if (!returnTriggered && next >= topReturnThresholdPx) {
-                        returnTriggered = true
-                        onScrollToTop()
-                        scope.launch {
-                            overscroll.snapTo(next)
-                            overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-                            returnTriggered = false
-                        }
-                        return Offset(0f, available.y)
-                    }
                     scope.launch {
                         overscroll.snapTo(next)
-                    }
-                    return Offset(0f, available.y)
-                }
-                if (available.y < 0f && atBottom) {
-                    scope.launch {
-                        overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(-overscrollLimitPx))
                     }
                     return Offset(0f, available.y)
                 }
@@ -1201,16 +1186,11 @@ private fun MaterialDenseGridScreen(
                     }
                     return Offset(0f, available.y)
                 }
-                if (overscroll.value < 0f && available.y > 0f) {
-                    scope.launch {
-                        overscroll.snapTo((overscroll.value + available.y).coerceAtMost(0f))
-                    }
-                    return Offset(0f, available.y)
-                }
                 return Offset.Zero
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
+                if (dragFromIndex != null || longPressedApp != null) return Velocity.Zero
                 if (overscroll.value != 0f) {
                     val shouldReturnToFace = overscroll.value >= topReturnThresholdPx
                     if (shouldReturnToFace && !returnTriggered) {
@@ -1243,7 +1223,6 @@ private fun MaterialDenseGridScreen(
                 scope.launch { gridState.scrollBy(-rotaryDelta) }
             }
             .nestedScroll(nestedScrollConnection)
-            .graphicsLayer { translationY = overscroll.value }
             .onGloballyPositioned {
                 materialContainerRoot = it.positionInRoot()
                 if (!focusReady) focusReady = true
@@ -1268,6 +1247,7 @@ private fun MaterialDenseGridScreen(
             }
             .pointerInput(onScrollToTop) {
                 awaitEachGesture {
+                    awaitPrimaryDown()
                     while (true) {
                         val event = awaitPointerEvent()
                         if (event.changes.none { it.pressed }) break
@@ -1285,57 +1265,88 @@ private fun MaterialDenseGridScreen(
                     }
                 }
             }
-            .pointerInput(apps) {
-                detectDragGesturesAfterLongPress(
-                    onDragStart = { offset ->
-                        val startIndex = findMaterialGridIndexAt(
-                            pointer = offset,
-                            itemBounds = materialItemBounds
-                        )
-                        val app = if (startIndex != null) apps.getOrNull(startIndex) else null
-                        if (startIndex != null && app != null) {
+            .pointerInput(apps, materialItemBounds) {
+                val menuDragStartPx = with(density) { HONEYCOMB_MENU_DRAG_START_DP.dp.toPx() }
+                awaitEachGesture {
+                    val down = awaitPrimaryDown()
+                    val startIndex = findMaterialGridIndexAt(
+                        pointer = down.position,
+                        itemBounds = materialItemBounds
+                    ) ?: return@awaitEachGesture
+                    val app = apps.getOrNull(startIndex) ?: return@awaitEachGesture
+                    val longPress = awaitLongPressByTimeoutOrCancel(
+                        pointerId = down.id,
+                        downPosition = down.position,
+                        timeoutMillis = HONEYCOMB_MENU_TRIGGER_MS
+                    ) ?: return@awaitEachGesture
+
+                    onLongClick(app)
+                    longPressedApp = app
+                    vibrateHaptic(context)
+
+                    val dragOrigin = longPress.position
+                    var dragActive = false
+                    var hasDragged = false
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            if (!dragActive) change.consume()
+                            break
+                        }
+
+                        val pointer = change.position
+                        val movedDistance = (pointer - dragOrigin).getDistance()
+                        if (!dragActive && movedDistance > menuDragStartPx) {
+                            longPressedApp = null
+                            dragActive = true
                             dragFromIndex = startIndex
                             dragCurrentIndex = startIndex
-                            dragPointer = offset
-                            longPressedApp = null
-                            onLongClick(app)
+                            dragPointer = pointer
                             vibrateHaptic(context)
                         }
-                    },
-                    onDrag = { change, _ ->
-                        if (dragFromIndex != null) {
-                            dragPointer = change.position
+
+                        if (dragActive) {
+                            dragPointer = pointer
+                            if (movedDistance > menuDragStartPx * 0.35f) {
+                                hasDragged = true
+                            }
                             findMaterialGridIndexAt(
-                                pointer = change.position,
+                                pointer = pointer,
                                 itemBounds = materialItemBounds
                             )?.let { target ->
-                                if (target in apps.indices) {
-                                    dragCurrentIndex = target
-                                }
+                                if (target in apps.indices) dragCurrentIndex = target
                             }
                             change.consume()
                         }
-                    },
-                    onDragEnd = {
-                        val from = dragFromIndex
-                        val to = dragCurrentIndex
-                        if (from != null && to != null && from != to) {
-                            onReorder(from, to)
-                        }
-                        dragFromIndex = null
-                        dragCurrentIndex = null
-                        dragPointer = null
-                    },
-                    onDragCancel = {
-                        dragFromIndex = null
-                        dragCurrentIndex = null
-                        dragPointer = null
                     }
-                )
+
+                    val from = dragFromIndex
+                    val to = dragCurrentIndex
+                    if (dragActive && from != null && to != null && from != to && hasDragged) {
+                        materialItemBounds[to]?.center?.let { targetCenter ->
+                            dragPointer = targetCenter
+                        }
+                        scope.launch {
+                            delay(150)
+                            onReorder(from, to)
+                            dragFromIndex = null
+                            dragCurrentIndex = null
+                            dragPointer = null
+                        }
+                        longPressedApp = null
+                    } else if (dragActive) {
+                        dragFromIndex = null
+                        dragCurrentIndex = null
+                        dragPointer = null
+                        longPressedApp = null
+                    }
+                }
             }
     ) {
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
+        val entryOffsetY = (1f - entryProgress.coerceIn(0f, 1f)) * screenHeightPx * 0.08f
         val backgroundDiameter = (if (maxWidth > maxHeight) maxWidth else maxHeight) * 1.38f
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val horizontalPaddingPx = with(density) { 8.dp.toPx() }
@@ -1344,6 +1355,39 @@ private fun MaterialDenseGridScreen(
         val fisheyeRangePx = (screenHeightPx / effectiveColumns * fisheyeRangeRows.coerceIn(1, 8))
             .coerceIn(screenHeightPx / effectiveColumns, screenHeightPx)
         val fisheyeMinScale = fisheyeMinScale(fisheyeStrengthPercent)
+        val autoScrollEdgePx = with(density) { HONEYCOMB_AUTO_SCROLL_EDGE_DP.dp.toPx() }
+        LaunchedEffect(dragFromIndex, screenHeightPx) {
+            var previousFrameNanos = 0L
+            while (dragFromIndex != null) {
+                var pendingScrollDelta = 0f
+                withFrameNanos { frameTimeNanos ->
+                    val frameDeltaSeconds = if (previousFrameNanos == 0L) {
+                        1f / 60f
+                    } else {
+                        ((frameTimeNanos - previousFrameNanos) / 1_000_000_000f).coerceIn(1f / 144f, 0.05f)
+                    }
+                    previousFrameNanos = frameTimeNanos
+                    val pointer = dragPointer
+                    if (pointer != null) {
+                        pendingScrollDelta = when {
+                            pointer.y < autoScrollEdgePx ->
+                                -HONEYCOMB_AUTO_SCROLL_MAX_PX * 60f * ((autoScrollEdgePx - pointer.y) / autoScrollEdgePx).coerceIn(0f, 1.2f)
+                            pointer.y > screenHeightPx - autoScrollEdgePx ->
+                                HONEYCOMB_AUTO_SCROLL_MAX_PX * 60f * ((pointer.y - (screenHeightPx - autoScrollEdgePx)) / autoScrollEdgePx).coerceIn(0f, 1.2f)
+                            else -> 0f
+                        } * frameDeltaSeconds
+                    }
+                }
+                if (pendingScrollDelta != 0f) {
+                    gridState.scrollBy(pendingScrollDelta)
+                    dragPointer?.let { pointer ->
+                        findMaterialGridIndexAt(pointer, materialItemBounds)?.let { target ->
+                            if (target in apps.indices) dragCurrentIndex = target
+                        }
+                    }
+                }
+            }
+        }
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
@@ -1353,6 +1397,7 @@ private fun MaterialDenseGridScreen(
                     scaleX = backgroundScale
                     scaleY = backgroundScale
                     alpha = entryVisuals.backgroundProgress
+                    translationY = entryOffsetY * 0.55f
                     clip = true
                     shape = CircleShape
                 }
@@ -1361,7 +1406,10 @@ private fun MaterialDenseGridScreen(
         LazyVerticalGrid(
             columns = GridCells.Fixed(effectiveColumns),
             state = gridState,
-            modifier = Modifier.fillMaxSize(),
+            userScrollEnabled = dragFromIndex == null && longPressedApp == null,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { translationY = overscroll.value + entryOffsetY },
             contentPadding = PaddingValues(start = 8.dp + leftSafeInset, top = 8.dp, end = 8.dp, bottom = 8.dp),
             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
             verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
@@ -1375,13 +1423,26 @@ private fun MaterialDenseGridScreen(
                 val isPressed by interactionSource.collectIsPressedAsState()
                 val itemBounds = materialItemBounds[index]
                 val itemCenterY = itemBounds?.center?.y ?: screenHeightPx / 2f
-                val itemScale = if (fisheyeEnabled) {
-                    val dist = abs(itemCenterY - screenHeightPx / 2f)
+                val bottomFisheyeStartY = screenHeightPx * 0.52f
+                val itemScale = if (fisheyeEnabled && itemCenterY > bottomFisheyeStartY) {
+                    val dist = itemCenterY - bottomFisheyeStartY
                     fisheyeScale(dist, fisheyeRangePx, minScale = fisheyeMinScale)
                 } else {
                     1f
                 }
                 val itemAlpha = if (fisheyeEnabled) itemScale.coerceIn(0.24f, 1f) else 1f
+                val itemHeightPx = itemBounds?.height ?: (screenHeightPx / effectiveColumns.coerceAtLeast(1))
+                val edgeSpacingOffset = edgeSpacingCompressionOffset(
+                    centerY = itemCenterY,
+                    screenCenterY = screenHeightPx / 2f,
+                    screenHeight = screenHeightPx,
+                    itemSize = itemHeightPx,
+                    strengthPercent = fisheyeStrengthPercent,
+                    enabled = fisheyeEnabled && edgeSpacingCompressionEnabled &&
+                        itemCenterY > bottomFisheyeStartY &&
+                        dragFromIndex == null &&
+                        longPressedApp == null
+                )
                 val isDragged = dragFromIndex == index
                 val dragTarget = materialDraggedTargetOffset(
                     index = index,
@@ -1390,17 +1451,29 @@ private fun MaterialDenseGridScreen(
                     bounds = itemBounds,
                     dragPointer = dragPointer
                 )
+                val animatedDragX by animateFloatAsState(
+                    targetValue = dragTarget.x,
+                    animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
+                    label = "material_drag_x"
+                )
+                val animatedDragY by animateFloatAsState(
+                    targetValue = dragTarget.y + edgeSpacingOffset,
+                    animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
+                    label = "material_drag_y"
+                )
                 val displayIcon = remember(
                     app.componentKey,
-                    app.cachedIcon,
-                    app.cachedTwoToneIcon,
+                    app.cachedPlainIcon,
+                    app.cachedPlainTwoToneIcon,
                     twoToneIconsEnabled
                 ) {
-                    app.iconForDisplay(
+                    app.plainIconForDisplay(
                         useTwoTone = twoToneIconsEnabled,
                         blurred = false
                     )
                 }
+                val materialIconShape = RoundedCornerShape((18.dp * appListScale).coerceIn(12.dp, 24.dp))
+                val iconInnerPadding = (3.dp * appListScale).coerceIn(2.dp, 6.dp)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1419,18 +1492,19 @@ private fun MaterialDenseGridScreen(
                         }
                         .graphicsLayer {
                             shadowElevation = iconShadowElevationPx
-                            shape = launcherStyle.bubbleShape
-                            translationX = dragTarget.x
-                            translationY = dragTarget.y
+                            shape = materialIconShape
+                            translationX = animatedDragX
+                            translationY = animatedDragY
                             scaleX = itemScale
                             scaleY = itemScale
-                            alpha = if (isDragged) 0.96f else itemAlpha
+                            alpha = (if (isDragged) 0.96f else itemAlpha) * entryVisuals.iconProgress
                         }
-                        .clip(launcherStyle.bubbleShape)
+                        .clip(materialIconShape)
                         .combinedClickable(
                             interactionSource = interactionSource,
                             indication = null,
                             onClick = {
+                                if (longPressedApp != null || dragFromIndex != null) return@combinedClickable
                                 val col = index % effectiveColumns
                                 val usableWidth = screenWidthPx - leftPaddingPx - horizontalPaddingPx - itemGapPx * (effectiveColumns - 1)
                                 val cellWidth = usableWidth / effectiveColumns
@@ -1439,21 +1513,17 @@ private fun MaterialDenseGridScreen(
                                     app,
                                     Offset(
                                         x = centerX / screenWidthPx,
-                                        y = 0.5f
+                                    y = ((itemCenterY + edgeSpacingOffset) / screenHeightPx).coerceIn(0f, 1f)
                                     )
                                 )
-                            },
-                            onLongClick = {
-                                onLongClick(app)
-                                longPressedApp = app
                             }
                         )
                         .background(
                             color = (if (isPressed) launcherStyle.pressedCardColor else appPalette.item)
                                 .copy(alpha = entryVisuals.surfaceProgress),
-                            shape = launcherStyle.bubbleShape
+                            shape = materialIconShape
                         )
-                        .padding(0.dp)
+                        .padding(iconInnerPadding)
                 ) {
                     Box(
                         modifier = Modifier.fillMaxSize(),
@@ -1462,10 +1532,9 @@ private fun MaterialDenseGridScreen(
                         Image(
                             bitmap = displayIcon,
                             contentDescription = app.label,
-                            contentScale = ContentScale.Crop,
+                            contentScale = ContentScale.Fit,
                             modifier = Modifier
                                 .fillMaxSize()
-                                .graphicsLayer { alpha = entryVisuals.iconProgress }
                         )
                     }
                 }

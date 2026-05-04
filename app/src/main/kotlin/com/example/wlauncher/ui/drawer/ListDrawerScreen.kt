@@ -103,6 +103,7 @@ fun ListDrawerScreen(
     fisheyeEnabled: Boolean = true,
     fisheyeRangeRows: Int = 4,
     fisheyeStrengthPercent: Int = 100,
+    edgeSpacingCompressionEnabled: Boolean = true,
     fastFlowAnimationEnabled: Boolean = false,
     twoToneIconsEnabled: Boolean = false,
     iconShadowEnabled: Boolean = true,
@@ -265,17 +266,6 @@ fun ListDrawerScreen(
                         object : NestedScrollConnection {
                             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                                 if (source != NestedScrollSource.UserInput || dragFromIndex != null || longPressedApp != null) return Offset.Zero
-                                if (!returnTriggered && available.y > 0f && !listState.canScrollBackward &&
-                                    overscroll.value + available.y >= topReturnThresholdPx
-                                ) {
-                                    returnTriggered = true
-                                    onScrollToTop()
-                                    scope.launch {
-                                        overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-                                        returnTriggered = false
-                                    }
-                                    return Offset(0f, available.y)
-                                }
                                 return consumeListOverscroll(
                                     availableY = available.y,
                                     listState = listState,
@@ -291,17 +281,6 @@ fun ListDrawerScreen(
                                 source: NestedScrollSource
                             ): Offset {
                                 if (source != NestedScrollSource.UserInput || dragFromIndex != null || longPressedApp != null) return Offset.Zero
-                                if (!returnTriggered && available.y > 0f && !listState.canScrollBackward &&
-                                    overscroll.value + available.y >= topReturnThresholdPx
-                                ) {
-                                    returnTriggered = true
-                                    onScrollToTop()
-                                    scope.launch {
-                                        overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-                                        returnTriggered = false
-                                    }
-                                    return Offset(0f, available.y)
-                                }
                                 return consumeListOverscroll(
                                     availableY = available.y,
                                     listState = listState,
@@ -314,7 +293,7 @@ fun ListDrawerScreen(
                             override suspend fun onPreFling(available: Velocity): Velocity {
                                 if (dragFromIndex != null || longPressedApp != null) return Velocity.Zero
                                 val atTop = !listState.canScrollBackward
-                                if ((overscroll.value > topReturnThresholdPx || available.y > 1200f) && atTop) {
+                                if (overscroll.value >= topReturnThresholdPx && atTop) {
                                     if (!returnTriggered) {
                                         returnTriggered = true
                                         onScrollToTop()
@@ -479,6 +458,7 @@ fun ListDrawerScreen(
         ) {
             val screenHeightPx = with(density) { maxHeight.toPx() }
             val screenCenterY = screenHeightPx / 2f
+            val entryOffsetY = (1f - entryProgress.coerceIn(0f, 1f)) * screenHeightPx * 0.08f
             val listViewportCenterY by remember {
                 derivedStateOf {
                     val info = listState.layoutInfo
@@ -573,7 +553,7 @@ fun ListDrawerScreen(
                 userScrollEnabled = dragFromIndex == null && longPressedApp == null,
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer { translationY = overscroll.value },
+                    .graphicsLayer { translationY = overscroll.value + entryOffsetY },
                 contentPadding = PaddingValues(
                     top = centeredPadding,
                     bottom = centeredPadding,
@@ -599,6 +579,16 @@ fun ListDrawerScreen(
                         scrollTick = fisheyeScrollTick
                     )
                     val rowCenterY = itemInfo?.let { it.offset + it.size / 2f } ?: listViewportCenterY
+                    val edgeSpacingOffset = edgeSpacingCompressionOffset(
+                        centerY = rowCenterY,
+                        screenCenterY = listViewportCenterY,
+                        screenHeight = screenHeightPx,
+                        itemSize = with(density) { estimatedItemHeight.toPx() },
+                        strengthPercent = fisheyeStrengthPercent,
+                        enabled = fisheyeEnabled && edgeSpacingCompressionEnabled &&
+                            dragFromIndex == null &&
+                            longPressedApp == null
+                    )
                     val flowOffset = computeFastFlowOffset(
                         rowCenterY = rowCenterY,
                         screenCenterY = listViewportCenterY,
@@ -671,7 +661,7 @@ fun ListDrawerScreen(
                             }
                             .graphicsLayer {
                                 val targetScale = itemScale * pressedScale
-                                translationY = if (isDragged) 0f else displayDisplacement + flowOffset
+                                translationY = if (isDragged) 0f else displayDisplacement + flowOffset + edgeSpacingOffset
                                 scaleX = targetScale
                                 scaleY = targetScale
                                 val rowAlpha = if (isDragged || isSettling) {
@@ -699,7 +689,8 @@ fun ListDrawerScreen(
                                 indication = null,
                                 onClick = {
                                     if (longPressedApp != null || dragFromIndex != null) return@combinedClickable
-                                    val centerY = (itemCenters[index] ?: rowCenterY).coerceIn(0f, screenHeightPx)
+                                    val centerY = ((itemCenters[index] ?: rowCenterY) + edgeSpacingOffset)
+                                        .coerceIn(0f, screenHeightPx)
                                     onAppClick(app, Offset(0.15f, centerY / screenHeightPx))
                                 }
                             )
@@ -778,7 +769,7 @@ fun ListDrawerScreen(
             }
         }
 
-        if (topFadeRangeDp > 0) {
+        if (active && topFadeRangeDp > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -797,7 +788,7 @@ fun ListDrawerScreen(
                     .platformBlur(topBlurRadiusDp, blurEnabled && effectiveEdgeBlur)
             )
         }
-        if (bottomFadeRangeDp > 0) {
+        if (active && bottomFadeRangeDp > 0) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)

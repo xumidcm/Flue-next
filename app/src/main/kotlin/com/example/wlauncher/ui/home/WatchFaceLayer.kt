@@ -78,6 +78,7 @@ import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.WatchFacePhotoCache
 import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.LauncherStyle
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.isMaterial
 import com.flue.launcher.watchface.WatchClockColorMode
@@ -209,6 +210,7 @@ fun WatchFaceLayer(
     videoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
     showChargingPowerText: Boolean = true,
     showStatusIndicators: Boolean = true,
+    showBottomFade: Boolean = true,
     hasNotifications: Boolean = false,
     onLongPress: (() -> Unit)? = null,
     onDoubleTap: (() -> Unit)? = null,
@@ -224,6 +226,7 @@ fun WatchFaceLayer(
         videoOptions = videoOptions,
         showChargingPowerText = showChargingPowerText,
         showStatusIndicators = showStatusIndicators,
+        showBottomFade = showBottomFade,
         hasNotifications = hasNotifications,
         clockOverride = null,
         onLongPress = onLongPress,
@@ -248,6 +251,7 @@ fun BuiltInWatchFacePreview(
     playVideo: Boolean = true,
     showChargingPowerText: Boolean = true,
     showStatusIndicators: Boolean = false,
+    showBottomFade: Boolean = true,
     hasNotifications: Boolean = false
 ) {
     BuiltInWatchFaceSurface(
@@ -260,6 +264,7 @@ fun BuiltInWatchFacePreview(
         videoOptions = videoOptions,
         showChargingPowerText = showChargingPowerText,
         showStatusIndicators = showStatusIndicators,
+        showBottomFade = showBottomFade,
         hasNotifications = hasNotifications,
         clockOverride = clockOverride,
         onLongPress = null,
@@ -281,6 +286,7 @@ private fun BuiltInWatchFaceSurface(
     videoOptions: BuiltInWatchFaceOptions,
     showChargingPowerText: Boolean,
     showStatusIndicators: Boolean,
+    showBottomFade: Boolean,
     hasNotifications: Boolean,
     clockOverride: ClockSnapshot?,
     onLongPress: (() -> Unit)?,
@@ -377,7 +383,7 @@ private fun BuiltInWatchFaceSurface(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(launcherStyle.screenScrim)
+                .background(watchFaceScrimBrush(launcherStyle, uiStyle, showBottomFade))
         )
 
         if (showClock) {
@@ -412,6 +418,21 @@ private fun BuiltInWatchFaceSurface(
             )
         }
     }
+}
+
+private fun watchFaceScrimBrush(
+    launcherStyle: LauncherStyle,
+    uiStyle: UiStyle,
+    showBottomFade: Boolean
+): Brush {
+    if (showBottomFade) return launcherStyle.screenScrim
+    return Brush.verticalGradient(
+        listOf(
+            if (uiStyle.isMaterial) launcherStyle.accentColor.copy(alpha = 0.10f) else Color.Transparent,
+            Color.Transparent,
+            Color.Transparent
+        )
+    )
 }
 
 @Composable

@@ -266,6 +266,7 @@ private fun SettingsRootScreen(
     val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsStateWithLifecycle()
     val appListFisheyeRangeRows by vm.appListFisheyeRangeRows.collectAsStateWithLifecycle()
     val appListFisheyeStrengthPercent by vm.appListFisheyeStrengthPercent.collectAsStateWithLifecycle()
+    val appListEdgeSpacingCompressionEnabled by vm.appListEdgeSpacingCompressionEnabled.collectAsStateWithLifecycle()
     val appListLeftSafeInsetPercent by vm.appListLeftSafeInsetPercent.collectAsStateWithLifecycle()
     val appListScalePercent by vm.appListScalePercent.collectAsStateWithLifecycle()
     val globalUiScalePercent by vm.globalUiScalePercent.collectAsStateWithLifecycle()
@@ -324,6 +325,7 @@ private fun SettingsRootScreen(
     val powerMenuButtonEnabled by vm.powerMenuButtonEnabled.collectAsStateWithLifecycle()
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
+    val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val accessibilityServiceConnected by FlueAccessibilityService.connected.collectAsStateWithLifecycle()
     val headerTime = rememberSettingsHeaderTime()
     val isZh = remember(context.resources.configuration) {
@@ -638,6 +640,19 @@ private fun SettingsRootScreen(
                     )
                 }
             }
+            item("watchface_bottom_fade") {
+                SettingsSwitchRow(
+                    title = if (isZh) "表盘底部渐隐遮罩" else "Watch Face Bottom Fade",
+                    subtitle = if (watchFaceBottomFadeEnabled) {
+                        if (isZh) "AW 和 MD3 表盘底部保留渐隐过渡" else "Keep the bottom fade on AW and MD3 watch faces"
+                    } else {
+                        if (isZh) "关闭表盘底部渐隐过渡" else "Disable the bottom watch face fade"
+                    },
+                    checked = watchFaceBottomFadeEnabled,
+                    onToggle = vm::setWatchFaceBottomFadeEnabled,
+                    scale = itemFisheye(listState, "watchface_bottom_fade", screenCenterY, screenHeightPx)
+                )
+            }
             items(watchFaces, key = { it.id }) { descriptor ->
                 WatchFaceSettingCard(
                     descriptor = descriptor,
@@ -932,6 +947,19 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "app_list_scale", screenCenterY, screenHeightPx)
                 )
             }
+            item("app_list_fisheye") {
+                SettingsSwitchRow(
+                    title = if (isZh) "鱼眼效果" else "Fisheye Effect",
+                    subtitle = if (appListFisheyeEnabled) {
+                        if (isZh) "开启后可调节范围、强度和边缘间距压缩" else "Enable range, strength, and edge spacing controls"
+                    } else {
+                        if (isZh) "关闭后应用列表不再缩放边缘图标" else "Disable edge scaling for the app list"
+                    },
+                    checked = appListFisheyeEnabled,
+                    onToggle = vm::setAppListFisheyeEnabled,
+                    scale = itemFisheye(listState, "app_list_fisheye", screenCenterY, screenHeightPx)
+                )
+            }
             item("app_list_fisheye_range_rows") {
                 SettingsSliderRow(
                     title = if (isZh) "鱼眼生效范围" else "Fisheye Range",
@@ -944,6 +972,7 @@ private fun SettingsRootScreen(
                     range = 1f..8f,
                     steps = 6,
                     onValueChange = { vm.setAppListFisheyeRangeRows(it.roundToInt()) },
+                    enabled = appListFisheyeEnabled,
                     scale = itemFisheye(listState, "app_list_fisheye_range_rows", screenCenterY, screenHeightPx)
                 )
             }
@@ -956,7 +985,18 @@ private fun SettingsRootScreen(
                     range = 0f..200f,
                     steps = 19,
                     onValueChange = { vm.setAppListFisheyeStrengthPercent(it.roundToInt()) },
+                    enabled = appListFisheyeEnabled,
                     scale = itemFisheye(listState, "app_list_fisheye_strength", screenCenterY, screenHeightPx)
+                )
+            }
+            item("app_list_edge_spacing_compression") {
+                SettingsSwitchRow(
+                    title = if (isZh) "边缘图标间距压缩" else "Edge Icon Spacing",
+                    subtitle = if (isZh) "越靠近屏幕边界，图标之间的视觉距离越小" else "Compress visual spacing as icons approach the screen edge",
+                    checked = appListEdgeSpacingCompressionEnabled,
+                    enabled = appListFisheyeEnabled,
+                    onToggle = vm::setAppListEdgeSpacingCompressionEnabled,
+                    scale = itemFisheye(listState, "app_list_edge_spacing_compression", screenCenterY, screenHeightPx)
                 )
             }
             item("app_list_left_safe_inset") {
@@ -964,9 +1004,10 @@ private fun SettingsRootScreen(
                     title = if (isZh) "应用列表左侧安全区" else "App List Left Safe Area",
                     value = appListLeftSafeInsetPercent.toFloat(),
                     valueText = "${appListLeftSafeInsetPercent}%",
+                    localValueText = { "${((it / 5f).roundToInt() * 5).coerceIn(0, 50)}%" },
                     range = 0f..50f,
-                    steps = 49,
-                    onValueChange = { vm.setAppListLeftSafeInsetPercent(it.toInt()) },
+                    steps = 9,
+                    onValueChange = { vm.setAppListLeftSafeInsetPercent((it / 5f).roundToInt() * 5) },
                     scale = itemFisheye(listState, "app_list_left_safe_inset", screenCenterY, screenHeightPx)
                 )
             }
@@ -1160,15 +1201,6 @@ private fun SettingsRootScreen(
                     checked = honeycombFastScrollOptimization,
                     onToggle = { vm.setHoneycombFastScrollOptimization(it) },
                     scale = itemFisheye(listState, "honeycomb_fast_scroll_opt", screenCenterY, screenHeightPx)
-                )
-            }
-            item("app_list_fisheye") {
-                SettingsSwitchRow(
-                    title = if (isZh) "鱼眼模式" else "Fisheye Mode",
-                    subtitle = if (isZh) "开启后距离屏幕中心较远的图标会缩小并降低透明度" else "Scale and fade icons farther from the screen center",
-                    checked = appListFisheyeEnabled,
-                    onToggle = vm::setAppListFisheyeEnabled,
-                    scale = itemFisheye(listState, "app_list_fisheye", screenCenterY, screenHeightPx)
                 )
             }
             item("fast_flow_animation") {

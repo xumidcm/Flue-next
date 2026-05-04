@@ -14,6 +14,10 @@ data class AppInfo(
     val cachedBlurredIcon: ImageBitmap,
     val cachedTwoToneIcon: ImageBitmap? = null,
     val cachedTwoToneBlurredIcon: ImageBitmap? = null,
+    val cachedPlainIcon: ImageBitmap? = null,
+    val cachedPlainBlurredIcon: ImageBitmap? = null,
+    val cachedPlainTwoToneIcon: ImageBitmap? = null,
+    val cachedPlainTwoToneBlurredIcon: ImageBitmap? = null,
     val isBuiltInSettingsEntry: Boolean = false
 ) {
     val componentKey: String
@@ -30,4 +34,20 @@ fun AppInfo.iconForDisplay(useTwoTone: Boolean, blurred: Boolean = false): Image
         if (twoTone != null) return twoTone
     }
     return if (blurred) cachedBlurredIcon else cachedIcon
+}
+
+fun AppInfo.plainIconForDisplay(useTwoTone: Boolean, blurred: Boolean = false): ImageBitmap {
+    if (useTwoTone) {
+        val twoTone = if (blurred) {
+            cachedPlainTwoToneBlurredIcon ?: cachedPlainTwoToneIcon
+        } else {
+            cachedPlainTwoToneIcon
+        }
+        if (twoTone != null) return twoTone
+    }
+    return if (blurred) {
+        cachedPlainBlurredIcon ?: cachedBlurredIcon
+    } else {
+        cachedPlainIcon ?: cachedIcon
+    }
 }

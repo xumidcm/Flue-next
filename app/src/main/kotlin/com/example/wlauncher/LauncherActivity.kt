@@ -183,6 +183,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appListLeftSafeInsetPercent by vm.appListLeftSafeInsetPercent.collectAsStateWithLifecycle()
     val appListFisheyeRangeRows by vm.appListFisheyeRangeRows.collectAsStateWithLifecycle()
     val appListFisheyeStrengthPercent by vm.appListFisheyeStrengthPercent.collectAsStateWithLifecycle()
+    val appListEdgeSpacingCompressionEnabled by vm.appListEdgeSpacingCompressionEnabled.collectAsStateWithLifecycle()
     val appListScalePercent by vm.appListScalePercent.collectAsStateWithLifecycle()
     val appListWatchFaceColors by vm.appListWatchFaceColors.collectAsStateWithLifecycle()
     val appListRowBorderEnabled by vm.appListRowBorderEnabled.collectAsStateWithLifecycle()
@@ -196,6 +197,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val showControlCenter by vm.showControlCenter.collectAsStateWithLifecycle()
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
+    val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val doubleTapLockScreenEnabled by vm.doubleTapLockScreenEnabled.collectAsStateWithLifecycle()
     val powerMenuButtonEnabled by vm.powerMenuButtonEnabled.collectAsStateWithLifecycle()
     val sideScreenSectionOrder by vm.sideScreenSectionOrder.collectAsStateWithLifecycle()
@@ -395,6 +397,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
             )
         } else if (screenState == ScreenState.Apps) {
             appListEntryProgress.snapTo(1f)
+        } else if (previousState == ScreenState.Apps) {
+            appListEntryProgress.animateTo(
+                0f,
+                tween(durationMillis = 260, easing = FastOutSlowInEasing)
+            )
         } else {
             appListEntryProgress.snapTo(0f)
         }
@@ -438,7 +445,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
 
     var showSplash by remember { mutableStateOf(false) }
-    val showLaunchBackdrop = screenState == ScreenState.App && (fadeLaunch || currentLaunchIcon != null)
+    val showLaunchBackdrop = screenState == ScreenState.App && (
+        fadeLaunch ||
+            (showSplash && currentLaunchIcon != null) ||
+            (retainedLaunchSplash && retainedLaunchIcon != null)
+        )
     val effectiveLaunchIcon = if (fadeLaunch) null else (currentLaunchIcon ?: retainedLaunchIcon)
     val effectiveLaunchSplash = !fadeLaunch && (
         (showSplash && currentLaunchIcon != null) ||
@@ -508,6 +519,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val widgetPageVisible = widgetPageProgress > 0.001f || screenState == ScreenState.Widgets
         val controlCenterVisible = controlCenterProgress > 0.001f || screenState == ScreenState.ControlCenter
         val sideSceneOverlayActive = sideScreenVisible || widgetPageVisible || controlCenterVisible
+        val keepAppListLayer = screenState == ScreenState.Apps ||
+            isOpeningAppList ||
+            appListEntryProgress.value > 0.001f
 
         GestureHost(
             screenState = screenState,
@@ -561,6 +575,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             videoOptions = videoWatchOptions,
                             showChargingPowerText = watchFaceChargingPowerText,
                             showStatusIndicators = watchFaceStatusIndicators,
+                            showBottomFade = watchFaceBottomFadeEnabled,
                             hasNotifications = showNotification && notificationGroups.isNotEmpty(),
                             onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
                             onDoubleTap = if (
@@ -594,7 +609,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(if (screenState == ScreenState.Apps || isOpeningAppList) 3f else 0f)
+                    .zIndex(if (keepAppListLayer) 3f else 0f)
                     .scaleBlurAlpha(
                         targetValues = appListLayerValues(screenState, uiStyle),
                         screenHeight = screenHeightPx,
@@ -629,6 +644,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         fisheyeEnabled = appListFisheyeEnabled,
                         fisheyeRangeRows = appListFisheyeRangeRows,
                         fisheyeStrengthPercent = appListFisheyeStrengthPercent,
+                        edgeSpacingCompressionEnabled = appListEdgeSpacingCompressionEnabled,
                         fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                         twoToneIconsEnabled = twoToneIconsEnabled,
                         iconShadowEnabled = effectiveIconShadowEnabled,
@@ -660,6 +676,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         fisheyeEnabled = appListFisheyeEnabled,
                         fisheyeRangeRows = appListFisheyeRangeRows,
                         fisheyeStrengthPercent = appListFisheyeStrengthPercent,
+                        edgeSpacingCompressionEnabled = appListEdgeSpacingCompressionEnabled,
                         fastFlowAnimationEnabled = false,
                         twoToneIconsEnabled = twoToneIconsEnabled,
                         iconShadowEnabled = effectiveIconShadowEnabled,

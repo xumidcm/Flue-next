@@ -205,6 +205,21 @@ class AppRepository(private val context: Context) {
                     useTwoToneIcons = useTwoToneIconsSnapshot
                 )
             }
+            val plainIconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|plain|$componentKey|$iconSize|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
+            val plainIcons = if (!useLegacyCircularIconsSnapshot) {
+                cachedIcons
+            } else {
+                getOrCreateIconSet(plainIconCacheKey) {
+                    createIconSet(
+                        componentKey = componentKey,
+                        iconPackMapping = iconPackMapping,
+                        sourceDrawable = ri.loadIcon(pm),
+                        iconSize = iconSize,
+                        useLegacyCircularIcons = false,
+                        useTwoToneIcons = useTwoToneIconsSnapshot
+                    )
+                }
+            }
             loadedApps += AppInfo(
                 label = ri.loadLabel(pm).toString(),
                 packageName = packageName,
@@ -212,7 +227,11 @@ class AppRepository(private val context: Context) {
                 cachedIcon = cachedIcons.sharp,
                 cachedBlurredIcon = cachedIcons.softened,
                 cachedTwoToneIcon = cachedIcons.twoToneSharp,
-                cachedTwoToneBlurredIcon = cachedIcons.twoToneSoftened
+                cachedTwoToneBlurredIcon = cachedIcons.twoToneSoftened,
+                cachedPlainIcon = plainIcons.sharp,
+                cachedPlainBlurredIcon = plainIcons.softened,
+                cachedPlainTwoToneIcon = plainIcons.twoToneSharp,
+                cachedPlainTwoToneBlurredIcon = plainIcons.twoToneSoftened
             )
         }
         createBuiltInSettingsEntry(iconSize, useTwoToneIconsSnapshot)?.let(loadedApps::add)
@@ -291,7 +310,11 @@ class AppRepository(private val context: Context) {
         refreshAsync(iconSize)
     }
 
-    fun loadDisplayIconForPackage(packageName: String, iconSize: Int = currentIconSize): ImageBitmap? {
+    fun loadDisplayIconForPackage(
+        packageName: String,
+        iconSize: Int = currentIconSize,
+        preferPlainIcon: Boolean = false
+    ): ImageBitmap? {
         if (packageName.isBlank()) return null
         return runCatching {
             val pm = context.packageManager
@@ -302,7 +325,7 @@ class AppRepository(private val context: Context) {
                 runCatching { pm.getActivityIcon(it) }.getOrNull()
             } ?: pm.getApplicationIcon(packageName)
             val iconPackPackageSnapshot = iconPackPackage
-            val useLegacyCircularIconsSnapshot = useLegacyCircularIcons
+            val useLegacyCircularIconsSnapshot = useLegacyCircularIcons && !preferPlainIcon
             val useTwoToneIconsSnapshot = useTwoToneIcons
             val iconPackMapping = iconPackPackageSnapshot?.let { IconPackScanner.loadMapping(context, it) }
             val normalizedIconSize = iconSize.coerceAtLeast(1)
@@ -659,6 +682,10 @@ class AppRepository(private val context: Context) {
             cachedBlurredIcon = cachedIcons.softened,
             cachedTwoToneIcon = cachedIcons.twoToneSharp,
             cachedTwoToneBlurredIcon = cachedIcons.twoToneSoftened,
+            cachedPlainIcon = cachedIcons.sharp,
+            cachedPlainBlurredIcon = cachedIcons.softened,
+            cachedPlainTwoToneIcon = cachedIcons.twoToneSharp,
+            cachedPlainTwoToneBlurredIcon = cachedIcons.twoToneSoftened,
             isBuiltInSettingsEntry = true
         )
     }

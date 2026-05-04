@@ -1037,21 +1037,21 @@ private fun MediaAppIconButton(
     val pressedState = rememberPressedState()
     val pressed by pressedState
     val scale by animateFloatAsState(if (pressed) 0.88f else 1f, label = "media_app_icon_scale")
-    val maskAlpha by animateFloatAsState(if (pressed) 0.32f else 0.18f, label = "media_app_icon_mask")
+    val iconAlpha by animateFloatAsState(if (pressed) 0.72f else 1f, label = "media_app_icon_alpha")
+    val iconShape = RoundedCornerShape(9.dp)
     Box(
         modifier = modifier
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
             }
-            .clip(CircleShape)
-            .background(Color.Black.copy(alpha = maskAlpha))
+            .clip(iconShape)
             .controlCenterPressGesture(
                 pressedState = pressedState,
                 onGestureLockChange = onGestureLockChange,
                 onClick = onClick
             )
-            .padding(2.dp),
+            .padding(1.dp),
         contentAlignment = Alignment.Center
     ) {
         Image(
@@ -1059,8 +1059,9 @@ private fun MediaAppIconButton(
             contentDescription = null,
             modifier = Modifier
                 .fillMaxSize()
-                .clip(CircleShape),
-            contentScale = ContentScale.Crop
+                .clip(iconShape)
+                .graphicsLayer { alpha = iconAlpha },
+            contentScale = ContentScale.Fit
         )
     }
 }
@@ -1161,7 +1162,7 @@ private fun MediaCustomActionButton(
     val pressedState = rememberPressedState()
     val pressed by pressedState
     val scale by animateFloatAsState(if (pressed) 0.88f else 1f, label = "media_custom_button_scale")
-    val backgroundAlpha by animateFloatAsState(if (pressed) 0.30f else 0.18f, label = "media_custom_button_alpha")
+    val contentAlpha by animateFloatAsState(if (pressed) 0.64f else 1f, label = "media_custom_button_alpha")
     Box(
         modifier = Modifier
             .requiredSize(size)
@@ -1169,8 +1170,6 @@ private fun MediaCustomActionButton(
                 scaleX = scale
                 scaleY = scale
             }
-            .clip(CircleShape)
-            .background(Color.White.copy(alpha = backgroundAlpha))
             .controlCenterPressGesture(
                 pressedState = pressedState,
                 onGestureLockChange = onGestureLockChange,
@@ -1184,13 +1183,13 @@ private fun MediaCustomActionButton(
                 contentDescription = action.title,
                 modifier = Modifier
                     .size(iconSize)
-                    .clip(CircleShape),
-                contentScale = ContentScale.Crop
+                    .graphicsLayer { alpha = contentAlpha },
+                contentScale = ContentScale.Fit
             )
         } else {
             Text(
                 text = action.title.take(2).ifBlank { "..." },
-                color = Color.White,
+                color = Color.White.copy(alpha = contentAlpha),
                 fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1
@@ -1612,7 +1611,11 @@ private fun readMediaState(context: Context): ControlCenterMediaState {
 
 private fun loadMediaAppIconBitmap(context: Context, packageName: String): Bitmap? {
     val repositoryIcon = runCatching {
-        FlueApplication.repositories(context).appRepository.loadDisplayIconForPackage(packageName, 128)
+        FlueApplication.repositories(context).appRepository.loadDisplayIconForPackage(
+            packageName = packageName,
+            iconSize = 128,
+            preferPlainIcon = true
+        )
     }.getOrNull()?.asAndroidBitmap()
     if (repositoryIcon != null) return repositoryIcon
     return runCatching {

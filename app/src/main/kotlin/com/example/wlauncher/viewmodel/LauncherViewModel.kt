@@ -91,6 +91,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_APP_LIST_FISHEYE = booleanPreferencesKey("app_list_fisheye_enabled")
         val KEY_APP_LIST_FISHEYE_RANGE_ROWS = intPreferencesKey("app_list_fisheye_range_rows")
         val KEY_APP_LIST_FISHEYE_STRENGTH_PERCENT = intPreferencesKey("app_list_fisheye_strength_percent")
+        val KEY_APP_LIST_EDGE_SPACING_COMPRESSION = booleanPreferencesKey("app_list_edge_spacing_compression_enabled")
         val KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT = intPreferencesKey("app_list_left_safe_inset_percent")
         val KEY_APP_LIST_SCALE_PERCENT = intPreferencesKey("app_list_scale_percent")
         val KEY_GLOBAL_UI_SCALE_PERCENT = intPreferencesKey("global_ui_scale_percent")
@@ -111,6 +112,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_POWER_MENU_BUTTON = booleanPreferencesKey("power_menu_button_enabled")
         val KEY_WATCHFACE_CHARGING_POWER_TEXT = booleanPreferencesKey("watchface_charging_power_text")
         val KEY_WATCHFACE_STATUS_INDICATORS = booleanPreferencesKey("watchface_status_indicators")
+        val KEY_WATCHFACE_BOTTOM_FADE = booleanPreferencesKey("watchface_bottom_fade_enabled")
         val KEY_SIDE_SCREEN_SECTION_ORDER = stringPreferencesKey("side_screen_section_order")
         val KEY_DEVICE_PRESET_APPLIED = booleanPreferencesKey("device_preset_applied")
         val KEY_HIDDEN_APPS = stringPreferencesKey("hidden_apps")
@@ -166,6 +168,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
         private fun normalizeEdgeBlurTenths(value: Float): Int {
             return ((value.coerceIn(0.5f, 5f) * 2f).roundToInt() * 5).coerceIn(5, 50)
+        }
+
+        private fun normalizeLeftSafeInsetPercent(value: Int): Int {
+            return ((value.coerceIn(0, APP_LIST_LEFT_SAFE_INSET_MAX_PERCENT) / 5f).roundToInt() * 5)
+                .coerceIn(0, APP_LIST_LEFT_SAFE_INSET_MAX_PERCENT)
         }
     }
 
@@ -299,6 +306,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val appListFisheyeRangeRows: StateFlow<Int> = _appListFisheyeRangeRows.asStateFlow()
     private val _appListFisheyeStrengthPercent = MutableStateFlow(100)
     val appListFisheyeStrengthPercent: StateFlow<Int> = _appListFisheyeStrengthPercent.asStateFlow()
+    private val _appListEdgeSpacingCompressionEnabled = MutableStateFlow(true)
+    val appListEdgeSpacingCompressionEnabled: StateFlow<Boolean> =
+        _appListEdgeSpacingCompressionEnabled.asStateFlow()
     private val _appListLeftSafeInsetPercent = MutableStateFlow(0)
     val appListLeftSafeInsetPercent: StateFlow<Int> = _appListLeftSafeInsetPercent.asStateFlow()
     private val _appListScalePercent = MutableStateFlow(100)
@@ -341,6 +351,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val watchFaceChargingPowerText: StateFlow<Boolean> = _watchFaceChargingPowerText.asStateFlow()
     private val _watchFaceStatusIndicators = MutableStateFlow(true)
     val watchFaceStatusIndicators: StateFlow<Boolean> = _watchFaceStatusIndicators.asStateFlow()
+    private val _watchFaceBottomFadeEnabled = MutableStateFlow(true)
+    val watchFaceBottomFadeEnabled: StateFlow<Boolean> = _watchFaceBottomFadeEnabled.asStateFlow()
     private val _sideScreenSectionOrder = MutableStateFlow(defaultSideScreenSectionOrder())
     val sideScreenSectionOrder: StateFlow<List<SideScreenSection>> = _sideScreenSectionOrder.asStateFlow()
     private val _notificationAccessGranted = MutableStateFlow(false)
@@ -684,10 +696,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListFisheyeStrengthPercent.value = loadedFisheyeStrength
                 }
 
-                val loadedLeftSafeInset = (prefs[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT] ?: 0)
-                    .coerceIn(0, APP_LIST_LEFT_SAFE_INSET_MAX_PERCENT)
+                val hasSavedLeftSafeInset = prefs[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT] != null
+                val loadedLeftSafeInset = (prefs[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT]
+                    ?: if (shouldApplyDevicePreset && !hasSavedLeftSafeInset && isXiaomi17ProSeriesDevice()) 20 else 0)
+                    .let(::normalizeLeftSafeInsetPercent)
                 if (_appListLeftSafeInsetPercent.value != loadedLeftSafeInset) {
                     _appListLeftSafeInsetPercent.value = loadedLeftSafeInset
+                }
+
+                val loadedEdgeSpacingCompression = prefs[KEY_APP_LIST_EDGE_SPACING_COMPRESSION] ?: true
+                if (_appListEdgeSpacingCompressionEnabled.value != loadedEdgeSpacingCompression) {
+                    _appListEdgeSpacingCompressionEnabled.value = loadedEdgeSpacingCompression
                 }
 
                 val loadedAppListScale = (prefs[KEY_APP_LIST_SCALE_PERCENT] ?: 100).coerceIn(50, 200)
@@ -746,6 +765,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _watchFaceStatusIndicators.value = loadedWatchFaceStatusIndicators
                 }
 
+                val loadedWatchFaceBottomFade = prefs[KEY_WATCHFACE_BOTTOM_FADE] ?: true
+                if (_watchFaceBottomFadeEnabled.value != loadedWatchFaceBottomFade) {
+                    _watchFaceBottomFadeEnabled.value = loadedWatchFaceBottomFade
+                }
+
                 val notificationSettingMigrated = prefs[KEY_NOTIFICATION_SETTING_MIGRATED] ?: false
                 val loadedShowNotification = if (notificationSettingMigrated) {
                     prefs[KEY_SHOW_NOTIFICATION] ?: true
@@ -799,6 +823,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     store.edit {
                         if (shouldApplyDevicePreset && !hasSavedHoneycombCols) {
                             it[KEY_HONEYCOMB_COLS] = 2
+                        }
+                        if (shouldApplyDevicePreset && !hasSavedLeftSafeInset) {
+                            it[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT] = 20
                         }
                         it[KEY_DEVICE_PRESET_APPLIED] = true
                     }
@@ -1282,8 +1309,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun setAppListEdgeSpacingCompressionEnabled(enabled: Boolean) {
+        _appListEdgeSpacingCompressionEnabled.value = enabled
+        persist { store.edit { it[KEY_APP_LIST_EDGE_SPACING_COMPRESSION] = enabled } }
+    }
+
     fun setAppListLeftSafeInsetPercent(value: Int) {
-        _appListLeftSafeInsetPercent.value = value.coerceIn(0, APP_LIST_LEFT_SAFE_INSET_MAX_PERCENT)
+        _appListLeftSafeInsetPercent.value = normalizeLeftSafeInsetPercent(value)
         val savedValue = _appListLeftSafeInsetPercent.value
         persistDebounced("key_app_list_left_safe_inset_percent") {
             store.edit { it[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT] = savedValue }
@@ -1351,6 +1383,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setWatchFaceStatusIndicatorsEnabled(enabled: Boolean) {
         _watchFaceStatusIndicators.value = enabled
         persist { store.edit { it[KEY_WATCHFACE_STATUS_INDICATORS] = enabled } }
+    }
+
+    fun setWatchFaceBottomFadeEnabled(enabled: Boolean) {
+        _watchFaceBottomFadeEnabled.value = enabled
+        persist { store.edit { it[KEY_WATCHFACE_BOTTOM_FADE] = enabled } }
     }
 
     fun setShowNotification(show: Boolean) {
@@ -1896,6 +1933,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appListFisheyeEnabled.value = true
         _appListFisheyeRangeRows.value = 4
         _appListFisheyeStrengthPercent.value = 100
+        _appListEdgeSpacingCompressionEnabled.value = true
         _appListLeftSafeInsetPercent.value = 0
         _appListScalePercent.value = 100
         _globalUiScalePercent.value = 100
@@ -1915,6 +1953,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _powerMenuButtonEnabled.value = false
         _watchFaceChargingPowerText.value = true
         _watchFaceStatusIndicators.value = true
+        _watchFaceBottomFadeEnabled.value = true
         _sideScreenSectionOrder.value = defaultSideScreenSectionOrder()
         _hiddenApps.value = emptySet()
         _selectedIconPackPackage.value = null
@@ -1987,6 +2026,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_APP_LIST_FISHEYE] = true
                 it[KEY_APP_LIST_FISHEYE_RANGE_ROWS] = 4
                 it[KEY_APP_LIST_FISHEYE_STRENGTH_PERCENT] = 100
+                it[KEY_APP_LIST_EDGE_SPACING_COMPRESSION] = true
                 it[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT] = 0
                 it[KEY_APP_LIST_SCALE_PERCENT] = 100
                 it[KEY_GLOBAL_UI_SCALE_PERCENT] = 100
@@ -2007,6 +2047,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_POWER_MENU_BUTTON] = false
                 it[KEY_WATCHFACE_CHARGING_POWER_TEXT] = true
                 it[KEY_WATCHFACE_STATUS_INDICATORS] = true
+                it[KEY_WATCHFACE_BOTTOM_FADE] = true
                 it[KEY_SIDE_SCREEN_SECTION_ORDER] = serializeSideScreenSectionOrder(defaultSideScreenSectionOrder())
                 it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
                 it.remove(KEY_SIDE_SCREEN_SHORTCUTS)
