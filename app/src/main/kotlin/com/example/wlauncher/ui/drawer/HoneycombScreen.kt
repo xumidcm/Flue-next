@@ -890,12 +890,11 @@ fun HoneycombScreen(
                                 )
                                 val sx = clickCenterX + clickEdgeOffsetX
                                 val syPos = clickCenterY + flowOffset + entryOffsetY
-                                val launchCenter = appLaunchCenters[appKey] ?: Offset(sx, syPos)
                                 onAppClick(
                                     app,
                                     Offset(
-                                        (launchCenter.x / screenWidthPx).coerceIn(0f, 1f),
-                                        (launchCenter.y / screenHeightPx).coerceIn(0f, 1f)
+                                        (sx / screenWidthPx).coerceIn(0f, 1f),
+                                        (syPos / screenHeightPx).coerceIn(0f, 1f)
                                     )
                                 )
                             }
@@ -1537,8 +1536,10 @@ private fun MaterialDenseGridScreen(
                             indication = null,
                             onClick = {
                                 if (longPressedApp != null || dragFromIndex != null) return@combinedClickable
-                                val launchCenter = materialLaunchCenters[index]
-                                    ?: Offset(itemCenterX + materialContainerRoot.x, itemCenterY + materialContainerRoot.y)
+                                val launchCenter = Offset(
+                                    x = itemCenterX + materialContainerRoot.x + animatedDragX,
+                                    y = itemCenterY + materialContainerRoot.y + animatedDragY + overscroll.value + entryOffsetY
+                                )
                                 onAppClick(
                                     app,
                                     Offset(

@@ -116,6 +116,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_WATCHFACE_CHARGING_POWER_TEXT = booleanPreferencesKey("watchface_charging_power_text")
         val KEY_WATCHFACE_STATUS_INDICATORS = booleanPreferencesKey("watchface_status_indicators")
         val KEY_WATCHFACE_BOTTOM_FADE = booleanPreferencesKey("watchface_bottom_fade_enabled")
+        val KEY_DINGDINGCAT_FILL_SCREEN = booleanPreferencesKey("dingdingcat_fill_screen")
+        val KEY_DINGDINGCAT_IMPORT_UNLOCKED = booleanPreferencesKey("dingdingcat_import_unlocked")
         val KEY_SIDE_SCREEN_SECTION_ORDER = stringPreferencesKey("side_screen_section_order")
         val KEY_DEVICE_PRESET_APPLIED = booleanPreferencesKey("device_preset_applied")
         val KEY_HIDDEN_APPS = stringPreferencesKey("hidden_apps")
@@ -356,6 +358,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val watchFaceStatusIndicators: StateFlow<Boolean> = _watchFaceStatusIndicators.asStateFlow()
     private val _watchFaceBottomFadeEnabled = MutableStateFlow(true)
     val watchFaceBottomFadeEnabled: StateFlow<Boolean> = _watchFaceBottomFadeEnabled.asStateFlow()
+    private val _dingDingCatFillScreen = MutableStateFlow(false)
+    val dingDingCatFillScreen: StateFlow<Boolean> = _dingDingCatFillScreen.asStateFlow()
+    private val _dingDingCatImportUnlocked = MutableStateFlow(false)
+    val dingDingCatImportUnlocked: StateFlow<Boolean> = _dingDingCatImportUnlocked.asStateFlow()
     private val _sideScreenSectionOrder = MutableStateFlow(defaultSideScreenSectionOrder())
     val sideScreenSectionOrder: StateFlow<List<SideScreenSection>> = _sideScreenSectionOrder.asStateFlow()
     private val _notificationAccessGranted = MutableStateFlow(false)
@@ -771,6 +777,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedWatchFaceBottomFade = prefs[KEY_WATCHFACE_BOTTOM_FADE] ?: true
                 if (_watchFaceBottomFadeEnabled.value != loadedWatchFaceBottomFade) {
                     _watchFaceBottomFadeEnabled.value = loadedWatchFaceBottomFade
+                }
+
+                val loadedDingDingCatFillScreen = prefs[KEY_DINGDINGCAT_FILL_SCREEN] ?: false
+                if (_dingDingCatFillScreen.value != loadedDingDingCatFillScreen) {
+                    _dingDingCatFillScreen.value = loadedDingDingCatFillScreen
+                }
+
+                val loadedDingDingCatImportUnlocked = prefs[KEY_DINGDINGCAT_IMPORT_UNLOCKED] ?: false
+                if (_dingDingCatImportUnlocked.value != loadedDingDingCatImportUnlocked) {
+                    _dingDingCatImportUnlocked.value = loadedDingDingCatImportUnlocked
                 }
 
                 val notificationSettingMigrated = prefs[KEY_NOTIFICATION_SETTING_MIGRATED] ?: false
@@ -1393,6 +1409,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_WATCHFACE_BOTTOM_FADE] = enabled } }
     }
 
+    fun setDingDingCatFillScreenEnabled(enabled: Boolean) {
+        _dingDingCatFillScreen.value = enabled
+        persist { store.edit { it[KEY_DINGDINGCAT_FILL_SCREEN] = enabled } }
+    }
+
+    fun setDingDingCatImportUnlocked(unlocked: Boolean) {
+        _dingDingCatImportUnlocked.value = unlocked
+        persist { store.edit { it[KEY_DINGDINGCAT_IMPORT_UNLOCKED] = unlocked } }
+    }
+
     fun setShowNotification(show: Boolean) {
         _showNotification.value = show
         if (!show && _screenState.value == ScreenState.Notifications) {
@@ -1528,8 +1554,20 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             _availableWatchFaces.value = scanned
             LunchWatchFaceRegistry.update(scanned)
             watchFaceScanHydrated = true
+            val selected = scanned.firstOrNull { it.id == descriptor.id && it.isDingDingCat } ?: descriptor
+            _selectedWatchFaceId.value = selected.id
+            _watchFaceLastError.value = null
+            _selectedWatchFace.value = selected
+            LunchWatchFaceRegistry.setCurrentSelectedId(selected.id)
+            _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
+            persist {
+                store.edit {
+                    it[KEY_SELECTED_WATCHFACE_ID] = selected.id
+                    it.remove(KEY_LAST_WATCHFACE_ERROR)
+                }
+            }
             syncSelectedWatchFace()
-            descriptor
+            selected
         }
     }
 
@@ -2005,6 +2043,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _watchFaceChargingPowerText.value = true
         _watchFaceStatusIndicators.value = true
         _watchFaceBottomFadeEnabled.value = true
+        _dingDingCatFillScreen.value = false
+        _dingDingCatImportUnlocked.value = false
         _sideScreenSectionOrder.value = defaultSideScreenSectionOrder()
         _hiddenApps.value = emptySet()
         _selectedIconPackPackage.value = null
@@ -2099,6 +2139,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_WATCHFACE_CHARGING_POWER_TEXT] = true
                 it[KEY_WATCHFACE_STATUS_INDICATORS] = true
                 it[KEY_WATCHFACE_BOTTOM_FADE] = true
+                it[KEY_DINGDINGCAT_FILL_SCREEN] = false
+                it[KEY_DINGDINGCAT_IMPORT_UNLOCKED] = false
                 it[KEY_SIDE_SCREEN_SECTION_ORDER] = serializeSideScreenSectionOrder(defaultSideScreenSectionOrder())
                 it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
                 it.remove(KEY_SIDE_SCREEN_SHORTCUTS)

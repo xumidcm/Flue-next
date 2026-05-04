@@ -687,14 +687,13 @@ fun ListDrawerScreen(
                                 onClick = {
                                     if (longPressedApp != null || dragFromIndex != null) return@combinedClickable
                                     val centerY = (itemCenters[index] ?: rowCenterY)
+                                        .let { it + displayDisplacement + flowOffset }
                                         .coerceIn(0f, screenHeightPx)
-                                    val launchCenter = itemLaunchCenters[index]
-                                        ?: Offset(launchOriginX * screenWidthPx, centerY)
                                     onAppClick(
                                         app,
                                         Offset(
-                                            (launchCenter.x / screenWidthPx).coerceIn(0f, 1f),
-                                            (launchCenter.y / screenHeightPx).coerceIn(0f, 1f)
+                                            launchOriginX.coerceIn(0f, 1f),
+                                            (centerY / screenHeightPx).coerceIn(0f, 1f)
                                         )
                                     )
                                 }

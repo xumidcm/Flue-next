@@ -39,11 +39,15 @@ object DingDingCatDialParser {
 
     private fun JSONObject.toDrawPoint(index: Int): DingDingCatDrawPoint {
         val fontObj = optJSONObject("font")
+        val animObj = optJSONObject("animorObj")
         return DingDingCatDrawPoint(
+            sourceIndex = index,
             pointType = optString("pointType").trim(),
             pieces = optJSONArray("pices").toStringList(),
             startX = optFloat("startX", 0f),
             startY = optFloat("startY", 0f),
+            hasStartX = has("startX"),
+            hasStartY = has("startY"),
             width = optFloat("width", 0f),
             height = optFloat("height", 0f),
             scale = optFloat("scale", 1f).takeIf { it > 0f } ?: 1f,
@@ -57,6 +61,21 @@ object DingDingCatDialParser {
             drawOrder = optInt("drawOrder", index),
             durationMs = optInt("duaution", 66).coerceAtLeast(16),
             visible = optBoolean("visibility", true),
+            netDrawpoint = optBoolean("netDrawpoint", false),
+            aminEffectStr = optString("aminEffectStr").takeIf { it.isNotBlank() },
+            animator = animObj?.let { obj ->
+                DingDingCatAnimator(
+                    totalDurationMs = obj.optString("aminorconstruction")
+                        .substringBefore(',')
+                        .toIntOrNull()
+                        ?.takeIf { it > 0 }
+                        ?: 0,
+                    triggerType = obj.optInt("triggerType", 0),
+                    startWithStatusPlay = obj.optBoolean("startWithStatusPlay", false),
+                    endWithStatusGone = obj.optBoolean("endWithStatusGone", false),
+                    animEndSaveData = obj.optBoolean("animEndSaveData", false)
+                )
+            },
             font = DingDingCatFont(
                 color = fontObj?.optInt("color", -1) ?: -1,
                 textSize = fontObj?.optFloat("textSize", 32f) ?: 32f,

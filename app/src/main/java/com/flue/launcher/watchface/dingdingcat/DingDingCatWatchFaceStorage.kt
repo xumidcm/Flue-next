@@ -68,11 +68,28 @@ object DingDingCatWatchFaceStorage {
             id = "${DINGDINGCAT_ID_PREFIX}${id}",
             type = com.flue.launcher.watchface.LunchWatchFaceType.DINGDINGCAT,
             displayName = title,
-            summary = "DingDingCat ZIP 表盘",
+            summary = dingDingCatSummary(),
             previewFilePath = File(dir, "thumb.png").takeIf { it.isFile }?.absolutePath,
             sourceDirPath = dir.absolutePath,
             watchFaceName = id
         )
+    }
+
+    private fun DingDingCatDial.dingDingCatSummary(): String {
+        val hasGravity = drawPoints.any { it.pointType == "PICTRUE_EFFECT_GRAVITY" }
+        val hasTapTrigger = drawPoints.any { point ->
+            val animator = point.animator ?: return@any false
+            point.pieces.size > 1 &&
+                animator.triggerType == 1024 &&
+                animator.startWithStatusPlay.not()
+        }
+        val hasAnimation = drawPoints.any { it.pieces.size > 1 }
+        return when {
+            hasGravity -> "叮叮猫重力表盘"
+            hasTapTrigger -> "叮叮猫互动表盘"
+            hasAnimation -> "叮叮猫动态表盘"
+            else -> "叮叮猫图片表盘"
+        }
     }
 
     private fun sanitizeId(raw: String): String {

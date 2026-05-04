@@ -14,10 +14,13 @@ data class DingDingCatDial(
 )
 
 data class DingDingCatDrawPoint(
+    val sourceIndex: Int,
     val pointType: String,
     val pieces: List<String>,
     val startX: Float,
     val startY: Float,
+    val hasStartX: Boolean,
+    val hasStartY: Boolean,
     val width: Float,
     val height: Float,
     val scale: Float,
@@ -31,7 +34,18 @@ data class DingDingCatDrawPoint(
     val drawOrder: Int,
     val durationMs: Int,
     val visible: Boolean,
+    val netDrawpoint: Boolean,
+    val aminEffectStr: String?,
+    val animator: DingDingCatAnimator?,
     val font: DingDingCatFont
+)
+
+data class DingDingCatAnimator(
+    val totalDurationMs: Int,
+    val triggerType: Int,
+    val startWithStatusPlay: Boolean,
+    val endWithStatusGone: Boolean,
+    val animEndSaveData: Boolean
 )
 
 data class DingDingCatFont(

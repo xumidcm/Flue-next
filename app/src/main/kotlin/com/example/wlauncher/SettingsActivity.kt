@@ -152,10 +152,6 @@ const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
 private val LocalSettingsLeftSafeInsetPercent = compositionLocalOf { 0 }
 
-private object DingDingCatImportSession {
-    var unlocked by mutableStateOf(false)
-}
-
 enum class SettingsDestination {
     ROOT,
     WATCH_FACES,
@@ -333,6 +329,8 @@ private fun SettingsRootScreen(
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
+    val dingDingCatFillScreen by vm.dingDingCatFillScreen.collectAsStateWithLifecycle()
+    val dingDingCatImportUnlocked by vm.dingDingCatImportUnlocked.collectAsStateWithLifecycle()
     val accessibilityServiceConnected by FlueAccessibilityService.connected.collectAsStateWithLifecycle()
     val headerTime = rememberSettingsHeaderTime()
     val isZh = remember(context.resources.configuration) {
@@ -383,7 +381,6 @@ private fun SettingsRootScreen(
     var hiddenAppsDirty by remember { mutableStateOf(false) }
     var donatePreviewResId by remember { mutableStateOf<Int?>(null) }
     var diagnosticLoggingEnabled by remember { mutableStateOf(ILog.isDiagnosticLoggingEnabled()) }
-    val dingDingCatImportUnlocked = DingDingCatImportSession.unlocked
     var dingDingCatVersionTapCount by remember { mutableStateOf(0) }
     var dingDingCatLastVersionTapAt by remember { mutableStateOf(0L) }
     var dingDingCatDeleteTarget by remember { mutableStateOf<LunchWatchFaceDescriptor?>(null) }
@@ -675,36 +672,6 @@ private fun SettingsRootScreen(
                     )
                 }
             }
-            item("watchface_font") {
-                ActionCard(
-                    title = "表盘字体",
-                    subtitle = builtInWatchFaceFontPath?.let { File(it).name } ?: "系统默认字体",
-                    scale = itemFisheye(listState, "watchface_font", screenCenterY, screenHeightPx),
-                    icon = { Icon(Icons.Filled.Settings, contentDescription = null, tint = WatchColors.ActiveCyan) },
-                    onClick = {
-                        fontPicker.launch(
-                            arrayOf(
-                                "font/*",
-                                "application/x-font-ttf",
-                                "application/x-font-otf",
-                                "application/vnd.ms-opentype",
-                                "application/octet-stream"
-                            )
-                        )
-                    }
-                )
-            }
-            if (!builtInWatchFaceFontPath.isNullOrBlank()) {
-                item("watchface_font_clear") {
-                    ActionCard(
-                        title = "恢复默认字体",
-                        subtitle = "清除已保存的表盘字体",
-                        scale = itemFisheye(listState, "watchface_font_clear", screenCenterY, screenHeightPx),
-                        icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
-                        onClick = { vm.setBuiltInWatchFaceFontPath(null) }
-                    )
-                }
-            }
             item("watchface_bottom_fade") {
                 SettingsSwitchRow(
                     title = if (isZh) "表盘底部渐隐遮罩" else "Watch Face Bottom Fade",
@@ -792,16 +759,12 @@ private fun SettingsRootScreen(
             item("watchface_refresh") {
                 ActionCard(
                     title = "重新扫描表盘",
-                    subtitle = if (dingDingCatImportUnlocked) {
-                        "短按刷新，长按导入叮叮猫 ZIP"
-                    } else {
-                        "刷新已安装的 Lunch 兼容表盘"
-                    },
+                    subtitle = "刷新已安装的 Lunch 兼容表盘",
                     scale = itemFisheye(listState, "watchface_refresh", screenCenterY, screenHeightPx),
                     icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
                     onClick = { vm.refreshWatchFaces(force = true) },
                     onLongPress = {
-                        if (DingDingCatImportSession.unlocked) {
+                        if (dingDingCatImportUnlocked) {
                             dingDingCatZipPicker.launch(
                                 arrayOf(
                                     "application/zip",
@@ -816,6 +779,51 @@ private fun SettingsRootScreen(
                         }
                     }
                 )
+            }
+            if (selectedWatchFace.isDingDingCat) {
+                item("dingdingcat_fill_screen") {
+                    SettingsSwitchRow(
+                        title = "铺满全屏",
+                        subtitle = if (dingDingCatFillScreen) {
+                            if (isZh) "只居中放大背景，时间日期保持原布局" else "Center-crop background only; keep time and date layout"
+                        } else {
+                            if (isZh) "按设计画布等比适配" else "Fit to the designed canvas"
+                        },
+                        checked = dingDingCatFillScreen,
+                        onToggle = vm::setDingDingCatFillScreenEnabled,
+                        scale = itemFisheye(listState, "dingdingcat_fill_screen", screenCenterY, screenHeightPx)
+                    )
+                }
+            }
+            item("watchface_font") {
+                ActionCard(
+                    title = "表盘字体",
+                    subtitle = builtInWatchFaceFontPath?.let { File(it).name } ?: "系统默认字体",
+                    scale = itemFisheye(listState, "watchface_font", screenCenterY, screenHeightPx),
+                    icon = { Icon(Icons.Filled.Settings, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                    onClick = {
+                        fontPicker.launch(
+                            arrayOf(
+                                "font/*",
+                                "application/x-font-ttf",
+                                "application/x-font-otf",
+                                "application/vnd.ms-opentype",
+                                "application/octet-stream"
+                            )
+                        )
+                    }
+                )
+            }
+            if (!builtInWatchFaceFontPath.isNullOrBlank()) {
+                item("watchface_font_clear") {
+                    ActionCard(
+                        title = "恢复默认字体",
+                        subtitle = "清除已保存的表盘字体",
+                        scale = itemFisheye(listState, "watchface_font_clear", screenCenterY, screenHeightPx),
+                        icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                        onClick = { vm.setBuiltInWatchFaceFontPath(null) }
+                    )
+                }
             }
         }
 
@@ -1420,7 +1428,7 @@ private fun SettingsRootScreen(
                             dingDingCatLastVersionTapAt = now
                             if (dingDingCatVersionTapCount >= 5) {
                                 dingDingCatVersionTapCount = 0
-                                DingDingCatImportSession.unlocked = true
+                                vm.setDingDingCatImportUnlocked(true)
                                 Toast.makeText(context, "nothing...", Toast.LENGTH_SHORT).show()
                             }
                         },
