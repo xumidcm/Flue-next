@@ -33,9 +33,11 @@ data class DingDingCatDrawPoint(
     val text: String,
     val drawOrder: Int,
     val durationMs: Int,
+    val startValue: Float,
     val visible: Boolean,
     val netDrawpoint: Boolean,
     val aminEffectStr: String?,
+    val launchAction: String?,
     val animator: DingDingCatAnimator?,
     val font: DingDingCatFont
 )

@@ -59,10 +59,13 @@ object DingDingCatDialParser {
             gravity = optInt("gravity", 0),
             text = optString("text"),
             drawOrder = optInt("drawOrder", index),
-            durationMs = optInt("duaution", 66).coerceAtLeast(16),
+            durationMs = optInt("duaution", optInt("duration", 66)).coerceAtLeast(16),
+            startValue = optFloat("startValue", optFloat("text", 0f)),
             visible = optBoolean("visibility", true),
             netDrawpoint = optBoolean("netDrawpoint", false),
             aminEffectStr = optString("aminEffectStr").takeIf { it.isNotBlank() },
+            launchAction = optString("laucnher").takeIf { it.isNotBlank() }
+                ?: optString("launcher").takeIf { it.isNotBlank() },
             animator = animObj?.let { obj ->
                 DingDingCatAnimator(
                     totalDurationMs = obj.optString("aminorconstruction")

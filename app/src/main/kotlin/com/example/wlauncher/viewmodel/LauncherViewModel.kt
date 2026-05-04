@@ -49,6 +49,7 @@ import com.flue.launcher.watchface.WatchFacePhotoCache
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceRegistry
 import com.flue.launcher.watchface.LunchWatchFaceScanner
+import com.flue.launcher.watchface.dingdingcat.DINGDINGCAT_ID_PREFIX
 import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceScanner
 import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceStorage
 import kotlinx.coroutines.Dispatchers
@@ -1649,6 +1650,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun selectWatchFace(id: String) {
         _selectedWatchFaceId.value = id
         _watchFaceLastError.value = null
+        if (id.startsWith(DINGDINGCAT_ID_PREFIX) && _availableWatchFaces.value.none { it.id == id }) {
+            viewModelScope.launch {
+                val scanned = withContext(Dispatchers.IO) { scanAllWatchFaces() }
+                _availableWatchFaces.value = scanned
+                LunchWatchFaceRegistry.update(scanned)
+                watchFaceScanHydrated = true
+                syncSelectedWatchFace()
+                _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
+                store.edit {
+                    it[KEY_SELECTED_WATCHFACE_ID] = _selectedWatchFaceId.value
+                    it.remove(KEY_LAST_WATCHFACE_ERROR)
+                }
+            }
+            return
+        }
         syncSelectedWatchFace()
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
         persist {
@@ -2275,6 +2291,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             match != null -> {
                 _selectedWatchFace.value = match
                 LunchWatchFaceRegistry.setCurrentSelectedId(match.id)
+            }
+            requestedId.startsWith(DINGDINGCAT_ID_PREFIX) &&
+                _selectedWatchFace.value.id == requestedId &&
+                _selectedWatchFace.value.isDingDingCat -> {
+                LunchWatchFaceRegistry.setCurrentSelectedId(requestedId)
             }
             watchFaceScanHydrated -> {
                 val fallback = available.firstOrNull { it.id == BUILT_IN_WATCHFACE_ID }

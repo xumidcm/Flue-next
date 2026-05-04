@@ -550,6 +550,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val keepAppListLayer = screenState == ScreenState.Apps ||
             isOpeningAppList ||
             appListEntryProgress.value > 0.001f
+        val appListContentEntryProgress = if (screenState == ScreenState.App && launchSourceState == ScreenState.Apps) {
+            1f
+        } else {
+            appListEntryProgress.value
+        }
 
         GestureHost(
             screenState = screenState,
@@ -686,7 +691,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         active = screenState == ScreenState.Apps,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         appListScalePercent = appListScalePercent,
-                        entryProgress = appListEntryProgress.value,
+                        entryProgress = appListContentEntryProgress,
                         useWatchFaceColors = useAppListWatchFaceColors,
                         fisheyeEnabled = appListFisheyeEnabled,
                         fisheyeRangeRows = appListFisheyeRangeRows,
@@ -717,7 +722,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         active = screenState == ScreenState.Apps,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         appListScalePercent = appListScalePercent,
-                        entryProgress = appListEntryProgress.value,
+                        entryProgress = appListContentEntryProgress,
                         useWatchFaceColors = useAppListWatchFaceColors,
                         rowBorderEnabled = appListRowBorderEnabled,
                         fisheyeEnabled = appListFisheyeEnabled,

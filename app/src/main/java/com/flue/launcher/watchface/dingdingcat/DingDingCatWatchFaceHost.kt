@@ -1,9 +1,11 @@
 package com.flue.launcher.watchface.dingdingcat
 
+import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas as AndroidCanvas
@@ -18,6 +20,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.BatteryManager
+import android.os.Build
 import android.os.SystemClock
 import android.util.LruCache
 import androidx.compose.foundation.Canvas
@@ -61,6 +64,7 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 @Composable
 fun DingDingCatWatchFaceHost(
@@ -92,6 +96,7 @@ fun DingDingCatWatchFaceHost(
     }
 
     val batteryLevel = rememberDingDingCatBatteryLevel(context)
+    val stepCount = rememberDingDingCatStepCount(context)
     val triggeredAnimations = remember(descriptor.stableKey, refreshToken) { mutableStateMapOf<Int, Long>() }
     val gravityBodies = remember(descriptor.stableKey, refreshToken) { mutableStateMapOf<Int, DingDingCatGravityBody>() }
     var draggingGravitySource by remember(descriptor.stableKey, refreshToken) { mutableStateOf<Int?>(null) }
@@ -100,9 +105,11 @@ fun DingDingCatWatchFaceHost(
     val activeDial = dial
     val gravitySpecs = remember(activeDial, refreshToken) { activeDial?.gravitySpecs().orEmpty() }
     val hasAnimatedLayers = activeDial?.drawPoints?.any { it.pieces.size > 1 } == true
+    val hasCompassLayers = activeDial?.drawPoints?.any { it.pointType == "PICTURE_COMPASS" } == true
     val animationFrameDelayMs = remember(activeDial) { activeDial?.animationFrameDelayMs() ?: 1_000L }
     val hasGravityLayers = gravitySpecs.isNotEmpty()
     val tiltOffset = rememberDingDingCatTiltOffset(context, isFaceVisible && hasGravityLayers)
+    val compassAzimuth = rememberDingDingCatCompassAzimuth(context, isFaceVisible && hasCompassLayers)
     val currentTilt by rememberUpdatedState(tiltOffset)
     val currentDraggingGravitySource by rememberUpdatedState(draggingGravitySource)
     val renderTransform = remember(activeDial, canvasSize) {
@@ -158,11 +165,9 @@ fun DingDingCatWatchFaceHost(
                             onDragEnd = { draggingGravitySource = null },
                             onDragCancel = { draggingGravitySource = null }
                         ) { change, dragAmount ->
+                            val source = draggingGravitySource ?: return@detectDragGestures
                             change.consume()
-                            val source = draggingGravitySource ?: gravitySpecs.firstOrNull()?.sourceIndex
-                            val spec = source?.let { value ->
-                                gravitySpecs.firstOrNull { it.sourceIndex == value }
-                            }
+                            val spec = gravitySpecs.firstOrNull { it.sourceIndex == source }
                             if (source != null && spec != null) {
                                 val transform = renderTransform
                                 val designDelta = transform?.screenDeltaToDesign(dragAmount) ?: dragAmount
@@ -186,10 +191,14 @@ fun DingDingCatWatchFaceHost(
                 if (onLongPress != null || onDoubleTap != null) {
                     Modifier.pointerInput(onLongPress, onDoubleTap, dial) {
                         detectTapGestures(
-                            onTap = {
-                                dial?.drawPoints
-                                    ?.filter(::isTapTriggeredAnimation)
-                                    ?.forEach { point -> triggeredAnimations[point.sourceIndex] = System.currentTimeMillis() }
+                            onTap = { screenPoint ->
+                                handleDingDingCatTap(
+                                    context = context,
+                                    dial = dial,
+                                    renderTransform = renderTransform,
+                                    screenPoint = screenPoint,
+                                    triggeredAnimations = triggeredAnimations
+                                )
                             },
                             onLongPress = onLongPress?.let { handler -> { _ -> handler() } },
                             onDoubleTap = onDoubleTap?.let { handler -> { _ -> handler() } }
@@ -198,10 +207,14 @@ fun DingDingCatWatchFaceHost(
                 } else {
                     Modifier.pointerInput(dial) {
                         detectTapGestures(
-                            onTap = {
-                                dial?.drawPoints
-                                    ?.filter(::isTapTriggeredAnimation)
-                                    ?.forEach { point -> triggeredAnimations[point.sourceIndex] = System.currentTimeMillis() }
+                            onTap = { screenPoint ->
+                                handleDingDingCatTap(
+                                    context = context,
+                                    dial = dial,
+                                    renderTransform = renderTransform,
+                                    screenPoint = screenPoint,
+                                    triggeredAnimations = triggeredAnimations
+                                )
                             }
                         )
                     }
@@ -238,6 +251,8 @@ fun DingDingCatWatchFaceHost(
                                 point = point,
                                 nowMillis = nowMillis,
                                 batteryLevel = batteryLevel,
+                                stepCount = stepCount,
+                                compassAzimuthDegrees = compassAzimuth,
                                 triggeredAnimations = triggeredAnimations,
                                 gravityBodies = gravityBodies,
                                 fillScreenBackgroundViewport = if (fillScreen) screenViewportInDesign else null
@@ -270,11 +285,75 @@ private fun rememberDingDingCatBatteryLevel(context: Context): Int {
     return level
 }
 
+@Composable
+private fun rememberDingDingCatStepCount(context: Context): Int? {
+    var steps by remember { mutableStateOf<Int?>(null) }
+    DisposableEffect(context) {
+        val hasPermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!hasPermission) {
+            steps = null
+            return@DisposableEffect onDispose { }
+        }
+        val sensorManager = ContextCompat.getSystemService(context, SensorManager::class.java)
+        val stepCounter = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+        if (sensorManager == null || stepCounter == null) {
+            steps = null
+            return@DisposableEffect onDispose { }
+        }
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent?) {
+                steps = event?.values?.firstOrNull()?.toInt()?.coerceAtLeast(0)
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        }
+        sensorManager.registerListener(listener, stepCounter, SensorManager.SENSOR_DELAY_NORMAL)
+        onDispose { sensorManager.unregisterListener(listener) }
+    }
+    return steps
+}
+
 private fun readBatteryLevel(intent: Intent): Int? {
     val rawLevel = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
     val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
     if (rawLevel < 0 || scale <= 0) return null
     return (rawLevel * 100 / scale).coerceIn(0, 100)
+}
+
+@Composable
+private fun rememberDingDingCatCompassAzimuth(context: Context, enabled: Boolean): Float {
+    var azimuth by remember { mutableStateOf(0f) }
+    DisposableEffect(context, enabled) {
+        if (!enabled) {
+            azimuth = 0f
+            return@DisposableEffect onDispose { }
+        }
+        val sensorManager = context.getSystemService(SensorManager::class.java)
+        val rotationSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        if (sensorManager == null || rotationSensor == null) {
+            azimuth = 0f
+            return@DisposableEffect onDispose { }
+        }
+        val rotationMatrix = FloatArray(9)
+        val orientation = FloatArray(3)
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent?) {
+                val values = event?.values ?: return
+                SensorManager.getRotationMatrixFromVector(rotationMatrix, values)
+                SensorManager.getOrientation(rotationMatrix, orientation)
+                val target = normalizeDegrees(Math.toDegrees(orientation[0].toDouble()).toFloat())
+                val delta = shortestDegreeDelta(azimuth, target)
+                azimuth = normalizeDegrees(azimuth + delta * 0.22f)
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        }
+        sensorManager.registerListener(listener, rotationSensor, SensorManager.SENSOR_DELAY_GAME)
+        onDispose { sensorManager.unregisterListener(listener) }
+    }
+    return azimuth
 }
 
 @Composable
@@ -312,33 +391,109 @@ private fun rememberDingDingCatTiltOffset(context: Context, enabled: Boolean): O
     return offset
 }
 
+private fun handleDingDingCatTap(
+    context: Context,
+    dial: DingDingCatDial?,
+    renderTransform: DingDingCatRenderTransform?,
+    screenPoint: Offset,
+    triggeredAnimations: MutableMap<Int, Long>
+) {
+    val activeDial = dial ?: return
+    val designPoint = renderTransform?.screenToDesign(screenPoint) ?: screenPoint
+    activeDial.drawPoints
+        .asReversed()
+        .firstOrNull { point ->
+            point.visible &&
+                !point.launchAction.isNullOrBlank() &&
+                point.containsDesignPoint(activeDial, designPoint)
+        }
+        ?.launchAction
+        ?.let { action -> launchDingDingCatAction(context, action) }
+
+    val now = System.currentTimeMillis()
+    activeDial.drawPoints
+        .filter(::isTapTriggeredAnimation)
+        .forEach { point -> triggeredAnimations[point.sourceIndex] = now }
+}
+
+private fun launchDingDingCatAction(context: Context, action: String): Boolean {
+    val packageManager = context.packageManager
+    val packageIntent = packageManager.getLaunchIntentForPackage(action)?.apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    val launchedByPackage = packageIntent?.let { intent ->
+        runCatching {
+            context.startActivity(intent)
+            true
+        }.getOrDefault(false)
+    } == true
+    if (launchedByPackage) return true
+
+    val actionIntent = Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    return runCatching {
+        if (actionIntent.resolveActivity(packageManager) == null) {
+            false
+        } else {
+            context.startActivity(actionIntent)
+            true
+        }
+    }.getOrDefault(false)
+}
+
 private fun drawDingDingCatPoint(
     canvas: AndroidCanvas,
     dial: DingDingCatDial,
     point: DingDingCatDrawPoint,
     nowMillis: Long,
     batteryLevel: Int,
+    stepCount: Int?,
+    compassAzimuthDegrees: Float,
     triggeredAnimations: Map<Int, Long>,
     gravityBodies: Map<Int, DingDingCatGravityBody>,
     fillScreenBackgroundViewport: RectF?
 ) {
     when (point.pointType) {
-        "PICTURE_LOOP", "PICTRUE_EFFECT" -> drawImageLayer(
+        "PICTURE_LOOP", "PICTRUE_EFFECT", "PICTURE_NORMAL", "PIICTURE_NORMAL", "PICTURE_COMPASS" -> drawImageLayer(
             canvas,
             dial,
             point,
             nowMillis,
+            compassAzimuthDegrees,
             triggeredAnimations[point.sourceIndex],
             fillScreenBackgroundViewport
         )
+        "PICTURE_CHARGE" -> drawProgressImageLayer(canvas, dial, point, batteryLevel, fillScreenBackgroundViewport)
+        "PICTURE_STEPS" -> drawProgressImageLayer(
+            canvas,
+            dial,
+            point,
+            stepCount?.let { (it.coerceAtMost(10_000) / 100f).roundToInt() } ?: 0,
+            fillScreenBackgroundViewport
+        )
+        "PICTURE_WEATHER" -> drawProgressImageLayer(canvas, dial, point, 0, fillScreenBackgroundViewport)
         "PICTRUE_EFFECT_GRAVITY" -> drawGravityLayer(canvas, dial, point, gravityBodies[point.sourceIndex])
         "PICTURE_NUM_TIME_HHMM" -> drawNumberStrip(canvas, dial, point, formatTime("HH:mm", nowMillis))
         "PICTURE_NUM_TIME_HHMMSS" -> drawNumberStrip(canvas, dial, point, formatTime("HH:mm:ss", nowMillis))
         "PICTURE_NUM_TIME_HH" -> drawNumberStrip(canvas, dial, point, formatTime("HH", nowMillis))
         "PICTURE_NUM_TIME_MINUTE" -> drawNumberStrip(canvas, dial, point, formatTime("mm", nowMillis))
+        "PICTURE_NUM_TIME_SECOND" -> drawNumberStrip(canvas, dial, point, formatTime("ss", nowMillis))
+        "PICTURE_NUM_TIME_MONTH" -> drawNumberStrip(canvas, dial, point, formatTime("MM", nowMillis))
+        "PICTURE_NUM_TIME_DD" -> drawNumberStrip(canvas, dial, point, formatTime("dd", nowMillis))
         "PICTURE_NUM_CHARGE" -> drawNumberStrip(canvas, dial, point, "$batteryLevel%")
+        "PICTURE_NUM_STEP" -> drawNumberStrip(canvas, dial, point, "${stepCount ?: point.text.toIntOrNull() ?: 0}")
+        "PICTURE_NUM_CALORIE" -> drawNumberStrip(
+            canvas,
+            dial,
+            point,
+            "${stepCount?.let { (it * 0.04f).roundToInt() } ?: point.text.toIntOrNull() ?: 0}"
+        )
+        "PICTURE_NUM_HEARTRATE" -> drawNumberStrip(canvas, dial, point, point.text.ifBlank { "0" })
+        "PICTURE_NUM_WEATHER" -> drawNumberStrip(canvas, dial, point, point.text.ifBlank { "25" })
         "PICTURE_AMPM" -> drawAmPm(canvas, dial, point, nowMillis)
         "PICTURE_NUM_WEEK" -> drawWeek(canvas, dial, point, nowMillis)
+        "PICTURE_POINTER_HOUR" -> drawPointerLayer(canvas, dial, point, nowMillis, DingDingCatPointerHand.Hour)
+        "PICTURE_POINTER_MINUTE" -> drawPointerLayer(canvas, dial, point, nowMillis, DingDingCatPointerHand.Minute)
+        "PICTURE_POINTER_SEC" -> drawPointerLayer(canvas, dial, point, nowMillis, DingDingCatPointerHand.Second)
         "TEXT_TIME_HHMMSS" -> drawTextLayer(canvas, dial, point, formatTime("HH:mm:ss", nowMillis))
         "TEXT_DATE" -> drawTextLayer(canvas, dial, point, formatDate(nowMillis))
     }
@@ -349,12 +504,13 @@ private fun drawImageLayer(
     dial: DingDingCatDial,
     point: DingDingCatDrawPoint,
     nowMillis: Long,
+    compassAzimuthDegrees: Float,
     triggeredAt: Long?,
     fillScreenBackgroundViewport: RectF?
 ) {
     val piece = selectAnimatedPiece(point, nowMillis, triggeredAt) ?: return
     val displayScale = if (
-        point.pointType == "PICTURE_LOOP" &&
+        point.pointType in setOf("PICTURE_LOOP", "PICTURE_NORMAL") &&
         point.width >= dial.width * 0.8f &&
         point.height >= dial.height * 0.8f
     ) {
@@ -377,15 +533,96 @@ private fun drawImageLayer(
             contentHeight = targetHeight * displayScale
         )
     } else {
-        RectF(
-            point.startX,
-            point.startY,
-            point.startX + targetWidth * displayScale,
-            point.startY + targetHeight * displayScale
+        point.destinationRect(
+            dial = dial,
+            contentWidth = targetWidth * displayScale,
+            contentHeight = targetHeight * displayScale
         )
     }
     val paint = pointPaint(point)
-    canvas.drawBitmap(bitmap, null, dst, paint)
+    if (point.pointType == "PICTURE_COMPASS") {
+        canvas.save()
+        canvas.rotate(-compassAzimuthDegrees - point.startValue, dst.centerX(), dst.centerY())
+        canvas.drawBitmap(bitmap, null, dst, paint)
+        canvas.restore()
+    } else {
+        canvas.drawBitmap(bitmap, null, dst, paint)
+    }
+}
+
+private fun drawProgressImageLayer(
+    canvas: AndroidCanvas,
+    dial: DingDingCatDial,
+    point: DingDingCatDrawPoint,
+    progressPercent: Int,
+    fillScreenBackgroundViewport: RectF?
+) {
+    val pieces = point.pieces
+    if (pieces.isEmpty()) return
+    val index = ((progressPercent.coerceIn(0, 100) / 100f) * (pieces.size - 1).coerceAtLeast(0)).roundToInt()
+    val piece = pieces.getOrNull(index) ?: pieces.firstOrNull() ?: return
+    val bitmap = DingDingCatBitmapCache.get(File(dial.rootDir, piece), allowSample = true) ?: return
+    val targetWidth = point.width.takeIf { it > 0f } ?: bitmap.width.toFloat()
+    val targetHeight = point.height.takeIf { it > 0f } ?: bitmap.height.toFloat()
+    val dst = if (fillScreenBackgroundViewport != null && isDingDingCatBackgroundLayer(point, dial)) {
+        centerCropDestination(
+            viewport = fillScreenBackgroundViewport,
+            contentWidth = targetWidth * point.scale,
+            contentHeight = targetHeight * point.scale
+        )
+    } else {
+        point.destinationRect(
+            dial = dial,
+            contentWidth = targetWidth * point.scale,
+            contentHeight = targetHeight * point.scale
+        )
+    }
+    canvas.drawBitmap(bitmap, null, dst, pointPaint(point))
+}
+
+private enum class DingDingCatPointerHand {
+    Hour,
+    Minute,
+    Second
+}
+
+private fun drawPointerLayer(
+    canvas: AndroidCanvas,
+    dial: DingDingCatDial,
+    point: DingDingCatDrawPoint,
+    nowMillis: Long,
+    hand: DingDingCatPointerHand
+) {
+    val piece = point.pieces.firstOrNull() ?: return
+    val bitmap = DingDingCatBitmapCache.get(File(dial.rootDir, piece), allowSample = true) ?: return
+    val width = (point.width.takeIf { it > 0f } ?: bitmap.width.toFloat()) * point.scale
+    val height = (point.height.takeIf { it > 0f } ?: bitmap.height.toFloat()) * point.scale
+    val dst = point.destinationRect(
+        dial = dial,
+        contentWidth = width,
+        contentHeight = height
+    )
+    val centerX = dst.centerX()
+    val centerY = dst.centerY()
+    val targetRotation = when (hand) {
+        DingDingCatPointerHand.Hour -> {
+            val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+            (calendar.get(Calendar.HOUR) % 12) * 30f + calendar.get(Calendar.MINUTE) * 0.5f
+        }
+        DingDingCatPointerHand.Minute -> {
+            val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+            calendar.get(Calendar.MINUTE) * 6f + calendar.get(Calendar.SECOND) * 0.1f
+        }
+        DingDingCatPointerHand.Second -> {
+            val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+            calendar.get(Calendar.SECOND) * 6f + calendar.get(Calendar.MILLISECOND) * 0.006f
+        }
+    }
+    val rotation = targetRotation - point.startValue
+    canvas.save()
+    canvas.rotate(rotation, centerX, centerY)
+    canvas.drawBitmap(bitmap, null, dst, pointPaint(point))
+    canvas.restore()
 }
 
 private fun drawGravityLayer(
@@ -431,11 +668,10 @@ private fun drawNumberStrip(
     val chars = text.mapNotNull { char -> dingDingCatCharIndex(char)?.let { char to it } }
     if (chars.isEmpty()) return
     val totalWidth = chars.size * dstWidth + (chars.size - 1).coerceAtLeast(0) * point.splitSpace
-    val area = RectF(
-        point.startX,
-        point.startY,
-        point.startX + (point.width.takeIf { it > 0f } ?: totalWidth),
-        point.startY + (point.height.takeIf { it > 0f } ?: dstHeight)
+    val area = point.destinationRect(
+        dial = dial,
+        contentWidth = point.width.takeIf { it > 0f } ?: totalWidth,
+        contentHeight = point.height.takeIf { it > 0f } ?: dstHeight
     )
     val paint = pointPaint(point)
     var cursorX = when (point.gravity) {
@@ -469,10 +705,15 @@ private fun drawAmPm(canvas: AndroidCanvas, dial: DingDingCatDial, point: DingDi
     val bitmap = DingDingCatBitmapCache.get(File(dial.rootDir, piece), allowSample = true) ?: return
     val width = (point.width.takeIf { it > 0f } ?: bitmap.width.toFloat()) * point.scale
     val height = (point.height.takeIf { it > 0f } ?: bitmap.height.toFloat()) * point.scale
+    val dst = point.destinationRect(
+        dial = dial,
+        contentWidth = width,
+        contentHeight = height
+    )
     canvas.drawBitmap(
         bitmap,
         null,
-        RectF(point.startX, point.startY, point.startX + width, point.startY + height),
+        dst,
         pointPaint(point)
     )
 }
@@ -488,10 +729,25 @@ private fun drawWeek(canvas: AndroidCanvas, dial: DingDingCatDial, point: DingDi
     if (srcRight <= srcLeft) return
     val dstWidth = sliceWidth * point.scale
     val dstHeight = bitmap.height * point.scale
+    val area = point.destinationRect(
+        dial = dial,
+        contentWidth = point.width.takeIf { it > 0f } ?: dstWidth,
+        contentHeight = point.height.takeIf { it > 0f } ?: dstHeight
+    )
+    val left = when (point.gravity) {
+        17 -> area.centerX() - dstWidth / 2f
+        5, 8388613 -> area.right - dstWidth
+        else -> area.left
+    }
+    val top = when (point.gravity) {
+        17 -> area.centerY() - dstHeight / 2f
+        80 -> area.bottom - dstHeight
+        else -> area.top
+    }
     canvas.drawBitmap(
         bitmap,
         Rect(srcLeft, 0, srcRight, bitmap.height),
-        RectF(point.startX, point.startY, point.startX + dstWidth, point.startY + dstHeight),
+        RectF(left, top, left + dstWidth, top + dstHeight),
         pointPaint(point)
     )
 }
@@ -507,11 +763,10 @@ private fun drawTextLayer(canvas: AndroidCanvas, dial: DingDingCatDial, point: D
             ?: Typeface.DEFAULT
         alpha = pointAlpha(point)
     }
-    val area = RectF(
-        point.startX,
-        point.startY,
-        point.startX + (point.width.takeIf { it > 0f } ?: dial.width.toFloat()),
-        point.startY + (point.height.takeIf { it > 0f } ?: dial.height.toFloat())
+    val area = point.destinationRect(
+        dial = dial,
+        contentWidth = point.width.takeIf { it > 0f } ?: dial.width.toFloat(),
+        contentHeight = point.height.takeIf { it > 0f } ?: dial.height.toFloat()
     )
     val x = if (point.gravity == 17) area.centerX() else area.left
     val y = area.centerY() - (paint.descent() + paint.ascent()) / 2f
@@ -535,7 +790,7 @@ private fun selectAnimatedPiece(point: DingDingCatDrawPoint, nowMillis: Long, tr
         }
         return point.pieces[frameIndex.coerceIn(0, point.pieces.lastIndex)]
     }
-    val frameMs = point.durationMs.toLong().coerceAtLeast(16L)
+    val frameMs = point.durationMs.toLong().coerceAtLeast(66L)
     val index = ((nowMillis / frameMs) % point.pieces.size).toInt()
     return point.pieces[index]
 }
@@ -547,21 +802,71 @@ private fun isTapTriggeredAnimation(point: DingDingCatDrawPoint): Boolean {
         !animator.startWithStatusPlay
 }
 
+private fun DingDingCatDrawPoint.containsDesignPoint(dial: DingDingCatDial, point: Offset): Boolean {
+    val bounds = drawBounds(dial)
+    return point.x in bounds.left..bounds.right && point.y in bounds.top..bounds.bottom
+}
+
+private fun DingDingCatDrawPoint.drawBounds(dial: DingDingCatDial): RectF {
+    val width = (this.width.takeIf { it > 0f } ?: dial.width.toFloat()) * this.scale
+    val height = (this.height.takeIf { it > 0f } ?: dial.height.toFloat()) * this.scale
+    return destinationRect(dial, width, height)
+}
+
+private fun DingDingCatDrawPoint.destinationRect(
+    dial: DingDingCatDial,
+    contentWidth: Float,
+    contentHeight: Float
+): RectF {
+    val width = contentWidth.coerceAtLeast(0f)
+    val height = contentHeight.coerceAtLeast(0f)
+    val left = when {
+        hasStartX -> startX
+        gravity == 17 -> (dial.width - width) / 2f
+        gravity == 5 || gravity == 8388613 -> dial.width - width
+        else -> 0f
+    }
+    val top = when {
+        hasStartY -> startY
+        shouldPinTopWhenPositionMissing(dial, width, height) -> 0f
+        gravity == 17 -> (dial.height - height) / 2f
+        gravity == 80 -> dial.height - height
+        else -> 0f
+    }
+    return RectF(left, top, left + width, top + height)
+}
+
 private fun isDingDingCatBackgroundLayer(point: DingDingCatDrawPoint, dial: DingDingCatDial): Boolean {
-    if (point.pointType != "PICTURE_LOOP") return false
+    if (point.pointType !in setOf("PICTURE_LOOP", "PICTURE_NORMAL", "PIICTURE_NORMAL")) return false
     if (isTapTriggeredAnimation(point)) return false
     val pointWidth = point.width.takeIf { it > 0f } ?: dial.width.toFloat()
     val pointHeight = point.height.takeIf { it > 0f } ?: dial.height.toFloat()
     val coversCanvas = pointWidth >= dial.width * 0.72f && pointHeight >= dial.height * 0.72f
-    val firstImageLayer = dial.drawPoints.firstOrNull { it.pointType == "PICTURE_LOOP" }?.sourceIndex == point.sourceIndex
+    val firstImageLayer = dial.drawPoints.firstOrNull { it.pointType in setOf("PICTURE_LOOP", "PICTURE_NORMAL") }?.sourceIndex == point.sourceIndex
     return coversCanvas && firstImageLayer
+}
+
+private fun DingDingCatDrawPoint.shouldPinTopWhenPositionMissing(
+    dial: DingDingCatDial,
+    contentWidth: Float,
+    contentHeight: Float
+): Boolean {
+    return pointType in setOf("PICTURE_NORMAL", "PIICTURE_NORMAL", "PICTRUE_EFFECT") &&
+        contentWidth >= dial.width * 0.95f &&
+        contentHeight < dial.height * 0.75f
 }
 
 private fun DingDingCatDial.animationFrameDelayMs(): Long {
     return drawPoints
         .asSequence()
         .filter { it.pieces.size > 1 }
-        .map { it.durationMs.toLong().coerceAtLeast(16L) }
+        .map { point ->
+            if (isTapTriggeredAnimation(point)) {
+                point.durationMs.toLong().coerceAtLeast(16L)
+            } else {
+                point.durationMs.toLong().coerceAtLeast(66L)
+            }
+        }
         .minOrNull()
         ?: 1_000L
 }
@@ -716,8 +1021,9 @@ private fun findNearestDingDingCatGravitySource(
 ): Int? {
     return specs
         .filter { spec ->
-            point.x in spec.area.left..spec.area.right &&
-                point.y in spec.area.top..spec.area.bottom
+            val center = bodies[spec.sourceIndex]?.center ?: spec.defaultCenter
+            point.x in (center.x - spec.halfWidth)..(center.x + spec.halfWidth) &&
+                point.y in (center.y - spec.halfHeight)..(center.y + spec.halfHeight)
         }
         .minByOrNull { spec ->
             val center = bodies[spec.sourceIndex]?.center ?: spec.defaultCenter
@@ -726,7 +1032,6 @@ private fun findNearestDingDingCatGravitySource(
             dx * dx + dy * dy
         }
         ?.sourceIndex
-        ?: specs.firstOrNull()?.sourceIndex
 }
 
 private fun coerceDingDingCatGravityCenter(center: Offset, spec: DingDingCatGravitySpec): Offset {
@@ -768,6 +1073,15 @@ private fun pointPaint(point: DingDingCatDrawPoint): Paint {
 
 private fun pointAlpha(point: DingDingCatDrawPoint): Int {
     return if (point.alpha in 0..255) point.alpha else 255
+}
+
+private fun normalizeDegrees(value: Float): Float {
+    val normalized = value % 360f
+    return if (normalized < 0f) normalized + 360f else normalized
+}
+
+private fun shortestDegreeDelta(from: Float, to: Float): Float {
+    return ((to - from + 540f) % 360f) - 180f
 }
 
 private fun dingDingCatCharIndex(char: Char): Int? {

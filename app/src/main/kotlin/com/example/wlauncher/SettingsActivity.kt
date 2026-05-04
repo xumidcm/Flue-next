@@ -63,6 +63,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -159,6 +160,7 @@ private val LocalSettingsLeftSafeInsetPercent = compositionLocalOf { 0 }
 enum class SettingsDestination {
     ROOT,
     WATCH_FACES,
+    WATCH_FACE_MORE,
     HIDDEN_APPS,
     ICON_PACKS,
     APPEARANCE,
@@ -166,6 +168,9 @@ enum class SettingsDestination {
     FEATURE_TOGGLES,
     PERFORMANCE,
     TOOLS,
+    BACKUP,
+    BACKUP_EXPORT,
+    BACKUP_IMPORT,
     ABOUT,
     DONATE
 }
@@ -179,6 +184,12 @@ private data class SettingsLaunchConfig(
     val initialDestination: SettingsDestination = SettingsDestination.ROOT,
     val returnToFaceOnBack: Boolean = false,
     val requestId: Long = 0L
+)
+
+private data class BlockingProgressState(
+    val title: String,
+    val detail: String,
+    val completed: Boolean = false
 )
 
 class SettingsActivity : ComponentActivity() {
@@ -340,6 +351,13 @@ private fun SettingsRootScreen(
     val isZh = remember(context.resources.configuration) {
         context.resources.configuration.locales[0]?.language?.startsWith("zh") == true
     }
+    var backupExportOptions by remember { mutableStateOf(FlueBackupOptions()) }
+    var pendingBackupExportOptions by remember { mutableStateOf<FlueBackupOptions?>(null) }
+    var backupImportUri by remember { mutableStateOf<Uri?>(null) }
+    var backupImportPreview by remember { mutableStateOf<FlueBackupPreview?>(null) }
+    var backupImportOptions by remember { mutableStateOf(FlueBackupOptions()) }
+    var backupBusy by remember { mutableStateOf(false) }
+    var backupProgress by remember { mutableStateOf<BlockingProgressState?>(null) }
     val fontPicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
             val savedPath = InternalWatchFaceStorage.copyFont(context, uri)
@@ -354,11 +372,20 @@ private fun SettingsRootScreen(
     val dingDingCatZipPicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
             settingsScope.launch {
+                backupBusy = true
+                backupProgress = BlockingProgressState(
+                    title = "导入叮叮猫表盘",
+                    detail = "正在解包和解析 ZIP"
+                )
                 val result = vm.importDingDingCatWatchFace(uri)
                 result
                     .onSuccess { descriptor ->
-                        vm.selectWatchFace(descriptor.id)
-                        Toast.makeText(context, "已导入 ${descriptor.displayName}", Toast.LENGTH_SHORT).show()
+                        backupProgress = BlockingProgressState(
+                            title = "导入完成",
+                            detail = descriptor.displayName,
+                            completed = true
+                        )
+                        delay(820)
                     }
                     .onFailure { error ->
                         Toast.makeText(
@@ -366,34 +393,42 @@ private fun SettingsRootScreen(
                             "导入失败：${error.message ?: error.javaClass.simpleName}",
                             Toast.LENGTH_SHORT
                         ).show()
-                }
+                    }
+                backupBusy = false
+                backupProgress = null
             }
         }
     }
-    var showBackupExportDialog by remember { mutableStateOf(false) }
-    var backupExportOptions by remember { mutableStateOf(FlueBackupOptions()) }
-    var pendingBackupExportOptions by remember { mutableStateOf<FlueBackupOptions?>(null) }
-    var backupImportUri by remember { mutableStateOf<Uri?>(null) }
-    var backupImportPreview by remember { mutableStateOf<FlueBackupPreview?>(null) }
-    var backupImportOptions by remember { mutableStateOf(FlueBackupOptions()) }
-    var backupBusy by remember { mutableStateOf(false) }
     val backupCreatePicker = rememberLauncherForActivityResult(CreateDocument("application/zip")) { uri ->
         val options = pendingBackupExportOptions
         pendingBackupExportOptions = null
         if (uri != null && options != null) {
             settingsScope.launch {
                 backupBusy = true
+                backupProgress = BlockingProgressState(
+                    title = "导出配置",
+                    detail = "正在写入 Flue 备份 ZIP"
+                )
                 val result = vm.exportBackup(uri, options)
-                backupBusy = false
                 result
-                    .onSuccess { Toast.makeText(context, "配置已导出", Toast.LENGTH_SHORT).show() }
+                    .onSuccess {
+                        backupProgress = BlockingProgressState(
+                            title = "导出完成",
+                            detail = uri.backupDisplayLabel(),
+                            completed = true
+                        )
+                        delay(920)
+                    }
                     .onFailure { error ->
+                        backupProgress = null
                         Toast.makeText(
                             context,
                             "导出失败：${error.message ?: error.javaClass.simpleName}",
                             Toast.LENGTH_SHORT
                         ).show()
                     }
+                backupBusy = false
+                backupProgress = null
             }
         }
     }
@@ -401,8 +436,11 @@ private fun SettingsRootScreen(
         if (uri != null) {
             settingsScope.launch {
                 backupBusy = true
+                backupProgress = BlockingProgressState(
+                    title = "读取配置",
+                    detail = "正在检查备份 ZIP"
+                )
                 val result = vm.readBackupPreview(uri)
-                backupBusy = false
                 result
                     .onSuccess { preview ->
                         backupImportUri = uri
@@ -416,6 +454,8 @@ private fun SettingsRootScreen(
                             Toast.LENGTH_SHORT
                         ).show()
                     }
+                backupBusy = false
+                backupProgress = null
             }
         }
     }
@@ -476,66 +516,8 @@ private fun SettingsRootScreen(
         )
     }
 
-    if (showBackupExportDialog) {
-        BackupOptionsDialog(
-            title = "导出配置",
-            subtitle = "选择要写入 ZIP 备份的内容",
-            options = backupExportOptions,
-            availableOptions = FlueBackupOptions(),
-            confirmText = "导出",
-            onOptionsChange = { backupExportOptions = it },
-            onDismiss = { showBackupExportDialog = false },
-            onConfirm = {
-                if (!backupExportOptions.hasAny) {
-                    Toast.makeText(context, "至少选择一项", Toast.LENGTH_SHORT).show()
-                } else {
-                    showBackupExportDialog = false
-                    pendingBackupExportOptions = backupExportOptions
-                    backupCreatePicker.launch(vm.suggestedBackupFileName())
-                }
-            }
-        )
-    }
-
-    backupImportPreview?.let { preview ->
-        BackupOptionsDialog(
-            title = "导入配置",
-            subtitle = "备份版本 ${preview.appVersion} · ${preview.createdAt.ifBlank { "未知时间" }}",
-            options = backupImportOptions,
-            availableOptions = preview.availableOptions,
-            confirmText = "导入",
-            onOptionsChange = { backupImportOptions = it.constrainedBy(preview.availableOptions) },
-            onDismiss = {
-                backupImportPreview = null
-                backupImportUri = null
-            },
-            onConfirm = {
-                val uri = backupImportUri
-                if (uri == null) {
-                    backupImportPreview = null
-                } else if (!backupImportOptions.hasAny) {
-                    Toast.makeText(context, "至少选择一项", Toast.LENGTH_SHORT).show()
-                } else {
-                    val options = backupImportOptions.constrainedBy(preview.availableOptions)
-                    backupImportPreview = null
-                    backupImportUri = null
-                    settingsScope.launch {
-                        backupBusy = true
-                        val result = vm.importBackup(uri, options)
-                        backupBusy = false
-                        result
-                            .onSuccess { Toast.makeText(context, "配置已导入", Toast.LENGTH_SHORT).show() }
-                            .onFailure { error ->
-                                Toast.makeText(
-                                    context,
-                                    "导入失败：${error.message ?: error.javaClass.simpleName}",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            }
-                    }
-                }
-            }
-        )
+    backupProgress?.let { state ->
+        BlockingProgressDialog(state = state)
     }
 
     LaunchedEffect(hiddenApps) {
@@ -587,6 +569,9 @@ private fun SettingsRootScreen(
     }
 
     val handleBack: () -> Unit = handleBack@{
+        if (backupBusy) {
+            return@handleBack
+        }
         if (donatePreviewResId != null) {
             donatePreviewResId = null
             return@handleBack
@@ -859,49 +844,6 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, descriptor.id, screenCenterY, screenHeightPx)
                 )
             }
-            item("watchface_font") {
-                ActionCard(
-                    title = "表盘字体",
-                    subtitle = builtInWatchFaceFontPath?.let { File(it).name } ?: "系统默认字体",
-                    scale = itemFisheye(listState, "watchface_font", screenCenterY, screenHeightPx),
-                    icon = { Icon(Icons.Filled.Settings, contentDescription = null, tint = WatchColors.ActiveCyan) },
-                    onClick = {
-                        fontPicker.launch(
-                            arrayOf(
-                                "font/*",
-                                "application/x-font-ttf",
-                                "application/x-font-otf",
-                                "application/vnd.ms-opentype",
-                                "application/octet-stream"
-                            )
-                        )
-                    }
-                )
-            }
-            if (!builtInWatchFaceFontPath.isNullOrBlank()) {
-                item("watchface_font_clear") {
-                    ActionCard(
-                        title = "恢复默认字体",
-                        subtitle = "清除已保存的表盘字体",
-                        scale = itemFisheye(listState, "watchface_font_clear", screenCenterY, screenHeightPx),
-                        icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
-                        onClick = { vm.setBuiltInWatchFaceFontPath(null) }
-                    )
-                }
-            }
-            item("watchface_bottom_fade") {
-                SettingsSwitchRow(
-                    title = if (isZh) "表盘底部渐隐遮罩" else "Watch Face Bottom Fade",
-                    subtitle = if (watchFaceBottomFadeEnabled) {
-                        if (isZh) "AW 和 MD3 表盘底部保留渐隐过渡" else "Keep the bottom fade on AW and MD3 watch faces"
-                    } else {
-                        if (isZh) "关闭表盘底部渐隐过渡" else "Disable the bottom watch face fade"
-                    },
-                    checked = watchFaceBottomFadeEnabled,
-                    onToggle = vm::setWatchFaceBottomFadeEnabled,
-                    scale = itemFisheye(listState, "watchface_bottom_fade", screenCenterY, screenHeightPx)
-                )
-            }
             item("watchface_refresh") {
                 ActionCard(
                     title = "重新扫描表盘",
@@ -926,6 +868,24 @@ private fun SettingsRootScreen(
                     }
                 )
             }
+            item("watchface_more") {
+                SettingsCategoryCard(
+                    title = "更多表盘选项",
+                    subtitle = "字体、底部渐隐和叮叮猫铺满全屏",
+                    onClick = { navigateTo(SettingsDestination.WATCH_FACE_MORE) },
+                    scale = itemFisheye(listState, "watchface_more", screenCenterY, screenHeightPx)
+                )
+            }
+        }
+
+            SettingsDestination.WATCH_FACE_MORE -> SettingsPageScaffold(
+            title = "更多表盘选项",
+            onBack = { handleBack() },
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.WATCH_FACE_MORE).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.WATCH_FACE_MORE).offset,
+            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.WATCH_FACE_MORE, index, offset) }
+        ) { listState, screenCenterY, screenHeightPx, _ ->
             if (selectedWatchFace.isDingDingCat) {
                 item("dingdingcat_fill_screen") {
                     SettingsSwitchRow(
@@ -940,6 +900,51 @@ private fun SettingsRootScreen(
                         scale = itemFisheye(listState, "dingdingcat_fill_screen", screenCenterY, screenHeightPx)
                     )
                 }
+            }
+            if (selectedWatchFace.isBuiltin) {
+                item("watchface_font") {
+                    ActionCard(
+                        title = "表盘字体",
+                        subtitle = builtInWatchFaceFontPath?.let { File(it).name } ?: "系统默认字体",
+                        scale = itemFisheye(listState, "watchface_font", screenCenterY, screenHeightPx),
+                        icon = { Icon(Icons.Filled.Settings, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                        onClick = {
+                            fontPicker.launch(
+                                arrayOf(
+                                    "font/*",
+                                    "application/x-font-ttf",
+                                    "application/x-font-otf",
+                                    "application/vnd.ms-opentype",
+                                    "application/octet-stream"
+                                )
+                            )
+                        }
+                    )
+                }
+                if (!builtInWatchFaceFontPath.isNullOrBlank()) {
+                    item("watchface_font_clear") {
+                        ActionCard(
+                            title = "恢复默认字体",
+                            subtitle = "清除已保存的表盘字体",
+                            scale = itemFisheye(listState, "watchface_font_clear", screenCenterY, screenHeightPx),
+                            icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                            onClick = { vm.setBuiltInWatchFaceFontPath(null) }
+                        )
+                    }
+                }
+            }
+            item("watchface_bottom_fade") {
+                SettingsSwitchRow(
+                    title = if (isZh) "表盘底部渐隐遮罩" else "Watch Face Bottom Fade",
+                    subtitle = if (watchFaceBottomFadeEnabled) {
+                        if (isZh) "AW 和 MD3 表盘底部保留渐隐过渡" else "Keep the bottom fade on AW and MD3 watch faces"
+                    } else {
+                        if (isZh) "关闭表盘底部渐隐过渡" else "Disable the bottom watch face fade"
+                    },
+                    checked = watchFaceBottomFadeEnabled,
+                    onToggle = vm::setWatchFaceBottomFadeEnabled,
+                    scale = itemFisheye(listState, "watchface_bottom_fade", screenCenterY, screenHeightPx)
+                )
             }
         }
 
@@ -1493,33 +1498,12 @@ private fun SettingsRootScreen(
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.TOOLS).offset,
             onScrollChanged = { index, offset -> updateScroll(SettingsDestination.TOOLS, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
-            item("export_backup") {
-                ActionCard(
-                    title = "导出配置",
-                    subtitle = if (backupBusy) "正在处理备份" else "导出设置、排序、表盘资源为 ZIP",
-                    onClick = {
-                        if (!backupBusy) showBackupExportDialog = true
-                    },
-                    scale = itemFisheye(listState, "export_backup", screenCenterY, screenHeightPx)
-                )
-            }
-            item("import_backup") {
-                ActionCard(
-                    title = "导入配置",
-                    subtitle = if (backupBusy) "正在处理备份" else "选择 Flue ZIP 备份并按项目恢复",
-                    onClick = {
-                        if (!backupBusy) {
-                            backupOpenPicker.launch(
-                                arrayOf(
-                                    "application/zip",
-                                    "application/x-zip-compressed",
-                                    "application/octet-stream",
-                                    "*/*"
-                                )
-                            )
-                        }
-                    },
-                    scale = itemFisheye(listState, "import_backup", screenCenterY, screenHeightPx)
+            item("backup_menu") {
+                SettingsCategoryCard(
+                    title = "导入/导出配置",
+                    subtitle = "选择备份项目、导入项目和表盘资源",
+                    onClick = { navigateTo(SettingsDestination.BACKUP) },
+                    scale = itemFisheye(listState, "backup_menu", screenCenterY, screenHeightPx)
                 )
             }
             item("export_log") {
@@ -1550,7 +1534,149 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "reset_defaults", screenCenterY, screenHeightPx)
                 )
             }
+        }
+
+            SettingsDestination.BACKUP -> SettingsPageScaffold(
+            title = "导入/导出配置",
+            onBack = { handleBack() },
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.BACKUP).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.BACKUP).offset,
+            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.BACKUP, index, offset) }
+        ) { listState, screenCenterY, screenHeightPx, _ ->
+            item("backup_export_page") {
+                SettingsCategoryCard(
+                    title = "导出配置",
+                    subtitle = "导出设置、排序和表盘资源为 ZIP",
+                    onClick = { navigateTo(SettingsDestination.BACKUP_EXPORT) },
+                    scale = itemFisheye(listState, "backup_export_page", screenCenterY, screenHeightPx)
+                )
             }
+            item("backup_import_page") {
+                SettingsCategoryCard(
+                    title = "导入配置",
+                    subtitle = "选择 Flue ZIP 备份并按项目恢复",
+                    onClick = { navigateTo(SettingsDestination.BACKUP_IMPORT) },
+                    scale = itemFisheye(listState, "backup_import_page", screenCenterY, screenHeightPx)
+                )
+            }
+        }
+
+            SettingsDestination.BACKUP_EXPORT -> SettingsPageScaffold(
+            title = "导出配置",
+            onBack = { handleBack() },
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.BACKUP_EXPORT).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.BACKUP_EXPORT).offset,
+            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.BACKUP_EXPORT, index, offset) }
+        ) { listState, screenCenterY, screenHeightPx, _ ->
+            backupOptionRows(
+                options = backupExportOptions,
+                availableOptions = FlueBackupOptions(),
+                onOptionsChange = { backupExportOptions = it },
+                scaleFor = { key -> itemFisheye(listState, key, screenCenterY, screenHeightPx) }
+            )
+            item("export_backup_start") {
+                ActionCard(
+                    title = "开始导出",
+                    subtitle = "选择保存位置后写入 ZIP 备份",
+                    onClick = {
+                        if (!backupExportOptions.hasAny) {
+                            Toast.makeText(context, "至少选择一项", Toast.LENGTH_SHORT).show()
+                        } else if (!backupBusy) {
+                            pendingBackupExportOptions = backupExportOptions
+                            backupCreatePicker.launch(vm.suggestedBackupFileName())
+                        }
+                    },
+                    scale = itemFisheye(listState, "export_backup_start", screenCenterY, screenHeightPx)
+                )
+            }
+        }
+
+            SettingsDestination.BACKUP_IMPORT -> SettingsPageScaffold(
+            title = "导入配置",
+            onBack = { handleBack() },
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.BACKUP_IMPORT).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.BACKUP_IMPORT).offset,
+            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.BACKUP_IMPORT, index, offset) }
+        ) { listState, screenCenterY, screenHeightPx, _ ->
+            item("import_backup_pick") {
+                ActionCard(
+                    title = "选择备份文件",
+                    subtitle = backupImportPreview?.let { preview ->
+                        "备份版本 ${preview.appVersion} · ${preview.createdAt.ifBlank { "未知时间" }}"
+                    } ?: "选择 Flue ZIP 备份文件",
+                    onClick = {
+                        if (!backupBusy) {
+                            backupOpenPicker.launch(
+                                arrayOf(
+                                    "application/zip",
+                                    "application/x-zip-compressed",
+                                    "application/octet-stream",
+                                    "*/*"
+                                )
+                            )
+                        }
+                    },
+                    scale = itemFisheye(listState, "import_backup_pick", screenCenterY, screenHeightPx)
+                )
+            }
+            backupImportPreview?.let { preview ->
+                backupOptionRows(
+                    options = backupImportOptions,
+                    availableOptions = preview.availableOptions,
+                    onOptionsChange = { backupImportOptions = it.constrainedBy(preview.availableOptions) },
+                    scaleFor = { key -> itemFisheye(listState, key, screenCenterY, screenHeightPx) }
+                )
+                item("import_backup_start") {
+                    ActionCard(
+                        title = "开始导入",
+                        subtitle = "恢复所选项目，未扫描到的应用和小组件会自动舍弃",
+                        onClick = {
+                            val uri = backupImportUri
+                            if (uri == null) {
+                                Toast.makeText(context, "先选择备份文件", Toast.LENGTH_SHORT).show()
+                            } else if (!backupImportOptions.hasAny) {
+                                Toast.makeText(context, "至少选择一项", Toast.LENGTH_SHORT).show()
+                            } else if (!backupBusy) {
+                                val options = backupImportOptions.constrainedBy(preview.availableOptions)
+                                settingsScope.launch {
+                                    backupBusy = true
+                                    backupProgress = BlockingProgressState(
+                                        title = "导入配置",
+                                        detail = "正在恢复所选项目"
+                                    )
+                                    val result = vm.importBackup(uri, options)
+                                    result
+                                        .onSuccess {
+                                            backupProgress = BlockingProgressState(
+                                                title = "导入完成",
+                                                detail = options.backupSummaryText(),
+                                                completed = true
+                                            )
+                                            backupImportPreview = null
+                                            backupImportUri = null
+                                            delay(920)
+                                        }
+                                        .onFailure { error ->
+                                            backupProgress = null
+                                            Toast.makeText(
+                                                context,
+                                                "导入失败：${error.message ?: error.javaClass.simpleName}",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    backupBusy = false
+                                    backupProgress = null
+                                }
+                            }
+                        },
+                        scale = itemFisheye(listState, "import_backup_start", screenCenterY, screenHeightPx)
+                    )
+                }
+            }
+        }
 
             SettingsDestination.ABOUT -> SettingsPageScaffold(
                 title = "关于",
@@ -2558,15 +2684,157 @@ private fun BackupOptionSwitch(
     title: String,
     subtitle: String,
     checked: Boolean,
-    onToggle: (Boolean) -> Unit
+    onToggle: (Boolean) -> Unit,
+    scale: Float = 1f
 ) {
     SettingsSwitchRow(
         title = title,
         subtitle = subtitle,
         checked = checked,
         onToggle = onToggle,
-        scale = 1f
+        scale = scale
     )
+}
+
+private fun LazyListScope.backupOptionRows(
+    options: FlueBackupOptions,
+    availableOptions: FlueBackupOptions,
+    onOptionsChange: (FlueBackupOptions) -> Unit,
+    scaleFor: (String) -> Float
+) {
+    if (availableOptions.settings) {
+        item("backup_settings") {
+            BackupOptionSwitch(
+                title = "设置",
+                subtitle = "桌面外观、性能、开关等通用设置",
+                checked = options.settings,
+                onToggle = { onOptionsChange(options.copy(settings = it)) },
+                scale = scaleFor("backup_settings")
+            )
+        }
+    }
+    if (availableOptions.appOrder) {
+        item("backup_app_order") {
+            BackupOptionSwitch(
+                title = "应用排序",
+                subtitle = "恢复时自动舍弃未扫描到的应用",
+                checked = options.appOrder,
+                onToggle = { onOptionsChange(options.copy(appOrder = it)) },
+                scale = scaleFor("backup_app_order")
+            )
+        }
+    }
+    if (availableOptions.widgetOrder) {
+        item("backup_widget_order") {
+            BackupOptionSwitch(
+                title = "小组件排序",
+                subtitle = "恢复时自动舍弃未扫描到的小组件",
+                checked = options.widgetOrder,
+                onToggle = { onOptionsChange(options.copy(widgetOrder = it)) },
+                scale = scaleFor("backup_widget_order")
+            )
+        }
+    }
+    if (availableOptions.sideScreenOrder) {
+        item("backup_side_screen_order") {
+            BackupOptionSwitch(
+                title = "负一屏排序",
+                subtitle = "负一屏分区顺序和快捷方式槽位",
+                checked = options.sideScreenOrder,
+                onToggle = { onOptionsChange(options.copy(sideScreenOrder = it)) },
+                scale = scaleFor("backup_side_screen_order")
+            )
+        }
+    }
+    if (availableOptions.photoWatchFace) {
+        item("backup_photo_watchface") {
+            BackupOptionSwitch(
+                title = "图片表盘",
+                subtitle = "图片表盘配置和当前图片",
+                checked = options.photoWatchFace,
+                onToggle = { onOptionsChange(options.copy(photoWatchFace = it)) },
+                scale = scaleFor("backup_photo_watchface")
+            )
+        }
+    }
+    if (availableOptions.videoWatchFace) {
+        item("backup_video_watchface") {
+            BackupOptionSwitch(
+                title = "视频表盘",
+                subtitle = "视频表盘配置和当前视频",
+                checked = options.videoWatchFace,
+                onToggle = { onOptionsChange(options.copy(videoWatchFace = it)) },
+                scale = scaleFor("backup_video_watchface")
+            )
+        }
+    }
+    if (availableOptions.dingDingCatWatchFaces) {
+        item("backup_dingdingcat") {
+            BackupOptionSwitch(
+                title = "叮叮猫表盘",
+                subtitle = "已经导入的叮叮猫 ZIP 表盘",
+                checked = options.dingDingCatWatchFaces,
+                onToggle = { onOptionsChange(options.copy(dingDingCatWatchFaces = it)) },
+                scale = scaleFor("backup_dingdingcat")
+            )
+        }
+    }
+}
+
+private fun FlueBackupOptions.backupSummaryText(): String {
+    val labels = buildList {
+        if (settings) add("设置")
+        if (appOrder) add("应用排序")
+        if (widgetOrder) add("小组件排序")
+        if (sideScreenOrder) add("负一屏排序")
+        if (photoWatchFace) add("图片表盘")
+        if (videoWatchFace) add("视频表盘")
+        if (dingDingCatWatchFaces) add("叮叮猫表盘")
+    }
+    return labels.takeIf { it.isNotEmpty() }?.joinToString(" · ") ?: "无"
+}
+
+private fun Uri.backupDisplayLabel(): String {
+    return runCatching {
+        val path = lastPathSegment?.substringAfterLast(':').orEmpty().ifBlank { toString() }
+        path.substringAfterLast('/').ifBlank { "未知位置" }
+    }.getOrElse { toString() }
+}
+
+@Composable
+private fun BlockingProgressDialog(state: BlockingProgressState) {
+    Dialog(
+        onDismissRequest = {},
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.92f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (state.completed) {
+                    Icon(
+                        imageVector = Icons.Filled.CheckCircle,
+                        contentDescription = null,
+                        tint = WatchColors.ActiveCyan,
+                        modifier = Modifier.size(52.dp)
+                    )
+                } else {
+                    CircularProgressIndicator(color = WatchColors.ActiveCyan)
+                }
+                Spacer(modifier = Modifier.height(18.dp))
+                Text(state.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(state.detail, color = WatchColors.TextTertiary, fontSize = 12.sp)
+            }
+        }
+    }
 }
 
 private suspend fun exportLog(context: android.content.Context) {
