@@ -1128,15 +1128,12 @@ private fun DingDingCatDial.animationFrameDelayMs(): Long {
 }
 
 private fun DingDingCatDrawPoint.frameDurationMs(): Long {
-    durationMs.toLong()
-        .takeIf { it > 0L }
-        ?.let { return it.coerceAtLeast(16L) }
     val pieceCount = pieces.size.coerceAtLeast(1)
     val totalDuration = animator?.totalDurationMs?.takeIf { it > 0 }
     if (totalDuration != null && pieceCount > 1) {
         return (totalDuration.toLong() / pieceCount).coerceAtLeast(16L)
     }
-    return 66L
+    return durationMs.toLong().takeIf { it > 0L }?.coerceAtLeast(16L) ?: 66L
 }
 
 private fun resolveHorizontalGravity(gravity: Int): Int {
