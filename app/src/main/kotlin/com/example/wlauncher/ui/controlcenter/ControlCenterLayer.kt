@@ -832,6 +832,7 @@ private fun ControlToggle(
 ) {
     val pressedState = rememberPressedState()
     val pressed by pressedState
+    val darkMode = WatchColors.isDark
     val targetScale by animateFloatAsState(
         when {
             pressed -> 0.88f
@@ -840,10 +841,19 @@ private fun ControlToggle(
         },
         label = "control_toggle_scale"
     )
+    val activeButtonColor = if (darkMode) Color.White else Color.Black
+    val inactiveButtonColor = if (darkMode) Color(0xFF2C2C2E) else Color.White
+    val activePressedButtonColor = if (darkMode) Color(0xFFE4E4E4) else Color(0xFF1C1C1E)
+    val inactivePressedButtonColor = if (darkMode) Color(0xFF424242) else Color(0xFFE4E4E4)
     val buttonColor = when {
-        pressed -> if (active) Color(0xFFE4E4E4) else Color(0xFF424242)
-        active -> Color.White
-        else -> Color(0xFF2C2C2E)
+        pressed -> if (active) activePressedButtonColor else inactivePressedButtonColor
+        active -> activeButtonColor
+        else -> inactiveButtonColor
+    }
+    val contentColor = if (active) {
+        if (darkMode) Color.Black else Color.White
+    } else {
+        if (darkMode) Color.White else Color.Black
     }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
@@ -866,7 +876,7 @@ private fun ControlToggle(
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = if (active) Color.Black else Color.White,
+                tint = contentColor,
                 modifier = Modifier.size(iconSize)
             )
         }

@@ -77,6 +77,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -511,6 +512,12 @@ private fun SettingsRootScreen(
     var dingDingCatLastVersionTapAt by remember { mutableStateOf(0L) }
     var dingDingCatDeleteTarget by remember { mutableStateOf<LunchWatchFaceDescriptor?>(null) }
     val pageScrollPositions = remember { mutableStateMapOf<SettingsDestination, SavedScrollPosition>() }
+    val pageScrollResetVersions = remember { mutableStateMapOf<SettingsDestination, Int>() }
+
+    fun resetPageScroll(target: SettingsDestination) {
+        pageScrollPositions.remove(target)
+        pageScrollResetVersions[target] = (pageScrollResetVersions[target] ?: 0) + 1
+    }
 
     fun closeBlockingProgressPage() {
         val state = backupProgress
@@ -610,8 +617,8 @@ private fun SettingsRootScreen(
 
     val navigateTo: (SettingsDestination) -> Unit = { next ->
         if (next != destination) {
-            if (next.depth > destination.depth) {
-                pageScrollPositions.remove(next)
+            if (next.resetsScrollOnEnter || next.depth > destination.depth) {
+                resetPageScroll(next)
             }
             leaveDestination(next)
             backStack = if (backStack.lastOrNull() == next) {
@@ -637,6 +644,9 @@ private fun SettingsRootScreen(
         }
         val previous = backStack.lastOrNull()
         if (previous != null) {
+            if (previous.depth < destination.depth) {
+                resetPageScroll(destination)
+            }
             leaveDestination(previous)
             backStack = backStack.dropLast(1)
             destination = previous
@@ -675,6 +685,7 @@ private fun SettingsRootScreen(
             },
             label = "settings_destination"
         ) { currentDestination ->
+        key(currentDestination, pageScrollResetVersions[currentDestination] ?: 0) {
         when (currentDestination) {
             SettingsDestination.ROOT -> SettingsPageScaffold(
                 title = "Flue设置",
@@ -1887,6 +1898,7 @@ private fun SettingsRootScreen(
             }
         }
         }
+        }
     }
 
     donatePreviewResId?.let { resId ->
@@ -2179,6 +2191,9 @@ private val SettingsDestination.depth: Int
         SettingsDestination.BACKUP_IMPORT -> 3
         else -> 1
     }
+
+private val SettingsDestination.resetsScrollOnEnter: Boolean
+    get() = depth >= 3
 
 @Composable
 private fun MessageCard(text: String, background: Color, onClick: () -> Unit) {
