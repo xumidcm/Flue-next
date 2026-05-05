@@ -958,6 +958,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     ControlCenterLayer(
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         showMusicControls = showMusicControls,
+                        notificationAccessGranted = notificationAccessGranted,
                         musicTextSwitchAnimation = musicTextSwitchAnimation,
                         onDismissToFace = { vm.setState(ScreenState.Face) },
                         showPowerButton = powerMenuButtonEnabled,

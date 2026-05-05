@@ -187,6 +187,7 @@ private data class BatteryStatusSnapshot(
 fun ControlCenterLayer(
     leftSafeInsetPercent: Int,
     showMusicControls: Boolean,
+    notificationAccessGranted: Boolean,
     musicTextSwitchAnimation: String = MusicTextSwitchAnimations.DEFAULT_ID,
     onDismissToFace: () -> Unit,
     showPowerButton: Boolean = false,
@@ -745,9 +746,11 @@ fun ControlCenterLayer(
                 if (showMusicControls) {
                     MediaControlCard(
                         mediaState = mediaState,
+                        notificationAccessGranted = notificationAccessGranted,
                         musicTextSwitchAnimation = musicTextSwitchAnimation,
                         onGestureLockChange = lockControlCenterGesture,
                         onOpenApp = { openMusicApp(context, mediaState.appPackage) },
+                        onOpenNotificationAccess = { openNotificationAccessSettings(context) },
                         onOpenOutputSwitcherOrApp = {
                             if (!openMediaOutputSwitcher(context)) {
                                 openMusicApp(context, mediaState.appPackage)
@@ -924,22 +927,27 @@ private fun ControlSliderCard(
 @Composable
 private fun MediaControlCard(
     mediaState: ControlCenterMediaState,
+    notificationAccessGranted: Boolean,
     musicTextSwitchAnimation: String,
     onGestureLockChange: (Boolean) -> Unit,
     onOpenApp: () -> Unit,
+    onOpenNotificationAccess: () -> Unit,
     onOpenOutputSwitcherOrApp: () -> Unit
 ) {
-    val bg = mediaState.artworkColor
+    val bg = if (notificationAccessGranted) mediaState.artworkColor else Color(0xFF2F3B45)
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(156.dp)
             .clip(RoundedCornerShape(32.dp))
             .background(bg.copy(alpha = 0.88f))
-            .clickable(onClick = onOpenApp)
+            .clickable(onClick = if (notificationAccessGranted) onOpenApp else onOpenNotificationAccess)
             .padding(12.dp)
     ) {
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        if (!notificationAccessGranted) {
+            MediaNotificationAccessPrompt()
+        } else {
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val artworkGap = 12.dp
             val preferredArtworkSize = 132.dp
             val minArtworkSize = 96.dp
@@ -1031,6 +1039,57 @@ private fun MediaControlCard(
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MediaNotificationAccessPrompt() {
+    Row(
+        modifier = Modifier.fillMaxSize(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(132.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .background(Color.Black.copy(alpha = 0.22f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Filled.MusicNote, null, tint = Color.White, modifier = Modifier.size(34.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = "需要通知使用权",
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(5.dp))
+            Text(
+                text = "授权后显示音乐信息和控制",
+                color = Color.White.copy(alpha = 0.72f),
+                fontSize = 11.sp,
+                lineHeight = 15.sp
+            )
+            Spacer(Modifier.height(12.dp))
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color.White.copy(alpha = 0.18f))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = "点击授权",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
         }
     }
@@ -1710,6 +1769,10 @@ private fun openMediaOutputSwitcher(context: Context): Boolean {
     return runCatching {
         SystemOutputSwitcherDialogController.showDialog(context)
     }.getOrDefault(false)
+}
+
+private fun openNotificationAccessSettings(context: Context) {
+    openSettings(context, Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
 }
 
 private fun formatMediaTime(timeMs: Long): String {
