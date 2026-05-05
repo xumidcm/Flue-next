@@ -703,7 +703,15 @@ fun HoneycombScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer {
+                        val backgroundProgress = entryVisuals.backgroundProgress
+                        val backgroundScale = 0.16f + backgroundProgress * 0.84f
+                        scaleX = backgroundScale
+                        scaleY = backgroundScale
                         alpha = entryVisuals.backgroundProgress
+                        clip = true
+                        shape = RoundedCornerShape(
+                            percent = ((1f - backgroundProgress) * 50f).roundToInt().coerceIn(0, 50)
+                        )
                     }
                     .background(appPalette.background)
             )
@@ -1472,7 +1480,15 @@ private fun MaterialDenseGridScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    alpha = entryVisuals.backgroundProgress
+                    val backgroundProgress = entryVisuals.backgroundProgress
+                    val backgroundScale = 0.16f + backgroundProgress * 0.84f
+                    scaleX = backgroundScale
+                    scaleY = backgroundScale
+                    alpha = backgroundProgress
+                    clip = true
+                    shape = RoundedCornerShape(
+                        percent = ((1f - backgroundProgress) * 50f).roundToInt().coerceIn(0, 50)
+                    )
                 }
                 .background(appPalette.background)
         )

@@ -81,6 +81,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private const val LIST_MENU_TRIGGER_MS = 620L
 private const val LIST_MENU_DRAG_START_DP = 20f
@@ -506,7 +507,15 @@ fun ListDrawerScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer {
-                        alpha = entryVisuals.backgroundProgress
+                        val backgroundProgress = entryVisuals.backgroundProgress
+                        val backgroundScale = 0.16f + backgroundProgress * 0.84f
+                        scaleX = backgroundScale
+                        scaleY = backgroundScale
+                        alpha = backgroundProgress
+                        clip = true
+                        shape = RoundedCornerShape(
+                            percent = ((1f - backgroundProgress) * 50f).roundToInt().coerceIn(0, 50)
+                        )
                     }
                     .background(appPalette.background)
             )
