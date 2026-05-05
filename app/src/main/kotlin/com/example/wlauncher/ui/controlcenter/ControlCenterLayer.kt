@@ -1043,6 +1043,7 @@ private fun MediaControlCard(
         }
     }
 }
+}
 
 @Composable
 private fun MediaNotificationAccessPrompt() {
