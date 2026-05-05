@@ -501,19 +501,11 @@ fun ListDrawerScreen(
             val reduceListVisualLoad = (fastScrollActive || listState.isScrollInProgress) &&
                 dragFromIndex == null &&
                 longPressedApp == null
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        val backgroundProgress = entryVisuals.backgroundProgress
-                        val backgroundScale = 0.16f + entryVisuals.backgroundScaleProgress * 0.84f
-                        scaleX = backgroundScale
-                        scaleY = backgroundScale
-                        alpha = backgroundProgress
-                        clip = true
-                        shape = RoundedCornerShape(percent = entryVisuals.backgroundCornerPercent)
-                    }
-                    .background(appPalette.background)
+            AppListEntryBackground(
+                maxWidth = maxWidth,
+                maxHeight = maxHeight,
+                visuals = entryVisuals,
+                color = appPalette.background
             )
             LaunchedEffect(dragFromIndex, screenHeightPx) {
                 var previousFrameNanos = 0L

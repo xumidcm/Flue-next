@@ -28,6 +28,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -150,7 +151,7 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
-private const val ABOUT_VERSION = "beta1.4.1"
+private const val ABOUT_VERSION = "beta1.5"
 private const val COMMUNITY_GROUP_NUMBER = "1097162313"
 private const val AUTHOR_QQ_NUMBER = "3513903055"
 private const val AUTHOR_BILIBILI_URL = "https://m.bilibili.com/space/1609437970"
@@ -2567,7 +2568,11 @@ private fun AboutCard(
                 fontSize = 12.sp,
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onVersionClick)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onVersionClick
+                    )
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             )
             Spacer(modifier = Modifier.height(22.dp))

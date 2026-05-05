@@ -25,6 +25,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
@@ -424,21 +425,10 @@ private fun BuiltInWatchFaceSurface(
         )
 
         if (showBottomFade && bottomFadeHeightDp > 0) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .height(bottomFadeHeightDp.dp)
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                Color.Transparent,
-                                effectiveBottomFadeColor.copy(alpha = 0.28f),
-                                effectiveBottomFadeColor.copy(alpha = 0.82f)
-                            )
-                        )
-                    )
-                    .platformBlur(bottomFadeBlurRadiusDp, bottomFadeBlurRadiusDp > 0f)
+            WatchFaceBottomFadeOverlay(
+                color = effectiveBottomFadeColor,
+                heightDp = bottomFadeHeightDp,
+                blurRadiusDp = bottomFadeBlurRadiusDp
             )
         }
 
@@ -474,6 +464,31 @@ private fun BuiltInWatchFaceSurface(
             )
         }
     }
+}
+
+@Composable
+internal fun BoxScope.WatchFaceBottomFadeOverlay(
+    color: Color,
+    heightDp: Int,
+    blurRadiusDp: Float
+) {
+    if (heightDp <= 0) return
+    Box(
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .fillMaxWidth()
+            .height(heightDp.dp)
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        Color.Transparent,
+                        color.copy(alpha = 0.28f),
+                        color.copy(alpha = 0.82f)
+                    )
+                )
+            )
+            .platformBlur(blurRadiusDp, blurRadiusDp > 0f)
+    )
 }
 
 private fun watchFaceScrimBrush(

@@ -64,6 +64,7 @@ import com.flue.launcher.ui.drawer.HoneycombScreen
 import com.flue.launcher.ui.drawer.ListDrawerScreen
 import com.flue.launcher.ui.drawer.appListPalette
 import com.flue.launcher.ui.home.WatchFaceLayer
+import com.flue.launcher.ui.home.WatchFaceBottomFadeOverlay
 import com.flue.launcher.ui.home.WatchFaceStatusIndicatorOverlay
 import com.flue.launcher.ui.home.rememberAppListSeedColor
 import com.flue.launcher.ui.navigation.GestureHost
@@ -654,6 +655,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                     vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
                                 }
                             )
+                            if (watchFaceBottomFadeEnabled) {
+                                WatchFaceBottomFadeOverlay(
+                                    color = watchFaceFadePalette.fadeEdge,
+                                    heightDp = honeycombBottomFade,
+                                    blurRadiusDp = if (blurEnabled && edgeBlurEnabled) honeycombEdgeBlurRadius else 0f
+                                )
+                            }
                             WatchFaceStatusIndicatorOverlay(
                                 showStatusIndicators = watchFaceStatusIndicators,
                                 hasNotifications = showNotification && notificationGroups.isNotEmpty(),
@@ -680,6 +688,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                     vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
                                 }
                             )
+                            if (watchFaceBottomFadeEnabled) {
+                                WatchFaceBottomFadeOverlay(
+                                    color = watchFaceFadePalette.fadeEdge,
+                                    heightDp = honeycombBottomFade,
+                                    blurRadiusDp = if (blurEnabled && edgeBlurEnabled) honeycombEdgeBlurRadius else 0f
+                                )
+                            }
                             WatchFaceStatusIndicatorOverlay(
                                 showStatusIndicators = watchFaceStatusIndicators,
                                 hasNotifications = showNotification && notificationGroups.isNotEmpty(),

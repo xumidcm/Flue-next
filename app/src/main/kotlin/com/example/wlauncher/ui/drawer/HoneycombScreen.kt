@@ -142,11 +142,16 @@ fun HoneycombScreen(
         MaterialDenseGridScreen(
             apps = apps,
             blurEnabled = blurEnabled,
+            edgeBlurEnabled = edgeBlurEnabled && !suppressHeavyEffects,
             twoToneIconsEnabled = twoToneIconsEnabled,
             iconShadowEnabled = iconShadowEnabled,
             themeColor = themeColor,
             darkMode = darkMode,
             columns = (narrowCols + 1).coerceIn(2, 6),
+            topBlurRadiusDp = topBlurRadiusDp,
+            bottomBlurRadiusDp = bottomBlurRadiusDp,
+            topFadeRangeDp = topFadeRangeDp,
+            bottomFadeRangeDp = bottomFadeRangeDp,
             active = active,
             leftSafeInsetPercent = leftSafeInsetPercent,
             appListScalePercent = appListScalePercent,
@@ -699,19 +704,11 @@ fun HoneycombScreen(
                     }
                 }
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        val backgroundProgress = entryVisuals.backgroundProgress
-                        val backgroundScale = 0.16f + entryVisuals.backgroundScaleProgress * 0.84f
-                        scaleX = backgroundScale
-                        scaleY = backgroundScale
-                        alpha = entryVisuals.backgroundProgress
-                        clip = true
-                        shape = RoundedCornerShape(percent = entryVisuals.backgroundCornerPercent)
-                    }
-                    .background(appPalette.background)
+            AppListEntryBackground(
+                maxWidth = maxWidth,
+                maxHeight = maxHeight,
+                visuals = entryVisuals,
+                color = appPalette.background
             )
 
             val visibleTop = -iconSizePx * 1.5f
@@ -1129,11 +1126,16 @@ fun HoneycombScreen(
 private fun MaterialDenseGridScreen(
     apps: List<AppInfo>,
     blurEnabled: Boolean,
+    edgeBlurEnabled: Boolean,
     twoToneIconsEnabled: Boolean,
     iconShadowEnabled: Boolean,
     themeColor: Color,
     darkMode: Boolean,
     columns: Int,
+    topBlurRadiusDp: Float,
+    bottomBlurRadiusDp: Float,
+    topFadeRangeDp: Int,
+    bottomFadeRangeDp: Int,
     active: Boolean,
     leftSafeInsetPercent: Int,
     appListScalePercent: Int,
@@ -1159,6 +1161,7 @@ private fun MaterialDenseGridScreen(
     val launcherStyle = LauncherTheme.style
     val appPalette = appListPalette(themeColor, darkMode, UiStyle.MATERIAL_3, useWatchFaceColors)
     val entryVisuals = appListEntryVisuals(entryProgress)
+    val edgeFadesVisible = active || entryProgress > 0.001f
     val iconShadowElevationPx by animateFloatAsState(
         targetValue = if (iconShadowEnabled) with(density) { 8.dp.toPx() } else 0f,
         animationSpec = tween(durationMillis = if (iconShadowEnabled) 120 else 0),
@@ -1485,19 +1488,11 @@ private fun MaterialDenseGridScreen(
                 }
             }
         }
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    val backgroundProgress = entryVisuals.backgroundProgress
-                    val backgroundScale = 0.16f + entryVisuals.backgroundScaleProgress * 0.84f
-                    scaleX = backgroundScale
-                    scaleY = backgroundScale
-                    alpha = backgroundProgress
-                    clip = true
-                    shape = RoundedCornerShape(percent = entryVisuals.backgroundCornerPercent)
-                }
-                .background(appPalette.background)
+        AppListEntryBackground(
+            maxWidth = maxWidth,
+            maxHeight = maxHeight,
+            visuals = entryVisuals,
+            color = appPalette.background
         )
         LazyVerticalGrid(
             columns = GridCells.Fixed(effectiveColumns),
@@ -1696,6 +1691,43 @@ private fun MaterialDenseGridScreen(
                         .clip(materialIconShape)
                 )
             }
+        }
+
+        if (edgeFadesVisible && topFadeRangeDp > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(topFadeRangeDp.dp)
+                    .graphicsLayer { alpha = entryVisuals.edgeProgress }
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                appPalette.fadeEdge,
+                                Color.Transparent
+                            )
+                        )
+                    )
+                    .platformBlur(topBlurRadiusDp, blurEnabled && edgeBlurEnabled)
+            )
+        }
+        if (edgeFadesVisible && bottomFadeRangeDp > 0) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(bottomFadeRangeDp.dp)
+                    .graphicsLayer { alpha = entryVisuals.edgeProgress }
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color.Transparent,
+                                appPalette.fadeEdge
+                            )
+                        )
+                    )
+                    .platformBlur(bottomBlurRadiusDp, blurEnabled && edgeBlurEnabled)
+            )
         }
 
         longPressedApp?.let { app ->

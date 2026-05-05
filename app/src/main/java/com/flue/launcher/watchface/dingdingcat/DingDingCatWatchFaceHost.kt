@@ -913,10 +913,10 @@ private fun drawWeek(canvas: AndroidCanvas, dial: DingDingCatDial, point: DingDi
 }
 
 private fun drawTimeSpaceLayer(canvas: AndroidCanvas, dial: DingDingCatDial, point: DingDingCatDrawPoint) {
-    val area = point.destinationRect(
+    val area = point.scaledLayerRect(
         dial = dial,
-        contentWidth = point.width.takeIf { it > 0f } ?: dial.width.toFloat(),
-        contentHeight = point.height.takeIf { it > 0f } ?: dial.height.toFloat()
+        rawWidth = point.width.takeIf { it > 0f } ?: dial.width.toFloat(),
+        rawHeight = point.height.takeIf { it > 0f } ?: dial.height.toFloat()
     )
     val colors = point.text.split(',')
         .mapNotNull { raw ->
@@ -1066,6 +1066,24 @@ private fun DingDingCatDrawPoint.destinationRect(
         fallbackHeight = contentHeight.coerceAtLeast(0f)
     )
     return alignedRectInArea(area, contentWidth, contentHeight)
+}
+
+private fun DingDingCatDrawPoint.scaledLayerRect(
+    dial: DingDingCatDial,
+    rawWidth: Float,
+    rawHeight: Float
+): RectF {
+    val contentWidth = rawWidth.coerceAtLeast(0f) * scale
+    val contentHeight = rawHeight.coerceAtLeast(0f) * scale
+    val area = layoutAreaRect(
+        dial = dial,
+        fallbackWidth = rawWidth.coerceAtLeast(0f),
+        fallbackHeight = rawHeight.coerceAtLeast(0f)
+    )
+    val aligned = alignedRectInArea(area, contentWidth, contentHeight)
+    val left = if (hasStartX) startX else aligned.left
+    val top = if (hasStartY) startY else aligned.top
+    return RectF(left, top, left + contentWidth, top + contentHeight)
 }
 
 private fun DingDingCatDrawPoint.layoutAreaRect(
