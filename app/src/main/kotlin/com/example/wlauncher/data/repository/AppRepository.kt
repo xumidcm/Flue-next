@@ -6,7 +6,9 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.LauncherApps
 import android.content.pm.ResolveInfo
+import android.content.pm.ShortcutInfo
 import android.os.Build
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
@@ -18,16 +20,19 @@ import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
 import android.graphics.PorterDuffXfermode
+import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import com.flue.launcher.R
 import com.flue.launcher.data.model.AppInfo
+import com.flue.launcher.data.model.AppListItemType
 import com.flue.launcher.data.model.BUILTIN_SETTINGS_ENTRY_COMPONENT
 import com.flue.launcher.data.model.BUILTIN_SETTINGS_ENTRY_PACKAGE
 import com.flue.launcher.iconpack.IconPackMapping
@@ -78,6 +83,9 @@ class AppRepository(private val context: Context) {
     private var packageRefreshJob: Job? = null
     private val installTimeCache = mutableMapOf<String, Long>()
     private val iconLocks = ConcurrentHashMap<String, Any>()
+    private val itemStorage = AppListItemStorage(context)
+    private var itemCatalog: Map<String, AppInfo> = emptyMap()
+    private var folderCatalog: List<StoredAppListFolder> = emptyList()
     private val iconCache = object : LinkedHashMap<String, CachedIconSet>(160, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedIconSet>?): Boolean {
             return size > 160
@@ -236,18 +244,69 @@ class AppRepository(private val context: Context) {
         }
         createBuiltInSettingsEntry(iconSize, useTwoToneIconsSnapshot)?.let(loadedApps::add)
 
+        val catalogItems = ArrayList<AppInfo>(loadedApps.size + 8)
+        catalogItems += loadedApps
+        itemStorage.loadShortcuts().forEach { shortcut ->
+            if (!isCurrentRefresh(generation)) return
+            createShortcutEntry(
+                shortcut = shortcut,
+                iconPackMapping = iconPackMapping,
+                iconSize = iconSize,
+                useLegacyCircularIcons = useLegacyCircularIconsSnapshot,
+                useTwoToneIcons = useTwoToneIconsSnapshot
+            )?.let(catalogItems::add)
+        }
+        val catalogMap = catalogItems.associateBy { it.componentKey }
+        val storedFolders = itemStorage.loadFolders()
+        val folderChildKeys = storedFolders.flatMap { folder -> folder.itemKeys }.toSet()
+        val folderEntries = storedFolders.mapNotNull { folder ->
+            val liveKeys = folder.itemKeys.filter { key -> catalogMap.containsKey(key) }
+            if (liveKeys.isEmpty()) {
+                null
+            } else {
+                createFolderEntry(
+                    folder = folder.copy(itemKeys = liveKeys),
+                    childItems = liveKeys.mapNotNull(catalogMap::get),
+                    iconSize = iconSize,
+                    useTwoToneIcons = useTwoToneIconsSnapshot
+                )
+            }
+        }
+        val topLevelItems = ArrayList<AppInfo>(catalogItems.size + folderEntries.size)
+        topLevelItems += catalogItems.filterNot { it.componentKey in folderChildKeys }
+        topLevelItems += folderEntries
+
         if (synchronized(this) { generation != refreshGeneration }) return
 
-        val knownPackages = loadedApps.mapTo(linkedSetOf()) { it.packageName }
+        val knownPackages = catalogItems.mapTo(linkedSetOf()) { it.packageName }
         synchronized(installTimeCache) {
             installTimeCache.keys.retainAll(knownPackages)
         }
 
-        _allApps.value = sortApps(loadedApps)
+        itemCatalog = catalogMap + folderEntries.associateBy { it.componentKey }
+        folderCatalog = storedFolders
+        _allApps.value = sortApps(topLevelItems)
         applyFilters()
     }
 
     fun launchApp(appInfo: AppInfo): Boolean {
+        if (appInfo.isFolder) return false
+        if (appInfo.isAppListShortcut) {
+            val intent = runCatching {
+                Intent.parseUri(appInfo.shortcutIntentUri.orEmpty(), Intent.URI_INTENT_SCHEME)
+            }.getOrNull() ?: return false
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            return try {
+                context.startActivity(intent)
+                true
+            } catch (_: ActivityNotFoundException) {
+                refreshAsync()
+                false
+            } catch (_: SecurityException) {
+                refreshAsync()
+                false
+            }
+        }
         if (appInfo.isBuiltInSettingsEntry) {
             val settingsIntent = Intent(context, com.flue.launcher.SettingsActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -308,6 +367,82 @@ class AppRepository(private val context: Context) {
 
     fun requestRefresh(iconSize: Int = currentIconSize) {
         refreshAsync(iconSize)
+    }
+
+    fun folderItems(folderKey: String): List<AppInfo> {
+        val folder = folderCatalog.firstOrNull { it.componentKey == folderKey } ?: return emptyList()
+        return folder.itemKeys.mapNotNull(itemCatalog::get)
+    }
+
+    fun itemsForKeys(keys: List<String>): List<AppInfo> {
+        return keys.mapNotNull(itemCatalog::get)
+    }
+
+    fun addLegacyShortcut(label: String?, intent: Intent?, icon: Bitmap?): Boolean {
+        val shortcutIntent = intent ?: return false
+        val safeLabel = label?.takeIf { it.isNotBlank() } ?: shortcutIntent.component?.packageName ?: "快捷方式"
+        val packageName = shortcutIntent.component?.packageName ?: shortcutIntent.`package`.orEmpty()
+        val uri = shortcutIntent.toUri(Intent.URI_INTENT_SCHEME)
+        itemStorage.addShortcut(
+            label = safeLabel,
+            packageName = packageName,
+            intentUri = uri,
+            icon = icon
+        )
+        refreshAsync()
+        return true
+    }
+
+    fun addPinnedShortcut(shortcutInfo: ShortcutInfo): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+        val shortcutIntent = shortcutInfo.intent ?: shortcutInfo.intents?.lastOrNull() ?: return false
+        val label = shortcutInfo.shortLabel?.toString()
+            ?: shortcutInfo.longLabel?.toString()
+            ?: shortcutInfo.id
+        val iconBitmap = runCatching {
+            val launcherApps = context.getSystemService(LauncherApps::class.java)
+            launcherApps?.getShortcutIconDrawable(shortcutInfo, context.resources.displayMetrics.densityDpi)
+                ?.toBitmap(currentIconSize, currentIconSize, Bitmap.Config.ARGB_8888)
+        }.getOrNull()
+        itemStorage.addShortcut(
+            label = label,
+            packageName = shortcutInfo.`package`,
+            intentUri = shortcutIntent.toUri(Intent.URI_INTENT_SCHEME),
+            icon = iconBitmap
+        )
+        refreshAsync()
+        return true
+    }
+
+    fun removeShortcut(componentKey: String): Boolean {
+        val removed = itemStorage.removeShortcut(componentKey)
+        if (removed) refreshAsync()
+        return removed
+    }
+
+    fun createFolder(sourceKey: String, targetKey: String): String? {
+        val targetName = itemCatalog[targetKey]?.label ?: "文件夹"
+        val folder = itemStorage.createFolder(sourceKey, targetKey, targetName) ?: return null
+        refreshAsync()
+        return folder.componentKey
+    }
+
+    fun renameFolder(folderKey: String, name: String): Boolean {
+        val renamed = itemStorage.renameFolder(folderKey, name)
+        if (renamed) refreshAsync()
+        return renamed
+    }
+
+    fun dissolveFolder(folderKey: String): List<String> {
+        val keys = itemStorage.dissolveFolder(folderKey)
+        if (keys.isNotEmpty()) refreshAsync()
+        return keys
+    }
+
+    fun moveItemOutOfFolder(folderKey: String, itemKey: String): List<String> {
+        val remainingKeys = itemStorage.moveItemOutOfFolder(folderKey, itemKey)
+        refreshAsync()
+        return remainingKeys
     }
 
     fun loadDisplayIconForPackage(
@@ -657,6 +792,133 @@ class AppRepository(private val context: Context) {
                     .thenBy { it.label.lowercase() }
             )
         }
+    }
+
+    private fun createShortcutEntry(
+        shortcut: StoredAppListShortcut,
+        iconPackMapping: IconPackMapping?,
+        iconSize: Int,
+        useLegacyCircularIcons: Boolean,
+        useTwoToneIcons: Boolean
+    ): AppInfo? {
+        val packageName = shortcut.packageName
+        val sourceDrawable = itemStorage.loadShortcutIcon(shortcut.iconPath)?.let { bitmap ->
+            BitmapDrawable(context.resources, bitmap)
+        } ?: loadPackageFallbackIcon(packageName) ?: return null
+        val iconCacheKey = "shortcut|${shortcut.id}|${shortcut.iconPath}|$iconSize|${if (useLegacyCircularIcons) "legacy" else "plain"}|${if (useTwoToneIcons) "two_tone" else "normal"}"
+        val cachedIcons = getOrCreateIconSet(iconCacheKey) {
+            createIconSet(
+                componentKey = shortcut.componentKey,
+                iconPackMapping = iconPackMapping,
+                sourceDrawable = sourceDrawable,
+                iconSize = iconSize,
+                useLegacyCircularIcons = useLegacyCircularIcons,
+                useTwoToneIcons = useTwoToneIcons
+            )
+        }
+        val plainIconCacheKey = "shortcut|plain|${shortcut.id}|${shortcut.iconPath}|$iconSize|${if (useTwoToneIcons) "two_tone" else "normal"}"
+        val plainIcons = if (!useLegacyCircularIcons) {
+            cachedIcons
+        } else {
+            getOrCreateIconSet(plainIconCacheKey) {
+                createIconSet(
+                    componentKey = shortcut.componentKey,
+                    iconPackMapping = iconPackMapping,
+                    sourceDrawable = sourceDrawable,
+                    iconSize = iconSize,
+                    useLegacyCircularIcons = false,
+                    useTwoToneIcons = useTwoToneIcons
+                )
+            }
+        }
+        return AppInfo(
+            label = shortcut.label,
+            packageName = packageName,
+            activityName = shortcut.id,
+            cachedIcon = cachedIcons.sharp,
+            cachedBlurredIcon = cachedIcons.softened,
+            cachedTwoToneIcon = cachedIcons.twoToneSharp,
+            cachedTwoToneBlurredIcon = cachedIcons.twoToneSoftened,
+            cachedPlainIcon = plainIcons.sharp,
+            cachedPlainBlurredIcon = plainIcons.softened,
+            cachedPlainTwoToneIcon = plainIcons.twoToneSharp,
+            cachedPlainTwoToneBlurredIcon = plainIcons.twoToneSoftened,
+            itemType = AppListItemType.SHORTCUT,
+            shortcutIntentUri = shortcut.intentUri
+        )
+    }
+
+    private fun createFolderEntry(
+        folder: StoredAppListFolder,
+        childItems: List<AppInfo>,
+        iconSize: Int,
+        useTwoToneIcons: Boolean
+    ): AppInfo {
+        val iconCacheKey = "folder|${folder.id}|${folder.itemKeys.joinToString("|")}|$iconSize|${if (useTwoToneIcons) "two_tone" else "normal"}"
+        val cachedIcons = getOrCreateIconSet(iconCacheKey) {
+            val baseBitmap = createFolderBitmap(childItems, iconSize)
+            val twoToneBitmap = if (useTwoToneIcons) createTintedGrayscaleBitmap(baseBitmap) else null
+            CachedIconSet(
+                sharp = baseBitmap.asImageBitmap(),
+                softened = createSoftenedBitmap(baseBitmap).asImageBitmap(),
+                twoToneSharp = twoToneBitmap?.asImageBitmap(),
+                twoToneSoftened = twoToneBitmap?.let(::createSoftenedBitmap)?.asImageBitmap()
+            )
+        }
+        return AppInfo(
+            label = folder.name,
+            packageName = BUILTIN_SETTINGS_ENTRY_PACKAGE,
+            activityName = folder.id,
+            cachedIcon = cachedIcons.sharp,
+            cachedBlurredIcon = cachedIcons.softened,
+            cachedTwoToneIcon = cachedIcons.twoToneSharp,
+            cachedTwoToneBlurredIcon = cachedIcons.twoToneSoftened,
+            cachedPlainIcon = cachedIcons.sharp,
+            cachedPlainBlurredIcon = cachedIcons.softened,
+            cachedPlainTwoToneIcon = cachedIcons.twoToneSharp,
+            cachedPlainTwoToneBlurredIcon = cachedIcons.twoToneSoftened,
+            itemType = AppListItemType.FOLDER,
+            folderItemKeys = folder.itemKeys
+        )
+    }
+
+    private fun createFolderBitmap(childItems: List<AppInfo>, iconSize: Int): Bitmap {
+        val size = iconSize.coerceAtLeast(1)
+        val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xDD2C2C2E.toInt() }
+        val radius = size * 0.24f
+        canvas.drawRoundRect(RectF(0f, 0f, size.toFloat(), size.toFloat()), radius, radius, bgPaint)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
+        val childSize = size * 0.36f
+        val gap = size * 0.08f
+        val start = (size - childSize * 2f - gap) / 2f
+        childItems.take(4).forEachIndexed { index, app ->
+            val row = index / 2
+            val col = index % 2
+            val left = start + col * (childSize + gap)
+            val top = start + row * (childSize + gap)
+            val childBitmap = (app.cachedPlainIcon ?: app.cachedIcon).asAndroidBitmap()
+            canvas.drawBitmap(
+                childBitmap,
+                null,
+                RectF(left, top, left + childSize, top + childSize),
+                paint
+            )
+        }
+        return output
+    }
+
+    private fun loadPackageFallbackIcon(packageName: String): Drawable? {
+        val pm = context.packageManager
+        return runCatching {
+            if (packageName.isBlank()) {
+                ContextCompat.getDrawable(context, R.mipmap.ic_launcher)
+            } else {
+                val launchComponent = pm.getLaunchIntentForPackage(packageName)?.component
+                launchComponent?.let(pm::getActivityIcon) ?: pm.getApplicationIcon(packageName)
+            }
+        }.getOrNull() ?: ContextCompat.getDrawable(context, R.mipmap.ic_launcher)
     }
 
     private fun createBuiltInSettingsEntry(iconSize: Int, useTwoToneIconsSnapshot: Boolean): AppInfo? {

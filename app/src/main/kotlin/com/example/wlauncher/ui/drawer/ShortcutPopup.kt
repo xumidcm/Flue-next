@@ -33,7 +33,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,6 +64,8 @@ fun AppShortcutOverlay(
     blurEnabled: Boolean = true,
     onExcludeApp: (() -> Unit)? = null,
     onRemoveShortcut: (() -> Unit)? = null,
+    onRenameFolder: ((String) -> Unit)? = null,
+    onDissolveFolder: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -68,6 +73,8 @@ fun AppShortcutOverlay(
 
     var showing by remember { mutableStateOf(false) }
     var dismissing by remember { mutableStateOf(false) }
+    var renameDialogVisible by remember { mutableStateOf(false) }
+    var renameText by remember(app.componentKey) { mutableStateOf(app.label) }
     val dismissInteraction = remember { MutableInteractionSource() }
     val blockInteraction = remember { MutableInteractionSource() }
 
@@ -99,6 +106,36 @@ fun AppShortcutOverlay(
         animationSpec = spring(dampingRatio = 0.7f, stiffness = 600f),
         label = "overlay_scale"
     )
+
+    if (renameDialogVisible) {
+        AlertDialog(
+            onDismissRequest = { renameDialogVisible = false },
+            title = { Text("重命名文件夹") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onRenameFolder?.invoke(renameText)
+                        renameDialogVisible = false
+                        animateDismiss()
+                    }
+                ) {
+                    Text("完成")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameDialogVisible = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 
     Box(
         modifier = Modifier
@@ -138,64 +175,88 @@ fun AppShortcutOverlay(
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color(0xFF2C2C2E))
                 ) {
-                    ShortcutMenuItem("应用信息") {
-                        context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                            data = Uri.parse("package:$appDetailsPackage")
-                        })
-                        onDismiss()
-                    }
-                    onExcludeApp?.let { exclude ->
-                        Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
-                        ShortcutMenuItem("排除应用", Color(0xFFFF9F0A)) {
-                            exclude()
+                    if (app.isFolder) {
+                        ShortcutMenuItem("重命名") {
+                            renameText = app.label
+                            renameDialogVisible = true
+                        }
+                        onDissolveFolder?.let { dissolve ->
+                            Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
+                            ShortcutMenuItem("解散文件夹", Color(0xFFFF9F0A)) {
+                                dissolve()
+                                onDismiss()
+                            }
+                        }
+                    } else {
+                        ShortcutMenuItem("应用信息") {
+                            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = Uri.parse("package:$appDetailsPackage")
+                            })
                             onDismiss()
                         }
-                    }
-                    onRemoveShortcut?.let { removeShortcut ->
-                        Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
-                        ShortcutMenuItem("从快捷启动移除", Color(0xFFFF9F0A)) {
-                            removeShortcut()
-                            onDismiss()
-                        }
-                    }
-                    if (!app.isBuiltInSettingsEntry) {
-                        Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
-                        ShortcutMenuItem("卸载", Color(0xFFFF453A)) {
-                            val packageUri = Uri.fromParts("package", app.packageName, null)
-                            val intents = listOf(
-                                Intent(Intent.ACTION_DELETE, packageUri).apply {
-                                    putExtra(Intent.EXTRA_RETURN_RESULT, false)
-                                    putExtra(Intent.EXTRA_USER, Process.myUserHandle())
+                        if (app.isAppListShortcut) {
+                            onRemoveShortcut?.let { removeShortcut ->
+                                Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
+                                ShortcutMenuItem("移除", Color(0xFFFF9F0A)) {
+                                    removeShortcut()
+                                    onDismiss()
                                 }
-                            )
-                            val fallbackIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                data = packageUri
                             }
-                            val launched = intents.any { baseIntent ->
-                                val intent = baseIntent.apply {
-                                    if (context !is android.app.Activity) {
-                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        } else {
+                            onExcludeApp?.let { exclude ->
+                                Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
+                                ShortcutMenuItem("排除应用", Color(0xFFFF9F0A)) {
+                                    exclude()
+                                    onDismiss()
+                                }
+                            }
+                            onRemoveShortcut?.let { removeShortcut ->
+                                Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
+                                ShortcutMenuItem("从快捷启动移除", Color(0xFFFF9F0A)) {
+                                    removeShortcut()
+                                    onDismiss()
+                                }
+                            }
+                            if (!app.isBuiltInSettingsEntry) {
+                                Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
+                                ShortcutMenuItem("卸载", Color(0xFFFF453A)) {
+                                    val packageUri = Uri.fromParts("package", app.packageName, null)
+                                    val intents = listOf(
+                                        Intent(Intent.ACTION_DELETE, packageUri).apply {
+                                            putExtra(Intent.EXTRA_RETURN_RESULT, false)
+                                            putExtra(Intent.EXTRA_USER, Process.myUserHandle())
+                                        }
+                                    )
+                                    val fallbackIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                        data = packageUri
                                     }
-                                }
-                                val resolved = intent.resolveActivity(context.packageManager) != null
-                                if (!resolved) return@any false
-                                runCatching {
-                                    context.startActivity(intent)
-                                }.onFailure {
-                                    Log.w("ShortcutPopup", "Failed to launch uninstall intent for ${app.packageName}", it)
-                                }.isSuccess
-                            }
-                            if (!launched) {
-                                runCatching {
-                                    if (context !is android.app.Activity) {
-                                        fallbackIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    val launched = intents.any { baseIntent ->
+                                        val intent = baseIntent.apply {
+                                            if (context !is android.app.Activity) {
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                        }
+                                        val resolved = intent.resolveActivity(context.packageManager) != null
+                                        if (!resolved) return@any false
+                                        runCatching {
+                                            context.startActivity(intent)
+                                        }.onFailure {
+                                            Log.w("ShortcutPopup", "Failed to launch uninstall intent for ${app.packageName}", it)
+                                        }.isSuccess
                                     }
-                                    context.startActivity(fallbackIntent)
-                                }.onFailure {
-                                    Log.w("ShortcutPopup", "Failed to open app details for ${app.packageName}", it)
+                                    if (!launched) {
+                                        runCatching {
+                                            if (context !is android.app.Activity) {
+                                                fallbackIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                            context.startActivity(fallbackIntent)
+                                        }.onFailure {
+                                            Log.w("ShortcutPopup", "Failed to open app details for ${app.packageName}", it)
+                                        }
+                                    }
+                                    onDismiss()
                                 }
                             }
-                            onDismiss()
                         }
                     }
                 }

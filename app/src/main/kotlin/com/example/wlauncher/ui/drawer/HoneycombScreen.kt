@@ -94,6 +94,7 @@ import kotlin.math.sqrt
 
 private const val HONEYCOMB_MENU_TRIGGER_MS = 620L
 private const val HONEYCOMB_MENU_DRAG_START_DP = 20f
+private const val HONEYCOMB_FOLDER_HOVER_MS = 430L
 private const val HONEYCOMB_PRESS_DURATION_MS = 200
 private const val HONEYCOMB_AUTO_SCROLL_EDGE_DP = 96f
 private const val HONEYCOMB_AUTO_SCROLL_MAX_PX = 26f
@@ -130,11 +131,16 @@ fun HoneycombScreen(
     leftSafeInsetPercent: Int = 0,
     appListScalePercent: Int = 100,
     entryProgress: Float = 1f,
+    folderOpen: Boolean = false,
     useWatchFaceColors: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
+    onCreateFolder: (Int, Int) -> Unit = { _, _ -> },
     onLongClick: (AppInfo) -> Unit = {},
     onExcludeApp: (AppInfo) -> Unit = {},
+    onRemoveShortcut: (AppInfo) -> Unit = {},
+    onRenameFolder: (AppInfo, String) -> Unit = { _, _ -> },
+    onDissolveFolder: (AppInfo) -> Unit = {},
     onScrollToTop: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -156,6 +162,7 @@ fun HoneycombScreen(
             leftSafeInsetPercent = leftSafeInsetPercent,
             appListScalePercent = appListScalePercent,
             entryProgress = entryProgress,
+            folderOpen = folderOpen,
             fisheyeEnabled = fisheyeEnabled,
             fisheyeRangeRows = fisheyeRangeRows,
             fisheyeStrengthPercent = fisheyeStrengthPercent,
@@ -164,8 +171,12 @@ fun HoneycombScreen(
             rotaryHapticsEnabled = rotaryHapticsEnabled,
             onAppClick = onAppClick,
             onReorder = onReorder,
+            onCreateFolder = onCreateFolder,
             onLongClick = onLongClick,
             onExcludeApp = onExcludeApp,
+            onRemoveShortcut = onRemoveShortcut,
+            onRenameFolder = onRenameFolder,
+            onDissolveFolder = onDissolveFolder,
             onScrollToTop = onScrollToTop,
             modifier = modifier
         )
@@ -261,7 +272,7 @@ fun HoneycombScreen(
 
         val scrollOffset = remember { Animatable(maxScroll) }
         val scope = rememberCoroutineScope()
-        val overlayBlurActive = longPressedApp != null && blurEnabled && !suppressHeavyEffects
+        val overlayBlurActive = (longPressedApp != null || folderOpen) && blurEnabled && !suppressHeavyEffects
         val honeycombAutoScrollEdgePx = with(density) { HONEYCOMB_AUTO_SCROLL_EDGE_DP.dp.toPx() }
         val fastDragThresholdPx = with(density) { 10.dp.toPx() }
         LaunchedEffect(apps) {
@@ -471,6 +482,9 @@ fun HoneycombScreen(
                             val dragOrigin = longPress.position
                             var dragActive = false
                             var hasDragged = false
+                            var folderHoverIndex: Int? = null
+                            var folderHoverStartedAt = 0L
+                            var folderDropIndex: Int? = null
 
                             while (true) {
                                 val event = awaitPointerEvent()
@@ -515,15 +529,36 @@ fun HoneycombScreen(
                                         maxDistance = cellSize * 0.95f
                                     )
                                     dragCurrentIndex = dragTarget ?: fromIndex
+                                    if (dragTarget != null && dragTarget != fromIndex) {
+                                        if (folderHoverIndex != dragTarget) {
+                                            folderHoverIndex = dragTarget
+                                            folderHoverStartedAt = change.uptimeMillis
+                                            folderDropIndex = null
+                                        } else if (change.uptimeMillis - folderHoverStartedAt >= HONEYCOMB_FOLDER_HOVER_MS) {
+                                            folderDropIndex = dragTarget
+                                        }
+                                    } else {
+                                        folderHoverIndex = null
+                                        folderHoverStartedAt = 0L
+                                        folderDropIndex = null
+                                    }
                                     change.consume()
                                 }
                             }
 
                             val from = dragFromIndex
                             val to = dragCurrentIndex
+                            val folderTarget = folderDropIndex
                             val releasePointer = dragPointer
                             val releaseScroll = currentScrollOffsetValue()
-                            if (dragActive && from != null && to != null && from != to && hasDragged) {
+                            if (dragActive && from != null && folderTarget != null && from != folderTarget && hasDragged) {
+                                dragFromIndex = null
+                                dragCurrentIndex = null
+                                dragPointer = null
+                                dragApp = null
+                                glidePressedKey = null
+                                onCreateFolder(from, folderTarget)
+                            } else if (dragActive && from != null && to != null && from != to && hasDragged) {
                                 val droppedApp = apps.getOrNull(from)
                                 val targetSlot = positions.getOrNull(to)
                                 dragFromIndex = null
@@ -1120,6 +1155,9 @@ fun HoneycombScreen(
             app = app,
             blurEnabled = blurEnabled,
             onExcludeApp = { onExcludeApp(app) },
+            onRemoveShortcut = if (app.isAppListShortcut) { { onRemoveShortcut(app) } } else null,
+            onRenameFolder = if (app.isFolder) { name -> onRenameFolder(app, name) } else null,
+            onDissolveFolder = if (app.isFolder) { { onDissolveFolder(app) } } else null,
             onDismiss = { longPressedApp = null }
         )
     }
@@ -1142,6 +1180,7 @@ private fun MaterialDenseGridScreen(
     leftSafeInsetPercent: Int,
     appListScalePercent: Int,
     entryProgress: Float,
+    folderOpen: Boolean,
     fisheyeEnabled: Boolean,
     fisheyeRangeRows: Int,
     fisheyeStrengthPercent: Int,
@@ -1150,8 +1189,12 @@ private fun MaterialDenseGridScreen(
     rotaryHapticsEnabled: Boolean,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit,
+    onCreateFolder: (Int, Int) -> Unit,
     onLongClick: (AppInfo) -> Unit,
     onExcludeApp: (AppInfo) -> Unit,
+    onRemoveShortcut: (AppInfo) -> Unit,
+    onRenameFolder: (AppInfo, String) -> Unit,
+    onDissolveFolder: (AppInfo) -> Unit,
     onScrollToTop: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -1313,6 +1356,7 @@ private fun MaterialDenseGridScreen(
                 materialContainerRoot = it.positionInRoot()
                 if (!focusReady) focusReady = true
             }
+            .platformBlur(16f, (longPressedApp != null || folderOpen) && blurEnabled)
             .pointerInput(gridState) {
                 awaitPointerEventScope {
                     while (true) {
@@ -1374,6 +1418,9 @@ private fun MaterialDenseGridScreen(
                     val dragOrigin = longPress.position
                     var dragActive = false
                     var hasDragged = false
+                    var folderHoverIndex: Int? = null
+                    var folderHoverStartedAt = 0L
+                    var folderDropIndex: Int? = null
                     while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
@@ -1404,6 +1451,19 @@ private fun MaterialDenseGridScreen(
                                 itemBounds = materialItemBounds
                             )?.let { target ->
                                 if (target in apps.indices) dragCurrentIndex = target
+                                if (target != startIndex) {
+                                    if (folderHoverIndex != target) {
+                                        folderHoverIndex = target
+                                        folderHoverStartedAt = change.uptimeMillis
+                                        folderDropIndex = null
+                                    } else if (change.uptimeMillis - folderHoverStartedAt >= HONEYCOMB_FOLDER_HOVER_MS) {
+                                        folderDropIndex = target
+                                    }
+                                }
+                            } ?: run {
+                                folderHoverIndex = null
+                                folderHoverStartedAt = 0L
+                                folderDropIndex = null
                             }
                             change.consume()
                         }
@@ -1411,7 +1471,15 @@ private fun MaterialDenseGridScreen(
 
                     val from = dragFromIndex
                     val to = dragCurrentIndex
-                    if (dragActive && from != null && to != null && from != to && hasDragged) {
+                    val folderTarget = folderDropIndex
+                    if (dragActive && from != null && folderTarget != null && from != folderTarget && hasDragged) {
+                        dragFromIndex = null
+                        dragCurrentIndex = null
+                        dragPointer = null
+                        dragStartBounds = null
+                        longPressedApp = null
+                        onCreateFolder(from, folderTarget)
+                    } else if (dragActive && from != null && to != null && from != to && hasDragged) {
                         materialItemBounds[to]?.center?.let { targetCenter ->
                             dragPointer = targetCenter
                         }
@@ -1735,12 +1803,15 @@ private fun MaterialDenseGridScreen(
         }
 
         longPressedApp?.let { app ->
-            AppShortcutOverlay(
-                app = app,
-                blurEnabled = blurEnabled,
-                onExcludeApp = { onExcludeApp(app) },
-                onDismiss = { longPressedApp = null }
-            )
+        AppShortcutOverlay(
+            app = app,
+            blurEnabled = blurEnabled,
+            onExcludeApp = { onExcludeApp(app) },
+            onRemoveShortcut = if (app.isAppListShortcut) { { onRemoveShortcut(app) } } else null,
+            onRenameFolder = if (app.isFolder) { name -> onRenameFolder(app, name) } else null,
+            onDissolveFolder = if (app.isFolder) { { onDissolveFolder(app) } } else null,
+            onDismiss = { longPressedApp = null }
+        )
         }
     }
 }

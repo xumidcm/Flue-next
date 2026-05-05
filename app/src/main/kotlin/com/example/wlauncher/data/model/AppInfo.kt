@@ -5,6 +5,14 @@ import androidx.compose.ui.graphics.ImageBitmap
 const val BUILTIN_SETTINGS_ENTRY_PACKAGE = "com.flue.launcher.internal"
 const val BUILTIN_SETTINGS_ENTRY_ACTIVITY = "builtin.SettingsEntry"
 const val BUILTIN_SETTINGS_ENTRY_COMPONENT = "$BUILTIN_SETTINGS_ENTRY_PACKAGE/$BUILTIN_SETTINGS_ENTRY_ACTIVITY"
+const val APP_LIST_SHORTCUT_KEY_PREFIX = "shortcut:"
+const val APP_LIST_FOLDER_KEY_PREFIX = "folder:"
+
+enum class AppListItemType {
+    APP,
+    SHORTCUT,
+    FOLDER
+}
 
 data class AppInfo(
     val label: String,
@@ -18,14 +26,24 @@ data class AppInfo(
     val cachedPlainBlurredIcon: ImageBitmap? = null,
     val cachedPlainTwoToneIcon: ImageBitmap? = null,
     val cachedPlainTwoToneBlurredIcon: ImageBitmap? = null,
-    val isBuiltInSettingsEntry: Boolean = false
+    val isBuiltInSettingsEntry: Boolean = false,
+    val itemType: AppListItemType = AppListItemType.APP,
+    val shortcutIntentUri: String? = null,
+    val folderItemKeys: List<String> = emptyList()
 ) {
     val componentKey: String
-        get() = if (isBuiltInSettingsEntry) {
-            BUILTIN_SETTINGS_ENTRY_COMPONENT
-        } else {
-            "$packageName/$activityName"
+        get() = when {
+            isBuiltInSettingsEntry -> BUILTIN_SETTINGS_ENTRY_COMPONENT
+            itemType == AppListItemType.SHORTCUT -> "$APP_LIST_SHORTCUT_KEY_PREFIX$activityName"
+            itemType == AppListItemType.FOLDER -> "$APP_LIST_FOLDER_KEY_PREFIX$activityName"
+            else -> "$packageName/$activityName"
         }
+
+    val isAppListShortcut: Boolean
+        get() = itemType == AppListItemType.SHORTCUT
+
+    val isFolder: Boolean
+        get() = itemType == AppListItemType.FOLDER
 }
 
 fun AppInfo.iconForDisplay(useTwoTone: Boolean, blurred: Boolean = false): ImageBitmap {

@@ -83,6 +83,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 private const val LIST_MENU_TRIGGER_MS = 620L
 private const val LIST_MENU_DRAG_START_DP = 20f
+private const val LIST_FOLDER_HOVER_MS = 430L
 private const val LIST_AUTO_SCROLL_EDGE_DP = 84f
 private const val LIST_AUTO_SCROLL_MAX_PX = 30f
 private const val LIST_EDGE_ITEM_BLUR_DP = 4f
@@ -119,12 +120,17 @@ fun ListDrawerScreen(
     leftSafeInsetPercent: Int = 0,
     appListScalePercent: Int = 100,
     entryProgress: Float = 1f,
+    folderOpen: Boolean = false,
     useWatchFaceColors: Boolean = true,
     rowBorderEnabled: Boolean = false,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
+    onCreateFolder: (Int, Int) -> Unit = { _, _ -> },
     onLongClick: (AppInfo) -> Unit = {},
     onExcludeApp: (AppInfo) -> Unit = {},
+    onRemoveShortcut: (AppInfo) -> Unit = {},
+    onRenameFolder: (AppInfo, String) -> Unit = { _, _ -> },
+    onDissolveFolder: (AppInfo) -> Unit = {},
     onScrollToTop: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -335,7 +341,7 @@ fun ListDrawerScreen(
                         }
                     }
                 }
-                .platformBlur(16f, longPressedApp != null && blurEnabled && !suppressHeavyEffects)
+                .platformBlur(16f, (longPressedApp != null || folderOpen) && blurEnabled && !suppressHeavyEffects)
                 .pointerInput(apps) {
                     val maxDistancePx = with(density) { 72.dp.toPx() }
                     val menuDragStartPx = with(density) { LIST_MENU_DRAG_START_DP.dp.toPx() }
@@ -370,6 +376,9 @@ fun ListDrawerScreen(
                         val dragAnchorY = longPress.position.y
                         var dragActive = false
                         var hasDragged = false
+                        var folderHoverIndex: Int? = null
+                        var folderHoverStartedAt = 0L
+                        var folderDropIndex: Int? = null
 
                         while (true) {
                             val event = awaitPointerEvent()
@@ -407,6 +416,24 @@ fun ListDrawerScreen(
                                     itemCenters = itemCenters,
                                     maxDistance = Float.MAX_VALUE
                                 ) ?: dragCurrentIndex
+                                val folderCandidate = findNearestListIndex(
+                                    pointerY = pointerY,
+                                    itemCenters = itemCenters,
+                                    maxDistance = releaseOverlayHeightPx * 0.42f
+                                )?.takeIf { it != activeFromIndex }
+                                if (folderCandidate != null) {
+                                    if (folderHoverIndex != folderCandidate) {
+                                        folderHoverIndex = folderCandidate
+                                        folderHoverStartedAt = change.uptimeMillis
+                                        folderDropIndex = null
+                                    } else if (change.uptimeMillis - folderHoverStartedAt >= LIST_FOLDER_HOVER_MS) {
+                                        folderDropIndex = folderCandidate
+                                    }
+                                } else {
+                                    folderHoverIndex = null
+                                    folderHoverStartedAt = 0L
+                                    folderDropIndex = null
+                                }
                                 if (change.position != change.previousPosition) {
                                     change.consume()
                                 }
@@ -415,7 +442,17 @@ fun ListDrawerScreen(
 
                         val from = dragFromIndex
                         val to = dragCurrentIndex
-                        if (dragActive && from != null && to != null && from != to && hasDragged) {
+                        val folderTarget = folderDropIndex
+                        if (dragActive && from != null && folderTarget != null && from != folderTarget && hasDragged) {
+                            dragFromIndex = null
+                            dragCurrentIndex = null
+                            dragOffsetY = 0f
+                            dragPointerY = Float.NaN
+                            glidePressedIndex = null
+                            settlingApp = null
+                            settlingKey = null
+                            onCreateFolder(from, folderTarget)
+                        } else if (dragActive && from != null && to != null && from != to && hasDragged) {
                             val droppedApp = apps.getOrNull(from)
                             val releaseCenter = dragPointerY.coerceIn(
                                 releaseOverlayHeightPx * 0.5f,
@@ -816,6 +853,9 @@ fun ListDrawerScreen(
             app = app,
             blurEnabled = blurEnabled,
             onExcludeApp = { onExcludeApp(app) },
+            onRemoveShortcut = if (app.isAppListShortcut) { { onRemoveShortcut(app) } } else null,
+            onRenameFolder = if (app.isFolder) { name -> onRenameFolder(app, name) } else null,
+            onDissolveFolder = if (app.isFolder) { { onDissolveFolder(app) } } else null,
             onDismiss = { longPressedApp = null }
         )
     }

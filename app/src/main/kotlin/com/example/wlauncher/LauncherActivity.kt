@@ -60,6 +60,7 @@ import com.flue.launcher.ui.anim.appListLayerValues
 import com.flue.launcher.ui.anim.faceLayerValues
 import com.flue.launcher.ui.anim.scaleBlurAlpha
 import com.flue.launcher.ui.controlcenter.ControlCenterLayer
+import com.flue.launcher.ui.drawer.AppFolderOverlay
 import com.flue.launcher.ui.drawer.HoneycombScreen
 import com.flue.launcher.ui.drawer.ListDrawerScreen
 import com.flue.launcher.ui.drawer.appListPalette
@@ -175,6 +176,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsStateWithLifecycle()
     val apps by vm.apps.collectAsStateWithLifecycle()
     val allApps by vm.allApps.collectAsStateWithLifecycle()
+    val openFolder by vm.openFolder.collectAsStateWithLifecycle()
+    val openFolderItems by vm.openFolderItems.collectAsStateWithLifecycle()
     val appOpenOrigin by vm.appOpenOrigin.collectAsStateWithLifecycle()
     val splashIcon by vm.splashIcon.collectAsStateWithLifecycle()
     val splashDelay by vm.splashDelay.collectAsStateWithLifecycle()
@@ -740,6 +743,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         appListScalePercent = appListScalePercent,
                         entryProgress = appListContentEntryProgress,
+                        folderOpen = openFolder != null,
                         useWatchFaceColors = useAppListWatchFaceColors,
                         fisheyeEnabled = appListFisheyeEnabled,
                         fisheyeRangeRows = appListFisheyeRangeRows,
@@ -755,7 +759,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
                         },
                         onReorder = { from, to -> vm.swapApps(from, to) },
+                        onCreateFolder = { from, to -> vm.createFolder(from, to) },
                         onExcludeApp = { appInfo -> vm.setAppHidden(appInfo.componentKey, true) },
+                        onRemoveShortcut = vm::removeAppListShortcut,
+                        onRenameFolder = vm::renameFolder,
+                        onDissolveFolder = vm::dissolveFolder,
                         onScrollToTop = { vm.setState(ScreenState.Face) }
                     )
                     LayoutMode.List -> ListDrawerScreen(
@@ -772,6 +780,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         appListScalePercent = appListScalePercent,
                         entryProgress = appListContentEntryProgress,
+                        folderOpen = openFolder != null,
                         useWatchFaceColors = useAppListWatchFaceColors,
                         rowBorderEnabled = appListRowBorderEnabled,
                         fisheyeEnabled = appListFisheyeEnabled,
@@ -788,10 +797,32 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
                         },
                         onReorder = { from, to -> vm.swapApps(from, to) },
+                        onCreateFolder = { from, to -> vm.createFolder(from, to) },
                         onExcludeApp = { appInfo -> vm.setAppHidden(appInfo.componentKey, true) },
+                        onRemoveShortcut = vm::removeAppListShortcut,
+                        onRenameFolder = vm::renameFolder,
+                        onDissolveFolder = vm::dissolveFolder,
                         onScrollToTop = { vm.setState(ScreenState.Face) }
                     )
                 }
+            }
+
+            val visibleFolder = openFolder
+            if (screenState == ScreenState.Apps && visibleFolder != null) {
+                AppFolderOverlay(
+                    folder = visibleFolder,
+                    items = openFolderItems,
+                    listMode = layoutMode == LayoutMode.List,
+                    blurEnabled = blurEnabled,
+                    twoToneIconsEnabled = twoToneIconsEnabled,
+                    onAppClick = { appInfo, origin ->
+                        vm.closeFolder()
+                        launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
+                    },
+                    onMoveItemOut = { item -> vm.moveItemOutOfFolder(visibleFolder, item) },
+                    onDismiss = vm::closeFolder,
+                    modifier = Modifier.zIndex(5.4f)
+                )
             }
 
             if (screenState == ScreenState.App) {

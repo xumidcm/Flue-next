@@ -218,6 +218,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     val allApps: StateFlow<List<AppInfo>> = appRepository.allApps
     val apps: StateFlow<List<AppInfo>> = appRepository.apps
+    private val _openFolder = MutableStateFlow<AppInfo?>(null)
+    val openFolder: StateFlow<AppInfo?> = _openFolder.asStateFlow()
+    private val _openFolderItems = MutableStateFlow<List<AppInfo>>(emptyList())
+    val openFolderItems: StateFlow<List<AppInfo>> = _openFolderItems.asStateFlow()
     private val _screenState = MutableStateFlow(ScreenState.Face)
     val screenState: StateFlow<ScreenState> = _screenState.asStateFlow()
     private val _launcherInteractive = MutableStateFlow(true)
@@ -1133,6 +1137,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             state == ScreenState.ControlCenter && !_showControlCenter.value -> ScreenState.Face
             else -> state
         }
+        if (_screenState.value != ScreenState.Apps) {
+            closeFolder()
+        }
         _revealedNotificationTarget.value = null
     }
 
@@ -1146,7 +1153,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         launchDelayMs: Long = _splashDelay.value.toLong(),
         returnState: ScreenState = ScreenState.Apps
     ) {
-        if (appInfo.packageName == getApplication<Application>().packageName) {
+        if (appInfo.isFolder) {
+            openFolder(appInfo)
+            return
+        }
+        if (!appInfo.isAppListShortcut && appInfo.packageName == getApplication<Application>().packageName) {
             Toast.makeText(getApplication(), "已阻止启动自身应用", Toast.LENGTH_SHORT).show()
             return
         }
@@ -1238,7 +1249,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun handleBackPress() {
         when (_screenState.value) {
             ScreenState.Face -> Unit
-            ScreenState.Apps -> _screenState.value = ScreenState.Face
+            ScreenState.Apps -> {
+                if (_openFolder.value != null) {
+                    closeFolder()
+                } else {
+                    _screenState.value = ScreenState.Face
+                }
+            }
             ScreenState.App -> {
                 launchJob?.cancel()
                 launchJob = null
@@ -1328,6 +1345,89 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             appRepository.setCustomOrder(order)
         }
         persist { store.edit { it[KEY_APP_ORDER] = order.joinToString(",") } }
+    }
+
+    fun openFolder(folder: AppInfo) {
+        if (!folder.isFolder) return
+        _openFolder.value = folder
+        _openFolderItems.value = appRepository.folderItems(folder.componentKey)
+    }
+
+    fun closeFolder() {
+        _openFolder.value = null
+        _openFolderItems.value = emptyList()
+    }
+
+    fun createFolder(fromIndex: Int, toIndex: Int) {
+        val current = apps.value.toMutableList()
+        if (fromIndex !in current.indices || toIndex !in current.indices || fromIndex == toIndex) return
+        val source = current[fromIndex]
+        val target = current[toIndex]
+        val folderKey = appRepository.createFolder(source.componentKey, target.componentKey) ?: return
+        val insertIndex = minOf(fromIndex, toIndex)
+        val nextOrder = current
+            .filterIndexed { index, _ -> index != fromIndex && index != toIndex }
+            .map { it.componentKey }
+            .toMutableList()
+        nextOrder.add(insertIndex.coerceIn(0, nextOrder.size), folderKey)
+        setAppOrder(nextOrder)
+    }
+
+    fun removeAppListShortcut(shortcut: AppInfo) {
+        if (!shortcut.isAppListShortcut) return
+        if (appRepository.removeShortcut(shortcut.componentKey)) {
+            setAppOrder(_appOrder.value.filterNot { it == shortcut.componentKey })
+            closeFolder()
+        }
+    }
+
+    fun renameFolder(folder: AppInfo, name: String) {
+        if (!folder.isFolder) return
+        if (appRepository.renameFolder(folder.componentKey, name)) {
+            val renamed = folder.copy(label = name.ifBlank { "文件夹" })
+            _openFolder.value = if (_openFolder.value?.componentKey == folder.componentKey) renamed else _openFolder.value
+        }
+    }
+
+    fun dissolveFolder(folder: AppInfo) {
+        if (!folder.isFolder) return
+        val childKeys = appRepository.dissolveFolder(folder.componentKey)
+        if (childKeys.isEmpty()) return
+        val currentOrder = apps.value.map { it.componentKey }.toMutableList()
+        val folderIndex = currentOrder.indexOf(folder.componentKey)
+        currentOrder.remove(folder.componentKey)
+        currentOrder.addAll(folderIndex.coerceIn(0, currentOrder.size), childKeys)
+        setAppOrder(currentOrder)
+        closeFolder()
+    }
+
+    fun moveItemOutOfFolder(folder: AppInfo, item: AppInfo) {
+        if (!folder.isFolder) return
+        val remainingKeys = appRepository.moveItemOutOfFolder(folder.componentKey, item.componentKey)
+        val remainingItems = appRepository.itemsForKeys(remainingKeys)
+        val dissolvesFolder = remainingKeys.size <= 1
+        val currentOrder = apps.value.map { it.componentKey }.toMutableList()
+        val folderIndex = currentOrder.indexOf(folder.componentKey).takeIf { it >= 0 } ?: currentOrder.size
+        if (dissolvesFolder) {
+            currentOrder.remove(folder.componentKey)
+            val insertAt = folderIndex.coerceIn(0, currentOrder.size)
+            remainingItems.forEachIndexed { offset, remaining ->
+                if (remaining.componentKey !in currentOrder) {
+                    currentOrder.add((insertAt + offset).coerceIn(0, currentOrder.size), remaining.componentKey)
+                }
+            }
+        }
+        val insertAt = folderIndex.coerceIn(0, currentOrder.size)
+        if (item.componentKey !in currentOrder) {
+            val offset = if (dissolvesFolder) remainingItems.size else 1
+            currentOrder.add((insertAt + offset).coerceIn(0, currentOrder.size), item.componentKey)
+        }
+        setAppOrder(currentOrder)
+        if (dissolvesFolder) {
+            closeFolder()
+        } else {
+            _openFolderItems.value = remainingItems
+        }
     }
 
     fun setHoneycombCols(cols: Int) {
