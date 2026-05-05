@@ -282,7 +282,7 @@ fun AppFolderOverlay(
                                 .graphicsLayer {
                                     scaleX = pressedScale
                                     scaleY = pressedScale
-                                    alpha = if (isDragged) 0f else 1f
+                                    this.alpha = if (isDragged) 0f else 1f
                                 }
                                 .clip(RoundedCornerShape(18.dp))
                                 .background(Color.Black.copy(alpha = pressedOverlay))
@@ -421,7 +421,7 @@ fun AppFolderOverlay(
                     .graphicsLayer {
                         translationX = dragPointerRoot.x - dragIconHalfSizePx
                         translationY = dragPointerRoot.y - dragIconHalfSizePx
-                        alpha = if (draggedOutsidePanel) 0.58f else 0.94f
+                        this.alpha = if (draggedOutsidePanel) 0.58f else 0.94f
                         scaleX = if (draggedOutsidePanel) 0.94f else 1.04f
                         scaleY = if (draggedOutsidePanel) 0.94f else 1.04f
                         shadowElevation = 18.dp.toPx()
