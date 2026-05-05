@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -486,7 +485,6 @@ fun ListDrawerScreen(
             val launchOriginX = with(density) {
                 (leftSafeInset + 12.dp + scaledRowHorizontalPadding + scaledIconSize * 0.5f).toPx()
             }.coerceIn(0f, screenWidthPx) / screenWidthPx
-            val backgroundDiameter = (if (maxWidth > maxHeight) maxWidth else maxHeight) * 1.68f
             val visibleItems by remember {
                 derivedStateOf {
                     listState.layoutInfo.visibleItemsInfo
@@ -506,17 +504,11 @@ fun ListDrawerScreen(
                 longPressedApp == null
             Box(
                 modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(backgroundDiameter)
+                    .fillMaxSize()
                     .graphicsLayer {
-                        val backgroundScale = 0.16f + entryVisuals.backgroundProgress * 1.04f
-                        scaleX = backgroundScale
-                        scaleY = backgroundScale
                         alpha = entryVisuals.backgroundProgress
-                        clip = true
-                        shape = CircleShape
                     }
-                    .background(appPalette.background, CircleShape)
+                    .background(appPalette.background)
             )
             LaunchedEffect(dragFromIndex, screenHeightPx) {
                 var previousFrameNanos = 0L

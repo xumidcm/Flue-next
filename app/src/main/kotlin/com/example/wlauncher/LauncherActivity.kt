@@ -449,6 +449,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
         appListReturnOriginActive && !classicReturnAnimationEnabled -> appOpenOrigin
         else -> null
     }
+    val appListLayerOrigin = if (isOpeningAppList) {
+        Offset(0.5f, 0.5f)
+    } else {
+        appListTransformOrigin
+    }
     val appListMotionSpec = when {
         isOpeningAppList -> tween<Float>(durationMillis = 260)
         uiStyle == UiStyle.MATERIAL_3 && isReturningFromApp -> tween(
@@ -580,7 +585,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .scaleBlurAlpha(
                         targetValues = faceLayerValues(faceAnimState, uiStyle),
                         screenHeight = screenHeightPx,
-                        blurEnabled = layerBlurEnabled
+                        blurEnabled = layerBlurEnabled,
+                        origin = Offset(0.5f, 0.5f)
                     )
             ) {
                 AnimatedContent(
@@ -692,7 +698,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = layerBlurEnabled,
-                        origin = appListTransformOrigin,
+                        origin = appListLayerOrigin,
                         scaleSpec = appListMotionSpec,
                         alphaSpec = if (isOpeningAppList) tween(durationMillis = 220) else tween(durationMillis = 400),
                         blurSpec = if (isOpeningAppList) tween(durationMillis = 220) else tween(durationMillis = 400),

@@ -234,7 +234,6 @@ fun HoneycombScreen(
         val bottomFadePx = with(density) { bottomFadeRangeDp.dp.toPx() }
         val entryVisuals = appListEntryVisuals(entryProgress)
         val edgeFadesVisible = active || entryProgress > 0.001f
-        val backgroundDiameter = (if (maxWidth > maxHeight) maxWidth else maxHeight) * 1.68f
         val fisheyeRangeMultiplier = fisheyeRangeRows.coerceIn(1, 8) * 0.42f
         val fisheyeMaxDistance = screenRadius * fisheyeRangeMultiplier.coerceAtLeast(0.42f)
         val fisheyeMinScale = fisheyeMinScale(fisheyeStrengthPercent)
@@ -702,17 +701,11 @@ fun HoneycombScreen(
         ) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(backgroundDiameter)
+                    .fillMaxSize()
                     .graphicsLayer {
-                        val backgroundScale = 0.16f + entryVisuals.backgroundProgress * 1.04f
-                        scaleX = backgroundScale
-                        scaleY = backgroundScale
                         alpha = entryVisuals.backgroundProgress
-                        clip = true
-                        shape = CircleShape
                     }
-                    .background(appPalette.background, CircleShape)
+                    .background(appPalette.background)
             )
 
             val visibleTop = -iconSizePx * 1.5f
@@ -1433,7 +1426,6 @@ private fun MaterialDenseGridScreen(
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
         val entryOffsetY = (1f - entryProgress.coerceIn(0f, 1f)) * screenHeightPx * 0.08f
-        val backgroundDiameter = (if (maxWidth > maxHeight) maxWidth else maxHeight) * 1.68f
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val fisheyeRangePx = (screenHeightPx / effectiveColumns * fisheyeRangeRows.coerceIn(1, 8))
             .coerceIn(screenHeightPx / effectiveColumns, screenHeightPx)
@@ -1478,18 +1470,11 @@ private fun MaterialDenseGridScreen(
         }
         Box(
             modifier = Modifier
-                .align(Alignment.Center)
-                .size(backgroundDiameter)
+                .fillMaxSize()
                 .graphicsLayer {
-                    val backgroundScale = 0.16f + entryVisuals.backgroundProgress * 1.04f
-                    scaleX = backgroundScale
-                    scaleY = backgroundScale
                     alpha = entryVisuals.backgroundProgress
-                    translationY = entryOffsetY * 0.55f
-                    clip = true
-                    shape = CircleShape
                 }
-                .background(appPalette.background, CircleShape)
+                .background(appPalette.background)
         )
         LazyVerticalGrid(
             columns = GridCells.Fixed(effectiveColumns),
