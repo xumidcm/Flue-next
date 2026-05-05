@@ -94,7 +94,7 @@ import kotlin.math.sqrt
 
 private const val HONEYCOMB_MENU_TRIGGER_MS = 620L
 private const val HONEYCOMB_MENU_DRAG_START_DP = 20f
-private const val HONEYCOMB_FOLDER_HOVER_MS = 430L
+private const val HONEYCOMB_FOLDER_HOVER_MS = 700L
 private const val HONEYCOMB_PRESS_DURATION_MS = 200
 private const val HONEYCOMB_AUTO_SCROLL_EDGE_DP = 96f
 private const val HONEYCOMB_AUTO_SCROLL_MAX_PX = 26f
@@ -133,6 +133,7 @@ fun HoneycombScreen(
     entryProgress: Float = 1f,
     folderOpen: Boolean = false,
     useWatchFaceColors: Boolean = true,
+    allowFolderCreation: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
     onCreateFolder: (Int, Int) -> Unit = { _, _ -> },
@@ -163,6 +164,7 @@ fun HoneycombScreen(
             appListScalePercent = appListScalePercent,
             entryProgress = entryProgress,
             folderOpen = folderOpen,
+            allowFolderCreation = allowFolderCreation,
             fisheyeEnabled = fisheyeEnabled,
             fisheyeRangeRows = fisheyeRangeRows,
             fisheyeStrengthPercent = fisheyeStrengthPercent,
@@ -531,13 +533,17 @@ fun HoneycombScreen(
                                         screenCenterY = screenCenterY + currentScrollOffsetValue(),
                                         maxDistance = cellSize * 0.95f
                                     )
-                                    val folderCandidate = findNearestHoneycombIndex(
-                                        pointer = displayPointer,
-                                        positions = positions,
-                                        screenCenterX = screenCenterX,
-                                        screenCenterY = screenCenterY + currentScrollOffsetValue(),
-                                        maxDistance = iconSizePx * 0.64f
-                                    )?.takeIf { it != fromIndex }
+                                    val folderCandidate = if (allowFolderCreation) {
+                                        findNearestHoneycombIndex(
+                                            pointer = displayPointer,
+                                            positions = positions,
+                                            screenCenterX = screenCenterX,
+                                            screenCenterY = screenCenterY + currentScrollOffsetValue(),
+                                            maxDistance = iconSizePx * 0.38f
+                                        )?.takeIf { it != fromIndex }
+                                    } else {
+                                        null
+                                    }
                                     if (folderCandidate != null) {
                                         if (folderHoverIndex != folderCandidate) {
                                             folderHoverIndex = folderCandidate
@@ -1196,6 +1202,7 @@ private fun MaterialDenseGridScreen(
     appListScalePercent: Int,
     entryProgress: Float,
     folderOpen: Boolean,
+    allowFolderCreation: Boolean,
     fisheyeEnabled: Boolean,
     fisheyeRangeRows: Int,
     fisheyeStrengthPercent: Int,
@@ -1465,14 +1472,16 @@ private fun MaterialDenseGridScreen(
                                 pointer = pointer,
                                 itemBounds = materialItemBounds
                             )
-                            val folderCandidate = findNearestMaterialGridIndex(
-                                pointer = pointer,
-                                itemBounds = materialItemBounds,
-                                excludedIndex = startIndex,
-                                maxDistance = (dragStartBounds?.let { minOf(it.width, it.height) }
-                                    ?: materialItemBounds[startIndex]?.let { minOf(it.width, it.height) }
-                                    ?: with(density) { 48.dp.toPx() }) * 0.62f
-                            )
+                            val folderCandidate = if (allowFolderCreation) {
+                                findMaterialGridCenterIndex(
+                                    pointer = pointer,
+                                    itemBounds = materialItemBounds,
+                                    excludedIndex = startIndex,
+                                    centerFraction = 0.42f
+                                )
+                            } else {
+                                null
+                            }
                             if (folderCandidate != null) {
                                 if (folderHoverIndex != folderCandidate) {
                                     folderHoverIndex = folderCandidate
@@ -1887,6 +1896,28 @@ private fun findMaterialGridIndexAt(
     return itemBounds.entries.firstOrNull { (index, bounds) ->
         index != excludedIndex &&
         pointer.x in bounds.left..bounds.right && pointer.y in bounds.top..bounds.bottom
+    }?.key
+}
+
+private fun findMaterialGridCenterIndex(
+    pointer: Offset,
+    itemBounds: Map<Int, Rect>,
+    excludedIndex: Int? = null,
+    centerFraction: Float = 0.42f
+): Int? {
+    val fraction = centerFraction.coerceIn(0.18f, 0.8f)
+    return itemBounds.entries.firstOrNull { (index, bounds) ->
+        if (index == excludedIndex) return@firstOrNull false
+        val insetX = bounds.width * (1f - fraction) / 2f
+        val insetY = bounds.height * (1f - fraction) / 2f
+        val centerBounds = Rect(
+            left = bounds.left + insetX,
+            top = bounds.top + insetY,
+            right = bounds.right - insetX,
+            bottom = bounds.bottom - insetY
+        )
+        pointer.x in centerBounds.left..centerBounds.right &&
+            pointer.y in centerBounds.top..centerBounds.bottom
     }?.key
 }
 

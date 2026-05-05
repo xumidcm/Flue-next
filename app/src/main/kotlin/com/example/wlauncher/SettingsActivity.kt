@@ -307,6 +307,7 @@ private fun SettingsRootScreen(
     val globalUiScalePercent by vm.globalUiScalePercent.collectAsStateWithLifecycle()
     val appListWatchFaceColors by vm.appListWatchFaceColors.collectAsStateWithLifecycle()
     val appListRowBorderEnabled by vm.appListRowBorderEnabled.collectAsStateWithLifecycle()
+    val appListFoldersEnabled by vm.appListFoldersEnabled.collectAsStateWithLifecycle()
     val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsStateWithLifecycle()
     val musicTextSwitchAnimation by vm.musicTextSwitchAnimation.collectAsStateWithLifecycle()
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
@@ -1508,6 +1509,19 @@ private fun SettingsRootScreen(
                     enabled = layoutMode == LayoutMode.List,
                     onToggle = vm::setAppListRowBorderEnabled,
                     scale = itemFisheye(listState, "app_list_row_border", screenCenterY, screenHeightPx)
+                )
+            }
+            item("app_list_folders_enabled") {
+                SettingsSwitchRow(
+                    title = if (isZh) "允许创建文件夹（实验性）" else "Allow Folders (Experimental)",
+                    subtitle = if (appListFoldersEnabled) {
+                        if (isZh) "长按拖动到另一个图标中心并停留 700ms 后合成文件夹" else "Hold a dragged icon over another icon center for 700ms to create a folder"
+                    } else {
+                        if (isZh) "关闭拖动合成文件夹，只保留排序手势" else "Disable drag-to-folder creation and keep reordering only"
+                    },
+                    checked = appListFoldersEnabled,
+                    onToggle = vm::setAppListFoldersEnabled,
+                    scale = itemFisheye(listState, "app_list_folders_enabled", screenCenterY, screenHeightPx)
                 )
             }
             item("show_step_count") {

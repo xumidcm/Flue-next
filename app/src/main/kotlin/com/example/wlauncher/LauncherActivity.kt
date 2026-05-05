@@ -195,6 +195,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appListScalePercent by vm.appListScalePercent.collectAsStateWithLifecycle()
     val appListWatchFaceColors by vm.appListWatchFaceColors.collectAsStateWithLifecycle()
     val appListRowBorderEnabled by vm.appListRowBorderEnabled.collectAsStateWithLifecycle()
+    val appListFoldersEnabled by vm.appListFoldersEnabled.collectAsStateWithLifecycle()
     val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsStateWithLifecycle()
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
@@ -745,6 +746,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         entryProgress = appListContentEntryProgress,
                         folderOpen = openFolder != null,
                         useWatchFaceColors = useAppListWatchFaceColors,
+                        allowFolderCreation = appListFoldersEnabled,
                         fisheyeEnabled = appListFisheyeEnabled,
                         fisheyeRangeRows = appListFisheyeRangeRows,
                         fisheyeStrengthPercent = appListFisheyeStrengthPercent,
@@ -783,6 +785,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         folderOpen = openFolder != null,
                         useWatchFaceColors = useAppListWatchFaceColors,
                         rowBorderEnabled = appListRowBorderEnabled,
+                        allowFolderCreation = appListFoldersEnabled,
                         fisheyeEnabled = appListFisheyeEnabled,
                         fisheyeRangeRows = appListFisheyeRangeRows,
                         fisheyeStrengthPercent = appListFisheyeStrengthPercent,
@@ -819,7 +822,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         vm.closeFolder()
                         launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
                     },
+                    onReorderItems = { orderedItems -> vm.reorderFolderItems(visibleFolder, orderedItems) },
                     onMoveItemOut = { item -> vm.moveItemOutOfFolder(visibleFolder, item) },
+                    onRenameFolder = { name -> vm.renameFolder(visibleFolder, name) },
+                    onExcludeApp = { appInfo -> vm.setAppHidden(appInfo.componentKey, true) },
+                    onRemoveShortcut = vm::removeAppListShortcut,
                     onDismiss = vm::closeFolder,
                     modifier = Modifier.zIndex(5.4f)
                 )

@@ -210,6 +210,23 @@ class AppListItemStorage(private val context: Context) {
         return nextKeys
     }
 
+    @Synchronized
+    fun reorderFolderItems(folderKey: String, orderedKeys: List<String>): List<String> {
+        val folders = loadFolders().toMutableList()
+        val index = folders.indexOfFirst { it.componentKey == folderKey }
+        if (index < 0) return emptyList()
+        val folder = folders[index]
+        val existing = folder.itemKeys
+        val nextKeys = (
+            orderedKeys.filter { it in existing } +
+                existing.filterNot { it in orderedKeys }
+            ).distinct()
+        if (nextKeys == existing) return existing
+        folders[index] = folder.copy(itemKeys = nextKeys)
+        saveFolders(folders)
+        return nextKeys
+    }
+
     fun loadShortcutIcon(path: String?): Bitmap? {
         if (path.isNullOrBlank()) return null
         return runCatching { BitmapFactory.decodeFile(path) }.getOrNull()

@@ -83,7 +83,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 private const val LIST_MENU_TRIGGER_MS = 620L
 private const val LIST_MENU_DRAG_START_DP = 20f
-private const val LIST_FOLDER_HOVER_MS = 430L
+private const val LIST_FOLDER_HOVER_MS = 700L
 private const val LIST_AUTO_SCROLL_EDGE_DP = 84f
 private const val LIST_AUTO_SCROLL_MAX_PX = 30f
 private const val LIST_EDGE_ITEM_BLUR_DP = 4f
@@ -123,6 +123,7 @@ fun ListDrawerScreen(
     folderOpen: Boolean = false,
     useWatchFaceColors: Boolean = true,
     rowBorderEnabled: Boolean = false,
+    allowFolderCreation: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
     onCreateFolder: (Int, Int) -> Unit = { _, _ -> },
@@ -416,14 +417,18 @@ fun ListDrawerScreen(
                                     itemCenters = itemCenters,
                                     maxDistance = Float.MAX_VALUE
                                 )
-                                val folderCandidate = findNearestListIndex(
-                                    pointerY = pointerY,
-                                    itemCenters = itemCenters,
-                                    maxDistance = minOf(
-                                        releaseOverlayHeightPx * 0.52f,
-                                        with(density) { scaledIconSize.toPx() } * 0.78f
-                                    )
-                                )?.takeIf { it != activeFromIndex }
+                                val folderCandidate = if (allowFolderCreation) {
+                                    findNearestListIndex(
+                                        pointerY = pointerY,
+                                        itemCenters = itemCenters,
+                                        maxDistance = minOf(
+                                            releaseOverlayHeightPx * 0.34f,
+                                            with(density) { scaledIconSize.toPx() } * 0.46f
+                                        )
+                                    )?.takeIf { it != activeFromIndex }
+                                } else {
+                                    null
+                                }
                                 if (folderCandidate != null) {
                                     if (folderHoverIndex != folderCandidate) {
                                         folderHoverIndex = folderCandidate

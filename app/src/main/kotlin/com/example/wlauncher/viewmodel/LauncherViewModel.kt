@@ -106,6 +106,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_GLOBAL_UI_SCALE_PERCENT = intPreferencesKey("global_ui_scale_percent")
         val KEY_APP_LIST_WATCHFACE_COLORS = booleanPreferencesKey("app_list_watchface_colors")
         val KEY_APP_LIST_ROW_BORDER = booleanPreferencesKey("app_list_row_border_enabled")
+        val KEY_APP_LIST_FOLDERS_ENABLED = booleanPreferencesKey("app_list_folders_enabled")
         val KEY_FAST_FLOW_ANIMATION = booleanPreferencesKey("fast_flow_animation_enabled")
         val KEY_MUSIC_TEXT_SWITCH_ANIMATION = stringPreferencesKey("music_text_switch_animation")
         val KEY_TWO_TONE_ICONS = booleanPreferencesKey("two_tone_icons_enabled")
@@ -359,6 +360,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val appListWatchFaceColors: StateFlow<Boolean> = _appListWatchFaceColors.asStateFlow()
     private val _appListRowBorderEnabled = MutableStateFlow(false)
     val appListRowBorderEnabled: StateFlow<Boolean> = _appListRowBorderEnabled.asStateFlow()
+    private val _appListFoldersEnabled = MutableStateFlow(true)
+    val appListFoldersEnabled: StateFlow<Boolean> = _appListFoldersEnabled.asStateFlow()
     private val _fastFlowAnimationEnabled = MutableStateFlow(false)
     val fastFlowAnimationEnabled: StateFlow<Boolean> = _fastFlowAnimationEnabled.asStateFlow()
     private val _musicTextSwitchAnimation = MutableStateFlow(MusicTextSwitchAnimations.DEFAULT_ID)
@@ -782,6 +785,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedAppListRowBorder = prefs[KEY_APP_LIST_ROW_BORDER] ?: false
                 if (_appListRowBorderEnabled.value != loadedAppListRowBorder) {
                     _appListRowBorderEnabled.value = loadedAppListRowBorder
+                }
+
+                val loadedAppListFoldersEnabled = prefs[KEY_APP_LIST_FOLDERS_ENABLED] ?: true
+                if (_appListFoldersEnabled.value != loadedAppListFoldersEnabled) {
+                    _appListFoldersEnabled.value = loadedAppListFoldersEnabled
                 }
 
                 val loadedFastFlowEnabled = prefs[KEY_FAST_FLOW_ANIMATION] ?: false
@@ -1389,6 +1397,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun reorderFolderItems(folder: AppInfo, orderedItems: List<AppInfo>) {
+        if (!folder.isFolder) return
+        val nextKeys = appRepository.reorderFolderItems(
+            folder.componentKey,
+            orderedItems.map { it.componentKey }
+        )
+        if (nextKeys.isNotEmpty()) {
+            _openFolderItems.value = appRepository.itemsForKeys(nextKeys)
+        }
+    }
+
     fun dissolveFolder(folder: AppInfo) {
         if (!folder.isFolder) return
         val childKeys = appRepository.dissolveFolder(folder.componentKey)
@@ -1531,6 +1550,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setAppListRowBorderEnabled(enabled: Boolean) {
         _appListRowBorderEnabled.value = enabled
         persist { store.edit { it[KEY_APP_LIST_ROW_BORDER] = enabled } }
+    }
+
+    fun setAppListFoldersEnabled(enabled: Boolean) {
+        _appListFoldersEnabled.value = enabled
+        persist { store.edit { it[KEY_APP_LIST_FOLDERS_ENABLED] = enabled } }
     }
 
     fun setFastFlowAnimationEnabled(enabled: Boolean) {
@@ -2275,6 +2299,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _globalUiScalePercent.value = 100
         _appListWatchFaceColors.value = true
         _appListRowBorderEnabled.value = false
+        _appListFoldersEnabled.value = true
         _fastFlowAnimationEnabled.value = false
         _musicTextSwitchAnimation.value = MusicTextSwitchAnimations.DEFAULT_ID
         _twoToneIconsEnabled.value = false
@@ -2374,6 +2399,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_GLOBAL_UI_SCALE_PERCENT] = 100
                 it[KEY_APP_LIST_WATCHFACE_COLORS] = true
                 it[KEY_APP_LIST_ROW_BORDER] = false
+                it[KEY_APP_LIST_FOLDERS_ENABLED] = true
                 it[KEY_FAST_FLOW_ANIMATION] = false
                 it[KEY_MUSIC_TEXT_SWITCH_ANIMATION] = MusicTextSwitchAnimations.DEFAULT_ID
                 it[KEY_TWO_TONE_ICONS] = false

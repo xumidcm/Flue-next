@@ -445,6 +445,12 @@ class AppRepository(private val context: Context) {
         return remainingKeys
     }
 
+    fun reorderFolderItems(folderKey: String, orderedKeys: List<String>): List<String> {
+        val nextKeys = itemStorage.reorderFolderItems(folderKey, orderedKeys)
+        if (nextKeys.isNotEmpty()) refreshAsync()
+        return nextKeys
+    }
+
     fun loadDisplayIconForPackage(
         packageName: String,
         iconSize: Int = currentIconSize,

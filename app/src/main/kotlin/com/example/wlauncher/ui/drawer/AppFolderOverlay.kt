@@ -1,35 +1,47 @@
 package com.flue.launcher.ui.drawer
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,15 +54,21 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.iconForDisplay
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+
+private const val FOLDER_ITEM_MENU_TRIGGER_MS = 620L
+private const val FOLDER_ITEM_DRAG_OUT_MS = 2_000L
+private const val FOLDER_GRID_COLUMNS = 3
 
 @Composable
 fun AppFolderOverlay(
@@ -60,17 +78,75 @@ fun AppFolderOverlay(
     blurEnabled: Boolean,
     twoToneIconsEnabled: Boolean,
     onAppClick: (AppInfo, Offset) -> Unit,
+    onReorderItems: (List<AppInfo>) -> Unit,
     onMoveItemOut: (AppInfo) -> Unit,
+    onRenameFolder: (String) -> Unit,
+    onExcludeApp: (AppInfo) -> Unit,
+    onRemoveShortcut: (AppInfo) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    val gridState = rememberLazyGridState()
+    val visibleItems = remember { mutableStateListOf<AppInfo>() }
+    val itemBounds = remember { mutableStateMapOf<String, Rect>() }
     var showing by remember(folder.componentKey) { mutableStateOf(false) }
     var panelBounds by remember { mutableStateOf(Rect.Zero) }
+    var menuApp by remember { mutableStateOf<AppInfo?>(null) }
+    var renameDialogVisible by remember { mutableStateOf(false) }
+    var renameText by remember(folder.componentKey) { mutableStateOf(folder.label) }
+    var draggedKey by remember { mutableStateOf<String?>(null) }
+    var dragPointerRoot by remember { mutableStateOf(Offset.Zero) }
+    var draggedOutsidePanel by remember { mutableStateOf(false) }
+    var hoverKey by remember { mutableStateOf<String?>(null) }
+    var moveOutJob by remember { mutableStateOf<Job?>(null) }
     val dismissInteraction = remember { MutableInteractionSource() }
     val blockInteraction = remember { MutableInteractionSource() }
+    val dragThresholdPx = with(density) { 22.dp.toPx() }
+    val dragIconHalfSizePx = with(density) { 29.dp.toPx() }
 
+    @Suppress("UNUSED_VARIABLE")
+    val sameStyleForEveryLayout = listMode
+
+    fun cancelMoveOutJob() {
+        moveOutJob?.cancel()
+        moveOutJob = null
+    }
+
+    fun finishMoveOut(app: AppInfo) {
+        cancelMoveOutJob()
+        draggedKey = null
+        draggedOutsidePanel = false
+        hoverKey = null
+        onMoveItemOut(app)
+        onDismiss()
+    }
+
+    fun persistOrderIfChanged(originalKeys: List<String>) {
+        val currentKeys = visibleItems.map { it.componentKey }
+        if (currentKeys != originalKeys) {
+            onReorderItems(visibleItems.toList())
+        }
+    }
+
+    fun moveVisibleItem(from: Int, to: Int) {
+        if (from !in visibleItems.indices || to !in visibleItems.indices || from == to) return
+        val item = visibleItems.removeAt(from)
+        visibleItems.add(to.coerceIn(0, visibleItems.size), item)
+    }
+
+    LaunchedEffect(folder.componentKey, items.map { it.componentKey }.joinToString("|")) {
+        visibleItems.clear()
+        visibleItems.addAll(items)
+        itemBounds.clear()
+        hoverKey = null
+    }
     LaunchedEffect(folder.componentKey) { showing = true }
+    DisposableEffect(Unit) {
+        onDispose { cancelMoveOutJob() }
+    }
     BackHandler(enabled = true) { onDismiss() }
 
     val alpha by animateFloatAsState(
@@ -83,7 +159,35 @@ fun AppFolderOverlay(
         animationSpec = spring(dampingRatio = 0.78f, stiffness = 520f),
         label = "folder_overlay_scale"
     )
-    val dragThresholdPx = with(density) { 22.dp.toPx() }
+
+    if (renameDialogVisible) {
+        AlertDialog(
+            onDismissRequest = { renameDialogVisible = false },
+            title = { Text("重命名文件夹") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onRenameFolder(renameText)
+                        renameDialogVisible = false
+                    }
+                ) {
+                    Text("完成")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameDialogVisible = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 
     Box(
         modifier = modifier
@@ -93,99 +197,206 @@ fun AppFolderOverlay(
             .clickable(indication = null, interactionSource = dismissInteraction) { onDismiss() },
         contentAlignment = Alignment.Center
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth(0.78f)
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                }
-                .onGloballyPositioned { panelBounds = it.boundsInRoot() }
-                .clip(RoundedCornerShape(28.dp))
-                .background(Color(0xE62A2A2C))
-                .clickable(indication = null, interactionSource = blockInteraction) { }
-                .padding(horizontal = 18.dp, vertical = 18.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            if (listMode) {
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val panelMaxHeight = (maxHeight * 0.76f).coerceAtLeast(210.dp)
+            val gridMaxHeight = (panelMaxHeight - 76.dp).coerceAtLeast(150.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .heightIn(max = panelMaxHeight)
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                    }
+                    .onGloballyPositioned { panelBounds = it.boundsInRoot() }
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(Color(0xE62A2A2C))
+                    .clickable(indication = null, interactionSource = blockInteraction) { }
+                    .padding(horizontal = 16.dp, vertical = 16.dp)
+                    .align(Alignment.Center)
+                    .animateContentSize(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
                 Text(
                     text = folder.label,
                     color = Color.White,
                     fontSize = 16.sp,
-                    fontWeight = FontWeight.W700
+                    fontWeight = FontWeight.W700,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable {
+                            renameText = folder.label
+                            renameDialogVisible = true
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
                 )
-                Spacer(modifier = Modifier.height(14.dp))
-            }
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
-                contentPadding = PaddingValues(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                modifier = Modifier.height(180.dp)
-            ) {
-                items(items, key = { it.componentKey }) { app ->
-                    var itemRoot by remember(app.componentKey) { mutableStateOf(Offset.Zero) }
-                    val iconShape = RoundedCornerShape(18.dp)
-                    Column(
-                        modifier = Modifier
-                            .onGloballyPositioned { itemRoot = it.positionInRoot() }
-                            .pointerInput(app.componentKey, panelBounds) {
-                                awaitEachGesture {
-                                    val down = awaitFirstDown(requireUnconsumed = false)
-                                    var dragMoved = false
-                                    var lastPosition = down.position
-                                    var longPressCancelled = false
-                                    withTimeoutOrNull(360L) {
-                                        while (true) {
-                                            val event = awaitPointerEvent()
-                                            val change = event.changes.firstOrNull { it.id == down.id }
-                                                ?: run {
+                Spacer(modifier = Modifier.height(10.dp))
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(FOLDER_GRID_COLUMNS),
+                    state = gridState,
+                    contentPadding = PaddingValues(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.heightIn(min = 150.dp, max = gridMaxHeight)
+                ) {
+                    itemsIndexed(
+                        items = visibleItems,
+                        key = { _, app -> app.componentKey },
+                        contentType = { _, _ -> "folder_app" }
+                    ) { index, app ->
+                        val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
+                        val isPressed by interactionSource.collectIsPressedAsState()
+                        val isDragged = draggedKey == app.componentKey
+                        val isFolderHoverTarget = hoverKey == app.componentKey
+                        val pressedScale by animateFloatAsState(
+                            targetValue = when {
+                                isDragged -> 0.92f
+                                isFolderHoverTarget -> 0.96f
+                                isPressed -> 0.95f
+                                else -> 1f
+                            },
+                            animationSpec = tween(150),
+                            label = "folder_item_press"
+                        )
+                        val pressedOverlay by animateFloatAsState(
+                            targetValue = when {
+                                isDragged -> 0.18f
+                                isFolderHoverTarget -> 0.26f
+                                isPressed -> 0.12f
+                                else -> 0f
+                            },
+                            animationSpec = tween(150),
+                            label = "folder_item_overlay"
+                        )
+                        Column(
+                            modifier = Modifier
+                                .animateItem(
+                                    fadeInSpec = tween(140),
+                                    placementSpec = spring(stiffness = 520f, dampingRatio = 0.84f),
+                                    fadeOutSpec = tween(120)
+                                )
+                                .onGloballyPositioned { coords ->
+                                    itemBounds[app.componentKey] = coords.boundsInRoot()
+                                }
+                                .graphicsLayer {
+                                    scaleX = pressedScale
+                                    scaleY = pressedScale
+                                    alpha = if (isDragged) 0f else 1f
+                                }
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(Color.Black.copy(alpha = pressedOverlay))
+                                .pointerInput(app.componentKey, panelBounds, visibleItems.size) {
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(requireUnconsumed = false)
+                                        val originalKeys = visibleItems.map { it.componentKey }
+                                        var longPressCancelled = false
+                                        withTimeoutOrNull(FOLDER_ITEM_MENU_TRIGGER_MS) {
+                                            while (true) {
+                                                val event = awaitPointerEvent()
+                                                val change = event.changes.firstOrNull { it.id == down.id }
+                                                    ?: run {
+                                                        longPressCancelled = true
+                                                        return@withTimeoutOrNull
+                                                    }
+                                                if (!change.pressed) {
                                                     longPressCancelled = true
                                                     return@withTimeoutOrNull
                                                 }
-                                            if (!change.pressed) {
-                                                longPressCancelled = true
-                                                return@withTimeoutOrNull
-                                            }
-                                            if ((change.position - down.position).getDistance() > dragThresholdPx) {
-                                                longPressCancelled = true
-                                                return@withTimeoutOrNull
+                                                if ((change.position - down.position).getDistance() > dragThresholdPx) {
+                                                    longPressCancelled = true
+                                                    return@withTimeoutOrNull
+                                                }
                                             }
                                         }
-                                    }
-                                    if (longPressCancelled) return@awaitEachGesture
-                                    while (true) {
-                                        val event = awaitPointerEvent()
-                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                        if (!change.pressed) break
-                                        lastPosition = change.position
-                                        if ((change.position - down.position).getDistance() > dragThresholdPx) {
-                                            dragMoved = true
-                                            change.consume()
+                                        if (longPressCancelled) return@awaitEachGesture
+
+                                        menuApp = app
+                                        vibrateHaptic(context)
+                                        var dragActive = false
+                                        while (true) {
+                                            val event = awaitPointerEvent()
+                                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                            if (!change.pressed) break
+                                            val movedDistance = (change.position - down.position).getDistance()
+                                            if (!dragActive && movedDistance > dragThresholdPx) {
+                                                menuApp = null
+                                                dragActive = true
+                                                draggedKey = app.componentKey
+                                                draggedOutsidePanel = false
+                                                vibrateHaptic(context)
+                                            }
+                                            if (dragActive) {
+                                                val bounds = itemBounds[app.componentKey]
+                                                val rootPointer = if (bounds != null) {
+                                                    Offset(bounds.left + change.position.x, bounds.top + change.position.y)
+                                                } else {
+                                                    change.position
+                                                }
+                                                dragPointerRoot = rootPointer
+                                                val insidePanel = panelBounds.contains(rootPointer)
+                                                draggedOutsidePanel = !insidePanel
+                                                if (insidePanel) {
+                                                    cancelMoveOutJob()
+                                                    val from = visibleItems.indexOfFirst { it.componentKey == app.componentKey }
+                                                    val to = findFolderGridIndexAt(
+                                                        pointer = rootPointer,
+                                                        items = visibleItems,
+                                                        itemBounds = itemBounds,
+                                                        excludedKey = app.componentKey
+                                                    )
+                                                    hoverKey = to?.let { visibleItems.getOrNull(it)?.componentKey }
+                                                    if (from >= 0 && to != null && to != from) {
+                                                        moveVisibleItem(from, to)
+                                                    }
+                                                } else {
+                                                    hoverKey = null
+                                                    if (moveOutJob == null) {
+                                                        moveOutJob = scope.launch {
+                                                            delay(FOLDER_ITEM_DRAG_OUT_MS)
+                                                            if (draggedKey == app.componentKey && draggedOutsidePanel) {
+                                                                finishMoveOut(app)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                change.consume()
+                                            }
                                         }
-                                    }
-                                    if (dragMoved) {
-                                        val releaseInRoot = itemRoot + lastPosition
-                                        if (!panelBounds.contains(releaseInRoot)) {
-                                            onMoveItemOut(app)
+
+                                        if (dragActive) {
+                                            val releasedOutside = draggedOutsidePanel
+                                            draggedKey = null
+                                            draggedOutsidePanel = false
+                                            hoverKey = null
+                                            if (releasedOutside) {
+                                                finishMoveOut(app)
+                                            } else {
+                                                cancelMoveOutJob()
+                                                persistOrderIfChanged(originalKeys)
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            .clickable {
-                                onAppClick(app, Offset(0.5f, 0.5f))
-                            },
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Image(
-                            bitmap = app.iconForDisplay(twoToneIconsEnabled),
-                            contentDescription = app.label,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .size(54.dp)
-                                .clip(iconShape)
-                        )
-                        if (listMode) {
+                                .clickable(
+                                    interactionSource = interactionSource,
+                                    indication = null
+                                ) {
+                                    if (draggedKey == null && menuApp == null) {
+                                        onAppClick(app, Offset(0.5f, 0.5f))
+                                    }
+                                }
+                                .padding(horizontal = 4.dp, vertical = 6.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Image(
+                                bitmap = app.iconForDisplay(twoToneIconsEnabled),
+                                contentDescription = app.label,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(56.dp)
+                                    .clip(RoundedCornerShape(18.dp))
+                            )
                             Spacer(modifier = Modifier.height(5.dp))
                             Text(
                                 text = app.label,
@@ -198,5 +409,46 @@ fun AppFolderOverlay(
                 }
             }
         }
+
+        val draggedApp = draggedKey?.let { key -> visibleItems.firstOrNull { it.componentKey == key } }
+        if (draggedApp != null) {
+            Image(
+                bitmap = draggedApp.iconForDisplay(twoToneIconsEnabled),
+                contentDescription = draggedApp.label,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(58.dp)
+                    .graphicsLayer {
+                        translationX = dragPointerRoot.x - dragIconHalfSizePx
+                        translationY = dragPointerRoot.y - dragIconHalfSizePx
+                        alpha = if (draggedOutsidePanel) 0.58f else 0.94f
+                        scaleX = if (draggedOutsidePanel) 0.94f else 1.04f
+                        scaleY = if (draggedOutsidePanel) 0.94f else 1.04f
+                        shadowElevation = 18.dp.toPx()
+                    }
+                    .clip(RoundedCornerShape(18.dp))
+            )
+        }
+
+        menuApp?.let { app ->
+            AppShortcutOverlay(
+                app = app,
+                blurEnabled = blurEnabled,
+                onExcludeApp = { onExcludeApp(app) },
+                onRemoveShortcut = if (app.isAppListShortcut) { { onRemoveShortcut(app) } } else null,
+                onDismiss = { menuApp = null }
+            )
+        }
     }
+}
+
+private fun findFolderGridIndexAt(
+    pointer: Offset,
+    items: List<AppInfo>,
+    itemBounds: Map<String, Rect>,
+    excludedKey: String
+): Int? {
+    return items.indexOfFirst { app ->
+        app.componentKey != excludedKey && itemBounds[app.componentKey]?.contains(pointer) == true
+    }.takeIf { it >= 0 }
 }
