@@ -7,7 +7,6 @@ object MusicTextSwitchAnimations {
     const val DEFAULT_ID = "fade_out_left_fade_in_up"
 
     val presets: List<MusicTextSwitchAnimationPreset> = listOf(
-        preset("default", "默认", "跟随 Flue 当前默认动画", fadeLeft(300), fadeUpIn(450)),
         preset("fade_out_fade_in", "渐隐渐现", "文字原地渐隐后渐现", fade(300), fade(300)),
         preset("fade_out_up_fade_in_up", "向上渐隐 & 向上渐现", "旧文字向上渐隐，新文字向上渐现", fadeUp(300), fadeUpIn(450)),
         preset("fade_out_down_fade_in_down", "向下渐隐 & 向下渐现", "旧文字向下渐隐，新文字向下渐现", fadeDown(300), fadeDownIn(450)),

@@ -36,8 +36,6 @@ import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -2010,8 +2008,8 @@ private fun SettingsPageScaffold(
 @Composable
 private fun HeaderBackButton(onClick: () -> Unit) {
     val launcherStyle = LauncherTheme.style
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
+    val pressedState = rememberPressedState()
+    val pressed by pressedState
     val scale by animateFloatAsState(if (pressed) 0.94f else 1f, label = "header_back_scale")
     Box(
         modifier = Modifier
@@ -2019,7 +2017,7 @@ private fun HeaderBackButton(onClick: () -> Unit) {
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(CircleShape)
             .background(launcherStyle.topBarChipColor)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+            .instantPressGesture(pressedState, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = launcherStyle.topBarTextColor)
@@ -2158,12 +2156,23 @@ private val SettingsDestination.depth: Int
 @Composable
 private fun MessageCard(text: String, background: Color, onClick: () -> Unit) {
     val launcherStyle = LauncherTheme.style
+    val pressedState = rememberPressedState()
+    val pressed by pressedState
+    val pressedScale by animateFloatAsState(
+        if (pressed) 0.964f else 1f,
+        animationSpec = launcherStyle.pressScaleSpec,
+        label = "message_card_scale"
+    )
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = pressedScale
+                scaleY = pressedScale
+            }
             .clip(launcherStyle.compactShape)
             .background(background)
-            .clickable(onClick = onClick)
+            .instantPressGesture(pressedState, onClick = onClick)
             .padding(14.dp)
     ) {
         Text(text = text, color = launcherStyle.bodyColor, fontSize = 12.sp)
@@ -2179,8 +2188,8 @@ private fun SettingsChoiceRow(
     scale: Float
 ) {
     val launcherStyle = LauncherTheme.style
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
+    val pressedState = rememberPressedState()
+    val pressed by pressedState
     val pressedScale by animateFloatAsState(
         if (pressed) 0.964f else 1f,
         animationSpec = launcherStyle.pressScaleSpec,
@@ -2204,7 +2213,7 @@ private fun SettingsChoiceRow(
                 }
             )
             .border(1.dp, launcherStyle.outlineColor, launcherStyle.compactShape)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .instantPressGesture(pressedState, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
         Row(
@@ -2240,8 +2249,8 @@ private fun SettingsSwitchRow(
     reserveLeadingIconSpace: Boolean = false
 ) {
     val launcherStyle = LauncherTheme.style
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
+    val pressedState = rememberPressedState()
+    val pressed by pressedState
     val pressedScale by animateFloatAsState(
         if (pressed) 0.958f else 1f,
         animationSpec = launcherStyle.pressScaleSpec,
@@ -2272,11 +2281,11 @@ private fun SettingsSwitchRow(
             .clip(launcherStyle.compactShape)
             .background(if (pressed) launcherStyle.pressedCardColor else launcherStyle.cardColor)
             .border(1.dp, launcherStyle.outlineColor, launcherStyle.compactShape)
-            .clickable(
+            .instantPressGesture(
+                pressedState = pressedState,
                 enabled = enabled,
-                interactionSource = interaction,
-                indication = null
-            ) { onToggle(!checked) }
+                onClick = { onToggle(!checked) }
+            )
             .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
         Row(

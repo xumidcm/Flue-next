@@ -486,7 +486,7 @@ fun ListDrawerScreen(
             val launchOriginX = with(density) {
                 (leftSafeInset + 12.dp + scaledRowHorizontalPadding + scaledIconSize * 0.5f).toPx()
             }.coerceIn(0f, screenWidthPx) / screenWidthPx
-            val backgroundDiameter = (if (maxWidth > maxHeight) maxWidth else maxHeight) * 1.38f
+            val backgroundDiameter = (if (maxWidth > maxHeight) maxWidth else maxHeight) * 1.68f
             val visibleItems by remember {
                 derivedStateOf {
                     listState.layoutInfo.visibleItemsInfo
