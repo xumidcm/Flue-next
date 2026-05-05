@@ -463,6 +463,8 @@ fun ListDrawerScreen(
         ) {
             val screenHeightPx = with(density) { maxHeight.toPx() }
             val screenWidthPx = with(density) { maxWidth.toPx() }
+            val containerMaxWidth = maxWidth
+            val containerMaxHeight = maxHeight
             val screenCenterY = screenHeightPx / 2f
             val entryOffsetY = (1f - entryProgress.coerceIn(0f, 1f)) * screenHeightPx * 0.08f
             val listViewportCenterY by remember {
@@ -502,8 +504,8 @@ fun ListDrawerScreen(
                 dragFromIndex == null &&
                 longPressedApp == null
             AppListEntryBackground(
-                maxWidth = maxWidth,
-                maxHeight = maxHeight,
+                maxWidth = containerMaxWidth,
+                maxHeight = containerMaxHeight,
                 visuals = entryVisuals,
                 color = appPalette.background
             )

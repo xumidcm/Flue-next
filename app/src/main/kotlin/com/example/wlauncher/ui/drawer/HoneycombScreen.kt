@@ -239,6 +239,8 @@ fun HoneycombScreen(
         val bottomFadePx = with(density) { bottomFadeRangeDp.dp.toPx() }
         val entryVisuals = appListEntryVisuals(entryProgress)
         val edgeFadesVisible = active || entryProgress > 0.001f
+        val containerMaxWidth = maxWidth
+        val containerMaxHeight = maxHeight
         val fisheyeRangeMultiplier = fisheyeRangeRows.coerceIn(1, 8) * 0.42f
         val fisheyeMaxDistance = screenRadius * fisheyeRangeMultiplier.coerceAtLeast(0.42f)
         val fisheyeMinScale = fisheyeMinScale(fisheyeStrengthPercent)
@@ -705,8 +707,8 @@ fun HoneycombScreen(
                 }
         ) {
             AppListEntryBackground(
-                maxWidth = maxWidth,
-                maxHeight = maxHeight,
+                maxWidth = containerMaxWidth,
+                maxHeight = containerMaxHeight,
                 visuals = entryVisuals,
                 color = appPalette.background
             )
@@ -1434,6 +1436,8 @@ private fun MaterialDenseGridScreen(
     ) {
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
+        val containerMaxWidth = maxWidth
+        val containerMaxHeight = maxHeight
         val entryOffsetY = (1f - entryProgress.coerceIn(0f, 1f)) * screenHeightPx * 0.08f
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val fisheyeRangePx = (screenHeightPx / effectiveColumns * fisheyeRangeRows.coerceIn(1, 8))
@@ -1489,8 +1493,8 @@ private fun MaterialDenseGridScreen(
             }
         }
         AppListEntryBackground(
-            maxWidth = maxWidth,
-            maxHeight = maxHeight,
+            maxWidth = containerMaxWidth,
+            maxHeight = containerMaxHeight,
             visuals = entryVisuals,
             color = appPalette.background
         )
