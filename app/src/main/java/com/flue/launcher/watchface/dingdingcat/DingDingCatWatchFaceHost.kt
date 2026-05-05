@@ -1,6 +1,7 @@
 package com.flue.launcher.watchface.dingdingcat
 
 import android.Manifest
+import android.content.ContentValues
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -21,6 +22,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Environment
 import android.os.SystemClock
 import android.provider.ContactsContract
 import android.provider.MediaStore
@@ -57,6 +59,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -111,7 +114,13 @@ fun DingDingCatWatchFaceHost(
     var canvasSize by remember(descriptor.stableKey, refreshToken) { mutableStateOf(IntSize.Zero) }
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
     val activeDial = dial
-    val gravitySpecs = remember(activeDial, refreshToken) { activeDial?.gravitySpecs().orEmpty() }
+    val renderTransform = remember(activeDial, canvasSize) {
+        activeDial?.let { dialValue -> dingDingCatRenderTransform(dialValue, canvasSize) }
+    }
+    val gravityMovementArea = if (fillScreen) renderTransform?.viewportInDesign else null
+    val gravitySpecs = remember(activeDial, refreshToken, gravityMovementArea) {
+        activeDial?.gravitySpecs(gravityMovementArea).orEmpty()
+    }
     val hasAnimatedLayers = activeDial?.drawPoints?.any { it.pieces.size > 1 } == true
     val hasCompassLayers = activeDial?.drawPoints?.any { it.pointType == "PICTURE_COMPASS" } == true
     val normalizedPlaybackSpeedPercent = playbackSpeedPercent.coerceIn(80, 400)
@@ -123,9 +132,6 @@ fun DingDingCatWatchFaceHost(
     val compassAzimuth = rememberDingDingCatCompassAzimuth(context, isFaceVisible && hasCompassLayers)
     val currentTilt by rememberUpdatedState(tiltOffset)
     val currentDraggingGravitySource by rememberUpdatedState(draggingGravitySource)
-    val renderTransform = remember(activeDial, canvasSize) {
-        activeDial?.let { dialValue -> dingDingCatRenderTransform(dialValue, canvasSize) }
-    }
     LaunchedEffect(gravitySpecs) {
         syncDingDingCatGravityBodies(gravityBodies, gravitySpecs)
     }
@@ -435,7 +441,7 @@ private fun handleDingDingCatTap(
 
 private fun launchDingDingCatAction(context: Context, action: String): Boolean {
     val packageManager = context.packageManager
-    val mappedIntent = dingDingCatMappedActionIntent(action)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    val mappedIntent = dingDingCatMappedActionIntent(context, action)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     val launchedByMappedAction = mappedIntent?.let { intent ->
         runCatching {
             if (intent.resolveActivity(packageManager) == null) {
@@ -470,14 +476,45 @@ private fun launchDingDingCatAction(context: Context, action: String): Boolean {
     }.getOrDefault(false)
 }
 
-private fun dingDingCatMappedActionIntent(action: String): Intent? {
+private fun dingDingCatMappedActionIntent(context: Context, action: String): Intent? {
     return when (action) {
-        "com.action.mgy.camera" -> Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        "com.action.mgy.camera" -> Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            createDingDingCatCameraOutputUri(context)?.let { outputUri ->
+                putExtra(MediaStore.EXTRA_OUTPUT, outputUri)
+                addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        }
         "com.action.mgy.dialer" -> Intent(Intent.ACTION_DIAL)
         "com.action.mgy.contacts" -> Intent(Intent.ACTION_VIEW, ContactsContract.Contacts.CONTENT_URI)
         "com.action.mgy.setting", "com.action.mgy.settings" -> Intent(android.provider.Settings.ACTION_SETTINGS)
         else -> null
     }
+}
+
+private fun createDingDingCatCameraOutputUri(context: Context): android.net.Uri? {
+    val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(System.currentTimeMillis())
+    val displayName = "Flue_$timestamp.jpg"
+    val resolver = context.contentResolver
+    val values = ContentValues().apply {
+        put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
+        put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+        put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Flue")
+        }
+    }
+    val mediaUri = runCatching {
+        resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+    }.getOrNull()
+    if (mediaUri != null) return mediaUri
+
+    val picturesDir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: context.cacheDir
+    val outputFile = File(picturesDir, displayName).apply {
+        parentFile?.mkdirs()
+    }
+    return runCatching {
+        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", outputFile)
+    }.getOrNull()
 }
 
 private fun drawDingDingCatPoint(
@@ -777,7 +814,8 @@ private fun drawGravityLayer(
     val piece = point.pieces.firstOrNull() ?: return
     val bitmap = DingDingCatBitmapCache.get(File(dial.rootDir, piece), allowSample = true) ?: return
     val spec = gravitySpecFor(dial, point, bitmap.width, bitmap.height) ?: return
-    val center = body?.center?.let { coerceDingDingCatGravityCenter(it, spec) } ?: spec.defaultCenter
+    val center = body?.center?.let { coerceDingDingCatGravityCenter(it, spec) }
+        ?: coerceDingDingCatGravityCenter(spec.defaultCenter, spec)
     canvas.drawBitmap(
         bitmap,
         null,
@@ -1191,7 +1229,8 @@ private fun resolveVerticalGravity(gravity: Int): Int {
 private data class DingDingCatRenderTransform(
     val scale: Float,
     val offsetX: Float,
-    val offsetY: Float
+    val offsetY: Float,
+    val viewportInDesign: RectF
 ) {
     fun screenToDesign(point: Offset): Offset {
         if (scale <= 0f) return point
@@ -1213,7 +1252,13 @@ private fun dingDingCatRenderTransform(dial: DingDingCatDial, size: IntSize): Di
     return DingDingCatRenderTransform(
         scale = scale,
         offsetX = (size.width - designWidth * scale) / 2f,
-        offsetY = (size.height - designHeight * scale) / 2f
+        offsetY = (size.height - designHeight * scale) / 2f,
+        viewportInDesign = RectF(
+            -((size.width - designWidth * scale) / 2f) / scale,
+            -((size.height - designHeight * scale) / 2f) / scale,
+            (size.width - (size.width - designWidth * scale) / 2f) / scale,
+            (size.height - (size.height - designHeight * scale) / 2f) / scale
+        )
     )
 }
 
@@ -1221,22 +1266,21 @@ private data class DingDingCatGravitySpec(
     val sourceIndex: Int,
     val area: RectF,
     val halfWidth: Float,
-    val halfHeight: Float
-) {
-    val defaultCenter: Offset = Offset(area.centerX(), area.centerY())
-}
+    val halfHeight: Float,
+    val defaultCenter: Offset
+)
 
 private data class DingDingCatGravityBody(
     val center: Offset,
     val velocity: Offset
 )
 
-private fun DingDingCatDial.gravitySpecs(): List<DingDingCatGravitySpec> {
+private fun DingDingCatDial.gravitySpecs(movementAreaOverride: RectF? = null): List<DingDingCatGravitySpec> {
     return drawPoints.mapNotNull { point ->
         if (point.pointType != "PICTRUE_EFFECT_GRAVITY") return@mapNotNull null
         val piece = point.pieces.firstOrNull() ?: return@mapNotNull null
         val bounds = DingDingCatBitmapCache.bounds(File(rootDir, piece)) ?: return@mapNotNull null
-        gravitySpecFor(this, point, bounds.width, bounds.height)
+        gravitySpecFor(this, point, bounds.width, bounds.height, movementAreaOverride)
     }
 }
 
@@ -1244,19 +1288,22 @@ private fun gravitySpecFor(
     dial: DingDingCatDial,
     point: DingDingCatDrawPoint,
     bitmapWidth: Int,
-    bitmapHeight: Int
+    bitmapHeight: Int,
+    movementAreaOverride: RectF? = null
 ): DingDingCatGravitySpec? {
     if (bitmapWidth <= 0 || bitmapHeight <= 0) return null
-    val area = point.layoutAreaRect(
+    val initialArea = point.layoutAreaRect(
         dial = dial,
         fallbackWidth = bitmapWidth.toFloat(),
         fallbackHeight = bitmapHeight.toFloat()
     )
+    val movementArea = movementAreaOverride ?: RectF(0f, 0f, dial.width.toFloat(), dial.height.toFloat())
     return DingDingCatGravitySpec(
         sourceIndex = point.sourceIndex,
-        area = area,
+        area = movementArea,
         halfWidth = bitmapWidth * point.scale / 2f,
-        halfHeight = bitmapHeight * point.scale / 2f
+        halfHeight = bitmapHeight * point.scale / 2f,
+        defaultCenter = Offset(initialArea.centerX(), initialArea.centerY())
     )
 }
 
@@ -1269,7 +1316,7 @@ private fun syncDingDingCatGravityBodies(
     specs.forEach { spec ->
         val body = bodies[spec.sourceIndex]
         bodies[spec.sourceIndex] = if (body == null) {
-            DingDingCatGravityBody(spec.defaultCenter, Offset.Zero)
+            DingDingCatGravityBody(coerceDingDingCatGravityCenter(spec.defaultCenter, spec), Offset.Zero)
         } else {
             body.copy(center = coerceDingDingCatGravityCenter(body.center, spec))
         }
