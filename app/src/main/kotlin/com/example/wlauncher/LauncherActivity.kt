@@ -204,6 +204,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val dingDingCatFillScreen by vm.dingDingCatFillScreen.collectAsStateWithLifecycle()
+    val dingDingCatPlaybackSpeedPercent by vm.dingDingCatPlaybackSpeedPercent.collectAsStateWithLifecycle()
     val doubleTapLockScreenEnabled by vm.doubleTapLockScreenEnabled.collectAsStateWithLifecycle()
     val powerMenuButtonEnabled by vm.powerMenuButtonEnabled.collectAsStateWithLifecycle()
     val sideScreenSectionOrder by vm.sideScreenSectionOrder.collectAsStateWithLifecycle()
@@ -639,6 +640,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
                                 refreshToken = watchFaceRefreshToken,
                                 fillScreen = dingDingCatFillScreen,
+                                playbackSpeedPercent = dingDingCatPlaybackSpeedPercent,
                                 onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
                                 onDoubleTap = if (
                                     doubleTapLockScreenEnabled &&

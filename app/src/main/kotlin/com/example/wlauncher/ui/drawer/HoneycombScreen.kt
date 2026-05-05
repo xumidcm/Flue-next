@@ -1441,6 +1441,17 @@ private fun MaterialDenseGridScreen(
         val autoScrollEdgePx = with(density) { HONEYCOMB_AUTO_SCROLL_EDGE_DP.dp.toPx() }
         val materialIconShape = RoundedCornerShape((18.dp * appListScale).coerceIn(12.dp, 24.dp))
         val iconInnerPadding = (3.dp * appListScale).coerceIn(2.dp, 6.dp)
+        val gridHorizontalPadding = 8.dp
+        val gridItemSpacing = 4.dp
+        val gridAvailableWidth = (
+            maxWidth -
+                leftSafeInset -
+                gridHorizontalPadding * 2f -
+                gridItemSpacing * (effectiveColumns - 1).coerceAtLeast(0).toFloat()
+            ).coerceAtLeast(48.dp)
+        val estimatedGridItemHeight = (gridAvailableWidth / effectiveColumns.coerceAtLeast(1).toFloat() / 0.92f)
+            .coerceAtLeast(48.dp)
+        val centeredGridPadding = ((maxHeight - estimatedGridItemHeight) / 2f).coerceAtLeast(8.dp)
         LaunchedEffect(dragFromIndex, screenHeightPx) {
             var previousFrameNanos = 0L
             while (dragFromIndex != null) {
@@ -1499,9 +1510,14 @@ private fun MaterialDenseGridScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer { translationY = overscroll.value + entryOffsetY },
-            contentPadding = PaddingValues(start = 8.dp + leftSafeInset, top = 8.dp, end = 8.dp, bottom = 8.dp),
-            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
-            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
+            contentPadding = PaddingValues(
+                start = gridHorizontalPadding + leftSafeInset,
+                top = centeredGridPadding,
+                end = gridHorizontalPadding,
+                bottom = centeredGridPadding
+            ),
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gridItemSpacing),
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gridItemSpacing)
         ) {
             itemsIndexed(
                 items = apps,

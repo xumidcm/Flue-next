@@ -126,6 +126,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_WATCHFACE_STATUS_INDICATORS = booleanPreferencesKey("watchface_status_indicators")
         val KEY_WATCHFACE_BOTTOM_FADE = booleanPreferencesKey("watchface_bottom_fade_enabled")
         val KEY_DINGDINGCAT_FILL_SCREEN = booleanPreferencesKey("dingdingcat_fill_screen")
+        val KEY_DINGDINGCAT_PLAYBACK_SPEED_PERCENT = intPreferencesKey("dingdingcat_playback_speed_percent")
         val KEY_DINGDINGCAT_IMPORT_UNLOCKED = booleanPreferencesKey("dingdingcat_import_unlocked")
         val KEY_SIDE_SCREEN_SECTION_ORDER = stringPreferencesKey("side_screen_section_order")
         val KEY_DEVICE_PRESET_APPLIED = booleanPreferencesKey("device_preset_applied")
@@ -175,6 +176,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_SIDE_SCREEN_SHORTCUT_COLS = intPreferencesKey("side_screen_shortcut_cols")
         private const val SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY = 12
         private const val APP_LIST_LEFT_SAFE_INSET_MAX_PERCENT = 50
+        const val DINGDINGCAT_PLAYBACK_SPEED_MIN_PERCENT = 25
+        const val DINGDINGCAT_PLAYBACK_SPEED_MAX_PERCENT = 400
+        const val DINGDINGCAT_PLAYBACK_SPEED_STEP_PERCENT = 5
 
         private fun normalizeEdgeBlurTenths(value: Int): Int {
             return ((value.coerceIn(5, 50) / 5f).roundToInt() * 5).coerceIn(5, 50)
@@ -193,6 +197,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             val clamped = value.coerceIn(50, 200)
             if (clamped == 200) return 200
             return ((clamped / 10) * 10).coerceIn(50, 200)
+        }
+
+        private fun normalizeDingDingCatPlaybackSpeedPercent(value: Int): Int {
+            return ((value.coerceIn(
+                DINGDINGCAT_PLAYBACK_SPEED_MIN_PERCENT,
+                DINGDINGCAT_PLAYBACK_SPEED_MAX_PERCENT
+            ) / DINGDINGCAT_PLAYBACK_SPEED_STEP_PERCENT.toFloat()).roundToInt() *
+                DINGDINGCAT_PLAYBACK_SPEED_STEP_PERCENT)
+                .coerceIn(
+                    DINGDINGCAT_PLAYBACK_SPEED_MIN_PERCENT,
+                    DINGDINGCAT_PLAYBACK_SPEED_MAX_PERCENT
+                )
         }
     }
 
@@ -381,6 +397,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val watchFaceBottomFadeEnabled: StateFlow<Boolean> = _watchFaceBottomFadeEnabled.asStateFlow()
     private val _dingDingCatFillScreen = MutableStateFlow(false)
     val dingDingCatFillScreen: StateFlow<Boolean> = _dingDingCatFillScreen.asStateFlow()
+    private val _dingDingCatPlaybackSpeedPercent = MutableStateFlow(100)
+    val dingDingCatPlaybackSpeedPercent: StateFlow<Int> = _dingDingCatPlaybackSpeedPercent.asStateFlow()
     private val _dingDingCatImportUnlocked = MutableStateFlow(false)
     val dingDingCatImportUnlocked: StateFlow<Boolean> = _dingDingCatImportUnlocked.asStateFlow()
     private val _sideScreenSectionOrder = MutableStateFlow(defaultSideScreenSectionOrder())
@@ -813,6 +831,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedDingDingCatFillScreen = prefs[KEY_DINGDINGCAT_FILL_SCREEN] ?: false
                 if (_dingDingCatFillScreen.value != loadedDingDingCatFillScreen) {
                     _dingDingCatFillScreen.value = loadedDingDingCatFillScreen
+                }
+
+                val loadedDingDingCatPlaybackSpeed = normalizeDingDingCatPlaybackSpeedPercent(
+                    prefs[KEY_DINGDINGCAT_PLAYBACK_SPEED_PERCENT] ?: 100
+                )
+                if (_dingDingCatPlaybackSpeedPercent.value != loadedDingDingCatPlaybackSpeed) {
+                    _dingDingCatPlaybackSpeedPercent.value = loadedDingDingCatPlaybackSpeed
                 }
 
                 val loadedDingDingCatImportUnlocked = prefs[KEY_DINGDINGCAT_IMPORT_UNLOCKED] ?: false
@@ -1459,6 +1484,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setDingDingCatFillScreenEnabled(enabled: Boolean) {
         _dingDingCatFillScreen.value = enabled
         persist { store.edit { it[KEY_DINGDINGCAT_FILL_SCREEN] = enabled } }
+    }
+
+    fun setDingDingCatPlaybackSpeedPercent(value: Int) {
+        val normalized = normalizeDingDingCatPlaybackSpeedPercent(value)
+        _dingDingCatPlaybackSpeedPercent.value = normalized
+        persist { store.edit { it[KEY_DINGDINGCAT_PLAYBACK_SPEED_PERCENT] = normalized } }
     }
 
     fun setDingDingCatImportUnlocked(unlocked: Boolean) {
@@ -2163,6 +2194,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _watchFaceStatusIndicators.value = true
         _watchFaceBottomFadeEnabled.value = true
         _dingDingCatFillScreen.value = false
+        _dingDingCatPlaybackSpeedPercent.value = 100
         _dingDingCatImportUnlocked.value = false
         _sideScreenSectionOrder.value = defaultSideScreenSectionOrder()
         _hiddenApps.value = emptySet()
@@ -2262,6 +2294,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_WATCHFACE_STATUS_INDICATORS] = true
                 it[KEY_WATCHFACE_BOTTOM_FADE] = true
                 it[KEY_DINGDINGCAT_FILL_SCREEN] = false
+                it[KEY_DINGDINGCAT_PLAYBACK_SPEED_PERCENT] = 100
                 it[KEY_DINGDINGCAT_IMPORT_UNLOCKED] = false
                 it[KEY_SIDE_SCREEN_SECTION_ORDER] = serializeSideScreenSectionOrder(defaultSideScreenSectionOrder())
                 it[KEY_NOTIFICATION_SETTING_MIGRATED] = true

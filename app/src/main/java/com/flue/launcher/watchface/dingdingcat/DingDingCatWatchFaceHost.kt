@@ -70,6 +70,7 @@ import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 import kotlin.math.sin
 
 @Composable
@@ -78,6 +79,7 @@ fun DingDingCatWatchFaceHost(
     isFaceVisible: Boolean,
     refreshToken: Int,
     fillScreen: Boolean = false,
+    playbackSpeedPercent: Int = 100,
     onLoadFailure: (LunchWatchFaceDescriptor, Throwable) -> Unit,
     onLongPress: (() -> Unit)? = null,
     onDoubleTap: (() -> Unit)? = null,
@@ -112,7 +114,10 @@ fun DingDingCatWatchFaceHost(
     val gravitySpecs = remember(activeDial, refreshToken) { activeDial?.gravitySpecs().orEmpty() }
     val hasAnimatedLayers = activeDial?.drawPoints?.any { it.pieces.size > 1 } == true
     val hasCompassLayers = activeDial?.drawPoints?.any { it.pointType == "PICTURE_COMPASS" } == true
-    val animationFrameDelayMs = remember(activeDial) { activeDial?.animationFrameDelayMs() ?: 1_000L }
+    val normalizedPlaybackSpeedPercent = playbackSpeedPercent.coerceIn(25, 400)
+    val animationFrameDelayMs = remember(activeDial, normalizedPlaybackSpeedPercent) {
+        activeDial?.animationFrameDelayMs(normalizedPlaybackSpeedPercent) ?: 1_000L
+    }
     val hasGravityLayers = gravitySpecs.isNotEmpty()
     val tiltOffset = rememberDingDingCatTiltOffset(context, isFaceVisible && hasGravityLayers)
     val compassAzimuth = rememberDingDingCatCompassAzimuth(context, isFaceVisible && hasCompassLayers)
@@ -266,6 +271,7 @@ fun DingDingCatWatchFaceHost(
                                 compassAzimuthDegrees = compassAzimuth,
                                 triggeredAnimations = triggeredAnimations,
                                 gravityBodies = gravityBodies,
+                                playbackSpeedPercent = normalizedPlaybackSpeedPercent,
                                 fillScreenBackgroundViewport = if (fillScreen) screenViewportInDesign else null
                             )
                         }
@@ -484,6 +490,7 @@ private fun drawDingDingCatPoint(
     compassAzimuthDegrees: Float,
     triggeredAnimations: Map<Int, Long>,
     gravityBodies: Map<Int, DingDingCatGravityBody>,
+    playbackSpeedPercent: Int,
     fillScreenBackgroundViewport: RectF?
 ) {
     when (point.pointType) {
@@ -494,9 +501,10 @@ private fun drawDingDingCatPoint(
             nowMillis,
             compassAzimuthDegrees,
             triggeredAnimations[point.sourceIndex],
+            playbackSpeedPercent,
             fillScreenBackgroundViewport
         )
-        "PICTRUE_EFFECT" -> drawParticleEffectLayer(canvas, dial, point, nowMillis)
+        "PICTRUE_EFFECT" -> drawParticleEffectLayer(canvas, dial, point, nowMillis, playbackSpeedPercent)
         "PICTURE_CHARGE" -> drawProgressImageLayer(canvas, dial, point, batteryLevel, fillScreenBackgroundViewport)
         "PICTURE_STEPS" -> drawProgressImageLayer(
             canvas,
@@ -542,9 +550,10 @@ private fun drawImageLayer(
     nowMillis: Long,
     compassAzimuthDegrees: Float,
     triggeredAt: Long?,
+    playbackSpeedPercent: Int,
     fillScreenBackgroundViewport: RectF?
 ) {
-    val piece = selectAnimatedPiece(point, nowMillis, triggeredAt) ?: return
+    val piece = selectAnimatedPiece(point, nowMillis, triggeredAt, playbackSpeedPercent) ?: return
     val file = File(dial.rootDir, piece)
     val bounds = DingDingCatBitmapCache.bounds(file) ?: return
     val area = point.layoutAreaRect(
@@ -595,20 +604,22 @@ private fun drawParticleEffectLayer(
     canvas: AndroidCanvas,
     dial: DingDingCatDial,
     point: DingDingCatDrawPoint,
-    nowMillis: Long
+    nowMillis: Long,
+    playbackSpeedPercent: Int
 ) {
     if (point.pieces.isEmpty()) return
     val config = point.particleEffectConfig()
     val cellWidth = dial.width.toFloat() / config.columns
     val cycleBaseMs = point.durationMs.toLong().coerceAtLeast(16L) * 96L
     val cycleMs = (cycleBaseMs / config.driftY.coerceIn(0.5f, 3f)).toLong().coerceAtLeast(800L)
+    val animationMillis = scaleDingDingCatAnimationTime(nowMillis, playbackSpeedPercent)
     point.pieces.forEachIndexed { index, piece ->
         val bitmap = DingDingCatBitmapCache.get(File(dial.rootDir, piece), allowSample = true) ?: return@forEachIndexed
         val seed = stableDingDingCatSeed(point.sourceIndex, index)
         val gridIndex = seed.floorMod(config.rows * config.columns)
         val column = gridIndex % config.columns
         val row = gridIndex / config.columns
-        val phase = ((nowMillis + seed * 37L).floorMod(cycleMs)).toFloat() / cycleMs
+        val phase = ((animationMillis + seed * 37L).floorMod(cycleMs)).toFloat() / cycleMs
         val scale = point.scale * (0.78f + ((seed ushr 8).floorMod(30)) / 100f)
         val width = bitmap.width * scale
         val height = bitmap.height * scale
@@ -1001,12 +1012,17 @@ private fun drawTextLayer(canvas: AndroidCanvas, dial: DingDingCatDial, point: D
     canvas.drawText(text, x, y, paint)
 }
 
-private fun selectAnimatedPiece(point: DingDingCatDrawPoint, nowMillis: Long, triggeredAt: Long?): String? {
+private fun selectAnimatedPiece(
+    point: DingDingCatDrawPoint,
+    nowMillis: Long,
+    triggeredAt: Long?,
+    playbackSpeedPercent: Int
+): String? {
     if (point.pieces.isEmpty()) return null
     if (point.pieces.size == 1) return point.pieces.first()
     if (isTapTriggeredAnimation(point)) {
         val start = triggeredAt ?: return point.pieces.first()
-        val frameMs = point.frameDurationMs()
+        val frameMs = point.frameDurationMs(playbackSpeedPercent)
         val elapsed = nowMillis - start
         val frameIndex = (elapsed / frameMs).toInt()
         if (frameIndex >= point.pieces.size) {
@@ -1018,7 +1034,7 @@ private fun selectAnimatedPiece(point: DingDingCatDrawPoint, nowMillis: Long, tr
         }
         return point.pieces[frameIndex.coerceIn(0, point.pieces.lastIndex)]
     }
-    val frameMs = point.frameDurationMs()
+    val frameMs = point.frameDurationMs(playbackSpeedPercent)
     val index = ((nowMillis / frameMs) % point.pieces.size).toInt()
     return point.pieces[index]
 }
@@ -1118,13 +1134,18 @@ private fun DingDingCatDrawPoint.shouldPinTopWhenPositionMissing(
         contentHeight < area.height() * 0.75f
 }
 
-private fun DingDingCatDial.animationFrameDelayMs(): Long {
+private fun DingDingCatDial.animationFrameDelayMs(playbackSpeedPercent: Int): Long {
     return drawPoints
         .asSequence()
         .filter { it.pieces.size > 1 }
-        .map { point -> point.frameDurationMs() }
+        .map { point -> point.frameDurationMs(playbackSpeedPercent) }
         .minOrNull()
         ?: 1_000L
+}
+
+private fun DingDingCatDrawPoint.frameDurationMs(playbackSpeedPercent: Int): Long {
+    val speed = playbackSpeedPercent.coerceIn(25, 400) / 100f
+    return (frameDurationMs() / speed).roundToLong().coerceIn(8L, 1_000L)
 }
 
 private fun DingDingCatDrawPoint.frameDurationMs(): Long {
@@ -1134,6 +1155,10 @@ private fun DingDingCatDrawPoint.frameDurationMs(): Long {
         return (totalDuration.toLong() / pieceCount).coerceAtLeast(16L)
     }
     return durationMs.toLong().takeIf { it > 0L }?.coerceAtLeast(16L) ?: 66L
+}
+
+private fun scaleDingDingCatAnimationTime(nowMillis: Long, playbackSpeedPercent: Int): Long {
+    return (nowMillis * (playbackSpeedPercent.coerceIn(25, 400) / 100f)).roundToLong()
 }
 
 private fun resolveHorizontalGravity(gravity: Int): Int {

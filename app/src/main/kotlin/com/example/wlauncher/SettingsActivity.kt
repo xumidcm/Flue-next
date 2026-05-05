@@ -361,6 +361,7 @@ private fun SettingsRootScreen(
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val dingDingCatFillScreen by vm.dingDingCatFillScreen.collectAsStateWithLifecycle()
+    val dingDingCatPlaybackSpeedPercent by vm.dingDingCatPlaybackSpeedPercent.collectAsStateWithLifecycle()
     val dingDingCatImportUnlocked by vm.dingDingCatImportUnlocked.collectAsStateWithLifecycle()
     val accessibilityServiceConnected by FlueAccessibilityService.connected.collectAsStateWithLifecycle()
     val headerTime = rememberSettingsHeaderTime()
@@ -957,6 +958,32 @@ private fun SettingsRootScreen(
                         checked = dingDingCatFillScreen,
                         onToggle = vm::setDingDingCatFillScreenEnabled,
                         scale = itemFisheye(listState, "dingdingcat_fill_screen", screenCenterY, screenHeightPx)
+                    )
+                }
+                item("dingdingcat_playback_speed") {
+                    SettingsSliderRow(
+                        title = if (isZh) "播放速度" else "Playback Speed",
+                        value = dingDingCatPlaybackSpeedPercent.toFloat(),
+                        valueText = "${dingDingCatPlaybackSpeedPercent}%",
+                        localValueText = { value ->
+                            "${LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_STEP_PERCENT.let { step ->
+                                ((value / step).roundToInt() * step).coerceIn(
+                                    LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_MIN_PERCENT,
+                                    LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_MAX_PERCENT
+                                )
+                            }}%"
+                        },
+                        range = LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_MIN_PERCENT.toFloat()..
+                            LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_MAX_PERCENT.toFloat(),
+                        steps = ((LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_MAX_PERCENT -
+                            LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_MIN_PERCENT) /
+                            LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_STEP_PERCENT - 1).coerceAtLeast(0),
+                        onValueChange = { },
+                        onValueChangeFinished = { value ->
+                            val step = LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_STEP_PERCENT
+                            vm.setDingDingCatPlaybackSpeedPercent((value / step).roundToInt() * step)
+                        },
+                        scale = itemFisheye(listState, "dingdingcat_playback_speed", screenCenterY, screenHeightPx)
                     )
                 }
             }
