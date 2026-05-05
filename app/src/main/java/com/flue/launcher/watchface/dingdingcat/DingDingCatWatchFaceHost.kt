@@ -114,7 +114,7 @@ fun DingDingCatWatchFaceHost(
     val gravitySpecs = remember(activeDial, refreshToken) { activeDial?.gravitySpecs().orEmpty() }
     val hasAnimatedLayers = activeDial?.drawPoints?.any { it.pieces.size > 1 } == true
     val hasCompassLayers = activeDial?.drawPoints?.any { it.pointType == "PICTURE_COMPASS" } == true
-    val normalizedPlaybackSpeedPercent = playbackSpeedPercent.coerceIn(25, 400)
+    val normalizedPlaybackSpeedPercent = playbackSpeedPercent.coerceIn(80, 400)
     val animationFrameDelayMs = remember(activeDial, normalizedPlaybackSpeedPercent) {
         activeDial?.animationFrameDelayMs(normalizedPlaybackSpeedPercent) ?: 1_000L
     }
@@ -1144,7 +1144,7 @@ private fun DingDingCatDial.animationFrameDelayMs(playbackSpeedPercent: Int): Lo
 }
 
 private fun DingDingCatDrawPoint.frameDurationMs(playbackSpeedPercent: Int): Long {
-    val speed = playbackSpeedPercent.coerceIn(25, 400) / 100f
+    val speed = playbackSpeedPercent.coerceIn(80, 400) / 100f
     return (frameDurationMs() / speed).roundToLong().coerceIn(8L, 1_000L)
 }
 
@@ -1158,7 +1158,7 @@ private fun DingDingCatDrawPoint.frameDurationMs(): Long {
 }
 
 private fun scaleDingDingCatAnimationTime(nowMillis: Long, playbackSpeedPercent: Int): Long {
-    return (nowMillis * (playbackSpeedPercent.coerceIn(25, 400) / 100f)).roundToLong()
+    return (nowMillis * (playbackSpeedPercent.coerceIn(80, 400) / 100f)).roundToLong()
 }
 
 private fun resolveHorizontalGravity(gravity: Int): Int {

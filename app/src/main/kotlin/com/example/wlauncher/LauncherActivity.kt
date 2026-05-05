@@ -305,9 +305,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
         videoPath = builtInVideoPath,
         photoOptions = photoWatchOptions,
         videoOptions = videoWatchOptions,
-        enabled = appListWatchFaceColors && selectedWatchFace.isBuiltin
+        watchFaceDescriptor = selectedWatchFace,
+        enabled = appListWatchFaceColors
     )
-    val useAppListWatchFaceColors = appListWatchFaceColors && selectedWatchFace.isBuiltin
+    val useAppListWatchFaceColors = appListWatchFaceColors && appListThemeColor.alpha > 0.01f
     val appListColors = appListPalette(
         seed = appListThemeColor,
         darkMode = effectiveDarkMode,

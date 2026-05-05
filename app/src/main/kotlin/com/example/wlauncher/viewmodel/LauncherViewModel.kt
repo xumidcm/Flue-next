@@ -176,9 +176,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_SIDE_SCREEN_SHORTCUT_COLS = intPreferencesKey("side_screen_shortcut_cols")
         private const val SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY = 12
         private const val APP_LIST_LEFT_SAFE_INSET_MAX_PERCENT = 50
-        const val DINGDINGCAT_PLAYBACK_SPEED_MIN_PERCENT = 25
+        const val DINGDINGCAT_PLAYBACK_SPEED_MIN_PERCENT = 80
         const val DINGDINGCAT_PLAYBACK_SPEED_MAX_PERCENT = 400
-        const val DINGDINGCAT_PLAYBACK_SPEED_STEP_PERCENT = 5
+        const val DINGDINGCAT_PLAYBACK_SPEED_STEP_PERCENT = 10
 
         private fun normalizeEdgeBlurTenths(value: Int): Int {
             return ((value.coerceIn(5, 50) / 5f).roundToInt() * 5).coerceIn(5, 50)

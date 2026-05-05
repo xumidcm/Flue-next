@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas as AndroidCanvas
 import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.graphics.Typeface as AndroidTypeface
@@ -18,6 +19,7 @@ import android.view.Surface
 import android.widget.FrameLayout
 import android.view.TextureView
 import android.widget.TextView
+import android.graphics.drawable.Drawable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.Image
@@ -77,6 +79,8 @@ import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
+import com.flue.launcher.watchface.LunchWatchFaceDescriptor
+import com.flue.launcher.watchface.LunchWatchFaceScanner
 import com.flue.launcher.watchface.WatchFacePhotoCache
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.LauncherStyle
@@ -104,6 +108,7 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.roundToInt
 
 data class ClockSnapshot(
     val time: String,
@@ -1392,11 +1397,32 @@ fun rememberAppListSeedColor(
     videoPath: String?,
     photoOptions: BuiltInWatchFaceOptions,
     videoOptions: BuiltInWatchFaceOptions,
+    watchFaceDescriptor: LunchWatchFaceDescriptor? = null,
     enabled: Boolean = true
 ): Color {
     if (!enabled) return Color.Transparent
     if (watchFaceId !in setOf(BUILT_IN_WATCHFACE_ID, BUILT_IN_PHOTO_WATCHFACE_ID, BUILT_IN_VIDEO_WATCHFACE_ID)) {
-        return Color.Transparent
+        val descriptor = watchFaceDescriptor ?: return Color.Transparent
+        val context = LocalContext.current
+        val cacheKey = remember(
+            descriptor.stableKey,
+            descriptor.versionCode,
+            descriptor.previewResId,
+            descriptor.previewAssetPath,
+            descriptor.previewFilePath,
+            descriptor.sourceDirPath
+        ) {
+            externalWatchFacePaletteCacheKey(descriptor)
+        }
+        var palette by remember(cacheKey) {
+            mutableStateOf(WatchFacePaletteCache.get(cacheKey) ?: externalWatchFaceDefaultPalette())
+        }
+        LaunchedEffect(cacheKey, descriptor.stableKey) {
+            palette = WatchFacePaletteCache.get(cacheKey) ?: (
+                sampleWatchFaceDescriptorPalette(context, descriptor) ?: externalWatchFaceDefaultPalette()
+            ).also { WatchFacePaletteCache.put(cacheKey, it) }
+        }
+        return palette.seedColor
     }
     val activeOptions = when (watchFaceId) {
         BUILT_IN_PHOTO_WATCHFACE_ID -> photoOptions
@@ -1420,6 +1446,58 @@ fun rememberAppListSeedColor(
         activeOptions.clockStyle != WatchFaceClockStyle.MD3E_CLOCK && activeOptions.useThemeTextColor -> palette.seedColor
         else -> appListSeedColorFromOptions(activeOptions)
     }
+}
+
+private fun externalWatchFaceDefaultPalette(): ClockPalette {
+    return ClockPalette(
+        timeColor = Color.White,
+        dateColor = Color(0xFF7BE8FF),
+        seedColor = Color(0xFF7BE8FF)
+    )
+}
+
+private fun externalWatchFacePaletteCacheKey(descriptor: LunchWatchFaceDescriptor): String {
+    val previewPath = descriptor.previewFilePath
+    val previewAsset = descriptor.previewAssetPath
+    val previewSource = when {
+        !previewPath.isNullOrBlank() -> {
+            val file = File(previewPath)
+            "file|${file.absolutePath}|${file.lastModified()}|${file.length()}"
+        }
+        !previewAsset.isNullOrBlank() -> "asset|$previewAsset"
+        descriptor.previewResId != 0 -> "res|${descriptor.packageName.orEmpty()}|${descriptor.previewResId}"
+        else -> "none"
+    }
+    return "external|${descriptor.stableKey}|${descriptor.versionCode}|$previewSource"
+}
+
+private suspend fun sampleWatchFaceDescriptorPalette(
+    context: Context,
+    descriptor: LunchWatchFaceDescriptor
+): ClockPalette? = withContext(Dispatchers.Default) {
+    runCatching {
+        val drawable = LunchWatchFaceScanner.loadPreviewDrawable(context, descriptor) ?: return@runCatching null
+        val bitmap = drawable.toSamplingBitmap() ?: return@runCatching null
+        try {
+            val color = averageBitmapColor(bitmap, 0 until bitmap.width, 0 until bitmap.height)
+            paletteForAverageColor(color)
+        } finally {
+            bitmap.recycle()
+        }
+    }.getOrNull()
+}
+
+private fun Drawable.toSamplingBitmap(maxSize: Int = 144): Bitmap? {
+    val width = intrinsicWidth.takeIf { it > 0 } ?: maxSize
+    val height = intrinsicHeight.takeIf { it > 0 } ?: maxSize
+    val scale = min(maxSize / width.toFloat(), maxSize / height.toFloat()).coerceAtMost(1f)
+    val sampleWidth = (width * scale).roundToInt().coerceAtLeast(1)
+    val sampleHeight = (height * scale).roundToInt().coerceAtLeast(1)
+    val bitmap = Bitmap.createBitmap(sampleWidth, sampleHeight, Bitmap.Config.ARGB_8888)
+    val canvas = AndroidCanvas(bitmap)
+    setBounds(0, 0, sampleWidth, sampleHeight)
+    draw(canvas)
+    return bitmap
 }
 
 private fun resolveClockTextPalette(
