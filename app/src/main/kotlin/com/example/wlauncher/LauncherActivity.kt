@@ -469,6 +469,19 @@ fun LauncherScreen(vm: LauncherViewModel) {
         )
         else -> spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow)
     }
+    val appListEntryAnimating = appListEntryProgress.value > 0.001f && appListEntryProgress.value < 0.995f
+    val faceLayerBlurEnabled = layerBlurEnabled &&
+        screenState != ScreenState.Apps &&
+        screenState != ScreenState.App &&
+        !isOpeningAppList &&
+        !isReturningFromApp &&
+        !appListReturnOriginActive &&
+        !appListEntryAnimating
+    val appListLayerBlurEnabled = layerBlurEnabled &&
+        !isOpeningAppList &&
+        !isReturningFromApp &&
+        !appListReturnOriginActive &&
+        !appListEntryAnimating
     val effectiveIconShadowEnabled = iconShadowEnabled && appListShadowsReady
     val fadeLaunch = launchSourceState == ScreenState.Stack || launchSourceState == ScreenState.Notifications
 
@@ -572,6 +585,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
         } else {
             appListEntryProgress.value
         }
+        val appListContentTransitionActive =
+            appListContentEntryProgress > 0.001f && appListContentEntryProgress < 0.995f
+        val suppressAppListHeavyEffects =
+            reduceLegacyDrawerEffects ||
+                appListContentTransitionActive ||
+                isOpeningAppList ||
+                isReturningFromApp ||
+                appListReturnOriginActive
 
         GestureHost(
             screenState = screenState,
@@ -592,7 +613,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .scaleBlurAlpha(
                         targetValues = faceLayerValues(faceAnimState, uiStyle),
                         screenHeight = screenHeightPx,
-                        blurEnabled = layerBlurEnabled,
+                        blurEnabled = faceLayerBlurEnabled,
                         origin = Offset(0.5f, 0.5f)
                     )
             ) {
@@ -719,7 +740,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         targetValues = appListLayerValues(screenState, uiStyle),
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
-                        blurEnabled = layerBlurEnabled,
+                        blurEnabled = appListLayerBlurEnabled,
                         origin = appListLayerOrigin,
                         scaleSpec = appListMotionSpec,
                         alphaSpec = if (isOpeningAppList) tween(durationMillis = 220) else tween(durationMillis = 400),
@@ -732,7 +753,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         apps = apps,
                         blurEnabled = blurEnabled,
                         edgeBlurEnabled = edgeBlurEnabled,
-                        suppressHeavyEffects = reduceLegacyDrawerEffects,
+                        suppressHeavyEffects = suppressAppListHeavyEffects,
                         narrowCols = honeycombCols,
                         topBlurRadiusDp = honeycombEdgeBlurRadius,
                         bottomBlurRadiusDp = honeycombEdgeBlurRadius,
@@ -772,7 +793,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         apps = apps,
                         blurEnabled = blurEnabled,
                         edgeBlurEnabled = edgeBlurEnabled,
-                        suppressHeavyEffects = reduceLegacyDrawerEffects,
+                        suppressHeavyEffects = suppressAppListHeavyEffects,
                         topFadeRangeDp = honeycombTopFade,
                         bottomFadeRangeDp = honeycombBottomFade,
                         topBlurRadiusDp = honeycombEdgeBlurRadius,

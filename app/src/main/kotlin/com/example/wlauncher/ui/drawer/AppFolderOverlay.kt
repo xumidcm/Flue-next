@@ -51,11 +51,15 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -90,6 +94,7 @@ fun AppFolderOverlay(
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val gridState = rememberLazyGridState()
+    val folderOverscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val visibleItems = remember { mutableStateListOf<AppInfo>() }
     val itemBounds = remember { mutableStateMapOf<String, Rect>() }
     var showing by remember(folder.componentKey) { mutableStateOf(false) }
@@ -102,10 +107,12 @@ fun AppFolderOverlay(
     var draggedOutsidePanel by remember { mutableStateOf(false) }
     var hoverKey by remember { mutableStateOf<String?>(null) }
     var moveOutJob by remember { mutableStateOf<Job?>(null) }
+    var dismissJob by remember { mutableStateOf<Job?>(null) }
     val dismissInteraction = remember { MutableInteractionSource() }
     val blockInteraction = remember { MutableInteractionSource() }
     val dragThresholdPx = with(density) { 22.dp.toPx() }
     val dragIconHalfSizePx = with(density) { 29.dp.toPx() }
+    val folderOverscrollLimitPx = with(density) { 72.dp.toPx() }
 
     @Suppress("UNUSED_VARIABLE")
     val sameStyleForEveryLayout = listMode
@@ -115,13 +122,25 @@ fun AppFolderOverlay(
         moveOutJob = null
     }
 
+    fun requestDismiss() {
+        if (dismissJob != null) return
+        cancelMoveOutJob()
+        menuApp = null
+        renameDialogVisible = false
+        showing = false
+        dismissJob = scope.launch {
+            delay(190)
+            onDismiss()
+        }
+    }
+
     fun finishMoveOut(app: AppInfo) {
         cancelMoveOutJob()
         draggedKey = null
         draggedOutsidePanel = false
         hoverKey = null
         onMoveItemOut(app)
-        onDismiss()
+        requestDismiss()
     }
 
     fun persistOrderIfChanged(originalKeys: List<String>) {
@@ -143,11 +162,77 @@ fun AppFolderOverlay(
         itemBounds.clear()
         hoverKey = null
     }
-    LaunchedEffect(folder.componentKey) { showing = true }
-    DisposableEffect(Unit) {
-        onDispose { cancelMoveOutJob() }
+    LaunchedEffect(folder.componentKey) {
+        dismissJob?.cancel()
+        dismissJob = null
+        showing = true
     }
-    BackHandler(enabled = true) { onDismiss() }
+    LaunchedEffect(draggedKey) {
+        if (draggedKey != null && folderOverscroll.value != 0f) {
+            folderOverscroll.snapTo(0f)
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            cancelMoveOutJob()
+            dismissJob?.cancel()
+        }
+    }
+    BackHandler(enabled = true) { requestDismiss() }
+
+    fun gridAtTop(): Boolean {
+        return gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0
+    }
+
+    fun gridAtBottom(): Boolean {
+        val info = gridState.layoutInfo
+        val last = info.visibleItemsInfo.maxByOrNull { it.index } ?: return true
+        return last.index >= info.totalItemsCount - 1 &&
+            last.offset.y + last.size.height <= info.viewportEndOffset
+    }
+
+    fun consumeFolderOverscroll(availableY: Float): Offset {
+        if (draggedKey != null || availableY == 0f) return Offset.Zero
+        val current = folderOverscroll.value
+        val next = when {
+            availableY > 0f && current < 0f ->
+                (current + availableY * 0.45f).coerceAtMost(0f)
+            availableY < 0f && current > 0f ->
+                (current + availableY * 0.45f).coerceAtLeast(0f)
+            availableY > 0f && gridAtTop() ->
+                (current + availableY * 0.45f).coerceAtMost(folderOverscrollLimitPx)
+            availableY < 0f && gridAtBottom() ->
+                (current + availableY * 0.45f).coerceAtLeast(-folderOverscrollLimitPx)
+            else -> return Offset.Zero
+        }
+        scope.launch { folderOverscroll.snapTo(next) }
+        return Offset(0f, availableY)
+    }
+
+    val folderNestedScrollConnection = remember(gridState, draggedKey, folderOverscrollLimitPx) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput) return Offset.Zero
+                return consumeFolderOverscroll(available.y)
+            }
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (source != NestedScrollSource.UserInput) return Offset.Zero
+                return consumeFolderOverscroll(available.y)
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                if (folderOverscroll.value != 0f) {
+                    folderOverscroll.animateTo(0f, spring(dampingRatio = 0.62f, stiffness = 380f))
+                }
+                return Velocity.Zero
+            }
+        }
+    }
 
     val alpha by animateFloatAsState(
         targetValue = if (showing) 1f else 0f,
@@ -194,7 +279,7 @@ fun AppFolderOverlay(
             .fillMaxSize()
             .graphicsLayer { this.alpha = alpha }
             .background(Color.Black.copy(alpha = if (blurEnabled) 0.58f else 0.46f))
-            .clickable(indication = null, interactionSource = dismissInteraction) { onDismiss() },
+            .clickable(indication = null, interactionSource = dismissInteraction) { requestDismiss() },
         contentAlignment = Alignment.Center
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -238,7 +323,10 @@ fun AppFolderOverlay(
                     contentPadding = PaddingValues(6.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.heightIn(min = 150.dp, max = gridMaxHeight)
+                    modifier = Modifier
+                        .heightIn(min = 150.dp, max = gridMaxHeight)
+                        .nestedScroll(folderNestedScrollConnection)
+                        .graphicsLayer { translationY = folderOverscroll.value }
                 ) {
                     itemsIndexed(
                         items = visibleItems,

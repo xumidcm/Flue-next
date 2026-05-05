@@ -84,6 +84,7 @@ import kotlin.math.abs
 private const val LIST_MENU_TRIGGER_MS = 620L
 private const val LIST_MENU_DRAG_START_DP = 20f
 private const val LIST_FOLDER_HOVER_MS = 700L
+private const val LIST_FOLDER_HOVER_MAX_SPEED_DP_PER_MS = 0.55f
 private const val LIST_AUTO_SCROLL_EDGE_DP = 84f
 private const val LIST_AUTO_SCROLL_MAX_PX = 30f
 private const val LIST_EDGE_ITEM_BLUR_DP = 4f
@@ -347,6 +348,9 @@ fun ListDrawerScreen(
                 .pointerInput(apps) {
                     val maxDistancePx = with(density) { 72.dp.toPx() }
                     val menuDragStartPx = with(density) { LIST_MENU_DRAG_START_DP.dp.toPx() }
+                    val folderHoverMaxSpeedPxPerMs = with(density) {
+                        LIST_FOLDER_HOVER_MAX_SPEED_DP_PER_MS.dp.toPx()
+                    }
                     awaitEachGesture {
                         val down = awaitPrimaryDown()
                         val startIndex = findNearestListIndex(
@@ -376,6 +380,8 @@ fun ListDrawerScreen(
                         vibrateHaptic(context)
 
                         val dragAnchorY = longPress.position.y
+                        var previousPointerY = dragAnchorY
+                        var previousMoveUptime = longPress.uptimeMillis
                         var dragActive = false
                         var hasDragged = false
                         var folderHoverStartedAt = 0L
@@ -392,6 +398,8 @@ fun ListDrawerScreen(
                             }
 
                             val pointerY = change.position.y
+                            val elapsedMs = (change.uptimeMillis - previousMoveUptime).coerceAtLeast(1L)
+                            val pointerSpeed = abs(pointerY - previousPointerY) / elapsedMs.toFloat()
                             val deltaFromAnchor = abs(pointerY - dragAnchorY)
                             if (!dragActive && deltaFromAnchor > menuDragStartPx) {
                                 longPressedApp = null
@@ -425,7 +433,9 @@ fun ListDrawerScreen(
                                             releaseOverlayHeightPx * 0.34f,
                                             with(density) { scaledIconSize.toPx() } * 0.46f
                                         )
-                                    )?.takeIf { it != activeFromIndex }
+                                    )?.takeIf {
+                                        it != activeFromIndex && pointerSpeed <= folderHoverMaxSpeedPxPerMs
+                                    }
                                 } else {
                                     null
                                 }
@@ -437,13 +447,15 @@ fun ListDrawerScreen(
                                     } else if (change.uptimeMillis - folderHoverStartedAt >= LIST_FOLDER_HOVER_MS) {
                                         folderDropIndex = folderCandidate
                                     }
-                                    dragCurrentIndex = activeFromIndex
+                                    dragCurrentIndex = reorderTarget ?: dragCurrentIndex
                                 } else {
                                     folderHoverIndex = null
                                     folderHoverStartedAt = 0L
                                     folderDropIndex = null
                                     dragCurrentIndex = reorderTarget ?: dragCurrentIndex
                                 }
+                                previousPointerY = pointerY
+                                previousMoveUptime = change.uptimeMillis
                                 if (change.position != change.previousPosition) {
                                     change.consume()
                                 }
@@ -559,7 +571,7 @@ fun ListDrawerScreen(
                 visuals = entryVisuals,
                 color = appPalette.background
             )
-            LaunchedEffect(dragFromIndex, folderHoverIndex, screenHeightPx) {
+            LaunchedEffect(dragFromIndex, screenHeightPx) {
                 var previousFrameNanos = 0L
                 while (dragFromIndex != null) {
                     var pendingScrollDelta = 0f
@@ -587,13 +599,11 @@ fun ListDrawerScreen(
                             }
                             val anchorCenter = itemCenters[activeFromIndex] ?: pointerY
                             dragOffsetY = pointerY - anchorCenter
-                            if (folderHoverIndex == null) {
-                                dragCurrentIndex = findNearestListIndex(
-                                    pointerY = pointerY,
-                                    itemCenters = itemCenters,
-                                    maxDistance = Float.MAX_VALUE
-                                ) ?: dragCurrentIndex
-                            }
+                            dragCurrentIndex = findNearestListIndex(
+                                pointerY = pointerY,
+                                itemCenters = itemCenters,
+                                maxDistance = Float.MAX_VALUE
+                            ) ?: dragCurrentIndex
                         }
                     }
                     if (pendingScrollDelta != 0f) {
