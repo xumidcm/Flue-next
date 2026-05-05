@@ -149,6 +149,7 @@ fun ListDrawerScreen(
     val overscroll = remember { Animatable(0f) }
     var dragFromIndex by remember { mutableStateOf<Int?>(null) }
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
+    var folderHoverIndex by remember { mutableStateOf<Int?>(null) }
     var dragOffsetY by remember { mutableFloatStateOf(0f) }
     var dragPointerY by remember { mutableFloatStateOf(Float.NaN) }
     var glidePressedIndex by remember { mutableStateOf<Int?>(null) }
@@ -376,7 +377,6 @@ fun ListDrawerScreen(
                         val dragAnchorY = longPress.position.y
                         var dragActive = false
                         var hasDragged = false
-                        var folderHoverIndex: Int? = null
                         var folderHoverStartedAt = 0L
                         var folderDropIndex: Int? = null
 
@@ -411,15 +411,18 @@ fun ListDrawerScreen(
                                     hasDragged = true
                                 }
 
-                                dragCurrentIndex = findNearestListIndex(
+                                val reorderTarget = findNearestListIndex(
                                     pointerY = pointerY,
                                     itemCenters = itemCenters,
                                     maxDistance = Float.MAX_VALUE
-                                ) ?: dragCurrentIndex
+                                )
                                 val folderCandidate = findNearestListIndex(
                                     pointerY = pointerY,
                                     itemCenters = itemCenters,
-                                    maxDistance = releaseOverlayHeightPx * 0.42f
+                                    maxDistance = minOf(
+                                        releaseOverlayHeightPx * 0.52f,
+                                        with(density) { scaledIconSize.toPx() } * 0.78f
+                                    )
                                 )?.takeIf { it != activeFromIndex }
                                 if (folderCandidate != null) {
                                     if (folderHoverIndex != folderCandidate) {
@@ -429,10 +432,12 @@ fun ListDrawerScreen(
                                     } else if (change.uptimeMillis - folderHoverStartedAt >= LIST_FOLDER_HOVER_MS) {
                                         folderDropIndex = folderCandidate
                                     }
+                                    dragCurrentIndex = activeFromIndex
                                 } else {
                                     folderHoverIndex = null
                                     folderHoverStartedAt = 0L
                                     folderDropIndex = null
+                                    dragCurrentIndex = reorderTarget ?: dragCurrentIndex
                                 }
                                 if (change.position != change.previousPosition) {
                                     change.consume()
@@ -446,6 +451,7 @@ fun ListDrawerScreen(
                         if (dragActive && from != null && folderTarget != null && from != folderTarget && hasDragged) {
                             dragFromIndex = null
                             dragCurrentIndex = null
+                            folderHoverIndex = null
                             dragOffsetY = 0f
                             dragPointerY = Float.NaN
                             glidePressedIndex = null
@@ -468,6 +474,7 @@ fun ListDrawerScreen(
                             )
                             dragFromIndex = null
                             dragCurrentIndex = null
+                            folderHoverIndex = null
                             dragOffsetY = 0f
                             dragPointerY = Float.NaN
                             glidePressedIndex = null
@@ -489,6 +496,7 @@ fun ListDrawerScreen(
                         } else {
                             dragFromIndex = null
                             dragCurrentIndex = null
+                            folderHoverIndex = null
                             dragOffsetY = 0f
                             dragPointerY = Float.NaN
                             glidePressedIndex = null
@@ -546,7 +554,7 @@ fun ListDrawerScreen(
                 visuals = entryVisuals,
                 color = appPalette.background
             )
-            LaunchedEffect(dragFromIndex, screenHeightPx) {
+            LaunchedEffect(dragFromIndex, folderHoverIndex, screenHeightPx) {
                 var previousFrameNanos = 0L
                 while (dragFromIndex != null) {
                     var pendingScrollDelta = 0f
@@ -574,11 +582,13 @@ fun ListDrawerScreen(
                             }
                             val anchorCenter = itemCenters[activeFromIndex] ?: pointerY
                             dragOffsetY = pointerY - anchorCenter
-                            dragCurrentIndex = findNearestListIndex(
-                                pointerY = pointerY,
-                                itemCenters = itemCenters,
-                                maxDistance = Float.MAX_VALUE
-                            ) ?: dragCurrentIndex
+                            if (folderHoverIndex == null) {
+                                dragCurrentIndex = findNearestListIndex(
+                                    pointerY = pointerY,
+                                    itemCenters = itemCenters,
+                                    maxDistance = Float.MAX_VALUE
+                                ) ?: dragCurrentIndex
+                            }
                         }
                     }
                     if (pendingScrollDelta != 0f) {
@@ -644,9 +654,10 @@ fun ListDrawerScreen(
                     val isDragged = dragFromIndex == index
                     val isSettling = settlingKey == app.componentKey
                     val isGlidePressed = glidePressedIndex == index
+                    val isFolderHoverTarget = folderHoverIndex == index
                     val showMenuBackground = longPressedApp?.componentKey == app.componentKey &&
                         dragFromIndex == null
-                    val showRowBackground = rowBorderEnabled || showMenuBackground
+                    val showRowBackground = rowBorderEnabled || showMenuBackground || isFolderHoverTarget
                     val displacedTarget = listDisplacementForIndex(
                         index = index,
                         dragFromIndex = dragFromIndex,
@@ -673,12 +684,18 @@ fun ListDrawerScreen(
                         targetValue = when {
                             isDragged -> 0.10f
                             isGlidePressed -> 0.05f
+                            isFolderHoverTarget -> 0.20f
                             isPressed -> 0.12f
                             else -> 0f
                         },
                         animationSpec = tween(durationMillis = 170),
                         label = "list_press_overlay"
                     )
+                    val pressedOverlayColor = if (isFolderHoverTarget) {
+                        Color.Black
+                    } else {
+                        appPalette.itemPressedOverlay
+                    }
 
                     Row(
                         modifier = Modifier
@@ -712,7 +729,7 @@ fun ListDrawerScreen(
                                     Modifier
                                 }
                             )
-                            .background(appPalette.itemPressedOverlay.copy(alpha = pressedOverlay), rowShape)
+                            .background(pressedOverlayColor.copy(alpha = pressedOverlay), rowShape)
                             .combinedClickable(
                                 interactionSource = interactionSource,
                                 indication = null,

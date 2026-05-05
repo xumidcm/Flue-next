@@ -190,6 +190,7 @@ fun HoneycombScreen(
     var glidePressedKey by remember { mutableStateOf<String?>(null) }
     var dragFromIndex by remember { mutableStateOf<Int?>(null) }
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
+    var folderHoverIndex by remember { mutableStateOf<Int?>(null) }
     var dragPointer by remember { mutableStateOf<Offset?>(null) }
     var dragApp by remember { mutableStateOf<AppInfo?>(null) }
     var settlingApp by remember { mutableStateOf<AppInfo?>(null) }
@@ -348,6 +349,7 @@ fun HoneycombScreen(
                 glidePressedKey = null
                 dragFromIndex = null
                 dragCurrentIndex = null
+                folderHoverIndex = null
                 dragPointer = null
                 dragApp = null
                 if (!returnTriggered) {
@@ -365,7 +367,7 @@ fun HoneycombScreen(
                 fastScrollActive = false
             }
         }
-        LaunchedEffect(dragFromIndex, minScroll, maxScroll, screenHeightPx) {
+        LaunchedEffect(dragFromIndex, folderHoverIndex, minScroll, maxScroll, screenHeightPx) {
             var previousFrameNanos = 0L
             while (dragFromIndex != null) {
                 var pendingScrollTarget: Float? = null
@@ -400,13 +402,15 @@ fun HoneycombScreen(
                                 pendingScrollTarget = next
                             }
                         }
-                        dragCurrentIndex = findNearestHoneycombIndex(
-                            pointer = displayPointer,
-                            positions = positions,
-                            screenCenterX = screenCenterX,
-                            screenCenterY = screenCenterY + currentScrollOffsetValue(),
-                            maxDistance = cellSize * 0.95f
-                        ) ?: dragCurrentIndex
+                        if (folderHoverIndex == null) {
+                            dragCurrentIndex = findNearestHoneycombIndex(
+                                pointer = displayPointer,
+                                positions = positions,
+                                screenCenterX = screenCenterX,
+                                screenCenterY = screenCenterY + currentScrollOffsetValue(),
+                                maxDistance = cellSize * 0.95f
+                            ) ?: dragCurrentIndex
+                        }
                     }
                 }
                 pendingScrollTarget?.let { directScrollOffset = it }
@@ -482,7 +486,6 @@ fun HoneycombScreen(
                             val dragOrigin = longPress.position
                             var dragActive = false
                             var hasDragged = false
-                            var folderHoverIndex: Int? = null
                             var folderHoverStartedAt = 0L
                             var folderDropIndex: Int? = null
 
@@ -521,26 +524,34 @@ fun HoneycombScreen(
                                         screenHeightPx = screenHeightPx,
                                         iconSizePx = iconSizePx
                                     )
-                                    val dragTarget = findNearestHoneycombIndex(
+                                    val reorderTarget = findNearestHoneycombIndex(
                                         pointer = displayPointer,
                                         positions = positions,
                                         screenCenterX = screenCenterX,
                                         screenCenterY = screenCenterY + currentScrollOffsetValue(),
                                         maxDistance = cellSize * 0.95f
                                     )
-                                    dragCurrentIndex = dragTarget ?: fromIndex
-                                    if (dragTarget != null && dragTarget != fromIndex) {
-                                        if (folderHoverIndex != dragTarget) {
-                                            folderHoverIndex = dragTarget
+                                    val folderCandidate = findNearestHoneycombIndex(
+                                        pointer = displayPointer,
+                                        positions = positions,
+                                        screenCenterX = screenCenterX,
+                                        screenCenterY = screenCenterY + currentScrollOffsetValue(),
+                                        maxDistance = iconSizePx * 0.64f
+                                    )?.takeIf { it != fromIndex }
+                                    if (folderCandidate != null) {
+                                        if (folderHoverIndex != folderCandidate) {
+                                            folderHoverIndex = folderCandidate
                                             folderHoverStartedAt = change.uptimeMillis
                                             folderDropIndex = null
                                         } else if (change.uptimeMillis - folderHoverStartedAt >= HONEYCOMB_FOLDER_HOVER_MS) {
-                                            folderDropIndex = dragTarget
+                                            folderDropIndex = folderCandidate
                                         }
+                                        dragCurrentIndex = fromIndex
                                     } else {
                                         folderHoverIndex = null
                                         folderHoverStartedAt = 0L
                                         folderDropIndex = null
+                                        dragCurrentIndex = reorderTarget ?: fromIndex
                                     }
                                     change.consume()
                                 }
@@ -554,6 +565,7 @@ fun HoneycombScreen(
                             if (dragActive && from != null && folderTarget != null && from != folderTarget && hasDragged) {
                                 dragFromIndex = null
                                 dragCurrentIndex = null
+                                folderHoverIndex = null
                                 dragPointer = null
                                 dragApp = null
                                 glidePressedKey = null
@@ -563,6 +575,7 @@ fun HoneycombScreen(
                                 val targetSlot = positions.getOrNull(to)
                                 dragFromIndex = null
                                 dragCurrentIndex = null
+                                folderHoverIndex = null
                                 dragPointer = null
                                 dragApp = null
                                 glidePressedKey = null
@@ -595,6 +608,7 @@ fun HoneycombScreen(
                             } else {
                                 dragFromIndex = null
                                 dragCurrentIndex = null
+                                folderHoverIndex = null
                                 dragPointer = null
                                 dragApp = null
                                 glidePressedKey = null
@@ -765,7 +779,8 @@ fun HoneycombScreen(
                 iconSizePx,
                 menuPressedIndex,
                 dragFromIndex,
-                dragCurrentIndex
+                dragCurrentIndex,
+                folderHoverIndex
             ) {
                 computeHoneycombRenderIndexes(
                     rows = rowInfo,
@@ -774,7 +789,7 @@ fun HoneycombScreen(
                     screenHeightPx = screenHeightPx,
                     iconSizePx = iconSizePx,
                     bufferRows = if (reducedMotionPhase()) 1 else 2,
-                    pinnedIndexes = listOfNotNull(menuPressedIndex, dragFromIndex, dragCurrentIndex)
+                    pinnedIndexes = listOfNotNull(menuPressedIndex, dragFromIndex, dragCurrentIndex, folderHoverIndex)
                 )
             }
             val dragOverlayPointer = dragPointer?.let {
@@ -938,7 +953,7 @@ fun HoneycombScreen(
                             }
                         },
                         onLongClick = null,
-                        forcePressed = isGlidePressed || menuPressedKey == appKey,
+                        forcePressed = isGlidePressed || menuPressedKey == appKey || folderHoverIndex == index,
                         pressScaleTarget = 0.9f,
                         pressAnimationDelayMillis = 0,
                         pressAnimationDurationMillis = HONEYCOMB_PRESS_DURATION_MS,
@@ -1218,6 +1233,7 @@ private fun MaterialDenseGridScreen(
     var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
     var dragFromIndex by remember { mutableStateOf<Int?>(null) }
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
+    var folderHoverIndex by remember { mutableStateOf<Int?>(null) }
     var dragPointer by remember { mutableStateOf<Offset?>(null) }
     var dragStartBounds by remember { mutableStateOf<Rect?>(null) }
     var returnTriggered by remember { mutableStateOf(false) }
@@ -1233,6 +1249,7 @@ private fun MaterialDenseGridScreen(
             longPressedApp = null
             dragFromIndex = null
             dragCurrentIndex = null
+            folderHoverIndex = null
             dragPointer = null
             dragStartBounds = null
             if (!returnTriggered) {
@@ -1252,10 +1269,10 @@ private fun MaterialDenseGridScreen(
             .filterNot { it in validIndexes }
             .forEach { materialLaunchCenters.remove(it) }
     }
-    LaunchedEffect(gridState, apps.size, dragFromIndex, dragCurrentIndex) {
+    LaunchedEffect(gridState, apps.size, dragFromIndex, dragCurrentIndex, folderHoverIndex) {
         snapshotFlow { gridState.layoutInfo.visibleItemsInfo.map { it.index }.toSet() }
             .collect { visibleIndexes ->
-                val pinned = setOfNotNull(dragFromIndex, dragCurrentIndex)
+                val pinned = setOfNotNull(dragFromIndex, dragCurrentIndex, folderHoverIndex)
                 materialItemBounds.keys
                     .filterNot { it in visibleIndexes || it in pinned }
                     .forEach { materialItemBounds.remove(it) }
@@ -1356,7 +1373,6 @@ private fun MaterialDenseGridScreen(
                 materialContainerRoot = it.positionInRoot()
                 if (!focusReady) focusReady = true
             }
-            .platformBlur(16f, (longPressedApp != null || folderOpen) && blurEnabled)
             .pointerInput(gridState) {
                 awaitPointerEventScope {
                     while (true) {
@@ -1418,7 +1434,6 @@ private fun MaterialDenseGridScreen(
                     val dragOrigin = longPress.position
                     var dragActive = false
                     var hasDragged = false
-                    var folderHoverIndex: Int? = null
                     var folderHoverStartedAt = 0L
                     var folderDropIndex: Int? = null
                     while (true) {
@@ -1446,24 +1461,34 @@ private fun MaterialDenseGridScreen(
                             if (movedDistance > menuDragStartPx * 0.35f) {
                                 hasDragged = true
                             }
-                            findNearestMaterialGridIndex(
+                            val reorderTarget = findNearestMaterialGridIndex(
                                 pointer = pointer,
                                 itemBounds = materialItemBounds
-                            )?.let { target ->
-                                if (target in apps.indices) dragCurrentIndex = target
-                                if (target != startIndex) {
-                                    if (folderHoverIndex != target) {
-                                        folderHoverIndex = target
-                                        folderHoverStartedAt = change.uptimeMillis
-                                        folderDropIndex = null
-                                    } else if (change.uptimeMillis - folderHoverStartedAt >= HONEYCOMB_FOLDER_HOVER_MS) {
-                                        folderDropIndex = target
-                                    }
+                            )
+                            val folderCandidate = findNearestMaterialGridIndex(
+                                pointer = pointer,
+                                itemBounds = materialItemBounds,
+                                excludedIndex = startIndex,
+                                maxDistance = (dragStartBounds?.let { minOf(it.width, it.height) }
+                                    ?: materialItemBounds[startIndex]?.let { minOf(it.width, it.height) }
+                                    ?: with(density) { 48.dp.toPx() }) * 0.62f
+                            )
+                            if (folderCandidate != null) {
+                                if (folderHoverIndex != folderCandidate) {
+                                    folderHoverIndex = folderCandidate
+                                    folderHoverStartedAt = change.uptimeMillis
+                                    folderDropIndex = null
+                                } else if (change.uptimeMillis - folderHoverStartedAt >= HONEYCOMB_FOLDER_HOVER_MS) {
+                                    folderDropIndex = folderCandidate
                                 }
-                            } ?: run {
+                                dragCurrentIndex = startIndex
+                            } else {
                                 folderHoverIndex = null
                                 folderHoverStartedAt = 0L
                                 folderDropIndex = null
+                                if (reorderTarget != null && reorderTarget in apps.indices) {
+                                    dragCurrentIndex = reorderTarget
+                                }
                             }
                             change.consume()
                         }
@@ -1475,6 +1500,7 @@ private fun MaterialDenseGridScreen(
                     if (dragActive && from != null && folderTarget != null && from != folderTarget && hasDragged) {
                         dragFromIndex = null
                         dragCurrentIndex = null
+                        folderHoverIndex = null
                         dragPointer = null
                         dragStartBounds = null
                         longPressedApp = null
@@ -1507,6 +1533,8 @@ private fun MaterialDenseGridScreen(
         val containerMaxWidth = maxWidth
         val containerMaxHeight = maxHeight
         val entryOffsetY = (1f - entryProgress.coerceIn(0f, 1f)) * screenHeightPx * 0.08f
+        val topFadePx = with(density) { topFadeRangeDp.dp.toPx() }
+        val bottomFadePx = with(density) { bottomFadeRangeDp.dp.toPx() }
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val fisheyeRangePx = (screenHeightPx / effectiveColumns * fisheyeRangeRows.coerceIn(1, 8))
             .coerceIn(screenHeightPx / effectiveColumns, screenHeightPx)
@@ -1525,7 +1553,7 @@ private fun MaterialDenseGridScreen(
         val estimatedGridItemHeight = (gridAvailableWidth / effectiveColumns.coerceAtLeast(1).toFloat() / 0.92f)
             .coerceAtLeast(48.dp)
         val centeredGridPadding = ((maxHeight - estimatedGridItemHeight) / 2f).coerceAtLeast(8.dp)
-        LaunchedEffect(dragFromIndex, screenHeightPx) {
+        LaunchedEffect(dragFromIndex, folderHoverIndex, screenHeightPx) {
             var previousFrameNanos = 0L
             while (dragFromIndex != null) {
                 var pendingScrollDelta = 0f
@@ -1554,7 +1582,7 @@ private fun MaterialDenseGridScreen(
                             pointer = pointer,
                             itemBounds = materialItemBounds
                         )?.let { target ->
-                            if (target in apps.indices) dragCurrentIndex = target
+                            if (folderHoverIndex == null && target in apps.indices) dragCurrentIndex = target
                         }
                     }
                 }
@@ -1572,7 +1600,8 @@ private fun MaterialDenseGridScreen(
             userScrollEnabled = dragFromIndex == null && longPressedApp == null,
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer { translationY = overscroll.value + entryOffsetY },
+                .graphicsLayer { translationY = overscroll.value + entryOffsetY }
+                .platformBlur(16f, (longPressedApp != null || folderOpen) && blurEnabled),
             contentPadding = PaddingValues(
                 start = gridHorizontalPadding + leftSafeInset,
                 top = centeredGridPadding,
@@ -1591,6 +1620,14 @@ private fun MaterialDenseGridScreen(
                 val isPressed by interactionSource.collectIsPressedAsState()
                 val itemBounds = materialItemBounds[index]
                 val itemCenterY = itemBounds?.center?.y ?: screenHeightPx / 2f
+                val itemBlur = computeHoneycombEdgeBlur(
+                    centerY = itemCenterY + overscroll.value + entryOffsetY,
+                    screenHeight = screenHeightPx,
+                    topBlurZonePx = topFadePx,
+                    bottomBlurZonePx = bottomFadePx,
+                    topBlurDp = topBlurRadiusDp,
+                    bottomBlurDp = bottomBlurRadiusDp
+                )
                 val bottomFisheyeStartY = screenHeightPx * 0.52f
                 val itemScale = if (fisheyeEnabled && itemCenterY > bottomFisheyeStartY) {
                     val dist = itemCenterY - bottomFisheyeStartY
@@ -1615,6 +1652,7 @@ private fun MaterialDenseGridScreen(
                         longPressedApp == null
                 )
                 val isDragged = dragFromIndex == index
+                val isFolderHoverTarget = folderHoverIndex == index
                 val dragTarget = materialDraggedTargetOffset(
                     index = index,
                     dragFromIndex = dragFromIndex,
@@ -1640,9 +1678,22 @@ private fun MaterialDenseGridScreen(
                 ) {
                     app.plainIconForDisplay(
                         useTwoTone = twoToneIconsEnabled,
-                        blurred = false
+                        blurred = blurEnabled &&
+                            edgeBlurEnabled &&
+                            itemBlur > 0.5f &&
+                            Build.VERSION.SDK_INT < Build.VERSION_CODES.S
                     )
                 }
+                val pressedScale by animateFloatAsState(
+                    targetValue = when {
+                        isDragged -> 0.965f
+                        isFolderHoverTarget -> 0.90f
+                        isPressed -> 0.96f
+                        else -> 1f
+                    },
+                    animationSpec = tween(durationMillis = 170),
+                    label = "material_press_scale"
+                )
                 val materialIconShape = RoundedCornerShape((18.dp * appListScale).coerceIn(12.dp, 24.dp))
                 val iconInnerPadding = (3.dp * appListScale).coerceIn(2.dp, 6.dp)
                 Box(
@@ -1667,10 +1718,14 @@ private fun MaterialDenseGridScreen(
                             shape = materialIconShape
                             translationX = animatedDragX
                             translationY = animatedDragY
-                            scaleX = itemScale
-                            scaleY = itemScale
+                            scaleX = itemScale * pressedScale
+                            scaleY = itemScale * pressedScale
                             alpha = (if (isDragged) 0f else itemAlpha) * entryVisuals.iconProgress
                         }
+                        .platformBlur(
+                            itemBlur,
+                            blurEnabled && edgeBlurEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && itemBlur > 0.5f
+                        )
                         .clip(materialIconShape)
                         .combinedClickable(
                             interactionSource = interactionSource,
@@ -1691,7 +1746,7 @@ private fun MaterialDenseGridScreen(
                             }
                         )
                         .background(
-                            color = (if (isPressed) launcherStyle.pressedCardColor else appPalette.item)
+                            color = (if (isPressed || isFolderHoverTarget) launcherStyle.pressedCardColor else appPalette.item)
                                 .copy(alpha = entryVisuals.surfaceProgress),
                             shape = materialIconShape
                         )
@@ -1716,6 +1771,14 @@ private fun MaterialDenseGridScreen(
                                     }
                                 )
                         )
+                        if (isFolderHoverTarget) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(materialIconShape)
+                                    .background(Color.Black.copy(alpha = 0.22f))
+                            )
+                        }
                     }
                 }
             }

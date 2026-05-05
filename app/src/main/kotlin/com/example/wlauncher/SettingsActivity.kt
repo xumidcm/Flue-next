@@ -29,6 +29,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -73,6 +74,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.compositionLocalOf
@@ -2129,7 +2131,13 @@ private fun SectionTitle(text: String, scale: Float) {
 }
 
 @Composable
-private fun rememberPressedState(): MutableState<Boolean> = remember { mutableStateOf(false) }
+private fun rememberPressedState(): MutableState<Boolean> {
+    val state = remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        onDispose { state.value = false }
+    }
+    return state
+}
 
 private fun Modifier.instantPressGesture(
     pressedState: MutableState<Boolean>,
@@ -2234,8 +2242,8 @@ private fun SettingsChoiceRow(
     scale: Float
 ) {
     val launcherStyle = LauncherTheme.style
-    val pressedState = rememberPressedState()
-    val pressed by pressedState
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
     val pressedScale by animateFloatAsState(
         if (pressed) 0.964f else 1f,
         animationSpec = launcherStyle.pressScaleSpec,
@@ -2259,7 +2267,11 @@ private fun SettingsChoiceRow(
                 }
             )
             .border(1.dp, launcherStyle.outlineColor, launcherStyle.compactShape)
-            .instantPressGesture(pressedState, onClick = onClick)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
             .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
         Row(
@@ -2295,8 +2307,8 @@ private fun SettingsSwitchRow(
     reserveLeadingIconSpace: Boolean = false
 ) {
     val launcherStyle = LauncherTheme.style
-    val pressedState = rememberPressedState()
-    val pressed by pressedState
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
     val pressedScale by animateFloatAsState(
         if (pressed) 0.958f else 1f,
         animationSpec = launcherStyle.pressScaleSpec,
@@ -2327,8 +2339,9 @@ private fun SettingsSwitchRow(
             .clip(launcherStyle.compactShape)
             .background(if (pressed) launcherStyle.pressedCardColor else launcherStyle.cardColor)
             .border(1.dp, launcherStyle.outlineColor, launcherStyle.compactShape)
-            .instantPressGesture(
-                pressedState = pressedState,
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
                 enabled = enabled,
                 onClick = { onToggle(!checked) }
             )
