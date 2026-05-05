@@ -665,7 +665,9 @@ private fun SettingsRootScreen(
         pageScrollPositions[target] ?: SavedScrollPosition()
     }
     val updateScroll: (SettingsDestination, Int, Int) -> Unit = { target, index, offset ->
-        pageScrollPositions[target] = SavedScrollPosition(index = index, offset = offset)
+        if (!target.resetsScrollOnEnter) {
+            pageScrollPositions[target] = SavedScrollPosition(index = index, offset = offset)
+        }
     }
 
     CompositionLocalProvider(LocalSettingsLeftSafeInsetPercent provides appListLeftSafeInsetPercent) {
@@ -2193,7 +2195,11 @@ private val SettingsDestination.depth: Int
     }
 
 private val SettingsDestination.resetsScrollOnEnter: Boolean
-    get() = depth >= 3
+    get() = when (this) {
+        SettingsDestination.DISPLAY_SIZE,
+        SettingsDestination.FEATURE_TOGGLES -> true
+        else -> depth >= 3
+    }
 
 @Composable
 private fun MessageCard(text: String, background: Color, onClick: () -> Unit) {

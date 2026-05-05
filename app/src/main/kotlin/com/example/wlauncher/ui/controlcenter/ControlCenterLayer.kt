@@ -1085,21 +1085,26 @@ private fun MediaControlsRow(
         val customActions = mediaState.customActions.take(2)
         val preferredButtonSize = 36.dp
         val minButtonSize = 24.dp
+        val customButtonScale = 1.12f
         val preferredSpacing = 8.dp
         val minSpacing = 4.dp
+        val customCountFloat = customActions.size.toFloat()
         val buttonCount = 3 + customActions.size
-        val buttonCountFloat = buttonCount.toFloat()
         val gapCountFloat = (buttonCount - 1).coerceAtLeast(1).toFloat()
-        val preferredWidth = preferredButtonSize * buttonCountFloat + preferredSpacing * gapCountFloat
+        val buttonWidthUnits = 3f + customCountFloat * customButtonScale
+        val preferredWidth = preferredButtonSize * buttonWidthUnits + preferredSpacing * gapCountFloat
         val minSpacingWidth = minSpacing * gapCountFloat
         val buttonSize = if (maxWidth >= preferredWidth) {
             preferredButtonSize
         } else {
-            ((maxWidth - minSpacingWidth) / buttonCountFloat).coerceIn(minButtonSize, preferredButtonSize)
+            ((maxWidth - minSpacingWidth) / buttonWidthUnits).coerceIn(minButtonSize, preferredButtonSize)
         }
-        val buttonSpacing = ((maxWidth - buttonSize * buttonCountFloat) / gapCountFloat)
+        val customButtonSize = (buttonSize * customButtonScale).coerceAtLeast(buttonSize)
+        val occupiedButtonWidth = buttonSize * 3f + customButtonSize * customCountFloat
+        val buttonSpacing = ((maxWidth - occupiedButtonWidth) / gapCountFloat)
             .coerceIn(minSpacing, preferredSpacing)
         val iconSize = (buttonSize * 0.56f).coerceIn(16.dp, 20.dp)
+        val customIconSize = (customButtonSize * 0.60f).coerceIn(iconSize, 23.dp)
 
         Row(
             horizontalArrangement = Arrangement.spacedBy(buttonSpacing),
@@ -1108,8 +1113,8 @@ private fun MediaControlsRow(
             customActions.getOrNull(0)?.let { customAction ->
                 MediaCustomActionButton(
                     action = customAction,
-                    size = buttonSize,
-                    iconSize = iconSize,
+                    size = customButtonSize,
+                    iconSize = customIconSize,
                     onGestureLockChange = onGestureLockChange
                 ) {
                     mediaState.controller?.transportControls?.sendCustomAction(
@@ -1146,8 +1151,8 @@ private fun MediaControlsRow(
             customActions.getOrNull(1)?.let { customAction ->
                 MediaCustomActionButton(
                     action = customAction,
-                    size = buttonSize,
-                    iconSize = iconSize,
+                    size = customButtonSize,
+                    iconSize = customIconSize,
                     onGestureLockChange = onGestureLockChange
                 ) {
                     mediaState.controller?.transportControls?.sendCustomAction(
