@@ -644,9 +644,6 @@ private fun SettingsRootScreen(
         }
         val previous = backStack.lastOrNull()
         if (previous != null) {
-            if (previous.depth < destination.depth) {
-                resetPageScroll(destination)
-            }
             leaveDestination(previous)
             backStack = backStack.dropLast(1)
             destination = previous
