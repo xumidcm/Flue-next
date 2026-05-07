@@ -64,6 +64,7 @@ import com.flue.launcher.ui.drawer.AppFolderOverlay
 import com.flue.launcher.ui.drawer.HoneycombScreen
 import com.flue.launcher.ui.drawer.ListDrawerScreen
 import com.flue.launcher.ui.drawer.appListPalette
+import com.flue.launcher.ui.drawer.vibrateHaptic
 import com.flue.launcher.ui.home.WatchFaceLayer
 import com.flue.launcher.ui.home.WatchFaceBottomFadeOverlay
 import com.flue.launcher.ui.home.WatchFaceStatusIndicatorOverlay
@@ -97,10 +98,12 @@ private const val NOTIFICATION_TRANSITION_MS = 240
 private const val APP_LIST_OPEN_SHADOW_DELAY_MS = 280L
 private const val APP_LIST_RETURN_SHADOW_DELAY_MS = 520L
 private const val APP_LIST_RETURN_ORIGIN_HOLD_MS = 520L
+private const val APP_RETURN_MAINTENANCE_DELAY_MS = 260L
 
 class LauncherActivity : ComponentActivity() {
 
     private lateinit var vm: LauncherViewModel
+    private var deferredResumeMaintenance: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -142,19 +145,33 @@ class LauncherActivity : ComponentActivity() {
         if (::vm.isInitialized) {
             vm.setLauncherInteractive(true)
             vm.onReturnToLauncher()
-            vm.refreshWatchFaces()
-            vm.refreshNotificationAccess()
+            scheduleDeferredResumeMaintenance()
         }
     }
 
     override fun onPause() {
         super.onPause()
+        deferredResumeMaintenance?.let(window.decorView::removeCallbacks)
+        deferredResumeMaintenance = null
         if (::vm.isInitialized) {
             vm.setLauncherInteractive(false)
         }
         if (::vm.isInitialized && vm.animationOverrideEnabled.value) {
             applyFadeCloseTransition()
         }
+    }
+
+    private fun scheduleDeferredResumeMaintenance() {
+        deferredResumeMaintenance?.let(window.decorView::removeCallbacks)
+        val task = Runnable {
+            deferredResumeMaintenance = null
+            if (::vm.isInitialized) {
+                vm.refreshWatchFaces()
+                vm.refreshNotificationAccess()
+            }
+        }
+        deferredResumeMaintenance = task
+        window.decorView.postDelayed(task, APP_RETURN_MAINTENANCE_DELAY_MS)
     }
 }
 
@@ -203,6 +220,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val showStepCount by vm.showStepCount.collectAsStateWithLifecycle()
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
     val rotaryHapticsEnabled by vm.rotaryHapticsEnabled.collectAsStateWithLifecycle()
+    val showWidgets by vm.showWidgets.collectAsStateWithLifecycle()
     val showWidgetPage by vm.showWidgetPage.collectAsStateWithLifecycle()
     val showControlCenter by vm.showControlCenter.collectAsStateWithLifecycle()
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
@@ -219,6 +237,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val notificationGroups by vm.notificationGroups.collectAsStateWithLifecycle()
     val revealedNotificationTarget by vm.revealedNotificationTarget.collectAsStateWithLifecycle()
     val showMusicControls by vm.showMusicControls.collectAsStateWithLifecycle()
+    val showMediaCustomActions by vm.showMediaCustomActions.collectAsStateWithLifecycle()
+    val swapMusicNotificationComponents by vm.swapMusicNotificationComponents.collectAsStateWithLifecycle()
     val musicTextSwitchAnimation by vm.musicTextSwitchAnimation.collectAsStateWithLifecycle()
     val launchSourceState by vm.launchSourceState.collectAsStateWithLifecycle()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsStateWithLifecycle()
@@ -361,7 +381,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
     val lockScreenWithAccessibility: () -> Unit = remember(context, openAccessibilitySettings) {
         {
-            if (!FlueAccessibilityService.lockScreen()) {
+            if (FlueAccessibilityService.lockScreen()) {
+                vibrateHaptic(context)
+            } else {
                 Toast.makeText(context, "请先授权 Flue 无障碍服务", Toast.LENGTH_SHORT).show()
                 openAccessibilitySettings()
             }
@@ -577,7 +599,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val widgetPageVisible = widgetPageProgress > 0.001f || screenState == ScreenState.Widgets
         val controlCenterVisible = controlCenterProgress > 0.001f || screenState == ScreenState.ControlCenter
         val sideSceneOverlayActive = sideScreenVisible || widgetPageVisible || controlCenterVisible
-        val keepAppListLayer = screenState == ScreenState.Apps ||
+        val appListLayerRaised = screenState == ScreenState.Apps ||
             isOpeningAppList ||
             appListEntryProgress.value > 0.001f
         val appListContentEntryProgress = if (screenState == ScreenState.App && launchSourceState == ScreenState.Apps) {
@@ -588,7 +610,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val appListContentTransitionActive =
             appListContentEntryProgress > 0.001f && appListContentEntryProgress < 0.995f
         val suppressAppListHeavyEffects =
-            reduceLegacyDrawerEffects ||
+            screenState != ScreenState.Apps ||
+                reduceLegacyDrawerEffects ||
                 appListContentTransitionActive ||
                 isOpeningAppList ||
                 isReturningFromApp ||
@@ -735,7 +758,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(if (keepAppListLayer) 3f else 0f)
+                    .zIndex(if (appListLayerRaised) 3f else 0f)
                     .scaleBlurAlpha(
                         targetValues = appListLayerValues(screenState, uiStyle),
                         screenWidth = screenWidthPx,
@@ -836,6 +859,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 AppFolderOverlay(
                     folder = visibleFolder,
                     items = openFolderItems,
+                    availableItems = apps,
                     listMode = layoutMode == LayoutMode.List,
                     blurEnabled = blurEnabled,
                     twoToneIconsEnabled = twoToneIconsEnabled,
@@ -845,6 +869,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     },
                     onReorderItems = { orderedItems -> vm.reorderFolderItems(visibleFolder, orderedItems) },
                     onMoveItemOut = { item -> vm.moveItemOutOfFolder(visibleFolder, item) },
+                    onAddItemsToFolder = { items -> vm.addItemsToFolder(visibleFolder, items) },
                     onRenameFolder = { name -> vm.renameFolder(visibleFolder, name) },
                     onExcludeApp = { appInfo -> vm.setAppHidden(appInfo.componentKey, true) },
                     onRemoveShortcut = vm::removeAppListShortcut,
@@ -902,10 +927,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         sideScreenShortcuts = sideScreenShortcuts,
                         sideScreenWidgetSlots = sideScreenWidgetSlots,
                         previewGroups = sideScreenPreviewGroups,
-                        showWidgets = false,
+                        showWidgets = showWidgets,
+                        showMusicCard = showMusicControls && swapMusicNotificationComponents,
+                        showMediaCustomActions = showMediaCustomActions,
+                        musicTextSwitchAnimation = musicTextSwitchAnimation,
                         sectionOrder = sideScreenSectionOrder,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
-                        notificationsEnabled = notificationsEnabled,
+                        notificationsEnabled = notificationsEnabled && !swapMusicNotificationComponents,
                         notificationAccessGranted = notificationAccessGranted,
                         notificationsSceneActive = notificationSceneActive,
                         notificationTransitionProgress = notificationProgress,
@@ -985,9 +1013,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 ) {
                     ControlCenterLayer(
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
-                        showMusicControls = showMusicControls,
+                        showMusicControls = showMusicControls && !swapMusicNotificationComponents,
                         notificationAccessGranted = notificationAccessGranted,
                         musicTextSwitchAnimation = musicTextSwitchAnimation,
+                        showMediaCustomActions = showMediaCustomActions,
+                        showNotificationCard = showNotification && swapMusicNotificationComponents,
+                        notificationGroups = sideScreenPreviewGroups,
+                        onOpenNotifications = {
+                            vm.setRevealedNotificationTarget(null)
+                            vm.setState(ScreenState.Notifications)
+                            settleNotificationTransition(1f)
+                        },
                         onDismissToFace = { vm.setState(ScreenState.Face) },
                         showPowerButton = powerMenuButtonEnabled,
                         onPowerClick = openPowerDialogWithAccessibility

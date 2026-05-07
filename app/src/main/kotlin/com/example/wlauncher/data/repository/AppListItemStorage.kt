@@ -211,6 +211,22 @@ class AppListItemStorage(private val context: Context) {
     }
 
     @Synchronized
+    fun addItemsToFolder(folderKey: String, itemKeys: List<String>): List<String> {
+        val folders = loadFolders().toMutableList()
+        val index = folders.indexOfFirst { it.componentKey == folderKey }
+        if (index < 0) return emptyList()
+        val folder = folders[index]
+        val additions = itemKeys
+            .filter { key -> key != folderKey && key !in folder.itemKeys }
+            .distinct()
+        if (additions.isEmpty()) return folder.itemKeys
+        val nextKeys = folder.itemKeys + additions
+        folders[index] = folder.copy(itemKeys = nextKeys)
+        saveFolders(folders)
+        return nextKeys
+    }
+
+    @Synchronized
     fun reorderFolderItems(folderKey: String, orderedKeys: List<String>): List<String> {
         val folders = loadFolders().toMutableList()
         val index = folders.indexOfFirst { it.componentKey == folderKey }

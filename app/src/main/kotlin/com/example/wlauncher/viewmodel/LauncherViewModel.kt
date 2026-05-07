@@ -121,6 +121,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_SHOW_WIDGET_PAGE = booleanPreferencesKey("show_widget_page")
         val KEY_SHOW_CONTROL_CENTER = booleanPreferencesKey("show_control_center")
         val KEY_SHOW_MUSIC_CONTROLS = booleanPreferencesKey("show_music_controls")
+        val KEY_SHOW_MEDIA_CUSTOM_ACTIONS = booleanPreferencesKey("show_media_custom_actions")
+        val KEY_SWAP_MUSIC_NOTIFICATION_COMPONENTS = booleanPreferencesKey("swap_music_notification_components")
         val KEY_DOUBLE_TAP_LOCK_SCREEN = booleanPreferencesKey("double_tap_lock_screen_enabled")
         val KEY_POWER_MENU_BUTTON = booleanPreferencesKey("power_menu_button_enabled")
         val KEY_WATCHFACE_CHARGING_POWER_TEXT = booleanPreferencesKey("watchface_charging_power_text")
@@ -392,6 +394,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val showControlCenter: StateFlow<Boolean> = _showControlCenter.asStateFlow()
     private val _showMusicControls = MutableStateFlow(true)
     val showMusicControls: StateFlow<Boolean> = _showMusicControls.asStateFlow()
+    private val _showMediaCustomActions = MutableStateFlow(true)
+    val showMediaCustomActions: StateFlow<Boolean> = _showMediaCustomActions.asStateFlow()
+    private val _swapMusicNotificationComponents = MutableStateFlow(false)
+    val swapMusicNotificationComponents: StateFlow<Boolean> = _swapMusicNotificationComponents.asStateFlow()
     private val _doubleTapLockScreenEnabled = MutableStateFlow(false)
     val doubleTapLockScreenEnabled: StateFlow<Boolean> = _doubleTapLockScreenEnabled.asStateFlow()
     private val _powerMenuButtonEnabled = MutableStateFlow(false)
@@ -899,6 +905,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedShowMusicControls = prefs[KEY_SHOW_MUSIC_CONTROLS] ?: true
                 if (_showMusicControls.value != loadedShowMusicControls) {
                     _showMusicControls.value = loadedShowMusicControls
+                }
+
+                val loadedShowMediaCustomActions = prefs[KEY_SHOW_MEDIA_CUSTOM_ACTIONS] ?: true
+                if (_showMediaCustomActions.value != loadedShowMediaCustomActions) {
+                    _showMediaCustomActions.value = loadedShowMediaCustomActions
+                }
+
+                val loadedSwapMusicNotificationComponents = prefs[KEY_SWAP_MUSIC_NOTIFICATION_COMPONENTS] ?: false
+                if (_swapMusicNotificationComponents.value != loadedSwapMusicNotificationComponents) {
+                    _swapMusicNotificationComponents.value = loadedSwapMusicNotificationComponents
                 }
 
                 val loadedDoubleTapLockScreen = prefs[KEY_DOUBLE_TAP_LOCK_SCREEN] ?: false
@@ -1449,6 +1465,26 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun addItemsToFolder(folder: AppInfo, items: List<AppInfo>) {
+        if (!folder.isFolder || items.isEmpty()) return
+        val addedKeys = items
+            .asSequence()
+            .filterNot { it.isFolder }
+            .map { it.componentKey }
+            .filter { it != folder.componentKey }
+            .distinct()
+            .toList()
+        if (addedKeys.isEmpty()) return
+        val nextKeys = appRepository.addItemsToFolder(folder.componentKey, addedKeys)
+        if (nextKeys.isEmpty()) return
+        val addedKeySet = addedKeys.toSet()
+        val currentOrder = apps.value
+            .map { it.componentKey }
+            .filterNot { it in addedKeySet }
+        setAppOrder(currentOrder)
+        _openFolderItems.value = appRepository.itemsForKeys(nextKeys)
+    }
+
     fun setHoneycombCols(cols: Int) {
         _honeycombCols.value = cols.coerceIn(1, 5)
         val savedValue = _honeycombCols.value
@@ -1668,6 +1704,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setShowMusicControls(show: Boolean) {
         _showMusicControls.value = show
         persist { store.edit { it[KEY_SHOW_MUSIC_CONTROLS] = show } }
+    }
+
+    fun setShowMediaCustomActions(show: Boolean) {
+        _showMediaCustomActions.value = show
+        persist { store.edit { it[KEY_SHOW_MEDIA_CUSTOM_ACTIONS] = show } }
+    }
+
+    fun setSwapMusicNotificationComponents(enabled: Boolean) {
+        _swapMusicNotificationComponents.value = enabled
+        persist { store.edit { it[KEY_SWAP_MUSIC_NOTIFICATION_COMPONENTS] = enabled } }
     }
 
     fun setDoubleTapLockScreenEnabled(enabled: Boolean) {
@@ -2313,6 +2359,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _showWidgetPage.value = true
         _showControlCenter.value = true
         _showMusicControls.value = true
+        _showMediaCustomActions.value = true
+        _swapMusicNotificationComponents.value = false
         _doubleTapLockScreenEnabled.value = false
         _powerMenuButtonEnabled.value = false
         _watchFaceChargingPowerText.value = true
@@ -2414,6 +2462,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_SHOW_WIDGET_PAGE] = true
                 it[KEY_SHOW_CONTROL_CENTER] = true
                 it[KEY_SHOW_MUSIC_CONTROLS] = true
+                it[KEY_SHOW_MEDIA_CUSTOM_ACTIONS] = true
+                it[KEY_SWAP_MUSIC_NOTIFICATION_COMPONENTS] = false
                 it[KEY_DOUBLE_TAP_LOCK_SCREEN] = false
                 it[KEY_POWER_MENU_BUTTON] = false
                 it[KEY_WATCHFACE_CHARGING_POWER_TEXT] = true

@@ -156,7 +156,6 @@ class AppRepository(private val context: Context) {
         useLegacyCircularIcons = legacyCircular
         useTwoToneIcons = twoTone
         currentIconSize = nextIconSize
-        synchronized(iconCache) { iconCache.clear() }
         refreshAsync(nextIconSize)
     }
 
@@ -202,7 +201,12 @@ class AppRepository(private val context: Context) {
             if (!isCurrentRefresh(generation)) return
             val packageName = ri.activityInfo.packageName
             val componentKey = "$packageName/${ri.activityInfo.name}"
-            val iconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|$componentKey|$iconSize|${if (useLegacyCircularIconsSnapshot) "legacy" else "plain"}|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
+            val plainIconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|plain|$componentKey|$iconSize|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
+            val iconCacheKey = if (useLegacyCircularIconsSnapshot) {
+                "${iconPackPackageSnapshot ?: "sys"}|$componentKey|$iconSize|legacy|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
+            } else {
+                plainIconCacheKey
+            }
             val cachedIcons = getOrCreateIconSet(iconCacheKey) {
                 createIconSet(
                     componentKey = componentKey,
@@ -213,7 +217,6 @@ class AppRepository(private val context: Context) {
                     useTwoToneIcons = useTwoToneIconsSnapshot
                 )
             }
-            val plainIconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|plain|$componentKey|$iconSize|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
             val plainIcons = if (!useLegacyCircularIconsSnapshot) {
                 cachedIcons
             } else {
@@ -395,10 +398,14 @@ class AppRepository(private val context: Context) {
 
     fun addPinnedShortcut(shortcutInfo: ShortcutInfo): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
-        val shortcutIntent = shortcutInfo.intent ?: shortcutInfo.intents?.lastOrNull() ?: return false
-        val label = shortcutInfo.shortLabel?.toString()
-            ?: shortcutInfo.longLabel?.toString()
-            ?: shortcutInfo.id
+        val packageName = shortcutInfo.safePackageName() ?: return false
+        val shortcutIntent = shortcutInfo.safeShortcutIntent()
+            ?: context.packageManager.getLaunchIntentForPackage(packageName)
+            ?: return false
+        val label = runCatching { shortcutInfo.shortLabel?.toString() }.getOrNull()
+            ?: runCatching { shortcutInfo.longLabel?.toString() }.getOrNull()
+            ?: runCatching { shortcutInfo.id }.getOrNull()
+            ?: packageName.substringAfterLast('.')
         val iconBitmap = runCatching {
             val launcherApps = context.getSystemService(LauncherApps::class.java)
             launcherApps?.getShortcutIconDrawable(shortcutInfo, context.resources.displayMetrics.densityDpi)
@@ -406,12 +413,25 @@ class AppRepository(private val context: Context) {
         }.getOrNull()
         itemStorage.addShortcut(
             label = label,
-            packageName = shortcutInfo.`package`,
+            packageName = packageName,
             intentUri = shortcutIntent.toUri(Intent.URI_INTENT_SCHEME),
             icon = iconBitmap
         )
         refreshAsync()
         return true
+    }
+
+    private fun ShortcutInfo.safePackageName(): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null
+        return runCatching { `package` }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+    }
+
+    private fun ShortcutInfo.safeShortcutIntent(): Intent? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null
+        runCatching { intent }.getOrNull()?.let { return it }
+        return runCatching { intents?.lastOrNull() }.getOrNull()
     }
 
     fun removeShortcut(componentKey: String): Boolean {
@@ -443,6 +463,12 @@ class AppRepository(private val context: Context) {
         val remainingKeys = itemStorage.moveItemOutOfFolder(folderKey, itemKey)
         refreshAsync()
         return remainingKeys
+    }
+
+    fun addItemsToFolder(folderKey: String, itemKeys: List<String>): List<String> {
+        val nextKeys = itemStorage.addItemsToFolder(folderKey, itemKeys)
+        if (nextKeys.isNotEmpty()) refreshAsync()
+        return nextKeys
     }
 
     fun reorderFolderItems(folderKey: String, orderedKeys: List<String>): List<String> {

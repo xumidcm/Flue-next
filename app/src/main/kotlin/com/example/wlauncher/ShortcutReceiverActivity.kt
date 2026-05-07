@@ -16,7 +16,7 @@ import androidx.core.graphics.drawable.toBitmap
 class ShortcutReceiverActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val added = ShortcutInstallHandler.handle(this, intent)
+        val added = runCatching { ShortcutInstallHandler.handle(this, intent) }.getOrDefault(false)
         Toast.makeText(
             this,
             if (added) "已添加到应用列表" else "无法添加快捷方式",
@@ -28,7 +28,7 @@ class ShortcutReceiverActivity : Activity() {
 
 class ShortcutInstallReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        val added = ShortcutInstallHandler.handle(context, intent)
+        val added = runCatching { ShortcutInstallHandler.handle(context, intent) }.getOrDefault(false)
         if (added) {
             Toast.makeText(context, "已添加到应用列表", Toast.LENGTH_SHORT).show()
         }
@@ -50,8 +50,9 @@ private object ShortcutInstallHandler {
             LauncherApps.EXTRA_PIN_ITEM_REQUEST,
             LauncherApps.PinItemRequest::class.java
         ) ?: return false
-        if (request.requestType != LauncherApps.PinItemRequest.REQUEST_TYPE_SHORTCUT) return false
-        val shortcutInfo = request.shortcutInfo ?: return false
+        val requestType = runCatching { request.requestType }.getOrNull() ?: return false
+        if (requestType != LauncherApps.PinItemRequest.REQUEST_TYPE_SHORTCUT) return false
+        val shortcutInfo = runCatching { request.shortcutInfo }.getOrNull() ?: return false
         val added = FlueApplication.repositories(context).appRepository.addPinnedShortcut(shortcutInfo)
         if (added) {
             runCatching { request.accept() }

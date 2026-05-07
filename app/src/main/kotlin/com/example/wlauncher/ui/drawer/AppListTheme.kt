@@ -12,6 +12,12 @@ data class AppListPalette(
     val fadeEdge: Color
 )
 
+fun appListEntryMaskColor(darkMode: Boolean): Color =
+    if (darkMode) Color(0xFF1C1C1E) else Color.White
+
+fun appListNeutralItemMaskColor(): Color =
+    Color.Black.copy(alpha = 0.36f)
+
 fun appListPalette(
     seed: Color,
     darkMode: Boolean,
@@ -23,16 +29,16 @@ fun appListPalette(
             return if (darkMode) {
                 AppListPalette(
                     background = Color.Black,
-                    item = Color(0xFF202A36).copy(alpha = 0.72f),
-                    itemPressedOverlay = Color(0xFFB8D7FF).copy(alpha = 0.18f),
+                    item = appListNeutralItemMaskColor(),
+                    itemPressedOverlay = Color.White.copy(alpha = 0.18f),
                     text = Color.White,
                     fadeEdge = Color.Black
                 )
             } else {
                 AppListPalette(
                     background = Color.White,
-                    item = Color(0xFFE6EEF8).copy(alpha = 0.86f),
-                    itemPressedOverlay = Color(0xFF5E7EA6).copy(alpha = 0.14f),
+                    item = appListNeutralItemMaskColor(),
+                    itemPressedOverlay = Color.Black.copy(alpha = 0.14f),
                     text = Color(0xFF101010),
                     fadeEdge = Color.White
                 )
@@ -41,7 +47,7 @@ fun appListPalette(
         return if (darkMode) {
             AppListPalette(
                 background = Color.Black,
-                item = Color.White.copy(alpha = if (uiStyle.isMaterial) 0.08f else 0.10f),
+                item = appListNeutralItemMaskColor(),
                 itemPressedOverlay = Color.White.copy(alpha = 0.18f),
                 text = Color.White,
                 fadeEdge = Color.Black
@@ -49,7 +55,7 @@ fun appListPalette(
         } else {
             AppListPalette(
                 background = Color.White,
-                item = Color.Black.copy(alpha = if (uiStyle.isMaterial) 0.06f else 0.08f),
+                item = appListNeutralItemMaskColor(),
                 itemPressedOverlay = Color.Black.copy(alpha = 0.12f),
                 text = Color(0xFF101010),
                 fadeEdge = Color.White

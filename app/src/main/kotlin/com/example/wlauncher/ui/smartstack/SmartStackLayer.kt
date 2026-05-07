@@ -63,6 +63,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -78,6 +79,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -121,6 +123,8 @@ import com.flue.launcher.data.repository.WidgetRepository
 import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.common.WatchBatteryPill
+import com.flue.launcher.ui.controlcenter.CompactControlCenterMusicCard
+import com.flue.launcher.ui.controlcenter.MusicTextSwitchAnimations
 import com.flue.launcher.ui.drawer.AppBubble
 import com.flue.launcher.ui.drawer.AppShortcutOverlay
 import com.flue.launcher.ui.drawer.vibrateHaptic
@@ -131,9 +135,11 @@ import com.flue.launcher.ui.notification.SwipeRevealDeleteContainer
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.viewmodel.SideScreenSection
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
@@ -225,6 +231,9 @@ fun SmartStackLayer(
     sideScreenWidgetSlots: List<String?>,
     previewGroups: List<NotificationGroupUi>,
     showWidgets: Boolean,
+    showMusicCard: Boolean = false,
+    showMediaCustomActions: Boolean = true,
+    musicTextSwitchAnimation: String = MusicTextSwitchAnimations.DEFAULT_ID,
     sectionOrder: List<SideScreenSection>,
     leftSafeInsetPercent: Int,
     notificationsEnabled: Boolean,
@@ -263,8 +272,9 @@ fun SmartStackLayer(
     val stepSnapshot = rememberStepSnapshot(showSteps, stepPermissionGranted)
     val slotCenters = remember { mutableStateMapOf<Int, Offset>() }
     val widgetCardHeightsPx = remember { mutableStateMapOf<Int, Int>() }
-    val showNotificationPreview = notificationsEnabled
-    val visibleShortcutCount = if (showNotificationPreview) 6 else 9
+    val showNotificationPreview = notificationsEnabled && !showMusicCard
+    val hasSecondaryComponent = showNotificationPreview || showMusicCard
+    val visibleShortcutCount = if (hasSecondaryComponent) 6 else 9
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
     val widgetRepository = remember(context) { FlueApplication.repositories(context).widgetRepository }
@@ -571,7 +581,7 @@ fun SmartStackLayer(
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val availableWidth = maxWidth - leftSafeInset
         val contentWidth = availableWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
-        val quickHeight = if (showNotificationPreview) {
+        val quickHeight = if (hasSecondaryComponent) {
             (contentWidth * 0.58f).coerceAtLeast(152.dp)
         } else {
             (contentWidth * 0.88f).coerceAtLeast(226.dp)
@@ -625,6 +635,18 @@ fun SmartStackLayer(
                     onLaunchApp(app, Offset(center.x / widthPx, center.y / heightPx))
                 }
             )
+            if (showMusicCard) {
+                Spacer(Modifier.height(16.dp))
+                CompactControlCenterMusicCard(
+                    notificationAccessGranted = notificationAccessGranted,
+                    musicTextSwitchAnimation = musicTextSwitchAnimation,
+                    showMediaCustomActions = showMediaCustomActions,
+                    modifier = Modifier.width(contentWidth)
+                )
+                if (!showWidgets || visibleWidgetCards.isEmpty()) {
+                    Spacer(Modifier.height(64.dp))
+                }
+            }
             if (showNotificationPreview) {
                 Spacer(Modifier.height(16.dp))
                 Column(
@@ -1908,15 +1930,18 @@ private fun ShortcutPickerOverlay(
     onDismiss: () -> Unit
 ) {
     val appPickerItems = remember(apps) {
-        apps.map { app ->
-            ShortcutPickerItem(
-                componentKey = app.componentKey,
-                label = app.label,
-                packageName = app.packageName,
-                icon = app.cachedIcon,
-                source = app
-            )
-        }
+        apps.asSequence()
+            .filterNot { it.isFolder }
+            .map { app ->
+                ShortcutPickerItem(
+                    componentKey = app.componentKey,
+                    label = app.label,
+                    packageName = app.packageName,
+                    icon = app.cachedIcon,
+                    source = app
+                )
+            }
+            .toList()
     }
     val listState = rememberLazyListState()
     ModalShell(onDismiss) { dismiss ->
@@ -1966,9 +1991,10 @@ private fun WidgetPickerOverlay(
             .groupBy { it.packageName }
             .map { (packageName, widgets) ->
                 val launcherApp = launcherAppsByPackage[packageName]
+                val representativeWidget = widgets.first()
                 WidgetPickerApp(
                     packageName = packageName,
-                    label = launcherApp?.label ?: packageName.substringAfterLast('.'),
+                    label = launcherApp?.label ?: representativeWidget.appLabel,
                     icon = launcherApp?.iconForDisplay(useTwoTone = false, blurred = false),
                     widgets = widgets.sortedBy { it.label.lowercase(Locale.getDefault()) }
                 )
@@ -1976,10 +2002,19 @@ private fun WidgetPickerOverlay(
             .sortedBy { it.label.lowercase(Locale.getDefault()) }
     }
     var selectedPackage by remember { mutableStateOf<String?>(null) }
+    var appListReturnIndex by remember { mutableIntStateOf(0) }
+    var appListReturnOffset by remember { mutableIntStateOf(0) }
     val selectedApp = selectedPackage?.let { selected ->
         pickerApps.firstOrNull { it.packageName == selected }
     }
     val listState = rememberLazyListState()
+    LaunchedEffect(selectedPackage) {
+        if (selectedPackage == null) {
+            listState.scrollToItem(appListReturnIndex, appListReturnOffset)
+        } else {
+            listState.scrollToItem(0)
+        }
+    }
     ModalShell(onDismiss) { dismiss ->
         Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFF1E1E1E)).padding(vertical = 12.dp)) {
             Text(
@@ -2011,7 +2046,10 @@ private fun WidgetPickerOverlay(
                     ) { app ->
                         WidgetPickerAppRow(
                             app = app,
+                            widgetRepository = widgetRepository,
                             onClick = {
+                                appListReturnIndex = listState.firstVisibleItemIndex
+                                appListReturnOffset = listState.firstVisibleItemScrollOffset
                                 selectedPackage = app.packageName
                             }
                         )
@@ -2027,6 +2065,7 @@ private fun WidgetPickerOverlay(
                     ) { widget ->
                         WidgetPickerRow(
                             widget = widget,
+                            widgetRepository = widgetRepository,
                             onClick = {
                                 onSelectWidget(widget)
                                 dismiss()
@@ -2046,24 +2085,39 @@ private fun WidgetPickerBackRow(onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .height(48.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(if (isPressed) Color(0xFF303030) else Color.Transparent)
+            .height(54.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (isPressed) Color(0xFF3A3A3A) else Color(0xFF2B2B2D))
             .instantPressGesture(pressed, onClick = onClick)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text("返回应用列表", color = WatchColors.TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Icon(
+            Icons.AutoMirrored.Filled.ArrowBack,
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(Modifier.width(9.dp))
+        Text("返回应用列表", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
 @Composable
 private fun WidgetPickerAppRow(
     app: WidgetPickerApp,
+    widgetRepository: WidgetRepository,
     onClick: () -> Unit
 ) {
     val pressed = rememberPressedState()
     val isPressed by pressed
+    val rowIcon by produceState<ImageBitmap?>(initialValue = app.icon, app.packageName, widgetRepository) {
+        if (value == null) {
+            value = withContext(Dispatchers.IO) {
+                widgetRepository.loadProviderPackageIcon(app.packageName)
+            }
+        }
+    }
     val scale by animateFloatAsState(
         if (isPressed) 0.985f else 1f,
         spring(stiffness = 880f, dampingRatio = 0.8f),
@@ -2083,9 +2137,9 @@ private fun WidgetPickerAppRow(
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (app.icon != null) {
+        if (rowIcon != null) {
             Image(
-                bitmap = app.icon,
+                bitmap = rowIcon!!,
                 contentDescription = app.label,
                 modifier = Modifier
                     .size(42.dp)
@@ -2114,10 +2168,20 @@ private fun WidgetPickerAppRow(
 @Composable
 private fun WidgetPickerRow(
     widget: WidgetInfo,
+    widgetRepository: WidgetRepository,
     onClick: () -> Unit
 ) {
     val pressed = rememberPressedState()
     val isPressed by pressed
+    val preview by produceState<ImageBitmap?>(initialValue = widget.previewImage ?: widget.appIcon, widget.widgetKey, widgetRepository) {
+        if (value == null) {
+            value = withContext(Dispatchers.IO) {
+                widgetRepository.loadWidgetPreviewImage(widget)
+                    ?: widgetRepository.loadProviderPackageIcon(widget.packageName)
+            }
+        }
+    }
+    val previewBitmap = preview
     val scale by animateFloatAsState(
         if (isPressed) 0.985f else 1f,
         spring(stiffness = 880f, dampingRatio = 0.8f),
@@ -2139,17 +2203,26 @@ private fun WidgetPickerRow(
     ) {
         Box(
             Modifier
-                .size(42.dp)
+                .size(52.dp, 42.dp)
                 .clip(RoundedCornerShape(12.dp))
-                .background(Color(0xFF007AFF)),
+                .background(Color(0xFF2A3444)),
             contentAlignment = Alignment.Center
         ) {
-            Text(widget.label.take(1), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            if (previewBitmap != null) {
+                Image(
+                    bitmap = previewBitmap,
+                    contentDescription = widget.label,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Text(widget.label.take(1), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
         }
         Spacer(Modifier.width(12.dp))
         Column {
             Text(widget.label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            Text(widget.packageName, color = WatchColors.TextTertiary, fontSize = 11.sp, maxLines = 1)
+            Text(widget.appLabel, color = WatchColors.TextTertiary, fontSize = 11.sp, maxLines = 1)
         }
     }
 }

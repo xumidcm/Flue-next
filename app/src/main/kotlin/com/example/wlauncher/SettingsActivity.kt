@@ -360,6 +360,8 @@ private fun SettingsRootScreen(
     val showWidgetPage by vm.showWidgetPage.collectAsStateWithLifecycle()
     val showControlCenter by vm.showControlCenter.collectAsStateWithLifecycle()
     val showMusicControls by vm.showMusicControls.collectAsStateWithLifecycle()
+    val showMediaCustomActions by vm.showMediaCustomActions.collectAsStateWithLifecycle()
+    val swapMusicNotificationComponents by vm.swapMusicNotificationComponents.collectAsStateWithLifecycle()
     val doubleTapLockScreenEnabled by vm.doubleTapLockScreenEnabled.collectAsStateWithLifecycle()
     val powerMenuButtonEnabled by vm.powerMenuButtonEnabled.collectAsStateWithLifecycle()
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
@@ -1429,6 +1431,34 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "music_controls_toggle", screenCenterY, screenHeightPx)
                 )
             }
+            item("media_custom_actions_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "音乐应用自定义按钮" else "Media App Actions",
+                    subtitle = if (showMediaCustomActions) {
+                        if (isZh) "在上一曲、下一曲两侧显示应用自定义操作" else "Show app-defined actions around previous and next"
+                    } else {
+                        if (isZh) "只保留上一曲、播放和下一曲按钮" else "Keep only previous, play, and next"
+                    },
+                    checked = showMediaCustomActions,
+                    enabled = showControlCenter && showMusicControls,
+                    onToggle = vm::setShowMediaCustomActions,
+                    scale = itemFisheye(listState, "media_custom_actions_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            item("music_notification_swap_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "互换通知和音乐组件" else "Swap Music and Notifications",
+                    subtitle = if (swapMusicNotificationComponents) {
+                        if (isZh) "副一屏显示音乐卡片，控制中心显示通知卡片" else "Show music on side screen and notifications in Control Center"
+                    } else {
+                        if (isZh) "保持副一屏通知、控制中心音乐的默认位置" else "Keep notifications on side screen and music in Control Center"
+                    },
+                    checked = swapMusicNotificationComponents,
+                    enabled = sideScreenEnabled && showControlCenter,
+                    onToggle = vm::setSwapMusicNotificationComponents,
+                    scale = itemFisheye(listState, "music_notification_swap_toggle", screenCenterY, screenHeightPx)
+                )
+            }
             item("double_tap_lock_screen") {
                 SettingsSwitchRow(
                     title = if (isZh) "双击表盘息屏" else "Double Tap to Lock",
@@ -1490,7 +1520,7 @@ private fun SettingsRootScreen(
                     subtitle = if (appListWatchFaceColors) {
                         if (isZh) "应用列表背景继续跟随表盘颜色" else "Keep the app list tinted by the watch face"
                     } else {
-                        if (isZh) "应用列表背景固定为黑白，图标遮罩保留系统取色" else "Use black or white background while keeping system-tinted icon masks"
+                        if (isZh) "应用列表使用中性黑白；列表底色遮罩固定为黑色半透明" else "Use neutral black or white colors; list row masks stay translucent black"
                     },
                     checked = appListWatchFaceColors,
                     onToggle = vm::setAppListWatchFaceColors,
@@ -1895,7 +1925,7 @@ private fun SettingsRootScreen(
                 }
                 item("donate_wechat") {
                     DonateMethodCard(
-                        title = "寰俊",
+                        title = "微信",
                         subtitle = "点击预览图全屏查看",
                         resId = R.drawable.donate_wechat,
                         scale = itemFisheye(listState, "donate_wechat", screenCenterY, screenHeightPx),

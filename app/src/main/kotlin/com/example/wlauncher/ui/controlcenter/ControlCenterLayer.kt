@@ -69,6 +69,7 @@ import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.DoNotDisturbOn
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.NetworkCell
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PowerSettingsNew
@@ -127,6 +128,7 @@ import com.flue.launcher.FlueApplication
 import com.flue.launcher.service.WLauncherNotificationListener
 import com.flue.launcher.ui.common.WatchBatteryPill
 import com.flue.launcher.ui.common.rememberPressedState
+import com.flue.launcher.ui.notification.NotificationGroupUi
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.delay
@@ -189,6 +191,10 @@ fun ControlCenterLayer(
     showMusicControls: Boolean,
     notificationAccessGranted: Boolean,
     musicTextSwitchAnimation: String = MusicTextSwitchAnimations.DEFAULT_ID,
+    showMediaCustomActions: Boolean = true,
+    showNotificationCard: Boolean = false,
+    notificationGroups: List<NotificationGroupUi> = emptyList(),
+    onOpenNotifications: () -> Unit = {},
     onDismissToFace: () -> Unit,
     showPowerButton: Boolean = false,
     onPowerClick: () -> Unit = {},
@@ -402,8 +408,9 @@ fun ControlCenterLayer(
     ) {
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val verticalPadding = 16.dp
-        val outerSpacing = if (showMusicControls) 14.dp else 18.dp
-        val controlsSpacing = if (showMusicControls) 14.dp else 20.dp
+        val extraCardsVisible = showMusicControls || showNotificationCard
+        val outerSpacing = if (extraCardsVisible) 14.dp else 18.dp
+        val controlsSpacing = if (extraCardsVisible) 14.dp else 20.dp
         val footerTopGap = 4.dp
         val toggleRowTopPadding = 6.dp
         val toggleSize = 58.dp
@@ -422,7 +429,8 @@ fun ControlCenterLayer(
             sliderHeight +
             controlsSpacing +
             sliderHeight +
-            if (showMusicControls) controlsSpacing + 156.dp else 0.dp
+            (if (showMusicControls) controlsSpacing + 156.dp else 0.dp) +
+            (if (showNotificationCard) controlsSpacing + 108.dp else 0.dp)
         val estimatedContentHeight = verticalPadding * 2f +
             32.dp +
             outerSpacing +
@@ -748,6 +756,7 @@ fun ControlCenterLayer(
                         mediaState = mediaState,
                         notificationAccessGranted = notificationAccessGranted,
                         musicTextSwitchAnimation = musicTextSwitchAnimation,
+                        showCustomActions = showMediaCustomActions,
                         onGestureLockChange = lockControlCenterGesture,
                         onOpenApp = { openMusicApp(context, mediaState.appPackage) },
                         onOpenNotificationAccess = { openNotificationAccessSettings(context) },
@@ -756,6 +765,13 @@ fun ControlCenterLayer(
                                 openMusicApp(context, mediaState.appPackage)
                             }
                         }
+                    )
+                }
+                if (showNotificationCard) {
+                    ControlCenterNotificationPreviewCard(
+                        notificationGroups = notificationGroups,
+                        notificationAccessGranted = notificationAccessGranted,
+                        onClick = onOpenNotifications
                     )
                 }
             }
@@ -773,6 +789,121 @@ fun ControlCenterLayer(
                     .align(Alignment.CenterHorizontally)
                     .padding(top = footerTopGap)
             )
+        }
+    }
+}
+
+@Composable
+fun CompactControlCenterMusicCard(
+    notificationAccessGranted: Boolean,
+    musicTextSwitchAnimation: String = MusicTextSwitchAnimations.DEFAULT_ID,
+    showMediaCustomActions: Boolean = true,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val mediaState = rememberMediaState(context)
+    MediaControlCard(
+        mediaState = mediaState,
+        notificationAccessGranted = notificationAccessGranted,
+        musicTextSwitchAnimation = musicTextSwitchAnimation,
+        showCustomActions = showMediaCustomActions,
+        onGestureLockChange = {},
+        onOpenApp = { openMusicApp(context, mediaState.appPackage) },
+        onOpenNotificationAccess = { openNotificationAccessSettings(context) },
+        onOpenOutputSwitcherOrApp = {
+            if (!openMediaOutputSwitcher(context)) {
+                openMusicApp(context, mediaState.appPackage)
+            }
+        },
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun ControlCenterNotificationPreviewCard(
+    notificationGroups: List<NotificationGroupUi>,
+    notificationAccessGranted: Boolean,
+    onClick: () -> Unit
+) {
+    val launcherStyle = LauncherTheme.style
+    val leadGroup = notificationGroups.firstOrNull()
+    val leadEntry = leadGroup?.visiblePreviewEntries?.firstOrNull() ?: leadGroup?.entries?.firstOrNull()
+    val count = notificationGroups.sumOf { it.entries.size }
+    val title = when {
+        !notificationAccessGranted -> "需要通知使用权"
+        leadEntry != null -> leadEntry.title.ifBlank { leadGroup?.headerTitle.orEmpty() }.ifBlank { leadEntry.appLabel }
+        else -> "暂无通知"
+    }
+    val subtitle = when {
+        !notificationAccessGranted -> "点击进入通知授权页面"
+        leadEntry != null -> leadEntry.text.ifBlank { "${count.coerceAtLeast(1)} 条通知，点击查看全部" }
+        else -> "当前没有新的通知"
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(108.dp)
+            .clip(RoundedCornerShape(30.dp))
+            .background(launcherStyle.cardColor)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(62.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(launcherStyle.pressedCardColor),
+            contentAlignment = Alignment.Center
+        ) {
+            val icon = leadGroup?.icon ?: leadEntry?.icon
+            if (icon != null) {
+                Image(
+                    bitmap = icon,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(10.dp),
+                    contentScale = ContentScale.Fit
+                )
+            } else {
+                Icon(Icons.Filled.Notifications, null, tint = launcherStyle.titleColor.copy(alpha = 0.74f))
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = launcherStyle.titleColor,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(5.dp))
+            Text(
+                text = subtitle,
+                color = launcherStyle.secondaryTextColor,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (count > 1) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(launcherStyle.accentColor.copy(alpha = 0.18f))
+                    .padding(horizontal = 9.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = count.toString(),
+                    color = launcherStyle.accentColor,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
 }
@@ -929,14 +1060,16 @@ private fun MediaControlCard(
     mediaState: ControlCenterMediaState,
     notificationAccessGranted: Boolean,
     musicTextSwitchAnimation: String,
+    showCustomActions: Boolean,
     onGestureLockChange: (Boolean) -> Unit,
     onOpenApp: () -> Unit,
     onOpenNotificationAccess: () -> Unit,
-    onOpenOutputSwitcherOrApp: () -> Unit
+    onOpenOutputSwitcherOrApp: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val bg = if (notificationAccessGranted) mediaState.artworkColor else Color(0xFF2F3B45)
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(156.dp)
             .clip(RoundedCornerShape(32.dp))
@@ -1035,6 +1168,7 @@ private fun MediaControlCard(
                     )
                     MediaControlsRow(
                         mediaState = mediaState,
+                        showCustomActions = showCustomActions,
                         onGestureLockChange = onGestureLockChange,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -1138,11 +1272,12 @@ private fun MediaAppIconButton(
 @Composable
 private fun MediaControlsRow(
     mediaState: ControlCenterMediaState,
+    showCustomActions: Boolean,
     onGestureLockChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(modifier = modifier, contentAlignment = Alignment.Center) {
-        val customActions = mediaState.customActions.take(2)
+        val customActions = if (showCustomActions) mediaState.customActions.take(2) else emptyList()
         val preferredButtonSize = 36.dp
         val minButtonSize = 24.dp
         val customButtonScale = 1.12f

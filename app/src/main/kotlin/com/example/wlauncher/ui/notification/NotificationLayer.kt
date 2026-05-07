@@ -410,16 +410,18 @@ fun NotificationLayer(
                             )
                         }
                     }
+                    if (hasClearableNotifications) {
+                        item(
+                            key = "clear_all_notifications",
+                            contentType = "clear_all"
+                        ) {
+                            NotificationRowContainer {
+                                ClearAllButton(onClick = onDismissAllNotifications)
+                            }
+                        }
+                    }
                 }
             }
-        }
-        if (hasClearableNotifications) {
-            ClearAllButton(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 50.dp),
-                onClick = onDismissAllNotifications
-            )
         }
         WatchBatteryPill(
             level = batteryStatus.level,

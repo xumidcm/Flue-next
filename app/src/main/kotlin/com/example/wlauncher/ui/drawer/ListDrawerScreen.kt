@@ -174,6 +174,9 @@ fun ListDrawerScreen(
     val launcherStyle = LauncherTheme.style
     val listPaletteStyle = if (uiStyle == UiStyle.MATERIAL_3) UiStyle.APPLE_WATCH else uiStyle
     val appPalette = appListPalette(themeColor, darkMode, listPaletteStyle, useWatchFaceColors)
+    val neutralListMaskActive = !useWatchFaceColors && rowBorderEnabled
+    val listRowMaskColor = if (neutralListMaskActive) appListNeutralItemMaskColor() else appPalette.item
+    val listRowTextColor = if (neutralListMaskActive) Color.White else appPalette.text
     val rowShape = RoundedCornerShape(18.dp)
     val entryVisuals = appListEntryVisuals(entryProgress)
     val appListScale = appListScalePercent.coerceIn(50, 200) / 100f
@@ -425,6 +428,7 @@ fun ListDrawerScreen(
                                     itemCenters = itemCenters,
                                     maxDistance = Float.MAX_VALUE
                                 )
+                                val activeRowShift = itemHeights[activeFromIndex] ?: releaseOverlayHeightPx
                                 val folderCandidate = if (allowFolderCreation) {
                                     findNearestListIndex(
                                         pointerY = pointerY,
@@ -432,9 +436,18 @@ fun ListDrawerScreen(
                                         maxDistance = minOf(
                                             releaseOverlayHeightPx * 0.34f,
                                             with(density) { scaledIconSize.toPx() } * 0.46f
-                                        )
+                                        ),
+                                        excludedIndex = activeFromIndex,
+                                        visualOffsetForIndex = { index ->
+                                            listDisplacementForIndex(
+                                                index = index,
+                                                dragFromIndex = activeFromIndex,
+                                                dragCurrentIndex = dragCurrentIndex,
+                                                dragRowShift = activeRowShift
+                                            )
+                                        }
                                     )?.takeIf {
-                                        it != activeFromIndex && pointerSpeed <= folderHoverMaxSpeedPxPerMs
+                                        pointerSpeed <= folderHoverMaxSpeedPxPerMs
                                     }
                                 } else {
                                     null
@@ -447,7 +460,7 @@ fun ListDrawerScreen(
                                     } else if (change.uptimeMillis - folderHoverStartedAt >= LIST_FOLDER_HOVER_MS) {
                                         folderDropIndex = folderCandidate
                                     }
-                                    dragCurrentIndex = reorderTarget ?: dragCurrentIndex
+                                    // Keep the candidate under the finger while the folder dwell timer runs.
                                 } else {
                                     folderHoverIndex = null
                                     folderHoverStartedAt = 0L
@@ -569,7 +582,7 @@ fun ListDrawerScreen(
                 maxWidth = containerMaxWidth,
                 maxHeight = containerMaxHeight,
                 visuals = entryVisuals,
-                color = appPalette.background
+                color = appListEntryMaskColor(darkMode)
             )
             LaunchedEffect(dragFromIndex, screenHeightPx) {
                 var previousFrameNanos = 0L
@@ -599,11 +612,13 @@ fun ListDrawerScreen(
                             }
                             val anchorCenter = itemCenters[activeFromIndex] ?: pointerY
                             dragOffsetY = pointerY - anchorCenter
-                            dragCurrentIndex = findNearestListIndex(
-                                pointerY = pointerY,
-                                itemCenters = itemCenters,
-                                maxDistance = Float.MAX_VALUE
-                            ) ?: dragCurrentIndex
+                            if (folderHoverIndex == null) {
+                                dragCurrentIndex = findNearestListIndex(
+                                    pointerY = pointerY,
+                                    itemCenters = itemCenters,
+                                    maxDistance = Float.MAX_VALUE
+                                ) ?: dragCurrentIndex
+                            }
                         }
                     }
                     if (pendingScrollDelta != 0f) {
@@ -737,7 +752,7 @@ fun ListDrawerScreen(
                             .then(
                                 if (showRowBackground) {
                                     Modifier.background(
-                                        appPalette.item.copy(alpha = entryVisuals.surfaceProgress),
+                                        listRowMaskColor.copy(alpha = entryVisuals.surfaceProgress),
                                         rowShape
                                     )
                                 } else {
@@ -781,7 +796,7 @@ fun ListDrawerScreen(
                             text = app.label,
                             fontSize = scaledTextSizeSp,
                             fontWeight = FontWeight.W500,
-                            color = appPalette.text
+                            color = listRowTextColor
                         )
                     }
                 }
@@ -810,7 +825,7 @@ fun ListDrawerScreen(
                         }
                         .then(
                             if (rowBorderEnabled) {
-                                Modifier.background(appPalette.item, rowShape)
+                                Modifier.background(listRowMaskColor, rowShape)
                             } else {
                                 Modifier
                             }
@@ -834,7 +849,7 @@ fun ListDrawerScreen(
                         text = draggedApp.label,
                         fontSize = scaledTextSizeSp,
                         fontWeight = FontWeight.W500,
-                        color = appPalette.text
+                        color = listRowTextColor
                     )
                 }
             }
@@ -932,12 +947,15 @@ private fun listDisplacementForIndex(
 private fun findNearestListIndex(
     pointerY: Float,
     itemCenters: Map<Int, Float>,
-    maxDistance: Float
+    maxDistance: Float,
+    excludedIndex: Int? = null,
+    visualOffsetForIndex: (Int) -> Float = { 0f }
 ): Int? {
     var bestIndex: Int? = null
     var bestDistance = Float.MAX_VALUE
     itemCenters.forEach { (index, centerY) ->
-        val distance = abs(centerY - pointerY)
+        if (index == excludedIndex) return@forEach
+        val distance = abs((centerY + visualOffsetForIndex(index)) - pointerY)
         if (distance < bestDistance && distance <= maxDistance) {
             bestDistance = distance
             bestIndex = index
