@@ -835,8 +835,9 @@ private fun drawPointerLayer(
             calendar.get(Calendar.SECOND) * 6f + calendar.get(Calendar.MILLISECOND) * 0.006f
         }
     }
+    val rotation = targetRotation - point.startValue
     canvas.save()
-    canvas.rotate(targetRotation, centerX, centerY)
+    canvas.rotate(rotation, centerX, centerY)
     canvas.drawBitmap(bitmap, null, dst, pointPaint(point))
     canvas.restore()
 }
