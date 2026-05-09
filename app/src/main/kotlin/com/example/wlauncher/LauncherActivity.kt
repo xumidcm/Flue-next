@@ -99,6 +99,7 @@ private const val APP_LIST_OPEN_SHADOW_DELAY_MS = 280L
 private const val APP_LIST_RETURN_SHADOW_DELAY_MS = 520L
 private const val APP_LIST_RETURN_ORIGIN_HOLD_MS = 720L
 private const val APP_RETURN_MAINTENANCE_DELAY_MS = 260L
+private const val APP_LIST_LAYER_RELEASE_HOLD_MS = 96L
 private const val LAUNCH_MASK_EXIT_RETAIN_MS = 360L
 
 class LauncherActivity : ComponentActivity() {
@@ -404,6 +405,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
     var prevState by remember { mutableStateOf(screenState) }
     val appListEntryProgress = remember { Animatable(if (screenState == ScreenState.Apps) 1f else 0f) }
+    var appListLayerReleaseHold by remember { mutableStateOf(false) }
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
     val isOpeningAppList = prevState == ScreenState.Face && screenState == ScreenState.Apps
     val isEnteringAppList = prevState != ScreenState.Apps && screenState == ScreenState.Apps
@@ -448,6 +450,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
     LaunchedEffect(screenState) {
         val previousState = prevState
+        appListLayerReleaseHold = false
         try {
             if (previousState == ScreenState.Face && screenState == ScreenState.Apps) {
                 appListEntryProgress.snapTo(0f)
@@ -458,10 +461,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
             } else if (screenState == ScreenState.Apps) {
                 appListEntryProgress.snapTo(1f)
             } else if (previousState == ScreenState.Apps) {
+                appListLayerReleaseHold = true
                 appListEntryProgress.animateTo(
                     0f,
                     tween(durationMillis = 400, easing = FastOutSlowInEasing)
                 )
+                delay(APP_LIST_LAYER_RELEASE_HOLD_MS)
+                appListLayerReleaseHold = false
             } else {
                 appListEntryProgress.snapTo(0f)
             }
@@ -643,14 +649,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val sideSceneOverlayActive = sideScreenVisible || widgetPageVisible || controlCenterVisible
         val appListLayerRaised = screenState == ScreenState.Apps ||
             isOpeningAppList ||
-            appListEntryProgress.value > 0.001f
+            appListEntryProgress.value > 0.001f ||
+            appListLayerReleaseHold
         val appListContentEntryProgress = if (appListLayerRaised) 1f else 0f
         val suppressAppListHeavyEffects =
             screenState != ScreenState.Apps ||
                 reduceLegacyDrawerEffects ||
                 isOpeningAppList ||
                 isReturningFromApp ||
-                appListReturnOriginActive
+                appListReturnOriginActive ||
+                appListLayerReleaseHold
 
         GestureHost(
             screenState = screenState,
