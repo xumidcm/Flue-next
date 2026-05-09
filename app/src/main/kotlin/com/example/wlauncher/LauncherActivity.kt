@@ -95,11 +95,9 @@ import kotlinx.coroutines.launch
 private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
 private const val SIDE_SCREEN_TRANSITION_MS = 260
 private const val NOTIFICATION_TRANSITION_MS = 240
-private const val APP_LIST_OPEN_SHADOW_DELAY_MS = 280L
-private const val APP_LIST_RETURN_SHADOW_DELAY_MS = 520L
 private const val APP_LIST_RETURN_ORIGIN_HOLD_MS = 720L
 private const val APP_RETURN_MAINTENANCE_DELAY_MS = 260L
-private const val APP_LIST_LAYER_RELEASE_HOLD_MS = 96L
+private const val APP_LIST_LAYER_RELEASE_HOLD_MS = 260L
 private const val LAUNCH_MASK_EXIT_RETAIN_MS = 360L
 
 class LauncherActivity : ComponentActivity() {
@@ -222,7 +220,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val showStepCount by vm.showStepCount.collectAsStateWithLifecycle()
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
     val rotaryHapticsEnabled by vm.rotaryHapticsEnabled.collectAsStateWithLifecycle()
-    val showWidgets by vm.showWidgets.collectAsStateWithLifecycle()
     val showWidgetPage by vm.showWidgetPage.collectAsStateWithLifecycle()
     val showControlCenter by vm.showControlCenter.collectAsStateWithLifecycle()
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
@@ -232,7 +229,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val dingDingCatPlaybackSpeedPercent by vm.dingDingCatPlaybackSpeedPercent.collectAsStateWithLifecycle()
     val doubleTapLockScreenEnabled by vm.doubleTapLockScreenEnabled.collectAsStateWithLifecycle()
     val powerMenuButtonEnabled by vm.powerMenuButtonEnabled.collectAsStateWithLifecycle()
-    val sideScreenSectionOrder by vm.sideScreenSectionOrder.collectAsStateWithLifecycle()
     val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
     val notificationAccessGranted by vm.notificationAccessGranted.collectAsStateWithLifecycle()
     val sideScreenPreviewGroups by vm.sideScreenPreviewGroups.collectAsStateWithLifecycle()
@@ -359,7 +355,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
     val layerBlurEnabled =
         blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
-    val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
     val notificationsEnabled = showNotification
     val notificationSceneActive = screenState == ScreenState.Notifications
     val notificationStackTint = appListColors.item
@@ -412,7 +407,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
     var appListReturnOriginActive by remember {
         mutableStateOf(screenState == ScreenState.App && launchSourceState == ScreenState.Apps)
     }
-    var appListShadowsReady by remember { mutableStateOf(screenState == ScreenState.Apps) }
     LaunchedEffect(screenState, launchSourceState) {
         if (launchSourceState != ScreenState.Apps) {
             appListReturnOriginActive = false
@@ -431,22 +425,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
             }
             else -> appListReturnOriginActive = false
         }
-    }
-    LaunchedEffect(screenState, iconShadowEnabled) {
-        if (!iconShadowEnabled || screenState != ScreenState.Apps) {
-            appListShadowsReady = false
-            return@LaunchedEffect
-        }
-        appListShadowsReady = false
-        val shadowDelayMs = when {
-            isReturningFromApp -> APP_LIST_RETURN_SHADOW_DELAY_MS
-            isEnteringAppList -> APP_LIST_OPEN_SHADOW_DELAY_MS
-            else -> 0L
-        }
-        if (shadowDelayMs > 0L) {
-            delay(shadowDelayMs)
-        }
-        appListShadowsReady = true
     }
     LaunchedEffect(screenState) {
         val previousState = prevState
@@ -517,7 +495,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         !isReturningFromApp &&
         !appListReturnOriginActive &&
         !appListEntryAnimating
-    val effectiveIconShadowEnabled = iconShadowEnabled && appListShadowsReady
+    val effectiveIconShadowEnabled = iconShadowEnabled
     val fadeLaunch = launchSourceState == ScreenState.Stack || launchSourceState == ScreenState.Notifications
 
     LaunchedEffect(notificationSceneActive) {
@@ -652,13 +630,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             appListEntryProgress.value > 0.001f ||
             appListLayerReleaseHold
         val appListContentEntryProgress = if (appListLayerRaised) 1f else 0f
-        val suppressAppListHeavyEffects =
-            screenState != ScreenState.Apps ||
-                reduceLegacyDrawerEffects ||
-                isOpeningAppList ||
-                isReturningFromApp ||
-                appListReturnOriginActive ||
-                appListLayerReleaseHold
+        val suppressAppListHeavyEffects = !appListLayerRaised
 
         GestureHost(
             screenState = screenState,
@@ -964,17 +936,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 (1f - 0.58f * notificationProgress)
                         }
                 ) {
-                    val sideScreenWidgetSlots by vm.sideScreenWidgetSlots.collectAsStateWithLifecycle()
                     SmartStackLayer(
                         apps = allApps,
                         sideScreenShortcuts = sideScreenShortcuts,
-                        sideScreenWidgetSlots = sideScreenWidgetSlots,
                         previewGroups = sideScreenPreviewGroups,
-                        showWidgets = false,
                         showMusicCard = showMusicControls && swapMusicNotificationComponents,
                         showMediaCustomActions = showMediaCustomActions,
                         musicTextSwitchAnimation = musicTextSwitchAnimation,
-                        sectionOrder = sideScreenSectionOrder,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         notificationsEnabled = notificationsEnabled,
                         notificationAccessGranted = notificationAccessGranted,
@@ -1000,13 +968,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onSetShortcut = vm::setSideScreenShortcut,
                         onRemoveShortcut = vm::removeSideScreenShortcut,
                         onSwapShortcut = vm::swapSideScreenShortcuts,
-                        onHideApp = { appInfo -> vm.setAppHidden(appInfo.componentKey, true) },
-                        onSetWidget = vm::setWidgetSlot,
-                        onSwapWidget = vm::swapWidgetSlots,
-                        onRemoveWidget = vm::removeWidgetSlot,
-                        onSetShowWidgets = vm::setShowWidgets,
                         onSetShowNotification = vm::setShowNotification,
-                        onMoveSection = vm::moveSideSection,
                         onDismissGroup = vm::dismissNotificationGroup,
                         onDismissNotification = vm::dismissNotification,
                         onDismissToFace = { vm.setState(ScreenState.Face) },

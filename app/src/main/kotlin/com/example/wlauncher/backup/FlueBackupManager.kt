@@ -70,7 +70,6 @@ object FlueBackupManager {
     private val appOrderKey = LauncherViewModel.KEY_APP_ORDER.name
     private val sideScreenShortcutsKey = LauncherViewModel.KEY_SIDE_SCREEN_SHORTCUTS.name
     private val sideScreenWidgetsKey = LauncherViewModel.KEY_SIDE_SCREEN_WIDGETS.name
-    private val sideScreenOrderKey = LauncherViewModel.KEY_SIDE_SCREEN_SECTION_ORDER.name
     private val hiddenAppsKey = LauncherViewModel.KEY_HIDDEN_APPS.name
     private val photoPathKey = LauncherViewModel.KEY_BUILTIN_PHOTO_PATH.name
     private val videoPathKey = LauncherViewModel.KEY_BUILTIN_VIDEO_PATH.name
@@ -121,7 +120,6 @@ object FlueBackupManager {
         appOrderKey,
         sideScreenShortcutsKey,
         sideScreenWidgetsKey,
-        sideScreenOrderKey,
         lastWatchFaceErrorKey,
         LauncherViewModel.KEY_DINGDINGCAT_IMPORT_UNLOCKED.name,
         fontPathKey
@@ -152,7 +150,6 @@ object FlueBackupManager {
             manifest.put("widgetOrder", prefs[LauncherViewModel.KEY_SIDE_SCREEN_WIDGETS].orEmpty().splitWidgetJson())
         }
         if (options.sideScreenOrder) {
-            manifest.put("sideScreenOrder", prefs[LauncherViewModel.KEY_SIDE_SCREEN_SECTION_ORDER].orEmpty())
             manifest.put("sideScreenShortcuts", prefs[LauncherViewModel.KEY_SIDE_SCREEN_SHORTCUTS].orEmpty().splitShortcutJson())
         }
 
@@ -258,9 +255,6 @@ object FlueBackupManager {
                     if (widgets.isEmpty()) prefs.remove(LauncherViewModel.KEY_SIDE_SCREEN_WIDGETS) else prefs[LauncherViewModel.KEY_SIDE_SCREEN_WIDGETS] = widgets.joinToString("|")
                 }
                 if (selected.sideScreenOrder) {
-                    manifest.optString("sideScreenOrder")
-                        .takeIf { it.isNotBlank() }
-                        ?.let { prefs[LauncherViewModel.KEY_SIDE_SCREEN_SECTION_ORDER] = it }
                     val shortcuts = manifest.optJSONArray("sideScreenShortcuts")
                         .toNullableStringList()
                         .map { value -> value?.takeIf(availableAppKeys::contains) }
@@ -381,7 +375,7 @@ object FlueBackupManager {
                 settings = manifest.has("settings"),
                 appOrder = manifest.has("appOrder"),
                 widgetOrder = manifest.has("widgetOrder"),
-                sideScreenOrder = manifest.has("sideScreenOrder") || manifest.has("sideScreenShortcuts"),
+                sideScreenOrder = manifest.has("sideScreenShortcuts"),
                 photoWatchFace = manifest.has("photoWatchFace"),
                 videoWatchFace = manifest.has("videoWatchFace"),
                 dingDingCatWatchFaces = manifest.has("dingDingCatWatchFaces")

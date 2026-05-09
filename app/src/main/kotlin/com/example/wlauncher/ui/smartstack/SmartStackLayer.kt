@@ -134,7 +134,6 @@ import com.flue.launcher.ui.notification.NotificationRevealTarget
 import com.flue.launcher.ui.notification.SwipeRevealDeleteContainer
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
-import com.flue.launcher.viewmodel.SideScreenSection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -164,12 +163,8 @@ private const val SIDE_SCREEN_OVERSCROLL_RESISTANCE = 0.35f
 private sealed interface SideScreenModalState {
     data object None : SideScreenModalState
     data class ShortcutPicker(val slotIndex: Int) : SideScreenModalState
-    data object WidgetPicker : SideScreenModalState
     data class ShortcutActions(val slotIndex: Int, val app: AppInfo) : SideScreenModalState
     data class RemoveShortcut(val slotIndex: Int) : SideScreenModalState
-    data class WidgetActions(val card: SideScreenWidgetCardItem) : SideScreenModalState
-    data class RemoveWidget(val card: SideScreenWidgetCardItem) : SideScreenModalState
-    data class SectionActions(val section: SideScreenSection) : SideScreenModalState
 }
 
 private data class SideScreenClockSnapshot(val time: String, val date: String)
@@ -273,13 +268,10 @@ private sealed interface PressHoldResult {
 fun SmartStackLayer(
     apps: List<AppInfo>,
     sideScreenShortcuts: List<String?>,
-    sideScreenWidgetSlots: List<String?>,
     previewGroups: List<NotificationGroupUi>,
-    showWidgets: Boolean,
     showMusicCard: Boolean = false,
     showMediaCustomActions: Boolean = true,
     musicTextSwitchAnimation: String = MusicTextSwitchAnimations.DEFAULT_ID,
-    sectionOrder: List<SideScreenSection>,
     leftSafeInsetPercent: Int,
     notificationsEnabled: Boolean,
     notificationAccessGranted: Boolean,
@@ -295,13 +287,7 @@ fun SmartStackLayer(
     onSetShortcut: (Int, String?) -> Unit,
     onRemoveShortcut: (Int) -> Unit,
     onSwapShortcut: (Int, Int) -> Unit,
-    onHideApp: (AppInfo) -> Unit,
-    onSetWidget: (Int, String?) -> Unit,
-    onSwapWidget: (Int, Int) -> Unit,
-    onRemoveWidget: (Int) -> Unit,
-    onSetShowWidgets: (Boolean) -> Unit,
     onSetShowNotification: (Boolean) -> Unit,
-    onMoveSection: (SideScreenSection, Int) -> Unit,
     onDismissGroup: (String) -> Unit,
     onDismissNotification: (String) -> Unit,
     onDismissToFace: () -> Unit,
@@ -316,98 +302,16 @@ fun SmartStackLayer(
     val stepPermissionGranted = rememberActivityRecognitionPermission(showSteps)
     val stepSnapshot = rememberStepSnapshot(showSteps, stepPermissionGranted)
     val slotCenters = remember { mutableStateMapOf<Int, Offset>() }
-    val widgetCardHeightsPx = remember { mutableStateMapOf<Int, Int>() }
     val showNotificationPreview = notificationsEnabled && !showMusicCard
     val hasSecondaryComponent = showNotificationPreview || showMusicCard
     val visibleShortcutCount = if (hasSecondaryComponent) 6 else 9
     val context = LocalContext.current
-    val activity = remember(context) { context.findActivity() }
-    val widgetRepository = remember(context, showWidgets) {
-        if (showWidgets) FlueApplication.repositories(context).widgetRepository else null
-    }
-    val appWidgetManager = remember(context, showWidgets) {
-        if (showWidgets) AppWidgetManager.getInstance(context) else null
-    }
-    val appWidgetHost = remember(context, showWidgets) {
-        if (showWidgets) AppWidgetHost(context, SIDE_SCREEN_APP_WIDGET_HOST_ID) else null
-    }
-    var pendingWidgetSelection by remember { mutableStateOf<PendingWidgetSelection?>(null) }
-    fun clearAllocatedWidget(slotIndex: Int) {
-        val repository = widgetRepository ?: return
-        val host = appWidgetHost ?: return
-        repository.extractWidgetId(sideScreenWidgetSlots.getOrNull(slotIndex))?.let { widgetId ->
-            runCatching { host.deleteAppWidgetId(widgetId) }
-        }
-    }
-
-    fun persistBoundWidget(slotIndex: Int, widget: WidgetInfo, appWidgetId: Int) {
-        val repository = widgetRepository ?: return
-        clearAllocatedWidget(slotIndex)
-        onSetWidget(slotIndex, repository.serializeSlotValue(widget.copy(widgetId = appWidgetId)))
-    }
-
-    fun discardPendingWidgetSelection() {
-        val host = appWidgetHost
-        pendingWidgetSelection?.let { selection ->
-            if (host != null) runCatching { host.deleteAppWidgetId(selection.appWidgetId) }
-        }
-        pendingWidgetSelection = null
-    }
-
-    fun continueWidgetBinding(selection: PendingWidgetSelection, configureLauncher: androidx.activity.result.ActivityResultLauncher<Intent>) {
-        val manager = appWidgetManager ?: return
-        val repository = widgetRepository ?: return
-        val providerInfo = manager.getAppWidgetInfo(selection.appWidgetId)
-            ?: repository.findProviderInfo(selection.widget.widgetKey)
-        if (providerInfo?.configure != null) {
-            val configureIntent = Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE).apply {
-                component = providerInfo.configure
-                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, selection.appWidgetId)
-            }
-            configureLauncher.launch(configureIntent)
-        } else {
-            persistBoundWidget(selection.slotIndex, selection.widget, selection.appWidgetId)
-            pendingWidgetSelection = null
-        }
-    }
-
-    val configureWidgetLauncher = rememberLauncherForActivityResult(StartActivityForResult()) { result ->
-        val selection = pendingWidgetSelection ?: return@rememberLauncherForActivityResult
-        if (result.resultCode == Activity.RESULT_OK) {
-            persistBoundWidget(selection.slotIndex, selection.widget, selection.appWidgetId)
-        } else {
-            appWidgetHost?.let { host -> runCatching { host.deleteAppWidgetId(selection.appWidgetId) } }
-        }
-        pendingWidgetSelection = null
-    }
-    val bindWidgetLauncher = rememberLauncherForActivityResult(StartActivityForResult()) { result ->
-        val selection = pendingWidgetSelection ?: return@rememberLauncherForActivityResult
-        if (result.resultCode == Activity.RESULT_OK) {
-            continueWidgetBinding(selection, configureWidgetLauncher)
-        } else {
-            appWidgetHost?.let { host -> runCatching { host.deleteAppWidgetId(selection.appWidgetId) } }
-            pendingWidgetSelection = null
-        }
-    }
 
     val shortcutItems = remember(apps, sideScreenShortcuts, visibleShortcutCount) {
         List(visibleShortcutCount) { i ->
             val appKey = sideScreenShortcuts.getOrNull(i)
             appKey?.let { key -> apps.firstOrNull { it.componentKey == key } }
         }
-    }
-    val widgetCards = remember(sideScreenWidgetSlots, widgetRepository, showWidgets) {
-        val repository = widgetRepository
-        if (showWidgets && repository != null) {
-            sideScreenWidgetSlots.mapIndexedNotNull { index, raw ->
-                repository.parseSlotValue(raw)?.let { SideScreenWidgetCardItem(index, it) }
-            }
-        } else {
-            emptyList()
-        }
-    }
-    val visibleWidgetCards = remember(widgetCards, showWidgets) {
-        if (showWidgets) widgetCards else emptyList()
     }
     val previewRows = remember(previewGroups, showNotificationPreview) {
         if (showNotificationPreview) buildPreviewRows(previewGroups, maxRows = 1) else emptyList()
@@ -419,36 +323,12 @@ fun SmartStackLayer(
         )
     }
     val notificationReleaseThresholdPx = notificationDragRangePx * SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS
-    DisposableEffect(appWidgetHost, visibleWidgetCards.isNotEmpty()) {
-        val host = appWidgetHost
-        if (host != null && visibleWidgetCards.isNotEmpty()) {
-            runCatching { host.startListening() }
-        }
-        onDispose {
-            discardPendingWidgetSelection()
-            if (host != null && visibleWidgetCards.isNotEmpty()) {
-                runCatching { host.stopListening() }
-            }
-        }
-    }
     var modalState by remember { mutableStateOf<SideScreenModalState>(SideScreenModalState.None) }
     var dragDx by remember { mutableFloatStateOf(0f) }
     var dragDy by remember { mutableFloatStateOf(0f) }
     var dragVelocityY by remember { mutableFloatStateOf(0f) }
     var lastDragEventUptime by remember { mutableStateOf(0L) }
     var transitionInFlight by remember { mutableStateOf(false) }
-    LaunchedEffect(showWidgets) {
-        if (!showWidgets) {
-            discardPendingWidgetSelection()
-            if (modalState is SideScreenModalState.WidgetPicker ||
-                modalState is SideScreenModalState.WidgetActions ||
-                modalState is SideScreenModalState.RemoveWidget
-            ) {
-                modalState = SideScreenModalState.None
-            }
-        }
-    }
-    val sideListState = rememberLazyListState()
     val sideOverscroll = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
     val contentTranslationY = if (notificationsSceneActive || transitionInFlight) 0f else sideOverscroll.value
@@ -474,48 +354,6 @@ fun SmartStackLayer(
         scope.launch { sideOverscroll.snapTo(next) }
     }
 
-    val sideNestedScrollConnection = remember(sideListState, notificationsEnabled, notificationsSceneActive, transitionInFlight) {
-        object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (source != NestedScrollSource.UserInput || notificationsSceneActive || transitionInFlight) {
-                    return Offset.Zero
-                }
-                val atTop = sideListState.firstVisibleItemIndex == 0 && sideListState.firstVisibleItemScrollOffset == 0
-                val lastVisible = sideListState.layoutInfo.visibleItemsInfo.lastOrNull()
-                val atBottom = lastVisible != null &&
-                    lastVisible.index >= sideListState.layoutInfo.totalItemsCount - 1 &&
-                    lastVisible.offset + lastVisible.size <= sideListState.layoutInfo.viewportEndOffset
-                when {
-                    available.y > 0f && atTop -> {
-                        applySideOverscroll(available.y)
-                        return Offset(0f, available.y)
-                    }
-                    available.y < 0f && atBottom && !notificationsEnabled -> {
-                        applySideOverscroll(available.y)
-                        return Offset(0f, available.y)
-                    }
-                    sideOverscroll.value > 0f && available.y < 0f -> {
-                        applySideOverscroll(available.y)
-                        return Offset(0f, available.y)
-                    }
-                    sideOverscroll.value < 0f && available.y > 0f && !notificationsEnabled -> {
-                        applySideOverscroll(available.y)
-                        return Offset(0f, available.y)
-                    }
-                }
-                return Offset.Zero
-            }
-
-            override suspend fun onPreFling(available: Velocity): Velocity {
-                if (sideOverscroll.value != 0f) {
-                    sideOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-                    return available
-                }
-                return Velocity.Zero
-            }
-        }
-    }
-
     LaunchedEffect(notificationsSceneActive) {
         sideOverscroll.snapTo(0f)
         dragDx = 0f
@@ -523,14 +361,6 @@ fun SmartStackLayer(
         dragVelocityY = 0f
         lastDragEventUptime = 0L
         transitionInFlight = false
-    }
-    LaunchedEffect(widgetCards) {
-        val activeWidgetIndexes = widgetCards.map(SideScreenWidgetCardItem::widgetIndex).toSet()
-        widgetCardHeightsPx.keys.toList().forEach { widgetIndex ->
-            if (widgetIndex !in activeWidgetIndexes) {
-                widgetCardHeightsPx.remove(widgetIndex)
-            }
-        }
     }
     val launcherStyle = LauncherTheme.style
 
@@ -549,12 +379,8 @@ fun SmartStackLayer(
                         lastDragEventUptime = 0L
                     },
                     onDrag = { change, dragAmount ->
-                        val listAtTop = sideListState.firstVisibleItemIndex == 0 &&
-                            sideListState.firstVisibleItemScrollOffset == 0
-                        val lastVisible = sideListState.layoutInfo.visibleItemsInfo.lastOrNull()
-                        val listAtBottom = lastVisible != null &&
-                            lastVisible.index >= sideListState.layoutInfo.totalItemsCount - 1 &&
-                            lastVisible.offset + lastVisible.size <= sideListState.layoutInfo.viewportEndOffset
+                        val listAtTop = true
+                        val listAtBottom = true
                         if (lastDragEventUptime != 0L) {
                             val deltaMs = (change.uptimeMillis - lastDragEventUptime).coerceAtLeast(1L)
                             val instantVelocityY = dragAmount.y / deltaMs * 1000f
@@ -572,14 +398,7 @@ fun SmartStackLayer(
                         } else if (sideOverscroll.value != 0f) {
                             change.consume()
                             applySideOverscroll(dragAmount.y)
-                        } else if (
-                            !notificationsEnabled &&
-                            (
-                                visibleWidgetCards.isEmpty() ||
-                                    (dragAmount.y > 0f && listAtTop) ||
-                                    (dragAmount.y < 0f && listAtBottom)
-                                )
-                        ) {
+                        } else if (!notificationsEnabled && ((dragAmount.y > 0f && listAtTop) || (dragAmount.y < 0f && listAtBottom))) {
                             change.consume()
                             applySideOverscroll(dragAmount.y)
                         } else if (notificationsEnabled && (dragDy < 0f || notificationTransitionProgress > 0f)) {
@@ -590,8 +409,7 @@ fun SmartStackLayer(
                         } else if (
                             notificationsEnabled &&
                             dragDy > 0f &&
-                            (visibleWidgetCards.isEmpty() ||
-                                (sideListState.firstVisibleItemIndex == 0 && sideListState.firstVisibleItemScrollOffset == 0))
+                            listAtTop
                         ) {
                             change.consume()
                             applySideOverscroll(dragAmount.y)
@@ -717,9 +535,7 @@ fun SmartStackLayer(
                     showMediaCustomActions = showMediaCustomActions,
                     modifier = Modifier.width(contentWidth)
                 )
-                if (!showWidgets || visibleWidgetCards.isEmpty()) {
-                    Spacer(Modifier.height(64.dp))
-                }
+                Spacer(Modifier.height(64.dp))
             }
             if (showNotificationPreview) {
                 Spacer(Modifier.height(16.dp))
@@ -780,71 +596,7 @@ fun SmartStackLayer(
                         }
                     }
                 }
-                if (!showWidgets || visibleWidgetCards.isEmpty()) {
-                    Spacer(Modifier.height(64.dp))
-                }
-            }
-            if (showWidgets && visibleWidgetCards.isNotEmpty()) {
-                val repository = requireNotNull(widgetRepository)
-                val host = requireNotNull(appWidgetHost)
-                Spacer(Modifier.height(12.dp))
-                LazyColumn(
-                    state = sideListState,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .nestedScroll(sideNestedScrollConnection),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    contentPadding = PaddingValues(bottom = 54.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    item("widget_header") {
-                        SideScreenSectionHeader(
-                            title = "小组件",
-                            width = contentWidth,
-                            actionLabel = "添加",
-                            onAction = {
-                                onRevealTargetChange(null)
-                                modalState = SideScreenModalState.WidgetPicker
-                            },
-                            onLongPress = {
-                                onRevealTargetChange(null)
-                                modalState = SideScreenModalState.SectionActions(SideScreenSection.Widgets)
-                            }
-                        )
-                    }
-                    items(
-                        items = visibleWidgetCards,
-                        key = { it.stableKey() },
-                        contentType = { "side_widget" }
-                    ) { card ->
-                        Box(
-                            Modifier
-                                .width(contentWidth)
-                                .animateItem(
-                                    fadeInSpec = tween(180),
-                                    placementSpec = spring(stiffness = 520f, dampingRatio = 0.84f),
-                                    fadeOutSpec = tween(180)
-                                )
-                                .animateContentSize()
-                        ) {
-                            WidgetCard(
-                                widget = card.widget,
-                                widgetRepository = repository,
-                                appWidgetHost = host,
-                                onLongPress = {
-                                    onRevealTargetChange(null)
-                                    modalState = SideScreenModalState.WidgetActions(card)
-                                },
-                                onMeasuredHeight = { heightPx ->
-                                    if (heightPx > 0) {
-                                        widgetCardHeightsPx[card.widgetIndex] = heightPx
-                                    }
-                                }
-                            )
-                        }
-                    }
-                }
+                Spacer(Modifier.height(64.dp))
             }
         }
         WatchBatteryAndStepsPill(
@@ -861,63 +613,9 @@ fun SmartStackLayer(
     when (val state = modalState) {
         is SideScreenModalState.ShortcutPicker -> ShortcutPickerOverlay(
             apps = apps,
-            onSelect = {
-                discardPendingWidgetSelection()
-                onSetShortcut(state.slotIndex, it.componentKey)
-            },
+            onSelect = { onSetShortcut(state.slotIndex, it.componentKey) },
             onDismiss = { modalState = SideScreenModalState.None }
         )
-        SideScreenModalState.WidgetPicker -> {
-            val repository = widgetRepository
-            val host = appWidgetHost
-            val manager = appWidgetManager
-            if (showWidgets && repository != null && host != null && manager != null) {
-                WidgetPickerOverlay(
-                    apps = apps,
-                    widgetRepository = repository,
-                    onSelectWidget = { widget ->
-                        val targetIndex = sideScreenWidgetSlots.size
-                        val providerInfo = repository.findProviderInfo(widget.widgetKey)
-                        if (providerInfo != null) {
-                            discardPendingWidgetSelection()
-                            clearAllocatedWidget(targetIndex)
-                            val appWidgetId = runCatching { host.allocateAppWidgetId() }.getOrNull()
-                            if (appWidgetId != null) {
-                                val selection = PendingWidgetSelection(
-                                    slotIndex = targetIndex,
-                                    widget = widget,
-                                    appWidgetId = appWidgetId
-                                )
-                                pendingWidgetSelection = selection
-                                val bindExtras = buildWidgetBindOptions(providerInfo)
-                                val bound = runCatching {
-                                    manager.bindAppWidgetIdIfAllowed(
-                                        appWidgetId,
-                                        providerInfo.provider,
-                                        bindExtras
-                                    )
-                                }.getOrDefault(false)
-                                if (bound) {
-                                    continueWidgetBinding(selection, configureWidgetLauncher)
-                                } else if (activity != null) {
-                                    val bindIntent = Intent(AppWidgetManager.ACTION_APPWIDGET_BIND).apply {
-                                        putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
-                                        putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, providerInfo.provider)
-                                        putExtra(AppWidgetManager.EXTRA_APPWIDGET_OPTIONS, bindExtras)
-                                    }
-                                    bindWidgetLauncher.launch(bindIntent)
-                                } else {
-                                    discardPendingWidgetSelection()
-                                }
-                            }
-                        }
-                    },
-                    onDismiss = { modalState = SideScreenModalState.None }
-                )
-            } else {
-                LaunchedEffect(state) { modalState = SideScreenModalState.None }
-            }
-        }
         is SideScreenModalState.ShortcutActions -> AppShortcutOverlay(
             app = state.app,
             onExcludeApp = null,
@@ -935,87 +633,6 @@ fun SmartStackLayer(
                 )
             } else {
                 LaunchedEffect(state) { modalState = SideScreenModalState.None }
-            }
-        }
-        is SideScreenModalState.WidgetActions -> {
-            if (!showWidgets) {
-                LaunchedEffect(state) { modalState = SideScreenModalState.None }
-            } else {
-                val selected = state.card
-                val widgetCardIndex = widgetCards.indexOfFirst {
-                    it.widgetIndex == selected.widgetIndex &&
-                        it.widget.widgetKey == selected.widget.widgetKey &&
-                        it.widget.widgetId == selected.widget.widgetId
-                }
-                val currentCard = widgetCards.getOrNull(widgetCardIndex)
-                if (currentCard != null) {
-                    WidgetActionOverlay(
-                        widget = currentCard.widget,
-                        canMoveUp = widgetCardIndex > 0,
-                        canMoveDown = widgetCardIndex in 0 until widgetCards.lastIndex,
-                        onMoveUp = {
-                            val previousIndex = widgetCards.getOrNull(widgetCardIndex - 1)?.widgetIndex ?: return@WidgetActionOverlay
-                            onSwapWidget(currentCard.widgetIndex, previousIndex)
-                        },
-                        onMoveDown = {
-                            val nextIndex = widgetCards.getOrNull(widgetCardIndex + 1)?.widgetIndex ?: return@WidgetActionOverlay
-                            onSwapWidget(currentCard.widgetIndex, nextIndex)
-                        },
-                        onRemove = {
-                            clearAllocatedWidget(currentCard.widgetIndex)
-                            onRemoveWidget(currentCard.widgetIndex)
-                        },
-                        onDismiss = { modalState = SideScreenModalState.None }
-                    )
-                } else {
-                    LaunchedEffect(state) { modalState = SideScreenModalState.None }
-                }
-            }
-        }
-        is SideScreenModalState.SectionActions -> {
-            val sectionIndex = sectionOrder.indexOf(state.section)
-            if (sectionIndex >= 0) {
-                SectionActionOverlay(
-                    title = sectionTitle(state.section),
-                    canMoveUp = sectionIndex > 0,
-                    canMoveDown = sectionIndex in 0 until sectionOrder.lastIndex,
-                    onMoveUp = { onMoveSection(state.section, -1) },
-                    onMoveDown = { onMoveSection(state.section, 1) },
-                    onDisable = {
-                        when (state.section) {
-                            SideScreenSection.Widgets -> onSetShowWidgets(false)
-                            SideScreenSection.Notifications -> onSetShowNotification(false)
-                        }
-                    },
-                    onDismiss = { modalState = SideScreenModalState.None }
-                )
-            } else {
-                LaunchedEffect(state) { modalState = SideScreenModalState.None }
-            }
-        }
-        is SideScreenModalState.RemoveWidget -> {
-            if (!showWidgets) {
-                LaunchedEffect(state) { modalState = SideScreenModalState.None }
-            } else {
-                val selected = state.card
-                val currentCard = widgetCards.firstOrNull {
-                    it.widgetIndex == selected.widgetIndex &&
-                        it.widget.widgetKey == selected.widget.widgetKey &&
-                        it.widget.widgetId == selected.widget.widgetId
-                }
-                if (currentCard != null) {
-                    RemoveOverlay(
-                        app = null,
-                        widget = currentCard.widget,
-                        onRemove = {
-                            clearAllocatedWidget(currentCard.widgetIndex)
-                            onRemoveWidget(currentCard.widgetIndex)
-                        },
-                        onDismiss = { modalState = SideScreenModalState.None }
-                    )
-                } else {
-                    LaunchedEffect(state) { modalState = SideScreenModalState.None }
-                }
             }
         }
         SideScreenModalState.None -> Unit
@@ -1696,191 +1313,6 @@ private fun WidgetCard(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun WidgetActionOverlay(
-    widget: WidgetInfo,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    onRemove: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    ModalShell(onDismiss) { dismiss ->
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier
-                .fillMaxWidth(0.78f)
-                .clip(RoundedCornerShape(20.dp))
-                .background(Color(0xFF1E1E1E))
-                .padding(horizontal = 14.dp, vertical = 14.dp)
-        ) {
-            Text(widget.label, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(12.dp))
-            WidgetActionRow(
-                text = "上移",
-                enabled = canMoveUp,
-                onClick = {
-                    onMoveUp()
-                    dismiss()
-                }
-            )
-            Spacer(Modifier.height(8.dp))
-            WidgetActionRow(
-                text = "下移",
-                enabled = canMoveDown,
-                onClick = {
-                    onMoveDown()
-                    dismiss()
-                }
-            )
-            Spacer(Modifier.height(8.dp))
-            WidgetActionRow(
-                text = "移除",
-                enabled = true,
-                textColor = Color(0xFFFF6B6B),
-                onClick = {
-                    onRemove()
-                    dismiss()
-                }
-            )
-        }
-    }
-}
-
-@Composable
-private fun SectionActionOverlay(
-    title: String,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
-    onDisable: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    ModalShell(onDismiss) { dismiss ->
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier
-                .fillMaxWidth(0.78f)
-                .clip(RoundedCornerShape(20.dp))
-                .background(Color(0xFF1E1E1E))
-                .padding(horizontal = 14.dp, vertical = 14.dp)
-        ) {
-            Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(12.dp))
-            WidgetActionRow(
-                text = "上移",
-                enabled = canMoveUp,
-                onClick = {
-                    onMoveUp()
-                    dismiss()
-                }
-            )
-            Spacer(Modifier.height(8.dp))
-            WidgetActionRow(
-                text = "下移",
-                enabled = canMoveDown,
-                onClick = {
-                    onMoveDown()
-                    dismiss()
-                }
-            )
-            Spacer(Modifier.height(8.dp))
-            WidgetActionRow(
-                text = "关闭",
-                enabled = true,
-                textColor = Color(0xFFFF6B6B),
-                onClick = {
-                    onDisable()
-                    dismiss()
-                }
-            )
-        }
-    }
-}
-
-@Composable
-private fun WidgetActionRow(
-    text: String,
-    enabled: Boolean,
-    textColor: Color = Color.White,
-    onClick: () -> Unit
-) {
-    val backgroundColor = if (enabled) Color(0xFF2C2C2E) else Color(0xFF232326)
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(backgroundColor)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(vertical = 14.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = text,
-            color = if (enabled) textColor else WatchColors.TextTertiary,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Medium
-        )
-    }
-}
-
-@Composable
-@OptIn(ExperimentalFoundationApi::class)
-private fun SideScreenSectionHeader(
-    title: String,
-    width: Dp,
-    actionLabel: String? = null,
-    onAction: (() -> Unit)? = null,
-    onLongPress: (() -> Unit)? = null
-) {
-    val launcherStyle = LauncherTheme.style
-    val interactionSource = remember { MutableInteractionSource() }
-    Row(
-        modifier = Modifier
-            .width(width)
-            .combinedClickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = {},
-                onLongClick = onLongPress
-            ),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = title,
-            color = launcherStyle.titleColor,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-        if (actionLabel != null && onAction != null) {
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(launcherStyle.topBarChipColor)
-                    .clickable(onClick = onAction)
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    text = actionLabel,
-                    color = launcherStyle.topBarTextColor,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-        }
-    }
-}
-
-private fun sectionTitle(section: SideScreenSection): String {
-    return when (section) {
-        SideScreenSection.Widgets -> "小组件"
-        SideScreenSection.Notifications -> "通知"
     }
 }
 

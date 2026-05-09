@@ -69,11 +69,6 @@ import kotlin.math.roundToInt
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "launcher_settings")
 
-enum class SideScreenSection(val prefValue: String) {
-    Widgets("widgets"),
-    Notifications("notifications")
-}
-
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
@@ -119,7 +114,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_SHOW_ONGOING_NOTIFICATIONS = booleanPreferencesKey("show_ongoing_notifications")
         val KEY_ROTARY_HAPTICS_ENABLED = booleanPreferencesKey("rotary_haptics_enabled")
         val KEY_NOTIFICATION_SETTING_MIGRATED = booleanPreferencesKey("notification_setting_migrated")
-        val KEY_SHOW_WIDGETS = booleanPreferencesKey("show_widgets")
         val KEY_SHOW_WIDGET_PAGE = booleanPreferencesKey("show_widget_page")
         val KEY_SHOW_CONTROL_CENTER = booleanPreferencesKey("show_control_center")
         val KEY_SHOW_MUSIC_CONTROLS = booleanPreferencesKey("show_music_controls")
@@ -133,7 +127,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_DINGDINGCAT_FILL_SCREEN = booleanPreferencesKey("dingdingcat_fill_screen")
         val KEY_DINGDINGCAT_PLAYBACK_SPEED_PERCENT = intPreferencesKey("dingdingcat_playback_speed_percent")
         val KEY_DINGDINGCAT_IMPORT_UNLOCKED = booleanPreferencesKey("dingdingcat_import_unlocked")
-        val KEY_SIDE_SCREEN_SECTION_ORDER = stringPreferencesKey("side_screen_section_order")
         val KEY_DEVICE_PRESET_APPLIED = booleanPreferencesKey("device_preset_applied")
         val KEY_HIDDEN_APPS = stringPreferencesKey("hidden_apps")
         val KEY_ICON_PACK_PACKAGE = stringPreferencesKey("icon_pack_package")
@@ -392,8 +385,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val showOngoingNotifications: StateFlow<Boolean> = _showOngoingNotifications.asStateFlow()
     private val _rotaryHapticsEnabled = MutableStateFlow(true)
     val rotaryHapticsEnabled: StateFlow<Boolean> = _rotaryHapticsEnabled.asStateFlow()
-    private val _showWidgets = MutableStateFlow(true)
-    val showWidgets: StateFlow<Boolean> = _showWidgets.asStateFlow()
     private val _showWidgetPage = MutableStateFlow(true)
     val showWidgetPage: StateFlow<Boolean> = _showWidgetPage.asStateFlow()
     private val _showControlCenter = MutableStateFlow(true)
@@ -420,8 +411,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val dingDingCatPlaybackSpeedPercent: StateFlow<Int> = _dingDingCatPlaybackSpeedPercent.asStateFlow()
     private val _dingDingCatImportUnlocked = MutableStateFlow(false)
     val dingDingCatImportUnlocked: StateFlow<Boolean> = _dingDingCatImportUnlocked.asStateFlow()
-    private val _sideScreenSectionOrder = MutableStateFlow(defaultSideScreenSectionOrder())
-    val sideScreenSectionOrder: StateFlow<List<SideScreenSection>> = _sideScreenSectionOrder.asStateFlow()
     private val _notificationAccessGranted = MutableStateFlow(false)
     val notificationAccessGranted: StateFlow<Boolean> = _notificationAccessGranted.asStateFlow()
     private val _expandedNotificationGroups = MutableStateFlow<Set<String>>(emptySet())
@@ -897,11 +886,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _rotaryHapticsEnabled.value = loadedRotaryHaptics
                 }
 
-                val loadedShowWidgets = prefs[KEY_SHOW_WIDGETS] ?: true
-                if (_showWidgets.value != loadedShowWidgets) {
-                    _showWidgets.value = loadedShowWidgets
-                }
-
                 val loadedShowWidgetPage = prefs[KEY_SHOW_WIDGET_PAGE] ?: true
                 if (_showWidgetPage.value != loadedShowWidgetPage) {
                     _showWidgetPage.value = loadedShowWidgetPage
@@ -935,11 +919,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedPowerMenuButton = prefs[KEY_POWER_MENU_BUTTON] ?: false
                 if (_powerMenuButtonEnabled.value != loadedPowerMenuButton) {
                     _powerMenuButtonEnabled.value = loadedPowerMenuButton
-                }
-
-                val loadedSectionOrder = parseSideScreenSectionOrder(prefs[KEY_SIDE_SCREEN_SECTION_ORDER])
-                if (_sideScreenSectionOrder.value != loadedSectionOrder) {
-                    _sideScreenSectionOrder.value = loadedSectionOrder
                 }
 
                 if (!devicePresetApplied) {
@@ -1763,11 +1742,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_ROTARY_HAPTICS_ENABLED] = enabled } }
     }
 
-    fun setShowWidgets(show: Boolean) {
-        _showWidgets.value = show
-        persist { store.edit { it[KEY_SHOW_WIDGETS] = show } }
-    }
-
     fun setShowWidgetPage(show: Boolean) {
         _showWidgetPage.value = show
         if (!show && _screenState.value == ScreenState.Widgets) {
@@ -1807,20 +1781,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setPowerMenuButtonEnabled(enabled: Boolean) {
         _powerMenuButtonEnabled.value = enabled
         persist { store.edit { it[KEY_POWER_MENU_BUTTON] = enabled } }
-    }
-
-    fun moveSideSection(section: SideScreenSection, direction: Int) {
-        if (direction == 0) return
-        val current = normalizeSideScreenSectionOrder(_sideScreenSectionOrder.value).toMutableList()
-        val fromIndex = current.indexOf(section)
-        if (fromIndex < 0) return
-        val toIndex = (fromIndex + direction.coerceIn(-1, 1)).coerceIn(current.indices)
-        if (fromIndex == toIndex) return
-        current.removeAt(fromIndex)
-        current.add(toIndex, section)
-        val next = normalizeSideScreenSectionOrder(current)
-        _sideScreenSectionOrder.value = next
-        persist { store.edit { it[KEY_SIDE_SCREEN_SECTION_ORDER] = serializeSideScreenSectionOrder(next) } }
     }
 
     fun setAppHidden(componentKey: String, hidden: Boolean) {
@@ -2445,7 +2405,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _showNotification.value = true
         _showOngoingNotifications.value = false
         _rotaryHapticsEnabled.value = true
-        _showWidgets.value = true
         _showWidgetPage.value = true
         _showControlCenter.value = true
         _showMusicControls.value = true
@@ -2459,7 +2418,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _dingDingCatFillScreen.value = false
         _dingDingCatPlaybackSpeedPercent.value = 100
         _dingDingCatImportUnlocked.value = false
-        _sideScreenSectionOrder.value = defaultSideScreenSectionOrder()
         _hiddenApps.value = emptySet()
         _selectedIconPackPackage.value = null
         _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
@@ -2548,7 +2506,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_SHOW_NOTIFICATION] = true
                 it[KEY_SHOW_ONGOING_NOTIFICATIONS] = false
                 it[KEY_ROTARY_HAPTICS_ENABLED] = true
-                it[KEY_SHOW_WIDGETS] = true
                 it[KEY_SHOW_WIDGET_PAGE] = true
                 it[KEY_SHOW_CONTROL_CENTER] = true
                 it[KEY_SHOW_MUSIC_CONTROLS] = true
@@ -2562,7 +2519,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_DINGDINGCAT_FILL_SCREEN] = false
                 it[KEY_DINGDINGCAT_PLAYBACK_SPEED_PERCENT] = 100
                 it[KEY_DINGDINGCAT_IMPORT_UNLOCKED] = false
-                it[KEY_SIDE_SCREEN_SECTION_ORDER] = serializeSideScreenSectionOrder(defaultSideScreenSectionOrder())
                 it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
                 it.remove(KEY_SIDE_SCREEN_SHORTCUTS)
                 it.remove(KEY_SIDE_SCREEN_WIDGETS)
@@ -2717,35 +2673,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         return widgets
             .mapNotNull { value -> value?.takeIf { it.isNotBlank() } }
             .joinToString("|")
-    }
-
-    private fun defaultSideScreenSectionOrder(): List<SideScreenSection> {
-        return listOf(SideScreenSection.Widgets, SideScreenSection.Notifications)
-    }
-
-    private fun parseSideScreenSectionOrder(raw: String?): List<SideScreenSection> {
-        val parsed = raw
-            ?.split(',')
-            ?.mapNotNull { token ->
-                SideScreenSection.entries.firstOrNull { section ->
-                    section.prefValue.equals(token.trim(), ignoreCase = true) ||
-                        section.name.equals(token.trim(), ignoreCase = true)
-                }
-            }
-            .orEmpty()
-        return normalizeSideScreenSectionOrder(parsed)
-    }
-
-    private fun normalizeSideScreenSectionOrder(order: List<SideScreenSection>): List<SideScreenSection> {
-        val normalized = order.distinct().toMutableList()
-        defaultSideScreenSectionOrder().forEach { section ->
-            if (section !in normalized) normalized.add(section)
-        }
-        return normalized
-    }
-
-    private fun serializeSideScreenSectionOrder(order: List<SideScreenSection>): String {
-        return normalizeSideScreenSectionOrder(order).joinToString(",") { it.prefValue }
     }
 
     private fun isXiaomi17ProSeriesDevice(): Boolean {

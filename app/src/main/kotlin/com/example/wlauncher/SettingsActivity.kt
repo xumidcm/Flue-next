@@ -2919,7 +2919,7 @@ private fun BackupOptionsDialog(
                         item("backup_side_screen_order") {
                             BackupOptionSwitch(
                                 title = "负一屏排序",
-                                subtitle = "负一屏分区顺序和快捷方式槽位",
+                                subtitle = "负一屏快捷启动槽位",
                                 checked = options.sideScreenOrder,
                                 onToggle = { onOptionsChange(options.copy(sideScreenOrder = it)) }
                             )
@@ -3033,7 +3033,7 @@ private fun LazyListScope.backupOptionRows(
         item("backup_side_screen_order") {
             BackupOptionSwitch(
                 title = "负一屏排序",
-                subtitle = "负一屏分区顺序和快捷方式槽位",
+                subtitle = "负一屏快捷启动槽位",
                 checked = options.sideScreenOrder,
                 onToggle = { onOptionsChange(options.copy(sideScreenOrder = it)) },
                 scale = itemFisheye(listState, "backup_side_screen_order", screenCenterY, screenHeightPx)
