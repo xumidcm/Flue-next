@@ -1621,7 +1621,8 @@ private fun MaterialDenseGridScreen(
             ).coerceAtLeast(48.dp)
         val estimatedGridItemHeight = (gridAvailableWidth / effectiveColumns.coerceAtLeast(1).toFloat() / 0.92f)
             .coerceAtLeast(48.dp)
-        val centeredGridPadding = ((maxHeight - estimatedGridItemHeight) / 2f).coerceAtLeast(8.dp)
+        val topGridPadding = (topFadeRangeDp.dp * 0.58f).coerceAtLeast(8.dp)
+        val bottomGridPadding = ((maxHeight - estimatedGridItemHeight) / 2f).coerceAtLeast(topGridPadding)
         LaunchedEffect(dragFromIndex, screenHeightPx) {
             var previousFrameNanos = 0L
             while (dragFromIndex != null) {
@@ -1675,9 +1676,9 @@ private fun MaterialDenseGridScreen(
                 .platformBlur(16f, (longPressedApp != null || folderOpen) && blurEnabled),
             contentPadding = PaddingValues(
                 start = gridHorizontalPadding + leftSafeInset,
-                top = centeredGridPadding,
+                top = topGridPadding,
                 end = gridHorizontalPadding,
-                bottom = centeredGridPadding
+                bottom = bottomGridPadding
             ),
             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gridItemSpacing),
             verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gridItemSpacing)
@@ -1710,9 +1711,8 @@ private fun MaterialDenseGridScreen(
                 } else {
                     0f
                 }
-                val bottomFisheyeStartY = screenHeightPx * 0.52f
-                val itemScale = if (fisheyeEnabled && itemCenterY > bottomFisheyeStartY) {
-                    val dist = itemCenterY - bottomFisheyeStartY
+                val itemScale = if (fisheyeEnabled) {
+                    val dist = abs(itemCenterY - screenHeightPx / 2f)
                     fisheyeScale(dist, fisheyeRangePx, minScale = fisheyeMinScale)
                 } else {
                     1f
@@ -1735,8 +1735,7 @@ private fun MaterialDenseGridScreen(
                     screenHeight = screenHeightPx,
                     itemSize = itemHeightPx,
                     strengthPercent = fisheyeStrengthPercent,
-                    enabled = fisheyeEnabled && edgeSpacingCompressionEnabled &&
-                        itemCenterY > bottomFisheyeStartY
+                    enabled = fisheyeEnabled && edgeSpacingCompressionEnabled
                 )
                 val isDragged = dragFromIndex == index
                 val isFolderHoverTarget = folderHoverIndex == index
@@ -1780,6 +1779,15 @@ private fun MaterialDenseGridScreen(
                     },
                     animationSpec = tween(durationMillis = 170),
                     label = "material_press_scale"
+                )
+                val pressedOverlay by animateFloatAsState(
+                    targetValue = when {
+                        isFolderHoverTarget -> 0.22f
+                        isPressed -> 0.14f
+                        else -> 0f
+                    },
+                    animationSpec = tween(durationMillis = 170),
+                    label = "material_press_overlay"
                 )
                 val materialIconShape = RoundedCornerShape((18.dp * appListScale).coerceIn(12.dp, 24.dp))
                 val iconInnerPadding = (3.dp * appListScale).coerceIn(2.dp, 6.dp)
@@ -1853,6 +1861,14 @@ private fun MaterialDenseGridScreen(
                                     }
                                 )
                         )
+                        if (pressedOverlay > 0f) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(materialIconShape)
+                                    .background(Color.Black.copy(alpha = pressedOverlay))
+                            )
+                        }
                     }
                 }
             }

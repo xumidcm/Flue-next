@@ -2,16 +2,19 @@ package com.flue.launcher.ui.drawer
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -64,10 +67,13 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.scrollBy
@@ -83,6 +89,8 @@ private const val FOLDER_ITEM_DRAG_OUT_MS = 2_000L
 private const val FOLDER_GRID_COLUMNS = 3
 private const val FOLDER_EDGE_AUTO_SCROLL_DP = 48
 private const val FOLDER_EDGE_AUTO_SCROLL_MAX_PX = 14f
+private const val FOLDER_LABEL_MARQUEE_DELAY_MS = 700L
+private const val FOLDER_LABEL_MARQUEE_SPEED_DP_PER_SECOND = 24f
 
 @Composable
 fun AppFolderOverlay(
@@ -109,6 +117,7 @@ fun AppFolderOverlay(
     val folderOverscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val visibleItems = remember { mutableStateListOf<AppInfo>() }
     val itemBounds = remember { mutableStateMapOf<String, Rect>() }
+    val iconBounds = remember { mutableStateMapOf<String, Rect>() }
     var showing by remember(folder.componentKey) { mutableStateOf(false) }
     var panelBounds by remember { mutableStateOf(Rect.Zero) }
     var gridBounds by remember { mutableStateOf(Rect.Zero) }
@@ -184,7 +193,7 @@ fun AppFolderOverlay(
             val toKey = findFolderGridIndexAt(
                 pointer = rootPointer,
                 items = visibleItems,
-                itemBounds = itemBounds,
+                itemBounds = iconBounds,
                 excludedKey = app.componentKey
             )?.let { visibleItems.getOrNull(it)?.componentKey }
             hoverKey = toKey
@@ -216,6 +225,7 @@ fun AppFolderOverlay(
         visibleItems.clear()
         visibleItems.addAll(items)
         itemBounds.clear()
+        iconBounds.clear()
         hoverKey = null
         dragFolderTargetKey = null
     }
@@ -645,6 +655,16 @@ fun AppFolderOverlay(
                                 animationSpec = tween(150),
                                 label = "folder_item_press"
                             )
+                            val iconPressedOverlay by animateFloatAsState(
+                                targetValue = when {
+                                    isDragged -> 0.18f
+                                    isFolderHoverTarget -> 0.16f
+                                    isPressed -> 0.14f
+                                    else -> 0f
+                                },
+                                animationSpec = tween(150),
+                                label = "folder_item_icon_overlay"
+                            )
                             Column(
                                 modifier = Modifier
                                     .animateItem(
@@ -672,20 +692,35 @@ fun AppFolderOverlay(
                                     .padding(horizontal = 4.dp, vertical = 6.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Image(
-                                    bitmap = app.iconForDisplay(twoToneIconsEnabled),
-                                    contentDescription = app.label,
-                                    contentScale = ContentScale.Crop,
+                                Box(
                                     modifier = Modifier
                                         .size(56.dp)
                                         .clip(RoundedCornerShape(18.dp))
-                                )
+                                        .onGloballyPositioned { coords ->
+                                            iconBounds[app.componentKey] = coords.boundsInRoot()
+                                        }
+                                ) {
+                                    Image(
+                                        bitmap = app.iconForDisplay(twoToneIconsEnabled),
+                                        contentDescription = app.label,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                    if (iconPressedOverlay > 0f) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(Color.Black.copy(alpha = iconPressedOverlay))
+                                        )
+                                    }
+                                }
                                 Spacer(modifier = Modifier.height(5.dp))
-                                Text(
+                                FolderMarqueeLabel(
                                     text = app.label,
                                     color = Color.White.copy(alpha = 0.86f),
-                                    fontSize = 10.sp,
-                                    maxLines = 1
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clipToBounds()
                                 )
                             }
                         }
@@ -723,6 +758,78 @@ fun AppFolderOverlay(
                 onRemoveShortcut = if (app.isAppListShortcut) { { onRemoveShortcut(app) } } else null,
                 onDismiss = { menuApp = null }
             )
+        }
+    }
+}
+
+@Composable
+private fun FolderMarqueeLabel(
+    text: String,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    val density = LocalDensity.current
+    val scrollState = rememberScrollState()
+    var containerWidthPx by remember { mutableStateOf(0) }
+    var textWidthPx by remember(text) { mutableStateOf(0) }
+    val spacerWidth = 16.dp
+    val spacerWidthPx = with(density) { spacerWidth.toPx() }
+    val overflow = containerWidthPx > 0 && textWidthPx > containerWidthPx
+    val scrollTarget = if (overflow) {
+        (textWidthPx + spacerWidthPx).toInt().coerceAtLeast(0)
+    } else {
+        0
+    }
+
+    LaunchedEffect(text, overflow, scrollTarget, density.density) {
+        scrollState.scrollTo(0)
+        if (!overflow || scrollTarget <= 0) return@LaunchedEffect
+        delay(FOLDER_LABEL_MARQUEE_DELAY_MS)
+        while (true) {
+            val durationMs = ((scrollTarget / density.density) / FOLDER_LABEL_MARQUEE_SPEED_DP_PER_SECOND * 1000f)
+                .toInt()
+                .coerceAtLeast(900)
+            scrollState.animateScrollTo(
+                value = scrollTarget,
+                animationSpec = tween(durationMillis = durationMs, easing = LinearEasing)
+            )
+            delay(260)
+            scrollState.scrollTo(0)
+            delay(FOLDER_LABEL_MARQUEE_DELAY_MS)
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .onSizeChanged { containerWidthPx = it.width.coerceAtLeast(0) }
+            .clipToBounds(),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            modifier = Modifier.horizontalScroll(scrollState, enabled = false),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = text,
+                color = color,
+                fontSize = 10.sp,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Clip,
+                textAlign = TextAlign.Center,
+                onTextLayout = { textWidthPx = it.size.width.coerceAtLeast(0) }
+            )
+            if (overflow) {
+                Spacer(modifier = Modifier.width(spacerWidth))
+                Text(
+                    text = text,
+                    color = color,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip
+                )
+            }
         }
     }
 }

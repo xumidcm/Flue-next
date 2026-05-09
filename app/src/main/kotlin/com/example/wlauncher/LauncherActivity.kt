@@ -460,7 +460,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             } else if (previousState == ScreenState.Apps) {
                 appListEntryProgress.animateTo(
                     0f,
-                    tween(durationMillis = 260, easing = FastOutSlowInEasing)
+                    tween(durationMillis = 400, easing = FastOutSlowInEasing)
                 )
             } else {
                 appListEntryProgress.snapTo(0f)
@@ -644,19 +644,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val appListLayerRaised = screenState == ScreenState.Apps ||
             isOpeningAppList ||
             appListEntryProgress.value > 0.001f
-        val appListContentEntryProgress = if (screenState == ScreenState.App && launchSourceState == ScreenState.Apps) {
-            1f
-        } else {
-            appListEntryProgress.value
-        }
-        val appListContentTransitionActive =
-            appListEntryProgress.isRunning &&
-                appListContentEntryProgress > 0.001f &&
-                appListContentEntryProgress < 1f
+        val appListContentEntryProgress = if (appListLayerRaised) 1f else 0f
         val suppressAppListHeavyEffects =
             screenState != ScreenState.Apps ||
                 reduceLegacyDrawerEffects ||
-                appListContentTransitionActive ||
                 isOpeningAppList ||
                 isReturningFromApp ||
                 appListReturnOriginActive
