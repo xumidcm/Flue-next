@@ -149,6 +149,8 @@ private const val MEDIA_PROGRESS_HIT_HEIGHT_DP = 24f
 private const val MEDIA_PROGRESS_SEEK_SYNC_HOLD_MS = 1200L
 private const val MUSIC_TEXT_MARQUEE_INITIAL_DELAY_MS = 650L
 private const val MUSIC_TEXT_MARQUEE_SPEED_DP_PER_SECOND = 34f
+private const val CONTROL_NOTIFICATION_STACK_TRANSLATION_DP = 7f
+private const val CONTROL_NOTIFICATION_STACK_HORIZONTAL_INSET_DP = 8f
 private const val MUSIC_TEXT_FADE_EDGE_DP = 18f
 private const val MUSIC_TEXT_FADE_TRANSITION_MS = 80
 private const val MUSIC_TEXT_MARQUEE_SIDE_PADDING_DP = 8f
@@ -839,72 +841,108 @@ private fun ControlCenterNotificationPreviewCard(
         leadEntry != null -> leadEntry.text.ifBlank { "${count.coerceAtLeast(1)} 条通知，点击查看全部" }
         else -> "当前没有新的通知"
     }
-    Row(
+    val stackStrength by animateFloatAsState(
+        targetValue = if (count > 1) 1f else 0f,
+        animationSpec = spring(stiffness = 620f, dampingRatio = 0.82f),
+        label = "control_notification_stack"
+    )
+    val density = LocalDensity.current
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(108.dp)
-            .clip(RoundedCornerShape(30.dp))
-            .background(launcherStyle.cardColor)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(62.dp)
-                .clip(RoundedCornerShape(20.dp))
-                .background(launcherStyle.pressedCardColor),
-            contentAlignment = Alignment.Center
-        ) {
-            val icon = leadGroup?.icon ?: leadEntry?.icon
-            if (icon != null) {
-                Image(
-                    bitmap = icon,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(10.dp),
-                    contentScale = ContentScale.Fit
-                )
-            } else {
-                Icon(Icons.Filled.Notifications, null, tint = launcherStyle.titleColor.copy(alpha = 0.74f))
-            }
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                color = launcherStyle.titleColor,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(Modifier.height(5.dp))
-            Text(
-                text = subtitle,
-                color = launcherStyle.secondaryTextColor,
-                fontSize = 11.sp,
-                lineHeight = 15.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
         if (count > 1) {
             Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(100.dp)
+                    .graphicsLayer {
+                        translationY = with(density) { CONTROL_NOTIFICATION_STACK_TRANSLATION_DP.dp.toPx() } * stackStrength
+                        scaleX = 1f - 0.012f * stackStrength
+                        scaleY = 1f - 0.012f * stackStrength
+                        alpha = 0.54f
+                    }
+                    .padding(horizontal = CONTROL_NOTIFICATION_STACK_HORIZONTAL_INSET_DP.dp)
+                    .clip(RoundedCornerShape(30.dp))
+                    .background(notificationPreviewStackBackColor(launcherStyle.cardColor))
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(100.dp)
+                .clip(RoundedCornerShape(30.dp))
+                .background(launcherStyle.cardColor)
+                .clickable(onClick = onClick)
+                .padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(launcherStyle.accentColor.copy(alpha = 0.18f))
-                    .padding(horizontal = 9.dp, vertical = 4.dp)
+                    .size(62.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(launcherStyle.pressedCardColor),
+                contentAlignment = Alignment.Center
             ) {
+                val icon = leadGroup?.icon ?: leadEntry?.icon
+                if (icon != null) {
+                    Image(
+                        bitmap = icon,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(10.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                } else {
+                    Icon(Icons.Filled.Notifications, null, tint = launcherStyle.titleColor.copy(alpha = 0.74f))
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = count.toString(),
-                    color = launcherStyle.accentColor,
+                    text = title,
+                    color = launcherStyle.titleColor,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(5.dp))
+                Text(
+                    text = subtitle,
+                    color = launcherStyle.secondaryTextColor,
                     fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
+                    lineHeight = 15.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
+            if (count > 1) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(launcherStyle.accentColor.copy(alpha = 0.18f))
+                        .padding(horizontal = 9.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = count.toString(),
+                        color = launcherStyle.accentColor,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
         }
+    }
+}
+
+private fun notificationPreviewStackBackColor(base: Color): Color {
+    return when {
+        base == Color.Unspecified -> Color(0xFF2E2E2E)
+        base.alpha > 0.35f -> base.copy(alpha = (base.alpha * 0.58f).coerceIn(0.22f, 0.48f))
+        else -> Color(0xFF404040)
     }
 }
 

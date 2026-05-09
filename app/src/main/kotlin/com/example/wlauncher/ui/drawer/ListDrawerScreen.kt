@@ -83,7 +83,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 private const val LIST_MENU_TRIGGER_MS = 620L
 private const val LIST_MENU_DRAG_START_DP = 20f
-private const val LIST_FOLDER_HOVER_MS = 700L
+private const val LIST_FOLDER_HOVER_MS = 500L
 private const val LIST_FOLDER_HOVER_MAX_SPEED_DP_PER_MS = 0.55f
 private const val LIST_AUTO_SCROLL_EDGE_DP = 84f
 private const val LIST_AUTO_SCROLL_MAX_PX = 30f
@@ -460,7 +460,7 @@ fun ListDrawerScreen(
                                     } else if (change.uptimeMillis - folderHoverStartedAt >= LIST_FOLDER_HOVER_MS) {
                                         folderDropIndex = folderCandidate
                                     }
-                                    // Keep the candidate under the finger while the folder dwell timer runs.
+                                    dragCurrentIndex = reorderTarget ?: dragCurrentIndex
                                 } else {
                                     folderHoverIndex = null
                                     folderHoverStartedAt = 0L

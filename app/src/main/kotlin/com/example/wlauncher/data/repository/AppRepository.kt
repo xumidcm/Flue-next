@@ -295,6 +295,23 @@ class AppRepository(private val context: Context) {
     fun launchApp(appInfo: AppInfo): Boolean {
         if (appInfo.isFolder) return false
         if (appInfo.isAppListShortcut) {
+            val pinnedShortcutId = appInfo.pinnedShortcutId
+            if (!pinnedShortcutId.isNullOrBlank() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val launcherApps = context.getSystemService(LauncherApps::class.java) ?: return false
+                return runCatching {
+                    launcherApps.startShortcut(
+                        appInfo.packageName,
+                        pinnedShortcutId,
+                        null,
+                        null,
+                        android.os.Process.myUserHandle()
+                    )
+                    true
+                }.getOrElse {
+                    refreshAsync()
+                    false
+                }
+            }
             val intent = runCatching {
                 Intent.parseUri(appInfo.shortcutIntentUri.orEmpty(), Intent.URI_INTENT_SCHEME)
             }.getOrNull() ?: return false
@@ -377,8 +394,20 @@ class AppRepository(private val context: Context) {
         return folder.itemKeys.mapNotNull(itemCatalog::get)
     }
 
+    fun folderItemKeys(folderKey: String): List<String> {
+        return folderCatalog.firstOrNull { it.componentKey == folderKey }?.itemKeys.orEmpty()
+    }
+
+    fun folderMembershipSnapshot(): Map<String, List<String>> {
+        return folderCatalog.associate { it.componentKey to it.itemKeys }
+    }
+
     fun itemsForKeys(keys: List<String>): List<AppInfo> {
         return keys.mapNotNull(itemCatalog::get)
+    }
+
+    fun itemForKey(key: String): AppInfo? {
+        return itemCatalog[key]
     }
 
     fun addLegacyShortcut(label: String?, intent: Intent?, icon: Bitmap?): Boolean {
@@ -399,13 +428,10 @@ class AppRepository(private val context: Context) {
     fun addPinnedShortcut(shortcutInfo: ShortcutInfo): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
         val packageName = shortcutInfo.safePackageName() ?: return false
-        val shortcutIntent = shortcutInfo.safeShortcutIntent()
-            ?: context.packageManager.getLaunchIntentForPackage(packageName)
-            ?: return false
+        val shortcutId = runCatching { shortcutInfo.id }.getOrNull()?.takeIf { it.isNotBlank() } ?: return false
         val label = runCatching { shortcutInfo.shortLabel?.toString() }.getOrNull()
             ?: runCatching { shortcutInfo.longLabel?.toString() }.getOrNull()
-            ?: runCatching { shortcutInfo.id }.getOrNull()
-            ?: packageName.substringAfterLast('.')
+            ?: shortcutId
         val iconBitmap = runCatching {
             val launcherApps = context.getSystemService(LauncherApps::class.java)
             launcherApps?.getShortcutIconDrawable(shortcutInfo, context.resources.displayMetrics.densityDpi)
@@ -414,8 +440,9 @@ class AppRepository(private val context: Context) {
         itemStorage.addShortcut(
             label = label,
             packageName = packageName,
-            intentUri = shortcutIntent.toUri(Intent.URI_INTENT_SCHEME),
-            icon = iconBitmap
+            intentUri = pinnedShortcutUri(packageName, shortcutId),
+            icon = iconBitmap,
+            pinnedShortcutId = shortcutId
         )
         refreshAsync()
         return true
@@ -426,12 +453,6 @@ class AppRepository(private val context: Context) {
         return runCatching { `package` }
             .getOrNull()
             ?.takeIf { it.isNotBlank() }
-    }
-
-    private fun ShortcutInfo.safeShortcutIntent(): Intent? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null
-        runCatching { intent }.getOrNull()?.let { return it }
-        return runCatching { intents?.lastOrNull() }.getOrNull()
     }
 
     fun removeShortcut(componentKey: String): Boolean {
@@ -468,6 +489,12 @@ class AppRepository(private val context: Context) {
     fun addItemsToFolder(folderKey: String, itemKeys: List<String>): List<String> {
         val nextKeys = itemStorage.addItemsToFolder(folderKey, itemKeys)
         if (nextKeys.isNotEmpty()) refreshAsync()
+        return nextKeys
+    }
+
+    fun setFolderItems(folderKey: String, itemKeys: List<String>): List<String> {
+        val nextKeys = itemStorage.setFolderItems(folderKey, itemKeys)
+        refreshAsync()
         return nextKeys
     }
 
@@ -876,8 +903,16 @@ class AppRepository(private val context: Context) {
             cachedPlainTwoToneIcon = plainIcons.twoToneSharp,
             cachedPlainTwoToneBlurredIcon = plainIcons.twoToneSoftened,
             itemType = AppListItemType.SHORTCUT,
-            shortcutIntentUri = shortcut.intentUri
+            shortcutIntentUri = shortcut.intentUri,
+            pinnedShortcutId = shortcut.pinnedShortcutId
         )
+    }
+
+    private fun pinnedShortcutUri(packageName: String, shortcutId: String): String {
+        return Intent("com.flue.launcher.action.START_PINNED_SHORTCUT").apply {
+            `package` = packageName
+            putExtra("android.intent.extra.shortcut.ID", shortcutId)
+        }.toUri(Intent.URI_INTENT_SCHEME)
     }
 
     private fun createFolderEntry(

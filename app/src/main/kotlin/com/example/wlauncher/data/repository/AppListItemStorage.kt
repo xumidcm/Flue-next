@@ -13,7 +13,8 @@ data class StoredAppListShortcut(
     val label: String,
     val packageName: String,
     val intentUri: String,
-    val iconPath: String? = null
+    val iconPath: String? = null,
+    val pinnedShortcutId: String? = null
 ) {
     val componentKey: String = "shortcut:$id"
 }
@@ -48,7 +49,8 @@ class AppListItemStorage(private val context: Context) {
                             label = label,
                             packageName = packageName,
                             intentUri = intentUri,
-                            iconPath = item.optString("iconPath").takeIf(String::isNotBlank)
+                            iconPath = item.optString("iconPath").takeIf(String::isNotBlank),
+                            pinnedShortcutId = item.optString("pinnedShortcutId").takeIf(String::isNotBlank)
                         )
                     )
                 }
@@ -89,10 +91,18 @@ class AppListItemStorage(private val context: Context) {
         label: String,
         packageName: String,
         intentUri: String,
-        icon: Bitmap?
+        icon: Bitmap?,
+        pinnedShortcutId: String? = null
     ): StoredAppListShortcut {
         val shortcuts = loadShortcuts().toMutableList()
-        val duplicate = shortcuts.firstOrNull { it.intentUri == intentUri }
+        val normalizedPinnedShortcutId = pinnedShortcutId?.takeIf { it.isNotBlank() }
+        val duplicate = shortcuts.firstOrNull { shortcut ->
+            if (normalizedPinnedShortcutId != null) {
+                shortcut.packageName == packageName && shortcut.pinnedShortcutId == normalizedPinnedShortcutId
+            } else {
+                shortcut.pinnedShortcutId == null && shortcut.intentUri == intentUri
+            }
+        }
         if (duplicate != null) return duplicate
         val id = UUID.randomUUID().toString()
         val iconPath = icon?.let { bitmap ->
@@ -107,7 +117,8 @@ class AppListItemStorage(private val context: Context) {
             label = label.ifBlank { "快捷方式" },
             packageName = packageName,
             intentUri = intentUri,
-            iconPath = iconPath
+            iconPath = iconPath,
+            pinnedShortcutId = normalizedPinnedShortcutId
         )
         shortcuts += shortcut
         saveShortcuts(shortcuts)
@@ -227,6 +238,31 @@ class AppListItemStorage(private val context: Context) {
     }
 
     @Synchronized
+    fun setFolderItems(folderKey: String, itemKeys: List<String>): List<String> {
+        val folders = loadFolders().toMutableList()
+        val index = folders.indexOfFirst { it.componentKey == folderKey }
+        if (index < 0) return emptyList()
+        val nextKeys = itemKeys
+            .filter { key -> key != folderKey }
+            .distinct()
+        val selectedKeySet = nextKeys.toSet()
+        val nextFolders = folders.mapIndexedNotNull { folderIndex, candidate ->
+            if (folderIndex == index) {
+                if (nextKeys.size <= 1) null else candidate.copy(itemKeys = nextKeys)
+            } else {
+                val keptKeys = candidate.itemKeys.filterNot { it in selectedKeySet }
+                when {
+                    keptKeys == candidate.itemKeys -> candidate
+                    keptKeys.size <= 1 -> null
+                    else -> candidate.copy(itemKeys = keptKeys)
+                }
+            }
+        }
+        saveFolders(nextFolders)
+        return nextKeys
+    }
+
+    @Synchronized
     fun reorderFolderItems(folderKey: String, orderedKeys: List<String>): List<String> {
         val folders = loadFolders().toMutableList()
         val index = folders.indexOfFirst { it.componentKey == folderKey }
@@ -257,6 +293,7 @@ class AppListItemStorage(private val context: Context) {
                 put("packageName", shortcut.packageName)
                 put("intentUri", shortcut.intentUri)
                 shortcut.iconPath?.let { put("iconPath", it) }
+                shortcut.pinnedShortcutId?.let { put("pinnedShortcutId", it) }
             })
         }
         prefs.edit().putString(KEY_SHORTCUTS, array.toString()).apply()

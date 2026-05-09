@@ -75,10 +75,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -183,6 +183,51 @@ private data class ShortcutPickerItem(
     val source: AppInfo
 )
 
+@Composable
+private fun rememberPickerOverscrollConnection(
+    listState: androidx.compose.foundation.lazy.LazyListState
+): Pair<Float, NestedScrollConnection> {
+    var overscroll by remember { mutableFloatStateOf(0f) }
+    val connection = remember(listState) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput) return Offset.Zero
+                val layoutInfo = listState.layoutInfo
+                val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+                val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()
+                val atBottom = layoutInfo.totalItemsCount > 0 &&
+                    lastVisible != null &&
+                    lastVisible.index >= layoutInfo.totalItemsCount - 1 &&
+                    lastVisible.offset + lastVisible.size <= layoutInfo.viewportEndOffset
+                val next = when {
+                    available.y > 0f && atTop -> (overscroll + available.y * 0.35f).coerceAtMost(112f)
+                    available.y < 0f && atBottom -> (overscroll + available.y * 0.35f).coerceAtLeast(-112f)
+                    overscroll > 0f && available.y < 0f -> (overscroll + available.y).coerceAtLeast(0f)
+                    overscroll < 0f && available.y > 0f -> (overscroll + available.y).coerceAtMost(0f)
+                    else -> overscroll
+                }
+                if (next != overscroll) {
+                    overscroll = next
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (overscroll != 0f) {
+                    Animatable(overscroll).animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f)) {
+                        overscroll = value
+                    }
+                    overscroll = 0f
+                    return available
+                }
+                return Velocity.Zero
+            }
+        }
+    }
+    return overscroll to connection
+}
+
 private data class SideScreenWidgetCardItem(
     val widgetIndex: Int,
     val widget: WidgetInfo
@@ -277,31 +322,43 @@ fun SmartStackLayer(
     val visibleShortcutCount = if (hasSecondaryComponent) 6 else 9
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
-    val widgetRepository = remember(context) { FlueApplication.repositories(context).widgetRepository }
-    val appWidgetManager = remember(context) { AppWidgetManager.getInstance(context) }
-    val appWidgetHost = remember(context) { AppWidgetHost(context, SIDE_SCREEN_APP_WIDGET_HOST_ID) }
+    val widgetRepository = remember(context, showWidgets) {
+        if (showWidgets) FlueApplication.repositories(context).widgetRepository else null
+    }
+    val appWidgetManager = remember(context, showWidgets) {
+        if (showWidgets) AppWidgetManager.getInstance(context) else null
+    }
+    val appWidgetHost = remember(context, showWidgets) {
+        if (showWidgets) AppWidgetHost(context, SIDE_SCREEN_APP_WIDGET_HOST_ID) else null
+    }
     var pendingWidgetSelection by remember { mutableStateOf<PendingWidgetSelection?>(null) }
     fun clearAllocatedWidget(slotIndex: Int) {
-        widgetRepository.extractWidgetId(sideScreenWidgetSlots.getOrNull(slotIndex))?.let { widgetId ->
-            runCatching { appWidgetHost.deleteAppWidgetId(widgetId) }
+        val repository = widgetRepository ?: return
+        val host = appWidgetHost ?: return
+        repository.extractWidgetId(sideScreenWidgetSlots.getOrNull(slotIndex))?.let { widgetId ->
+            runCatching { host.deleteAppWidgetId(widgetId) }
         }
     }
 
     fun persistBoundWidget(slotIndex: Int, widget: WidgetInfo, appWidgetId: Int) {
+        val repository = widgetRepository ?: return
         clearAllocatedWidget(slotIndex)
-        onSetWidget(slotIndex, widgetRepository.serializeSlotValue(widget.copy(widgetId = appWidgetId)))
+        onSetWidget(slotIndex, repository.serializeSlotValue(widget.copy(widgetId = appWidgetId)))
     }
 
     fun discardPendingWidgetSelection() {
+        val host = appWidgetHost
         pendingWidgetSelection?.let { selection ->
-            runCatching { appWidgetHost.deleteAppWidgetId(selection.appWidgetId) }
+            if (host != null) runCatching { host.deleteAppWidgetId(selection.appWidgetId) }
         }
         pendingWidgetSelection = null
     }
 
     fun continueWidgetBinding(selection: PendingWidgetSelection, configureLauncher: androidx.activity.result.ActivityResultLauncher<Intent>) {
-        val providerInfo = appWidgetManager.getAppWidgetInfo(selection.appWidgetId)
-            ?: widgetRepository.findProviderInfo(selection.widget.widgetKey)
+        val manager = appWidgetManager ?: return
+        val repository = widgetRepository ?: return
+        val providerInfo = manager.getAppWidgetInfo(selection.appWidgetId)
+            ?: repository.findProviderInfo(selection.widget.widgetKey)
         if (providerInfo?.configure != null) {
             val configureIntent = Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE).apply {
                 component = providerInfo.configure
@@ -319,7 +376,7 @@ fun SmartStackLayer(
         if (result.resultCode == Activity.RESULT_OK) {
             persistBoundWidget(selection.slotIndex, selection.widget, selection.appWidgetId)
         } else {
-            runCatching { appWidgetHost.deleteAppWidgetId(selection.appWidgetId) }
+            appWidgetHost?.let { host -> runCatching { host.deleteAppWidgetId(selection.appWidgetId) } }
         }
         pendingWidgetSelection = null
     }
@@ -328,7 +385,7 @@ fun SmartStackLayer(
         if (result.resultCode == Activity.RESULT_OK) {
             continueWidgetBinding(selection, configureWidgetLauncher)
         } else {
-            runCatching { appWidgetHost.deleteAppWidgetId(selection.appWidgetId) }
+            appWidgetHost?.let { host -> runCatching { host.deleteAppWidgetId(selection.appWidgetId) } }
             pendingWidgetSelection = null
         }
     }
@@ -339,9 +396,14 @@ fun SmartStackLayer(
             appKey?.let { key -> apps.firstOrNull { it.componentKey == key } }
         }
     }
-    val widgetCards = remember(sideScreenWidgetSlots, widgetRepository) {
-        sideScreenWidgetSlots.mapIndexedNotNull { index, raw ->
-            widgetRepository.parseSlotValue(raw)?.let { SideScreenWidgetCardItem(index, it) }
+    val widgetCards = remember(sideScreenWidgetSlots, widgetRepository, showWidgets) {
+        val repository = widgetRepository
+        if (showWidgets && repository != null) {
+            sideScreenWidgetSlots.mapIndexedNotNull { index, raw ->
+                repository.parseSlotValue(raw)?.let { SideScreenWidgetCardItem(index, it) }
+            }
+        } else {
+            emptyList()
         }
     }
     val visibleWidgetCards = remember(widgetCards, showWidgets) {
@@ -358,13 +420,14 @@ fun SmartStackLayer(
     }
     val notificationReleaseThresholdPx = notificationDragRangePx * SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS
     DisposableEffect(appWidgetHost, visibleWidgetCards.isNotEmpty()) {
-        if (visibleWidgetCards.isNotEmpty()) {
-            runCatching { appWidgetHost.startListening() }
+        val host = appWidgetHost
+        if (host != null && visibleWidgetCards.isNotEmpty()) {
+            runCatching { host.startListening() }
         }
         onDispose {
             discardPendingWidgetSelection()
-            if (visibleWidgetCards.isNotEmpty()) {
-                runCatching { appWidgetHost.stopListening() }
+            if (host != null && visibleWidgetCards.isNotEmpty()) {
+                runCatching { host.stopListening() }
             }
         }
     }
@@ -374,6 +437,17 @@ fun SmartStackLayer(
     var dragVelocityY by remember { mutableFloatStateOf(0f) }
     var lastDragEventUptime by remember { mutableStateOf(0L) }
     var transitionInFlight by remember { mutableStateOf(false) }
+    LaunchedEffect(showWidgets) {
+        if (!showWidgets) {
+            discardPendingWidgetSelection()
+            if (modalState is SideScreenModalState.WidgetPicker ||
+                modalState is SideScreenModalState.WidgetActions ||
+                modalState is SideScreenModalState.RemoveWidget
+            ) {
+                modalState = SideScreenModalState.None
+            }
+        }
+    }
     val sideListState = rememberLazyListState()
     val sideOverscroll = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
@@ -711,6 +785,8 @@ fun SmartStackLayer(
                 }
             }
             if (showWidgets && visibleWidgetCards.isNotEmpty()) {
+                val repository = requireNotNull(widgetRepository)
+                val host = requireNotNull(appWidgetHost)
                 Spacer(Modifier.height(12.dp))
                 LazyColumn(
                     state = sideListState,
@@ -754,8 +830,8 @@ fun SmartStackLayer(
                         ) {
                             WidgetCard(
                                 widget = card.widget,
-                                widgetRepository = widgetRepository,
-                                appWidgetHost = appWidgetHost,
+                                widgetRepository = repository,
+                                appWidgetHost = host,
                                 onLongPress = {
                                     onRevealTargetChange(null)
                                     modalState = SideScreenModalState.WidgetActions(card)
@@ -791,54 +867,60 @@ fun SmartStackLayer(
             },
             onDismiss = { modalState = SideScreenModalState.None }
         )
-        SideScreenModalState.WidgetPicker -> WidgetPickerOverlay(
-            apps = apps,
-            widgetRepository = widgetRepository,
-            onSelectWidget = { widget ->
-                val targetIndex = sideScreenWidgetSlots.size
-                val providerInfo = widgetRepository.findProviderInfo(widget.widgetKey)
-                if (providerInfo != null) {
-                    discardPendingWidgetSelection()
-                    clearAllocatedWidget(targetIndex)
-                    val appWidgetId = runCatching { appWidgetHost.allocateAppWidgetId() }.getOrNull()
-                    if (appWidgetId != null) {
-                        val selection = PendingWidgetSelection(
-                            slotIndex = targetIndex,
-                            widget = widget,
-                            appWidgetId = appWidgetId
-                        )
-                        pendingWidgetSelection = selection
-                        val bindExtras = buildWidgetBindOptions(providerInfo)
-                        val bound = runCatching {
-                            appWidgetManager.bindAppWidgetIdIfAllowed(
-                                appWidgetId,
-                                providerInfo.provider,
-                                bindExtras
-                            )
-                        }.getOrDefault(false)
-                        if (bound) {
-                            continueWidgetBinding(selection, configureWidgetLauncher)
-                        } else if (activity != null) {
-                            val bindIntent = Intent(AppWidgetManager.ACTION_APPWIDGET_BIND).apply {
-                                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
-                                putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, providerInfo.provider)
-                                putExtra(AppWidgetManager.EXTRA_APPWIDGET_OPTIONS, bindExtras)
-                            }
-                            bindWidgetLauncher.launch(bindIntent)
-                        } else {
+        SideScreenModalState.WidgetPicker -> {
+            val repository = widgetRepository
+            val host = appWidgetHost
+            val manager = appWidgetManager
+            if (showWidgets && repository != null && host != null && manager != null) {
+                WidgetPickerOverlay(
+                    apps = apps,
+                    widgetRepository = repository,
+                    onSelectWidget = { widget ->
+                        val targetIndex = sideScreenWidgetSlots.size
+                        val providerInfo = repository.findProviderInfo(widget.widgetKey)
+                        if (providerInfo != null) {
                             discardPendingWidgetSelection()
+                            clearAllocatedWidget(targetIndex)
+                            val appWidgetId = runCatching { host.allocateAppWidgetId() }.getOrNull()
+                            if (appWidgetId != null) {
+                                val selection = PendingWidgetSelection(
+                                    slotIndex = targetIndex,
+                                    widget = widget,
+                                    appWidgetId = appWidgetId
+                                )
+                                pendingWidgetSelection = selection
+                                val bindExtras = buildWidgetBindOptions(providerInfo)
+                                val bound = runCatching {
+                                    manager.bindAppWidgetIdIfAllowed(
+                                        appWidgetId,
+                                        providerInfo.provider,
+                                        bindExtras
+                                    )
+                                }.getOrDefault(false)
+                                if (bound) {
+                                    continueWidgetBinding(selection, configureWidgetLauncher)
+                                } else if (activity != null) {
+                                    val bindIntent = Intent(AppWidgetManager.ACTION_APPWIDGET_BIND).apply {
+                                        putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+                                        putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, providerInfo.provider)
+                                        putExtra(AppWidgetManager.EXTRA_APPWIDGET_OPTIONS, bindExtras)
+                                    }
+                                    bindWidgetLauncher.launch(bindIntent)
+                                } else {
+                                    discardPendingWidgetSelection()
+                                }
+                            }
                         }
-                    }
-                }
-            },
-            onDismiss = { modalState = SideScreenModalState.None }
-        )
+                    },
+                    onDismiss = { modalState = SideScreenModalState.None }
+                )
+            } else {
+                LaunchedEffect(state) { modalState = SideScreenModalState.None }
+            }
+        }
         is SideScreenModalState.ShortcutActions -> AppShortcutOverlay(
             app = state.app,
-            onExcludeApp = {
-                onHideApp(state.app)
-                onRemoveShortcut(state.slotIndex)
-            },
+            onExcludeApp = null,
             onRemoveShortcut = { onRemoveShortcut(state.slotIndex) },
             onDismiss = { modalState = SideScreenModalState.None }
         )
@@ -856,34 +938,38 @@ fun SmartStackLayer(
             }
         }
         is SideScreenModalState.WidgetActions -> {
-            val selected = state.card
-            val widgetCardIndex = widgetCards.indexOfFirst {
-                it.widgetIndex == selected.widgetIndex &&
-                    it.widget.widgetKey == selected.widget.widgetKey &&
-                    it.widget.widgetId == selected.widget.widgetId
-            }
-            val currentCard = widgetCards.getOrNull(widgetCardIndex)
-            if (currentCard != null) {
-                WidgetActionOverlay(
-                    widget = currentCard.widget,
-                    canMoveUp = widgetCardIndex > 0,
-                    canMoveDown = widgetCardIndex in 0 until widgetCards.lastIndex,
-                    onMoveUp = {
-                        val previousIndex = widgetCards.getOrNull(widgetCardIndex - 1)?.widgetIndex ?: return@WidgetActionOverlay
-                        onSwapWidget(currentCard.widgetIndex, previousIndex)
-                    },
-                    onMoveDown = {
-                        val nextIndex = widgetCards.getOrNull(widgetCardIndex + 1)?.widgetIndex ?: return@WidgetActionOverlay
-                        onSwapWidget(currentCard.widgetIndex, nextIndex)
-                    },
-                    onRemove = {
-                        clearAllocatedWidget(currentCard.widgetIndex)
-                        onRemoveWidget(currentCard.widgetIndex)
-                    },
-                    onDismiss = { modalState = SideScreenModalState.None }
-                )
-            } else {
+            if (!showWidgets) {
                 LaunchedEffect(state) { modalState = SideScreenModalState.None }
+            } else {
+                val selected = state.card
+                val widgetCardIndex = widgetCards.indexOfFirst {
+                    it.widgetIndex == selected.widgetIndex &&
+                        it.widget.widgetKey == selected.widget.widgetKey &&
+                        it.widget.widgetId == selected.widget.widgetId
+                }
+                val currentCard = widgetCards.getOrNull(widgetCardIndex)
+                if (currentCard != null) {
+                    WidgetActionOverlay(
+                        widget = currentCard.widget,
+                        canMoveUp = widgetCardIndex > 0,
+                        canMoveDown = widgetCardIndex in 0 until widgetCards.lastIndex,
+                        onMoveUp = {
+                            val previousIndex = widgetCards.getOrNull(widgetCardIndex - 1)?.widgetIndex ?: return@WidgetActionOverlay
+                            onSwapWidget(currentCard.widgetIndex, previousIndex)
+                        },
+                        onMoveDown = {
+                            val nextIndex = widgetCards.getOrNull(widgetCardIndex + 1)?.widgetIndex ?: return@WidgetActionOverlay
+                            onSwapWidget(currentCard.widgetIndex, nextIndex)
+                        },
+                        onRemove = {
+                            clearAllocatedWidget(currentCard.widgetIndex)
+                            onRemoveWidget(currentCard.widgetIndex)
+                        },
+                        onDismiss = { modalState = SideScreenModalState.None }
+                    )
+                } else {
+                    LaunchedEffect(state) { modalState = SideScreenModalState.None }
+                }
             }
         }
         is SideScreenModalState.SectionActions -> {
@@ -908,24 +994,28 @@ fun SmartStackLayer(
             }
         }
         is SideScreenModalState.RemoveWidget -> {
-            val selected = state.card
-            val currentCard = widgetCards.firstOrNull {
-                it.widgetIndex == selected.widgetIndex &&
-                    it.widget.widgetKey == selected.widget.widgetKey &&
-                    it.widget.widgetId == selected.widget.widgetId
-            }
-            if (currentCard != null) {
-                RemoveOverlay(
-                    app = null,
-                    widget = currentCard.widget,
-                    onRemove = {
-                        clearAllocatedWidget(currentCard.widgetIndex)
-                        onRemoveWidget(currentCard.widgetIndex)
-                    },
-                    onDismiss = { modalState = SideScreenModalState.None }
-                )
-            } else {
+            if (!showWidgets) {
                 LaunchedEffect(state) { modalState = SideScreenModalState.None }
+            } else {
+                val selected = state.card
+                val currentCard = widgetCards.firstOrNull {
+                    it.widgetIndex == selected.widgetIndex &&
+                        it.widget.widgetKey == selected.widget.widgetKey &&
+                        it.widget.widgetId == selected.widget.widgetId
+                }
+                if (currentCard != null) {
+                    RemoveOverlay(
+                        app = null,
+                        widget = currentCard.widget,
+                        onRemove = {
+                            clearAllocatedWidget(currentCard.widgetIndex)
+                            onRemoveWidget(currentCard.widgetIndex)
+                        },
+                        onDismiss = { modalState = SideScreenModalState.None }
+                    )
+                } else {
+                    LaunchedEffect(state) { modalState = SideScreenModalState.None }
+                }
             }
         }
         SideScreenModalState.None -> Unit
@@ -1116,7 +1206,10 @@ fun WidgetPageLayer(
                         )
                         WidgetPageChip(
                             label = "添加",
-                            onClick = { showPicker = true }
+                            onClick = {
+                                editMode = false
+                                showPicker = true
+                            }
                         )
                     }
                 }
@@ -1134,6 +1227,7 @@ fun WidgetPageLayer(
                     val cardKey = card.stableKey()
                     val cardIndex = widgetCards.indexOfFirst { it.stableKey() == cardKey }
                     val shellShape = RoundedCornerShape(28.dp)
+                    val jiggleActive = editMode && !showPicker
                     val editJiggle = rememberInfiniteTransition(label = "widget_edit_jiggle_$cardKey")
                     val jiggleRotation by editJiggle.animateFloat(
                         initialValue = -0.35f,
@@ -1157,7 +1251,7 @@ fun WidgetPageLayer(
                                 fadeOutSpec = tween(180)
                             )
                             .graphicsLayer {
-                                rotationZ = if (editMode) jiggleRotation else 0f
+                                rotationZ = if (jiggleActive) jiggleRotation else 0f
                             }
                     ) {
                         Box(
@@ -1202,7 +1296,7 @@ fun WidgetPageLayer(
                                 onMeasuredHeight = {}
                             )
                         }
-                        if (editMode) {
+                        if (jiggleActive) {
                             val blockerInteraction = remember { MutableInteractionSource() }
                             Box(
                                 modifier = Modifier
@@ -1269,16 +1363,19 @@ fun WidgetPageLayer(
     }
 
     if (showPicker) {
+        val repository = requireNotNull(widgetRepository)
+        val host = requireNotNull(appWidgetHost)
+        val manager = requireNotNull(appWidgetManager)
         WidgetPickerOverlay(
             apps = apps,
-            widgetRepository = widgetRepository,
+            widgetRepository = repository,
             onSelectWidget = { widget ->
                 val targetIndex = sideScreenWidgetSlots.size
-                val providerInfo = widgetRepository.findProviderInfo(widget.widgetKey)
+                val providerInfo = repository.findProviderInfo(widget.widgetKey)
                 if (providerInfo != null) {
                     discardPendingWidgetSelection()
                     clearAllocatedWidget(targetIndex)
-                    val appWidgetId = runCatching { appWidgetHost.allocateAppWidgetId() }.getOrNull()
+                    val appWidgetId = runCatching { host.allocateAppWidgetId() }.getOrNull()
                     if (appWidgetId != null) {
                         val selection = PendingWidgetSelection(
                             slotIndex = targetIndex,
@@ -1288,7 +1385,7 @@ fun WidgetPageLayer(
                         pendingWidgetSelection = selection
                         val bindExtras = buildWidgetBindOptions(providerInfo)
                         val bound = runCatching {
-                            appWidgetManager.bindAppWidgetIdIfAllowed(
+                            manager.bindAppWidgetIdIfAllowed(
                                 appWidgetId,
                                 providerInfo.provider,
                                 bindExtras
@@ -1944,6 +2041,7 @@ private fun ShortcutPickerOverlay(
             .toList()
     }
     val listState = rememberLazyListState()
+    val (pickerOverscroll, pickerNestedScroll) = rememberPickerOverscrollConnection(listState)
     ModalShell(onDismiss) { dismiss ->
         Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFF1E1E1E)).padding(vertical = 12.dp)) {
             Text("添加快捷启动", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 10.dp))
@@ -1951,7 +2049,9 @@ private fun ShortcutPickerOverlay(
                 state = listState,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f, fill = false),
+                    .weight(1f, fill = false)
+                    .nestedScroll(pickerNestedScroll)
+                    .graphicsLayer { translationY = pickerOverscroll },
                 contentPadding = PaddingValues(horizontal = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
@@ -2008,6 +2108,7 @@ private fun WidgetPickerOverlay(
         pickerApps.firstOrNull { it.packageName == selected }
     }
     val listState = rememberLazyListState()
+    val (pickerOverscroll, pickerNestedScroll) = rememberPickerOverscrollConnection(listState)
     LaunchedEffect(selectedPackage) {
         if (selectedPackage == null) {
             listState.scrollToItem(appListReturnIndex, appListReturnOffset)
@@ -2015,7 +2116,10 @@ private fun WidgetPickerOverlay(
             listState.scrollToItem(0)
         }
     }
-    ModalShell(onDismiss) { dismiss ->
+    BackHandler(enabled = selectedPackage != null) {
+        selectedPackage = null
+    }
+    ModalShell(onDismiss, backHandlerEnabled = selectedPackage == null) { dismiss ->
         Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFF1E1E1E)).padding(vertical = 12.dp)) {
             Text(
                 selectedApp?.label ?: "添加小组件",
@@ -2028,7 +2132,9 @@ private fun WidgetPickerOverlay(
                 state = listState,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f, fill = false),
+                    .weight(1f, fill = false)
+                    .nestedScroll(pickerNestedScroll)
+                    .graphicsLayer { translationY = pickerOverscroll },
                 contentPadding = PaddingValues(horizontal = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
@@ -2323,12 +2429,16 @@ private fun ShortcutPickerRow(
     }
 }
 
-@Composable private fun ModalShell(onDismissRequest: () -> Unit, content: @Composable (dismiss: () -> Unit) -> Unit) {
+@Composable private fun ModalShell(
+    onDismissRequest: () -> Unit,
+    backHandlerEnabled: Boolean = true,
+    content: @Composable (dismiss: () -> Unit) -> Unit
+) {
     val dismissInteraction = remember { MutableInteractionSource() }
     var visible by remember { mutableStateOf(false) }
     fun dismiss() { visible = false }
     LaunchedEffect(Unit) { visible = true }
-    BackHandler { dismiss() }
+    BackHandler(enabled = backHandlerEnabled) { dismiss() }
     LaunchedEffect(visible) { if (!visible) { delay(220); onDismissRequest() } }
     val alpha by animateFloatAsState(if (visible) 1f else 0f, spring(stiffness = 720f, dampingRatio = 0.85f), label = "modal_alpha")
     val scale by animateFloatAsState(if (visible) 1f else 0.84f, spring(stiffness = 700f, dampingRatio = 0.8f), label = "modal_scale")

@@ -34,9 +34,11 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -74,6 +76,7 @@ import com.flue.launcher.data.model.iconForDisplay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.min
 import kotlinx.coroutines.withTimeoutOrNull
 
 private const val FOLDER_ITEM_MENU_TRIGGER_MS = 620L
@@ -93,7 +96,7 @@ fun AppFolderOverlay(
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorderItems: (List<AppInfo>) -> Unit,
     onMoveItemOut: (AppInfo) -> Unit,
-    onAddItemsToFolder: (List<AppInfo>) -> Unit,
+    onSetFolderItems: (List<AppInfo>) -> Unit,
     onRenameFolder: (String) -> Unit,
     onExcludeApp: (AppInfo) -> Unit,
     onRemoveShortcut: (AppInfo) -> Unit,
@@ -183,7 +186,7 @@ fun AppFolderOverlay(
                 itemBounds = itemBounds,
                 excludedKey = app.componentKey
             )
-            hoverKey = to?.let { visibleItems.getOrNull(it)?.componentKey }
+            hoverKey = null
             if (from >= 0 && to != null && to != from) {
                 moveVisibleItem(from, to)
             }
@@ -316,11 +319,11 @@ fun AppFolderOverlay(
     )
 
     val folderItemKeys = visibleItems.mapTo(linkedSetOf()) { it.componentKey }
-    val addCandidates = availableItems
+    val folderItemKeySet = folderItemKeys.toSet()
+    val editableCandidates = (visibleItems + availableItems)
         .asSequence()
         .filterNot { it.isFolder }
         .filter { it.componentKey != folder.componentKey }
-        .filter { it.componentKey !in folderItemKeys }
         .distinctBy { it.componentKey }
         .toList()
 
@@ -361,20 +364,26 @@ fun AppFolderOverlay(
             },
             title = { Text("添加应用") },
             text = {
-                if (addCandidates.isEmpty()) {
+                if (editableCandidates.isEmpty()) {
                     Text("没有可添加的应用")
                 } else {
                     LazyColumn(
                         modifier = Modifier.heightIn(max = 320.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        items(addCandidates, key = { it.componentKey }) { app ->
+                        items(editableCandidates, key = { it.componentKey }) { app ->
                             val selected = app.componentKey in selectedAddKeys
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(16.dp))
-                                    .background(if (selected) Color.White.copy(alpha = 0.16f) else Color.Transparent)
+                                    .background(
+                                        if (selected) {
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                        } else {
+                                            Color.Transparent
+                                        }
+                                    )
                                     .clickable {
                                         selectedAddKeys = if (selected) {
                                             selectedAddKeys - app.componentKey
@@ -397,15 +406,19 @@ fun AppFolderOverlay(
                                 Text(
                                     text = app.label,
                                     modifier = Modifier.weight(1f),
-                                    color = Color.White,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     fontSize = 14.sp,
                                     maxLines = 1
                                 )
-                                Text(
-                                    text = if (selected) "已选" else "添加",
-                                    color = if (selected) Color(0xFF64D2FF) else Color.White.copy(alpha = 0.58f),
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold
+                                Checkbox(
+                                    checked = selected,
+                                    onCheckedChange = { checked ->
+                                        selectedAddKeys = if (checked) {
+                                            selectedAddKeys + app.componentKey
+                                        } else {
+                                            selectedAddKeys - app.componentKey
+                                        }
+                                    }
                                 )
                             }
                         }
@@ -416,13 +429,13 @@ fun AppFolderOverlay(
                 TextButton(
                     enabled = selectedAddKeys.isNotEmpty(),
                     onClick = {
-                        val selectedItems = addCandidates.filter { it.componentKey in selectedAddKeys }
-                        onAddItemsToFolder(selectedItems)
+                        val selectedItems = editableCandidates.filter { it.componentKey in selectedAddKeys }
+                        onSetFolderItems(selectedItems)
                         selectedAddKeys = emptySet()
                         addDialogVisible = false
                     }
                 ) {
-                    Text("添加")
+                    Text("完成")
                 }
             },
             dismissButton = {
@@ -489,14 +502,14 @@ fun AppFolderOverlay(
                     Spacer(Modifier.width(8.dp))
                     Text(
                         text = "添加应用",
-                        color = if (addCandidates.isEmpty()) Color.White.copy(alpha = 0.38f) else Color(0xFF64D2FF),
+                        color = if (editableCandidates.isEmpty()) Color.White.copy(alpha = 0.38f) else Color(0xFF64D2FF),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier
                             .clip(RoundedCornerShape(999.dp))
-                            .background(Color.White.copy(alpha = if (addCandidates.isEmpty()) 0.06f else 0.13f))
-                            .clickable(enabled = addCandidates.isNotEmpty()) {
-                                selectedAddKeys = emptySet()
+                            .background(Color.White.copy(alpha = if (editableCandidates.isEmpty()) 0.06f else 0.13f))
+                            .clickable(enabled = editableCandidates.isNotEmpty()) {
+                                selectedAddKeys = folderItemKeySet
                                 addDialogVisible = true
                             }
                             .padding(horizontal = 12.dp, vertical = 7.dp)
@@ -719,7 +732,19 @@ private fun findFolderGridIndexAt(
     itemBounds: Map<String, Rect>,
     excludedKey: String
 ): Int? {
-    return items.indexOfFirst { app ->
-        app.componentKey != excludedKey && itemBounds[app.componentKey]?.contains(pointer) == true
-    }.takeIf { it >= 0 }
+    var bestIndex: Int? = null
+    var bestDistance = Float.MAX_VALUE
+    var bestSize = Float.MAX_VALUE
+    items.forEachIndexed { index, app ->
+        if (app.componentKey == excludedKey) return@forEachIndexed
+        val bounds = itemBounds[app.componentKey] ?: return@forEachIndexed
+        val distance = (bounds.center - pointer).getDistance()
+        val size = min(bounds.width, bounds.height).coerceAtLeast(1f)
+        if (distance < bestDistance) {
+            bestDistance = distance
+            bestSize = size
+            bestIndex = index
+        }
+    }
+    return bestIndex?.takeIf { bestDistance <= bestSize * 1.35f }
 }

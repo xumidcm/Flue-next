@@ -1237,11 +1237,11 @@ private fun SettingsRootScreen(
                     title = if (isZh) "全局 UI 大小" else "Global UI Size",
                     value = globalUiScalePercent.toFloat(),
                     valueText = "${globalUiScalePercent}%",
-                    localValueText = { "${it.roundToInt()}%" },
+                    localValueText = { "${((it / 5f).roundToInt() * 5).coerceIn(50, 150)}%" },
                     range = 50f..150f,
-                    steps = 9,
+                    steps = 19,
                     onValueChange = {},
-                    onValueChangeFinished = { vm.setGlobalUiScalePercent(it.roundToInt()) },
+                    onValueChangeFinished = { vm.setGlobalUiScalePercent(((it / 5f).roundToInt() * 5).coerceIn(50, 150)) },
                     scale = itemFisheye(listState, "global_ui_scale", screenCenterY, screenHeightPx)
                 )
             }
@@ -1516,11 +1516,11 @@ private fun SettingsRootScreen(
             }
             item("app_list_watchface_colors") {
                 SettingsSwitchRow(
-                    title = if (isZh) "应用列表表盘取色" else "Watch Face App List Colors",
+                    title = if (isZh) "应用遮罩表盘取色" else "Watch Face Launch Mask Colors",
                     subtitle = if (appListWatchFaceColors) {
-                        if (isZh) "应用列表背景继续跟随表盘颜色" else "Keep the app list tinted by the watch face"
+                        if (isZh) "从应用列表打开应用时，遮罩背景继续跟随表盘颜色" else "Tint the launch mask from the watch face when opening apps from the list"
                     } else {
-                        if (isZh) "应用列表使用中性黑白；列表底色遮罩固定为黑色半透明" else "Use neutral black or white colors; list row masks stay translucent black"
+                        if (isZh) "打开应用遮罩使用深浅色黑白；应用列表背景始终纯黑或纯白" else "Use neutral black or white launch masks; the app list background stays pure black or white"
                     },
                     checked = appListWatchFaceColors,
                     onToggle = vm::setAppListWatchFaceColors,
@@ -1545,7 +1545,7 @@ private fun SettingsRootScreen(
                 SettingsSwitchRow(
                     title = if (isZh) "允许创建文件夹（实验性）" else "Allow Folders (Experimental)",
                     subtitle = if (appListFoldersEnabled) {
-                        if (isZh) "长按拖动到另一个图标中心并停留 700ms 后合成文件夹" else "Hold a dragged icon over another icon center for 700ms to create a folder"
+                        if (isZh) "长按拖动到另一个图标中心并停留 500ms 后合成文件夹" else "Hold a dragged icon over another icon center for 500ms to create a folder"
                     } else {
                         if (isZh) "关闭拖动合成文件夹，只保留排序手势" else "Disable drag-to-folder creation and keep reordering only"
                     },

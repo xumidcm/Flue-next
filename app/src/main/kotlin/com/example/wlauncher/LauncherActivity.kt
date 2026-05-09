@@ -63,6 +63,7 @@ import com.flue.launcher.ui.controlcenter.ControlCenterLayer
 import com.flue.launcher.ui.drawer.AppFolderOverlay
 import com.flue.launcher.ui.drawer.HoneycombScreen
 import com.flue.launcher.ui.drawer.ListDrawerScreen
+import com.flue.launcher.ui.drawer.appLaunchBackdropColor
 import com.flue.launcher.ui.drawer.appListPalette
 import com.flue.launcher.ui.drawer.vibrateHaptic
 import com.flue.launcher.ui.home.WatchFaceLayer
@@ -113,7 +114,7 @@ class LauncherActivity : ComponentActivity() {
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
         )
-        onBackPressedDispatcher.addCallback(this) { vm.handleBackPress() }
+        onBackPressedDispatcher.addCallback(this) { vm.requestBackPress() }
         setContent {
             val viewModel: LauncherViewModel = viewModel()
             vm = viewModel
@@ -132,7 +133,7 @@ class LauncherActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (::vm.isInitialized && intent.isLauncherHomeIntent()) {
-            vm.handleHomePress()
+            vm.requestHomePress()
         }
     }
 
@@ -333,26 +334,32 @@ fun LauncherScreen(vm: LauncherViewModel) {
         watchFaceDescriptor = selectedWatchFace,
         enabled = appListWatchFaceColors
     )
-    val useAppListWatchFaceColors = appListWatchFaceColors && appListThemeColor.alpha > 0.01f
+    val useLaunchMaskWatchFaceColors = appListWatchFaceColors && appListThemeColor.alpha > 0.01f
     val appListColors = appListPalette(
         seed = appListThemeColor,
         darkMode = effectiveDarkMode,
         uiStyle = uiStyle,
-        useWatchFaceColor = useAppListWatchFaceColors
+        useWatchFaceColor = false
     )
-    val watchFaceFadeSeed = if (uiStyle == UiStyle.MATERIAL_3 && appListThemeColor.alpha <= 0.01f) {
+    val launchMaskSeed = if (uiStyle == UiStyle.MATERIAL_3 && appListThemeColor.alpha <= 0.01f) {
         launcherStyle.accentColor
     } else {
         appListThemeColor
     }
     val watchFaceFadePalette = appListPalette(
-        seed = watchFaceFadeSeed,
+        seed = appListThemeColor,
         darkMode = effectiveDarkMode,
         uiStyle = uiStyle,
-        useWatchFaceColor = if (uiStyle == UiStyle.MATERIAL_3) true else useAppListWatchFaceColors
+        useWatchFaceColor = false
+    )
+    val launchMaskWatchFaceColor = appLaunchBackdropColor(
+        seed = launchMaskSeed,
+        darkMode = effectiveDarkMode,
+        uiStyle = uiStyle,
+        useWatchFaceColor = useLaunchMaskWatchFaceColors || (uiStyle == UiStyle.MATERIAL_3 && appListWatchFaceColors)
     )
     val launchBackdropColor = when (launchSourceState) {
-        ScreenState.Apps -> appListColors.background
+        ScreenState.Apps -> launchMaskWatchFaceColor
         else -> launcherStyle.screenBackground
     }
     val layerBlurEnabled =
@@ -471,6 +478,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val notificationTransition = remember { Animatable(if (notificationSceneActive) 1f else 0f) }
     var notificationGestureActive by remember { mutableStateOf(false) }
     var notificationTargetProgress by remember { mutableFloatStateOf(if (notificationSceneActive) 1f else 0f) }
+    var notificationReturnState by remember { mutableStateOf(ScreenState.Stack) }
+    val backPressRequests by vm.backPressRequests.collectAsStateWithLifecycle()
+    val homePressRequests by vm.homePressRequests.collectAsStateWithLifecycle()
 
     val appListTransformOrigin = when {
         launchSourceState != ScreenState.Apps -> null
@@ -594,6 +604,41 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val settleNotificationTransition: (Float) -> Unit = { target ->
             notificationGestureActive = false
             notificationTargetProgress = target.coerceIn(0f, 1f)
+        }
+        val openNotificationsFrom: (ScreenState) -> Unit = { origin ->
+            notificationReturnState = origin
+            vm.setRevealedNotificationTarget(null)
+            vm.setState(ScreenState.Notifications)
+            settleNotificationTransition(1f)
+        }
+        val closeNotificationsToOrigin: () -> Unit = {
+            vm.setState(
+                when (notificationReturnState) {
+                    ScreenState.ControlCenter -> ScreenState.ControlCenter
+                    ScreenState.Stack,
+                    ScreenState.Notifications -> if (sideScreenEnabled) ScreenState.Stack else ScreenState.Face
+                    else -> notificationReturnState
+                }
+            )
+            settleNotificationTransition(0f)
+        }
+        LaunchedEffect(backPressRequests) {
+            if (backPressRequests > 0L) {
+                if (screenState == ScreenState.Notifications) {
+                    closeNotificationsToOrigin()
+                } else {
+                    vm.handleBackPress()
+                }
+            }
+        }
+        LaunchedEffect(homePressRequests) {
+            if (homePressRequests > 0L) {
+                if (screenState == ScreenState.Notifications) {
+                    closeNotificationsToOrigin()
+                } else {
+                    vm.handleHomePress()
+                }
+            }
         }
         val sideScreenVisible = sidePageProgress > 0.001f || screenState == ScreenState.Stack || screenState == ScreenState.Notifications
         val widgetPageVisible = widgetPageProgress > 0.001f || screenState == ScreenState.Widgets
@@ -789,7 +834,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         appListScalePercent = appListScalePercent,
                         entryProgress = appListContentEntryProgress,
                         folderOpen = openFolder != null,
-                        useWatchFaceColors = useAppListWatchFaceColors,
+                        useWatchFaceColors = false,
                         allowFolderCreation = appListFoldersEnabled,
                         fisheyeEnabled = appListFisheyeEnabled,
                         fisheyeRangeRows = appListFisheyeRangeRows,
@@ -827,7 +872,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         appListScalePercent = appListScalePercent,
                         entryProgress = appListContentEntryProgress,
                         folderOpen = openFolder != null,
-                        useWatchFaceColors = useAppListWatchFaceColors,
+                        useWatchFaceColors = false,
                         rowBorderEnabled = appListRowBorderEnabled,
                         allowFolderCreation = appListFoldersEnabled,
                         fisheyeEnabled = appListFisheyeEnabled,
@@ -859,7 +904,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 AppFolderOverlay(
                     folder = visibleFolder,
                     items = openFolderItems,
-                    availableItems = apps,
+                    availableItems = allApps,
                     listMode = layoutMode == LayoutMode.List,
                     blurEnabled = blurEnabled,
                     twoToneIconsEnabled = twoToneIconsEnabled,
@@ -869,7 +914,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     },
                     onReorderItems = { orderedItems -> vm.reorderFolderItems(visibleFolder, orderedItems) },
                     onMoveItemOut = { item -> vm.moveItemOutOfFolder(visibleFolder, item) },
-                    onAddItemsToFolder = { items -> vm.addItemsToFolder(visibleFolder, items) },
+                    onSetFolderItems = { items -> vm.setFolderItems(visibleFolder, items) },
                     onRenameFolder = { name -> vm.renameFolder(visibleFolder, name) },
                     onExcludeApp = { appInfo -> vm.setAppHidden(appInfo.componentKey, true) },
                     onRemoveShortcut = vm::removeAppListShortcut,
@@ -927,29 +972,23 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         sideScreenShortcuts = sideScreenShortcuts,
                         sideScreenWidgetSlots = sideScreenWidgetSlots,
                         previewGroups = sideScreenPreviewGroups,
-                        showWidgets = showWidgets,
+                        showWidgets = false,
                         showMusicCard = showMusicControls && swapMusicNotificationComponents,
                         showMediaCustomActions = showMediaCustomActions,
                         musicTextSwitchAnimation = musicTextSwitchAnimation,
                         sectionOrder = sideScreenSectionOrder,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
-                        notificationsEnabled = notificationsEnabled && !swapMusicNotificationComponents,
+                        notificationsEnabled = notificationsEnabled,
                         notificationAccessGranted = notificationAccessGranted,
                         notificationsSceneActive = notificationSceneActive,
                         notificationTransitionProgress = notificationProgress,
                         revealedNotificationTarget = revealedNotificationTarget,
                         onRevealTargetChange = vm::setRevealedNotificationTarget,
-                        onOpenNotifications = {
-                            vm.setRevealedNotificationTarget(null)
-                            vm.setState(ScreenState.Notifications)
-                            settleNotificationTransition(1f)
-                        },
+                        onOpenNotifications = { openNotificationsFrom(ScreenState.Stack) },
                         onNotificationTransitionProgressChange = updateNotificationTransitionProgress,
                         onNotificationTransitionRelease = { open ->
                             if (open) {
-                                vm.setRevealedNotificationTarget(null)
-                                vm.setState(ScreenState.Notifications)
-                                settleNotificationTransition(1f)
+                                openNotificationsFrom(ScreenState.Stack)
                             } else {
                                 settleNotificationTransition(0f)
                             }
@@ -1019,11 +1058,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         showMediaCustomActions = showMediaCustomActions,
                         showNotificationCard = showNotification && swapMusicNotificationComponents,
                         notificationGroups = sideScreenPreviewGroups,
-                        onOpenNotifications = {
-                            vm.setRevealedNotificationTarget(null)
-                            vm.setState(ScreenState.Notifications)
-                            settleNotificationTransition(1f)
-                        },
+                        onOpenNotifications = { openNotificationsFrom(ScreenState.ControlCenter) },
                         onDismissToFace = { vm.setState(ScreenState.Face) },
                         showPowerButton = powerMenuButtonEnabled,
                         onPowerClick = openPowerDialogWithAccessibility
@@ -1048,15 +1083,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         notificationAccessGranted = notificationAccessGranted,
                         revealedNotificationTarget = revealedNotificationTarget,
                         onRevealTargetChange = vm::setRevealedNotificationTarget,
-                        onDismissToStack = {
-                            vm.setState(if (sideScreenEnabled) ScreenState.Stack else ScreenState.Face)
-                            settleNotificationTransition(0f)
-                        },
+                        onDismissToStack = closeNotificationsToOrigin,
                         onTransitionProgressChange = updateNotificationTransitionProgress,
                         onTransitionRelease = { dismiss ->
                             if (dismiss) {
-                                vm.setState(if (sideScreenEnabled) ScreenState.Stack else ScreenState.Face)
-                                settleNotificationTransition(0f)
+                                closeNotificationsToOrigin()
                             } else {
                                 settleNotificationTransition(1f)
                             }

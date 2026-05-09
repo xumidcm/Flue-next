@@ -29,6 +29,7 @@ data class AppInfo(
     val isBuiltInSettingsEntry: Boolean = false,
     val itemType: AppListItemType = AppListItemType.APP,
     val shortcutIntentUri: String? = null,
+    val pinnedShortcutId: String? = null,
     val folderItemKeys: List<String> = emptyList()
 ) {
     val componentKey: String

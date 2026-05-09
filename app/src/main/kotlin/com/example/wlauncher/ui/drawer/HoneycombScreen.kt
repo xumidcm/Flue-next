@@ -94,7 +94,7 @@ import kotlin.math.sqrt
 
 private const val HONEYCOMB_MENU_TRIGGER_MS = 620L
 private const val HONEYCOMB_MENU_DRAG_START_DP = 20f
-private const val HONEYCOMB_FOLDER_HOVER_MS = 700L
+private const val HONEYCOMB_FOLDER_HOVER_MS = 500L
 private const val HONEYCOMB_FOLDER_HOVER_MAX_SPEED_DP_PER_MS = 0.55f
 private const val HONEYCOMB_PRESS_DURATION_MS = 200
 private const val HONEYCOMB_AUTO_SCROLL_EDGE_DP = 96f
@@ -585,7 +585,7 @@ fun HoneycombScreen(
                                         } else if (change.uptimeMillis - folderHoverStartedAt >= HONEYCOMB_FOLDER_HOVER_MS) {
                                             folderDropIndex = folderCandidate
                                         }
-                                        // Keep the hover target in its current visual slot until the dwell resolves.
+                                        dragCurrentIndex = reorderTarget ?: dragCurrentIndex
                                     } else {
                                         folderHoverIndex = null
                                         folderHoverStartedAt = 0L
@@ -950,9 +950,7 @@ fun HoneycombScreen(
                         screenHeight = screenHeightPx,
                         itemSize = iconSizePx,
                         strengthPercent = fisheyeStrengthPercent,
-                        enabled = fisheyeEnabled && edgeSpacingCompressionEnabled &&
-                            dragFromIndex == null &&
-                            longPressedApp == null
+                        enabled = fisheyeEnabled && edgeSpacingCompressionEnabled
                     )
                     val effectiveItemBlur = reduceHoneycombBlurForFastScroll(itemBlur, reduceVisualLoad)
                     AppBubble(
@@ -1479,14 +1477,15 @@ private fun MaterialDenseGridScreen(
                 }
                 awaitEachGesture {
                     val down = awaitPrimaryDown()
+                    val downRoot = down.position + materialContainerRoot
                     val startIndex = findMaterialGridIndexAt(
-                        pointer = down.position,
+                        pointer = downRoot,
                         itemBounds = materialItemBounds
                     ) ?: return@awaitEachGesture
                     val app = apps.getOrNull(startIndex) ?: return@awaitEachGesture
                     val longPress = awaitLongPressByTimeoutOrCancel(
                         pointerId = down.id,
-                        downPosition = down.position,
+                        downPosition = downRoot,
                         timeoutMillis = HONEYCOMB_MENU_TRIGGER_MS,
                         moveTolerancePx = menuDragStartPx
                     ) ?: return@awaitEachGesture
@@ -1495,7 +1494,7 @@ private fun MaterialDenseGridScreen(
                     longPressedApp = app
                     vibrateHaptic(context)
 
-                    val dragOrigin = longPress.position
+                    val dragOrigin = longPress.position + materialContainerRoot
                     val dragStartCenter = materialItemBounds[startIndex]?.center ?: dragOrigin
                     var dragVisualOffset = Offset.Zero
                     var previousPointer = dragOrigin
@@ -1512,7 +1511,7 @@ private fun MaterialDenseGridScreen(
                             break
                         }
 
-                        val pointer = change.position
+                        val pointer = change.position + materialContainerRoot
                         val elapsedMs = (change.uptimeMillis - previousMoveUptime).coerceAtLeast(1L)
                         val pointerSpeed = (pointer - previousPointer).getDistance() / elapsedMs.toFloat()
                         val movedDistance = (pointer - dragOrigin).getDistance()
@@ -1559,7 +1558,7 @@ private fun MaterialDenseGridScreen(
                                 } else if (change.uptimeMillis - folderHoverStartedAt >= HONEYCOMB_FOLDER_HOVER_MS) {
                                     folderDropIndex = folderCandidate
                                 }
-                                // Keep the hovered icon in its current visual slot while creating a folder.
+                                dragCurrentIndex = reorderTarget ?: dragCurrentIndex
                             } else {
                                 folderHoverIndex = null
                                 folderHoverStartedAt = 0L
@@ -1721,7 +1720,7 @@ private fun MaterialDenseGridScreen(
                     0f
                 }
                 val bottomFisheyeStartY = screenHeightPx * 0.52f
-                val itemScale = if (!materialScrollOptimizationActive && fisheyeEnabled && itemCenterY > bottomFisheyeStartY) {
+                val itemScale = if (fisheyeEnabled && itemCenterY > bottomFisheyeStartY) {
                     val dist = itemCenterY - bottomFisheyeStartY
                     fisheyeScale(dist, fisheyeRangePx, minScale = fisheyeMinScale)
                 } else {
@@ -1738,11 +1737,8 @@ private fun MaterialDenseGridScreen(
                     screenHeight = screenHeightPx,
                     itemSize = itemHeightPx,
                     strengthPercent = fisheyeStrengthPercent,
-                    enabled = !materialScrollOptimizationActive &&
-                        fisheyeEnabled && edgeSpacingCompressionEnabled &&
-                        itemCenterY > bottomFisheyeStartY &&
-                        dragFromIndex == null &&
-                        longPressedApp == null
+                    enabled = fisheyeEnabled && edgeSpacingCompressionEnabled &&
+                        itemCenterY > bottomFisheyeStartY
                 )
                 val isDragged = dragFromIndex == index
                 val isFolderHoverTarget = folderHoverIndex == index
@@ -1794,13 +1790,13 @@ private fun MaterialDenseGridScreen(
                         .fillMaxWidth()
                         .aspectRatio(0.92f)
                         .onGloballyPositioned { coords ->
-                            materialLaunchCenters[index] = coords.boundsInRoot().center
-                            val pos = coords.positionInRoot() - materialContainerRoot
+                            val rootBounds = coords.boundsInRoot()
+                            materialLaunchCenters[index] = rootBounds.center
                             val bounds = Rect(
-                                left = pos.x,
-                                top = pos.y,
-                                right = pos.x + coords.size.width.toFloat(),
-                                bottom = pos.y + coords.size.height.toFloat()
+                                left = rootBounds.left,
+                                top = rootBounds.top,
+                                right = rootBounds.right,
+                                bottom = rootBounds.bottom
                             )
                             if (materialItemBounds[index] != bounds) {
                                 materialItemBounds[index] = bounds
@@ -1826,8 +1822,8 @@ private fun MaterialDenseGridScreen(
                             onClick = {
                                 if (longPressedApp != null || dragFromIndex != null) return@combinedClickable
                                 val launchCenter = Offset(
-                                    x = itemCenterX + materialContainerRoot.x + animatedDragX,
-                                    y = itemCenterY + materialContainerRoot.y + animatedDragY + overscroll.value + entryOffsetY
+                                    x = itemCenterX + animatedDragX,
+                                    y = itemCenterY + animatedDragY
                                 )
                                 onAppClick(
                                     app,
@@ -1882,6 +1878,7 @@ private fun MaterialDenseGridScreen(
         val dragOverlayPointer = dragVisualPointer ?: dragPointer
         val dragOverlayBounds = dragOverlayIndex?.let { materialItemBounds[it] ?: dragStartBounds }
         if (dragOverlayApp != null && dragOverlayPointer != null && dragOverlayBounds != null) {
+            val dragOverlayLocalPointer = dragOverlayPointer - materialContainerRoot
             val overlayIcon = remember(
                 dragOverlayApp.componentKey,
                 dragOverlayApp.cachedPlainIcon,
@@ -1899,8 +1896,8 @@ private fun MaterialDenseGridScreen(
                 modifier = Modifier
                     .size(overlayWidth, overlayHeight)
                     .graphicsLayer {
-                        translationX = dragOverlayPointer.x - dragOverlayBounds.width / 2f
-                        translationY = dragOverlayPointer.y - dragOverlayBounds.height / 2f
+                        translationX = dragOverlayLocalPointer.x - dragOverlayBounds.width / 2f
+                        translationY = dragOverlayLocalPointer.y - dragOverlayBounds.height / 2f
                         shadowElevation = iconShadowElevationPx
                         shape = materialIconShape
                         clip = true

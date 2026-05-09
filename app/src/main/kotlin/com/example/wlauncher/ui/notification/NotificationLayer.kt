@@ -88,7 +88,8 @@ import kotlin.math.absoluteValue
 private const val NOTIFICATION_CARD_WIDTH_RATIO = 0.86f
 private const val NOTIFICATION_TOP_SAFE_PADDING_DP = 22
 private const val NOTIFICATION_TOP_OVERSCROLL_LIMIT = 72f
-private const val NOTIFICATION_TOP_OVERSCROLL_TRIGGER = 56f
+private const val NOTIFICATION_TOP_OVERSCROLL_TRIGGER = 42f
+private const val NOTIFICATION_TOP_DISMISS_EXTRA_PULL = 12f
 private const val NOTIFICATION_BOTTOM_OVERSCROLL_LIMIT = -96f
 private const val NOTIFICATION_OVERSCROLL_RESISTANCE = 0.35f
 private const val NOTIFICATION_DISMISS_DRAG_RANGE_RATIO = 0.78f
@@ -145,6 +146,7 @@ fun NotificationLayer(
     var dismissDragVelocityY by remember { mutableFloatStateOf(0f) }
     var lastDismissDragEventUptime by remember { mutableStateOf(0L) }
     var topDismissArmed by remember { mutableStateOf(false) }
+    var topDismissDragRemainder by remember { mutableFloatStateOf(0f) }
 
     fun applyOverscroll(delta: Float): Float {
         val next = when {
@@ -182,7 +184,6 @@ fun NotificationLayer(
     LaunchedEffect(
         isActive,
         listAtTop,
-        listState.isScrollInProgress,
         dismissDragDistance,
         overscroll.value
     ) {
@@ -190,7 +191,7 @@ fun NotificationLayer(
             topDismissArmed = false
         } else if (!listAtTop) {
             topDismissArmed = false
-        } else if (!listState.isScrollInProgress && dismissDragDistance == 0f && overscroll.value == 0f) {
+        } else if (dismissDragDistance == 0f && overscroll.value == 0f) {
             topDismissArmed = true
         }
     }
@@ -207,6 +208,7 @@ fun NotificationLayer(
         dismissDragVelocityY = 0f
         lastDismissDragEventUptime = 0L
         topDismissArmed = false
+        topDismissDragRemainder = 0f
         releaseOverscroll()
         onTransitionRelease(shouldDismiss)
     }
@@ -227,6 +229,10 @@ fun NotificationLayer(
             onDragStart = {
                 dismissDragVelocityY = 0f
                 lastDismissDragEventUptime = 0L
+                topDismissDragRemainder = 0f
+                if (listAtTop) {
+                    topDismissArmed = true
+                }
             },
             onVerticalDrag = { change, dragAmount ->
                 if (lastDismissDragEventUptime != 0L) {
@@ -239,7 +245,7 @@ fun NotificationLayer(
                     }
                 }
                 lastDismissDragEventUptime = change.uptimeMillis
-                if (dragAmount > 0f || dismissDragDistance > 0f) {
+                if ((dragAmount > 0f && listAtTop) || dismissDragDistance > 0f) {
                     change.consume()
                     if (dismissDragDistance > 0f) {
                         val currentDrag = dismissDragDistance
@@ -249,8 +255,12 @@ fun NotificationLayer(
                         }
                     } else {
                         val newOverscroll = applyOverscroll(dragAmount)
-                        if (topDismissArmed && newOverscroll >= NOTIFICATION_TOP_OVERSCROLL_TRIGGER) {
-                            updateDismissDrag(dragAmount)
+                        if ((topDismissArmed || listAtTop) && newOverscroll >= NOTIFICATION_TOP_OVERSCROLL_TRIGGER) {
+                            topDismissDragRemainder += dragAmount
+                            if (topDismissDragRemainder >= NOTIFICATION_TOP_DISMISS_EXTRA_PULL) {
+                                updateDismissDrag(topDismissDragRemainder)
+                                topDismissDragRemainder = 0f
+                            }
                         }
                     }
                 } else if (dragAmount < 0f || overscroll.value != 0f) {
@@ -270,6 +280,7 @@ fun NotificationLayer(
                     dismissDragDistance = 0f
                     dismissDragVelocityY = 0f
                     lastDismissDragEventUptime = 0L
+                    topDismissDragRemainder = 0f
                     onTransitionRelease(false)
                 }
                 releaseOverscroll()
@@ -290,12 +301,17 @@ fun NotificationLayer(
                     lastVisibleItem.index == layoutInfo.totalItemsCount - 1 &&
                     lastVisibleItem.offset + lastVisibleItem.size <= layoutInfo.viewportEndOffset
                 if (available.y > 0f && atTop) {
+                    topDismissArmed = true
                     if (dismissDragDistance > 0f) {
                         updateDismissDrag(available.y)
                     } else {
                         val newOverscroll = applyOverscroll(available.y)
-                        if (topDismissArmed && newOverscroll >= NOTIFICATION_TOP_OVERSCROLL_TRIGGER) {
-                            updateDismissDrag(available.y)
+                        if (newOverscroll >= NOTIFICATION_TOP_OVERSCROLL_TRIGGER) {
+                            topDismissDragRemainder += available.y
+                            if (topDismissDragRemainder >= NOTIFICATION_TOP_DISMISS_EXTRA_PULL) {
+                                updateDismissDrag(topDismissDragRemainder)
+                                topDismissDragRemainder = 0f
+                            }
                         }
                     }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
@@ -350,7 +366,7 @@ fun NotificationLayer(
             .nestedScroll(nestedScroll)
     ) {
         val contentWidth = maxWidth * NOTIFICATION_CARD_WIDTH_RATIO
-        val bottomScrollPadding = ((maxHeight / 2) - 24.dp).coerceAtLeast(132.dp)
+        val bottomScrollPadding = ((maxHeight / 2) + 42.dp).coerceAtLeast(184.dp)
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -410,18 +426,16 @@ fun NotificationLayer(
                             )
                         }
                     }
-                    if (hasClearableNotifications) {
-                        item(
-                            key = "clear_all_notifications",
-                            contentType = "clear_all"
-                        ) {
-                            NotificationRowContainer {
-                                ClearAllButton(onClick = onDismissAllNotifications)
-                            }
-                        }
-                    }
                 }
             }
+        }
+        if (hasClearableNotifications) {
+            ClearAllButton(
+                onClick = onDismissAllNotifications,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 68.dp)
+            )
         }
         WatchBatteryPill(
             level = batteryStatus.level,

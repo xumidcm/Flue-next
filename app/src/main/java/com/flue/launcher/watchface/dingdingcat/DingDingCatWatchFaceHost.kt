@@ -264,8 +264,10 @@ fun DingDingCatWatchFaceHost(
                     nativeCanvas.save()
                     nativeCanvas.translate(offsetX, offsetY)
                     nativeCanvas.scale(fitScale, fitScale)
-                    activeDial.drawPoints.forEach { point ->
-                        if (point.visible) {
+                    val overlayPointTypes = setOf("PICTRUE_EFFECT", "PICTRUE_EFFECT_GRAVITY")
+                    activeDial.drawPoints.asSequence()
+                        .filter { it.visible && it.pointType !in overlayPointTypes }
+                        .forEach { point ->
                             drawDingDingCatPoint(
                                 canvas = nativeCanvas,
                                 dial = activeDial,
@@ -280,7 +282,23 @@ fun DingDingCatWatchFaceHost(
                                 fillScreenBackgroundViewport = if (fillScreen) screenViewportInDesign else null
                             )
                         }
-                    }
+                    activeDial.drawPoints.asSequence()
+                        .filter { it.visible && it.pointType in overlayPointTypes }
+                        .forEach { point ->
+                            drawDingDingCatPoint(
+                                canvas = nativeCanvas,
+                                dial = activeDial,
+                                point = point,
+                                nowMillis = nowMillis,
+                                batteryLevel = batteryLevel,
+                                stepCount = stepCount,
+                                compassAzimuthDegrees = compassAzimuth,
+                                triggeredAnimations = triggeredAnimations,
+                                gravityBodies = gravityBodies,
+                                playbackSpeedPercent = normalizedPlaybackSpeedPercent,
+                                fillScreenBackgroundViewport = if (fillScreen) screenViewportInDesign else null
+                            )
+                        }
                     nativeCanvas.restore()
                 }
             }
@@ -645,35 +663,55 @@ private fun drawParticleEffectLayer(
 ) {
     if (point.pieces.isEmpty()) return
     val config = point.particleEffectConfig()
-    val cellWidth = dial.width.toFloat() / config.columns
+    val area = point.layoutAreaRect(
+        dial = dial,
+        fallbackWidth = point.width.takeIf { it > 0f } ?: dial.width.toFloat(),
+        fallbackHeight = point.height.takeIf { it > 0f } ?: dial.height.toFloat()
+    )
+    val cellWidth = area.width() / config.columns.coerceAtLeast(1)
     val cycleBaseMs = point.durationMs.toLong().coerceAtLeast(16L) * 96L
     val cycleMs = (cycleBaseMs / config.driftY.coerceIn(0.5f, 3f)).toLong().coerceAtLeast(800L)
     val animationMillis = scaleDingDingCatAnimationTime(nowMillis, playbackSpeedPercent)
-    point.pieces.forEachIndexed { index, piece ->
-        val bitmap = DingDingCatBitmapCache.get(File(dial.rootDir, piece), allowSample = true) ?: return@forEachIndexed
-        val seed = stableDingDingCatSeed(point.sourceIndex, index)
-        val gridIndex = seed.floorMod(config.rows * config.columns)
-        val column = gridIndex % config.columns
-        val row = gridIndex / config.columns
-        val phase = ((animationMillis + seed * 37L).floorMod(cycleMs)).toFloat() / cycleMs
-        val scale = point.scale * (0.78f + ((seed ushr 8).floorMod(30)) / 100f)
-        val width = bitmap.width * scale
-        val height = bitmap.height * scale
-        val baseX = (column + 0.5f) * cellWidth
-        val wave = sin((phase * 6.28318f) + index) * cellWidth * 0.22f * config.driftX.coerceIn(0.5f, 2.5f)
-        val x = (baseX + wave).coerceIn(width / 2f, dial.width - width / 2f)
-        val travel = dial.height + height * 2f
-        val y = -height + ((phase + row / config.rows.toFloat()) % 1f) * travel
-        val alphaMix = config.alphaMin + ((seed ushr 16).floorMod(100) / 99f) * (config.alphaMax - config.alphaMin)
-        val paint = pointPaint(point).apply {
-            alpha = (pointAlpha(point) * alphaMix.coerceIn(0.05f, 1f)).roundToInt().coerceIn(0, 255)
+    canvas.save()
+    canvas.clipRect(area.left, area.top, area.right, area.bottom)
+    try {
+        point.pieces.forEachIndexed { index, piece ->
+            val bitmap = DingDingCatBitmapCache.get(File(dial.rootDir, piece), allowSample = true) ?: return@forEachIndexed
+            val seed = stableDingDingCatSeed(point.sourceIndex, index)
+            val gridIndex = seed.floorMod(config.rows * config.columns)
+            val column = gridIndex % config.columns
+            val row = gridIndex / config.columns
+            val phase = ((animationMillis + seed * 37L).floorMod(cycleMs)).toFloat() / cycleMs
+            val scale = point.scale * (0.78f + ((seed ushr 8).floorMod(30)) / 100f)
+            val width = bitmap.width * scale
+            val height = bitmap.height * scale
+            val baseX = area.left + (column + 0.5f) * cellWidth
+            val wave = sin((phase * 6.28318f) + index) * cellWidth * 0.22f * config.driftX.coerceIn(0.5f, 2.5f)
+            val x = if (width >= area.width()) {
+                area.centerX()
+            } else {
+                (baseX + wave).coerceIn(area.left + width / 2f, area.right - width / 2f)
+            }
+            val travel = area.height() + height * 2f
+            val rawY = area.top - height + ((phase + row / config.rows.toFloat()) % 1f) * travel
+            val y = if (height >= area.height()) {
+                area.centerY()
+            } else {
+                rawY.coerceIn(area.top + height / 2f, area.bottom - height / 2f)
+            }
+            val alphaMix = config.alphaMin + ((seed ushr 16).floorMod(100) / 99f) * (config.alphaMax - config.alphaMin)
+            val paint = pointPaint(point).apply {
+                alpha = (pointAlpha(point) * alphaMix.coerceIn(0.05f, 1f)).roundToInt().coerceIn(0, 255)
+            }
+            canvas.drawBitmap(
+                bitmap,
+                null,
+                RectF(x - width / 2f, y - height / 2f, x + width / 2f, y + height / 2f),
+                paint
+            )
         }
-        canvas.drawBitmap(
-            bitmap,
-            null,
-            RectF(x - width / 2f, y - height / 2f, x + width / 2f, y + height / 2f),
-            paint
-        )
+    } finally {
+        canvas.restore()
     }
 }
 
@@ -797,9 +835,8 @@ private fun drawPointerLayer(
             calendar.get(Calendar.SECOND) * 6f + calendar.get(Calendar.MILLISECOND) * 0.006f
         }
     }
-    val rotation = targetRotation - point.startValue
     canvas.save()
-    canvas.rotate(rotation, centerX, centerY)
+    canvas.rotate(targetRotation, centerX, centerY)
     canvas.drawBitmap(bitmap, null, dst, pointPaint(point))
     canvas.restore()
 }

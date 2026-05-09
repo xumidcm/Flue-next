@@ -77,6 +77,8 @@ enum class SideScreenSection(val prefValue: String) {
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
+        private var cachedWatchFaces: List<LunchWatchFaceDescriptor>? = null
+
         val KEY_LAYOUT = stringPreferencesKey("layout_mode")
         val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
         val KEY_UI_STYLE = stringPreferencesKey("ui_style")
@@ -200,6 +202,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             val clamped = value.coerceIn(50, 200)
             if (clamped == 200) return 200
             return ((clamped / 10) * 10).coerceIn(50, 200)
+        }
+
+        private fun normalizeGlobalUiScalePercent(value: Int): Int {
+            return ((value.coerceIn(50, 150) / 5f).roundToInt() * 5).coerceIn(50, 150)
         }
 
         private fun normalizeDingDingCatPlaybackSpeedPercent(value: Int): Int {
@@ -426,6 +432,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val notificationGroups: StateFlow<List<NotificationGroupUi>> = _notificationGroups.asStateFlow()
     private val _revealedNotificationTarget = MutableStateFlow<NotificationRevealTarget?>(null)
     val revealedNotificationTarget: StateFlow<NotificationRevealTarget?> = _revealedNotificationTarget.asStateFlow()
+    private val _backPressRequests = MutableStateFlow(0L)
+    val backPressRequests: StateFlow<Long> = _backPressRequests.asStateFlow()
+    private val _homePressRequests = MutableStateFlow(0L)
+    val homePressRequests: StateFlow<Long> = _homePressRequests.asStateFlow()
 
     private val _hiddenApps = MutableStateFlow<Set<String>>(emptySet())
     val hiddenApps: StateFlow<Set<String>> = _hiddenApps.asStateFlow()
@@ -436,7 +446,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _selectedIconPackPackage = MutableStateFlow<String?>(null)
     val selectedIconPackPackage: StateFlow<String?> = _selectedIconPackPackage.asStateFlow()
 
-    private val _availableWatchFaces = MutableStateFlow(LunchWatchFaceScanner.builtInDescriptors())
+    private val _availableWatchFaces = MutableStateFlow(cachedWatchFaces ?: LunchWatchFaceScanner.builtInDescriptors())
     val availableWatchFaces: StateFlow<List<LunchWatchFaceDescriptor>> = _availableWatchFaces.asStateFlow()
 
     private val _selectedWatchFaceId = MutableStateFlow(BUILT_IN_WATCHFACE_ID)
@@ -778,7 +788,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListScalePercent.value = loadedAppListScale
                 }
 
-                val loadedGlobalUiScale = (prefs[KEY_GLOBAL_UI_SCALE_PERCENT] ?: 100).coerceIn(50, 150)
+                val loadedGlobalUiScale = normalizeGlobalUiScalePercent(prefs[KEY_GLOBAL_UI_SCALE_PERCENT] ?: 100)
                 if (_globalUiScalePercent.value != loadedGlobalUiScale) {
                     _globalUiScalePercent.value = loadedGlobalUiScale
                 }
@@ -1270,6 +1280,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun requestHomePress() {
+        _homePressRequests.value = _homePressRequests.value + 1L
+    }
+
+    fun requestBackPress() {
+        _backPressRequests.value = _backPressRequests.value + 1L
+    }
+
     fun handleBackPress() {
         when (_screenState.value) {
             ScreenState.Face -> Unit
@@ -1485,6 +1503,71 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _openFolderItems.value = appRepository.itemsForKeys(nextKeys)
     }
 
+    fun setFolderItems(folder: AppInfo, items: List<AppInfo>) {
+        if (!folder.isFolder) return
+        val originalKeys = appRepository.folderItemKeys(folder.componentKey)
+        val folderSnapshot = appRepository.folderMembershipSnapshot()
+        val selectedKeys = items
+            .asSequence()
+            .filterNot { it.isFolder }
+            .map { it.componentKey }
+            .filter { it != folder.componentKey }
+            .distinct()
+            .toList()
+        val selectedKeySet = selectedKeys.toSet()
+        val dissolvedOtherFolderItems = folderSnapshot
+            .filterKeys { it != folder.componentKey }
+            .mapNotNull { (otherFolderKey, otherKeys) ->
+                val keptKeys = otherKeys.filterNot { it in selectedKeySet }
+                if (keptKeys != otherKeys && keptKeys.size <= 1) {
+                    otherFolderKey to keptKeys.filter { appRepository.itemForKey(it) != null }
+                } else {
+                    null
+                }
+            }
+        val nextKeys = appRepository.setFolderItems(folder.componentKey, selectedKeys)
+        val currentTopLevelKeys = apps.value.map { it.componentKey }.toMutableList()
+        val folderIndex = currentTopLevelKeys.indexOf(folder.componentKey).takeIf { it >= 0 }
+        val removedKeys = originalKeys
+            .filter { it !in selectedKeySet }
+            .filter { appRepository.itemForKey(it) != null }
+        currentTopLevelKeys.removeAll(selectedKeySet)
+        dissolvedOtherFolderItems.forEach { (otherFolderKey, keptKeys) ->
+            val otherFolderIndex = currentTopLevelKeys.indexOf(otherFolderKey).takeIf { it >= 0 }
+            val otherInsertAt = (otherFolderIndex ?: currentTopLevelKeys.size).coerceIn(0, currentTopLevelKeys.size)
+            currentTopLevelKeys.remove(otherFolderKey)
+            keptKeys.forEachIndexed { offset, key ->
+                if (key !in currentTopLevelKeys) {
+                    currentTopLevelKeys.add((otherInsertAt + offset).coerceIn(0, currentTopLevelKeys.size), key)
+                }
+            }
+        }
+        val insertAt = currentTopLevelKeys.indexOf(folder.componentKey).takeIf { it >= 0 }
+            ?: (folderIndex ?: currentTopLevelKeys.size).coerceIn(0, currentTopLevelKeys.size)
+        if (nextKeys.size <= 1) {
+            currentTopLevelKeys.remove(folder.componentKey)
+            val restoredKeys = nextKeys + removedKeys.filter { it !in nextKeys }
+            restoredKeys.forEachIndexed { offset, key ->
+                if (key !in currentTopLevelKeys) {
+                    currentTopLevelKeys.add((insertAt + offset).coerceIn(0, currentTopLevelKeys.size), key)
+                }
+            }
+            setAppOrder(currentTopLevelKeys)
+            closeFolder()
+            return
+        }
+        removedKeys.forEachIndexed { offset, key ->
+            if (key !in currentTopLevelKeys) {
+                currentTopLevelKeys.add((insertAt + 1 + offset).coerceIn(0, currentTopLevelKeys.size), key)
+            }
+        }
+        if (folder.componentKey !in currentTopLevelKeys) {
+            currentTopLevelKeys.add(insertAt, folder.componentKey)
+        }
+        setAppOrder(currentTopLevelKeys)
+        _openFolderItems.value = appRepository.itemsForKeys(nextKeys)
+    }
+
     fun setHoneycombCols(cols: Int) {
         _honeycombCols.value = cols.coerceIn(1, 5)
         val savedValue = _honeycombCols.value
@@ -1571,7 +1654,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setGlobalUiScalePercent(value: Int) {
-        _globalUiScalePercent.value = value.coerceIn(50, 150)
+        _globalUiScalePercent.value = normalizeGlobalUiScalePercent(value)
         val savedValue = _globalUiScalePercent.value
         persistDebounced("key_global_ui_scale_percent") {
             store.edit { it[KEY_GLOBAL_UI_SCALE_PERCENT] = savedValue }
@@ -1790,16 +1873,22 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun refreshWatchFaces(force: Boolean = false) {
         val now = SystemClock.elapsedRealtime()
-        if (!force && now - lastWatchFaceRefreshAt < 25_000L) return
+        cachedWatchFaces?.let { cached ->
+            if (_availableWatchFaces.value != cached) {
+                _availableWatchFaces.value = cached
+                LunchWatchFaceRegistry.update(cached)
+                watchFaceScanHydrated = true
+                syncSelectedWatchFace(freshScanCompleted = true)
+            }
+        }
+        if (!force && watchFaceScanHydrated && now - lastWatchFaceRefreshAt < 25_000L) return
         lastWatchFaceRefreshAt = now
         watchFaceRefreshJob?.cancel()
         watchFaceRefreshJob = viewModelScope.launch {
             val scanned = withContext(Dispatchers.IO) {
                 scanAllWatchFaces()
             }
-            _availableWatchFaces.value = scanned
-            LunchWatchFaceRegistry.update(scanned)
-            watchFaceScanHydrated = true
+            publishWatchFaces(scanned)
             syncSelectedWatchFace(freshScanCompleted = true)
         }
     }
@@ -1816,9 +1905,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             } else {
                 scannedRaw + descriptor
             }
-            _availableWatchFaces.value = scanned
-            LunchWatchFaceRegistry.update(scanned)
-            watchFaceScanHydrated = true
+            publishWatchFaces(scanned)
             val selected = scanned.firstOrNull { it.id == descriptor.id && it.isDingDingCat } ?: descriptor
             _selectedWatchFaceId.value = selected.id
             _watchFaceLastError.value = null
@@ -1882,9 +1969,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
             if (!deleted) error("删除失败")
             val scanned = withContext(Dispatchers.IO) { scanAllWatchFaces() }
-            _availableWatchFaces.value = scanned
-            LunchWatchFaceRegistry.update(scanned)
-            watchFaceScanHydrated = true
+            publishWatchFaces(scanned)
             if (_selectedWatchFaceId.value == id) {
                 _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
                 _watchFaceLastError.value = null
@@ -1906,9 +1991,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (id.startsWith(DINGDINGCAT_ID_PREFIX) && _availableWatchFaces.value.none { it.id == id }) {
             viewModelScope.launch {
                 val scanned = withContext(Dispatchers.IO) { scanAllWatchFaces() }
-                _availableWatchFaces.value = scanned
-                LunchWatchFaceRegistry.update(scanned)
-                watchFaceScanHydrated = true
+                publishWatchFaces(scanned)
                 syncSelectedWatchFace(freshScanCompleted = true)
                 _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
                 store.edit {
@@ -1933,6 +2016,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         return LunchWatchFaceScanner.builtInDescriptors() +
             LunchWatchFaceScanner.scanInstalled(context) +
             DingDingCatWatchFaceScanner.scanImported(context)
+    }
+
+    private fun publishWatchFaces(watchFaces: List<LunchWatchFaceDescriptor>) {
+        cachedWatchFaces = watchFaces
+        _availableWatchFaces.value = watchFaces
+        LunchWatchFaceRegistry.update(watchFaces)
+        watchFaceScanHydrated = true
     }
 
     fun fallbackToBuiltIn(error: String? = null) {
