@@ -43,6 +43,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -76,7 +77,6 @@ import com.flue.launcher.data.model.iconForDisplay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.min
 import kotlinx.coroutines.withTimeoutOrNull
 
 private const val FOLDER_ITEM_MENU_TRIGGER_MS = 620L
@@ -122,6 +122,9 @@ fun AppFolderOverlay(
     var dragPointerRoot by remember { mutableStateOf(Offset.Zero) }
     var draggedOutsidePanel by remember { mutableStateOf(false) }
     var hoverKey by remember { mutableStateOf<String?>(null) }
+    var dragFolderTargetKey by remember { mutableStateOf<String?>(null) }
+    var dragFolderCandidateKey by remember { mutableStateOf<String?>(null) }
+    var dragFolderCandidateHits by remember { mutableIntStateOf(0) }
     var moveOutJob by remember { mutableStateOf<Job?>(null) }
     var dismissJob by remember { mutableStateOf<Job?>(null) }
     val dismissInteraction = remember { MutableInteractionSource() }
@@ -156,6 +159,9 @@ fun AppFolderOverlay(
         draggedKey = null
         draggedOutsidePanel = false
         hoverKey = null
+        dragFolderTargetKey = null
+        dragFolderCandidateKey = null
+        dragFolderCandidateHits = 0
         onMoveItemOut(app)
         requestDismiss()
     }
@@ -180,18 +186,36 @@ fun AppFolderOverlay(
         if (insidePanel) {
             cancelMoveOutJob()
             val from = visibleItems.indexOfFirst { it.componentKey == app.componentKey }
-            val to = findFolderGridIndexAt(
+            val toKey = findFolderGridIndexAt(
                 pointer = rootPointer,
                 items = visibleItems,
                 itemBounds = itemBounds,
                 excludedKey = app.componentKey
-            )
-            hoverKey = null
-            if (from >= 0 && to != null && to != from) {
-                moveVisibleItem(from, to)
+            )?.let { visibleItems.getOrNull(it)?.componentKey }
+            hoverKey = toKey
+            if (toKey == null) {
+                dragFolderCandidateKey = null
+                dragFolderCandidateHits = 0
+                return
+            }
+            if (toKey != dragFolderCandidateKey) {
+                dragFolderCandidateKey = toKey
+                dragFolderCandidateHits = 1
+            } else {
+                dragFolderCandidateHits += 1
+            }
+            if (dragFolderCandidateHits >= 2 && dragFolderTargetKey != toKey) {
+                val to = visibleItems.indexOfFirst { it.componentKey == toKey }
+                if (from >= 0 && to >= 0 && to != from) {
+                    moveVisibleItem(from, to)
+                    dragFolderTargetKey = toKey
+                }
             }
         } else {
             hoverKey = null
+            dragFolderTargetKey = null
+            dragFolderCandidateKey = null
+            dragFolderCandidateHits = 0
             if (moveOutJob == null) {
                 moveOutJob = scope.launch {
                     delay(FOLDER_ITEM_DRAG_OUT_MS)
@@ -208,6 +232,9 @@ fun AppFolderOverlay(
         visibleItems.addAll(items)
         itemBounds.clear()
         hoverKey = null
+        dragFolderTargetKey = null
+        dragFolderCandidateKey = null
+        dragFolderCandidateHits = 0
     }
     LaunchedEffect(folder.componentKey) {
         dismissJob?.cancel()
@@ -579,6 +606,9 @@ fun AppFolderOverlay(
                                         dragActive = true
                                         draggedKey = app.componentKey
                                         draggedOutsidePanel = false
+                                        dragFolderTargetKey = null
+                                        dragFolderCandidateKey = null
+                                        dragFolderCandidateHits = 0
                                         updateDraggedItemTarget(app, rootPointer)
                                         vibrateHaptic(context)
                                     }
@@ -593,6 +623,9 @@ fun AppFolderOverlay(
                                     draggedKey = null
                                     draggedOutsidePanel = false
                                     hoverKey = null
+                                    dragFolderTargetKey = null
+                                    dragFolderCandidateKey = null
+                                    dragFolderCandidateHits = 0
                                     if (releasedOutside) {
                                         finishMoveOut(app)
                                     } else {
@@ -633,16 +666,6 @@ fun AppFolderOverlay(
                             animationSpec = tween(150),
                             label = "folder_item_press"
                         )
-                        val pressedOverlay by animateFloatAsState(
-                            targetValue = when {
-                                isDragged -> 0.18f
-                                isFolderHoverTarget -> 0.26f
-                                isPressed -> 0.12f
-                                else -> 0f
-                            },
-                            animationSpec = tween(150),
-                            label = "folder_item_overlay"
-                        )
                         Column(
                             modifier = Modifier
                                 .animateItem(
@@ -659,7 +682,6 @@ fun AppFolderOverlay(
                                     this.alpha = if (isDragged) 0f else 1f
                                 }
                                 .clip(RoundedCornerShape(18.dp))
-                                .background(Color.Black.copy(alpha = pressedOverlay))
                                 .clickable(
                                     interactionSource = interactionSource,
                                     indication = null
@@ -732,19 +754,7 @@ private fun findFolderGridIndexAt(
     itemBounds: Map<String, Rect>,
     excludedKey: String
 ): Int? {
-    var bestIndex: Int? = null
-    var bestDistance = Float.MAX_VALUE
-    var bestSize = Float.MAX_VALUE
-    items.forEachIndexed { index, app ->
-        if (app.componentKey == excludedKey) return@forEachIndexed
-        val bounds = itemBounds[app.componentKey] ?: return@forEachIndexed
-        val distance = (bounds.center - pointer).getDistance()
-        val size = min(bounds.width, bounds.height).coerceAtLeast(1f)
-        if (distance < bestDistance) {
-            bestDistance = distance
-            bestSize = size
-            bestIndex = index
-        }
-    }
-    return bestIndex?.takeIf { bestDistance <= bestSize * 1.35f }
+    return items.indexOfFirst { app ->
+        app.componentKey != excludedKey && itemBounds[app.componentKey]?.contains(pointer) == true
+    }.takeIf { it >= 0 }
 }
