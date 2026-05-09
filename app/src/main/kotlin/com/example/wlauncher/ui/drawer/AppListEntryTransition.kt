@@ -11,11 +11,11 @@ internal data class AppListEntryVisuals(
 internal fun appListEntryVisuals(progress: Float): AppListEntryVisuals {
     val p = progress.coerceIn(0f, 1f)
     return AppListEntryVisuals(
-        backgroundProgress = transitionPhase(p, 0f, 0.86f),
-        backgroundFillProgress = transitionPhase(p, 0.80f, 1f),
-        iconProgress = transitionPhase(p, 0.04f, 0.42f),
-        surfaceProgress = transitionPhase(p, 0.42f, 0.80f),
-        edgeProgress = transitionPhase(p, 0.74f, 1f)
+        backgroundProgress = 1f,
+        backgroundFillProgress = 1f,
+        iconProgress = transitionPhase(p, 0f, 0.36f),
+        surfaceProgress = transitionPhase(p, 0.18f, 0.56f),
+        edgeProgress = transitionPhase(p, 0.34f, 0.68f)
     )
 }
 
