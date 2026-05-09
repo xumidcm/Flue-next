@@ -63,7 +63,6 @@ import com.flue.launcher.ui.controlcenter.ControlCenterLayer
 import com.flue.launcher.ui.drawer.AppFolderOverlay
 import com.flue.launcher.ui.drawer.HoneycombScreen
 import com.flue.launcher.ui.drawer.ListDrawerScreen
-import com.flue.launcher.ui.drawer.appLaunchBackdropColor
 import com.flue.launcher.ui.drawer.appListPalette
 import com.flue.launcher.ui.drawer.vibrateHaptic
 import com.flue.launcher.ui.home.WatchFaceLayer
@@ -334,32 +333,26 @@ fun LauncherScreen(vm: LauncherViewModel) {
         watchFaceDescriptor = selectedWatchFace,
         enabled = appListWatchFaceColors
     )
-    val useLaunchMaskWatchFaceColors = appListWatchFaceColors && appListThemeColor.alpha > 0.01f
+    val useAppListWatchFaceColors = appListWatchFaceColors && appListThemeColor.alpha > 0.01f
     val appListColors = appListPalette(
         seed = appListThemeColor,
         darkMode = effectiveDarkMode,
         uiStyle = uiStyle,
-        useWatchFaceColor = false
+        useWatchFaceColor = useAppListWatchFaceColors
     )
-    val launchMaskSeed = if (uiStyle == UiStyle.MATERIAL_3 && appListThemeColor.alpha <= 0.01f) {
+    val watchFaceFadeSeed = if (uiStyle == UiStyle.MATERIAL_3 && appListThemeColor.alpha <= 0.01f) {
         launcherStyle.accentColor
     } else {
         appListThemeColor
     }
     val watchFaceFadePalette = appListPalette(
-        seed = appListThemeColor,
+        seed = watchFaceFadeSeed,
         darkMode = effectiveDarkMode,
         uiStyle = uiStyle,
-        useWatchFaceColor = false
-    )
-    val launchMaskWatchFaceColor = appLaunchBackdropColor(
-        seed = launchMaskSeed,
-        darkMode = effectiveDarkMode,
-        uiStyle = uiStyle,
-        useWatchFaceColor = useLaunchMaskWatchFaceColors || (uiStyle == UiStyle.MATERIAL_3 && appListWatchFaceColors)
+        useWatchFaceColor = if (uiStyle == UiStyle.MATERIAL_3) true else useAppListWatchFaceColors
     )
     val launchBackdropColor = when (launchSourceState) {
-        ScreenState.Apps -> launchMaskWatchFaceColor
+        ScreenState.Apps -> appListColors.background
         else -> launcherStyle.screenBackground
     }
     val layerBlurEnabled =
@@ -834,7 +827,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         appListScalePercent = appListScalePercent,
                         entryProgress = appListContentEntryProgress,
                         folderOpen = openFolder != null,
-                        useWatchFaceColors = false,
+                        useWatchFaceColors = useAppListWatchFaceColors,
                         allowFolderCreation = appListFoldersEnabled,
                         fisheyeEnabled = appListFisheyeEnabled,
                         fisheyeRangeRows = appListFisheyeRangeRows,
@@ -872,7 +865,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         appListScalePercent = appListScalePercent,
                         entryProgress = appListContentEntryProgress,
                         folderOpen = openFolder != null,
-                        useWatchFaceColors = false,
+                        useWatchFaceColors = useAppListWatchFaceColors,
                         rowBorderEnabled = appListRowBorderEnabled,
                         allowFolderCreation = appListFoldersEnabled,
                         fisheyeEnabled = appListFisheyeEnabled,

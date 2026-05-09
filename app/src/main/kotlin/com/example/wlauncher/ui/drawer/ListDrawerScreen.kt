@@ -173,6 +173,7 @@ fun ListDrawerScreen(
     val topReturnThresholdPx = with(density) { 72.dp.toPx() }
     val listPaletteStyle = if (uiStyle == UiStyle.MATERIAL_3) UiStyle.APPLE_WATCH else uiStyle
     val appPalette = appListPalette(themeColor, darkMode, listPaletteStyle, useWatchFaceColors)
+    val rowShape = RoundedCornerShape(18.dp)
     val listRowTextColor = appPalette.text
     val entryVisuals = appListEntryVisuals(entryProgress)
     val appListScale = appListScalePercent.coerceIn(50, 200) / 100f
@@ -670,6 +671,10 @@ fun ListDrawerScreen(
                     val isDragged = dragFromIndex == index
                     val isSettling = settlingKey == app.componentKey
                     val isGlidePressed = glidePressedIndex == index
+                    val isFolderHoverTarget = folderHoverIndex == index
+                    val showMenuBackground = longPressedApp?.componentKey == app.componentKey &&
+                        dragFromIndex == null
+                    val showRowBackground = rowBorderEnabled || showMenuBackground || isFolderHoverTarget
                     val displacedTarget = listDisplacementForIndex(
                         index = index,
                         dragFromIndex = dragFromIndex,
@@ -686,12 +691,29 @@ fun ListDrawerScreen(
                         targetValue = when {
                             isDragged -> 0.965f
                             isGlidePressed -> 0.992f
+                            isFolderHoverTarget -> 0.90f
                             isPressed -> 0.97f
                             else -> 1f
                         },
                         animationSpec = tween(durationMillis = 170),
                         label = "list_press_scale"
                     )
+                    val pressedOverlay by animateFloatAsState(
+                        targetValue = when {
+                            isDragged -> 0.10f
+                            isGlidePressed -> 0.05f
+                            isFolderHoverTarget -> 0.20f
+                            isPressed -> 0.12f
+                            else -> 0f
+                        },
+                        animationSpec = tween(durationMillis = 170),
+                        label = "list_press_overlay"
+                    )
+                    val pressedOverlayColor = if (isFolderHoverTarget) {
+                        Color.Black
+                    } else {
+                        appPalette.itemPressedOverlay
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -714,6 +736,17 @@ fun ListDrawerScreen(
                                 }
                                 alpha = rowAlpha * entryVisuals.iconProgress
                             }
+                            .then(
+                                if (showRowBackground) {
+                                    Modifier.background(
+                                        appPalette.item.copy(alpha = entryVisuals.surfaceProgress),
+                                        rowShape
+                                    )
+                                } else {
+                                    Modifier
+                                }
+                            )
+                            .background(pressedOverlayColor.copy(alpha = pressedOverlay), rowShape)
                             .combinedClickable(
                                 interactionSource = interactionSource,
                                 indication = null,
@@ -777,6 +810,7 @@ fun ListDrawerScreen(
                             alpha = 0.98f
                             shadowElevation = if (iconShadowEnabled) 18.dp.toPx() else 0f
                         }
+                        .background(appPalette.item, rowShape)
                         .padding(horizontal = (28.dp * appListScale).coerceIn(14.dp, 40.dp), vertical = scaledRowVerticalPadding),
                     verticalAlignment = Alignment.CenterVertically
                 ) {

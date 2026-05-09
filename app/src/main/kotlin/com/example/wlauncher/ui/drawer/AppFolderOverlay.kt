@@ -43,7 +43,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -123,8 +122,6 @@ fun AppFolderOverlay(
     var draggedOutsidePanel by remember { mutableStateOf(false) }
     var hoverKey by remember { mutableStateOf<String?>(null) }
     var dragFolderTargetKey by remember { mutableStateOf<String?>(null) }
-    var dragFolderCandidateKey by remember { mutableStateOf<String?>(null) }
-    var dragFolderCandidateHits by remember { mutableIntStateOf(0) }
     var moveOutJob by remember { mutableStateOf<Job?>(null) }
     var dismissJob by remember { mutableStateOf<Job?>(null) }
     val dismissInteraction = remember { MutableInteractionSource() }
@@ -160,8 +157,6 @@ fun AppFolderOverlay(
         draggedOutsidePanel = false
         hoverKey = null
         dragFolderTargetKey = null
-        dragFolderCandidateKey = null
-        dragFolderCandidateHits = 0
         onMoveItemOut(app)
         requestDismiss()
     }
@@ -194,17 +189,9 @@ fun AppFolderOverlay(
             )?.let { visibleItems.getOrNull(it)?.componentKey }
             hoverKey = toKey
             if (toKey == null) {
-                dragFolderCandidateKey = null
-                dragFolderCandidateHits = 0
                 return
             }
-            if (toKey != dragFolderCandidateKey) {
-                dragFolderCandidateKey = toKey
-                dragFolderCandidateHits = 1
-            } else {
-                dragFolderCandidateHits += 1
-            }
-            if (dragFolderCandidateHits >= 2 && dragFolderTargetKey != toKey) {
+            if (dragFolderTargetKey != toKey) {
                 val to = visibleItems.indexOfFirst { it.componentKey == toKey }
                 if (from >= 0 && to >= 0 && to != from) {
                     moveVisibleItem(from, to)
@@ -214,8 +201,6 @@ fun AppFolderOverlay(
         } else {
             hoverKey = null
             dragFolderTargetKey = null
-            dragFolderCandidateKey = null
-            dragFolderCandidateHits = 0
             if (moveOutJob == null) {
                 moveOutJob = scope.launch {
                     delay(FOLDER_ITEM_DRAG_OUT_MS)
@@ -233,8 +218,6 @@ fun AppFolderOverlay(
         itemBounds.clear()
         hoverKey = null
         dragFolderTargetKey = null
-        dragFolderCandidateKey = null
-        dragFolderCandidateHits = 0
     }
     LaunchedEffect(folder.componentKey) {
         dismissJob?.cancel()
@@ -607,8 +590,6 @@ fun AppFolderOverlay(
                                         draggedKey = app.componentKey
                                         draggedOutsidePanel = false
                                         dragFolderTargetKey = null
-                                        dragFolderCandidateKey = null
-                                        dragFolderCandidateHits = 0
                                         updateDraggedItemTarget(app, rootPointer)
                                         vibrateHaptic(context)
                                     }
@@ -624,8 +605,6 @@ fun AppFolderOverlay(
                                     draggedOutsidePanel = false
                                     hoverKey = null
                                     dragFolderTargetKey = null
-                                    dragFolderCandidateKey = null
-                                    dragFolderCandidateHits = 0
                                     if (releasedOutside) {
                                         finishMoveOut(app)
                                     } else {
@@ -652,63 +631,63 @@ fun AppFolderOverlay(
                             key = { _, app -> app.componentKey },
                             contentType = { _, _ -> "folder_app" }
                         ) { index, app ->
-                        val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
-                        val isPressed by interactionSource.collectIsPressedAsState()
-                        val isDragged = draggedKey == app.componentKey
-                        val isFolderHoverTarget = hoverKey == app.componentKey
-                        val pressedScale by animateFloatAsState(
-                            targetValue = when {
-                                isDragged -> 0.92f
-                                isFolderHoverTarget -> 0.96f
-                                isPressed -> 0.95f
-                                else -> 1f
-                            },
-                            animationSpec = tween(150),
-                            label = "folder_item_press"
-                        )
-                        Column(
-                            modifier = Modifier
-                                .animateItem(
-                                    fadeInSpec = tween(140),
-                                    placementSpec = spring(stiffness = 520f, dampingRatio = 0.84f),
-                                    fadeOutSpec = tween(120)
-                                )
-                                .onGloballyPositioned { coords ->
-                                    itemBounds[app.componentKey] = coords.boundsInRoot()
-                                }
-                                .graphicsLayer {
-                                    scaleX = pressedScale
-                                    scaleY = pressedScale
-                                    this.alpha = if (isDragged) 0f else 1f
-                                }
-                                .clip(RoundedCornerShape(18.dp))
-                                .clickable(
-                                    interactionSource = interactionSource,
-                                    indication = null
-                                ) {
-                                    if (draggedKey == null && menuApp == null) {
-                                        onAppClick(app, Offset(0.5f, 0.5f))
-                                    }
-                                }
-                                .padding(horizontal = 4.dp, vertical = 6.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Image(
-                                bitmap = app.iconForDisplay(twoToneIconsEnabled),
-                                contentDescription = app.label,
-                                contentScale = ContentScale.Crop,
+                            val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
+                            val isPressed by interactionSource.collectIsPressedAsState()
+                            val isDragged = draggedKey == app.componentKey
+                            val isFolderHoverTarget = hoverKey == app.componentKey
+                            val pressedScale by animateFloatAsState(
+                                targetValue = when {
+                                    isDragged -> 0.92f
+                                    isFolderHoverTarget -> 0.96f
+                                    isPressed -> 0.95f
+                                    else -> 1f
+                                },
+                                animationSpec = tween(150),
+                                label = "folder_item_press"
+                            )
+                            Column(
                                 modifier = Modifier
-                                    .size(56.dp)
+                                    .animateItem(
+                                        fadeInSpec = tween(140),
+                                        placementSpec = spring(stiffness = 520f, dampingRatio = 0.84f),
+                                        fadeOutSpec = tween(120)
+                                    )
+                                    .onGloballyPositioned { coords ->
+                                        itemBounds[app.componentKey] = coords.boundsInRoot()
+                                    }
+                                    .graphicsLayer {
+                                        scaleX = pressedScale
+                                        scaleY = pressedScale
+                                        this.alpha = if (isDragged) 0f else 1f
+                                    }
                                     .clip(RoundedCornerShape(18.dp))
-                            )
-                            Spacer(modifier = Modifier.height(5.dp))
-                            Text(
-                                text = app.label,
-                                color = Color.White.copy(alpha = 0.86f),
-                                fontSize = 10.sp,
-                                maxLines = 1
-                            )
-                        }
+                                    .clickable(
+                                        interactionSource = interactionSource,
+                                        indication = null
+                                    ) {
+                                        if (draggedKey == null && menuApp == null) {
+                                            onAppClick(app, Offset(0.5f, 0.5f))
+                                        }
+                                    }
+                                    .padding(horizontal = 4.dp, vertical = 6.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Image(
+                                    bitmap = app.iconForDisplay(twoToneIconsEnabled),
+                                    contentDescription = app.label,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .clip(RoundedCornerShape(18.dp))
+                                )
+                                Spacer(modifier = Modifier.height(5.dp))
+                                Text(
+                                    text = app.label,
+                                    color = Color.White.copy(alpha = 0.86f),
+                                    fontSize = 10.sp,
+                                    maxLines = 1
+                                )
+                            }
                         }
                     }
                 }
@@ -754,7 +733,17 @@ private fun findFolderGridIndexAt(
     itemBounds: Map<String, Rect>,
     excludedKey: String
 ): Int? {
-    return items.indexOfFirst { app ->
-        app.componentKey != excludedKey && itemBounds[app.componentKey]?.contains(pointer) == true
-    }.takeIf { it >= 0 }
+    var bestIndex: Int? = null
+    var bestDistance = Float.MAX_VALUE
+    items.forEachIndexed { index, app ->
+        if (app.componentKey == excludedKey) return@forEachIndexed
+        val bounds = itemBounds[app.componentKey] ?: return@forEachIndexed
+        val distance = (bounds.center - pointer).getDistance()
+        val maxDistance = maxOf(bounds.width, bounds.height) * 0.72f
+        if (distance <= maxDistance && distance < bestDistance) {
+            bestDistance = distance
+            bestIndex = index
+        }
+    }
+    return bestIndex
 }

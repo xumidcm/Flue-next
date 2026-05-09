@@ -4,10 +4,12 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -28,7 +30,6 @@ import androidx.compose.ui.unit.dp
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-@Suppress("UNUSED_PARAMETER")
 fun AppBubble(
     icon: ImageBitmap?,
     size: Dp = 54.dp,
@@ -54,6 +55,14 @@ fun AppBubble(
             delayMillis = if (activePressed) pressAnimationDelayMillis else 0
         ),
         label = "bubble_scale"
+    )
+    val pressedOverlayAlpha by animateFloatAsState(
+        targetValue = if (activePressed) 0.16f else 0f,
+        animationSpec = tween(
+            durationMillis = pressAnimationDurationMillis,
+            delayMillis = if (activePressed) pressAnimationDelayMillis else 0
+        ),
+        label = "bubble_overlay"
     )
 
     LaunchedEffect(activePressed) {
@@ -87,6 +96,14 @@ fun AppBubble(
             ),
         contentAlignment = Alignment.Center
     ) {
+        if (tintColor.alpha > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(shape)
+                    .background(tintColor)
+            )
+        }
         if (icon != null) {
             Image(
                 bitmap = icon,
@@ -102,6 +119,15 @@ fun AppBubble(
                 modifier = Modifier
                     .size(size)
                     .clip(shape)
+                    .background(Color.White.copy(alpha = 0.06f))
+            )
+        }
+        if (pressedOverlayAlpha > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(shape)
+                    .background(Color.Black.copy(alpha = pressedOverlayAlpha))
             )
         }
     }
