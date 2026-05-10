@@ -43,6 +43,8 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.drawRect
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
@@ -424,11 +426,15 @@ fun ListDrawerScreen(
                                     hasDragged = true
                                 }
 
-                                val reorderTarget = findNearestListIndex(
-                                    pointerY = visualCenterY,
-                                    itemCenters = itemCenters,
-                                    maxDistance = Float.MAX_VALUE
-                                )
+                                val reorderTarget = if (!allowFolderCreation) {
+                                    findNearestListIndex(
+                                        pointerY = visualCenterY,
+                                        itemCenters = itemCenters,
+                                        maxDistance = Float.MAX_VALUE
+                                    )
+                                } else {
+                                    null
+                                }
                                 val folderCandidate = if (allowFolderCreation) {
                                     findNearestListIndex(
                                         pointerY = visualCenterY,
@@ -457,7 +463,11 @@ fun ListDrawerScreen(
                                     folderHoverIndex = null
                                     folderHoverStartedAt = 0L
                                     folderDropIndex = null
-                                    dragCurrentIndex = reorderTarget ?: dragCurrentIndex
+                                    dragCurrentIndex = if (allowFolderCreation) {
+                                        activeFromIndex
+                                    } else {
+                                        reorderTarget ?: dragCurrentIndex
+                                    }
                                 }
                                 previousVisualCenterY = visualCenterY
                                 previousMoveUptime = change.uptimeMillis
@@ -480,7 +490,7 @@ fun ListDrawerScreen(
                             settlingApp = null
                             settlingKey = null
                             onCreateFolder(from, folderTarget)
-                        } else if (dragActive && from != null && to != null && from != to && hasDragged) {
+                        } else if (!allowFolderCreation && dragActive && from != null && to != null && from != to && hasDragged) {
                             val droppedApp = apps.getOrNull(from)
                             val releaseCenter = dragPointerY.coerceIn(
                                 releaseOverlayHeightPx * 0.5f,
@@ -604,7 +614,7 @@ fun ListDrawerScreen(
                             }
                             val anchorCenter = itemCenters[activeFromIndex] ?: pointerY
                             dragOffsetY = pointerY - anchorCenter
-                            if (folderHoverIndex == null) {
+                            if (!allowFolderCreation && folderHoverIndex == null) {
                                 dragCurrentIndex = findNearestListIndex(
                                     pointerY = pointerY,
                                     itemCenters = itemCenters,
@@ -774,6 +784,12 @@ fun ListDrawerScreen(
                                     itemLaunchCenters[index] = coords.boundsInRoot().center
                                 }
                                 .clip(RoundedCornerShape((14.dp * appListScale).coerceIn(10.dp, 24.dp)))
+                                .drawWithContent {
+                                    drawContent()
+                                    if (iconPressedOverlay > 0f) {
+                                        drawRect(Color.Black.copy(alpha = iconPressedOverlay))
+                                    }
+                                }
                         ) {
                             Image(
                                 bitmap = displayIcon,
@@ -781,13 +797,6 @@ fun ListDrawerScreen(
                                 modifier = Modifier.fillMaxSize(),
                                 contentScale = ContentScale.Crop
                             )
-                            if (iconPressedOverlay > 0f) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(Color.Black.copy(alpha = iconPressedOverlay))
-                                )
-                            }
                         }
                         Spacer(modifier = Modifier.width(scaledIconTextGap))
                         Text(

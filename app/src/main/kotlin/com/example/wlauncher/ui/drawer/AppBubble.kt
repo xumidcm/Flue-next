@@ -4,7 +4,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -19,7 +18,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.drawRect
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shape
@@ -96,39 +97,33 @@ fun AppBubble(
             ),
         contentAlignment = Alignment.Center
     ) {
-        if (tintColor.alpha > 0f && activePressed) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(shape)
-                    .background(tintColor)
-            )
-        }
-        if (icon != null) {
-            Image(
-                bitmap = icon,
-                contentDescription = null,
-                filterQuality = FilterQuality.Medium,
-                modifier = Modifier
-                    .size(size)
-                    .clip(shape),
-                contentScale = ContentScale.Crop
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .size(size)
-                    .clip(shape)
-                    .background(Color.White.copy(alpha = 0.06f))
-            )
-        }
-        if (pressedOverlayAlpha > 0f) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(shape)
-                    .background(Color.Black.copy(alpha = pressedOverlayAlpha))
-            )
+        Box(
+            modifier = Modifier
+                .size(size)
+                .clip(shape)
+                .drawWithContent {
+                    if (icon != null) {
+                        drawContent()
+                    } else {
+                        drawRect(Color.White.copy(alpha = 0.06f))
+                    }
+                    if (tintColor.alpha > 0f && activePressed) {
+                        drawRect(tintColor)
+                    }
+                    if (pressedOverlayAlpha > 0f) {
+                        drawRect(Color.Black.copy(alpha = pressedOverlayAlpha))
+                    }
+                }
+        ) {
+            if (icon != null) {
+                Image(
+                    bitmap = icon,
+                    contentDescription = null,
+                    filterQuality = FilterQuality.Medium,
+                    modifier = Modifier.size(size),
+                    contentScale = ContentScale.Crop
+                )
+            }
         }
     }
 }

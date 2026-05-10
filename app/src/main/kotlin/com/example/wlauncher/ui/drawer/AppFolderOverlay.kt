@@ -56,9 +56,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.drawRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -118,6 +120,7 @@ fun AppFolderOverlay(
     val visibleItems = remember { mutableStateListOf<AppInfo>() }
     val slotBounds = remember { mutableStateMapOf<Int, Rect>() }
     val slotIconBounds = remember { mutableStateMapOf<Int, Rect>() }
+    var dragSlotCenters by remember { mutableStateOf<Map<Int, Offset>>(emptyMap()) }
     val itemBounds = remember { mutableStateMapOf<String, Rect>() }
     val iconBounds = remember { mutableStateMapOf<String, Rect>() }
     var showing by remember(folder.componentKey) { mutableStateOf(false) }
@@ -140,6 +143,7 @@ fun AppFolderOverlay(
     val blockInteraction = remember { MutableInteractionSource() }
     val dragThresholdPx = with(density) { 22.dp.toPx() }
     val dragIconHalfSizePx = with(density) { 29.dp.toPx() }
+    val slotSwitchHysteresisPx = with(density) { 10.dp.toPx() }
     val folderOverscrollLimitPx = with(density) { 72.dp.toPx() }
     val folderAutoScrollEdgePx = with(density) { FOLDER_EDGE_AUTO_SCROLL_DP.dp.toPx() }
 
@@ -169,9 +173,19 @@ fun AppFolderOverlay(
         dragFromIndex = null
         dragCurrentIndex = null
         dragOriginalItems = emptyList()
+        dragSlotCenters = emptyMap()
         draggedOutsidePanel = false
         onMoveItemOut(app)
         requestDismiss()
+    }
+
+    fun captureDragSlotCenters() {
+        dragSlotCenters = buildMap {
+            repeat(visibleItems.size) { index ->
+                val center = slotIconBounds[index]?.center ?: slotBounds[index]?.center ?: return@repeat
+                put(index, center)
+            }
+        }
     }
 
     fun persistOrderIfChanged(originalKeys: List<String>) {
@@ -191,6 +205,9 @@ fun AppFolderOverlay(
                 pointer = visualCenter,
                 slotBounds = slotBounds,
                 slotIconBounds = slotIconBounds,
+                slotCentersSnapshot = dragSlotCenters,
+                currentIndex = dragCurrentIndex,
+                hysteresisPx = slotSwitchHysteresisPx,
                 itemCount = (dragOriginalItems.ifEmpty { visibleItems }).size
             )
             if (targetIndex != null) {
@@ -213,6 +230,7 @@ fun AppFolderOverlay(
         visibleItems.addAll(items)
         slotBounds.clear()
         slotIconBounds.clear()
+        dragSlotCenters = emptyMap()
         itemBounds.clear()
         iconBounds.clear()
         dragFromIndex = null
@@ -603,6 +621,7 @@ fun AppFolderOverlay(
                                         dragFromIndex = startIndex
                                         dragCurrentIndex = startIndex
                                         dragOriginalItems = visibleItems.toList()
+                                        captureDragSlotCenters()
                                         draggedKey = app.componentKey
                                         draggedOutsidePanel = false
                                         dragVisualOffset = dragStartCenter - rootPointer
@@ -611,6 +630,8 @@ fun AppFolderOverlay(
                                     }
                                     if (dragActive) {
                                         updateDraggedItemTarget(app, rootPointer + dragVisualOffset)
+                                    }
+                                    if (change.position != change.previousPosition) {
                                         change.consume()
                                     }
                                 }
@@ -626,6 +647,7 @@ fun AppFolderOverlay(
                                     dragFromIndex = null
                                     dragCurrentIndex = null
                                     dragOriginalItems = emptyList()
+                                    dragSlotCenters = emptyMap()
                                     draggedOutsidePanel = false
                                     if (releasedOutside) {
                                         finishMoveOut(app)
@@ -644,6 +666,7 @@ fun AppFolderOverlay(
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(FOLDER_GRID_COLUMNS),
                         state = gridState,
+                        userScrollEnabled = draggedKey == null && menuApp == null,
                         contentPadding = PaddingValues(6.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -664,7 +687,9 @@ fun AppFolderOverlay(
                                 index = index,
                                 fromIndex = dragFromIndex,
                                 toIndex = dragCurrentIndex,
-                                slotBounds = slotBounds
+                                slotBounds = slotBounds,
+                                slotIconBounds = slotIconBounds,
+                                slotCentersSnapshot = dragSlotCenters
                             )
                             val animatedDragDisplacementX by animateFloatAsState(
                                 targetValue = dragDisplacement.x,
@@ -729,6 +754,12 @@ fun AppFolderOverlay(
                                     modifier = Modifier
                                         .size(56.dp)
                                         .clip(RoundedCornerShape(18.dp))
+                                        .drawWithContent {
+                                            drawContent()
+                                            if (iconPressedOverlay > 0f) {
+                                                drawRect(Color.Black.copy(alpha = iconPressedOverlay))
+                                            }
+                                        }
                                         .onGloballyPositioned { coords ->
                                             val bounds = coords.boundsInRoot()
                                             slotIconBounds[index] = bounds
@@ -741,13 +772,6 @@ fun AppFolderOverlay(
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier.fillMaxSize()
                                     )
-                                    if (iconPressedOverlay > 0f) {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxSize()
-                                                .background(Color.Black.copy(alpha = iconPressedOverlay))
-                                        )
-                                    }
                                 }
                                 Spacer(modifier = Modifier.height(5.dp))
                                 FolderMarqueeLabel(
@@ -770,6 +794,10 @@ fun AppFolderOverlay(
                 modifier = Modifier
                     .size(58.dp)
                     .align(Alignment.TopStart)
+                    .drawWithContent {
+                        drawContent()
+                        drawRect(Color.Black.copy(alpha = if (draggedOutsidePanel) 0.14f else 0.18f))
+                    }
                     .graphicsLayer {
                         translationX = dragPointerRoot.x - dragIconHalfSizePx
                         translationY = dragPointerRoot.y - dragIconHalfSizePx
@@ -785,11 +813,6 @@ fun AppFolderOverlay(
                     contentDescription = draggedApp.label,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
-                )
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.18f))
                 )
             }
         }
@@ -888,16 +911,31 @@ private fun findNearestFolderSlotIndex(
     pointer: Offset,
     slotBounds: Map<Int, Rect>,
     slotIconBounds: Map<Int, Rect>,
+    slotCentersSnapshot: Map<Int, Offset>,
+    currentIndex: Int? = null,
+    hysteresisPx: Float = 0f,
     itemCount: Int
 ): Int? {
     var bestIndex: Int? = null
     var bestDistance = Float.MAX_VALUE
+    var currentDistance = Float.MAX_VALUE
     repeat(itemCount.coerceAtLeast(0)) { index ->
-        val bounds = slotBounds[index] ?: slotIconBounds[index] ?: return@repeat
-        val distance = (bounds.center - pointer).getDistance()
+        val center = slotCentersSnapshot[index]
+            ?: slotIconBounds[index]?.center
+            ?: slotBounds[index]?.center
+            ?: return@repeat
+        val distance = (center - pointer).getDistance()
         if (distance < bestDistance) {
             bestDistance = distance
             bestIndex = index
+        }
+        if (index == currentIndex) {
+            currentDistance = distance
+        }
+    }
+    if (currentIndex != null && bestIndex != null && bestIndex != currentIndex) {
+        if (currentDistance <= bestDistance + hysteresisPx) {
+            return currentIndex
         }
     }
     return bestIndex
@@ -921,7 +959,9 @@ private fun folderDragDisplacement(
     index: Int,
     fromIndex: Int?,
     toIndex: Int?,
-    slotBounds: Map<Int, Rect>
+    slotBounds: Map<Int, Rect>,
+    slotIconBounds: Map<Int, Rect>,
+    slotCentersSnapshot: Map<Int, Offset>
 ): Offset {
     if (fromIndex == null || toIndex == null || fromIndex == toIndex) return Offset.Zero
     val targetIndex = when {
@@ -931,7 +971,13 @@ private fun folderDragDisplacement(
         else -> index
     }
     if (targetIndex == index) return Offset.Zero
-    val currentBounds = slotBounds[index] ?: return Offset.Zero
-    val targetBounds = slotBounds[targetIndex] ?: return Offset.Zero
-    return targetBounds.center - currentBounds.center
+    val currentCenter = slotCentersSnapshot[index]
+        ?: slotIconBounds[index]?.center
+        ?: slotBounds[index]?.center
+        ?: return Offset.Zero
+    val targetCenter = slotCentersSnapshot[targetIndex]
+        ?: slotIconBounds[targetIndex]?.center
+        ?: slotBounds[targetIndex]?.center
+        ?: return Offset.Zero
+    return targetCenter - currentCenter
 }

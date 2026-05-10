@@ -96,11 +96,11 @@ private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
 private const val SIDE_SCREEN_TRANSITION_MS = 260
 private const val NOTIFICATION_TRANSITION_MS = 240
 private const val APP_LIST_OPEN_SHADOW_DELAY_MS = 280L
-private const val APP_LIST_RETURN_SHADOW_DELAY_MS = 520L
-private const val APP_LIST_RETURN_ORIGIN_HOLD_MS = 720L
+private const val APP_LIST_RETURN_SHADOW_DELAY_MS = 320L
+private const val APP_LIST_RETURN_ORIGIN_HOLD_MS = 320L
 private const val APP_RETURN_MAINTENANCE_DELAY_MS = 260L
-private const val APP_LIST_LAYER_RELEASE_HOLD_MS = 260L
-private const val LAUNCH_MASK_EXIT_RETAIN_MS = 360L
+private const val APP_LIST_LAYER_RELEASE_HOLD_MS = 32L
+private const val LAUNCH_MASK_EXIT_RETAIN_MS = 180L
 
 class LauncherActivity : ComponentActivity() {
 
@@ -356,9 +356,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         ScreenState.Apps -> appListColors.background
         else -> launcherStyle.screenBackground
     }
-    val layerBlurEnabled =
-        blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
-    val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
+    val layerBlurEnabled = blurEnabled
     val notificationsEnabled = showNotification
     val notificationSceneActive = screenState == ScreenState.Notifications
     val notificationStackTint = appListColors.item
@@ -444,12 +442,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
             } else if (screenState == ScreenState.Apps) {
                 appListEntryProgress.snapTo(1f)
             } else if (previousState == ScreenState.Apps) {
-                appListLayerReleaseHold = true
+                val shouldHoldRelease = screenState == ScreenState.App
+                appListLayerReleaseHold = shouldHoldRelease
                 appListEntryProgress.animateTo(
                     0f,
                     tween(durationMillis = 400, easing = FastOutSlowInEasing)
                 )
-                delay(APP_LIST_LAYER_RELEASE_HOLD_MS)
+                if (shouldHoldRelease) {
+                    delay(APP_LIST_LAYER_RELEASE_HOLD_MS)
+                }
                 appListLayerReleaseHold = false
             } else {
                 appListEntryProgress.snapTo(0f)
@@ -503,19 +504,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
         )
         else -> spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow)
     }
-    val appListEntryAnimating = appListEntryProgress.isRunning
-    val faceLayerBlurEnabled = layerBlurEnabled &&
-        screenState != ScreenState.Apps &&
-        screenState != ScreenState.App &&
-        !isOpeningAppList &&
-        !isReturningFromApp &&
-        !appListReturnOriginActive &&
-        !appListEntryAnimating
-    val appListLayerBlurEnabled = layerBlurEnabled &&
-        !isOpeningAppList &&
-        !isReturningFromApp &&
-        !appListReturnOriginActive &&
-        !appListEntryAnimating
+    val faceLayerBlurEnabled = layerBlurEnabled
+    val appListLayerBlurEnabled = layerBlurEnabled
     val effectiveIconShadowEnabled = iconShadowEnabled && appListShadowsReady
     val fadeLaunch = launchSourceState == ScreenState.Stack || launchSourceState == ScreenState.Notifications
 
@@ -545,7 +535,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val effectiveLaunchIcon = if (fadeLaunch) null else (currentLaunchIcon ?: retainedLaunchIcon)
     val effectiveLaunchSplash = !fadeLaunch && (
         (showSplash && currentLaunchIcon != null) ||
-            (!showLaunchBackdrop && retainedLaunchSplash && retainedLaunchIcon != null)
+            (retainedLaunchSplash && retainedLaunchIcon != null)
     )
     LaunchedEffect(screenState, splashIcon, splashDelay, currentLaunchIcon, fadeLaunch) {
         if (!fadeLaunch && screenState == ScreenState.App && splashIcon && currentLaunchIcon != null) {
@@ -661,18 +651,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
             appListLayerReleaseHold
         val appListContentEntryProgress = when {
             screenState == ScreenState.Apps || isOpeningAppList -> appListEntryProgress.value
-            launchSourceState == ScreenState.Apps || appListLayerRaised -> 1f
+            launchSourceState == ScreenState.Apps && screenState == ScreenState.App -> appListEntryProgress.value.coerceAtLeast(0.72f)
             else -> 0f
         }
-        val appListContentTransitionActive =
-            appListContentEntryProgress > 0.001f && appListContentEntryProgress < 0.995f
-        val suppressAppListHeavyEffects =
-            reduceLegacyDrawerEffects ||
-                appListContentTransitionActive ||
-                isOpeningAppList ||
-                isReturningFromApp ||
-                appListReturnOriginActive ||
-                appListLayerReleaseHold
+        val suppressAppListHeavyEffects = false
 
         GestureHost(
             screenState = screenState,
