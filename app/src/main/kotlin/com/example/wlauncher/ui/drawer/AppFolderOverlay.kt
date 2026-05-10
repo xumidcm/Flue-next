@@ -183,21 +183,22 @@ fun AppFolderOverlay(
         visibleItems.add(to.coerceIn(0, visibleItems.size), item)
     }
 
-    fun updateDraggedItemTarget(app: AppInfo, rootPointer: Offset) {
-        dragPointerRoot = rootPointer
-        val insidePanel = panelBounds.contains(rootPointer)
+    fun updateDraggedItemTarget(app: AppInfo, visualCenter: Offset) {
+        dragPointerRoot = visualCenter
+        val insidePanel = panelBounds.contains(visualCenter)
         draggedOutsidePanel = !insidePanel
         if (insidePanel) {
             cancelMoveOutJob()
             val from = visibleItems.indexOfFirst { it.componentKey == app.componentKey }
             val toKey = findFolderGridIndexAt(
-                pointer = rootPointer,
+                pointer = visualCenter,
                 items = visibleItems,
-                itemBounds = iconBounds,
+                itemBounds = itemBounds,
                 excludedKey = app.componentKey
             )?.let { visibleItems.getOrNull(it)?.componentKey }
-            hoverKey = toKey
+            hoverKey = null
             if (toKey == null) {
+                dragFolderTargetKey = null
                 return
             }
             if (dragFolderTargetKey != toKey) {
@@ -557,6 +558,10 @@ fun AppFolderOverlay(
 
                                 val app = visibleItems[startIndex]
                                 val originalKeys = visibleItems.map { it.componentKey }
+                                val dragStartCenter = iconBounds[app.componentKey]?.center
+                                    ?: itemBounds[app.componentKey]?.center
+                                    ?: downRoot
+                                var dragVisualOffset = Offset.Zero
                                 var longPressCancelled = false
                                 withTimeoutOrNull(FOLDER_ITEM_MENU_TRIGGER_MS) {
                                     while (true) {
@@ -600,11 +605,12 @@ fun AppFolderOverlay(
                                         draggedKey = app.componentKey
                                         draggedOutsidePanel = false
                                         dragFolderTargetKey = null
-                                        updateDraggedItemTarget(app, rootPointer)
+                                        dragVisualOffset = dragStartCenter - rootPointer
+                                        updateDraggedItemTarget(app, rootPointer + dragVisualOffset)
                                         vibrateHaptic(context)
                                     }
                                     if (dragActive) {
-                                        updateDraggedItemTarget(app, rootPointer)
+                                        updateDraggedItemTarget(app, rootPointer + dragVisualOffset)
                                         change.consume()
                                     }
                                 }
@@ -731,10 +737,7 @@ fun AppFolderOverlay(
 
         val draggedApp = draggedKey?.let { key -> visibleItems.firstOrNull { it.componentKey == key } }
         if (draggedApp != null) {
-            Image(
-                bitmap = draggedApp.iconForDisplay(twoToneIconsEnabled),
-                contentDescription = draggedApp.label,
-                contentScale = ContentScale.Crop,
+            Box(
                 modifier = Modifier
                     .size(58.dp)
                     .align(Alignment.TopStart)
@@ -747,7 +750,19 @@ fun AppFolderOverlay(
                         shadowElevation = 18.dp.toPx()
                     }
                     .clip(RoundedCornerShape(18.dp))
-            )
+            ) {
+                Image(
+                    bitmap = draggedApp.iconForDisplay(twoToneIconsEnabled),
+                    contentDescription = draggedApp.label,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.12f))
+                )
+            }
         }
 
         menuApp?.let { app ->

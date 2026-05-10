@@ -203,13 +203,6 @@ fun AppShortcutOverlay(
                                 }
                             }
                         } else {
-                            onExcludeApp?.let { exclude ->
-                                Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
-                                ShortcutMenuItem("排除应用", Color(0xFFFF9F0A)) {
-                                    exclude()
-                                    onDismiss()
-                                }
-                            }
                             onRemoveShortcut?.let { removeShortcut ->
                                 Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
                                 ShortcutMenuItem("从快捷启动移除", Color(0xFFFF9F0A)) {

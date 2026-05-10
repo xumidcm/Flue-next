@@ -380,6 +380,8 @@ fun ListDrawerScreen(
                         vibrateHaptic(context)
 
                         val dragAnchorY = longPress.position.y
+                        val dragStartCenterY = itemCenters[startIndex] ?: dragAnchorY
+                        var dragVisualOffsetY = 0f
                         var previousPointerY = dragAnchorY
                         var previousMoveUptime = longPress.uptimeMillis
                         var dragActive = false
@@ -406,28 +408,30 @@ fun ListDrawerScreen(
                                 dragActive = true
                                 dragFromIndex = startIndex
                                 dragCurrentIndex = startIndex
-                                dragPointerY = pointerY
+                                dragVisualOffsetY = dragStartCenterY - pointerY
+                                dragPointerY = pointerY + dragVisualOffsetY
                                 glidePressedIndex = null
                                 vibrateHaptic(context)
                             }
 
                             val activeFromIndex = dragFromIndex
                             if (dragActive && activeFromIndex != null) {
-                                dragPointerY = pointerY
-                                val anchorCenter = itemCenters[activeFromIndex] ?: pointerY
-                                dragOffsetY = pointerY - anchorCenter
+                                val visualCenterY = pointerY + dragVisualOffsetY
+                                dragPointerY = visualCenterY
+                                val anchorCenter = itemCenters[activeFromIndex] ?: visualCenterY
+                                dragOffsetY = visualCenterY - anchorCenter
                                 if (abs(dragOffsetY) > menuDragStartPx * 0.35f) {
                                     hasDragged = true
                                 }
 
                                 val reorderTarget = findNearestListIndex(
-                                    pointerY = pointerY,
+                                    pointerY = visualCenterY,
                                     itemCenters = itemCenters,
                                     maxDistance = Float.MAX_VALUE
                                 )
                                 val folderCandidate = if (allowFolderCreation) {
                                     findNearestListIndex(
-                                        pointerY = pointerY,
+                                        pointerY = visualCenterY,
                                         itemCenters = itemCenters,
                                         maxDistance = minOf(
                                             releaseOverlayHeightPx * 0.34f,
@@ -441,6 +445,7 @@ fun ListDrawerScreen(
                                     null
                                 }
                                 if (folderCandidate != null) {
+                                    dragCurrentIndex = activeFromIndex
                                     if (folderHoverIndex != folderCandidate) {
                                         folderHoverIndex = folderCandidate
                                         folderHoverStartedAt = change.uptimeMillis
@@ -709,11 +714,7 @@ fun ListDrawerScreen(
                         animationSpec = tween(durationMillis = 170),
                         label = "list_press_overlay"
                     )
-                    val pressedOverlayColor = if (isFolderHoverTarget) {
-                        Color.Black
-                    } else {
-                        appPalette.itemPressedOverlay
-                    }
+                    val iconPressedOverlay = pressedOverlay.takeIf { it > 0f } ?: 0f
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -746,7 +747,6 @@ fun ListDrawerScreen(
                                     Modifier
                                 }
                             )
-                            .background(pressedOverlayColor.copy(alpha = pressedOverlay), rowShape)
                             .combinedClickable(
                                 interactionSource = interactionSource,
                                 indication = null,
@@ -767,17 +767,28 @@ fun ListDrawerScreen(
                             .padding(horizontal = scaledRowHorizontalPadding, vertical = scaledRowVerticalPadding),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Image(
-                            bitmap = displayIcon,
-                            contentDescription = app.label,
+                        Box(
                             modifier = Modifier
                                 .size(scaledIconSize)
                                 .onGloballyPositioned { coords ->
                                     itemLaunchCenters[index] = coords.boundsInRoot().center
                                 }
-                                .clip(RoundedCornerShape((14.dp * appListScale).coerceIn(10.dp, 24.dp))),
-                            contentScale = ContentScale.Crop
-                        )
+                                .clip(RoundedCornerShape((14.dp * appListScale).coerceIn(10.dp, 24.dp)))
+                        ) {
+                            Image(
+                                bitmap = displayIcon,
+                                contentDescription = app.label,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                            if (iconPressedOverlay > 0f) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(Color.Black.copy(alpha = iconPressedOverlay))
+                                )
+                            }
+                        }
                         Spacer(modifier = Modifier.width(scaledIconTextGap))
                         Text(
                             text = app.label,
@@ -810,21 +821,29 @@ fun ListDrawerScreen(
                             alpha = 0.98f
                             shadowElevation = if (iconShadowEnabled) 18.dp.toPx() else 0f
                         }
-                        .background(appPalette.item, rowShape)
                         .padding(horizontal = (28.dp * appListScale).coerceIn(14.dp, 40.dp), vertical = scaledRowVerticalPadding),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Image(
-                        bitmap = draggedApp.iconForDisplay(
-                            useTwoTone = twoToneIconsEnabled,
-                            blurred = false
-                        ),
-                        contentDescription = draggedApp.label,
+                    Box(
                         modifier = Modifier
                             .size(scaledIconSize)
-                            .clip(RoundedCornerShape((14.dp * appListScale).coerceIn(10.dp, 24.dp))),
-                        contentScale = ContentScale.Crop
-                    )
+                            .clip(RoundedCornerShape((14.dp * appListScale).coerceIn(10.dp, 24.dp)))
+                    ) {
+                        Image(
+                            bitmap = draggedApp.iconForDisplay(
+                                useTwoTone = twoToneIconsEnabled,
+                                blurred = false
+                            ),
+                            contentDescription = draggedApp.label,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.12f))
+                        )
+                    }
                     Spacer(modifier = Modifier.width(scaledIconTextGap))
                     Text(
                         text = draggedApp.label,
