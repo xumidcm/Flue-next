@@ -629,11 +629,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             isOpeningAppList ||
             appListEntryProgress.value > 0.001f ||
             appListLayerReleaseHold
-        val appListContentEntryProgress = if (screenState == ScreenState.App && launchSourceState == ScreenState.Apps) {
-            1f
-        } else {
-            appListEntryProgress.value
-        }
+        val appListContentEntryProgress = appListEntryProgress.value
         val suppressAppListHeavyEffects = !appListLayerRaised
 
         GestureHost(

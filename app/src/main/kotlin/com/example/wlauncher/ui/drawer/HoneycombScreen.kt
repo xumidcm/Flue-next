@@ -503,7 +503,7 @@ fun HoneycombScreen(
                                 dragOrigin
                             }
                             var dragVisualOffset = Offset.Zero
-                            var previousPointer = dragOrigin
+                            var previousVisualPointer = dragStartCenter
                             var previousMoveUptime = longPress.uptimeMillis
                             var dragActive = false
                             var hasDragged = false
@@ -521,8 +521,6 @@ fun HoneycombScreen(
                                 }
 
                                 val pointer = change.position
-                                val elapsedMs = (change.uptimeMillis - previousMoveUptime).coerceAtLeast(1L)
-                                val pointerSpeed = (pointer - previousPointer).getDistance() / elapsedMs.toFloat()
                                 val movedDistance = (pointer - dragOrigin).getDistance()
                                 if (!dragActive && movedDistance > menuDragStartPx) {
                                     longPressedApp = null
@@ -545,6 +543,8 @@ fun HoneycombScreen(
                                         hasDragged = true
                                     }
                                     val visualPointer = pointer + dragVisualOffset
+                                    val elapsedMs = (change.uptimeMillis - previousMoveUptime).coerceAtLeast(1L)
+                                    val visualSpeed = (visualPointer - previousVisualPointer).getDistance() / elapsedMs.toFloat()
                                     val displayPointer = clampHoneycombDisplayPointer(
                                         pointer = visualPointer,
                                         screenWidthPx = screenWidthPx,
@@ -570,8 +570,8 @@ fun HoneycombScreen(
                                             positions = positions,
                                             screenCenterX = screenCenterX,
                                             screenCenterY = screenCenterY + currentScrollOffsetValue(),
-                                            maxDistance = iconSizePx * 0.42f
-                                        )?.takeIf { it != fromIndex && pointerSpeed <= folderHoverMaxSpeedPxPerMs }
+                                            maxDistance = iconSizePx * 0.56f
+                                        )?.takeIf { it != fromIndex && visualSpeed <= folderHoverMaxSpeedPxPerMs }
                                     } else {
                                         null
                                     }
@@ -590,7 +590,7 @@ fun HoneycombScreen(
                                         folderDropIndex = null
                                         dragCurrentIndex = reorderTarget ?: fromIndex
                                     }
-                                    previousPointer = pointer
+                                    previousVisualPointer = visualPointer
                                     previousMoveUptime = change.uptimeMillis
                                     change.consume()
                                 }
@@ -1488,7 +1488,7 @@ private fun MaterialDenseGridScreen(
                     val dragOrigin = longPress.position + materialContainerRoot
                     val dragStartCenter = materialItemBounds[startIndex]?.center ?: dragOrigin
                     var dragVisualOffset = Offset.Zero
-                    var previousPointer = dragOrigin
+                    var previousVisualPointer = dragStartCenter
                     var previousMoveUptime = longPress.uptimeMillis
                     var dragActive = false
                     var hasDragged = false
@@ -1503,8 +1503,6 @@ private fun MaterialDenseGridScreen(
                         }
 
                         val pointer = change.position + materialContainerRoot
-                        val elapsedMs = (change.uptimeMillis - previousMoveUptime).coerceAtLeast(1L)
-                        val pointerSpeed = (pointer - previousPointer).getDistance() / elapsedMs.toFloat()
                         val movedDistance = (pointer - dragOrigin).getDistance()
                         if (!dragActive && movedDistance > menuDragStartPx) {
                             longPressedApp = null
@@ -1525,6 +1523,8 @@ private fun MaterialDenseGridScreen(
                                 hasDragged = true
                             }
                             val visualPointer = pointer + dragVisualOffset
+                            val elapsedMs = (change.uptimeMillis - previousMoveUptime).coerceAtLeast(1L)
+                            val visualSpeed = (visualPointer - previousVisualPointer).getDistance() / elapsedMs.toFloat()
                             val reorderTarget = findNearestMaterialGridIndex(
                                 pointer = visualPointer,
                                 itemBounds = materialItemBounds
@@ -1535,8 +1535,8 @@ private fun MaterialDenseGridScreen(
                                     pointer = folderPointer,
                                     itemBounds = materialItemBounds,
                                     excludedIndex = startIndex,
-                                    centerFraction = 0.42f
-                                )?.takeIf { pointerSpeed <= folderHoverMaxSpeedPxPerMs }
+                                    centerFraction = 0.56f
+                                )?.takeIf { visualSpeed <= folderHoverMaxSpeedPxPerMs }
                             } else {
                                 null
                             }
@@ -1557,7 +1557,7 @@ private fun MaterialDenseGridScreen(
                                     dragCurrentIndex = reorderTarget
                                 }
                             }
-                            previousPointer = pointer
+                            previousVisualPointer = visualPointer
                             previousMoveUptime = change.uptimeMillis
                             change.consume()
                         }
@@ -1628,8 +1628,7 @@ private fun MaterialDenseGridScreen(
             ).coerceAtLeast(48.dp)
         val estimatedGridItemHeight = (gridAvailableWidth / effectiveColumns.coerceAtLeast(1).toFloat() / 0.92f)
             .coerceAtLeast(48.dp)
-        val topGridPadding = (topFadeRangeDp.dp * 0.58f).coerceAtLeast(8.dp)
-        val bottomGridPadding = ((maxHeight - estimatedGridItemHeight) / 2f).coerceAtLeast(topGridPadding)
+        val centeredGridPadding = ((maxHeight - estimatedGridItemHeight) / 2f).coerceAtLeast(8.dp)
         val materialFisheyeScrollTick = gridState.firstVisibleItemIndex * 100_000 +
             gridState.firstVisibleItemScrollOffset
         LaunchedEffect(dragFromIndex, screenHeightPx) {
@@ -1686,9 +1685,9 @@ private fun MaterialDenseGridScreen(
                 .platformBlur(16f, (longPressedApp != null || folderOpen) && blurEnabled),
             contentPadding = PaddingValues(
                 start = gridHorizontalPadding + leftSafeInset,
-                top = topGridPadding,
+                top = centeredGridPadding,
                 end = gridHorizontalPadding,
-                bottom = bottomGridPadding
+                bottom = centeredGridPadding
             ),
             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gridItemSpacing),
             verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gridItemSpacing)

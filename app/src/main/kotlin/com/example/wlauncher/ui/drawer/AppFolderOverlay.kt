@@ -116,6 +116,8 @@ fun AppFolderOverlay(
     val gridState = rememberLazyGridState()
     val folderOverscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val visibleItems = remember { mutableStateListOf<AppInfo>() }
+    val slotBounds = remember { mutableStateMapOf<Int, Rect>() }
+    val slotIconBounds = remember { mutableStateMapOf<Int, Rect>() }
     val itemBounds = remember { mutableStateMapOf<String, Rect>() }
     val iconBounds = remember { mutableStateMapOf<String, Rect>() }
     var showing by remember(folder.componentKey) { mutableStateOf(false) }
@@ -130,7 +132,9 @@ fun AppFolderOverlay(
     var dragPointerRoot by remember { mutableStateOf(Offset.Zero) }
     var draggedOutsidePanel by remember { mutableStateOf(false) }
     var hoverKey by remember { mutableStateOf<String?>(null) }
-    var dragFolderTargetKey by remember { mutableStateOf<String?>(null) }
+    var dragFromIndex by remember { mutableStateOf<Int?>(null) }
+    var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
+    var dragOriginalItems by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
     var moveOutJob by remember { mutableStateOf<Job?>(null) }
     var dismissJob by remember { mutableStateOf<Job?>(null) }
     val dismissInteraction = remember { MutableInteractionSource() }
@@ -163,9 +167,11 @@ fun AppFolderOverlay(
     fun finishMoveOut(app: AppInfo) {
         cancelMoveOutJob()
         draggedKey = null
+        dragFromIndex = null
+        dragCurrentIndex = null
+        dragOriginalItems = emptyList()
         draggedOutsidePanel = false
         hoverKey = null
-        dragFolderTargetKey = null
         onMoveItemOut(app)
         requestDismiss()
     }
@@ -177,40 +183,26 @@ fun AppFolderOverlay(
         }
     }
 
-    fun moveVisibleItem(from: Int, to: Int) {
-        if (from !in visibleItems.indices || to !in visibleItems.indices || from == to) return
-        val item = visibleItems.removeAt(from)
-        visibleItems.add(to.coerceIn(0, visibleItems.size), item)
-    }
-
     fun updateDraggedItemTarget(app: AppInfo, visualCenter: Offset) {
         dragPointerRoot = visualCenter
         val insidePanel = panelBounds.contains(visualCenter)
         draggedOutsidePanel = !insidePanel
         if (insidePanel) {
             cancelMoveOutJob()
-            val from = visibleItems.indexOfFirst { it.componentKey == app.componentKey }
-            val toKey = findFolderGridIndexAt(
+            val targetIndex = findFolderGridIndexAt(
                 pointer = visualCenter,
-                items = visibleItems,
+                items = dragOriginalItems.ifEmpty { visibleItems },
+                slotBounds = slotBounds,
+                slotIconBounds = slotIconBounds,
                 itemBounds = itemBounds,
-                excludedKey = app.componentKey
-            )?.let { visibleItems.getOrNull(it)?.componentKey }
+                iconBounds = iconBounds
+            )
             hoverKey = null
-            if (toKey == null) {
-                dragFolderTargetKey = null
-                return
-            }
-            if (dragFolderTargetKey != toKey) {
-                val to = visibleItems.indexOfFirst { it.componentKey == toKey }
-                if (from >= 0 && to >= 0 && to != from) {
-                    moveVisibleItem(from, to)
-                    dragFolderTargetKey = toKey
-                }
+            if (targetIndex != null) {
+                dragCurrentIndex = targetIndex
             }
         } else {
             hoverKey = null
-            dragFolderTargetKey = null
             if (moveOutJob == null) {
                 moveOutJob = scope.launch {
                     delay(FOLDER_ITEM_DRAG_OUT_MS)
@@ -225,10 +217,14 @@ fun AppFolderOverlay(
     LaunchedEffect(folder.componentKey, items.map { it.componentKey }.joinToString("|")) {
         visibleItems.clear()
         visibleItems.addAll(items)
+        slotBounds.clear()
+        slotIconBounds.clear()
         itemBounds.clear()
         iconBounds.clear()
         hoverKey = null
-        dragFolderTargetKey = null
+        dragFromIndex = null
+        dragCurrentIndex = null
+        dragOriginalItems = emptyList()
     }
     LaunchedEffect(folder.componentKey) {
         dismissJob?.cancel()
@@ -602,9 +598,11 @@ fun AppFolderOverlay(
                                     if (!dragActive && movedDistance > dragThresholdPx) {
                                         menuApp = null
                                         dragActive = true
+                                        dragFromIndex = startIndex
+                                        dragCurrentIndex = startIndex
+                                        dragOriginalItems = visibleItems.toList()
                                         draggedKey = app.componentKey
                                         draggedOutsidePanel = false
-                                        dragFolderTargetKey = null
                                         dragVisualOffset = dragStartCenter - rootPointer
                                         updateDraggedItemTarget(app, rootPointer + dragVisualOffset)
                                         vibrateHaptic(context)
@@ -617,14 +615,25 @@ fun AppFolderOverlay(
 
                                 if (dragActive) {
                                     val releasedOutside = draggedOutsidePanel
+                                    val finalItems = folderReorderedItems(
+                                        items = dragOriginalItems.ifEmpty { visibleItems },
+                                        fromIndex = dragFromIndex,
+                                        toIndex = dragCurrentIndex
+                                    )
                                     draggedKey = null
+                                    dragFromIndex = null
+                                    dragCurrentIndex = null
+                                    dragOriginalItems = emptyList()
                                     draggedOutsidePanel = false
                                     hoverKey = null
-                                    dragFolderTargetKey = null
                                     if (releasedOutside) {
                                         finishMoveOut(app)
                                     } else {
                                         cancelMoveOutJob()
+                                        if (finalItems.isNotEmpty()) {
+                                            visibleItems.clear()
+                                            visibleItems.addAll(finalItems)
+                                        }
                                         persistOrderIfChanged(originalKeys)
                                     }
                                 }
@@ -643,7 +652,11 @@ fun AppFolderOverlay(
                             .graphicsLayer { translationY = folderOverscroll.value }
                     ) {
                         itemsIndexed(
-                            items = visibleItems,
+                            items = folderReorderedItems(
+                                items = dragOriginalItems.ifEmpty { visibleItems },
+                                fromIndex = dragFromIndex,
+                                toIndex = dragCurrentIndex
+                            ),
                             key = { _, app -> app.componentKey },
                             contentType = { _, _ -> "folder_app" }
                         ) { index, app ->
@@ -679,7 +692,9 @@ fun AppFolderOverlay(
                                         fadeOutSpec = tween(120)
                                     )
                                     .onGloballyPositioned { coords ->
-                                        itemBounds[app.componentKey] = coords.boundsInRoot()
+                                        val bounds = coords.boundsInRoot()
+                                        slotBounds[index] = bounds
+                                        itemBounds[app.componentKey] = bounds
                                     }
                                     .graphicsLayer {
                                         scaleX = pressedScale
@@ -703,7 +718,9 @@ fun AppFolderOverlay(
                                         .size(56.dp)
                                         .clip(RoundedCornerShape(18.dp))
                                         .onGloballyPositioned { coords ->
-                                            iconBounds[app.componentKey] = coords.boundsInRoot()
+                                            val bounds = coords.boundsInRoot()
+                                            slotIconBounds[index] = bounds
+                                            iconBounds[app.componentKey] = bounds
                                         }
                                 ) {
                                     Image(
@@ -852,20 +869,40 @@ private fun FolderMarqueeLabel(
 private fun findFolderGridIndexAt(
     pointer: Offset,
     items: List<AppInfo>,
+    slotBounds: Map<Int, Rect>,
+    slotIconBounds: Map<Int, Rect>,
     itemBounds: Map<String, Rect>,
-    excludedKey: String
+    iconBounds: Map<String, Rect>
 ): Int? {
     var bestIndex: Int? = null
     var bestDistance = Float.MAX_VALUE
     items.forEachIndexed { index, app ->
-        if (app.componentKey == excludedKey) return@forEachIndexed
-        val bounds = itemBounds[app.componentKey] ?: return@forEachIndexed
+        val icon = slotIconBounds[index] ?: iconBounds[app.componentKey]
+        val bounds = icon ?: slotBounds[index] ?: itemBounds[app.componentKey] ?: return@forEachIndexed
         val distance = (bounds.center - pointer).getDistance()
-        val maxDistance = maxOf(bounds.width, bounds.height) * 0.72f
+        val maxDistance = if (icon != null) {
+            maxOf(bounds.width, bounds.height) * 0.86f
+        } else {
+            maxOf(bounds.width, bounds.height) * 0.72f
+        }
         if (distance <= maxDistance && distance < bestDistance) {
             bestDistance = distance
             bestIndex = index
         }
     }
     return bestIndex
+}
+
+private fun folderReorderedItems(
+    items: List<AppInfo>,
+    fromIndex: Int?,
+    toIndex: Int?
+): List<AppInfo> {
+    if (fromIndex == null || toIndex == null || fromIndex !in items.indices || toIndex !in items.indices || fromIndex == toIndex) {
+        return items
+    }
+    return items.toMutableList().apply {
+        val item = removeAt(fromIndex)
+        add(toIndex.coerceIn(0, size), item)
+    }
 }

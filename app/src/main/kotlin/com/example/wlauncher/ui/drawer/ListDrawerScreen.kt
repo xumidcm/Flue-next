@@ -382,7 +382,7 @@ fun ListDrawerScreen(
                         val dragAnchorY = longPress.position.y
                         val dragStartCenterY = itemCenters[startIndex] ?: dragAnchorY
                         var dragVisualOffsetY = 0f
-                        var previousPointerY = dragAnchorY
+                        var previousVisualCenterY = dragStartCenterY
                         var previousMoveUptime = longPress.uptimeMillis
                         var dragActive = false
                         var hasDragged = false
@@ -400,8 +400,6 @@ fun ListDrawerScreen(
                             }
 
                             val pointerY = change.position.y
-                            val elapsedMs = (change.uptimeMillis - previousMoveUptime).coerceAtLeast(1L)
-                            val pointerSpeed = abs(pointerY - previousPointerY) / elapsedMs.toFloat()
                             val deltaFromAnchor = abs(pointerY - dragAnchorY)
                             if (!dragActive && deltaFromAnchor > menuDragStartPx) {
                                 longPressedApp = null
@@ -417,6 +415,8 @@ fun ListDrawerScreen(
                             val activeFromIndex = dragFromIndex
                             if (dragActive && activeFromIndex != null) {
                                 val visualCenterY = pointerY + dragVisualOffsetY
+                                val elapsedMs = (change.uptimeMillis - previousMoveUptime).coerceAtLeast(1L)
+                                val visualSpeed = abs(visualCenterY - previousVisualCenterY) / elapsedMs.toFloat()
                                 dragPointerY = visualCenterY
                                 val anchorCenter = itemCenters[activeFromIndex] ?: visualCenterY
                                 dragOffsetY = visualCenterY - anchorCenter
@@ -434,12 +434,12 @@ fun ListDrawerScreen(
                                         pointerY = visualCenterY,
                                         itemCenters = itemCenters,
                                         maxDistance = minOf(
-                                            releaseOverlayHeightPx * 0.34f,
-                                            with(density) { scaledIconSize.toPx() } * 0.46f
+                                            releaseOverlayHeightPx * 0.42f,
+                                            with(density) { scaledIconSize.toPx() } * 0.58f
                                         ),
                                         excludedIndex = activeFromIndex
                                     )?.takeIf {
-                                        pointerSpeed <= folderHoverMaxSpeedPxPerMs
+                                        visualSpeed <= folderHoverMaxSpeedPxPerMs
                                     }
                                 } else {
                                     null
@@ -459,7 +459,7 @@ fun ListDrawerScreen(
                                     folderDropIndex = null
                                     dragCurrentIndex = reorderTarget ?: dragCurrentIndex
                                 }
-                                previousPointerY = pointerY
+                                previousVisualCenterY = visualCenterY
                                 previousMoveUptime = change.uptimeMillis
                                 if (change.position != change.previousPosition) {
                                     change.consume()
