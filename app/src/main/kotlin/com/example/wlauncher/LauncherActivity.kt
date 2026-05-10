@@ -95,6 +95,8 @@ import kotlinx.coroutines.launch
 private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
 private const val SIDE_SCREEN_TRANSITION_MS = 260
 private const val NOTIFICATION_TRANSITION_MS = 240
+private const val APP_LIST_OPEN_SHADOW_DELAY_MS = 280L
+private const val APP_LIST_RETURN_SHADOW_DELAY_MS = 520L
 private const val APP_LIST_RETURN_ORIGIN_HOLD_MS = 720L
 private const val APP_RETURN_MAINTENANCE_DELAY_MS = 260L
 private const val APP_LIST_LAYER_RELEASE_HOLD_MS = 260L
@@ -356,6 +358,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
     val layerBlurEnabled =
         blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
+    val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
     val notificationsEnabled = showNotification
     val notificationSceneActive = screenState == ScreenState.Notifications
     val notificationStackTint = appListColors.item
@@ -408,6 +411,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     var appListReturnOriginActive by remember {
         mutableStateOf(screenState == ScreenState.App && launchSourceState == ScreenState.Apps)
     }
+    var appListShadowsReady by remember { mutableStateOf(screenState == ScreenState.Apps) }
     LaunchedEffect(screenState, launchSourceState) {
         if (launchSourceState != ScreenState.Apps) {
             appListReturnOriginActive = false
@@ -454,6 +458,22 @@ fun LauncherScreen(vm: LauncherViewModel) {
             prevState = screenState
         }
     }
+    LaunchedEffect(screenState, iconShadowEnabled) {
+        if (!iconShadowEnabled || screenState != ScreenState.Apps) {
+            appListShadowsReady = false
+            return@LaunchedEffect
+        }
+        appListShadowsReady = false
+        val shadowDelayMs = when {
+            isReturningFromApp -> APP_LIST_RETURN_SHADOW_DELAY_MS
+            isEnteringAppList -> APP_LIST_OPEN_SHADOW_DELAY_MS
+            else -> 0L
+        }
+        if (shadowDelayMs > 0L) {
+            delay(shadowDelayMs)
+        }
+        appListShadowsReady = true
+    }
     val launcherScope = rememberCoroutineScope()
     var retainedLaunchIcon by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     var retainedLaunchSplash by remember { mutableStateOf(false) }
@@ -496,7 +516,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         !isReturningFromApp &&
         !appListReturnOriginActive &&
         !appListEntryAnimating
-    val effectiveIconShadowEnabled = iconShadowEnabled
+    val effectiveIconShadowEnabled = iconShadowEnabled && appListShadowsReady
     val fadeLaunch = launchSourceState == ScreenState.Stack || launchSourceState == ScreenState.Notifications
 
     LaunchedEffect(notificationSceneActive) {
@@ -639,8 +659,20 @@ fun LauncherScreen(vm: LauncherViewModel) {
             isOpeningAppList ||
             appListEntryProgress.value > 0.001f ||
             appListLayerReleaseHold
-        val appListContentEntryProgress = appListEntryProgress.value
-        val suppressAppListHeavyEffects = !appListLayerRaised
+        val appListContentEntryProgress = when {
+            screenState == ScreenState.Apps || isOpeningAppList -> appListEntryProgress.value
+            launchSourceState == ScreenState.Apps || appListLayerRaised -> 1f
+            else -> 0f
+        }
+        val appListContentTransitionActive =
+            appListContentEntryProgress > 0.001f && appListContentEntryProgress < 0.995f
+        val suppressAppListHeavyEffects =
+            reduceLegacyDrawerEffects ||
+                appListContentTransitionActive ||
+                isOpeningAppList ||
+                isReturningFromApp ||
+                appListReturnOriginActive ||
+                appListLayerReleaseHold
 
         GestureHost(
             screenState = screenState,
