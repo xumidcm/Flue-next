@@ -116,7 +116,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dudu.wearlauncher.utils.ILog
 import com.flue.launcher.backup.FlueBackupOptions
 import com.flue.launcher.backup.FlueBackupPreview
-import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.service.FlueAccessibilityService
 import com.flue.launcher.ui.common.bottomFisheyeScale
 import com.flue.launcher.ui.controlcenter.MusicTextSwitchAnimations
@@ -280,7 +279,7 @@ private fun SettingsRootScreen(
     val watchFaces by vm.availableWatchFaces.collectAsStateWithLifecycle()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsStateWithLifecycle()
     val selectedWatchFace by vm.selectedWatchFace.collectAsStateWithLifecycle()
-    val allApps by vm.allApps.collectAsStateWithLifecycle()
+    val allSelectableApps by vm.allSelectableApps.collectAsStateWithLifecycle()
     val hiddenApps by vm.hiddenApps.collectAsStateWithLifecycle()
     val availableIconPacks by vm.availableIconPacks.collectAsStateWithLifecycle()
     val selectedIconPackPackage by vm.selectedIconPackPackage.collectAsStateWithLifecycle()
@@ -591,6 +590,16 @@ private fun SettingsRootScreen(
             hiddenAppsDraft = hiddenApps
         }
     }
+    val hideableApps = remember(allSelectableApps) {
+        allSelectableApps.filter { app ->
+            !app.isBuiltInSettingsEntry && !app.isFolder
+        }
+    }
+    val hiddenHideableCount = remember(hiddenAppsDraft, hideableApps) {
+        hideableApps.count { app ->
+            hiddenAppsDraft.contains(app.componentKey) || hiddenAppsDraft.contains(app.packageName)
+        }
+    }
 
     LaunchedEffect(Unit) {
         vm.refreshWatchFaces()
@@ -723,7 +732,7 @@ private fun SettingsRootScreen(
                 item("hidden_apps") {
                     SettingsCategoryCard(
                         title = "隐藏应用",
-                        subtitle = "已隐藏 ${hiddenAppsDraft.size} 个应用",
+                        subtitle = "已隐藏 ${hiddenHideableCount} 个应用",
                         onClick = { navigateTo(SettingsDestination.HIDDEN_APPS) },
                         scale = itemFisheye(listState, "hidden_apps", screenCenterY, screenHeightPx)
                     )
@@ -772,19 +781,24 @@ private fun SettingsRootScreen(
             ) { listState, screenCenterY, screenHeightPx, visibleItemKeys ->
                 item("hidden_summary") {
                     MessageCard(
-                        text = "已隐藏 ${hiddenAppsDraft.size} 个应用",
+                        text = "已隐藏 ${hiddenHideableCount} 个应用",
                         background = WatchColors.SurfaceGlass,
                         onClick = {}
                     )
                 }
-                items(allApps.filterNot(AppInfo::isBuiltInSettingsEntry), key = { "app_${it.componentKey}" }) { app ->
+                items(hideableApps, key = { "app_${it.componentKey}" }) { app ->
                     SettingsSwitchRow(
                         title = app.label,
                         subtitle = app.packageName,
                         checked = hiddenAppsDraft.contains(app.componentKey) || hiddenAppsDraft.contains(app.packageName),
                         onToggle = {
                             hiddenAppsDraft = hiddenAppsDraft.toMutableSet().apply {
-                                if (it) add(app.componentKey) else remove(app.componentKey)
+                                if (it) {
+                                    add(app.componentKey)
+                                } else {
+                                    remove(app.componentKey)
+                                    remove(app.packageName)
+                                }
                             }
                             hiddenAppsDirty = true
                         },

@@ -395,7 +395,9 @@ class AppRepository(private val context: Context) {
 
     fun folderItems(folderKey: String): List<AppInfo> {
         val folder = folderCatalog.firstOrNull { it.componentKey == folderKey } ?: return emptyList()
-        return folder.itemKeys.mapNotNull(itemCatalog::get)
+        return folder.itemKeys
+            .mapNotNull(itemCatalog::get)
+            .filterNot(::isHiddenApp)
     }
 
     fun folderItemKeys(folderKey: String): List<String> {
@@ -1024,8 +1026,28 @@ class AppRepository(private val context: Context) {
     }
 
     private fun applyFilters() {
-        _apps.value = _allApps.value.filterNot { app ->
-            hiddenComponents.contains(app.componentKey) || hiddenComponents.contains(app.packageName)
-        }
+        _apps.value = _allApps.value.mapNotNull(::visibleAppListItem)
+    }
+
+    private fun visibleAppListItem(app: AppInfo): AppInfo? {
+        if (!app.isFolder) return app.takeUnless(::isHiddenApp)
+        val visibleChildren = app.folderItemKeys.mapNotNull(itemCatalog::get).filterNot(::isHiddenApp)
+        if (visibleChildren.isEmpty()) return null
+        if (visibleChildren.map { it.componentKey } == app.folderItemKeys) return app
+        return createFolderEntry(
+            folder = StoredAppListFolder(
+                id = app.activityName,
+                name = app.label,
+                itemKeys = visibleChildren.map { it.componentKey }
+            ),
+            childItems = visibleChildren,
+            iconSize = currentIconSize,
+            useTwoToneIcons = useTwoToneIcons
+        )
+    }
+
+    private fun isHiddenApp(app: AppInfo): Boolean {
+        if (app.isFolder) return false
+        return hiddenComponents.contains(app.componentKey) || hiddenComponents.contains(app.packageName)
     }
 }
