@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -900,11 +901,18 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
             val visibleFolder = openFolder
             if (screenState == ScreenState.Apps && visibleFolder != null) {
+                val appListScale = appListScalePercent.coerceIn(50, 200) / 100f
+                val folderIconShape = when {
+                    layoutMode == LayoutMode.List -> RoundedCornerShape((14.dp * appListScale).coerceIn(10.dp, 24.dp))
+                    uiStyle == UiStyle.MATERIAL_3 -> RoundedCornerShape((18.dp * appListScale).coerceIn(12.dp, 24.dp))
+                    else -> launcherStyle.bubbleShape
+                }
                 AppFolderOverlay(
                     folder = visibleFolder,
                     items = openFolderItems,
                     availableItems = allSelectableApps,
                     listMode = layoutMode == LayoutMode.List,
+                    iconShape = folderIconShape,
                     blurEnabled = blurEnabled,
                     twoToneIconsEnabled = twoToneIconsEnabled,
                     onAppClick = { appInfo, origin ->

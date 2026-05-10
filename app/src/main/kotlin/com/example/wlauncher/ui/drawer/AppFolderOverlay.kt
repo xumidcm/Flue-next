@@ -61,6 +61,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -100,6 +101,7 @@ fun AppFolderOverlay(
     items: List<AppInfo>,
     availableItems: List<AppInfo>,
     listMode: Boolean,
+    iconShape: Shape = if (listMode) RoundedCornerShape(18.dp) else CircleShape,
     blurEnabled: Boolean,
     twoToneIconsEnabled: Boolean,
     onAppClick: (AppInfo, Offset) -> Unit,
@@ -146,9 +148,6 @@ fun AppFolderOverlay(
     val slotSwitchHysteresisPx = with(density) { 10.dp.toPx() }
     val folderOverscrollLimitPx = with(density) { 72.dp.toPx() }
     val folderAutoScrollEdgePx = with(density) { FOLDER_EDGE_AUTO_SCROLL_DP.dp.toPx() }
-
-    @Suppress("UNUSED_VARIABLE")
-    val sameStyleForEveryLayout = listMode
 
     fun cancelMoveOutJob() {
         moveOutJob?.cancel()
@@ -752,7 +751,7 @@ fun AppFolderOverlay(
                                 Box(
                                     modifier = Modifier
                                         .size(56.dp)
-                                        .clip(CircleShape)
+                                        .clip(iconShape)
                                         .drawWithContent {
                                             drawContent()
                                             if (iconPressedOverlay > 0f) {
@@ -800,10 +799,10 @@ fun AppFolderOverlay(
                         scaleX = if (draggedOutsidePanel) 0.94f else 1.04f
                         scaleY = if (draggedOutsidePanel) 0.94f else 1.04f
                         shadowElevation = 18.dp.toPx()
-                        shape = CircleShape
+                        shape = iconShape
                         clip = true
                     }
-                    .clip(CircleShape)
+                    .clip(iconShape)
                     .drawWithContent {
                         drawContent()
                         drawRect(Color.Black.copy(alpha = if (draggedOutsidePanel) 0.14f else 0.18f))
