@@ -852,20 +852,22 @@ private fun ControlCenterNotificationPreviewCard(
             .fillMaxWidth()
             .height(108.dp)
     ) {
-        if (count > 1) {
+        repeat((count - 1).coerceIn(0, 2)) { index ->
             Box(
                 Modifier
                     .fillMaxWidth()
                     .height(100.dp)
                     .graphicsLayer {
-                        translationY = with(density) { CONTROL_NOTIFICATION_STACK_TRANSLATION_DP.dp.toPx() } * stackStrength
-                        scaleX = 1f - 0.012f * stackStrength
-                        scaleY = 1f - 0.012f * stackStrength
-                        alpha = 0.54f
+                        translationY = with(density) {
+                            (CONTROL_NOTIFICATION_STACK_TRANSLATION_DP * (index + 1)).dp.toPx()
+                        } * stackStrength
+                        scaleX = 1f - (index + 1) * 0.012f * stackStrength
+                        scaleY = 1f - (index + 1) * 0.012f * stackStrength
+                        alpha = 0.54f - index * 0.16f
                     }
-                    .padding(horizontal = CONTROL_NOTIFICATION_STACK_HORIZONTAL_INSET_DP.dp)
+                    .padding(horizontal = (CONTROL_NOTIFICATION_STACK_HORIZONTAL_INSET_DP * (index + 1)).dp)
                     .clip(RoundedCornerShape(30.dp))
-                    .background(notificationPreviewStackBackColor(launcherStyle.cardColor))
+                    .background(notificationPreviewStackBackColor(launcherStyle.cardColor, index))
             )
         }
         Row(
@@ -938,11 +940,12 @@ private fun ControlCenterNotificationPreviewCard(
     }
 }
 
-private fun notificationPreviewStackBackColor(base: Color): Color {
+private fun notificationPreviewStackBackColor(base: Color, index: Int): Color {
     return when {
         base == Color.Unspecified -> Color(0xFF2E2E2E)
-        base.alpha > 0.35f -> base.copy(alpha = (base.alpha * 0.58f).coerceIn(0.22f, 0.48f))
-        else -> Color(0xFF404040)
+        base.alpha > 0.35f -> base.copy(alpha = ((base.alpha * 0.58f) - index * 0.08f).coerceIn(0.20f, 0.48f))
+        index == 0 -> Color(0xFF404040)
+        else -> Color(0xFF303030)
     }
 }
 

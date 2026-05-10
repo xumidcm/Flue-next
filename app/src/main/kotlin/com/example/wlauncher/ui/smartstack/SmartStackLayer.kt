@@ -319,6 +319,7 @@ fun SmartStackLayer(
     val stepSnapshot = rememberStepSnapshot(showSteps, stepPermissionGranted)
     val slotCenters = remember { mutableStateMapOf<Int, Offset>() }
     val showNotificationPreview = notificationsEnabled && !showMusicCard
+    val canOpenNotificationsFromSide = showNotificationPreview
     val hasSecondaryComponent = showNotificationPreview || showMusicCard
     val visibleShortcutCount = if (hasSecondaryComponent) 6 else 9
     val context = LocalContext.current
@@ -385,7 +386,7 @@ fun SmartStackLayer(
             .fillMaxSize()
             .clip(RoundedCornerShape(40.dp))
             .background(launcherStyle.screenBackground)
-            .pointerInput(notificationAccessGranted, notificationsEnabled, modalState, notificationsSceneActive, transitionInFlight) {
+            .pointerInput(notificationAccessGranted, canOpenNotificationsFromSide, modalState, notificationsSceneActive, transitionInFlight) {
                 if (modalState != SideScreenModalState.None || notificationsSceneActive || transitionInFlight) return@pointerInput
                 detectDragGestures(
                     onDragStart = {
@@ -414,16 +415,16 @@ fun SmartStackLayer(
                         } else if (sideOverscroll.value != 0f) {
                             change.consume()
                             applySideOverscroll(dragAmount.y)
-                        } else if (!notificationsEnabled && ((dragAmount.y > 0f && listAtTop) || (dragAmount.y < 0f && listAtBottom))) {
+                        } else if (!canOpenNotificationsFromSide && ((dragAmount.y > 0f && listAtTop) || (dragAmount.y < 0f && listAtBottom))) {
                             change.consume()
                             applySideOverscroll(dragAmount.y)
-                        } else if (notificationsEnabled && (dragDy < 0f || notificationTransitionProgress > 0f)) {
+                        } else if (canOpenNotificationsFromSide && (dragDy < 0f || notificationTransitionProgress > 0f)) {
                             change.consume()
                             onNotificationTransitionProgressChange(
                                 (-dragDy / notificationDragRangePx).coerceIn(0f, 1f)
                             )
                         } else if (
-                            notificationsEnabled &&
+                            canOpenNotificationsFromSide &&
                             dragDy > 0f &&
                             listAtTop
                         ) {
@@ -435,7 +436,7 @@ fun SmartStackLayer(
                         val verticalIntent = abs(dragDy) > abs(dragDx) ||
                             abs(dragVelocityY) > SIDE_SCREEN_NOTIFICATION_FLING_VELOCITY
                         val dismissToFace = dragDx < -SIDE_SCREEN_DISMISS_THRESHOLD && abs(dragDx) > abs(dragDy)
-                        val openNotifications = notificationsEnabled &&
+                        val openNotifications = canOpenNotificationsFromSide &&
                             verticalIntent &&
                             (
                                 dragDy < -notificationReleaseThresholdPx ||

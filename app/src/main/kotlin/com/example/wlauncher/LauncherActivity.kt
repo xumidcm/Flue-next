@@ -558,7 +558,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val notificationProgress = notificationTransition.value.coerceIn(0f, 1f)
         val keepNotificationLayer = notificationProgress > 0.001f || notificationSceneActive || notificationGestureActive
         val sidePageProgress by animateFloatAsState(
-            targetValue = if (sideScreenEnabled && (screenState == ScreenState.Stack || screenState == ScreenState.Notifications)) {
+            targetValue = if (
+                sideScreenEnabled &&
+                (screenState == ScreenState.Stack ||
+                    (screenState == ScreenState.Notifications && notificationReturnState != ScreenState.ControlCenter))
+            ) {
                 1f
             } else {
                 0f
@@ -572,7 +576,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
             label = "widget_page_progress"
         )
         val controlCenterProgress by animateFloatAsState(
-            targetValue = if (showControlCenter && screenState == ScreenState.ControlCenter) 1f else 0f,
+            targetValue = if (
+                showControlCenter &&
+                (screenState == ScreenState.ControlCenter ||
+                    (screenState == ScreenState.Notifications && notificationReturnState == ScreenState.ControlCenter))
+            ) 1f else 0f,
             animationSpec = tween(durationMillis = SIDE_SCREEN_TRANSITION_MS),
             label = "control_center_progress"
         )
@@ -589,6 +597,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
         val openNotificationsFrom: (ScreenState) -> Unit = { origin ->
             notificationReturnState = origin
+            vm.collapseNotificationGroups()
             vm.setRevealedNotificationTarget(null)
             vm.setState(ScreenState.Notifications)
             settleNotificationTransition(1f)
@@ -1059,7 +1068,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onDismissAllNotifications = vm::dismissAllNotifications,
                         onRunNotificationAction = vm::runNotificationAction,
                         onOpenNotification = { key, origin ->
-                            vm.openNotification(key, origin, ScreenState.Notifications, 0L)
+                            vm.openNotification(key, origin, notificationReturnState, 0L)
                         },
                         stackCardColor = notificationStackTint
                     )

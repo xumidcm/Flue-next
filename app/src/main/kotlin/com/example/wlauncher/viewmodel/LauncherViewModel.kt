@@ -2288,6 +2288,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _revealedNotificationTarget.value = null
     }
 
+    fun collapseNotificationGroups() {
+        if (_expandedNotificationGroups.value.isNotEmpty()) {
+            _expandedNotificationGroups.value = emptySet()
+        }
+        _revealedNotificationTarget.value = null
+    }
+
     fun dismissNotificationGroup(packageName: String) {
         val keys = _notificationGroups.value
             .firstOrNull { it.packageName == packageName }

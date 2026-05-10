@@ -255,7 +255,6 @@ fun NotificationLayer(
             }
         )
     }
-
     val nestedScroll = remember(listState, dismissTransitionInFlight) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: NestedScrollSource): androidx.compose.ui.geometry.Offset {
@@ -297,6 +296,26 @@ fun NotificationLayer(
                                 else -> (overscroll.value + available.y).coerceAtMost(0f)
                             }
                         )
+                    }
+                    return androidx.compose.ui.geometry.Offset(0f, available.y)
+                }
+                return androidx.compose.ui.geometry.Offset.Zero
+            }
+
+            override fun onPostScroll(
+                consumed: androidx.compose.ui.geometry.Offset,
+                available: androidx.compose.ui.geometry.Offset,
+                source: NestedScrollSource
+            ): androidx.compose.ui.geometry.Offset {
+                if (dismissTransitionInFlight) return androidx.compose.ui.geometry.Offset.Zero
+                if (source != NestedScrollSource.UserInput) return androidx.compose.ui.geometry.Offset.Zero
+                val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+                if (available.y > 0f && atTop) {
+                    if (dismissDragDistance > 0f) {
+                        updateDismissDrag(available.y)
+                    } else {
+                        applyOverscroll(available.y)
+                        updateDismissDrag(available.y)
                     }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
@@ -395,7 +414,7 @@ fun NotificationLayer(
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             if (hasClearableNotifications) {
                 ClearAllButton(onClick = onDismissAllNotifications)
