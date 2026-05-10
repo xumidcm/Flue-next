@@ -775,7 +775,7 @@ fun AppFolderOverlay(
                                 Spacer(modifier = Modifier.height(5.dp))
                                 FolderMarqueeLabel(
                                     text = app.label,
-                                    color = Color.White.copy(alpha = 0.86f),
+                                    color = panelTextColor.copy(alpha = 0.84f),
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clipToBounds()

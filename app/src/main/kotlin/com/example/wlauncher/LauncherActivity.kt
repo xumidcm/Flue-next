@@ -100,7 +100,7 @@ private const val APP_LIST_RETURN_SHADOW_DELAY_MS = 320L
 private const val APP_LIST_RETURN_ORIGIN_HOLD_MS = 320L
 private const val APP_RETURN_MAINTENANCE_DELAY_MS = 260L
 private const val APP_LIST_LAYER_RELEASE_HOLD_MS = 32L
-private const val LAUNCH_MASK_EXIT_RETAIN_MS = 180L
+private const val LAUNCH_MASK_EXIT_RETAIN_MS = 260L
 
 class LauncherActivity : ComponentActivity() {
 
@@ -356,7 +356,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
         ScreenState.Apps -> appListColors.background
         else -> launcherStyle.screenBackground
     }
-    val layerBlurEnabled = blurEnabled
+    val layerBlurEnabled =
+        blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
+    val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
     val notificationsEnabled = showNotification
     val notificationSceneActive = screenState == ScreenState.Notifications
     val notificationStackTint = appListColors.item
@@ -401,7 +403,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
         vm.openApp(appInfo, origin, launchDelay, returnState)
     }
     var prevState by remember { mutableStateOf(screenState) }
-    val appListEntryProgress = remember { Animatable(if (screenState == ScreenState.Apps) 1f else 0f) }
     var appListLayerReleaseHold by remember { mutableStateOf(false) }
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
     val isOpeningAppList = prevState == ScreenState.Face && screenState == ScreenState.Apps
@@ -433,29 +434,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val previousState = prevState
         appListLayerReleaseHold = false
         try {
-            if (previousState == ScreenState.Face && screenState == ScreenState.Apps) {
-                appListEntryProgress.snapTo(0f)
-                appListEntryProgress.animateTo(
-                    1f,
-                    tween(durationMillis = 520, easing = FastOutSlowInEasing)
-                )
-            } else if (screenState == ScreenState.Apps) {
-                appListEntryProgress.snapTo(1f)
-            } else if (previousState == ScreenState.Apps) {
-                val shouldHoldRelease = screenState == ScreenState.App
-                appListLayerReleaseHold = shouldHoldRelease
-                appListEntryProgress.animateTo(
-                    0f,
-                    tween(durationMillis = 400, easing = FastOutSlowInEasing)
-                )
-                if (shouldHoldRelease) {
-                    delay(APP_LIST_LAYER_RELEASE_HOLD_MS)
-                }
-                appListLayerReleaseHold = false
+            if (previousState == ScreenState.Apps && screenState == ScreenState.App) {
+                appListLayerReleaseHold = true
+                delay(APP_LIST_LAYER_RELEASE_HOLD_MS)
             } else {
-                appListEntryProgress.snapTo(0f)
+                appListLayerReleaseHold = false
             }
         } finally {
+            appListLayerReleaseHold = false
             prevState = screenState
         }
     }
@@ -534,7 +520,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val showLaunchBackdrop = screenState == ScreenState.App && (fadeLaunch || currentLaunchIcon != null || retainedLaunchIcon != null)
     val effectiveLaunchIcon = if (fadeLaunch) null else (currentLaunchIcon ?: retainedLaunchIcon)
     val effectiveLaunchSplash = !fadeLaunch && (
-        (showSplash && currentLaunchIcon != null) ||
+            (showSplash && currentLaunchIcon != null) ||
             (retainedLaunchSplash && retainedLaunchIcon != null)
     )
     LaunchedEffect(screenState, splashIcon, splashDelay, currentLaunchIcon, fadeLaunch) {
@@ -647,14 +633,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val sideSceneOverlayActive = sideScreenVisible || widgetPageVisible || controlCenterVisible
         val appListLayerRaised = screenState == ScreenState.Apps ||
             isOpeningAppList ||
-            appListEntryProgress.value > 0.001f ||
-            appListLayerReleaseHold
-        val appListContentEntryProgress = when {
-            screenState == ScreenState.Apps || isOpeningAppList -> appListEntryProgress.value
-            launchSourceState == ScreenState.Apps && screenState == ScreenState.App -> appListEntryProgress.value.coerceAtLeast(0.72f)
-            else -> 0f
-        }
-        val suppressAppListHeavyEffects = false
+            appListLayerReleaseHold ||
+            (screenState == ScreenState.App && launchSourceState == ScreenState.Apps && showLaunchBackdrop)
+        val suppressAppListHeavyEffects =
+            reduceLegacyDrawerEffects ||
+                isOpeningAppList ||
+                isReturningFromApp ||
+                appListReturnOriginActive ||
+                appListLayerReleaseHold
 
         GestureHost(
             screenState = screenState,
@@ -826,7 +812,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         active = screenState == ScreenState.Apps,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         appListScalePercent = appListScalePercent,
-                        entryProgress = appListContentEntryProgress,
                         folderOpen = openFolder != null,
                         useWatchFaceColors = useAppListWatchFaceColors,
                         allowFolderCreation = appListFoldersEnabled,
@@ -864,7 +849,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         active = screenState == ScreenState.Apps,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         appListScalePercent = appListScalePercent,
-                        entryProgress = appListContentEntryProgress,
                         folderOpen = openFolder != null,
                         useWatchFaceColors = useAppListWatchFaceColors,
                         rowBorderEnabled = appListRowBorderEnabled,

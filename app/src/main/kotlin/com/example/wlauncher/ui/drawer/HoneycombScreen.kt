@@ -426,7 +426,6 @@ fun HoneycombScreen(
         }
 
         val currentScroll = currentScrollOffsetValue()
-        val entryOffsetY = (1f - entryProgress.coerceIn(0f, 1f)) * screenHeightPx * 0.08f
         val fastFlowSlowTopY = screenHeightPx * FAST_FLOW_SLOW_TOP_FRACTION
         val fastFlowSlowBottomY = screenHeightPx * FAST_FLOW_SLOW_BOTTOM_FRACTION
 
@@ -813,7 +812,7 @@ fun HoneycombScreen(
                 maxWidth = containerMaxWidth,
                 maxHeight = containerMaxHeight,
                 visuals = entryVisuals,
-                color = appListEntryMaskColor(darkMode)
+                color = appPalette.background
             )
 
             val visibleTop = -iconSizePx * 1.5f
@@ -994,7 +993,7 @@ fun HoneycombScreen(
                                     enabled = fisheyeEnabled && edgeSpacingCompressionEnabled
                                 )
                                 val sx = clickCenterX + clickEdgeOffsetX
-                                val syPos = clickCenterY + flowOffset + entryOffsetY
+                                val syPos = clickCenterY + flowOffset
                                 onAppClick(
                                     app,
                                     Offset(
@@ -1023,7 +1022,7 @@ fun HoneycombScreen(
                                     slowBottomY = fastFlowSlowBottomY
                                 )
                                 val posX = screenCenterX + baseX + edgeSpacingOffsetX
-                                val pY = screenCenterY + baseY + currentScroll + flowOffset + entryOffsetY
+                                val pY = screenCenterY + baseY + currentScroll + flowOffset
                                 var actualCenterX = posX
                                 var actualCenterY = pY
                                 translationX = posX - iconSizePx / 2f
@@ -1054,7 +1053,7 @@ fun HoneycombScreen(
                                     settlingKey == app.componentKey -> 0f
                                     else -> if (fisheyeEnabled) scale.coerceIn(0.24f, 1f) else 1f
                                 }
-                                alpha = itemAlpha * entryVisuals.iconProgress
+                                alpha = itemAlpha
                                 shadowElevation = if (itemAlpha > 0.001f) {
                                     if (reduceVisualLoad) iconShadowElevationPx * 0.62f else iconShadowElevationPx
                                 } else {
@@ -1189,7 +1188,6 @@ fun HoneycombScreen(
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
                     .height(topFadeRangeDp.dp)
-                    .graphicsLayer { alpha = entryVisuals.edgeProgress }
                     .background(
                         Brush.verticalGradient(
                             listOf(
@@ -1207,7 +1205,6 @@ fun HoneycombScreen(
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .height(bottomFadeRangeDp.dp)
-                    .graphicsLayer { alpha = entryVisuals.edgeProgress }
                     .background(
                         Brush.verticalGradient(
                             listOf(
@@ -1623,7 +1620,6 @@ private fun MaterialDenseGridScreen(
         val screenHeightPx = with(density) { maxHeight.toPx() }
         val containerMaxWidth = maxWidth
         val containerMaxHeight = maxHeight
-        val entryOffsetY = (1f - entryProgress.coerceIn(0f, 1f)) * screenHeightPx * 0.08f
         val topFadePx = with(density) { topFadeRangeDp.dp.toPx() }
         val bottomFadePx = with(density) { bottomFadeRangeDp.dp.toPx() }
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
@@ -1684,7 +1680,7 @@ private fun MaterialDenseGridScreen(
             maxWidth = containerMaxWidth,
             maxHeight = containerMaxHeight,
             visuals = entryVisuals,
-            color = appListEntryMaskColor(darkMode)
+            color = appPalette.background
         )
         LazyVerticalGrid(
             columns = GridCells.Fixed(effectiveColumns),
@@ -1692,7 +1688,7 @@ private fun MaterialDenseGridScreen(
             userScrollEnabled = dragFromIndex == null && longPressedApp == null,
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer { translationY = overscroll.value + entryOffsetY }
+                .graphicsLayer { translationY = overscroll.value }
                 .platformBlur(16f, (longPressedApp != null || folderOpen) && blurEnabled),
             contentPadding = PaddingValues(
                 start = gridHorizontalPadding + leftSafeInset,
@@ -1718,7 +1714,7 @@ private fun MaterialDenseGridScreen(
                     containerRoot = materialContainerRoot,
                     fallback = screenHeightPx / 2f
                 )
-                val itemCenterY = itemCenterYRoot - materialContainerRoot.y + overscroll.value + entryOffsetY
+                val itemCenterY = itemCenterYRoot - materialContainerRoot.y + overscroll.value
                 val itemBlur = if (edgeBlurEnabled) {
                     val rawBlur = computeHoneycombEdgeBlur(
                         centerY = itemCenterY,
@@ -1832,7 +1828,7 @@ private fun MaterialDenseGridScreen(
                             translationY = animatedDragY
                             scaleX = itemScale * pressedScale
                             scaleY = itemScale * pressedScale
-                            alpha = (if (isDragged) 0f else itemAlpha) * entryVisuals.iconProgress
+                            alpha = if (isDragged) 0f else itemAlpha
                         }
                         .platformBlur(
                             itemBlur,
@@ -1933,7 +1929,6 @@ private fun MaterialDenseGridScreen(
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
                     .height(topFadeRangeDp.dp)
-                    .graphicsLayer { alpha = entryVisuals.edgeProgress }
                     .background(
                         Brush.verticalGradient(
                             listOf(
@@ -1951,7 +1946,6 @@ private fun MaterialDenseGridScreen(
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .height(bottomFadeRangeDp.dp)
-                    .graphicsLayer { alpha = entryVisuals.edgeProgress }
                     .background(
                         Brush.verticalGradient(
                             listOf(

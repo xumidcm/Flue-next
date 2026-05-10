@@ -542,7 +542,6 @@ fun ListDrawerScreen(
             val containerMaxWidth = maxWidth
             val containerMaxHeight = maxHeight
             val screenCenterY = screenHeightPx / 2f
-            val entryOffsetY = (1f - entryProgress.coerceIn(0f, 1f)) * screenHeightPx * 0.08f
             val listViewportCenterY by remember {
                 derivedStateOf {
                     val info = listState.layoutInfo
@@ -583,7 +582,7 @@ fun ListDrawerScreen(
                 maxWidth = containerMaxWidth,
                 maxHeight = containerMaxHeight,
                 visuals = entryVisuals,
-                color = appListEntryMaskColor(darkMode)
+                color = appPalette.background
             )
             LaunchedEffect(dragFromIndex, screenHeightPx) {
                 var previousFrameNanos = 0L
@@ -633,7 +632,7 @@ fun ListDrawerScreen(
                 userScrollEnabled = dragFromIndex == null && longPressedApp == null,
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer { translationY = overscroll.value + entryOffsetY },
+                    .graphicsLayer { translationY = overscroll.value },
                 contentPadding = PaddingValues(
                     top = centeredPadding,
                     bottom = centeredPadding,
@@ -744,12 +743,12 @@ fun ListDrawerScreen(
                                 } else {
                                     1f
                                 }
-                                alpha = rowAlpha * entryVisuals.iconProgress
+                                alpha = rowAlpha
                             }
                             .then(
                                 if (showRowBackground) {
                                     Modifier.background(
-                                        appPalette.item.copy(alpha = entryVisuals.surfaceProgress),
+                                        appPalette.item,
                                         rowShape
                                     )
                                 } else {
@@ -864,7 +863,6 @@ fun ListDrawerScreen(
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
                     .height(topFadeRangeDp.coerceAtLeast(0).dp)
-                    .graphicsLayer { alpha = entryVisuals.edgeProgress }
                     .background(
                         Brush.verticalGradient(
                             listOf(
@@ -883,7 +881,6 @@ fun ListDrawerScreen(
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .height(bottomFadeRangeDp.coerceAtLeast(0).dp)
-                    .graphicsLayer { alpha = entryVisuals.edgeProgress }
                     .background(
                         Brush.verticalGradient(
                             listOf(
