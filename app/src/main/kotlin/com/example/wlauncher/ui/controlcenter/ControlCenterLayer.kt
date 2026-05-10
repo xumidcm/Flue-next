@@ -828,6 +828,18 @@ private fun ControlCenterNotificationPreviewCard(
     onClick: () -> Unit
 ) {
     val launcherStyle = LauncherTheme.style
+    val pressedState = rememberPressedState()
+    val pressed by pressedState
+    val cardColor = if (launcherStyle.cardColor.alpha < 0.35f) {
+        if (launcherStyle.titleColor == Color.White) Color(0xFF353535) else Color(0xFFE8E8ED)
+    } else {
+        launcherStyle.cardColor
+    }
+    val cardScale by animateFloatAsState(
+        targetValue = if (pressed) 0.968f else 1f,
+        animationSpec = spring(stiffness = 860f, dampingRatio = 0.72f),
+        label = "control_notification_press"
+    )
     val leadGroup = notificationGroups.firstOrNull()
     val leadEntry = leadGroup?.visiblePreviewEntries?.firstOrNull() ?: leadGroup?.entries?.firstOrNull()
     val count = notificationGroups.sumOf { it.entries.size }
@@ -874,9 +886,16 @@ private fun ControlCenterNotificationPreviewCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(100.dp)
+                .graphicsLayer {
+                    scaleX = cardScale
+                    scaleY = cardScale
+                }
                 .clip(RoundedCornerShape(30.dp))
-                .background(launcherStyle.cardColor)
-                .clickable(onClick = onClick)
+                .background(cardColor)
+                .controlCenterPressGesture(
+                    pressedState = pressedState,
+                    onClick = onClick
+                )
                 .padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {

@@ -95,6 +95,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_HONEYCOMB_BOTTOM_FADE = intPreferencesKey("honeycomb_bottom_fade")
         val KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION = booleanPreferencesKey("honeycomb_fast_scroll_optimization")
         val KEY_APP_LIST_FISHEYE = booleanPreferencesKey("app_list_fisheye_enabled")
+        val KEY_MATERIAL_HONEYCOMB_TOP_FISHEYE = booleanPreferencesKey("material_honeycomb_top_fisheye_enabled")
         val KEY_APP_LIST_FISHEYE_RANGE_ROWS = intPreferencesKey("app_list_fisheye_range_rows")
         val KEY_APP_LIST_FISHEYE_STRENGTH_PERCENT = intPreferencesKey("app_list_fisheye_strength_percent")
         val KEY_APP_LIST_EDGE_SPACING_COMPRESSION = booleanPreferencesKey("app_list_edge_spacing_compression_enabled")
@@ -345,6 +346,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val honeycombFastScrollOptimization: StateFlow<Boolean> = _honeycombFastScrollOptimization.asStateFlow()
     private val _appListFisheyeEnabled = MutableStateFlow(true)
     val appListFisheyeEnabled: StateFlow<Boolean> = _appListFisheyeEnabled.asStateFlow()
+    private val _materialHoneycombTopFisheyeEnabled = MutableStateFlow(true)
+    val materialHoneycombTopFisheyeEnabled: StateFlow<Boolean> = _materialHoneycombTopFisheyeEnabled.asStateFlow()
     private val _appListFisheyeRangeRows = MutableStateFlow(4)
     val appListFisheyeRangeRows: StateFlow<Int> = _appListFisheyeRangeRows.asStateFlow()
     private val _appListFisheyeStrengthPercent = MutableStateFlow(100)
@@ -748,6 +751,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedFisheyeEnabled = prefs[KEY_APP_LIST_FISHEYE] ?: true
                 if (_appListFisheyeEnabled.value != loadedFisheyeEnabled) {
                     _appListFisheyeEnabled.value = loadedFisheyeEnabled
+                }
+
+                val loadedMaterialTopFisheye = prefs[KEY_MATERIAL_HONEYCOMB_TOP_FISHEYE] ?: true
+                if (_materialHoneycombTopFisheyeEnabled.value != loadedMaterialTopFisheye) {
+                    _materialHoneycombTopFisheyeEnabled.value = loadedMaterialTopFisheye
                 }
 
                 val loadedFisheyeRangeRows = (prefs[KEY_APP_LIST_FISHEYE_RANGE_ROWS] ?: 4).coerceIn(1, 8)
@@ -1596,6 +1604,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_APP_LIST_FISHEYE] = enabled } }
     }
 
+    fun setMaterialHoneycombTopFisheyeEnabled(enabled: Boolean) {
+        _materialHoneycombTopFisheyeEnabled.value = enabled
+        persist { store.edit { it[KEY_MATERIAL_HONEYCOMB_TOP_FISHEYE] = enabled } }
+    }
+
     fun setAppListFisheyeRangeRows(value: Int) {
         _appListFisheyeRangeRows.value = value.coerceIn(1, 8)
         val savedValue = _appListFisheyeRangeRows.value
@@ -2395,6 +2408,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _honeycombBottomFade.value = 30
         _honeycombFastScrollOptimization.value = true
         _appListFisheyeEnabled.value = true
+        _materialHoneycombTopFisheyeEnabled.value = true
         _appListFisheyeRangeRows.value = 4
         _appListFisheyeStrengthPercent.value = 100
         _appListEdgeSpacingCompressionEnabled.value = true
@@ -2495,6 +2509,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_HONEYCOMB_BOTTOM_FADE] = 30
                 it[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION] = true
                 it[KEY_APP_LIST_FISHEYE] = true
+                it[KEY_MATERIAL_HONEYCOMB_TOP_FISHEYE] = true
                 it[KEY_APP_LIST_FISHEYE_RANGE_ROWS] = 4
                 it[KEY_APP_LIST_FISHEYE_STRENGTH_PERCENT] = 100
                 it[KEY_APP_LIST_EDGE_SPACING_COMPRESSION] = true

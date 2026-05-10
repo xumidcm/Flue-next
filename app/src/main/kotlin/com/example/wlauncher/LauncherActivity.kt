@@ -97,7 +97,7 @@ private const val SIDE_SCREEN_TRANSITION_MS = 260
 private const val NOTIFICATION_TRANSITION_MS = 240
 private const val APP_LIST_OPEN_SHADOW_DELAY_MS = 280L
 private const val APP_LIST_RETURN_SHADOW_DELAY_MS = 320L
-private const val APP_LIST_RETURN_ORIGIN_HOLD_MS = 320L
+private const val APP_LIST_RETURN_ORIGIN_HOLD_MS = 420L
 private const val APP_RETURN_MAINTENANCE_DELAY_MS = 260L
 private const val APP_LIST_LAYER_RELEASE_HOLD_MS = 32L
 private const val LAUNCH_MASK_EXIT_RETAIN_MS = 260L
@@ -208,6 +208,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsStateWithLifecycle()
     val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsStateWithLifecycle()
     val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsStateWithLifecycle()
+    val materialHoneycombTopFisheyeEnabled by vm.materialHoneycombTopFisheyeEnabled.collectAsStateWithLifecycle()
     val appListLeftSafeInsetPercent by vm.appListLeftSafeInsetPercent.collectAsStateWithLifecycle()
     val appListFisheyeRangeRows by vm.appListFisheyeRangeRows.collectAsStateWithLifecycle()
     val appListFisheyeStrengthPercent by vm.appListFisheyeStrengthPercent.collectAsStateWithLifecycle()
@@ -477,14 +478,30 @@ fun LauncherScreen(vm: LauncherViewModel) {
         appListReturnOriginActive && !classicReturnAnimationEnabled -> appOpenOrigin
         else -> null
     }
+    val appListIconReturnActive =
+        launchSourceState == ScreenState.Apps &&
+            screenState == ScreenState.Apps &&
+            !classicReturnAnimationEnabled &&
+            (isReturningFromApp || appListReturnOriginActive)
     val appListLayerOrigin = if (isOpeningAppList) {
         Offset(0.5f, 0.5f)
+    } else if (appListIconReturnActive) {
+        appOpenOrigin
     } else {
         appListTransformOrigin
     }
+    val appListBackgroundProgress by animateFloatAsState(
+        targetValue = if (screenState == ScreenState.Apps) 1f else 0f,
+        animationSpec = if (screenState == ScreenState.Apps) {
+            tween(durationMillis = 400)
+        } else {
+            tween(durationMillis = 400)
+        },
+        label = "app_list_background_progress"
+    )
     val appListMotionSpec = when {
         isOpeningAppList -> tween<Float>(durationMillis = 260)
-        uiStyle == UiStyle.MATERIAL_3 && isReturningFromApp -> tween(
+        uiStyle == UiStyle.MATERIAL_3 && (isReturningFromApp || appListIconReturnActive) -> tween(
             durationMillis = 260,
             easing = FastOutSlowInEasing
         )
@@ -639,6 +656,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             reduceLegacyDrawerEffects ||
                 isOpeningAppList ||
                 isReturningFromApp ||
+                appListIconReturnActive ||
                 appListReturnOriginActive ||
                 appListLayerReleaseHold
 
@@ -816,6 +834,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         useWatchFaceColors = useAppListWatchFaceColors,
                         allowFolderCreation = appListFoldersEnabled,
                         fisheyeEnabled = appListFisheyeEnabled,
+                        materialTopFisheyeEnabled = materialHoneycombTopFisheyeEnabled,
                         fisheyeRangeRows = appListFisheyeRangeRows,
                         fisheyeStrengthPercent = appListFisheyeStrengthPercent,
                         edgeSpacingCompressionEnabled = appListEdgeSpacingCompressionEnabled,
@@ -825,6 +844,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         themeColor = appListThemeColor,
                         uiStyle = uiStyle,
                         darkMode = effectiveDarkMode,
+                        entryProgress = appListBackgroundProgress,
                         onAppClick = { appInfo, origin ->
                             launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
                         },
@@ -863,6 +883,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         themeColor = appListThemeColor,
                         uiStyle = uiStyle,
                         darkMode = effectiveDarkMode,
+                        entryProgress = appListBackgroundProgress,
                         onAppClick = { appInfo, origin ->
                             launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
                         },

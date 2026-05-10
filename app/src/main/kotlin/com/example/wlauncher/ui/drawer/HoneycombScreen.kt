@@ -113,6 +113,7 @@ fun HoneycombScreen(
     edgeBlurEnabled: Boolean = false,
     suppressHeavyEffects: Boolean = false,
     fisheyeEnabled: Boolean = true,
+    materialTopFisheyeEnabled: Boolean = true,
     fisheyeRangeRows: Int = 4,
     fisheyeStrengthPercent: Int = 100,
     edgeSpacingCompressionEnabled: Boolean = true,
@@ -168,6 +169,7 @@ fun HoneycombScreen(
             folderOpen = folderOpen,
             allowFolderCreation = allowFolderCreation,
             fisheyeEnabled = fisheyeEnabled,
+            topFisheyeEnabled = materialTopFisheyeEnabled,
             fisheyeRangeRows = fisheyeRangeRows,
             fisheyeStrengthPercent = fisheyeStrengthPercent,
             edgeSpacingCompressionEnabled = edgeSpacingCompressionEnabled,
@@ -1251,6 +1253,7 @@ private fun MaterialDenseGridScreen(
     folderOpen: Boolean,
     allowFolderCreation: Boolean,
     fisheyeEnabled: Boolean,
+    topFisheyeEnabled: Boolean,
     fisheyeRangeRows: Int,
     fisheyeStrengthPercent: Int,
     edgeSpacingCompressionEnabled: Boolean,
@@ -1634,10 +1637,17 @@ private fun MaterialDenseGridScreen(
         val iconInnerPadding = (3.dp * appListScale).coerceIn(2.dp, 6.dp)
         val gridHorizontalPadding = 8.dp
         val gridItemSpacing = 4.dp
-        val materialTopPadding = maxOf(16.dp, topFadeRangeDp.dp * 0.42f)
-        val materialBottomPadding = maxOf(68.dp, bottomFadeRangeDp.dp * 0.95f)
+        val materialItemHeight = (screenHeightPx / effectiveColumns.coerceAtLeast(1)).coerceAtLeast(with(density) { 56.dp.toPx() })
+        val centerScrollPadding = with(density) {
+            ((screenHeightPx - materialItemHeight) / 2f).coerceAtLeast(16.dp.toPx()).toDp()
+        }
+        val materialTopPadding = maxOf(centerScrollPadding, topFadeRangeDp.dp * 0.42f)
+        val materialBottomPadding = maxOf(centerScrollPadding, bottomFadeRangeDp.dp * 0.95f)
         val materialFisheyeScrollTick = gridState.firstVisibleItemIndex * 100_000 +
             gridState.firstVisibleItemScrollOffset
+        val materialVisibleItemsByIndex = remember(materialFisheyeScrollTick, apps.size) {
+            gridState.layoutInfo.visibleItemsInfo.associateBy { it.index }
+        }
         LaunchedEffect(dragFromIndex, screenHeightPx) {
             var previousFrameNanos = 0L
             while (dragFromIndex != null) {
@@ -1706,7 +1716,7 @@ private fun MaterialDenseGridScreen(
             ) { index, app ->
                 val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
                 val isPressed by interactionSource.collectIsPressedAsState()
-                val itemInfo = gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+                val itemInfo = materialVisibleItemsByIndex[index]
                 val itemBounds = materialItemBounds[index]
                 val itemCenterYRoot = materialGridItemCenterY(
                     itemInfo = itemInfo,
@@ -1735,6 +1745,7 @@ private fun MaterialDenseGridScreen(
                     rangePx = fisheyeRangePx,
                     minScale = fisheyeMinScale,
                     fisheyeEnabled = fisheyeEnabled,
+                    topFisheyeEnabled = topFisheyeEnabled,
                     scrollTick = materialFisheyeScrollTick
                 )
                 val itemAlpha = if (fisheyeEnabled) itemScale.coerceIn(0.30f, 1f) else 1f
@@ -1757,6 +1768,7 @@ private fun MaterialDenseGridScreen(
                     itemSize = itemHeightPx,
                     strengthPercent = fisheyeStrengthPercent,
                     enabled = fisheyeEnabled &&
+                        (topFisheyeEnabled || itemCenterY >= screenHeightPx / 2f) &&
                         edgeSpacingCompressionEnabled
                 )
                 val isDragged = dragFromIndex == index
@@ -2071,9 +2083,11 @@ private fun computeMaterialItemScale(
     rangePx: Float,
     minScale: Float,
     fisheyeEnabled: Boolean,
+    topFisheyeEnabled: Boolean,
     scrollTick: Int
 ): Float {
     if (!fisheyeEnabled) return 1f
+    if (!topFisheyeEnabled && centerY < screenCenterY) return 1f
     val distance = max(0f, abs(centerY - screenCenterY) - deadZonePx)
     return fisheyeScale(distance, rangePx, minScale = minScale)
 }

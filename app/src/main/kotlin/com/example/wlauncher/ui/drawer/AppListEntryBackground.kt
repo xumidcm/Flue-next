@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 
 @Suppress("UNUSED_PARAMETER")
@@ -19,6 +20,9 @@ internal fun BoxScope.AppListEntryBackground(
     androidx.compose.foundation.layout.Box(
         modifier = Modifier
             .fillMaxSize()
+            .graphicsLayer {
+                alpha = visuals.backgroundFillProgress.coerceIn(0f, 1f)
+            }
             .background(color)
     )
 }

@@ -36,6 +36,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
@@ -737,7 +738,6 @@ fun AppFolderOverlay(
                                         scaleY = pressedScale
                                         this.alpha = if (isDragged) 0f else 1f
                                     }
-                                    .clip(RoundedCornerShape(18.dp))
                                     .clickable(
                                         interactionSource = interactionSource,
                                         indication = null
@@ -752,7 +752,7 @@ fun AppFolderOverlay(
                                 Box(
                                     modifier = Modifier
                                         .size(56.dp)
-                                        .clip(RoundedCornerShape(18.dp))
+                                        .clip(CircleShape)
                                         .drawWithContent {
                                             drawContent()
                                             if (iconPressedOverlay > 0f) {
@@ -793,10 +793,6 @@ fun AppFolderOverlay(
                 modifier = Modifier
                     .size(58.dp)
                     .align(Alignment.TopStart)
-                    .drawWithContent {
-                        drawContent()
-                        drawRect(Color.Black.copy(alpha = if (draggedOutsidePanel) 0.14f else 0.18f))
-                    }
                     .graphicsLayer {
                         translationX = dragPointerRoot.x - dragIconHalfSizePx
                         translationY = dragPointerRoot.y - dragIconHalfSizePx
@@ -804,8 +800,14 @@ fun AppFolderOverlay(
                         scaleX = if (draggedOutsidePanel) 0.94f else 1.04f
                         scaleY = if (draggedOutsidePanel) 0.94f else 1.04f
                         shadowElevation = 18.dp.toPx()
+                        shape = CircleShape
+                        clip = true
                     }
-                    .clip(RoundedCornerShape(18.dp))
+                    .clip(CircleShape)
+                    .drawWithContent {
+                        drawContent()
+                        drawRect(Color.Black.copy(alpha = if (draggedOutsidePanel) 0.14f else 0.18f))
+                    }
             ) {
                 Image(
                     bitmap = draggedApp.iconForDisplay(twoToneIconsEnabled),

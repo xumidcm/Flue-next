@@ -5,15 +5,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.provider.Settings
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -25,7 +18,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -382,28 +374,103 @@ fun NotificationLayer(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                     contentPadding = PaddingValues(top = 10.dp, bottom = bottomScrollPadding)
                 ) {
-                    items(
-                        items = notificationGroups,
-                        key = { it.packageName },
-                        contentType = { "group" }
-                    ) { group ->
-                        NotificationRowContainer {
-                            NotificationGroupSection(
-                                modifier = Modifier,
-                                width = contentWidth,
-                                group = group,
-                                revealedTarget = revealedNotificationTarget,
-                                onRevealTargetChange = onRevealTargetChange,
-                                onToggleGroup = { onToggleGroup(group.packageName) },
-                                onDismissGroup = { onDismissGroup(group.packageName) },
-                                onDismissNotification = onDismissNotification,
-                                onRunNotificationAction = onRunNotificationAction,
-                                onOpenNotification = onOpenNotification,
-                                stackCardColor = stackCardColor
-                            )
+                    notificationGroups.forEach { group ->
+                        item(
+                            key = "header_${group.packageName}",
+                            contentType = "group_header"
+                        ) {
+                            NotificationRowContainer {
+                                Box(Modifier.width(contentWidth)) {
+                                    GroupHeader(
+                                        title = group.headerTitle,
+                                        count = group.entries.size,
+                                        showMeta = group.entries.size > 1 && group.expanded,
+                                        expanded = group.expanded,
+                                        onClick = { onToggleGroup(group.packageName) }
+                                    )
+                                }
+                            }
+                        }
+                        if (group.expanded && group.entries.size > 1) {
+                            items(
+                                items = group.entries,
+                                key = { entry -> "entry_${entry.key}" },
+                                contentType = { "entry" }
+                            ) { entry ->
+                                NotificationRowContainer {
+                                    SwipeRevealDeleteContainer(
+                                        target = NotificationRevealTarget.Entry(entry.key),
+                                        revealedTarget = revealedNotificationTarget,
+                                        onRevealTargetChange = onRevealTargetChange,
+                                        enabled = entry.isClearable,
+                                        onDelete = { onDismissNotification(entry.key) },
+                                        modifier = Modifier.width(contentWidth)
+                                    ) {
+                                        NotificationCard(
+                                            width = contentWidth,
+                                            entry = entry,
+                                            subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
+                                            trailing = formatNotificationTime(entry.time),
+                                            onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) },
+                                            onRunNotificationAction = onRunNotificationAction
+                                        )
+                                    }
+                                }
+                            }
+                        } else if (group.entries.size > 1) {
+                            item(
+                                key = "stack_${group.packageName}",
+                                contentType = "stack"
+                            ) {
+                                NotificationRowContainer {
+                                    SwipeRevealDeleteContainer(
+                                        target = NotificationRevealTarget.Group(group.packageName),
+                                        revealedTarget = revealedNotificationTarget,
+                                        onRevealTargetChange = onRevealTargetChange,
+                                        enabled = group.entries.any(NotificationEntryUi::isClearable),
+                                        onDelete = { onDismissGroup(group.packageName) },
+                                        modifier = Modifier.width(contentWidth),
+                                        actionHeight = 72.dp
+                                    ) {
+                                        CollapsedStackCard(
+                                            width = contentWidth,
+                                            leadEntry = group.entries.first(),
+                                            hiddenCount = group.entries.size - 1,
+                                            stackCardColor = stackCardColor,
+                                            onClick = { onToggleGroup(group.packageName) }
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            val entry = group.entries.first()
+                            item(
+                                key = "entry_${entry.key}",
+                                contentType = "entry"
+                            ) {
+                                NotificationRowContainer {
+                                    SwipeRevealDeleteContainer(
+                                        target = NotificationRevealTarget.Entry(entry.key),
+                                        revealedTarget = revealedNotificationTarget,
+                                        onRevealTargetChange = onRevealTargetChange,
+                                        enabled = entry.isClearable,
+                                        onDelete = { onDismissNotification(entry.key) },
+                                        modifier = Modifier.width(contentWidth)
+                                    ) {
+                                        NotificationCard(
+                                            width = contentWidth,
+                                            entry = entry,
+                                            subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
+                                            trailing = formatNotificationTime(entry.time),
+                                            onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) },
+                                            onRunNotificationAction = onRunNotificationAction
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -417,13 +484,38 @@ fun NotificationLayer(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             if (hasClearableNotifications) {
-                ClearAllButton(onClick = onDismissAllNotifications)
+                ClearAllDock {
+                    ClearAllButton(onClick = onDismissAllNotifications)
+                }
             }
             WatchBatteryPill(
                 level = batteryStatus.level,
                 charging = batteryStatus.charging
             )
         }
+    }
+}
+
+@Composable
+private fun ClearAllDock(content: @Composable () -> Unit) {
+    val launcherStyle = LauncherTheme.style
+    val dockColor = if (launcherStyle.cardColor.alpha < 0.35f) {
+        if (launcherStyle.titleColor == Color.White) {
+            Color(0xFF151515).copy(alpha = 0.82f)
+        } else {
+            Color(0xFFF2F2F6).copy(alpha = 0.88f)
+        }
+    } else {
+        launcherStyle.cardColor.copy(alpha = launcherStyle.cardColor.alpha.coerceAtLeast(0.72f))
+    }
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(dockColor)
+            .padding(horizontal = 7.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        content()
     }
 }
 
@@ -435,139 +527,6 @@ private fun NotificationRowContainer(content: @Composable () -> Unit) {
         contentAlignment = Alignment.Center
     ) {
         content()
-    }
-}
-
-@Composable
-private fun NotificationGroupSection(
-    modifier: Modifier = Modifier,
-    width: androidx.compose.ui.unit.Dp,
-    group: NotificationGroupUi,
-    revealedTarget: NotificationRevealTarget?,
-    onRevealTargetChange: (NotificationRevealTarget?) -> Unit,
-    onToggleGroup: () -> Unit,
-    onDismissGroup: () -> Unit,
-    onDismissNotification: (String) -> Unit,
-    onRunNotificationAction: (String) -> Boolean,
-    onOpenNotification: (String, Offset) -> Boolean,
-    stackCardColor: Color = Color.Unspecified
-) {
-    Column(
-        modifier = modifier.width(width),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        GroupHeader(
-            title = group.headerTitle,
-            count = group.entries.size,
-            showMeta = group.entries.size > 1 && group.expanded,
-            expanded = group.expanded,
-            onClick = onToggleGroup
-        )
-        NotificationGroupBody(
-            width = width,
-            group = group,
-            revealedTarget = revealedTarget,
-            onRevealTargetChange = onRevealTargetChange,
-            onToggleGroup = onToggleGroup,
-            onDismissGroup = onDismissGroup,
-            onDismissNotification = onDismissNotification,
-            onRunNotificationAction = onRunNotificationAction,
-            onOpenNotification = onOpenNotification,
-            stackCardColor = stackCardColor
-        )
-    }
-}
-
-@Composable
-private fun NotificationGroupBody(
-    width: androidx.compose.ui.unit.Dp,
-    group: NotificationGroupUi,
-    revealedTarget: NotificationRevealTarget?,
-    onRevealTargetChange: (NotificationRevealTarget?) -> Unit,
-    onToggleGroup: () -> Unit,
-    onDismissGroup: () -> Unit,
-    onDismissNotification: (String) -> Unit,
-    onRunNotificationAction: (String) -> Boolean,
-    onOpenNotification: (String, Offset) -> Boolean,
-    stackCardColor: Color = Color.Unspecified
-) {
-    val hasMultipleEntries = group.entries.size > 1
-    AnimatedContent(
-        targetState = group.expanded,
-        transitionSpec = {
-            if (targetState) {
-                (fadeIn(animationSpec = tween(220)) + slideInVertically(animationSpec = tween(220)) { it / 4 }) togetherWith
-                    (fadeOut(animationSpec = tween(140)) + slideOutVertically(animationSpec = tween(140)) { -it / 10 })
-            } else {
-                (fadeIn(animationSpec = tween(180)) + slideInVertically(animationSpec = tween(180)) { -it / 8 }) togetherWith
-                    (fadeOut(animationSpec = tween(210)) + slideOutVertically(animationSpec = tween(210)) { it / 5 })
-            }
-        },
-        label = "notification_group_body"
-    ) { expanded ->
-        if (expanded && hasMultipleEntries) {
-            Column(
-                modifier = Modifier.width(width),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                group.entries.forEach { entry ->
-                    SwipeRevealDeleteContainer(
-                        target = NotificationRevealTarget.Entry(entry.key),
-                        revealedTarget = revealedTarget,
-                        onRevealTargetChange = onRevealTargetChange,
-                        enabled = entry.isClearable,
-                        onDelete = { onDismissNotification(entry.key) },
-                        modifier = Modifier.width(width)
-                    ) {
-                        NotificationCard(
-                            width = width,
-                            entry = entry,
-                            subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
-                            trailing = formatNotificationTime(entry.time),
-                            onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) },
-                            onRunNotificationAction = onRunNotificationAction
-                        )
-                    }
-                }
-            }
-        } else if (hasMultipleEntries) {
-            SwipeRevealDeleteContainer(
-                target = NotificationRevealTarget.Group(group.packageName),
-                revealedTarget = revealedTarget,
-                onRevealTargetChange = onRevealTargetChange,
-                enabled = group.entries.any(NotificationEntryUi::isClearable),
-                onDelete = onDismissGroup,
-                modifier = Modifier.width(width),
-                actionHeight = 72.dp
-            ) {
-                CollapsedStackCard(
-                    width = width,
-                    leadEntry = group.entries.first(),
-                    hiddenCount = group.entries.size - 1,
-                    stackCardColor = stackCardColor,
-                    onClick = onToggleGroup
-                )
-            }
-        } else {
-            val entry = group.entries.first()
-            SwipeRevealDeleteContainer(
-                target = NotificationRevealTarget.Entry(entry.key),
-                revealedTarget = revealedTarget,
-                onRevealTargetChange = onRevealTargetChange,
-                enabled = entry.isClearable,
-                onDelete = { onDismissNotification(entry.key) },
-                modifier = Modifier.width(width)
-            ) {
-                NotificationCard(
-                    width = width,
-                    entry = entry,
-                    subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
-                    trailing = formatNotificationTime(entry.time),
-                    onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) },
-                    onRunNotificationAction = onRunNotificationAction
-                )
-            }
-        }
     }
 }
 

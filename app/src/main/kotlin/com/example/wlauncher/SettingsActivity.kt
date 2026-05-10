@@ -299,6 +299,7 @@ private fun SettingsRootScreen(
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsStateWithLifecycle()
     val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsStateWithLifecycle()
     val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsStateWithLifecycle()
+    val materialHoneycombTopFisheyeEnabled by vm.materialHoneycombTopFisheyeEnabled.collectAsStateWithLifecycle()
     val appListFisheyeRangeRows by vm.appListFisheyeRangeRows.collectAsStateWithLifecycle()
     val appListFisheyeStrengthPercent by vm.appListFisheyeStrengthPercent.collectAsStateWithLifecycle()
     val appListEdgeSpacingCompressionEnabled by vm.appListEdgeSpacingCompressionEnabled.collectAsStateWithLifecycle()
@@ -1294,6 +1295,16 @@ private fun SettingsRootScreen(
                     onValueChange = { vm.setAppListFisheyeRangeRows(it.roundToInt()) },
                     enabled = appListFisheyeEnabled,
                     scale = itemFisheye(listState, "app_list_fisheye_range_rows", screenCenterY, screenHeightPx)
+                )
+            }
+            item("material_honeycomb_top_fisheye") {
+                SettingsSwitchRow(
+                    title = if (isZh) "MD3 顶部鱼眼效果" else "MD3 Top Fisheye",
+                    subtitle = if (isZh) "仅作用于 MD3 蜂窝列表顶部图标" else "Only affects icons above center in the MD3 honeycomb list",
+                    checked = materialHoneycombTopFisheyeEnabled,
+                    enabled = appListFisheyeEnabled,
+                    onToggle = vm::setMaterialHoneycombTopFisheyeEnabled,
+                    scale = itemFisheye(listState, "material_honeycomb_top_fisheye", screenCenterY, screenHeightPx)
                 )
             }
             item("app_list_fisheye_strength") {
