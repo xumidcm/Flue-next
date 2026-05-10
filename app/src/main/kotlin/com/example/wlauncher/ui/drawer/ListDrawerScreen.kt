@@ -123,7 +123,7 @@ fun ListDrawerScreen(
     appListScalePercent: Int = 100,
     entryProgress: Float = 1f,
     folderOpen: Boolean = false,
-    useWatchFaceColors: Boolean = true,
+    useWatchFaceColors: Boolean = false,
     rowBorderEnabled: Boolean = false,
     allowFolderCreation: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,

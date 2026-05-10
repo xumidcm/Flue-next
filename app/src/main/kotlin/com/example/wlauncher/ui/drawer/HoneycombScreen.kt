@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.LazyGridItemInfo
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -37,6 +36,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -135,7 +135,7 @@ fun HoneycombScreen(
     appListScalePercent: Int = 100,
     entryProgress: Float = 1f,
     folderOpen: Boolean = false,
-    useWatchFaceColors: Boolean = true,
+    useWatchFaceColors: Boolean = false,
     allowFolderCreation: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (Int, Int) -> Unit = { _, _ -> },
@@ -412,7 +412,7 @@ fun HoneycombScreen(
                                 pendingScrollTarget = next
                             }
                         }
-                        if (folderHoverIndex == null) {
+                        if (!allowFolderCreation && folderHoverIndex == null) {
                             dragCurrentIndex = findNearestHoneycombIndex(
                                 pointer = displayPointer,
                                 positions = positions,
@@ -1300,8 +1300,7 @@ private fun MaterialDenseGridScreen(
     var dragStartBounds by remember { mutableStateOf<Rect?>(null) }
     var returnTriggered by remember { mutableStateOf(false) }
     var materialContainerRoot by remember { mutableStateOf(Offset.Zero) }
-    val materialItemBounds = remember { mutableMapOf<Int, Rect>() }
-    val materialLaunchCenters = remember { mutableMapOf<Int, Offset>() }
+    val materialItemBounds = remember { mutableStateMapOf<Int, Rect>() }
     val overscroll = remember { Animatable(0f) }
     val topReturnThresholdPx = with(density) { 72.dp.toPx() }
     val overscrollLimitPx = with(density) { 140.dp.toPx() }
@@ -1333,9 +1332,6 @@ private fun MaterialDenseGridScreen(
         materialItemBounds.keys
             .filterNot { it in validIndexes }
             .forEach { materialItemBounds.remove(it) }
-        materialLaunchCenters.keys
-            .filterNot { it in validIndexes }
-            .forEach { materialLaunchCenters.remove(it) }
     }
     LaunchedEffect(gridState, apps.size, dragFromIndex, dragCurrentIndex, folderHoverIndex) {
         snapshotFlow { gridState.layoutInfo.visibleItemsInfo.map { it.index }.toSet() }
@@ -1486,15 +1482,14 @@ private fun MaterialDenseGridScreen(
                 }
                 awaitEachGesture {
                     val down = awaitPrimaryDown()
-                    val downRoot = down.position + materialContainerRoot
                     val startIndex = findMaterialGridIndexAt(
-                        pointer = downRoot,
+                        pointer = down.position,
                         itemBounds = materialItemBounds
                     ) ?: return@awaitEachGesture
                     val app = apps.getOrNull(startIndex) ?: return@awaitEachGesture
                     val longPress = awaitLongPressByTimeoutOrCancel(
                         pointerId = down.id,
-                        downPosition = downRoot,
+                        downPosition = down.position,
                         timeoutMillis = HONEYCOMB_MENU_TRIGGER_MS,
                         moveTolerancePx = menuDragStartPx
                     ) ?: return@awaitEachGesture
@@ -1503,7 +1498,7 @@ private fun MaterialDenseGridScreen(
                     longPressedApp = app
                     vibrateHaptic(context)
 
-                    val dragOrigin = longPress.position + materialContainerRoot
+                    val dragOrigin = longPress.position
                     val dragStartCenter = materialItemBounds[startIndex]?.center ?: dragOrigin
                     var dragVisualOffset = Offset.Zero
                     var previousVisualPointer = dragStartCenter
@@ -1520,7 +1515,7 @@ private fun MaterialDenseGridScreen(
                             break
                         }
 
-                        val pointer = change.position + materialContainerRoot
+                        val pointer = change.position
                         val movedDistance = (pointer - dragOrigin).getDistance()
                         if (!dragActive && movedDistance > menuDragStartPx) {
                             longPressedApp = null
@@ -1588,7 +1583,7 @@ private fun MaterialDenseGridScreen(
                     val from = dragFromIndex
                     val to = dragCurrentIndex
                     val folderTarget = folderDropIndex
-                    if (dragActive && from != null && folderTarget != null && from != folderTarget && hasDragged) {
+                    if (allowFolderCreation && dragActive && from != null && folderTarget != null && from != folderTarget && hasDragged) {
                         dragFromIndex = null
                         dragCurrentIndex = null
                         folderHoverIndex = null
@@ -1597,7 +1592,7 @@ private fun MaterialDenseGridScreen(
                         dragStartBounds = null
                         longPressedApp = null
                         onCreateFolder(from, folderTarget)
-                    } else if (dragActive && from != null && to != null && from != to && hasDragged) {
+                    } else if (!allowFolderCreation && dragActive && from != null && to != null && from != to && hasDragged) {
                         materialItemBounds[to]?.center?.let { targetCenter ->
                             dragPointer = targetCenter
                             dragVisualPointer = targetCenter
@@ -1627,33 +1622,32 @@ private fun MaterialDenseGridScreen(
         val screenHeightPx = with(density) { maxHeight.toPx() }
         val containerMaxWidth = maxWidth
         val containerMaxHeight = maxHeight
+        val entryOffsetY = (1f - entryProgress.coerceIn(0f, 1f)) * screenHeightPx * 0.08f
         val topFadePx = with(density) { topFadeRangeDp.dp.toPx() }
         val bottomFadePx = with(density) { bottomFadeRangeDp.dp.toPx() }
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val leftSafeInsetPx = with(density) { leftSafeInset.toPx() }
         val materialContentCenterX = leftSafeInsetPx + (screenWidthPx - leftSafeInsetPx) / 2f
+        val fisheyeRangePx = (screenHeightPx / effectiveColumns * fisheyeRangeRows.coerceIn(1, 8))
+            .coerceIn(screenHeightPx / effectiveColumns, screenHeightPx)
         val fisheyeMinScale = fisheyeMinScale(fisheyeStrengthPercent)
         val autoScrollEdgePx = with(density) { HONEYCOMB_AUTO_SCROLL_EDGE_DP.dp.toPx() }
         val materialIconShape = RoundedCornerShape((18.dp * appListScale).coerceIn(12.dp, 24.dp))
         val iconInnerPadding = (3.dp * appListScale).coerceIn(2.dp, 6.dp)
         val gridHorizontalPadding = 8.dp
         val gridItemSpacing = 4.dp
-        val materialItemHeight = (screenHeightPx / effectiveColumns.coerceAtLeast(1)).coerceAtLeast(with(density) { 56.dp.toPx() })
-        val centerScrollPadding = with(density) {
-            ((screenHeightPx - materialItemHeight) / 2f).coerceAtLeast(16.dp.toPx()).toDp()
-        }
-        val materialTopPadding = maxOf(centerScrollPadding, topFadeRangeDp.dp * 0.42f)
-        val materialBottomPadding = maxOf(centerScrollPadding, bottomFadeRangeDp.dp * 0.95f)
-        val materialEdgeRangePx = (materialItemHeight * fisheyeRangeRows.coerceIn(1, 8) * 0.58f)
-            .coerceIn(materialItemHeight, screenHeightPx * 0.48f)
-        val materialTopFisheyeZonePx = maxOf(topFadePx, materialEdgeRangePx)
-        val materialBottomFisheyeZonePx = maxOf(bottomFadePx, materialEdgeRangePx)
+        val gridAvailableWidth = (
+            maxWidth -
+                leftSafeInset -
+                gridHorizontalPadding * 2f -
+                gridItemSpacing * (effectiveColumns - 1).coerceAtLeast(0).toFloat()
+            ).coerceAtLeast(48.dp)
+        val estimatedGridItemHeight = (gridAvailableWidth / effectiveColumns.coerceAtLeast(1).toFloat() / 0.92f)
+            .coerceAtLeast(48.dp)
+        val centeredGridPadding = ((maxHeight - estimatedGridItemHeight) / 2f).coerceAtLeast(8.dp)
+        val topFisheyeZonePx = maxOf(topFadePx, with(density) { estimatedGridItemHeight.toPx() } * 1.18f)
+        val bottomFisheyeStartY = screenHeightPx * 0.52f
         val materialEdgeOverlayAlpha = entryProgress.coerceIn(0f, 1f)
-        val materialFisheyeScrollTick = gridState.firstVisibleItemIndex * 100_000 +
-            gridState.firstVisibleItemScrollOffset
-        val materialVisibleItemsByIndex = remember(materialFisheyeScrollTick, apps.size) {
-            gridState.layoutInfo.visibleItemsInfo.associateBy { it.index }
-        }
         LaunchedEffect(dragFromIndex, screenHeightPx) {
             var previousFrameNanos = 0L
             while (dragFromIndex != null) {
@@ -1704,13 +1698,13 @@ private fun MaterialDenseGridScreen(
             userScrollEnabled = dragFromIndex == null && longPressedApp == null,
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer { translationY = overscroll.value }
+                .graphicsLayer { translationY = overscroll.value + entryOffsetY }
                 .platformBlur(16f, (longPressedApp != null || folderOpen) && blurEnabled),
             contentPadding = PaddingValues(
                 start = gridHorizontalPadding + leftSafeInset,
-                top = materialTopPadding,
+                top = centeredGridPadding,
                 end = gridHorizontalPadding,
-                bottom = materialBottomPadding
+                bottom = centeredGridPadding
             ),
             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gridItemSpacing),
             verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gridItemSpacing)
@@ -1722,17 +1716,12 @@ private fun MaterialDenseGridScreen(
             ) { index, app ->
                 val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
                 val isPressed by interactionSource.collectIsPressedAsState()
-                val itemInfo = materialVisibleItemsByIndex[index]
                 val itemBounds = materialItemBounds[index]
-                val itemCenterY = materialGridItemCenterY(
-                    itemInfo = itemInfo,
-                    fallbackBounds = itemBounds,
-                    containerRoot = materialContainerRoot,
-                    fallback = screenHeightPx / 2f
-                ) + overscroll.value
+                val itemCenterY = itemBounds?.center?.y ?: screenHeightPx / 2f
+                val visualCenterY = itemCenterY + overscroll.value + entryOffsetY
                 val itemBlur = if (edgeBlurEnabled) {
                     val rawBlur = computeHoneycombEdgeBlur(
-                        centerY = itemCenterY,
+                        centerY = visualCenterY,
                         screenHeight = screenHeightPx,
                         topBlurZonePx = topFadePx,
                         bottomBlurZonePx = bottomFadePx,
@@ -1743,36 +1732,42 @@ private fun MaterialDenseGridScreen(
                 } else {
                     0f
                 }
-                val itemScale = computeMaterialItemScale(
-                    centerY = itemCenterY,
-                    screenHeight = screenHeightPx,
-                    topZonePx = materialTopFisheyeZonePx,
-                    bottomZonePx = materialBottomFisheyeZonePx,
-                    minScale = fisheyeMinScale,
-                    fisheyeEnabled = fisheyeEnabled,
-                    topFisheyeEnabled = topFisheyeEnabled,
-                    scrollTick = materialFisheyeScrollTick
-                )
+                val topEdgeEffectActive = topFisheyeEnabled && visualCenterY < topFisheyeZonePx
+                val bottomEdgeEffectActive = visualCenterY > bottomFisheyeStartY
+                val topScale = if (fisheyeEnabled && topEdgeEffectActive) {
+                    fisheyeScale(
+                        distance = (topFisheyeZonePx - visualCenterY).coerceAtLeast(0f),
+                        maxDistance = topFisheyeZonePx,
+                        minScale = fisheyeMinScale
+                    )
+                } else {
+                    1f
+                }
+                val bottomScale = if (fisheyeEnabled && bottomEdgeEffectActive) {
+                    fisheyeScale(
+                        distance = visualCenterY - bottomFisheyeStartY,
+                        maxDistance = fisheyeRangePx,
+                        minScale = fisheyeMinScale
+                    )
+                } else {
+                    1f
+                }
+                val itemScale = if (fisheyeEnabled) minOf(topScale, bottomScale) else 1f
                 val itemAlpha = if (fisheyeEnabled) itemScale.coerceIn(0.30f, 1f) else 1f
-                val itemHeightPx = itemInfo?.size?.height?.toFloat()
-                    ?: itemBounds?.height
-                    ?: (screenHeightPx / effectiveColumns.coerceAtLeast(1))
-                val itemCenterX = materialGridItemCenterX(
-                    itemInfo = itemInfo,
-                    fallbackBounds = itemBounds,
-                    containerRoot = materialContainerRoot,
-                    fallback = screenWidthPx / 2f
-                )
+                val itemHeightPx = itemBounds?.height ?: with(density) { estimatedGridItemHeight.toPx() }
+                val itemCenterX = itemBounds?.center?.x ?: materialContentCenterX
                 val edgeSpacingOffsetX = edgeSpacingCompressionHorizontalOffset(
                     centerX = itemCenterX,
-                    rowCenterY = itemCenterY,
+                    rowCenterY = visualCenterY,
                     screenCenterX = materialContentCenterX,
                     screenCenterY = screenHeightPx / 2f,
                     screenHeight = screenHeightPx,
                     itemSize = itemHeightPx,
                     strengthPercent = fisheyeStrengthPercent,
                     enabled = fisheyeEnabled &&
-                        (topFisheyeEnabled || itemCenterY >= screenHeightPx / 2f) &&
+                        (topEdgeEffectActive || bottomEdgeEffectActive) &&
+                        dragFromIndex == null &&
+                        longPressedApp == null &&
                         edgeSpacingCompressionEnabled
                 )
                 val isDragged = dragFromIndex == index
@@ -1830,13 +1825,12 @@ private fun MaterialDenseGridScreen(
                         .fillMaxWidth()
                         .aspectRatio(0.92f)
                         .onGloballyPositioned { coords ->
-                            val rootBounds = coords.boundsInRoot()
-                            materialLaunchCenters[index] = rootBounds.center
+                            val pos = coords.positionInRoot() - materialContainerRoot
                             val bounds = Rect(
-                                left = rootBounds.left,
-                                top = rootBounds.top,
-                                right = rootBounds.right,
-                                bottom = rootBounds.bottom
+                                left = pos.x,
+                                top = pos.y,
+                                right = pos.x + coords.size.width.toFloat(),
+                                bottom = pos.y + coords.size.height.toFloat()
                             )
                             if (materialItemBounds[index] != bounds) {
                                 materialItemBounds[index] = bounds
@@ -1862,8 +1856,8 @@ private fun MaterialDenseGridScreen(
                             onClick = {
                                 if (longPressedApp != null || dragFromIndex != null) return@combinedClickable
                                 val launchCenter = Offset(
-                                    x = itemCenterX + animatedDragX,
-                                    y = itemCenterY + animatedDragY
+                                    x = itemCenterX + materialContainerRoot.x + animatedDragX,
+                                    y = itemCenterY + materialContainerRoot.y + animatedDragY + overscroll.value + entryOffsetY
                                 )
                                 onAppClick(
                                     app,
@@ -1905,7 +1899,6 @@ private fun MaterialDenseGridScreen(
         val dragOverlayPointer = dragVisualPointer ?: dragPointer
         val dragOverlayBounds = dragOverlayIndex?.let { materialItemBounds[it] ?: dragStartBounds }
         if (dragOverlayApp != null && dragOverlayPointer != null && dragOverlayBounds != null) {
-            val dragOverlayLocalPointer = dragOverlayPointer - materialContainerRoot
             val overlayIcon = remember(
                 dragOverlayApp.componentKey,
                 dragOverlayApp.cachedPlainIcon,
@@ -1923,8 +1916,8 @@ private fun MaterialDenseGridScreen(
                 modifier = Modifier
                     .size(overlayWidth, overlayHeight)
                     .graphicsLayer {
-                        translationX = dragOverlayLocalPointer.x - dragOverlayBounds.width / 2f
-                        translationY = dragOverlayLocalPointer.y - dragOverlayBounds.height / 2f
+                        translationX = dragOverlayPointer.x - dragOverlayBounds.width / 2f
+                        translationY = dragOverlayPointer.y - dragOverlayBounds.height / 2f
                         shadowElevation = iconShadowElevationPx
                         shape = materialIconShape
                         clip = true
@@ -2028,28 +2021,6 @@ private fun findMaterialGridCenterIndex(
     }?.key
 }
 
-private fun materialGridItemCenterX(
-    itemInfo: LazyGridItemInfo?,
-    fallbackBounds: Rect?,
-    containerRoot: Offset,
-    fallback: Float
-): Float {
-    return itemInfo?.let { it.offset.x + it.size.width / 2f }
-        ?: fallbackBounds?.let { it.center.x - containerRoot.x }
-        ?: fallback
-}
-
-private fun materialGridItemCenterY(
-    itemInfo: LazyGridItemInfo?,
-    fallbackBounds: Rect?,
-    containerRoot: Offset,
-    fallback: Float
-): Float {
-    return itemInfo?.let { it.offset.y + it.size.height / 2f }
-        ?: fallbackBounds?.let { it.center.y - containerRoot.y }
-        ?: fallback
-}
-
 private fun findNearestMaterialGridIndex(
     pointer: Offset,
     itemBounds: Map<Int, Rect>,
@@ -2084,52 +2055,6 @@ private fun materialDraggedTargetOffset(
     if (targetIndex == index) return Offset.Zero
     val targetBounds = itemBounds[targetIndex] ?: return Offset.Zero
     return targetBounds.center - bounds.center
-}
-
-@Suppress("UNUSED_PARAMETER")
-private fun computeMaterialItemScale(
-    centerY: Float,
-    screenHeight: Float,
-    topZonePx: Float,
-    bottomZonePx: Float,
-    minScale: Float,
-    fisheyeEnabled: Boolean,
-    topFisheyeEnabled: Boolean,
-    scrollTick: Int
-): Float {
-    if (!fisheyeEnabled) return 1f
-    val edgeProgress = materialEdgeFisheyeProgress(
-        centerY = centerY,
-        screenHeight = screenHeight,
-        topZonePx = topZonePx,
-        bottomZonePx = bottomZonePx,
-        topFisheyeEnabled = topFisheyeEnabled
-    )
-    if (edgeProgress <= 0f) return 1f
-    return (1f - (1f - minScale) * edgeProgress).coerceIn(minScale, 1f)
-}
-
-private fun materialEdgeFisheyeProgress(
-    centerY: Float,
-    screenHeight: Float,
-    topZonePx: Float,
-    bottomZonePx: Float,
-    topFisheyeEnabled: Boolean
-): Float {
-    if (screenHeight <= 0f) return 0f
-    val topProgress = if (topFisheyeEnabled && topZonePx > 0f) {
-        (1f - centerY / topZonePx).coerceIn(0f, 1f)
-    } else {
-        0f
-    }
-    val bottomProgress = if (bottomZonePx > 0f) {
-        val bottomDistance = screenHeight - centerY
-        (1f - bottomDistance / bottomZonePx).coerceIn(0f, 1f)
-    } else {
-        0f
-    }
-    val edgeProgress = max(topProgress, bottomProgress)
-    return edgeProgress * edgeProgress * (3f - 2f * edgeProgress)
 }
 
 private fun materialVisualSlotIndex(

@@ -361,7 +361,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val appListScalePercent: StateFlow<Int> = _appListScalePercent.asStateFlow()
     private val _globalUiScalePercent = MutableStateFlow(100)
     val globalUiScalePercent: StateFlow<Int> = _globalUiScalePercent.asStateFlow()
-    private val _appListWatchFaceColors = MutableStateFlow(true)
+    private val _appListWatchFaceColors = MutableStateFlow(false)
     val appListWatchFaceColors: StateFlow<Boolean> = _appListWatchFaceColors.asStateFlow()
     private val _appListRowBorderEnabled = MutableStateFlow(false)
     val appListRowBorderEnabled: StateFlow<Boolean> = _appListRowBorderEnabled.asStateFlow()
@@ -791,7 +791,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _globalUiScalePercent.value = loadedGlobalUiScale
                 }
 
-                val loadedAppListWatchFaceColors = prefs[KEY_APP_LIST_WATCHFACE_COLORS] ?: true
+                val loadedAppListWatchFaceColors = prefs[KEY_APP_LIST_WATCHFACE_COLORS] ?: false
                 if (_appListWatchFaceColors.value != loadedAppListWatchFaceColors) {
                     _appListWatchFaceColors.value = loadedAppListWatchFaceColors
                 }
@@ -2415,7 +2415,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appListLeftSafeInsetPercent.value = 0
         _appListScalePercent.value = 100
         _globalUiScalePercent.value = 100
-        _appListWatchFaceColors.value = true
+        _appListWatchFaceColors.value = false
         _appListRowBorderEnabled.value = false
         _appListFoldersEnabled.value = true
         _fastFlowAnimationEnabled.value = false
@@ -2516,7 +2516,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT] = 0
                 it[KEY_APP_LIST_SCALE_PERCENT] = 100
                 it[KEY_GLOBAL_UI_SCALE_PERCENT] = 100
-                it[KEY_APP_LIST_WATCHFACE_COLORS] = true
+                it[KEY_APP_LIST_WATCHFACE_COLORS] = false
                 it[KEY_APP_LIST_ROW_BORDER] = false
                 it[KEY_APP_LIST_FOLDERS_ENABLED] = true
                 it[KEY_FAST_FLOW_ANIMATION] = false
