@@ -824,29 +824,32 @@ private fun drawPointerLayer(
     val targetRotation = when (hand) {
         DingDingCatPointerHand.Hour -> {
             val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
-            (calendar.get(Calendar.HOUR) % 12) * 30f + calendar.get(Calendar.MINUTE) * 0.5f
+            val second = calendar.get(Calendar.SECOND) + calendar.get(Calendar.MILLISECOND) / 1_000f
+            val minute = calendar.get(Calendar.MINUTE) + second / 60f
+            val hour = (calendar.get(Calendar.HOUR_OF_DAY) % 12) + minute / 60f
+            hour * 30f
         }
         DingDingCatPointerHand.Minute -> {
             val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
-            calendar.get(Calendar.MINUTE) * 6f + calendar.get(Calendar.SECOND) * 0.1f
+            val second = calendar.get(Calendar.SECOND) + calendar.get(Calendar.MILLISECOND) / 1_000f
+            (calendar.get(Calendar.MINUTE) + second / 60f) * 6f
         }
         DingDingCatPointerHand.Second -> {
             val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
-            calendar.get(Calendar.SECOND) * 6f + calendar.get(Calendar.MILLISECOND) * 0.006f
+            (calendar.get(Calendar.SECOND) + calendar.get(Calendar.MILLISECOND) / 1_000f) * 6f
         }
     }
-    val inferredBaseline = DingDingCatBitmapCache.pointerBaselineDegrees(file)
-    val sourceBaseline = inferredBaseline
-        ?.takeIf { baseline ->
-            abs(shortestDegreeDelta(baseline, 0f)) <= 12f &&
-                abs(shortestDegreeDelta(point.startValue, baseline)) > 30f
-        }
-        ?: point.startValue
+    val sourceBaseline = dingDingCatPointerSourceBaseline(file)
     val rotation = targetRotation - sourceBaseline
     canvas.save()
     canvas.rotate(rotation, centerX, centerY)
     canvas.drawBitmap(bitmap, null, dst, pointPaint(point))
     canvas.restore()
+}
+
+private fun dingDingCatPointerSourceBaseline(file: File): Float {
+    val inferred = DingDingCatBitmapCache.pointerBaselineDegrees(file) ?: return 0f
+    return if (abs(shortestDegreeDelta(inferred, 0f)) <= 6f) 0f else inferred
 }
 
 private fun drawGravityLayer(
