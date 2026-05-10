@@ -193,6 +193,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsStateWithLifecycle()
     val apps by vm.apps.collectAsStateWithLifecycle()
     val allApps by vm.allApps.collectAsStateWithLifecycle()
+    val allSelectableApps by vm.allSelectableApps.collectAsStateWithLifecycle()
     val openFolder by vm.openFolder.collectAsStateWithLifecycle()
     val openFolderItems by vm.openFolderItems.collectAsStateWithLifecycle()
     val appOpenOrigin by vm.appOpenOrigin.collectAsStateWithLifecycle()
@@ -849,7 +850,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         fisheyeRangeRows = appListFisheyeRangeRows,
                         fisheyeStrengthPercent = appListFisheyeStrengthPercent,
                         edgeSpacingCompressionEnabled = appListEdgeSpacingCompressionEnabled,
-                        fastFlowAnimationEnabled = false,
+                        fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                         twoToneIconsEnabled = twoToneIconsEnabled,
                         iconShadowEnabled = effectiveIconShadowEnabled,
                         themeColor = appListThemeColor,
@@ -874,7 +875,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 AppFolderOverlay(
                     folder = visibleFolder,
                     items = openFolderItems,
-                    availableItems = allApps,
+                    availableItems = allSelectableApps,
                     listMode = layoutMode == LayoutMode.List,
                     blurEnabled = blurEnabled,
                     twoToneIconsEnabled = twoToneIconsEnabled,

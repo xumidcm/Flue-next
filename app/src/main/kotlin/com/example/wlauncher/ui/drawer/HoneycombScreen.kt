@@ -89,6 +89,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -292,7 +293,7 @@ fun HoneycombScreen(
             animatedScrollOffset = scrollOffset.value
         )
         fun reducedMotionPhase(): Boolean =
-            fastScrollOptimizationEnabled && (fastScrollActive || scrollOffset.isRunning)
+            fastScrollOptimizationEnabled && fastScrollActive
         fun markFastScrollActive(durationMs: Long = 180L) {
             if (!fastScrollOptimizationEnabled) return
             fastScrollActive = true
@@ -386,8 +387,9 @@ fun HoneycombScreen(
                     previousFrameNanos = frameTimeNanos
                     val pointer = dragPointer
                     if (pointer != null) {
+                        val visualPointer = dragVisualPointer ?: pointer
                         val displayPointer = clampHoneycombDisplayPointer(
-                            pointer = pointer,
+                            pointer = visualPointer,
                             screenWidthPx = screenWidthPx,
                             screenHeightPx = screenHeightPx,
                             iconSizePx = iconSizePx
@@ -1611,7 +1613,7 @@ private fun MaterialDenseGridScreen(
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val leftSafeInsetPx = with(density) { leftSafeInset.toPx() }
         val materialContentCenterX = leftSafeInsetPx + (screenWidthPx - leftSafeInsetPx) / 2f
-        val bottomFisheyeStartY = screenHeightPx * 0.52f
+        val fisheyeDeadZonePx = (screenHeightPx / effectiveColumns.coerceAtLeast(1)) * 0.45f
         val fisheyeRangePx = (screenHeightPx / effectiveColumns * fisheyeRangeRows.coerceIn(1, 8))
             .coerceIn(screenHeightPx / effectiveColumns, screenHeightPx)
         val fisheyeMinScale = fisheyeMinScale(fisheyeStrengthPercent)
@@ -1723,7 +1725,8 @@ private fun MaterialDenseGridScreen(
                 }
                 val itemScale = computeMaterialItemScale(
                     centerY = itemCenterY,
-                    bottomStartY = bottomFisheyeStartY,
+                    screenCenterY = screenHeightPx / 2f,
+                    deadZonePx = fisheyeDeadZonePx,
                     rangePx = fisheyeRangePx,
                     minScale = fisheyeMinScale,
                     fisheyeEnabled = fisheyeEnabled,
@@ -1750,7 +1753,7 @@ private fun MaterialDenseGridScreen(
                     strengthPercent = fisheyeStrengthPercent,
                     enabled = fisheyeEnabled &&
                         edgeSpacingCompressionEnabled &&
-                        itemCenterY > bottomFisheyeStartY
+                        abs(itemCenterY - screenHeightPx / 2f) > fisheyeDeadZonePx
                 )
                 val isDragged = dragFromIndex == index
                 val isFolderHoverTarget = folderHoverIndex == index
@@ -1930,12 +1933,6 @@ private fun MaterialDenseGridScreen(
                         .fillMaxSize()
                         .clip(materialIconShape)
                 )
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clip(materialIconShape)
-                        .background(Color.Black.copy(alpha = 0.12f))
-                )
             }
         }
 
@@ -2084,15 +2081,16 @@ private fun materialDraggedTargetOffset(
 @Suppress("UNUSED_PARAMETER")
 private fun computeMaterialItemScale(
     centerY: Float,
-    bottomStartY: Float,
+    screenCenterY: Float,
+    deadZonePx: Float,
     rangePx: Float,
     minScale: Float,
     fisheyeEnabled: Boolean,
     scrollTick: Int
 ): Float {
     if (!fisheyeEnabled) return 1f
-    if (centerY <= bottomStartY) return 1f
-    return fisheyeScale(centerY - bottomStartY, rangePx, minScale = minScale)
+    val distance = max(0f, abs(centerY - screenCenterY) - deadZonePx)
+    return fisheyeScale(distance, rangePx, minScale = minScale)
 }
 
 private fun materialVisualSlotIndex(

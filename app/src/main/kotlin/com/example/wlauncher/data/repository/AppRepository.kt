@@ -66,6 +66,9 @@ class AppRepository(private val context: Context) {
     private val _allApps = MutableStateFlow<List<AppInfo>>(emptyList())
     val allApps: StateFlow<List<AppInfo>> = _allApps.asStateFlow()
 
+    private val _allSelectableApps = MutableStateFlow<List<AppInfo>>(emptyList())
+    val allSelectableApps: StateFlow<List<AppInfo>> = _allSelectableApps.asStateFlow()
+
     private val _apps = MutableStateFlow<List<AppInfo>>(emptyList())
     val apps: StateFlow<List<AppInfo>> = _apps.asStateFlow()
 
@@ -288,6 +291,7 @@ class AppRepository(private val context: Context) {
 
         itemCatalog = catalogMap + folderEntries.associateBy { it.componentKey }
         folderCatalog = storedFolders
+        _allSelectableApps.value = sortApps(catalogItems)
         _allApps.value = sortApps(topLevelItems)
         applyFilters()
     }

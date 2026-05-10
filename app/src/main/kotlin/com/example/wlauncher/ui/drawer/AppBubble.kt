@@ -96,7 +96,7 @@ fun AppBubble(
             ),
         contentAlignment = Alignment.Center
     ) {
-        if (tintColor.alpha > 0f) {
+        if (tintColor.alpha > 0f && activePressed) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()

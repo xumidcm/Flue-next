@@ -183,7 +183,8 @@ private fun rememberPickerOverscrollConnection(
     listState: androidx.compose.foundation.lazy.LazyListState
 ): Pair<Float, NestedScrollConnection> {
     var overscroll by remember { mutableFloatStateOf(0f) }
-    val connection = remember(listState) {
+    val rebound = remember { Animatable(0f) }
+    val connection = remember(listState, rebound) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 if (source != NestedScrollSource.UserInput) return Offset.Zero
@@ -208,9 +209,24 @@ private fun rememberPickerOverscrollConnection(
                 return Offset.Zero
             }
 
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
+                val next = when {
+                    overscroll > 0f && available.y < 0f -> (overscroll + available.y).coerceAtLeast(0f)
+                    overscroll < 0f && available.y > 0f -> (overscroll + available.y).coerceAtMost(0f)
+                    else -> overscroll
+                }
+                if (next != overscroll) {
+                    overscroll = next
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (overscroll != 0f) {
-                    Animatable(overscroll).animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f)) {
+                    rebound.snapTo(overscroll)
+                    rebound.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f)) {
                         overscroll = value
                     }
                     overscroll = 0f

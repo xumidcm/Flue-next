@@ -835,8 +835,16 @@ private fun drawPointerLayer(
             calendar.get(Calendar.SECOND) * 6f + calendar.get(Calendar.MILLISECOND) * 0.006f
         }
     }
+    val inferredBaseline = DingDingCatBitmapCache.pointerBaselineDegrees(file)
+    val sourceBaseline = inferredBaseline
+        ?.takeIf { baseline ->
+            abs(shortestDegreeDelta(baseline, 0f)) <= 12f &&
+                abs(shortestDegreeDelta(point.startValue, baseline)) > 30f
+        }
+        ?: point.startValue
+    val rotation = targetRotation - sourceBaseline
     canvas.save()
-    canvas.rotate(targetRotation, centerX, centerY)
+    canvas.rotate(rotation, centerX, centerY)
     canvas.drawBitmap(bitmap, null, dst, pointPaint(point))
     canvas.restore()
 }
@@ -1530,11 +1538,12 @@ private object DingDingCatBitmapCache {
     }
     private val boundsCache = mutableMapOf<String, DingDingCatBitmapBounds>()
     private val visibleBoundsCache = mutableMapOf<String, Rect>()
+    private val pointerBaselineCache = mutableMapOf<String, Float?>()
 
     fun get(file: File, allowSample: Boolean, targetWidth: Int = 0, targetHeight: Int = 0): Bitmap? {
         if (!file.isFile) return null
         val sampleSize = if (allowSample) calculateSampleSize(file, targetWidth, targetHeight) else 1
-        val key = "${file.absolutePath}:${file.lastModified()}:$sampleSize"
+        val key = "${cacheToken(file)}:$sampleSize"
         cache.get(key)?.let { return it }
         val bitmap = BitmapFactory.decodeFile(
             file.absolutePath,
@@ -1546,7 +1555,7 @@ private object DingDingCatBitmapCache {
 
     fun bounds(file: File): DingDingCatBitmapBounds? {
         if (!file.isFile) return null
-        val key = "${file.absolutePath}:${file.lastModified()}"
+        val key = cacheToken(file)
         synchronized(boundsCache) {
             boundsCache[key]?.let { return it }
         }
@@ -1563,7 +1572,7 @@ private object DingDingCatBitmapCache {
 
     fun visibleBounds(file: File): Rect? {
         if (!file.isFile) return null
-        val key = "${file.absolutePath}:${file.lastModified()}"
+        val key = cacheToken(file)
         synchronized(visibleBoundsCache) {
             visibleBoundsCache[key]?.let { return Rect(it) }
         }
@@ -1596,6 +1605,47 @@ private object DingDingCatBitmapCache {
         return result
     }
 
+    fun pointerBaselineDegrees(file: File): Float? {
+        if (!file.isFile) return null
+        val key = cacheToken(file)
+        synchronized(pointerBaselineCache) {
+            if (pointerBaselineCache.containsKey(key)) return pointerBaselineCache[key]
+        }
+        val bitmap = get(file, allowSample = false) ?: return null
+        val width = bitmap.width
+        val height = bitmap.height
+        val pixels = IntArray(width * height)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+        val pivotX = width / 2.0
+        val pivotY = height / 2.0
+        var baselineDx = 0.0
+        var baselineDy = 0.0
+        var bestDistanceSquared = 0.0
+        pixels.forEachIndexed { index, pixel ->
+            val alpha = android.graphics.Color.alpha(pixel)
+            if (alpha <= 8) return@forEachIndexed
+            val x = index % width
+            val y = index / width
+            val dx = (x + 0.5) - pivotX
+            val dy = (y + 0.5) - pivotY
+            val distanceSquared = dx * dx + dy * dy
+            if (distanceSquared > bestDistanceSquared) {
+                bestDistanceSquared = distanceSquared
+                baselineDx = dx
+                baselineDy = dy
+            }
+        }
+        val result = if (bestDistanceSquared >= 4.0) {
+            normalizeDegrees(Math.toDegrees(Math.atan2(baselineDx, -baselineDy)).toFloat())
+        } else {
+            null
+        }
+        synchronized(pointerBaselineCache) {
+            pointerBaselineCache[key] = result
+        }
+        return result
+    }
+
     private fun calculateSampleSize(file: File, targetWidth: Int, targetHeight: Int): Int {
         if (targetWidth <= 0 || targetHeight <= 0) return 1
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -1608,6 +1658,10 @@ private object DingDingCatBitmapCache {
             sampleSize *= 2
         }
         return sampleSize.coerceAtLeast(1)
+    }
+
+    private fun cacheToken(file: File): String {
+        return "${file.absolutePath}:${file.lastModified()}:${file.length()}"
     }
 }
 

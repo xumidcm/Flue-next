@@ -479,6 +479,10 @@ fun AppFolderOverlay(
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val panelMaxHeight = (maxHeight * 0.76f).coerceAtLeast(210.dp)
             val gridMaxHeight = (panelMaxHeight - 76.dp).coerceAtLeast(150.dp)
+            val panelColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+            val panelTextColor = MaterialTheme.colorScheme.onSurface
+            val manageButtonColor = MaterialTheme.colorScheme.primary
+            val manageButtonBackground = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
             Column(
                 modifier = Modifier
                     .fillMaxWidth(0.9f)
@@ -489,7 +493,7 @@ fun AppFolderOverlay(
                     }
                     .onGloballyPositioned { panelBounds = it.boundsInRoot() }
                     .clip(RoundedCornerShape(28.dp))
-                    .background(Color(0xE62A2A2C))
+                    .background(panelColor)
                     .clickable(indication = null, interactionSource = blockInteraction) { }
                     .padding(horizontal = 16.dp, vertical = 16.dp)
                     .align(Alignment.Center)
@@ -503,7 +507,7 @@ fun AppFolderOverlay(
                 ) {
                     Text(
                         text = folder.label,
-                        color = Color.White,
+                        color = panelTextColor,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.W700,
                         maxLines = 1,
@@ -518,13 +522,17 @@ fun AppFolderOverlay(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = "添加应用",
-                        color = if (editableCandidates.isEmpty()) Color.White.copy(alpha = 0.38f) else Color(0xFF64D2FF),
+                        text = "管理应用",
+                        color = if (editableCandidates.isEmpty()) {
+                            panelTextColor.copy(alpha = 0.38f)
+                        } else {
+                            manageButtonColor
+                        },
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier
                             .clip(RoundedCornerShape(999.dp))
-                            .background(Color.White.copy(alpha = if (editableCandidates.isEmpty()) 0.06f else 0.13f))
+                            .background(if (editableCandidates.isEmpty()) panelTextColor.copy(alpha = 0.06f) else manageButtonBackground)
                             .clickable(enabled = editableCandidates.isNotEmpty()) {
                                 selectedAddKeys = folderItemKeySet
                                 addDialogVisible = true
@@ -652,11 +660,7 @@ fun AppFolderOverlay(
                             .graphicsLayer { translationY = folderOverscroll.value }
                     ) {
                         itemsIndexed(
-                            items = folderReorderedItems(
-                                items = dragOriginalItems.ifEmpty { visibleItems },
-                                fromIndex = dragFromIndex,
-                                toIndex = dragCurrentIndex
-                            ),
+                            items = dragOriginalItems.ifEmpty { visibleItems },
                             key = { _, app -> app.componentKey },
                             contentType = { _, _ -> "folder_app" }
                         ) { index, app ->
@@ -664,6 +668,22 @@ fun AppFolderOverlay(
                             val isPressed by interactionSource.collectIsPressedAsState()
                             val isDragged = draggedKey == app.componentKey
                             val isFolderHoverTarget = hoverKey == app.componentKey
+                            val dragDisplacement = folderDragDisplacement(
+                                index = index,
+                                fromIndex = dragFromIndex,
+                                toIndex = dragCurrentIndex,
+                                slotBounds = slotBounds
+                            )
+                            val animatedDragDisplacementX by animateFloatAsState(
+                                targetValue = dragDisplacement.x,
+                                animationSpec = spring(stiffness = 520f, dampingRatio = 0.84f),
+                                label = "folder_drag_x"
+                            )
+                            val animatedDragDisplacementY by animateFloatAsState(
+                                targetValue = dragDisplacement.y,
+                                animationSpec = spring(stiffness = 520f, dampingRatio = 0.84f),
+                                label = "folder_drag_y"
+                            )
                             val pressedScale by animateFloatAsState(
                                 targetValue = when {
                                     isDragged -> 0.92f
@@ -697,6 +717,8 @@ fun AppFolderOverlay(
                                         itemBounds[app.componentKey] = bounds
                                     }
                                     .graphicsLayer {
+                                        translationX = if (isDragged) 0f else animatedDragDisplacementX
+                                        translationY = if (isDragged) 0f else animatedDragDisplacementY
                                         scaleX = pressedScale
                                         scaleY = pressedScale
                                         this.alpha = if (isDragged) 0f else 1f
@@ -774,11 +796,6 @@ fun AppFolderOverlay(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
                 )
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.12f))
-                )
             }
         }
 
@@ -786,7 +803,7 @@ fun AppFolderOverlay(
             AppShortcutOverlay(
                 app = app,
                 blurEnabled = blurEnabled,
-                onExcludeApp = { onExcludeApp(app) },
+                onExcludeApp = null,
                 onRemoveShortcut = if (app.isAppListShortcut) { { onRemoveShortcut(app) } } else null,
                 onDismiss = { menuApp = null }
             )
@@ -877,8 +894,8 @@ private fun findFolderGridIndexAt(
     var bestIndex: Int? = null
     var bestDistance = Float.MAX_VALUE
     items.forEachIndexed { index, app ->
-        val icon = slotIconBounds[index] ?: iconBounds[app.componentKey]
-        val bounds = icon ?: slotBounds[index] ?: itemBounds[app.componentKey] ?: return@forEachIndexed
+        val icon = iconBounds[app.componentKey] ?: slotIconBounds[index]
+        val bounds = icon ?: itemBounds[app.componentKey] ?: slotBounds[index] ?: return@forEachIndexed
         val distance = (bounds.center - pointer).getDistance()
         val maxDistance = if (icon != null) {
             maxOf(bounds.width, bounds.height) * 0.86f
@@ -905,4 +922,23 @@ private fun folderReorderedItems(
         val item = removeAt(fromIndex)
         add(toIndex.coerceIn(0, size), item)
     }
+}
+
+private fun folderDragDisplacement(
+    index: Int,
+    fromIndex: Int?,
+    toIndex: Int?,
+    slotBounds: Map<Int, Rect>
+): Offset {
+    if (fromIndex == null || toIndex == null || fromIndex == toIndex) return Offset.Zero
+    val targetIndex = when {
+        index == fromIndex -> index
+        toIndex > fromIndex && index in (fromIndex + 1)..toIndex -> index - 1
+        toIndex < fromIndex && index in toIndex until fromIndex -> index + 1
+        else -> index
+    }
+    if (targetIndex == index) return Offset.Zero
+    val currentBounds = slotBounds[index] ?: return Offset.Zero
+    val targetBounds = slotBounds[targetIndex] ?: return Offset.Zero
+    return targetBounds.center - currentBounds.center
 }
