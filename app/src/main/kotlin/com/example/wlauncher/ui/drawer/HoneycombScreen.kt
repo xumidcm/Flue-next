@@ -96,7 +96,7 @@ import kotlin.math.sqrt
 private const val HONEYCOMB_MENU_TRIGGER_MS = 620L
 private const val HONEYCOMB_MENU_DRAG_START_DP = 20f
 private const val HONEYCOMB_FOLDER_HOVER_MS = 500L
-private const val HONEYCOMB_FOLDER_HOVER_MAX_SPEED_DP_PER_MS = 0.55f
+private const val HONEYCOMB_FOLDER_HOVER_MAX_SPEED_DP_PER_MS = 0.72f
 private const val HONEYCOMB_PRESS_DURATION_MS = 200
 private const val HONEYCOMB_AUTO_SCROLL_EDGE_DP = 96f
 private const val HONEYCOMB_AUTO_SCROLL_MAX_PX = 26f
@@ -1537,7 +1537,7 @@ private fun MaterialDenseGridScreen(
                                     pointer = folderPointer,
                                     itemBounds = materialItemBounds,
                                     excludedIndex = startIndex,
-                                    centerFraction = 0.56f
+                                    centerFraction = 0.64f
                                 )?.takeIf { visualSpeed <= folderHoverMaxSpeedPxPerMs }
                             } else {
                                 null
@@ -1613,7 +1613,7 @@ private fun MaterialDenseGridScreen(
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val leftSafeInsetPx = with(density) { leftSafeInset.toPx() }
         val materialContentCenterX = leftSafeInsetPx + (screenWidthPx - leftSafeInsetPx) / 2f
-        val fisheyeDeadZonePx = (screenHeightPx / effectiveColumns.coerceAtLeast(1)) * 0.45f
+        val fisheyeDeadZonePx = (screenHeightPx / effectiveColumns.coerceAtLeast(1)) * 0.18f
         val fisheyeRangePx = (screenHeightPx / effectiveColumns * fisheyeRangeRows.coerceIn(1, 8))
             .coerceIn(screenHeightPx / effectiveColumns, screenHeightPx)
         val fisheyeMinScale = fisheyeMinScale(fisheyeStrengthPercent)
@@ -1622,15 +1622,8 @@ private fun MaterialDenseGridScreen(
         val iconInnerPadding = (3.dp * appListScale).coerceIn(2.dp, 6.dp)
         val gridHorizontalPadding = 8.dp
         val gridItemSpacing = 4.dp
-        val gridAvailableWidth = (
-            maxWidth -
-                leftSafeInset -
-                gridHorizontalPadding * 2f -
-                gridItemSpacing * (effectiveColumns - 1).coerceAtLeast(0).toFloat()
-            ).coerceAtLeast(48.dp)
-        val estimatedGridItemHeight = (gridAvailableWidth / effectiveColumns.coerceAtLeast(1).toFloat() / 0.92f)
-            .coerceAtLeast(48.dp)
-        val centeredGridPadding = ((maxHeight - estimatedGridItemHeight) / 2f).coerceAtLeast(8.dp)
+        val materialTopPadding = maxOf(20.dp, topFadeRangeDp.dp * 0.58f)
+        val materialBottomPadding = maxOf(88.dp, bottomFadeRangeDp.dp * 1.25f)
         val materialFisheyeScrollTick = gridState.firstVisibleItemIndex * 100_000 +
             gridState.firstVisibleItemScrollOffset
         LaunchedEffect(dragFromIndex, screenHeightPx) {
@@ -1687,9 +1680,9 @@ private fun MaterialDenseGridScreen(
                 .platformBlur(16f, (longPressedApp != null || folderOpen) && blurEnabled),
             contentPadding = PaddingValues(
                 start = gridHorizontalPadding + leftSafeInset,
-                top = centeredGridPadding,
+                top = materialTopPadding,
                 end = gridHorizontalPadding,
-                bottom = centeredGridPadding
+                bottom = materialBottomPadding
             ),
             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gridItemSpacing),
             verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(gridItemSpacing)
@@ -1932,6 +1925,12 @@ private fun MaterialDenseGridScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .clip(materialIconShape)
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(materialIconShape)
+                        .background(Color.Black.copy(alpha = 0.18f))
                 )
             }
         }

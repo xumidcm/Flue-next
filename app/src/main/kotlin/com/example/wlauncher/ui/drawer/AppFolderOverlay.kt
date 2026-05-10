@@ -131,7 +131,6 @@ fun AppFolderOverlay(
     var draggedKey by remember { mutableStateOf<String?>(null) }
     var dragPointerRoot by remember { mutableStateOf(Offset.Zero) }
     var draggedOutsidePanel by remember { mutableStateOf(false) }
-    var hoverKey by remember { mutableStateOf<String?>(null) }
     var dragFromIndex by remember { mutableStateOf<Int?>(null) }
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
     var dragOriginalItems by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
@@ -171,7 +170,6 @@ fun AppFolderOverlay(
         dragCurrentIndex = null
         dragOriginalItems = emptyList()
         draggedOutsidePanel = false
-        hoverKey = null
         onMoveItemOut(app)
         requestDismiss()
     }
@@ -189,20 +187,16 @@ fun AppFolderOverlay(
         draggedOutsidePanel = !insidePanel
         if (insidePanel) {
             cancelMoveOutJob()
-            val targetIndex = findFolderGridIndexAt(
+            val targetIndex = findNearestFolderSlotIndex(
                 pointer = visualCenter,
-                items = dragOriginalItems.ifEmpty { visibleItems },
                 slotBounds = slotBounds,
                 slotIconBounds = slotIconBounds,
-                itemBounds = itemBounds,
-                iconBounds = iconBounds
+                itemCount = (dragOriginalItems.ifEmpty { visibleItems }).size
             )
-            hoverKey = null
             if (targetIndex != null) {
                 dragCurrentIndex = targetIndex
             }
         } else {
-            hoverKey = null
             if (moveOutJob == null) {
                 moveOutJob = scope.launch {
                     delay(FOLDER_ITEM_DRAG_OUT_MS)
@@ -221,7 +215,6 @@ fun AppFolderOverlay(
         slotIconBounds.clear()
         itemBounds.clear()
         iconBounds.clear()
-        hoverKey = null
         dragFromIndex = null
         dragCurrentIndex = null
         dragOriginalItems = emptyList()
@@ -505,12 +498,9 @@ fun AppFolderOverlay(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
+                    FolderMarqueeLabel(
                         text = folder.label,
                         color = panelTextColor,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.W700,
-                        maxLines = 1,
                         modifier = Modifier
                             .weight(1f)
                             .clip(RoundedCornerShape(14.dp))
@@ -518,7 +508,11 @@ fun AppFolderOverlay(
                                 renameText = folder.label
                                 renameDialogVisible = true
                             }
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.W700,
+                        textAlign = TextAlign.Start,
+                        contentAlignment = Alignment.CenterStart
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
@@ -633,7 +627,6 @@ fun AppFolderOverlay(
                                     dragCurrentIndex = null
                                     dragOriginalItems = emptyList()
                                     draggedOutsidePanel = false
-                                    hoverKey = null
                                     if (releasedOutside) {
                                         finishMoveOut(app)
                                     } else {
@@ -667,7 +660,6 @@ fun AppFolderOverlay(
                             val interactionSource = remember(app.componentKey) { MutableInteractionSource() }
                             val isPressed by interactionSource.collectIsPressedAsState()
                             val isDragged = draggedKey == app.componentKey
-                            val isFolderHoverTarget = hoverKey == app.componentKey
                             val dragDisplacement = folderDragDisplacement(
                                 index = index,
                                 fromIndex = dragFromIndex,
@@ -687,7 +679,6 @@ fun AppFolderOverlay(
                             val pressedScale by animateFloatAsState(
                                 targetValue = when {
                                     isDragged -> 0.92f
-                                    isFolderHoverTarget -> 0.96f
                                     isPressed -> 0.95f
                                     else -> 1f
                                 },
@@ -697,7 +688,6 @@ fun AppFolderOverlay(
                             val iconPressedOverlay by animateFloatAsState(
                                 targetValue = when {
                                     isDragged -> 0.18f
-                                    isFolderHoverTarget -> 0.16f
                                     isPressed -> 0.14f
                                     else -> 0f
                                 },
@@ -796,6 +786,11 @@ fun AppFolderOverlay(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
                 )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.18f))
+                )
             }
         }
 
@@ -815,7 +810,11 @@ fun AppFolderOverlay(
 private fun FolderMarqueeLabel(
     text: String,
     color: Color,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    fontSize: androidx.compose.ui.unit.TextUnit = 10.sp,
+    fontWeight: FontWeight? = null,
+    textAlign: TextAlign = TextAlign.Center,
+    contentAlignment: Alignment = Alignment.Center
 ) {
     val density = LocalDensity.current
     val scrollState = rememberScrollState()
@@ -852,7 +851,7 @@ private fun FolderMarqueeLabel(
         modifier = modifier
             .onSizeChanged { containerWidthPx = it.width.coerceAtLeast(0) }
             .clipToBounds(),
-        contentAlignment = Alignment.Center
+        contentAlignment = contentAlignment
     ) {
         Row(
             modifier = Modifier.horizontalScroll(scrollState, enabled = false),
@@ -861,11 +860,12 @@ private fun FolderMarqueeLabel(
             Text(
                 text = text,
                 color = color,
-                fontSize = 10.sp,
+                fontSize = fontSize,
+                fontWeight = fontWeight,
                 maxLines = 1,
                 softWrap = false,
                 overflow = TextOverflow.Clip,
-                textAlign = TextAlign.Center,
+                textAlign = textAlign,
                 onTextLayout = { textWidthPx = it.size.width.coerceAtLeast(0) }
             )
             if (overflow) {
@@ -873,7 +873,8 @@ private fun FolderMarqueeLabel(
                 Text(
                     text = text,
                     color = color,
-                    fontSize = 10.sp,
+                    fontSize = fontSize,
+                    fontWeight = fontWeight,
                     maxLines = 1,
                     softWrap = false,
                     overflow = TextOverflow.Clip
@@ -883,26 +884,18 @@ private fun FolderMarqueeLabel(
     }
 }
 
-private fun findFolderGridIndexAt(
+private fun findNearestFolderSlotIndex(
     pointer: Offset,
-    items: List<AppInfo>,
     slotBounds: Map<Int, Rect>,
     slotIconBounds: Map<Int, Rect>,
-    itemBounds: Map<String, Rect>,
-    iconBounds: Map<String, Rect>
+    itemCount: Int
 ): Int? {
     var bestIndex: Int? = null
     var bestDistance = Float.MAX_VALUE
-    items.forEachIndexed { index, app ->
-        val icon = iconBounds[app.componentKey] ?: slotIconBounds[index]
-        val bounds = icon ?: itemBounds[app.componentKey] ?: slotBounds[index] ?: return@forEachIndexed
+    repeat(itemCount.coerceAtLeast(0)) { index ->
+        val bounds = slotBounds[index] ?: slotIconBounds[index] ?: return@repeat
         val distance = (bounds.center - pointer).getDistance()
-        val maxDistance = if (icon != null) {
-            maxOf(bounds.width, bounds.height) * 0.86f
-        } else {
-            maxOf(bounds.width, bounds.height) * 0.72f
-        }
-        if (distance <= maxDistance && distance < bestDistance) {
+        if (distance < bestDistance) {
             bestDistance = distance
             bestIndex = index
         }
