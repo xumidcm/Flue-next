@@ -773,6 +773,7 @@ fun ControlCenterLayer(
                     ControlCenterNotificationPreviewCard(
                         notificationGroups = notificationGroups,
                         notificationAccessGranted = notificationAccessGranted,
+                        onGestureLockChange = lockControlCenterGesture,
                         onClick = onOpenNotifications
                     )
                 }
@@ -825,6 +826,7 @@ fun CompactControlCenterMusicCard(
 private fun ControlCenterNotificationPreviewCard(
     notificationGroups: List<NotificationGroupUi>,
     notificationAccessGranted: Boolean,
+    onGestureLockChange: (Boolean) -> Unit = {},
     onClick: () -> Unit
 ) {
     val launcherStyle = LauncherTheme.style
@@ -894,6 +896,7 @@ private fun ControlCenterNotificationPreviewCard(
                 .background(cardColor)
                 .controlCenterPressGesture(
                     pressedState = pressedState,
+                    onGestureLockChange = onGestureLockChange,
                     onClick = onClick
                 )
                 .padding(horizontal = 14.dp),

@@ -1280,7 +1280,11 @@ private fun MaterialDenseGridScreen(
     val entryVisuals = appListEntryVisuals(entryProgress)
     val edgeFadesVisible = active || entryProgress > 0.001f
     val iconShadowElevationPx by animateFloatAsState(
-        targetValue = if (iconShadowEnabled) with(density) { 8.dp.toPx() } else 0f,
+        targetValue = if (iconShadowEnabled && active && entryProgress >= 0.985f) {
+            with(density) { 8.dp.toPx() }
+        } else {
+            0f
+        },
         animationSpec = tween(durationMillis = if (iconShadowEnabled) 120 else 0),
         label = "material_grid_icon_shadow"
     )
@@ -1628,9 +1632,6 @@ private fun MaterialDenseGridScreen(
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val leftSafeInsetPx = with(density) { leftSafeInset.toPx() }
         val materialContentCenterX = leftSafeInsetPx + (screenWidthPx - leftSafeInsetPx) / 2f
-        val fisheyeDeadZonePx = (screenHeightPx / effectiveColumns.coerceAtLeast(1)) * 0.14f
-        val fisheyeRangePx = (screenHeightPx / effectiveColumns * fisheyeRangeRows.coerceIn(1, 8))
-            .coerceIn(screenHeightPx / effectiveColumns, screenHeightPx)
         val fisheyeMinScale = fisheyeMinScale(fisheyeStrengthPercent)
         val autoScrollEdgePx = with(density) { HONEYCOMB_AUTO_SCROLL_EDGE_DP.dp.toPx() }
         val materialIconShape = RoundedCornerShape((18.dp * appListScale).coerceIn(12.dp, 24.dp))
@@ -1643,6 +1644,11 @@ private fun MaterialDenseGridScreen(
         }
         val materialTopPadding = maxOf(centerScrollPadding, topFadeRangeDp.dp * 0.42f)
         val materialBottomPadding = maxOf(centerScrollPadding, bottomFadeRangeDp.dp * 0.95f)
+        val materialEdgeRangePx = (materialItemHeight * fisheyeRangeRows.coerceIn(1, 8) * 0.58f)
+            .coerceIn(materialItemHeight, screenHeightPx * 0.48f)
+        val materialTopFisheyeZonePx = maxOf(topFadePx, materialEdgeRangePx)
+        val materialBottomFisheyeZonePx = maxOf(bottomFadePx, materialEdgeRangePx)
+        val materialEdgeOverlayAlpha = entryProgress.coerceIn(0f, 1f)
         val materialFisheyeScrollTick = gridState.firstVisibleItemIndex * 100_000 +
             gridState.firstVisibleItemScrollOffset
         val materialVisibleItemsByIndex = remember(materialFisheyeScrollTick, apps.size) {
@@ -1718,13 +1724,12 @@ private fun MaterialDenseGridScreen(
                 val isPressed by interactionSource.collectIsPressedAsState()
                 val itemInfo = materialVisibleItemsByIndex[index]
                 val itemBounds = materialItemBounds[index]
-                val itemCenterYRoot = materialGridItemCenterY(
+                val itemCenterY = materialGridItemCenterY(
                     itemInfo = itemInfo,
                     fallbackBounds = itemBounds,
                     containerRoot = materialContainerRoot,
                     fallback = screenHeightPx / 2f
-                )
-                val itemCenterY = itemCenterYRoot - materialContainerRoot.y + overscroll.value
+                ) + overscroll.value
                 val itemBlur = if (edgeBlurEnabled) {
                     val rawBlur = computeHoneycombEdgeBlur(
                         centerY = itemCenterY,
@@ -1740,9 +1745,9 @@ private fun MaterialDenseGridScreen(
                 }
                 val itemScale = computeMaterialItemScale(
                     centerY = itemCenterY,
-                    screenCenterY = screenHeightPx / 2f,
-                    deadZonePx = fisheyeDeadZonePx,
-                    rangePx = fisheyeRangePx,
+                    screenHeight = screenHeightPx,
+                    topZonePx = materialTopFisheyeZonePx,
+                    bottomZonePx = materialBottomFisheyeZonePx,
                     minScale = fisheyeMinScale,
                     fisheyeEnabled = fisheyeEnabled,
                     topFisheyeEnabled = topFisheyeEnabled,
@@ -1752,13 +1757,12 @@ private fun MaterialDenseGridScreen(
                 val itemHeightPx = itemInfo?.size?.height?.toFloat()
                     ?: itemBounds?.height
                     ?: (screenHeightPx / effectiveColumns.coerceAtLeast(1))
-                val itemCenterXRoot = materialGridItemCenterX(
+                val itemCenterX = materialGridItemCenterX(
                     itemInfo = itemInfo,
                     fallbackBounds = itemBounds,
                     containerRoot = materialContainerRoot,
                     fallback = screenWidthPx / 2f
                 )
-                val itemCenterX = itemCenterXRoot - materialContainerRoot.x
                 val edgeSpacingOffsetX = edgeSpacingCompressionHorizontalOffset(
                     centerX = itemCenterX,
                     rowCenterY = itemCenterY,
@@ -1773,6 +1777,11 @@ private fun MaterialDenseGridScreen(
                 )
                 val isDragged = dragFromIndex == index
                 val isFolderHoverTarget = folderHoverIndex == index
+                val itemShadowElevationPx = when {
+                    entryProgress < 0.985f || !active -> 0f
+                    materialScrollOptimizationActive -> iconShadowElevationPx * 0.62f
+                    else -> iconShadowElevationPx
+                }
                 val dragTarget = materialDraggedTargetOffset(
                     index = index,
                     dragFromIndex = dragFromIndex,
@@ -1834,7 +1843,7 @@ private fun MaterialDenseGridScreen(
                             }
                         }
                         .graphicsLayer {
-                            shadowElevation = if (materialScrollOptimizationActive) iconShadowElevationPx * 0.62f else iconShadowElevationPx
+                            shadowElevation = itemShadowElevationPx
                             shape = materialIconShape
                             translationX = animatedDragX
                             translationY = animatedDragY
@@ -1916,7 +1925,7 @@ private fun MaterialDenseGridScreen(
                     .graphicsLayer {
                         translationX = dragOverlayLocalPointer.x - dragOverlayBounds.width / 2f
                         translationY = dragOverlayLocalPointer.y - dragOverlayBounds.height / 2f
-                        shadowElevation = if (materialScrollOptimizationActive) iconShadowElevationPx * 0.62f else iconShadowElevationPx
+                        shadowElevation = iconShadowElevationPx
                         shape = materialIconShape
                         clip = true
                         scaleX = 1.04f
@@ -1941,6 +1950,7 @@ private fun MaterialDenseGridScreen(
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
                     .height(topFadeRangeDp.dp)
+                    .graphicsLayer { alpha = materialEdgeOverlayAlpha }
                     .background(
                         Brush.verticalGradient(
                             listOf(
@@ -1949,7 +1959,7 @@ private fun MaterialDenseGridScreen(
                             )
                         )
                     )
-                    .platformBlur(topBlurRadiusDp, blurEnabled && edgeBlurEnabled)
+                    .platformBlur(topBlurRadiusDp, blurEnabled && edgeBlurEnabled && materialEdgeOverlayAlpha > 0.001f)
             )
         }
         if (edgeFadesVisible && bottomFadeRangeDp > 0) {
@@ -1958,6 +1968,7 @@ private fun MaterialDenseGridScreen(
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .height(bottomFadeRangeDp.dp)
+                    .graphicsLayer { alpha = materialEdgeOverlayAlpha }
                     .background(
                         Brush.verticalGradient(
                             listOf(
@@ -1966,7 +1977,7 @@ private fun MaterialDenseGridScreen(
                             )
                         )
                     )
-                    .platformBlur(bottomBlurRadiusDp, blurEnabled && edgeBlurEnabled)
+                    .platformBlur(bottomBlurRadiusDp, blurEnabled && edgeBlurEnabled && materialEdgeOverlayAlpha > 0.001f)
             )
         }
 
@@ -2023,8 +2034,8 @@ private fun materialGridItemCenterX(
     containerRoot: Offset,
     fallback: Float
 ): Float {
-    return itemInfo?.let { containerRoot.x + it.offset.x + it.size.width / 2f }
-        ?: fallbackBounds?.center?.x
+    return itemInfo?.let { it.offset.x + it.size.width / 2f }
+        ?: fallbackBounds?.let { it.center.x - containerRoot.x }
         ?: fallback
 }
 
@@ -2034,8 +2045,8 @@ private fun materialGridItemCenterY(
     containerRoot: Offset,
     fallback: Float
 ): Float {
-    return itemInfo?.let { containerRoot.y + it.offset.y + it.size.height / 2f }
-        ?: fallbackBounds?.center?.y
+    return itemInfo?.let { it.offset.y + it.size.height / 2f }
+        ?: fallbackBounds?.let { it.center.y - containerRoot.y }
         ?: fallback
 }
 
@@ -2078,18 +2089,47 @@ private fun materialDraggedTargetOffset(
 @Suppress("UNUSED_PARAMETER")
 private fun computeMaterialItemScale(
     centerY: Float,
-    screenCenterY: Float,
-    deadZonePx: Float,
-    rangePx: Float,
+    screenHeight: Float,
+    topZonePx: Float,
+    bottomZonePx: Float,
     minScale: Float,
     fisheyeEnabled: Boolean,
     topFisheyeEnabled: Boolean,
     scrollTick: Int
 ): Float {
     if (!fisheyeEnabled) return 1f
-    if (!topFisheyeEnabled && centerY < screenCenterY) return 1f
-    val distance = max(0f, abs(centerY - screenCenterY) - deadZonePx)
-    return fisheyeScale(distance, rangePx, minScale = minScale)
+    val edgeProgress = materialEdgeFisheyeProgress(
+        centerY = centerY,
+        screenHeight = screenHeight,
+        topZonePx = topZonePx,
+        bottomZonePx = bottomZonePx,
+        topFisheyeEnabled = topFisheyeEnabled
+    )
+    if (edgeProgress <= 0f) return 1f
+    return (1f - (1f - minScale) * edgeProgress).coerceIn(minScale, 1f)
+}
+
+private fun materialEdgeFisheyeProgress(
+    centerY: Float,
+    screenHeight: Float,
+    topZonePx: Float,
+    bottomZonePx: Float,
+    topFisheyeEnabled: Boolean
+): Float {
+    if (screenHeight <= 0f) return 0f
+    val topProgress = if (topFisheyeEnabled && topZonePx > 0f) {
+        (1f - centerY / topZonePx).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val bottomProgress = if (bottomZonePx > 0f) {
+        val bottomDistance = screenHeight - centerY
+        (1f - bottomDistance / bottomZonePx).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val edgeProgress = max(topProgress, bottomProgress)
+    return edgeProgress * edgeProgress * (3f - 2f * edgeProgress)
 }
 
 private fun materialVisualSlotIndex(
