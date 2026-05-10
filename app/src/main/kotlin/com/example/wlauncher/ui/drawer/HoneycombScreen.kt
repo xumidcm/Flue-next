@@ -1826,7 +1826,7 @@ private fun MaterialDenseGridScreen(
                             }
                         }
                         .graphicsLayer {
-                            shadowElevation = if (reducedMotionPhase()) iconShadowElevationPx * 0.62f else iconShadowElevationPx
+                            shadowElevation = if (materialScrollOptimizationActive) iconShadowElevationPx * 0.62f else iconShadowElevationPx
                             shape = materialIconShape
                             translationX = animatedDragX
                             translationY = animatedDragY
@@ -1908,7 +1908,7 @@ private fun MaterialDenseGridScreen(
                     .graphicsLayer {
                         translationX = dragOverlayLocalPointer.x - dragOverlayBounds.width / 2f
                         translationY = dragOverlayLocalPointer.y - dragOverlayBounds.height / 2f
-                        shadowElevation = if (reducedMotionPhase()) iconShadowElevationPx * 0.62f else iconShadowElevationPx
+                        shadowElevation = if (materialScrollOptimizationActive) iconShadowElevationPx * 0.62f else iconShadowElevationPx
                         shape = materialIconShape
                         clip = true
                         scaleX = 1.04f
