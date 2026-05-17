@@ -451,6 +451,10 @@ private fun drawJbLayer(
             drawJbBitmapLayer(canvas, face, layer, nowMillis, batteryLevel)
         }
         "text" -> drawJbTextLayer(canvas, face, layer, nowMillis, batteryLevel, is24Hour)
+        "text_curved" -> drawJbCurvedTextLayer(canvas, face, layer, nowMillis, batteryLevel, is24Hour)
+        "ring" -> drawJbRingLayer(canvas, face, layer, nowMillis, batteryLevel)
+        "markers_hm" -> drawJbMarkersLayer(canvas, face, layer)
+        "shape" -> drawJbShapeLayer(canvas, face, layer)
     }
 }
 

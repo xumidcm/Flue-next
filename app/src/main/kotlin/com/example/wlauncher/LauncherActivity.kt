@@ -85,6 +85,7 @@ import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.util.applyFadeCloseTransition
 import com.flue.launcher.util.applyFadeOpenTransition
 import com.flue.launcher.util.RecentsVisibility
+import com.flue.launcher.viewmodel.HoneycombFastScrollOptimizationMode
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
@@ -212,6 +213,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val honeycombTopFade by vm.honeycombTopFade.collectAsStateWithLifecycle()
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsStateWithLifecycle()
     val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsStateWithLifecycle()
+    val honeycombFastScrollOptimizationMode by vm.honeycombFastScrollOptimizationMode.collectAsStateWithLifecycle()
     val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsStateWithLifecycle()
     val materialHoneycombTopFisheyeEnabled by vm.materialHoneycombTopFisheyeEnabled.collectAsStateWithLifecycle()
     val appListLeftSafeInsetPercent by vm.appListLeftSafeInsetPercent.collectAsStateWithLifecycle()
@@ -952,6 +954,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         topFadeRangeDp = honeycombTopFade,
                         bottomFadeRangeDp = honeycombBottomFade,
                         fastScrollOptimizationEnabled = honeycombFastScrollOptimization,
+                        fastScrollOptimizationAggressive =
+                            honeycombFastScrollOptimizationMode == HoneycombFastScrollOptimizationMode.Aggressive,
                         rotaryHapticsEnabled = rotaryHapticsEnabled,
                         active = screenState == ScreenState.Apps,
                         initialScrollResetKey = directLaunchInitialScrollResetKey,

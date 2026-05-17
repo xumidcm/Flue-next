@@ -441,25 +441,26 @@ private fun handleDingDingCatTap(
 ) {
     val activeDial = dial ?: return
     val designPoint = renderTransform?.screenToDesign(screenPoint) ?: screenPoint
-    val hitPoint = activeDial.drawPoints
+    val hitPoints = activeDial.drawPoints
         .asReversed()
-        .firstOrNull { point ->
+        .filter { point ->
             point.visible &&
                 (!point.launchAction.isNullOrBlank() || isTapTriggeredAnimation(point)) &&
                 point.containsDesignPoint(activeDial, designPoint)
         }
-    if (hitPoint?.launchAction?.let { action -> launchDingDingCatAction(context, action) } == true) {
+    val launchPoint = hitPoints.firstOrNull { !it.launchAction.isNullOrBlank() }
+    if (launchPoint?.launchAction?.let { action -> launchDingDingCatAction(context, action) } == true) {
         return
     }
 
     val now = System.currentTimeMillis()
-    if (hitPoint?.let(::isTapTriggeredAnimation) == true && hitPoint.launchAction.isNullOrBlank()) {
-        hitPoint.toggleDingDingCatTapLayer(triggeredAnimations, now)
+    val togglePoint = hitPoints.firstOrNull { point ->
+        point.launchAction.isNullOrBlank() && isTapTriggeredAnimation(point)
+    }
+    if (togglePoint != null) {
+        togglePoint.toggleDingDingCatTapLayer(triggeredAnimations, now)
         return
     }
-    activeDial.drawPoints
-        .filter { point -> point.launchAction.isNullOrBlank() && isTapTriggeredAnimation(point) }
-        .forEach { point -> point.toggleDingDingCatTapLayer(triggeredAnimations, now) }
 }
 
 private fun launchDingDingCatAction(context: Context, action: String): Boolean {

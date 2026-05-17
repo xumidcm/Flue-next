@@ -327,7 +327,7 @@ private data class PendingWidgetSelection(
 
 private fun SideScreenWidgetCardItem.stableKey(): String {
     keyOverride?.let { return it }
-    return baseStableKey()
+    return "${baseStableKey()}@slot_$widgetIndex"
 }
 
 private fun SideScreenWidgetCardItem.baseStableKey(): String {
@@ -1217,6 +1217,7 @@ fun WidgetPageLayer(
                     enter = fadeIn(tween(180)) + scaleIn(tween(220), initialScale = 0.88f),
                     exit = fadeOut(tween(150)) + scaleOut(tween(170), targetScale = 0.86f)
                 ) {
+                    val dragging = draggingWidgetKey == cardKey
                     Box(
                         modifier = Modifier
                             .width(animatedCardWidth)
@@ -1244,9 +1245,14 @@ fun WidgetPageLayer(
                                     bottom = position.y + height
                                 )
                             }
+                            .zIndex(if (dragging) 50f else 0f)
                             .graphicsLayer {
-                                val dragging = draggingWidgetKey == cardKey
-                                alpha = if (dragging) 0.36f else 1f
+                                translationX = if (dragging) draggingWidgetOffset.x else 0f
+                                translationY = if (dragging) draggingWidgetOffset.y else 0f
+                                shadowElevation = if (dragging) 22.dp.toPx() else 0f
+                                alpha = 1f
+                                scaleX = if (dragging) 1.035f else 1f
+                                scaleY = if (dragging) 1.035f else 1f
                             }
                     ) {
                         Box(
@@ -1535,25 +1541,6 @@ fun WidgetPageLayer(
                 }
             }
         }
-        draggingWidgetKey
-            ?.let { key -> widgetCards.firstOrNull { it.stableKey() == key } }
-            ?.let { card ->
-                val bounds = widgetCardBounds[card.stableKey()]
-                if (bounds != null) {
-                     WidgetDragPreviewCard(
-                         preview = WidgetDragPreview(
-                             card = card,
-                             bounds = bounds,
-                             offset = draggingWidgetOffset
-                         ),
-                         rootOffset = widgetPageRootOffset,
-                         widgetRepository = widgetRepository,
-                         appWidgetHost = appWidgetHost,
-                         modifier = Modifier.zIndex(20f)
-                     )
-                }
-            }
-
         if (showPicker) {
         val repository = requireNotNull(widgetRepository)
         val host = requireNotNull(appWidgetHost)
