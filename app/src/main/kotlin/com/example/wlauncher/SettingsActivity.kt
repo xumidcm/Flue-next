@@ -1014,7 +1014,7 @@ private fun SettingsRootScreen(
                                 )
                             )
                         } else {
-                            Toast.makeText(context, "请先开启隐藏的叮叮猫表盘，再长按导入旧版表盘", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Ciallo(∠・ω< )⌒☆", Toast.LENGTH_SHORT).show()
                         }
                     },
                     longPressDurationMs = 2_000L
@@ -2013,7 +2013,7 @@ private fun SettingsRootScreen(
                                 vm.setDingDingCatImportUnlocked(!dingDingCatImportUnlocked)
                                 Toast.makeText(
                                     context,
-                                    if (dingDingCatImportUnlocked) "已关闭旧版表盘导入" else "已开启旧版表盘导入",
+                                    "喵～",
                                     Toast.LENGTH_SHORT
                                 ).show()
                             }

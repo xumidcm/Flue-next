@@ -47,10 +47,13 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -64,6 +67,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Velocity
@@ -305,7 +309,7 @@ fun HoneycombScreen(
             )
         }
         fun reducedMotionPhase(): Boolean =
-            fastScrollOptimizationEnabled && fastScrollActive
+            fastScrollOptimizationEnabled && (fastScrollActive || scrollOffset.isRunning || dragScrollActive)
         fun markFastScrollActive(durationMs: Long = 180L) {
             if (!fastScrollOptimizationEnabled) return
             fastScrollActive = true
@@ -821,6 +825,12 @@ fun HoneycombScreen(
                                     try {
                                         scrollOffset.snapTo(current)
                                         directScrollOffset = Float.NaN
+                                        if (current < minScroll || current > maxScroll) {
+                                            scrollOffset.animateTo(
+                                                current.coerceIn(minScroll, maxScroll),
+                                                spring(dampingRatio = 0.64f, stiffness = 360f)
+                                            )
+                                        }
                                     } finally {
                                         dragScrollActive = false
                                     }
@@ -1072,7 +1082,7 @@ fun HoneycombScreen(
                                 val itemAlpha = when {
                                     isDragged -> 0f
                                     settlingKey == app.componentKey -> 0f
-                                    else -> if (useFisheyeEffects) scale.coerceIn(0.24f, 1f) else 1f
+                                    else -> 1f
                                 }
                                 alpha = itemAlpha
                                 shadowElevation = if (itemAlpha > 0.001f) {
@@ -1292,6 +1302,7 @@ private fun MaterialDenseGridScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
     val density = LocalDensity.current
     val focusRequester = remember { FocusRequester() }
     val gridState = remember { LazyGridState() }
@@ -1324,7 +1335,11 @@ private fun MaterialDenseGridScreen(
     val materialItemBounds = remember { mutableMapOf<Int, Rect>() }
     val overscroll = remember { Animatable(0f) }
     val topReturnThresholdPx = with(density) { 72.dp.toPx() }
-    val overscrollLimitPx = with(density) { 140.dp.toPx() }
+    val configuredScreenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+    val overscrollLimitPx = maxOf(
+        with(density) { 140.dp.toPx() },
+        configuredScreenHeightPx * 0.45f
+    )
     var materialFastScrollActive by remember { mutableStateOf(false) }
     var materialFastScrollResetJob by remember { mutableStateOf<Job?>(null) }
     val materialScrollOptimizationActive =
@@ -1891,6 +1906,8 @@ private fun MaterialDenseGridScreen(
                     entryProgress < 0.985f || !active -> 0f
                     else -> iconShadowElevationPx
                 }
+                val itemShadowAlpha = (itemShadowElevationPx / with(density) { 8.dp.toPx() })
+                    .coerceIn(0f, 1f)
                 val dragTarget = materialDraggedTargetOffset(
                     index = index,
                     dragFromIndex = dragFromIndex,
@@ -1956,7 +1973,7 @@ private fun MaterialDenseGridScreen(
                             }
                         }
                         .graphicsLayer {
-                            shadowElevation = itemShadowElevationPx
+                            shadowElevation = 0f
                             shape = materialIconShape
                             translationX = animatedDragX
                             translationY = animatedDragY
@@ -1993,6 +2010,34 @@ private fun MaterialDenseGridScreen(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
                     ) {
+                        if (itemShadowAlpha > 0f && !isDragged) {
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .padding(iconInnerPadding)
+                                    .drawBehind {
+                                        val shadowWidth = size.width * 0.88f
+                                        val shadowHeight = size.height * 0.82f
+                                        val left = (size.width - shadowWidth) / 2f
+                                        val top = (size.height - shadowHeight) / 2f + size.height * 0.10f
+                                        val radius = size.minDimension * 0.23f
+                                        drawRoundRect(
+                                            brush = Brush.verticalGradient(
+                                                colors = listOf(
+                                                    Color.Black.copy(alpha = 0.18f * itemShadowAlpha),
+                                                    Color.Black.copy(alpha = 0.09f * itemShadowAlpha),
+                                                    Color.Transparent
+                                                ),
+                                                startY = top,
+                                                endY = top + shadowHeight
+                                            ),
+                                            topLeft = Offset(left, top),
+                                            size = Size(shadowWidth, shadowHeight),
+                                            cornerRadius = CornerRadius(radius, radius)
+                                        )
+                                    }
+                            )
+                        }
                         Image(
                             bitmap = displayIcon,
                             contentDescription = app.label,

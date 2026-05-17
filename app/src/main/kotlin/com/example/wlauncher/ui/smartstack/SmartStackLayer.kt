@@ -100,6 +100,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -265,7 +266,8 @@ private fun rememberPickerOverscrollConnection(
 private data class SideScreenWidgetCardItem(
     val widgetIndex: Int,
     val widget: WidgetInfo,
-    val layout: WidgetSlotLayout
+    val layout: WidgetSlotLayout,
+    val keyOverride: String? = null
 )
 
 private data class WidgetSlotLayout(
@@ -305,10 +307,15 @@ private data class PendingWidgetSelection(
 )
 
 private fun SideScreenWidgetCardItem.stableKey(): String {
+    keyOverride?.let { return it }
+    return baseStableKey()
+}
+
+private fun SideScreenWidgetCardItem.baseStableKey(): String {
     return if (widget.widgetId != -1) {
         "widget_${widget.widgetId}"
     } else {
-        "widget_${widget.widgetKey}_$widgetIndex"
+        "widget_${widget.widgetKey}"
     }
 }
 
@@ -861,13 +868,25 @@ fun WidgetPageLayer(
     val scope = rememberCoroutineScope()
     val widgetOverscrollLimitPx = 150f
     val widgetCards = remember(sideScreenWidgetSlots, widgetRepository) {
-        sideScreenWidgetSlots.mapIndexedNotNull { index, raw ->
+        val parsedCards = sideScreenWidgetSlots.mapIndexedNotNull { index, raw ->
             widgetRepository.parseSlotValue(raw)?.let { widget ->
                 SideScreenWidgetCardItem(
                     widgetIndex = index,
                     widget = widget,
                     layout = parseWidgetSlotLayout(raw, widget, widgetRepository)
                 )
+            }
+        }
+        val duplicateBaseKeys = parsedCards
+            .groupingBy { it.baseStableKey() }
+            .eachCount()
+            .filterValues { it > 1 }
+            .keys
+        parsedCards.map { card ->
+            if (card.baseStableKey() in duplicateBaseKeys) {
+                card.copy(keyOverride = "${card.baseStableKey()}_${card.widgetIndex}")
+            } else {
+                card
             }
         }
     }
@@ -890,7 +909,7 @@ fun WidgetPageLayer(
     val widgetBorderHotspotPx = with(density) { 26.dp.toPx() }
     val widgetResizeLongPressMs = 420L
     val autoScrollEdgePx = with(density) { 56.dp.toPx() }
-    val autoScrollStepPx = with(density) { 18.dp.toPx() }
+    val autoScrollMaxVelocityPx = with(density) { 1100.dp.toPx() }
 
     LaunchedEffect(editMode, showPicker) {
         onEditModeChange(editMode && !showPicker)
@@ -1067,9 +1086,22 @@ fun WidgetPageLayer(
     }
 
     LaunchedEffect(draggingWidgetKey, widgetDragAutoScrollPx) {
+        var previousFrameNanos = 0L
         while (draggingWidgetKey != null && widgetDragAutoScrollPx != 0f && isActive) {
-            listState.scrollBy(widgetDragAutoScrollPx)
-            delay(16)
+            var scrollDelta = 0f
+            withFrameNanos { frameTimeNanos ->
+                val frameDeltaSeconds = if (previousFrameNanos == 0L) {
+                    1f / 60f
+                } else {
+                    ((frameTimeNanos - previousFrameNanos) / 1_000_000_000f).coerceIn(1f / 144f, 0.05f)
+                }
+                previousFrameNanos = frameTimeNanos
+                scrollDelta = widgetDragAutoScrollPx * frameDeltaSeconds
+            }
+            val consumed = listState.scrollBy(scrollDelta)
+            if (consumed != 0f) {
+                draggingWidgetOffset = draggingWidgetOffset.copy(y = draggingWidgetOffset.y + consumed)
+            }
         }
     }
 
@@ -1135,6 +1167,9 @@ fun WidgetPageLayer(
                     key = { row -> row.joinToString(separator = "|") { it.stableKey() } },
                     contentType = { "widget_page_row" }
                 ) { row ->
+                    val rowIsResizing = activeWidgetResize?.cardKey?.let { activeKey ->
+                        row.any { it.stableKey() == activeKey }
+                    } == true
                     Row(
                         modifier = Modifier
                             .width(contentWidth)
@@ -1143,8 +1178,14 @@ fun WidgetPageLayer(
                                 placementSpec = spring(stiffness = 520f, dampingRatio = 0.86f),
                                 fadeOutSpec = tween(160)
                             )
-                            .animateContentSize(
-                                animationSpec = spring(stiffness = 560f, dampingRatio = 0.86f)
+                            .then(
+                                if (rowIsResizing) {
+                                    Modifier
+                                } else {
+                                    Modifier.animateContentSize(
+                                        animationSpec = spring(stiffness = 560f, dampingRatio = 0.86f)
+                                    )
+                                }
                             ),
                         horizontalArrangement = Arrangement.spacedBy(rowGap)
                     ) {
@@ -1185,8 +1226,14 @@ fun WidgetPageLayer(
                                     Box(
                                         modifier = Modifier
                                             .width(animatedCardWidth)
-                                            .animateContentSize(
-                                                animationSpec = spring(stiffness = 560f, dampingRatio = 0.86f)
+                                            .then(
+                                                if (resizing != null) {
+                                                    Modifier
+                                                } else {
+                                                    Modifier.animateContentSize(
+                                                        animationSpec = spring(stiffness = 560f, dampingRatio = 0.86f)
+                                                    )
+                                                }
                                             )
                                             .animateItem(
                                                 fadeInSpec = tween(180),
@@ -1240,13 +1287,12 @@ fun WidgetPageLayer(
                                         if (jiggleActive) {
                                             val blockerInteraction = remember { MutableInteractionSource() }
                                             Box(
-                                                modifier = Modifier
-                                                    .matchParentSize()
-                                                    .clip(shellShape)
-                                                    .background(Color.Black.copy(alpha = 0.08f))
-                                                    .clickable(
-                                                        interactionSource = blockerInteraction,
-                                                        indication = null,
+                                                 modifier = Modifier
+                                                     .matchParentSize()
+                                                     .clip(shellShape)
+                                                     .clickable(
+                                                         interactionSource = blockerInteraction,
+                                                         indication = null,
                                                         onClick = {}
                                                     )
                                                     .pointerInput(cardKey, card.layout, editMode) {
@@ -1304,15 +1350,19 @@ fun WidgetPageLayer(
                                                                         draggingWidgetOffset.y +
                                                                         change.position.y
                                                                 }
-                                                                when {
-                                                                    pointerScreenY != null && pointerScreenY < autoScrollEdgePx -> {
-                                                                        widgetDragAutoScrollPx = -autoScrollStepPx
-                                                                    }
-                                                                    pointerScreenY != null && pointerScreenY > screenHeightPx - autoScrollEdgePx -> {
-                                                                        widgetDragAutoScrollPx = autoScrollStepPx
-                                                                    }
-                                                                    else -> {
-                                                                        widgetDragAutoScrollPx = 0f
+                                                                 when {
+                                                                     pointerScreenY != null && pointerScreenY < autoScrollEdgePx -> {
+                                                                         val progress = ((autoScrollEdgePx - pointerScreenY) / autoScrollEdgePx)
+                                                                             .coerceIn(0f, 1.2f)
+                                                                         widgetDragAutoScrollPx = -autoScrollMaxVelocityPx * progress
+                                                                     }
+                                                                     pointerScreenY != null && pointerScreenY > screenHeightPx - autoScrollEdgePx -> {
+                                                                         val progress = ((pointerScreenY - (screenHeightPx - autoScrollEdgePx)) / autoScrollEdgePx)
+                                                                             .coerceIn(0f, 1.2f)
+                                                                         widgetDragAutoScrollPx = autoScrollMaxVelocityPx * progress
+                                                                     }
+                                                                     else -> {
+                                                                         widgetDragAutoScrollPx = 0f
                                                                     }
                                                                 }
                                                                 val sourceCenter = widgetCardCenters[cardKey]
@@ -1404,15 +1454,17 @@ fun WidgetPageLayer(
             ?.let { card ->
                 val bounds = widgetCardBounds[card.stableKey()]
                 if (bounds != null) {
-                    WidgetDragPreviewCard(
-                        preview = WidgetDragPreview(
-                            card = card,
-                            bounds = bounds,
-                            offset = draggingWidgetOffset
-                        ),
-                        rootOffset = widgetPageRootOffset,
-                        modifier = Modifier.zIndex(20f)
-                    )
+                     WidgetDragPreviewCard(
+                         preview = WidgetDragPreview(
+                             card = card,
+                             bounds = bounds,
+                             offset = draggingWidgetOffset
+                         ),
+                         rootOffset = widgetPageRootOffset,
+                         widgetRepository = widgetRepository,
+                         appWidgetHost = appWidgetHost,
+                         modifier = Modifier.zIndex(20f)
+                     )
                 }
             }
 
@@ -1561,9 +1613,10 @@ private fun WidgetResizeHandles(
 private fun WidgetDragPreviewCard(
     preview: WidgetDragPreview,
     rootOffset: Offset,
+    widgetRepository: WidgetRepository,
+    appWidgetHost: AppWidgetHost,
     modifier: Modifier = Modifier
 ) {
-    val launcherStyle = LauncherTheme.style
     val width = with(LocalDensity.current) { preview.bounds.width.toDp() }
     val height = with(LocalDensity.current) { preview.bounds.height.toDp() }
     val shape = RoundedCornerShape(28.dp)
@@ -1580,44 +1633,17 @@ private fun WidgetDragPreviewCard(
                 scaleY = 1.035f
             }
             .clip(shape)
-            .background(launcherStyle.cardColor.copy(alpha = 0.96f))
             .border(1.dp, Color.White.copy(alpha = 0.38f), shape)
-            .padding(14.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxSize(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            val icon = preview.card.widget.previewImage ?: preview.card.widget.appIcon
-            if (icon != null) {
-                Image(
-                    bitmap = icon,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(RoundedCornerShape(14.dp)),
-                    contentScale = ContentScale.Crop,
-                    filterQuality = FilterQuality.Medium
-                )
-                Spacer(Modifier.width(12.dp))
-            }
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = preview.card.widget.label.ifBlank { preview.card.widget.appLabel },
-                    color = launcherStyle.titleColor,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    text = "拖动到目标位置后松手排序",
-                    color = WatchColors.TextSecondary,
-                    fontSize = 12.sp,
-                    maxLines = 1
-                )
-            }
-        }
+        WidgetCard(
+            widget = preview.card.widget,
+            layout = preview.card.layout,
+            cardWidth = width,
+            widgetRepository = widgetRepository,
+            appWidgetHost = appWidgetHost,
+            onLongPress = null,
+            onMeasuredHeight = {}
+        )
     }
 }
 

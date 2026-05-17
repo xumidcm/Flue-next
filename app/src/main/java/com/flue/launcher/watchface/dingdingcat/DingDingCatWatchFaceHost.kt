@@ -458,7 +458,7 @@ private fun handleDingDingCatTap(
         return
     }
     activeDial.drawPoints
-        .filter(::isTapTriggeredAnimation)
+        .filter { point -> point.launchAction.isNullOrBlank() && isTapTriggeredAnimation(point) }
         .forEach { point -> point.toggleDingDingCatTapLayer(triggeredAnimations, now) }
 }
 

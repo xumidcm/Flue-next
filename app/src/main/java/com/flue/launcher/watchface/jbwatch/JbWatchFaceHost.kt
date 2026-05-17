@@ -1004,31 +1004,15 @@ private fun launchJbWatchTapAction(context: Context, action: String, rootDir: Fi
         }
         else -> {
             parseJbWatchAppAction(normalized)?.let { appAction ->
-                val launchedComponent = runCatching {
-                    context.startActivity(Intent().apply {
-                        component = ComponentName(appAction.packageName, appAction.className)
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    })
-                    true
-                }.getOrDefault(false)
-                if (launchedComponent) return true
-                return context.packageManager.getLaunchIntentForPackage(appAction.packageName)?.apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }?.let { intent ->
-                    runCatching {
-                        context.startActivity(intent)
-                        true
-                    }.getOrDefault(false)
-                } == true
+                return launchJbWatchAppAction(context, appAction)
             }
             val parts = normalized.split('/')
             if (parts.size == 2) {
-                runCatching {
-                    context.startActivity(Intent().apply {
-                        component = ComponentName(parts[0], parts[1])
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    })
-                }.isSuccess
+                val packageName = parts[0].trim()
+                val className = parts[1].trim().let { value ->
+                    if (value.startsWith(".")) packageName + value else value
+                }
+                launchJbWatchAppAction(context, JbWatchAppAction(packageName, className))
             } else {
                 false
             }
@@ -1052,7 +1036,29 @@ private fun parseJbWatchAppAction(action: String): JbWatchAppAction? {
     val packageName = parts[1]
     val className = parts[2]
     if (packageName.isBlank() || className.isBlank()) return null
-    return JbWatchAppAction(packageName, className)
+    return JbWatchAppAction(
+        packageName = packageName,
+        className = if (className.startsWith(".")) packageName + className else className
+    )
+}
+
+private fun launchJbWatchAppAction(context: Context, appAction: JbWatchAppAction): Boolean {
+    val launchedComponent = runCatching {
+        context.startActivity(Intent().apply {
+            component = ComponentName(appAction.packageName, appAction.className)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        })
+        true
+    }.getOrDefault(false)
+    if (launchedComponent) return true
+    return context.packageManager.getLaunchIntentForPackage(appAction.packageName)?.apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }?.let { intent ->
+        runCatching {
+            context.startActivity(intent)
+            true
+        }.getOrDefault(false)
+    } == true
 }
 
 private fun normalizeJbTapAction(raw: String): String {
