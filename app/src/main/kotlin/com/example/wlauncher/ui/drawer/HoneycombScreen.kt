@@ -222,6 +222,8 @@ fun HoneycombScreen(
     var returnTriggered by remember { mutableStateOf(false) }
     var fastScrollActive by remember { mutableStateOf(false) }
     var fastScrollResetJob by remember { mutableStateOf<Job?>(null) }
+    var rubberScrollOffset by remember { mutableFloatStateOf(0f) }
+    var rubberScrollJob by remember { mutableStateOf<Job?>(null) }
     val appPalette = appListPalette(themeColor, darkMode, uiStyle, useWatchFaceColors)
 
     LaunchedEffect(focusReady) {
@@ -293,6 +295,51 @@ fun HoneycombScreen(
         val honeycombAutoScrollEdgePx = with(density) { HONEYCOMB_AUTO_SCROLL_EDGE_DP.dp.toPx() }
         val fastDragThresholdPx = with(density) { 10.dp.toPx() }
         val dragOverscrollLimitPx = with(density) { 72.dp.toPx() }
+        fun cancelRubberScrollAnimation() {
+            rubberScrollJob?.cancel()
+            rubberScrollJob = null
+        }
+        fun setRubberScrollOffset(value: Float) {
+            rubberScrollOffset = value.coerceIn(-dragOverscrollLimitPx, dragOverscrollLimitPx)
+        }
+        suspend fun animateRubberScrollToZero() {
+            val start = rubberScrollOffset
+            if (start == 0f) return
+            val rebound = Animatable(start)
+            rebound.animateTo(
+                0f,
+                spring(dampingRatio = 0.64f, stiffness = 360f)
+            ) {
+                rubberScrollOffset = value
+            }
+            rubberScrollOffset = 0f
+        }
+        fun launchRubberScrollRebound() {
+            cancelRubberScrollAnimation()
+            rubberScrollJob = scope.launch {
+                try {
+                    animateRubberScrollToZero()
+                } finally {
+                    rubberScrollJob = null
+                }
+            }
+        }
+        suspend fun animateInertialRubberScroll(velocity: Float) {
+            val overshoot = (velocity * 0.045f)
+                .coerceIn(-dragOverscrollLimitPx, dragOverscrollLimitPx)
+            if (abs(overshoot) < 1f) return
+            val rebound = Animatable(0f)
+            rebound.animateTo(overshoot, tween(durationMillis = 90)) {
+                rubberScrollOffset = value
+            }
+            rebound.animateTo(
+                0f,
+                spring(dampingRatio = 0.64f, stiffness = 360f)
+            ) {
+                rubberScrollOffset = value
+            }
+            rubberScrollOffset = 0f
+        }
         LaunchedEffect(apps) {
             val validKeys = apps.mapTo(mutableSetOf()) { it.componentKey }
             appLaunchCenters.keys
@@ -309,7 +356,8 @@ fun HoneycombScreen(
             )
         }
         fun reducedMotionPhase(): Boolean =
-            fastScrollOptimizationEnabled && (fastScrollActive || scrollOffset.isRunning || dragScrollActive)
+            fastScrollOptimizationEnabled &&
+                (fastScrollActive || scrollOffset.isRunning || dragScrollActive || rubberScrollOffset != 0f)
         fun markFastScrollActive(durationMs: Long = 180L) {
             if (!fastScrollOptimizationEnabled) return
             fastScrollActive = true
@@ -326,17 +374,29 @@ fun HoneycombScreen(
                 if (scrollOffset.isRunning) {
                     scrollOffset.stop()
                 }
+                cancelRubberScrollAnimation()
+                rubberScrollOffset = 0f
                 markFastScrollActive(220L)
-                val start = currentScrollOffsetValue()
-                scrollOffset.snapTo((start + delta).coerceIn(minScroll, maxScroll))
+                val start = currentScrollOffsetValue().coerceIn(minScroll, maxScroll)
+                val first = start + delta
+                val firstBounded = first.coerceIn(minScroll, maxScroll)
+                scrollOffset.snapTo(firstBounded)
                 directScrollOffset = Float.NaN
+                if (first != firstBounded) {
+                    animateInertialRubberScroll(delta * 60f)
+                    return@launch
+                }
                 var tail = delta * 0.55f
                 repeat(6) {
                     withFrameNanos { }
                     if (abs(tail) < 0.5f) return@launch
-                    val next = (scrollOffset.value + tail).coerceIn(minScroll, maxScroll)
+                    val rawNext = scrollOffset.value + tail
+                    val next = rawNext.coerceIn(minScroll, maxScroll)
                     scrollOffset.snapTo(next)
-                    if (next == minScroll || next == maxScroll) return@launch
+                    if (rawNext != next || next == minScroll || next == maxScroll) {
+                        animateInertialRubberScroll(tail * 60f)
+                        return@launch
+                    }
                     tail *= 0.55f
                 }
             }
@@ -366,6 +426,8 @@ fun HoneycombScreen(
             ) {
                 directLaunchTopLockObservedKey = initialScrollResetKey
                 wheelMomentumJob?.cancel()
+                cancelRubberScrollAnimation()
+                rubberScrollOffset = 0f
                 directScrollOffset = Float.NaN
                 scrollOffset.stop()
                 scrollOffset.snapTo(maxScroll)
@@ -381,6 +443,10 @@ fun HoneycombScreen(
             if (clampedAnimated != scrollOffset.value) {
                 scrollOffset.snapTo(clampedAnimated)
             }
+            if (rubberScrollOffset != 0f) {
+                cancelRubberScrollAnimation()
+                rubberScrollOffset = 0f
+            }
         }
         LaunchedEffect(active, minScroll, maxScroll) {
             if (!active) {
@@ -393,6 +459,8 @@ fun HoneycombScreen(
                 dragVisualPointer = null
                 dragApp = null
                 if (!returnTriggered) {
+                    cancelRubberScrollAnimation()
+                    rubberScrollOffset = 0f
                     directScrollOffset = Float.NaN
                     scrollOffset.snapTo(scrollOffset.value.coerceIn(minScroll, maxScroll))
                 }
@@ -458,7 +526,8 @@ fun HoneycombScreen(
             }
         }
 
-        val currentScroll = currentScrollOffsetValue()
+        val currentScroll = currentScrollOffsetValue().coerceIn(minScroll, maxScroll)
+        val visualScroll = currentScroll + rubberScrollOffset
         val fastFlowSlowTopY = screenHeightPx * FAST_FLOW_SLOW_TOP_FRACTION
         val fastFlowSlowBottomY = screenHeightPx * FAST_FLOW_SLOW_BOTTOM_FRACTION
 
@@ -718,8 +787,9 @@ fun HoneycombScreen(
                                 if (dragFromIndex != null || longPressedApp != null) return@detectDragGestures
                                 dragScrollActive = true
                                 wheelMomentumJob?.cancel()
+                                cancelRubberScrollAnimation()
                                 scope.launch { scrollOffset.stop() }
-                                directScrollOffset = currentScrollOffsetValue()
+                                directScrollOffset = currentScrollOffsetValue().coerceIn(minScroll, maxScroll)
                                 velocityTracker.resetTracking()
                                 val hoverIndex = findNearestHoneycombIndex(
                                     pointer = startOffset,
@@ -746,22 +816,47 @@ fun HoneycombScreen(
                                     maxDistance = iconSizePx * 0.9f
                                 )
                                 glidePressedKey = hoverIndex?.let { apps.getOrNull(it)?.componentKey }
-                                val current = currentScrollOffsetValue()
-                                val next = current + dragAmount.y
-                                val overscroll = when {
-                                    next > maxScroll -> next - maxScroll
-                                    next < minScroll -> next - minScroll
-                                    else -> 0f
-                                }
                                 if (abs(dragAmount.y) >= fastDragThresholdPx) {
                                     markFastScrollActive(180L)
                                 }
-                                val dampedDrag = if (overscroll != 0f) dragAmount.y * 0.28f else dragAmount.y
-                                val nextScroll = current + dampedDrag
-                                directScrollOffset = nextScroll.coerceIn(
-                                    minScroll - dragOverscrollLimitPx,
-                                    maxScroll + dragOverscrollLimitPx
-                                )
+                                val current = currentScrollOffsetValue().coerceIn(minScroll, maxScroll)
+                                val rubber = rubberScrollOffset
+                                if (rubber != 0f) {
+                                    val nextRubber = rubber + dragAmount.y
+                                    when {
+                                        rubber > 0f && nextRubber > 0f -> {
+                                            directScrollOffset = maxScroll
+                                            setRubberScrollOffset(nextRubber)
+                                        }
+                                        rubber < 0f && nextRubber < 0f -> {
+                                            directScrollOffset = minScroll
+                                            setRubberScrollOffset(nextRubber)
+                                        }
+                                        else -> {
+                                            rubberScrollOffset = 0f
+                                            val remainingDrag = nextRubber
+                                            directScrollOffset = (if (rubber > 0f) maxScroll else minScroll)
+                                                .plus(remainingDrag)
+                                                .coerceIn(minScroll, maxScroll)
+                                        }
+                                    }
+                                } else {
+                                    val rawNext = current + dragAmount.y
+                                    when {
+                                        rawNext > maxScroll -> {
+                                            directScrollOffset = maxScroll
+                                            setRubberScrollOffset((rawNext - maxScroll) * 0.35f)
+                                        }
+                                        rawNext < minScroll -> {
+                                            directScrollOffset = minScroll
+                                            setRubberScrollOffset((rawNext - minScroll) * 0.35f)
+                                        }
+                                        else -> {
+                                            rubberScrollOffset = 0f
+                                            directScrollOffset = rawNext
+                                        }
+                                    }
+                                }
                             },
                             onDragEnd = {
                                 if (returnTriggered) {
@@ -770,23 +865,22 @@ fun HoneycombScreen(
                                     return@detectDragGestures
                                 }
                                 val velocity = velocityTracker.calculateVelocity().y
-                                val current = currentScrollOffsetValue()
+                                val current = currentScrollOffsetValue().coerceIn(minScroll, maxScroll)
+                                val releaseRubber = rubberScrollOffset
                                 glidePressedKey = null
                                 if (abs(velocity) > 1600f) {
                                     markFastScrollActive(260L)
                                 }
                                 directScrollOffset = current
-                                if (current >= maxScroll + iconSizePx * 0.28f) {
+                                if (releaseRubber >= iconSizePx * 0.28f) {
                                     val returnStart = current
                                     returnTriggered = true
                                     onScrollToTop()
                                     scope.launch {
                                         scrollOffset.snapTo(returnStart)
                                         directScrollOffset = Float.NaN
-                                        scrollOffset.animateTo(
-                                            maxScroll,
-                                            spring(dampingRatio = 0.64f, stiffness = 360f)
-                                        )
+                                        animateRubberScrollToZero()
+                                        scrollOffset.snapTo(maxScroll)
                                         returnTriggered = false
                                         dragScrollActive = false
                                     }
@@ -796,11 +890,8 @@ fun HoneycombScreen(
                                     try {
                                         scrollOffset.snapTo(current)
                                         directScrollOffset = Float.NaN
-                                        if (current < minScroll || current > maxScroll) {
-                                            scrollOffset.animateTo(
-                                                current.coerceIn(minScroll, maxScroll),
-                                                spring(dampingRatio = 0.64f, stiffness = 360f)
-                                            )
+                                        if (releaseRubber != 0f) {
+                                            animateRubberScrollToZero()
                                         } else {
                                             scrollOffset.updateBounds(lowerBound = minScroll, upperBound = maxScroll)
                                             try {
@@ -811,6 +902,15 @@ fun HoneycombScreen(
                                                     upperBound = Float.POSITIVE_INFINITY
                                                 )
                                             }
+                                            val edgeTarget = when {
+                                                scrollOffset.value <= minScroll + 0.5f && velocity < 0f -> minScroll
+                                                scrollOffset.value >= maxScroll - 0.5f && velocity > 0f -> maxScroll
+                                                else -> null
+                                            }
+                                            if (edgeTarget != null) {
+                                                scrollOffset.snapTo(edgeTarget)
+                                                animateInertialRubberScroll(velocity)
+                                            }
                                         }
                                     } finally {
                                         dragScrollActive = false
@@ -819,18 +919,13 @@ fun HoneycombScreen(
                             },
                             onDragCancel = {
                                 glidePressedKey = null
-                                val current = currentScrollOffsetValue()
+                                val current = currentScrollOffsetValue().coerceIn(minScroll, maxScroll)
                                 directScrollOffset = current
                                 scope.launch {
                                     try {
                                         scrollOffset.snapTo(current)
                                         directScrollOffset = Float.NaN
-                                        if (current < minScroll || current > maxScroll) {
-                                            scrollOffset.animateTo(
-                                                current.coerceIn(minScroll, maxScroll),
-                                                spring(dampingRatio = 0.64f, stiffness = 360f)
-                                            )
-                                        }
+                                        animateRubberScrollToZero()
                                     } finally {
                                         dragScrollActive = false
                                     }
@@ -843,6 +938,7 @@ fun HoneycombScreen(
                             scope.launch {
                                 scrollOffset.snapTo(current)
                                 directScrollOffset = Float.NaN
+                                animateRubberScrollToZero()
                                 dragScrollActive = false
                             }
                         }
@@ -867,7 +963,7 @@ fun HoneycombScreen(
             }
             val renderIndexes = remember(
                 rowInfo,
-                currentScroll,
+                visualScroll,
                 screenCenterY,
                 screenHeightPx,
                 iconSizePx,
@@ -878,7 +974,7 @@ fun HoneycombScreen(
             ) {
                 computeHoneycombRenderIndexes(
                     rows = rowInfo,
-                    currentScroll = currentScroll,
+                    currentScroll = visualScroll,
                     screenCenterY = screenCenterY,
                     screenHeightPx = screenHeightPx,
                     iconSizePx = iconSizePx,
@@ -905,13 +1001,13 @@ fun HoneycombScreen(
                 val isDragged = dragFromIndex == index
                 val slotCenter = Offset(
                     x = screenCenterX + visualPos.x,
-                    y = screenCenterY + visualPos.y + currentScroll
+                    y = screenCenterY + visualPos.y + visualScroll
                 )
                 val dragDisplayPointer = if (isDragged) {
                     clampHoneycombDisplayPointer(
                         pointer = dragVisualPointer ?: dragPointer ?: Offset(
                             screenCenterX + gridPos.x,
-                            screenCenterY + gridPos.y + currentScroll
+                            screenCenterY + gridPos.y + visualScroll
                         ),
                         screenWidthPx = screenWidthPx,
                         screenHeightPx = screenHeightPx,
@@ -998,7 +1094,7 @@ fun HoneycombScreen(
                     )
                     val edgeSpacingOffsetX = edgeSpacingCompressionHorizontalOffset(
                         centerX = screenCenterX + slotX,
-                        rowCenterY = screenCenterY + slotY + currentScroll,
+                        rowCenterY = screenCenterY + slotY + visualScroll,
                         screenCenterX = screenCenterX,
                         screenCenterY = screenCenterY,
                         screenHeight = screenHeightPx,
@@ -1009,7 +1105,7 @@ fun HoneycombScreen(
                     val effectiveItemBlur = reduceHoneycombBlurForFastScroll(itemBlur, reduceVisualLoad)
                     val itemShadowPx = if (reduceVisualLoad) iconShadowElevationPx * 0.62f else iconShadowElevationPx
                     val clickCenterX = screenCenterX + slotX
-                    val clickCenterY = screenCenterY + slotY + currentScroll
+                    val clickCenterY = screenCenterY + slotY + visualScroll
                     val baseFlowOffset = honeycombFlowOffset(
                         enabled = useFastFlowEffects,
                         rowCenterY = clickCenterY,
@@ -1053,7 +1149,7 @@ fun HoneycombScreen(
                                 val baseX = slotX
                                 val baseY = slotY
                                 val posX = screenCenterX + baseX + edgeSpacingOffsetX
-                                val pY = screenCenterY + baseY + currentScroll + baseFlowOffset
+                                val pY = screenCenterY + baseY + visualScroll + baseFlowOffset
                                 var actualCenterX = posX
                                 var actualCenterY = pY
                                 translationX = posX - iconSizePx / 2f
@@ -2084,11 +2180,32 @@ private fun MaterialDenseGridScreen(
                     .graphicsLayer {
                         translationX = dragOverlayPointer.x - dragOverlayBounds.width / 2f
                         translationY = dragOverlayPointer.y - dragOverlayBounds.height / 2f
-                        shadowElevation = iconShadowElevationPx
+                        shadowElevation = 0f
                         shape = materialIconShape
-                        clip = true
+                        clip = false
                         scaleX = 1.04f
                         scaleY = 1.04f
+                    }
+                    .drawBehind {
+                        val shadowWidth = size.width * 0.88f
+                        val shadowHeight = size.height * 0.82f
+                        val left = (size.width - shadowWidth) / 2f
+                        val top = (size.height - shadowHeight) / 2f + size.height * 0.10f
+                        val radius = size.minDimension * 0.23f
+                        drawRoundRect(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Black.copy(alpha = 0.18f),
+                                    Color.Black.copy(alpha = 0.09f),
+                                    Color.Transparent
+                                ),
+                                startY = top,
+                                endY = top + shadowHeight
+                            ),
+                            topLeft = Offset(left, top),
+                            size = Size(shadowWidth, shadowHeight),
+                            cornerRadius = CornerRadius(radius, radius)
+                        )
                     }
                     .padding(iconInnerPadding)
             ) {

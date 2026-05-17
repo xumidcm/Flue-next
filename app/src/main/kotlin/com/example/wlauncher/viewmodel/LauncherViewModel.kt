@@ -276,10 +276,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun swapWidgetSlots(fromIndex: Int, toIndex: Int) {
         if (fromIndex == toIndex) return
         val current = _sideScreenWidgetSlots.value
-        if (fromIndex !in current.indices || toIndex !in current.indices) return
+        if (fromIndex !in current.indices || toIndex !in 0..current.size) return
         val next = current.toMutableList()
         val item = next.removeAt(fromIndex)
-        next.add(toIndex, item)
+        val insertIndex = if (toIndex > fromIndex) toIndex - 1 else toIndex
+        next.add(insertIndex.coerceIn(0, next.size), item)
         updateSideScreenWidgets(next)
     }
 

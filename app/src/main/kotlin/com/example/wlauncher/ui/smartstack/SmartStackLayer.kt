@@ -270,6 +270,25 @@ private data class SideScreenWidgetCardItem(
     val keyOverride: String? = null
 )
 
+private sealed interface WidgetLayoutSection {
+    val cards: List<SideScreenWidgetCardItem>
+    val stableKey: String
+
+    data class FullWidth(val card: SideScreenWidgetCardItem) : WidgetLayoutSection {
+        override val cards: List<SideScreenWidgetCardItem> = listOf(card)
+        override val stableKey: String = "full:${card.stableKey()}"
+    }
+
+    data class Columns(
+        val left: List<SideScreenWidgetCardItem>,
+        val right: List<SideScreenWidgetCardItem>
+    ) : WidgetLayoutSection {
+        override val cards: List<SideScreenWidgetCardItem> = left + right
+        override val stableKey: String =
+            "cols:${cards.joinToString(separator = "|") { it.stableKey() }}"
+    }
+}
+
 private data class WidgetSlotLayout(
     val spanColumns: Int = 2,
     val heightDp: Int? = null
@@ -393,27 +412,67 @@ private fun resizeWidgetSlotLayout(
     return WidgetSlotLayout(spanColumns = nextSpan, heightDp = nextHeight)
 }
 
-private fun groupWidgetCardsIntoRows(widgetCards: List<SideScreenWidgetCardItem>): List<List<SideScreenWidgetCardItem>> {
+private fun groupWidgetCardsIntoSections(widgetCards: List<SideScreenWidgetCardItem>): List<WidgetLayoutSection> {
     if (widgetCards.isEmpty()) return emptyList()
-    val rows = mutableListOf<List<SideScreenWidgetCardItem>>()
-    var index = 0
-    while (index < widgetCards.size) {
-        val current = widgetCards[index]
-        if (current.layout.spanColumns >= 2) {
-            rows += listOf(current)
-            index += 1
+    val sections = mutableListOf<WidgetLayoutSection>()
+    val leftColumn = mutableListOf<SideScreenWidgetCardItem>()
+    val rightColumn = mutableListOf<SideScreenWidgetCardItem>()
+    var leftHeight = 0
+    var rightHeight = 0
+
+    fun flushColumns() {
+        if (leftColumn.isEmpty() && rightColumn.isEmpty()) return
+        sections += WidgetLayoutSection.Columns(
+            left = leftColumn.toList(),
+            right = rightColumn.toList()
+        )
+        leftColumn.clear()
+        rightColumn.clear()
+        leftHeight = 0
+        rightHeight = 0
+    }
+
+    widgetCards.forEach { card ->
+        if (card.layout.spanColumns >= 2) {
+            flushColumns()
+            sections += WidgetLayoutSection.FullWidth(card)
+        } else if (leftHeight <= rightHeight) {
+            leftColumn += card
+            leftHeight += card.estimatedHeightDp()
         } else {
-            val next = widgetCards.getOrNull(index + 1)
-            if (next != null && next.layout.spanColumns < 2) {
-                rows += listOf(current, next)
-                index += 2
-            } else {
-                rows += listOf(current)
-                index += 1
-            }
+            rightColumn += card
+            rightHeight += card.estimatedHeightDp()
         }
     }
-    return rows
+    flushColumns()
+    return sections
+}
+
+private fun SideScreenWidgetCardItem.estimatedHeightDp(): Int {
+    return (layout.heightDp ?: if (layout.spanColumns == 1) 156 else 170)
+        .coerceIn(WIDGET_CARD_MIN_HEIGHT_DP, WIDGET_CARD_MAX_HEIGHT_DP)
+}
+
+private fun widgetInsertionIndexFor(
+    point: Offset,
+    widgetCards: List<SideScreenWidgetCardItem>,
+    boundsByKey: Map<String, Rect>
+): Int? {
+    val targets = widgetCards.mapNotNull { card ->
+        boundsByKey[card.stableKey()]?.let { bounds -> card to bounds }
+    }
+    if (targets.isEmpty()) return null
+    val columnTargets = targets.filter { (_, bounds) ->
+        val horizontalSlop = bounds.width * 0.35f
+        point.x in (bounds.left - horizontalSlop)..(bounds.right + horizontalSlop)
+    }
+    val relevantTargets = (columnTargets.ifEmpty { targets })
+        .sortedWith(compareBy<Pair<SideScreenWidgetCardItem, Rect>> { it.second.top }.thenBy { it.second.left })
+    val beforeTarget = relevantTargets.firstOrNull { (_, bounds) -> point.y < bounds.center.y }
+    if (beforeTarget != null) return beforeTarget.first.widgetIndex
+    val afterTarget = relevantTargets.last()
+    val maxInsertIndex = widgetCards.maxOf { it.widgetIndex } + 1
+    return (afterTarget.first.widgetIndex + 1).coerceIn(0, maxInsertIndex)
 }
 
 private fun widgetResizeModeAt(
@@ -890,7 +949,7 @@ fun WidgetPageLayer(
             }
         }
     }
-    val widgetRows = remember(widgetCards) { groupWidgetCardsIntoRows(widgetCards) }
+    val widgetSections = remember(widgetCards) { groupWidgetCardsIntoSections(widgetCards) }
     val widgetCardCenters = remember { mutableStateMapOf<String, Offset>() }
     val widgetCardBounds = remember { mutableStateMapOf<String, Rect>() }
     var editMode by remember { mutableStateOf(false) }
@@ -901,7 +960,7 @@ fun WidgetPageLayer(
     var activeWidgetResize by remember { mutableStateOf<ActiveWidgetResize?>(null) }
     var editGestureLocked by remember { mutableStateOf(false) }
     var widgetDragAutoScrollPx by remember { mutableFloatStateOf(0f) }
-    var pendingWidgetDropTargetKey by remember { mutableStateOf<String?>(null) }
+    var pendingWidgetDropIndex by remember { mutableStateOf<Int?>(null) }
     var widgetPageRootOffset by remember { mutableStateOf(Offset.Zero) }
     val removingWidgetKeys = remember { mutableStateListOf<String>() }
     val enteringWidgetKeys = remember { mutableStateListOf<String>() }
@@ -1080,7 +1139,7 @@ fun WidgetPageLayer(
             draggingWidgetOffset = Offset.Zero
             activeWidgetResize = null
             widgetDragAutoScrollPx = 0f
-            pendingWidgetDropTargetKey = null
+            pendingWidgetDropIndex = null
             editGestureLocked = false
         }
     }
@@ -1117,6 +1176,259 @@ fun WidgetPageLayer(
         val availableWidth = maxWidth - leftSafeInset
         val contentWidth = availableWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
         val screenHeightPx = with(density) { maxHeight.toPx() }
+        val widgetColumnGap = 10.dp
+        val singleColumnWidth = (contentWidth - widgetColumnGap) / 2f
+        val singleColumnWidthDp = with(density) { singleColumnWidth.toPx().toDp().value }
+
+        @Composable
+        fun EditableWidgetCard(
+            card: SideScreenWidgetCardItem,
+            targetWidth: Dp
+        ) {
+            val cardKey = card.stableKey()
+            val resizing = activeWidgetResize?.takeIf { it.cardKey == cardKey }
+            val displayLayout = resizing
+                ?.let {
+                    resizeWidgetSlotLayout(
+                        it.startLayout,
+                        it.delta,
+                        density,
+                        it.resizeMode,
+                        it.singleColumnWidthDp
+                    )
+                }
+                ?: card.layout
+            val cardWidth = if (displayLayout.spanColumns >= 2) {
+                contentWidth
+            } else {
+                targetWidth
+            }
+            val animatedCardWidth by animateDpAsState(
+                targetValue = cardWidth,
+                animationSpec = spring(stiffness = 620f, dampingRatio = 0.86f),
+                label = "widget_card_width"
+            )
+            val shellShape = RoundedCornerShape(28.dp)
+            val jiggleActive = editMode && !showPicker
+
+            key(cardKey) {
+                AnimatedVisibility(
+                    visible = cardKey !in removingWidgetKeys && cardKey !in enteringWidgetKeys,
+                    enter = fadeIn(tween(180)) + scaleIn(tween(220), initialScale = 0.88f),
+                    exit = fadeOut(tween(150)) + scaleOut(tween(170), targetScale = 0.86f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(animatedCardWidth)
+                            .then(
+                                if (resizing != null) {
+                                    Modifier
+                                } else {
+                                    Modifier.animateContentSize(
+                                        animationSpec = spring(stiffness = 560f, dampingRatio = 0.86f)
+                                    )
+                                }
+                            )
+                            .onGloballyPositioned { coordinates ->
+                                val position = coordinates.positionInRoot()
+                                val width = coordinates.size.width.toFloat()
+                                val height = coordinates.size.height.toFloat()
+                                widgetCardCenters[cardKey] = Offset(
+                                    position.x + width / 2f,
+                                    position.y + height / 2f
+                                )
+                                widgetCardBounds[cardKey] = Rect(
+                                    left = position.x,
+                                    top = position.y,
+                                    right = position.x + width,
+                                    bottom = position.y + height
+                                )
+                            }
+                            .graphicsLayer {
+                                val dragging = draggingWidgetKey == cardKey
+                                alpha = if (dragging) 0.36f else 1f
+                            }
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(shellShape)
+                                .background(Color.White.copy(alpha = if (editMode) 0.05f else 0.03f))
+                                .padding(4.dp)
+                        ) {
+                            WidgetCard(
+                                widget = card.widget,
+                                layout = displayLayout,
+                                cardWidth = cardWidth,
+                                widgetRepository = widgetRepository,
+                                appWidgetHost = appWidgetHost,
+                                onLongPress = if (!editMode && !showPicker) {
+                                    {
+                                        editMode = true
+                                        editGestureLocked = true
+                                    }
+                                } else {
+                                    null
+                                },
+                                onMeasuredHeight = {}
+                            )
+                        }
+                        if (jiggleActive) {
+                            val blockerInteraction = remember { MutableInteractionSource() }
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .clip(shellShape)
+                                    .clickable(
+                                        interactionSource = blockerInteraction,
+                                        indication = null,
+                                        onClick = {}
+                                    )
+                                    .pointerInput(cardKey, card.layout, editMode) {
+                                        awaitEachGesture {
+                                            val down = awaitPrimaryDown()
+                                            down.consume()
+                                            if (!editMode) return@awaitEachGesture
+                                            val resizeMode = widgetResizeModeAt(
+                                                position = down.position,
+                                                widthPx = size.width.toFloat(),
+                                                heightPx = size.height.toFloat(),
+                                                hotspotPx = widgetBorderHotspotPx
+                                            )
+                                            if (resizeMode != null) {
+                                                vibrateHaptic(context)
+                                                activeWidgetResize = ActiveWidgetResize(
+                                                    cardKey = cardKey,
+                                                    startLayout = card.layout,
+                                                    resizeMode = resizeMode,
+                                                    singleColumnWidthDp = singleColumnWidthDp
+                                                )
+                                                draggingWidgetKey = null
+                                                draggingWidgetOffset = Offset.Zero
+                                                widgetDragAutoScrollPx = 0f
+                                            } else {
+                                                val hold = awaitLongPressOrRelease(
+                                                    pointerId = down.id,
+                                                    downPosition = down.position,
+                                                    timeoutMillis = widgetResizeLongPressMs
+                                                )
+                                                if (hold !is PressHoldResult.LongPress) return@awaitEachGesture
+                                                vibrateHaptic(context)
+                                                hold.change.consume()
+                                                activeWidgetResize = null
+                                                draggingWidgetKey = cardKey
+                                                draggingWidgetOffset = Offset.Zero
+                                                widgetDragAutoScrollPx = 0f
+                                                pendingWidgetDropIndex = null
+                                            }
+                                            while (true) {
+                                                val event = awaitPointerEvent()
+                                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                                if (!change.pressed) break
+                                                val dragAmount = change.positionChange()
+                                                if (dragAmount == Offset.Zero) continue
+                                                change.consume()
+                                                val resize = activeWidgetResize
+                                                if (resize?.cardKey == cardKey) {
+                                                    activeWidgetResize = resize.copy(delta = resize.delta + dragAmount)
+                                                } else if (draggingWidgetKey == cardKey) {
+                                                    draggingWidgetOffset += dragAmount
+                                                    val cardCenter = widgetCardCenters[cardKey]
+                                                    val pointerScreenY = cardCenter?.y?.let { centerY ->
+                                                        centerY - size.height / 2f +
+                                                            draggingWidgetOffset.y +
+                                                            change.position.y
+                                                    }
+                                                    when {
+                                                        pointerScreenY != null && pointerScreenY < autoScrollEdgePx -> {
+                                                            val progress = ((autoScrollEdgePx - pointerScreenY) / autoScrollEdgePx)
+                                                                .coerceIn(0f, 1.2f)
+                                                            widgetDragAutoScrollPx = -autoScrollMaxVelocityPx * progress
+                                                        }
+                                                        pointerScreenY != null && pointerScreenY > screenHeightPx - autoScrollEdgePx -> {
+                                                            val progress = ((pointerScreenY - (screenHeightPx - autoScrollEdgePx)) / autoScrollEdgePx)
+                                                                .coerceIn(0f, 1.2f)
+                                                            widgetDragAutoScrollPx = autoScrollMaxVelocityPx * progress
+                                                        }
+                                                        else -> {
+                                                            widgetDragAutoScrollPx = 0f
+                                                        }
+                                                    }
+                                                    val sourceCenter = widgetCardCenters[cardKey]
+                                                    pendingWidgetDropIndex = sourceCenter
+                                                        ?.plus(draggingWidgetOffset)
+                                                        ?.let { point ->
+                                                            widgetInsertionIndexFor(
+                                                                point = point,
+                                                                widgetCards = widgetCards,
+                                                                boundsByKey = widgetCardBounds
+                                                            )
+                                                        }
+                                                }
+                                            }
+                                            if (draggingWidgetKey == cardKey) {
+                                                val targetIndex = pendingWidgetDropIndex
+                                                if (
+                                                    targetIndex != null &&
+                                                    targetIndex != card.widgetIndex &&
+                                                    targetIndex != card.widgetIndex + 1
+                                                ) {
+                                                    onSwapWidget(card.widgetIndex, targetIndex)
+                                                }
+                                            }
+                                            activeWidgetResize?.takeIf { it.cardKey == cardKey }?.let { resize ->
+                                                persistWidgetLayout(
+                                                    card,
+                                                    resizeWidgetSlotLayout(
+                                                        resize.startLayout,
+                                                        resize.delta,
+                                                        density,
+                                                        resize.resizeMode,
+                                                        resize.singleColumnWidthDp
+                                                    )
+                                                )
+                                            }
+                                            activeWidgetResize = null
+                                            draggingWidgetKey = null
+                                            draggingWidgetOffset = Offset.Zero
+                                            widgetDragAutoScrollPx = 0f
+                                            pendingWidgetDropIndex = null
+                                        }
+                                    }
+                            )
+                            WidgetResizeHandles(
+                                shape = shellShape,
+                                modifier = Modifier.matchParentSize()
+                            )
+                            WidgetEditIconButton(
+                                enabled = true,
+                                backgroundColor = Color(0xFFE53935),
+                                onClick = {
+                                    clearAllocatedWidget(card.widgetIndex)
+                                    removingWidgetKeys += cardKey
+                                    scope.launch {
+                                        delay(170)
+                                        onRemoveWidget(card.widgetIndex)
+                                    }
+                                },
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(8.dp)
+                            ) {
+                                Text(
+                                    text = "-",
+                                    color = Color.White,
+                                    fontSize = 22.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -1161,291 +1473,65 @@ fun WidgetPageLayer(
                     EmptyWidgetCard(width = contentWidth)
                 }
             } else {
-                val rowGap = 10.dp
                 items(
-                    items = widgetRows,
-                    key = { row -> row.joinToString(separator = "|") { it.stableKey() } },
-                    contentType = { "widget_page_row" }
-                ) { row ->
-                    val rowIsResizing = activeWidgetResize?.cardKey?.let { activeKey ->
-                        row.any { it.stableKey() == activeKey }
+                    items = widgetSections,
+                    key = { section -> section.stableKey },
+                    contentType = { section ->
+                        when (section) {
+                            is WidgetLayoutSection.Columns -> "widget_page_columns"
+                            is WidgetLayoutSection.FullWidth -> "widget_page_full"
+                        }
+                    }
+                ) { section ->
+                    val sectionIsResizing = activeWidgetResize?.cardKey?.let { activeKey ->
+                        section.cards.any { it.stableKey() == activeKey }
                     } == true
-                    Row(
-                        modifier = Modifier
-                            .width(contentWidth)
-                            .animateItem(
-                                fadeInSpec = tween(160),
-                                placementSpec = spring(stiffness = 520f, dampingRatio = 0.86f),
-                                fadeOutSpec = tween(160)
-                            )
-                            .then(
-                                if (rowIsResizing) {
-                                    Modifier
-                                } else {
-                                    Modifier.animateContentSize(
-                                        animationSpec = spring(stiffness = 560f, dampingRatio = 0.86f)
-                                    )
-                                }
-                            ),
-                        horizontalArrangement = Arrangement.spacedBy(rowGap)
-                    ) {
-                        row.forEach { card ->
-                            val cardKey = card.stableKey()
-                            val resizing = activeWidgetResize?.takeIf { it.cardKey == cardKey }
-                            val displayLayout = resizing
-                                ?.let {
-                                    resizeWidgetSlotLayout(
-                                        it.startLayout,
-                                        it.delta,
-                                        density,
-                                        it.resizeMode,
-                                        it.singleColumnWidthDp
-                                    )
-                                }
-                                ?: card.layout
-                            val cardWidth = if (displayLayout.spanColumns >= 2) {
-                                contentWidth
+                    val sectionModifier = Modifier
+                        .width(contentWidth)
+                        .animateItem(
+                            fadeInSpec = tween(160),
+                            placementSpec = spring(stiffness = 520f, dampingRatio = 0.86f),
+                            fadeOutSpec = tween(160)
+                        )
+                        .then(
+                            if (sectionIsResizing) {
+                                Modifier
                             } else {
-                                (contentWidth - rowGap) / 2f
+                                Modifier.animateContentSize(
+                                    animationSpec = spring(stiffness = 560f, dampingRatio = 0.86f)
+                                )
                             }
-                            val animatedCardWidth by animateDpAsState(
-                                targetValue = cardWidth,
-                                animationSpec = spring(stiffness = 620f, dampingRatio = 0.86f),
-                                label = "widget_card_width"
-                            )
-                            val singleColumnWidth = (contentWidth - rowGap) / 2f
-                            val singleColumnWidthDp = with(density) { singleColumnWidth.toPx().toDp().value }
-                            val shellShape = RoundedCornerShape(28.dp)
-                            val jiggleActive = editMode && !showPicker
-                            key(cardKey) {
-                                AnimatedVisibility(
-                                    visible = cardKey !in removingWidgetKeys && cardKey !in enteringWidgetKeys,
-                                    enter = fadeIn(tween(180)) + scaleIn(tween(220), initialScale = 0.88f),
-                                    exit = fadeOut(tween(150)) + scaleOut(tween(170), targetScale = 0.86f)
+                        )
+                    when (section) {
+                        is WidgetLayoutSection.FullWidth -> {
+                            Box(modifier = sectionModifier) {
+                                EditableWidgetCard(section.card, contentWidth)
+                            }
+                        }
+                        is WidgetLayoutSection.Columns -> {
+                            Row(
+                                modifier = sectionModifier,
+                                horizontalArrangement = Arrangement.spacedBy(widgetColumnGap)
+                            ) {
+                                Column(
+                                    modifier = Modifier.width(singleColumnWidth),
+                                    verticalArrangement = Arrangement.spacedBy(widgetColumnGap)
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .width(animatedCardWidth)
-                                            .then(
-                                                if (resizing != null) {
-                                                    Modifier
-                                                } else {
-                                                    Modifier.animateContentSize(
-                                                        animationSpec = spring(stiffness = 560f, dampingRatio = 0.86f)
-                                                    )
-                                                }
-                                            )
-                                            .animateItem(
-                                                fadeInSpec = tween(180),
-                                                placementSpec = spring(stiffness = 520f, dampingRatio = 0.84f),
-                                                fadeOutSpec = tween(180)
-                                            )
-                                            .onGloballyPositioned { coordinates ->
-                                                val position = coordinates.positionInRoot()
-                                                val width = coordinates.size.width.toFloat()
-                                                val height = coordinates.size.height.toFloat()
-                                                widgetCardCenters[cardKey] = Offset(
-                                                    position.x + width / 2f,
-                                                    position.y + height / 2f
-                                                )
-                                                widgetCardBounds[cardKey] = Rect(
-                                                    left = position.x,
-                                                    top = position.y,
-                                                    right = position.x + width,
-                                                    bottom = position.y + height
-                                                )
-                                            }
-                                            .graphicsLayer {
-                                                val dragging = draggingWidgetKey == cardKey
-                                                alpha = if (dragging) 0.36f else 1f
-                                            }
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clip(shellShape)
-                                                .background(Color.White.copy(alpha = if (editMode) 0.05f else 0.03f))
-                                                .padding(4.dp)
-                                        ) {
-                                            WidgetCard(
-                                                widget = card.widget,
-                                                layout = displayLayout,
-                                                cardWidth = cardWidth,
-                                                widgetRepository = widgetRepository,
-                                                appWidgetHost = appWidgetHost,
-                                                onLongPress = if (!editMode && !showPicker) {
-                                                    {
-                                                        editMode = true
-                                                        editGestureLocked = true
-                                                    }
-                                                } else {
-                                                    null
-                                                },
-                                                onMeasuredHeight = {}
-                                            )
-                                        }
-                                        if (jiggleActive) {
-                                            val blockerInteraction = remember { MutableInteractionSource() }
-                                            Box(
-                                                 modifier = Modifier
-                                                     .matchParentSize()
-                                                     .clip(shellShape)
-                                                     .clickable(
-                                                         interactionSource = blockerInteraction,
-                                                         indication = null,
-                                                        onClick = {}
-                                                    )
-                                                    .pointerInput(cardKey, card.layout, editMode) {
-                                                    awaitEachGesture {
-                                                        val down = awaitPrimaryDown()
-                                                        down.consume()
-                                                        if (!editMode) return@awaitEachGesture
-                                                        val resizeMode = widgetResizeModeAt(
-                                                            position = down.position,
-                                                            widthPx = size.width.toFloat(),
-                                                            heightPx = size.height.toFloat(),
-                                                            hotspotPx = widgetBorderHotspotPx
-                                                        )
-                                                        if (resizeMode != null) {
-                                                            vibrateHaptic(context)
-                                                            activeWidgetResize = ActiveWidgetResize(
-                                                                cardKey = cardKey,
-                                                                startLayout = card.layout,
-                                                                resizeMode = resizeMode,
-                                                                singleColumnWidthDp = singleColumnWidthDp
-                                                            )
-                                                            draggingWidgetKey = null
-                                                            draggingWidgetOffset = Offset.Zero
-                                                            widgetDragAutoScrollPx = 0f
-                                                        } else {
-                                                            val hold = awaitLongPressOrRelease(
-                                                                pointerId = down.id,
-                                                                downPosition = down.position,
-                                                                timeoutMillis = widgetResizeLongPressMs
-                                                            )
-                                                            if (hold !is PressHoldResult.LongPress) return@awaitEachGesture
-                                                            vibrateHaptic(context)
-                                                            hold.change.consume()
-                                                            activeWidgetResize = null
-                                                            draggingWidgetKey = cardKey
-                                                            draggingWidgetOffset = Offset.Zero
-                                                            widgetDragAutoScrollPx = 0f
-                                                            pendingWidgetDropTargetKey = null
-                                                        }
-                                                        while (true) {
-                                                            val event = awaitPointerEvent()
-                                                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                                                            if (!change.pressed) break
-                                                            val dragAmount = change.positionChange()
-                                                            if (dragAmount == Offset.Zero) continue
-                                                            change.consume()
-                                                            val resize = activeWidgetResize
-                                                            if (resize?.cardKey == cardKey) {
-                                                                activeWidgetResize = resize.copy(delta = resize.delta + dragAmount)
-                                                            } else if (draggingWidgetKey == cardKey) {
-                                                                draggingWidgetOffset += dragAmount
-                                                                val cardCenter = widgetCardCenters[cardKey]
-                                                                val pointerScreenY = cardCenter?.y?.let { centerY ->
-                                                                    centerY - size.height / 2f +
-                                                                        draggingWidgetOffset.y +
-                                                                        change.position.y
-                                                                }
-                                                                 when {
-                                                                     pointerScreenY != null && pointerScreenY < autoScrollEdgePx -> {
-                                                                         val progress = ((autoScrollEdgePx - pointerScreenY) / autoScrollEdgePx)
-                                                                             .coerceIn(0f, 1.2f)
-                                                                         widgetDragAutoScrollPx = -autoScrollMaxVelocityPx * progress
-                                                                     }
-                                                                     pointerScreenY != null && pointerScreenY > screenHeightPx - autoScrollEdgePx -> {
-                                                                         val progress = ((pointerScreenY - (screenHeightPx - autoScrollEdgePx)) / autoScrollEdgePx)
-                                                                             .coerceIn(0f, 1.2f)
-                                                                         widgetDragAutoScrollPx = autoScrollMaxVelocityPx * progress
-                                                                     }
-                                                                     else -> {
-                                                                         widgetDragAutoScrollPx = 0f
-                                                                    }
-                                                                }
-                                                                val sourceCenter = widgetCardCenters[cardKey]
-                                                                val draggedCenter = sourceCenter?.plus(draggingWidgetOffset)
-                                                                val threshold = with(density) { 96.dp.toPx() }
-                                                                val target = draggedCenter?.let { center ->
-                                                                    widgetCardCenters
-                                                                        .asSequence()
-                                                                        .filter { (key, _) -> key != cardKey }
-                                                                        .map { (key, targetCenter) -> key to (targetCenter - center).getDistance() }
-                                                                        .minByOrNull { it.second }
-                                                                        ?.takeIf { it.second <= threshold }
-                                                                        ?.first
-                                                                }
-                                                                pendingWidgetDropTargetKey = target
-                                                            }
-                                                        }
-                                                        if (draggingWidgetKey == cardKey) {
-                                                            val targetCard = pendingWidgetDropTargetKey
-                                                                ?.let { targetKey -> widgetCards.firstOrNull { it.stableKey() == targetKey } }
-                                                            if (targetCard != null && targetCard.widgetIndex != card.widgetIndex) {
-                                                                onSwapWidget(card.widgetIndex, targetCard.widgetIndex)
-                                                            }
-                                                        }
-                                                        activeWidgetResize?.takeIf { it.cardKey == cardKey }?.let { resize ->
-                                                            persistWidgetLayout(
-                                                                card,
-                                                                resizeWidgetSlotLayout(
-                                                                    resize.startLayout,
-                                                                    resize.delta,
-                                                                    density,
-                                                                    resize.resizeMode,
-                                                                    resize.singleColumnWidthDp
-                                                                )
-                                                            )
-                                                        }
-                                                        activeWidgetResize = null
-                                                        draggingWidgetKey = null
-                                                        draggingWidgetOffset = Offset.Zero
-                                                        widgetDragAutoScrollPx = 0f
-                                                        pendingWidgetDropTargetKey = null
-                                                    }
-                                                }
-                                         )
-                                        if (jiggleActive) {
-                                            WidgetResizeHandles(
-                                                shape = shellShape,
-                                                modifier = Modifier.matchParentSize()
-                                            )
-                                        }
-                                        WidgetEditIconButton(
-                                            enabled = true,
-                                            backgroundColor = Color(0xFFE53935),
-                                            onClick = {
-                                                clearAllocatedWidget(card.widgetIndex)
-                                                removingWidgetKeys += cardKey
-                                                scope.launch {
-                                                    delay(170)
-                                                    onRemoveWidget(card.widgetIndex)
-                                                }
-                                            },
-                                            modifier = Modifier
-                                                .align(Alignment.TopEnd)
-                                                .padding(8.dp)
-                                        ) {
-                                            Text(
-                                                text = "-",
-                                                color = Color.White,
-                                                fontSize = 22.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                textAlign = TextAlign.Center
-                                            )
-                                        }
-                                        }
+                                    section.left.forEach { card ->
+                                        EditableWidgetCard(card, singleColumnWidth)
+                                    }
+                                }
+                                Column(
+                                    modifier = Modifier.width(singleColumnWidth),
+                                    verticalArrangement = Arrangement.spacedBy(widgetColumnGap)
+                                ) {
+                                    section.right.forEach { card ->
+                                        EditableWidgetCard(card, singleColumnWidth)
                                     }
                                 }
                             }
                         }
-                        if (row.size == 1 && row.first().layout.spanColumns < 2) {
-                            Spacer(Modifier.width((contentWidth - rowGap) / 2f))
-                        }
                     }
-                }
                 }
             }
         }
@@ -1515,6 +1601,8 @@ fun WidgetPageLayer(
             onDismiss = { showPicker = false }
         )
     }
+}
+
 }
 
 @Composable
