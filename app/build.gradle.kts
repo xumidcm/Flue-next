@@ -34,6 +34,9 @@ val hasReleaseSigning = listOf(
     signingKeyAlias,
     signingKeyPassword
 ).all { !it.isNullOrBlank() }
+val disableReleaseMinify = providers.gradleProperty("flue.disableReleaseMinify")
+    .map { it.toBoolean() }
+    .orElse(false)
 
 android {
     namespace = "com.flue.launcher"
@@ -64,8 +67,9 @@ android {
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
-            isMinifyEnabled = true
-            isShrinkResources = true
+            val minifyRelease = !disableReleaseMinify.get()
+            isMinifyEnabled = minifyRelease
+            isShrinkResources = minifyRelease
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -74,8 +78,8 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_21
-        targetCompatibility = JavaVersion.VERSION_21
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     buildFeatures {

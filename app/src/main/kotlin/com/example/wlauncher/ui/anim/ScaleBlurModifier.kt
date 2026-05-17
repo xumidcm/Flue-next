@@ -44,9 +44,7 @@ fun Modifier.scaleBlurAlpha(
             alpha = animAlpha.value
             translationX = animTransX.value * screenWidth
             translationY = animTransY.value * screenHeight
-            if (origin != null) {
-                transformOrigin = TransformOrigin(origin.x, origin.y)
-            }
+            transformOrigin = TransformOrigin(origin?.x ?: 0.5f, origin?.y ?: 0.5f)
         }
         .platformBlur(
             blurRadiusDp = animBlur.value,

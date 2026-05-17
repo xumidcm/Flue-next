@@ -17,16 +17,23 @@ object DingDingCatWatchFaceStorage {
 
     fun importZip(context: Context, uri: Uri): LunchWatchFaceDescriptor {
         val tempZip = File.createTempFile("dingdingcat_import_", ".zip", context.cacheDir)
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(tempZip).use { output -> input.copyTo(output) }
+            } ?: error("无法读取 ZIP 文件")
+            return importZipFile(context, tempZip)
+        } finally {
+            tempZip.delete()
+        }
+    }
+
+    fun importZipFile(context: Context, archive: File): LunchWatchFaceDescriptor {
         val tempExtract = File(context.cacheDir, "dingdingcat_extract_${System.currentTimeMillis()}").apply {
             deleteRecursively()
             mkdirs()
         }
         try {
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(tempZip).use { output -> input.copyTo(output) }
-            } ?: error("无法读取 ZIP 文件")
-
-            ZipFile(tempZip).use { zip ->
+            ZipFile(archive).use { zip ->
                 val dialEntry = findDialEntry(zip) ?: error("找不到 dial.json")
                 val basePath = dialEntry.name.substringBeforeLast('/', missingDelimiterValue = "")
                 zip.entries().asSequence().forEach { entry ->
@@ -44,7 +51,6 @@ object DingDingCatWatchFaceStorage {
             val storedDial = DingDingCatDialParser.parse(finalDir)
             return storedDial.toDescriptor(finalDir)
         } finally {
-            tempZip.delete()
             tempExtract.deleteRecursively()
         }
     }
@@ -79,16 +85,15 @@ object DingDingCatWatchFaceStorage {
         val hasGravity = drawPoints.any { it.pointType == "PICTRUE_EFFECT_GRAVITY" }
         val hasTapTrigger = drawPoints.any { point ->
             val animator = point.animator ?: return@any false
-            point.pieces.size > 1 &&
-                animator.triggerType == 1024 &&
+            animator.triggerType == 1024 &&
                 animator.startWithStatusPlay.not()
         }
         val hasAnimation = drawPoints.any { it.pieces.size > 1 }
         return when {
-            hasGravity -> "叮叮猫重力表盘"
-            hasTapTrigger -> "叮叮猫互动表盘"
-            hasAnimation -> "叮叮猫动态表盘"
-            else -> "叮叮猫图片表盘"
+            hasGravity -> "旧版重力表盘"
+            hasTapTrigger -> "旧版互动表盘"
+            hasAnimation -> "旧版动态表盘"
+            else -> "旧版图片表盘"
         }
     }
 

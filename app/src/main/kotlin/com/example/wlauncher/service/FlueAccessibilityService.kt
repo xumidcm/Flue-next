@@ -1,8 +1,11 @@
 package com.flue.launcher.service
 
 import android.accessibilityservice.AccessibilityService
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,6 +43,21 @@ class FlueAccessibilityService : AccessibilityService() {
         private var activeService: FlueAccessibilityService? = null
         private val _connected = MutableStateFlow(false)
         val connected: StateFlow<Boolean> = _connected.asStateFlow()
+
+        fun isConnected(): Boolean = activeService != null || _connected.value
+
+        fun isEnabled(context: Context): Boolean {
+            val component = ComponentName(context, FlueAccessibilityService::class.java)
+            val enabledServices = Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            )
+            return enabledServices
+                ?.split(':')
+                ?.mapNotNull { ComponentName.unflattenFromString(it) }
+                ?.any { it.packageName == component.packageName && it.className == component.className }
+                ?: false
+        }
 
         fun lockScreen(): Boolean {
             val service = activeService ?: return false

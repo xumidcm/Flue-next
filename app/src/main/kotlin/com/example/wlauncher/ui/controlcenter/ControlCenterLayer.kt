@@ -154,6 +154,7 @@ private const val CONTROL_NOTIFICATION_STACK_HORIZONTAL_INSET_DP = 8f
 private const val MUSIC_TEXT_FADE_EDGE_DP = 18f
 private const val MUSIC_TEXT_FADE_TRANSITION_MS = 80
 private const val MUSIC_TEXT_MARQUEE_SIDE_PADDING_DP = 8f
+private const val CONTROL_CENTER_DISMISS_DRAG_THRESHOLD_DP = 54f
 
 private data class ControlCenterMediaState(
     val controller: MediaController? = null,
@@ -218,6 +219,7 @@ fun ControlCenterLayer(
     var bluetoothEnabled by remember(context) { mutableStateOf(isBluetoothLikelyEnabled(context)) }
     var dndEnabled by remember(context) { mutableStateOf(isDndEnabled(context)) }
     val mediaState = rememberMediaState(context)
+    val density = LocalDensity.current
     val verticalScrollState = rememberScrollState()
     val toggleScrollState = rememberScrollState()
     val verticalOverscroll = remember { Animatable(0f) }
@@ -226,6 +228,7 @@ fun ControlCenterLayer(
     var bottomDismissArmed by remember { mutableStateOf(false) }
     var fullScreenDismissTriggered by remember { mutableStateOf(false) }
     var controlCenterGestureLocked by remember { mutableStateOf(false) }
+    val dismissDragThresholdPx = with(density) { CONTROL_CENTER_DISMISS_DRAG_THRESHOLD_DP.dp.toPx() }
     val lockControlCenterGesture: (Boolean) -> Unit = remember {
         { locked ->
             controlCenterGestureLocked = locked
@@ -256,7 +259,7 @@ fun ControlCenterLayer(
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 if (available.y < 0f && atBottom) {
-                    if (bottomDismissArmed) {
+                    if (bottomDismissArmed || verticalOverscroll.value <= -dismissDragThresholdPx) {
                         onDismissToFace()
                     } else {
                         overscrollScope.launch {
@@ -286,6 +289,11 @@ fun ControlCenterLayer(
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (controlCenterGestureLocked) return available
                 if (verticalOverscroll.value != 0f) {
+                    if (verticalOverscroll.value <= -dismissDragThresholdPx) {
+                        onDismissToFace()
+                        verticalOverscroll.snapTo(0f)
+                        return available
+                    }
                     verticalOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
                     return available
                 }
@@ -773,7 +781,6 @@ fun ControlCenterLayer(
                     ControlCenterNotificationPreviewCard(
                         notificationGroups = notificationGroups,
                         notificationAccessGranted = notificationAccessGranted,
-                        onGestureLockChange = lockControlCenterGesture,
                         onClick = onOpenNotifications
                     )
                 }
@@ -864,7 +871,7 @@ private fun ControlCenterNotificationPreviewCard(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(108.dp)
+            .height(102.dp)
     ) {
         repeat((count - 1).coerceIn(0, 2)) { index ->
             Box(
@@ -880,7 +887,7 @@ private fun ControlCenterNotificationPreviewCard(
                         alpha = 0.54f - index * 0.16f
                     }
                     .padding(horizontal = (CONTROL_NOTIFICATION_STACK_HORIZONTAL_INSET_DP * (index + 1)).dp)
-                    .clip(RoundedCornerShape(30.dp))
+                    .clip(RoundedCornerShape(28.dp))
                     .background(notificationPreviewStackBackColor(launcherStyle.cardColor, index))
             )
         }
@@ -892,7 +899,7 @@ private fun ControlCenterNotificationPreviewCard(
                     scaleX = cardScale
                     scaleY = cardScale
                 }
-                .clip(RoundedCornerShape(30.dp))
+                .clip(RoundedCornerShape(28.dp))
                 .background(cardColor)
                 .controlCenterPressGesture(
                     pressedState = pressedState,
@@ -904,8 +911,8 @@ private fun ControlCenterNotificationPreviewCard(
         ) {
             Box(
                 modifier = Modifier
-                    .size(62.dp)
-                    .clip(RoundedCornerShape(20.dp))
+                    .size(46.dp)
+                    .clip(CircleShape)
                     .background(launcherStyle.pressedCardColor),
                 contentAlignment = Alignment.Center
             ) {
@@ -916,7 +923,7 @@ private fun ControlCenterNotificationPreviewCard(
                         contentDescription = null,
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(10.dp),
+                            .padding(7.dp),
                         contentScale = ContentScale.Fit
                     )
                 } else {

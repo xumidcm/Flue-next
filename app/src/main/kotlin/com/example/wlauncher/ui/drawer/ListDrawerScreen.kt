@@ -26,8 +26,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -38,6 +39,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -119,6 +121,7 @@ fun ListDrawerScreen(
     bottomBlurRadiusDp: Float = LIST_EDGE_ITEM_BLUR_DP,
     rotaryHapticsEnabled: Boolean = true,
     active: Boolean = true,
+    initialScrollResetKey: Int = 0,
     leftSafeInsetPercent: Int = 0,
     appListScalePercent: Int = 100,
     entryProgress: Float = 1f,
@@ -137,7 +140,7 @@ fun ListDrawerScreen(
     onScrollToTop: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val listState = rememberLazyListState()
+    val listState = remember { LazyListState() }
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
     val context = LocalContext.current
@@ -165,9 +168,10 @@ fun ListDrawerScreen(
     var fastScrollResetJob by remember { mutableStateOf<Job?>(null) }
     var containerTopInRoot by remember { mutableFloatStateOf(0f) }
     var returnTriggered by remember { mutableStateOf(false) }
-    val visibleIndexes by remember {
+    var directLaunchTopLockObservedKey by remember { mutableStateOf(0) }
+    val visibleItemMap by remember(listState) {
         derivedStateOf {
-            listState.layoutInfo.visibleItemsInfo.map { it.index }
+            listState.layoutInfo.visibleItemsInfo.associateBy { it.index }
         }
     }
     val overscrollLimitPx = with(density) { configuration.screenHeightDp.dp.toPx() / 2f }
@@ -184,16 +188,20 @@ fun ListDrawerScreen(
     val scaledIconTextGap = (14.dp * appListScale).coerceIn(8.dp, 28.dp)
     val scaledTextSizeSp = (16f * appListScale).coerceIn(10f, 32f).sp
     val fisheyeMinScale = fisheyeMinScale(fisheyeStrengthPercent)
+    val listFlingBehavior = rememberAppListOverScrollerFlingBehavior()
 
-    LaunchedEffect(visibleIndexes, dragFromIndex, dragCurrentIndex, apps.size) {
-        val retain = buildSet {
-            addAll(visibleIndexes)
-            dragFromIndex?.let(::add)
-            dragCurrentIndex?.let(::add)
-        }
-        itemCenters.keys.retainAll(retain)
-        itemHeights.keys.retainAll(retain)
-        itemLaunchCenters.keys.retainAll(retain)
+    LaunchedEffect(listState, dragFromIndex, dragCurrentIndex, apps.size) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.index }.toSet() }
+            .collect { visibleIndexes ->
+                val retain = buildSet {
+                    addAll(visibleIndexes)
+                    dragFromIndex?.let(::add)
+                    dragCurrentIndex?.let(::add)
+                }
+                itemCenters.keys.retainAll(retain)
+                itemHeights.keys.retainAll(retain)
+                itemLaunchCenters.keys.retainAll(retain)
+            }
     }
 
     LaunchedEffect(focusReady) {
@@ -210,6 +218,23 @@ fun ListDrawerScreen(
         } else {
             returnTriggered = false
             focusRequester.requestFocusAfterFirstFrame()
+        }
+    }
+
+    LaunchedEffect(initialScrollResetKey, active, apps.size) {
+        if (
+            initialScrollResetKey > 0 &&
+            initialScrollResetKey != directLaunchTopLockObservedKey &&
+            active &&
+            apps.isNotEmpty() &&
+            dragFromIndex == null &&
+            longPressedApp == null
+        ) {
+            directLaunchTopLockObservedKey = initialScrollResetKey
+            wheelMomentumJob?.cancel()
+            overscroll.stop()
+            overscroll.snapTo(0f)
+            listState.scrollToItem(0, 0)
         }
     }
 
@@ -312,11 +337,13 @@ fun ListDrawerScreen(
                                         returnTriggered = true
                                         onScrollToTop()
                                     }
+                                    overscroll.stop()
                                     overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
                                     returnTriggered = false
                                     return available
                                 }
                                 if (overscroll.value != 0f) {
+                                    overscroll.stop()
                                     overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
                                     return available
                                 }
@@ -339,6 +366,7 @@ fun ListDrawerScreen(
                                     returnTriggered = true
                                     onScrollToTop()
                                 }
+                                overscroll.stop()
                                 overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
                                 returnTriggered = false
                             }
@@ -561,23 +589,21 @@ fun ListDrawerScreen(
             val launchOriginX = with(density) {
                 (leftSafeInset + 12.dp + scaledRowHorizontalPadding + scaledIconSize * 0.5f).toPx()
             }.coerceIn(0f, screenWidthPx) / screenWidthPx
-            val visibleItems by remember {
-                derivedStateOf {
-                    listState.layoutInfo.visibleItemsInfo
-                }
-            }
-            val fisheyeVisibleItems = listState.layoutInfo.visibleItemsInfo
+            val fisheyeVisibleItems = visibleItemMap
             val fisheyeScrollTick = listState.firstVisibleItemIndex * 100_000 +
                 listState.firstVisibleItemScrollOffset
             val dragRowShift = dragFromIndex?.let {
-                itemHeights[it] ?: visibleItems.firstOrNull { item -> item.index == it }?.size?.toFloat()
+                itemHeights[it] ?: fisheyeVisibleItems[it]?.size?.toFloat()
             } ?: with(density) { estimatedItemHeight.toPx() }
             val dragOverlayHeightPx = dragFromIndex?.let {
-                itemHeights[it] ?: visibleItems.firstOrNull { item -> item.index == it }?.size?.toFloat()
+                itemHeights[it] ?: fisheyeVisibleItems[it]?.size?.toFloat()
             } ?: with(density) { (scaledIconSize + scaledRowVerticalPadding * 2f).toPx() }
-            val reduceListVisualLoad = (fastScrollActive || listState.isScrollInProgress) &&
+            val reduceListVisualLoad = fastScrollActive &&
                 dragFromIndex == null &&
                 longPressedApp == null
+            val effectiveListFisheyeEnabled =
+                fisheyeEnabled &&
+                    (active || entryProgress > 0.001f)
             AppListEntryBackground(
                 maxWidth = containerMaxWidth,
                 maxHeight = containerMaxHeight,
@@ -629,6 +655,7 @@ fun ListDrawerScreen(
 
             LazyColumn(
                 state = listState,
+                flingBehavior = listFlingBehavior,
                 userScrollEnabled = dragFromIndex == null && longPressedApp == null,
                 modifier = Modifier
                     .fillMaxSize()
@@ -646,16 +673,17 @@ fun ListDrawerScreen(
                     key = { _, app -> app.componentKey },
                     contentType = { _, _ -> "app_row" }
                 ) { index, app ->
-                    val itemInfo = fisheyeVisibleItems.firstOrNull { it.index == index }
+                    val itemInfo = fisheyeVisibleItems[index]
                     val itemScale = computeItemScale(
                         itemInfo = itemInfo,
+                        fallbackCenterY = itemCenters[index] ?: listViewportCenterY,
                         screenCenterY = listViewportCenterY,
                         screenHeight = screenHeightPx,
                         rowHeight = with(density) { estimatedItemHeight.toPx() },
                         rangeRows = fisheyeRangeRows,
                         minScale = fisheyeMinScale,
-                        fisheyeEnabled = fisheyeEnabled,
-                        scrollTick = fisheyeScrollTick
+                        fisheyeEnabled = effectiveListFisheyeEnabled,
+                        scrollTick = if (effectiveListFisheyeEnabled) fisheyeScrollTick else 0
                     )
                     val rowCenterY = itemInfo?.let { it.offset + it.size / 2f } ?: listViewportCenterY
                     val flowOffset = computeFastFlowOffset(
@@ -694,11 +722,15 @@ fun ListDrawerScreen(
                         dragCurrentIndex = dragCurrentIndex,
                         dragRowShift = dragRowShift
                     )
-                    val animatedDisplacement by animateFloatAsState(
-                        targetValue = displacedTarget,
-                        animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
-                        label = "list_drag_displacement"
-                    )
+                    val animatedDisplacement = if (reduceListVisualLoad && !isDragged) {
+                        displacedTarget
+                    } else {
+                        animateFloatAsState(
+                            targetValue = displacedTarget,
+                            animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
+                            label = "list_drag_displacement"
+                        ).value
+                    }
                     val displayDisplacement = if (isDragged) dragOffsetY else animatedDisplacement
                     val pressedScale by animateFloatAsState(
                         targetValue = when {
@@ -723,6 +755,11 @@ fun ListDrawerScreen(
                         label = "list_press_overlay"
                     )
                     val iconPressedOverlay = pressedOverlay.takeIf { it > 0f } ?: 0f
+                    val listIconShape = if (uiStyle == UiStyle.APPLE_WATCH) {
+                        CircleShape
+                    } else {
+                        RoundedCornerShape((14.dp * appListScale).coerceIn(10.dp, 24.dp))
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -738,7 +775,7 @@ fun ListDrawerScreen(
                                 scaleY = targetScale
                                 val rowAlpha = if (isDragged || isSettling) {
                                     0f
-                                } else if (fisheyeEnabled) {
+                                } else if (effectiveListFisheyeEnabled) {
                                     itemScale.coerceIn(0.3f, 1f)
                                 } else {
                                     1f
@@ -781,7 +818,7 @@ fun ListDrawerScreen(
                                 .onGloballyPositioned { coords ->
                                     itemLaunchCenters[index] = coords.boundsInRoot().center
                                 }
-                                .clip(RoundedCornerShape((14.dp * appListScale).coerceIn(10.dp, 24.dp)))
+                                .clip(listIconShape)
                                 .drawWithContent {
                                     drawContent()
                                     if (iconPressedOverlay > 0f) {
@@ -834,7 +871,7 @@ fun ListDrawerScreen(
                     Box(
                         modifier = Modifier
                             .size(scaledIconSize)
-                            .clip(RoundedCornerShape((14.dp * appListScale).coerceIn(10.dp, 24.dp)))
+                            .clip(if (uiStyle == UiStyle.APPLE_WATCH) CircleShape else RoundedCornerShape((14.dp * appListScale).coerceIn(10.dp, 24.dp)))
                     ) {
                         Image(
                             bitmap = draggedApp.iconForDisplay(
@@ -926,7 +963,10 @@ private fun consumeListOverscroll(
         else -> current
     }
     if (next == current) return Offset.Zero
-    scope.launch { overscroll.snapTo(next) }
+    scope.launch {
+        overscroll.stop()
+        overscroll.snapTo(next)
+    }
     return Offset(0f, availableY)
 }
 
@@ -975,6 +1015,7 @@ private fun findListItemCenter(
 @Suppress("UNUSED_PARAMETER")
 private fun computeItemScale(
     itemInfo: androidx.compose.foundation.lazy.LazyListItemInfo?,
+    fallbackCenterY: Float,
     screenCenterY: Float,
     screenHeight: Float,
     rowHeight: Float,
@@ -984,8 +1025,7 @@ private fun computeItemScale(
     scrollTick: Int = 0
 ): Float {
     if (!fisheyeEnabled) return 1f
-    if (itemInfo == null) return 1f
-    val itemCenterY = itemInfo.offset + itemInfo.size / 2f
+    val itemCenterY = itemInfo?.let { it.offset + it.size / 2f } ?: fallbackCenterY
     val dist = abs(itemCenterY - screenCenterY)
     val maxDist = (rowHeight * rangeRows.coerceIn(1, 8)).coerceIn(rowHeight, screenHeight)
     val t = (dist / maxDist).coerceIn(0f, 1f)

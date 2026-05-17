@@ -40,6 +40,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -89,6 +90,7 @@ import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceHost
 import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceHost
+import com.flue.launcher.watchface.jbwatch.JbWatchFaceHost
 import androidx.compose.animation.core.Spring
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -202,6 +204,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appOpenOrigin by vm.appOpenOrigin.collectAsStateWithLifecycle()
     val splashIcon by vm.splashIcon.collectAsStateWithLifecycle()
     val splashDelay by vm.splashDelay.collectAsStateWithLifecycle()
+    val directLaunchAppListEnabled by vm.directLaunchAppListEnabled.collectAsStateWithLifecycle()
+    val directLaunchAppListPreferenceLoaded by vm.directLaunchAppListPreferenceLoaded.collectAsStateWithLifecycle()
     val currentLaunchIcon by vm.currentLaunchIcon.collectAsStateWithLifecycle()
     val honeycombCols by vm.honeycombCols.collectAsStateWithLifecycle()
     val honeycombEdgeBlurRadius by vm.honeycombEdgeBlurRadius.collectAsStateWithLifecycle()
@@ -215,7 +219,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appListFisheyeStrengthPercent by vm.appListFisheyeStrengthPercent.collectAsStateWithLifecycle()
     val appListEdgeSpacingCompressionEnabled by vm.appListEdgeSpacingCompressionEnabled.collectAsStateWithLifecycle()
     val appListScalePercent by vm.appListScalePercent.collectAsStateWithLifecycle()
-    val appListWatchFaceColors by vm.appListWatchFaceColors.collectAsStateWithLifecycle()
     val appListRowBorderEnabled by vm.appListRowBorderEnabled.collectAsStateWithLifecycle()
     val appListFoldersEnabled by vm.appListFoldersEnabled.collectAsStateWithLifecycle()
     val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsStateWithLifecycle()
@@ -334,9 +337,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
         photoOptions = photoWatchOptions,
         videoOptions = videoWatchOptions,
         watchFaceDescriptor = selectedWatchFace,
-        enabled = appListWatchFaceColors
+        enabled = false
     )
-    val useAppListWatchFaceColors = appListWatchFaceColors && appListThemeColor.alpha > 0.01f
+    val useAppListWatchFaceColors = false
     val appListColors = appListPalette(
         seed = appListThemeColor,
         darkMode = effectiveDarkMode,
@@ -366,6 +369,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val notificationStackTint = appListColors.item
     val openWatchFaceChooser: () -> Unit = remember(context) {
         {
+            vibrateHaptic(context)
             context.startActivity(
                 Intent(context, SettingsActivity::class.java)
                     .putExtra(EXTRA_SETTINGS_DESTINATION, SETTINGS_DESTINATION_WATCH_FACES)
@@ -387,16 +391,24 @@ fun LauncherScreen(vm: LauncherViewModel) {
             if (FlueAccessibilityService.lockScreen()) {
                 vibrateHaptic(context)
             } else {
-                Toast.makeText(context, "请先授权 Flue 无障碍服务", Toast.LENGTH_SHORT).show()
-                openAccessibilitySettings()
+                if (FlueAccessibilityService.isEnabled(context)) {
+                    Toast.makeText(context, "Flue 无障碍服务连接中，请稍后重试", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "请先授权 Flue 无障碍服务", Toast.LENGTH_SHORT).show()
+                    openAccessibilitySettings()
+                }
             }
         }
     }
     val openPowerDialogWithAccessibility: () -> Unit = remember(context, openAccessibilitySettings) {
         {
             if (!FlueAccessibilityService.openPowerDialog()) {
-                Toast.makeText(context, "请先授权 Flue 无障碍服务", Toast.LENGTH_SHORT).show()
-                openAccessibilitySettings()
+                if (FlueAccessibilityService.isEnabled(context)) {
+                    Toast.makeText(context, "Flue 无障碍服务连接中，请稍后重试", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "请先授权 Flue 无障碍服务", Toast.LENGTH_SHORT).show()
+                    openAccessibilitySettings()
+                }
             }
         }
     }
@@ -406,8 +418,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
     var prevState by remember { mutableStateOf(screenState) }
     var appListLayerReleaseHold by remember { mutableStateOf(false) }
+    var directLaunchAppListConsumed by rememberSaveable { mutableStateOf(false) }
+    var directLaunchStartupWindowOpen by rememberSaveable { mutableStateOf(true) }
+    var directLaunchInitialScrollResetKey by rememberSaveable { mutableStateOf(0) }
+    var directLaunchInitialScrollResetPosted by rememberSaveable { mutableStateOf(false) }
+    var widgetPageEditGestureLocked by rememberSaveable { mutableStateOf(false) }
+    val isDirectLaunchEnteringAppList =
+        directLaunchStartupWindowOpen && directLaunchAppListConsumed && screenState == ScreenState.Apps
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
-    val isOpeningAppList = prevState == ScreenState.Face && screenState == ScreenState.Apps
+    val isOpeningAppList =
+        (prevState == ScreenState.Face && screenState == ScreenState.Apps) || isDirectLaunchEnteringAppList
+    val isClosingAppListToFace = prevState == ScreenState.Apps && screenState == ScreenState.Face
     val isEnteringAppList = prevState != ScreenState.Apps && screenState == ScreenState.Apps
     var appListReturnOriginActive by remember {
         mutableStateOf(screenState == ScreenState.App && launchSourceState == ScreenState.Apps)
@@ -430,6 +451,51 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 }
             }
             else -> appListReturnOriginActive = false
+        }
+    }
+    LaunchedEffect(
+        directLaunchAppListPreferenceLoaded,
+        directLaunchAppListEnabled,
+        directLaunchAppListConsumed,
+        screenState
+    ) {
+        if (!directLaunchStartupWindowOpen || !directLaunchAppListPreferenceLoaded) return@LaunchedEffect
+        when {
+            !directLaunchAppListEnabled -> directLaunchStartupWindowOpen = false
+            directLaunchAppListConsumed && screenState == ScreenState.Apps -> {
+                delay(360)
+                directLaunchStartupWindowOpen = false
+            }
+        }
+    }
+    LaunchedEffect(
+        directLaunchAppListPreferenceLoaded,
+        directLaunchAppListEnabled,
+        directLaunchStartupWindowOpen,
+        screenState
+    ) {
+        if (
+            !directLaunchAppListConsumed &&
+            directLaunchStartupWindowOpen &&
+            directLaunchAppListPreferenceLoaded &&
+            directLaunchAppListEnabled &&
+            screenState == ScreenState.Face
+        ) {
+            vm.setState(ScreenState.Apps)
+            directLaunchAppListConsumed = true
+        }
+    }
+    LaunchedEffect(directLaunchAppListConsumed, screenState, apps.size) {
+        if (
+            directLaunchAppListConsumed &&
+            !directLaunchInitialScrollResetPosted &&
+            screenState == ScreenState.Apps
+        ) {
+            // Let Apps become active before issuing the one-shot top reset; otherwise
+            // direct launch can sample fish-eye positions from the hidden first frame.
+            delay(96)
+            directLaunchInitialScrollResetKey += 1
+            directLaunchInitialScrollResetPosted = true
         }
     }
     LaunchedEffect(screenState) {
@@ -501,7 +567,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         label = "app_list_background_progress"
     )
     val appListMotionSpec = when {
-        isOpeningAppList -> tween<Float>(durationMillis = 260)
+        isOpeningAppList || isClosingAppListToFace -> tween<Float>(durationMillis = 220)
         uiStyle == UiStyle.MATERIAL_3 && (isReturningFromApp || appListIconReturnActive) -> tween(
             durationMillis = 260,
             easing = FastOutSlowInEasing
@@ -512,6 +578,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appListLayerBlurEnabled = layerBlurEnabled
     val effectiveIconShadowEnabled = iconShadowEnabled && appListShadowsReady
     val fadeLaunch = launchSourceState == ScreenState.Stack || launchSourceState == ScreenState.Notifications
+    val directLaunchBlackBackdropVisible = directLaunchStartupWindowOpen && (
+        !directLaunchAppListPreferenceLoaded ||
+            (!directLaunchAppListConsumed && directLaunchAppListEnabled && screenState == ScreenState.Face) ||
+            (directLaunchAppListConsumed && screenState == ScreenState.Apps)
+        )
 
     LaunchedEffect(notificationSceneActive) {
         if (!notificationGestureActive) {
@@ -656,6 +727,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val suppressAppListHeavyEffects =
             reduceLegacyDrawerEffects ||
                 isOpeningAppList ||
+                isClosingAppListToFace ||
                 isReturningFromApp ||
                 appListIconReturnActive ||
                 appListReturnOriginActive ||
@@ -668,8 +740,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
             showNotification = false,
             showWidgetPage = showWidgetPage,
             showControlCenter = showControlCenter,
+            widgetsBackGestureLocked = widgetPageEditGestureLocked,
             modifier = Modifier.fillMaxSize()
         ) {
+            if (directLaunchBlackBackdropVisible) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(if (screenState == ScreenState.Face) 4f else 2f)
+                        .background(Color.Black)
+                )
+            }
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -685,7 +766,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     )
             ) {
                 AnimatedContent(
-                    targetState = if (watchFaceSelectionReady || selectedWatchFace.isBuiltin || selectedWatchFaceId == BUILT_IN_WATCHFACE_ID) {
+                    targetState = if (
+                        watchFaceSelectionReady ||
+                        selectedWatchFace.isBuiltin ||
+                        selectedWatchFaceId == BUILT_IN_WATCHFACE_ID ||
+                        (
+                            selectedWatchFace.id == selectedWatchFaceId &&
+                                (selectedWatchFace.isDingDingCat || selectedWatchFace.isJbWatch) &&
+                                !selectedWatchFace.sourceDirPath.isNullOrBlank()
+                            )
+                    ) {
                         selectedWatchFace.stableKey
                     } else {
                         "loading"
@@ -735,6 +825,39 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 refreshToken = watchFaceRefreshToken,
                                 fillScreen = dingDingCatFillScreen,
                                 playbackSpeedPercent = dingDingCatPlaybackSpeedPercent,
+                                onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
+                                onDoubleTap = if (
+                                    doubleTapLockScreenEnabled &&
+                                    launcherInteractive &&
+                                    screenState == ScreenState.Face &&
+                                    !sideSceneOverlayActive
+                                ) lockScreenWithAccessibility else null,
+                                onLoadFailure = { descriptor, error ->
+                                    val rootCause = generateSequence(error) { it.cause }.last()
+                                    vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
+                                }
+                            )
+                            if (watchFaceBottomFadeEnabled) {
+                                WatchFaceBottomFadeOverlay(
+                                    color = watchFaceFadePalette.fadeEdge,
+                                    heightDp = honeycombBottomFade,
+                                    blurRadiusDp = if (blurEnabled && edgeBlurEnabled) honeycombEdgeBlurRadius else 0f
+                                )
+                            }
+                            WatchFaceStatusIndicatorOverlay(
+                                showStatusIndicators = watchFaceStatusIndicators,
+                                hasNotifications = showNotification && notificationGroups.isNotEmpty(),
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(top = 18.dp)
+                            )
+                        }
+                    } else if (selectedWatchFace.isJbWatch) {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            JbWatchFaceHost(
+                                descriptor = selectedWatchFace,
+                                isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
+                                refreshToken = watchFaceRefreshToken,
                                 onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
                                 onDoubleTap = if (
                                     doubleTapLockScreenEnabled &&
@@ -829,6 +952,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         fastScrollOptimizationEnabled = honeycombFastScrollOptimization,
                         rotaryHapticsEnabled = rotaryHapticsEnabled,
                         active = screenState == ScreenState.Apps,
+                        initialScrollResetKey = directLaunchInitialScrollResetKey,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         appListScalePercent = appListScalePercent,
                         folderOpen = openFolder != null,
@@ -868,6 +992,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         bottomBlurRadiusDp = honeycombEdgeBlurRadius,
                         rotaryHapticsEnabled = rotaryHapticsEnabled,
                         active = screenState == ScreenState.Apps,
+                        initialScrollResetKey = directLaunchInitialScrollResetKey,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         appListScalePercent = appListScalePercent,
                         folderOpen = openFolder != null,
@@ -1032,7 +1157,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         onSetWidget = vm::setWidgetSlot,
                         onSwapWidget = vm::swapWidgetSlots,
-                        onRemoveWidget = vm::removeWidgetSlot
+                        onRemoveWidget = vm::removeWidgetSlot,
+                        onEditModeChange = { widgetPageEditGestureLocked = it }
                     )
                 }
             }

@@ -96,7 +96,7 @@ fun DingDingCatWatchFaceHost(
         val sourceDir = descriptor.sourceDirPath?.let(::File)
         val result = withContext(Dispatchers.IO) {
             runCatching {
-                require(sourceDir != null && sourceDir.isDirectory) { "叮叮猫表盘目录不存在" }
+                require(sourceDir != null && sourceDir.isDirectory) { "旧版表盘目录不存在" }
                 DingDingCatDialParser.parse(sourceDir)
             }
         }

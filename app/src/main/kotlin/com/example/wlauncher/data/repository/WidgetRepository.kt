@@ -41,19 +41,21 @@ class WidgetRepository(private val context: Context) {
 
     fun parseSlotValue(raw: String?): WidgetInfo? {
         if (raw.isNullOrBlank()) return null
-        val separatorIndex = raw.indexOf(':')
-        val widgetId = if (separatorIndex > 0) raw.substring(0, separatorIndex).toIntOrNull() else null
-        val widgetKey = if (separatorIndex > 0) raw.substring(separatorIndex + 1) else raw
+        val baseValue = raw.substringBefore('#')
+        val separatorIndex = baseValue.indexOf(':')
+        val widgetId = if (separatorIndex > 0) baseValue.substring(0, separatorIndex).toIntOrNull() else null
+        val widgetKey = if (separatorIndex > 0) baseValue.substring(separatorIndex + 1) else baseValue
         return getWidgetByKey(widgetKey = widgetKey, widgetId = widgetId ?: -1)
     }
 
     fun extractWidgetId(raw: String?): Int? {
         if (raw.isNullOrBlank()) return null
-        val separatorIndex = raw.indexOf(':')
+        val baseValue = raw.substringBefore('#')
+        val separatorIndex = baseValue.indexOf(':')
         return if (separatorIndex <= 0) {
             null
         } else {
-            raw.substring(0, separatorIndex).toIntOrNull()
+            baseValue.substring(0, separatorIndex).toIntOrNull()
         }
     }
 

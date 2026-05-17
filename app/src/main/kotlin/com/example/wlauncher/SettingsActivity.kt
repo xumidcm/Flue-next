@@ -61,6 +61,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Refresh
@@ -112,6 +113,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dudu.wearlauncher.utils.ILog
 import com.flue.launcher.backup.FlueBackupOptions
@@ -205,7 +209,12 @@ private enum class BlockingProgressCompletionAction {
     None,
     ExportBackup,
     ImportBackup,
-    DingDingCatImport
+    WatchFaceArchiveImport
+}
+
+private enum class WatchFaceArchiveImportMode {
+    WATCH,
+    LEGACY
 }
 
 class SettingsActivity : ComponentActivity() {
@@ -274,6 +283,7 @@ private fun SettingsRootScreen(
     launchConfig: SettingsLaunchConfig = SettingsLaunchConfig()
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val settingsScope = rememberCoroutineScope()
     val vm: LauncherViewModel = viewModel()
     val watchFaces by vm.availableWatchFaces.collectAsStateWithLifecycle()
@@ -292,6 +302,7 @@ private fun SettingsRootScreen(
     val animationOverrideEnabled by vm.animationOverrideEnabled.collectAsStateWithLifecycle()
     val splashIcon by vm.splashIcon.collectAsStateWithLifecycle()
     val splashDelay by vm.splashDelay.collectAsStateWithLifecycle()
+    val directLaunchAppListEnabled by vm.directLaunchAppListEnabled.collectAsStateWithLifecycle()
     val honeycombCols by vm.honeycombCols.collectAsStateWithLifecycle()
     val honeycombEdgeBlurRadius by vm.honeycombEdgeBlurRadius.collectAsStateWithLifecycle()
     val honeycombTopFade by vm.honeycombTopFade.collectAsStateWithLifecycle()
@@ -371,6 +382,9 @@ private fun SettingsRootScreen(
     val dingDingCatPlaybackSpeedPercent by vm.dingDingCatPlaybackSpeedPercent.collectAsStateWithLifecycle()
     val dingDingCatImportUnlocked by vm.dingDingCatImportUnlocked.collectAsStateWithLifecycle()
     val accessibilityServiceConnected by FlueAccessibilityService.connected.collectAsStateWithLifecycle()
+    var accessibilityServiceEnabled by remember {
+        mutableStateOf(FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected)
+    }
     val headerTime = rememberSettingsHeaderTime()
     val isZh = remember(context.resources.configuration) {
         context.resources.configuration.locales[0]?.language?.startsWith("zh") == true
@@ -382,6 +396,7 @@ private fun SettingsRootScreen(
     var backupImportOptions by remember { mutableStateOf(FlueBackupOptions()) }
     var backupBusy by remember { mutableStateOf(false) }
     var backupProgress by remember { mutableStateOf<BlockingProgressState?>(null) }
+    var watchFaceArchiveImportMode by remember { mutableStateOf(WatchFaceArchiveImportMode.WATCH) }
     val dingDingCatBackupAvailability = remember(dingDingCatImportUnlocked) {
         FlueBackupOptions(dingDingCatWatchFaces = dingDingCatImportUnlocked)
     }
@@ -413,17 +428,23 @@ private fun SettingsRootScreen(
             settingsScope.launch {
                 backupBusy = true
                 backupProgress = BlockingProgressState(
-                    title = "导入叮叮猫表盘",
-                    detail = "正在解包和解析 ZIP"
+                    title = "导入表盘",
+                    detail = when (watchFaceArchiveImportMode) {
+                        WatchFaceArchiveImportMode.WATCH -> "正在导入 jb_watch 表盘"
+                        WatchFaceArchiveImportMode.LEGACY -> "正在识别 jb_watch / 旧版表盘"
+                    }
                 )
-                val result = vm.importDingDingCatWatchFace(uri)
+                val result = vm.importWatchFaceArchive(
+                    uri = uri,
+                    allowDingDingCat = watchFaceArchiveImportMode == WatchFaceArchiveImportMode.LEGACY
+                )
                 result
                     .onSuccess { descriptor ->
                         backupProgress = BlockingProgressState(
                             title = "导入完成",
                             detail = descriptor.displayName,
                             completed = true,
-                            completionAction = BlockingProgressCompletionAction.DingDingCatImport
+                            completionAction = BlockingProgressCompletionAction.WatchFaceArchiveImport
                         )
                     }
                     .onFailure { error ->
@@ -529,7 +550,7 @@ private fun SettingsRootScreen(
         val state = backupProgress
         backupProgress = null
         backupBusy = false
-        if (state?.completionAction == BlockingProgressCompletionAction.DingDingCatImport) {
+        if (state?.completionAction == BlockingProgressCompletionAction.WatchFaceArchiveImport) {
             pageScrollPositions.remove(SettingsDestination.WATCH_FACES)
             destination = SettingsDestination.WATCH_FACES
             if (backStack.isEmpty() && !launchConfig.returnToFaceOnBack) {
@@ -545,13 +566,20 @@ private fun SettingsRootScreen(
         AlertDialog(
             onDismissRequest = { dingDingCatDeleteTarget = null },
             title = { Text("删除表盘") },
-            text = { Text("删除 ${target.displayName}？这个叮叮猫 ZIP 表盘会从 Flue 私有目录移除。") },
+            text = {
+                Text(
+                    when {
+                        target.isJbWatch -> "删除 ${target.displayName}？这个 .watch 表盘会从 Flue 私有目录移除。"
+                        else -> "删除 ${target.displayName}？这个旧版导入表盘会从 Flue 私有目录移除。"
+                    }
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
                         dingDingCatDeleteTarget = null
                         settingsScope.launch {
-                            val result = vm.deleteDingDingCatWatchFace(target.id)
+                            val result = vm.deleteImportedWatchFace(target.id)
                             result
                                 .onSuccess {
                                     Toast.makeText(context, "已删除 ${target.displayName}", Toast.LENGTH_SHORT).show()
@@ -603,6 +631,18 @@ private fun SettingsRootScreen(
 
     LaunchedEffect(Unit) {
         vm.refreshWatchFaces()
+    }
+    LaunchedEffect(accessibilityServiceConnected) {
+        accessibilityServiceEnabled = FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected
+    }
+    DisposableEffect(lifecycleOwner, context, accessibilityServiceConnected) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                accessibilityServiceEnabled = FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(hideFromRecents, context) {
@@ -926,7 +966,7 @@ private fun SettingsRootScreen(
                     } else {
                         null
                     },
-                    onDelete = if (descriptor.isDingDingCat) {
+                    onDelete = if (descriptor.isDingDingCat || descriptor.isJbWatch) {
                         { dingDingCatDeleteTarget = descriptor }
                     } else {
                         null
@@ -937,12 +977,33 @@ private fun SettingsRootScreen(
             item("watchface_refresh") {
                 ActionCard(
                     title = "重新扫描表盘",
-                    subtitle = "刷新已安装的 Lunch 兼容表盘",
+                    subtitle = "刷新launch表盘",
                     scale = itemFisheye(listState, "watchface_refresh", screenCenterY, screenHeightPx),
                     icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
-                    onClick = { vm.refreshWatchFaces(force = true) },
+                    onClick = { vm.refreshWatchFaces(force = true) }
+                )
+            }
+            item("watchface_import_archive") {
+                ActionCard(
+                    title = "导入表盘",
+                    subtitle = "导入jb_watch表盘",
+                    scale = itemFisheye(listState, "watchface_import_archive", screenCenterY, screenHeightPx),
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                    onClick = {
+                        watchFaceArchiveImportMode = WatchFaceArchiveImportMode.WATCH
+                        dingDingCatZipPicker.launch(
+                            arrayOf(
+                                "application/zip",
+                                "application/x-zip-compressed",
+                                "application/octet-stream",
+                                "application/*",
+                                "*/*"
+                            )
+                        )
+                    },
                     onLongPress = {
                         if (dingDingCatImportUnlocked) {
+                            watchFaceArchiveImportMode = WatchFaceArchiveImportMode.LEGACY
                             dingDingCatZipPicker.launch(
                                 arrayOf(
                                     "application/zip",
@@ -953,7 +1014,7 @@ private fun SettingsRootScreen(
                                 )
                             )
                         } else {
-                            Toast.makeText(context, "nothing...", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "请先开启隐藏的叮叮猫表盘，再长按导入旧版表盘", Toast.LENGTH_SHORT).show()
                         }
                     },
                     longPressDurationMs = 2_000L
@@ -1015,6 +1076,15 @@ private fun SettingsRootScreen(
                             vm.setDingDingCatPlaybackSpeedPercent((value / step).roundToInt() * step)
                         },
                         scale = itemFisheye(listState, "dingdingcat_playback_speed", screenCenterY, screenHeightPx)
+                    )
+                }
+            }
+            if (selectedWatchFace.isJbWatch) {
+                item("jbwatch_info") {
+                    MessageCard(
+                        text = ".watch 表盘已识别为 watch.xml / watch.pxml 结构，当前走开放 watch 标准兼容链。",
+                        background = Color(0x33007AFF),
+                        onClick = {}
                     )
                 }
             }
@@ -1222,6 +1292,19 @@ private fun SettingsRootScreen(
                     checked = splashIcon,
                     onToggle = { vm.setSplashIcon(it) },
                     scale = itemFisheye(listState, "splash_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            item("direct_launch_app_list") {
+                SettingsSwitchRow(
+                    title = if (isZh) "打开 Flue 直接进入应用列表" else "Open Flue to App List",
+                    subtitle = if (directLaunchAppListEnabled) {
+                        if (isZh) "启动后自动进入应用列表，仍可返回表盘" else "Start in the app list and keep back navigation to the watch face"
+                    } else {
+                        if (isZh) "默认先显示表盘" else "Show the watch face first by default"
+                    },
+                    checked = directLaunchAppListEnabled,
+                    onToggle = vm::setDirectLaunchAppListEnabled,
+                    scale = itemFisheye(listState, "direct_launch_app_list", screenCenterY, screenHeightPx)
                 )
             }
             if (splashIcon) {
@@ -1487,7 +1570,7 @@ private fun SettingsRootScreen(
             item("double_tap_lock_screen") {
                 SettingsSwitchRow(
                     title = if (isZh) "双击表盘息屏" else "Double Tap to Lock",
-                    subtitle = if (accessibilityServiceConnected) {
+                    subtitle = if (accessibilityServiceEnabled) {
                         if (isZh) "已授权无障碍，双击表盘会立即息屏" else "Accessibility is enabled; double tap the watch face to lock the screen"
                     } else {
                         if (isZh) "开启后跳转无障碍授权，仅用于双击息屏" else "Requires Accessibility; used only for double-tap screen lock"
@@ -1495,7 +1578,8 @@ private fun SettingsRootScreen(
                     checked = doubleTapLockScreenEnabled,
                     onToggle = { enabled ->
                         vm.setDoubleTapLockScreenEnabled(enabled)
-                        if (enabled && !accessibilityServiceConnected) {
+                        accessibilityServiceEnabled = FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected
+                        if (enabled && !accessibilityServiceEnabled) {
                             openAccessibilitySettings()
                         }
                     },
@@ -1505,7 +1589,7 @@ private fun SettingsRootScreen(
             item("power_menu_button") {
                 SettingsSwitchRow(
                     title = if (isZh) "控制中心电源按钮" else "Control Center Power Button",
-                    subtitle = if (accessibilityServiceConnected) {
+                    subtitle = if (accessibilityServiceEnabled) {
                         if (isZh) "已授权无障碍，点击控制中心电源图标会打开电源选项" else "Accessibility is enabled; the power icon opens power options"
                     } else {
                         if (isZh) "开启后跳转无障碍授权，仅用于打开电源选项" else "Requires Accessibility; used only to open power options"
@@ -1514,7 +1598,8 @@ private fun SettingsRootScreen(
                     enabled = true,
                     onToggle = { enabled ->
                         vm.setPowerMenuButtonEnabled(enabled)
-                        if (enabled && !accessibilityServiceConnected) {
+                        accessibilityServiceEnabled = FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected
+                        if (enabled && !accessibilityServiceEnabled) {
                             openAccessibilitySettings()
                         }
                     },
@@ -1545,7 +1630,7 @@ private fun SettingsRootScreen(
                     subtitle = if (appListWatchFaceColors) {
                         if (isZh) "从应用列表打开应用时，遮罩背景继续跟随表盘颜色" else "Tint the launch mask from the watch face when opening apps from the list"
                     } else {
-                        if (isZh) "打开应用遮罩使用深浅色黑白；应用列表背景始终纯黑或纯白" else "Use neutral black or white launch masks; the app list background stays pure black or white"
+                        if (isZh) "打开应用遮罩使用黑白中性色；应用列表背景保持纯黑或纯白" else "Use neutral black or white launch masks while the app list background stays pure black or white"
                     },
                     checked = appListWatchFaceColors,
                     onToggle = vm::setAppListWatchFaceColors,
@@ -1926,7 +2011,11 @@ private fun SettingsRootScreen(
                             if (dingDingCatVersionTapCount >= 5) {
                                 dingDingCatVersionTapCount = 0
                                 vm.setDingDingCatImportUnlocked(!dingDingCatImportUnlocked)
-                                Toast.makeText(context, "nothing...", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(
+                                    context,
+                                    if (dingDingCatImportUnlocked) "已关闭旧版表盘导入" else "已开启旧版表盘导入",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         },
                         scale = itemFisheye(listState, "about_card", screenCenterY, screenHeightPx)
@@ -1997,6 +2086,7 @@ private fun SettingsPageScaffold(
     val focusRequester = remember { FocusRequester() }
     val overscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = rememberCoroutineScope()
+    val settingsOverscrollLimitPx = 140f
     val visibleItemKeys by remember(listState) {
         derivedStateOf {
             listState.layoutInfo.visibleItemsInfo.mapNotNull { it.key }.toSet()
@@ -2013,19 +2103,31 @@ private fun SettingsPageScaffold(
                     lastVisible.index >= listState.layoutInfo.totalItemsCount - 1 &&
                     lastVisible.offset + lastVisible.size <= listState.layoutInfo.viewportEndOffset
                 if (available.y > 0f && atTop) {
-                    scope.launch { overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtMost(140f)) }
+                    scope.launch {
+                        overscroll.stop()
+                        overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtMost(settingsOverscrollLimitPx))
+                    }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 if (available.y < 0f && atBottom) {
-                    scope.launch { overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtLeast(-140f)) }
+                    scope.launch {
+                        overscroll.stop()
+                        overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtLeast(-settingsOverscrollLimitPx))
+                    }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 if (overscroll.value > 0f && available.y < 0f) {
-                    scope.launch { overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(0f)) }
+                    scope.launch {
+                        overscroll.stop()
+                        overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(0f))
+                    }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 if (overscroll.value < 0f && available.y > 0f) {
-                    scope.launch { overscroll.snapTo((overscroll.value + available.y).coerceAtMost(0f)) }
+                    scope.launch {
+                        overscroll.stop()
+                        overscroll.snapTo((overscroll.value + available.y).coerceAtMost(0f))
+                    }
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 return androidx.compose.ui.geometry.Offset.Zero
@@ -2033,6 +2135,7 @@ private fun SettingsPageScaffold(
 
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (overscroll.value != 0f) {
+                    overscroll.stop()
                     overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
                     return available
                 }
@@ -2973,8 +3076,8 @@ private fun BackupOptionsDialog(
                     if (availableOptions.dingDingCatWatchFaces) {
                         item("backup_dingdingcat") {
                             BackupOptionSwitch(
-                                title = "叮叮猫表盘",
-                                subtitle = "已经导入的叮叮猫 ZIP 表盘",
+                                title = "旧版表盘",
+                                subtitle = "已经导入的旧版 ZIP 表盘",
                                 checked = options.dingDingCatWatchFaces,
                                 onToggle = { onOptionsChange(options.copy(dingDingCatWatchFaces = it)) }
                             )
@@ -3090,8 +3193,8 @@ private fun LazyListScope.backupOptionRows(
     if (availableOptions.dingDingCatWatchFaces) {
         item("backup_dingdingcat") {
             BackupOptionSwitch(
-                title = "叮叮猫表盘",
-                subtitle = "已经导入的叮叮猫 ZIP 表盘",
+                title = "旧版表盘",
+                subtitle = "已经导入的旧版 ZIP 表盘",
                 checked = options.dingDingCatWatchFaces,
                 onToggle = { onOptionsChange(options.copy(dingDingCatWatchFaces = it)) },
                 scale = itemFisheye(listState, "backup_dingdingcat", screenCenterY, screenHeightPx)
@@ -3108,7 +3211,7 @@ private fun FlueBackupOptions.backupSummaryText(): String {
         if (sideScreenOrder) add("负一屏排序")
         if (photoWatchFace) add("图片表盘")
         if (videoWatchFace) add("视频表盘")
-        if (dingDingCatWatchFaces) add("叮叮猫表盘")
+        if (dingDingCatWatchFaces) add("旧版表盘")
     }
     return labels.takeIf { it.isNotEmpty() }?.joinToString(" · ") ?: "无"
 }

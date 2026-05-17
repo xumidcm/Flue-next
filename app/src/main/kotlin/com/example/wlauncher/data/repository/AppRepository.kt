@@ -11,6 +11,7 @@ import android.content.pm.ResolveInfo
 import android.content.pm.ShortcutInfo
 import android.os.Build
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
@@ -46,6 +47,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.roundToInt
 
@@ -61,6 +65,10 @@ class AppRepository(private val context: Context) {
         private const val TWO_TONE_BG = 0xFF1D1D1F.toInt()
         private const val TWO_TONE_FG = 0xFFF5F5F7.toInt()
         private const val BINARY_LUMINANCE_THRESHOLD = 0.8f
+        private const val APP_LIST_CACHE_DIR = "app_list_cache"
+        private const val APP_LIST_CACHE_ICON_DIR = "icons"
+        private const val APP_LIST_CACHE_FILE = "snapshot.json"
+        private const val APP_LIST_CACHE_VERSION = 1
     }
 
     private val _allApps = MutableStateFlow<List<AppInfo>>(emptyList())
@@ -80,6 +88,8 @@ class AppRepository(private val context: Context) {
     private var useLegacyCircularIcons = true
     private var useTwoToneIcons = false
     private var refreshGeneration = 0
+    @Volatile
+    private var freshScanPublished = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val refreshMonitor = Any()
     private var refreshJob: Job? = null
@@ -108,7 +118,8 @@ class AppRepository(private val context: Context) {
     }
 
     init {
-        refreshAsync()
+        val cachedSnapshotLoaded = restoreCachedSnapshot()
+        refreshAsync(initialDelayMs = if (cachedSnapshotLoaded) 1_400L else 0L)
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_PACKAGE_ADDED)
             addAction(Intent.ACTION_PACKAGE_REMOVED)
@@ -289,11 +300,13 @@ class AppRepository(private val context: Context) {
             installTimeCache.keys.retainAll(knownPackages)
         }
 
+        freshScanPublished = true
         itemCatalog = catalogMap + folderEntries.associateBy { it.componentKey }
         folderCatalog = storedFolders
         _allSelectableApps.value = sortApps(catalogItems)
         _allApps.value = sortApps(topLevelItems)
         applyFilters()
+        saveCachedSnapshot(catalogItems)
     }
 
     fun launchApp(appInfo: AppInfo): Boolean {
@@ -544,13 +557,224 @@ class AppRepository(private val context: Context) {
         }.getOrNull()
     }
 
-    private fun refreshAsync(iconSize: Int = currentIconSize) {
+    private fun refreshAsync(iconSize: Int = currentIconSize, initialDelayMs: Long = 0L) {
         synchronized(refreshMonitor) {
             refreshJob?.cancel()
             refreshJob = scope.launch {
+                if (initialDelayMs > 0L) {
+                    kotlinx.coroutines.delay(initialDelayMs)
+                }
                 refresh(iconSize)
             }
         }
+    }
+
+    private fun restoreCachedSnapshot(): Boolean {
+        val cacheRoot = appListCacheRoot()
+        val snapshotFile = File(cacheRoot, APP_LIST_CACHE_FILE)
+        if (!snapshotFile.isFile || freshScanPublished) return false
+        val catalogItems = runCatching {
+            val root = JSONObject(snapshotFile.readText(Charsets.UTF_8))
+            if (root.optInt("version") != APP_LIST_CACHE_VERSION) return@runCatching emptyList<AppInfo>()
+            val items = root.optJSONArray("items") ?: JSONArray()
+            buildList {
+                for (index in 0 until items.length()) {
+                    val item = items.optJSONObject(index) ?: continue
+                    readCachedSnapshotItem(cacheRoot, item)?.let(::add)
+                }
+            }
+        }.getOrDefault(emptyList())
+        if (catalogItems.isEmpty() || freshScanPublished) return false
+
+        val catalogMap = catalogItems.associateBy { it.componentKey }
+        val storedFolders = itemStorage.loadFolders()
+        val folderChildKeys = storedFolders.flatMap { folder -> folder.itemKeys }.toSet()
+        val folderEntries = storedFolders.mapNotNull { folder ->
+            val liveKeys = folder.itemKeys.filter { key -> catalogMap.containsKey(key) }
+            if (liveKeys.isEmpty()) {
+                null
+            } else {
+                createFolderEntry(
+                    folder = folder.copy(itemKeys = liveKeys),
+                    childItems = liveKeys.mapNotNull(catalogMap::get),
+                    iconSize = currentIconSize,
+                    useTwoToneIcons = useTwoToneIcons
+                )
+            }
+        }
+        if (freshScanPublished) return false
+        val topLevelItems = ArrayList<AppInfo>(catalogItems.size + folderEntries.size)
+        topLevelItems += catalogItems.filterNot { it.componentKey in folderChildKeys }
+        topLevelItems += folderEntries
+
+        itemCatalog = catalogMap + folderEntries.associateBy { it.componentKey }
+        folderCatalog = storedFolders
+        _allSelectableApps.value = sortApps(catalogItems)
+        _allApps.value = sortApps(topLevelItems)
+        applyFilters()
+        return true
+    }
+
+    private fun saveCachedSnapshot(catalogItems: List<AppInfo>) {
+        runCatching {
+            val cacheRoot = appListCacheRoot().apply { mkdirs() }
+            val iconDir = File(cacheRoot, APP_LIST_CACHE_ICON_DIR).apply { mkdirs() }
+            val items = JSONArray()
+            catalogItems
+                .asSequence()
+                .filterNot { it.isFolder }
+                .forEach { app ->
+                    val key = app.componentKey
+                    val stem = snapshotFileStem(key)
+                    val icon = writeCachedSnapshotIcon(cacheRoot, iconDir, stem, "icon", app.cachedIcon)
+                        ?: return@forEach
+                    val item = JSONObject().apply {
+                        put("label", app.label)
+                        put("packageName", app.packageName)
+                        put("activityName", app.activityName)
+                        put("itemType", app.itemType.name)
+                        put("builtIn", app.isBuiltInSettingsEntry)
+                        put("componentKey", key)
+                        put("installTime", synchronized(installTimeCache) {
+                            installTimeCache[app.packageName] ?: Long.MAX_VALUE
+                        })
+                        put("icon", icon)
+                        writeCachedSnapshotIcon(
+                            cacheRoot,
+                            iconDir,
+                            stem,
+                            "blur",
+                            app.cachedBlurredIcon
+                        )?.let { put("blur", it) }
+                        writeCachedSnapshotIcon(
+                            cacheRoot,
+                            iconDir,
+                            stem,
+                            "two_tone",
+                            app.cachedTwoToneIcon
+                        )?.let { put("twoTone", it) }
+                        writeCachedSnapshotIcon(
+                            cacheRoot,
+                            iconDir,
+                            stem,
+                            "two_tone_blur",
+                            app.cachedTwoToneBlurredIcon
+                        )?.let { put("twoToneBlur", it) }
+                        writeCachedSnapshotIcon(
+                            cacheRoot,
+                            iconDir,
+                            stem,
+                            "plain",
+                            app.cachedPlainIcon
+                        )?.let { put("plain", it) }
+                        writeCachedSnapshotIcon(
+                            cacheRoot,
+                            iconDir,
+                            stem,
+                            "plain_blur",
+                            app.cachedPlainBlurredIcon
+                        )?.let { put("plainBlur", it) }
+                        writeCachedSnapshotIcon(
+                            cacheRoot,
+                            iconDir,
+                            stem,
+                            "plain_two_tone",
+                            app.cachedPlainTwoToneIcon
+                        )?.let { put("plainTwoTone", it) }
+                        writeCachedSnapshotIcon(
+                            cacheRoot,
+                            iconDir,
+                            stem,
+                            "plain_two_tone_blur",
+                            app.cachedPlainTwoToneBlurredIcon
+                        )?.let { put("plainTwoToneBlur", it) }
+                        app.shortcutIntentUri?.let { put("shortcutIntentUri", it) }
+                        app.pinnedShortcutId?.let { put("pinnedShortcutId", it) }
+                    }
+                    items.put(item)
+                }
+            val root = JSONObject().apply {
+                put("version", APP_LIST_CACHE_VERSION)
+                put("generatedAt", System.currentTimeMillis())
+                put("items", items)
+            }
+            val output = File(cacheRoot, APP_LIST_CACHE_FILE)
+            val temp = File(cacheRoot, "$APP_LIST_CACHE_FILE.tmp")
+            temp.writeText(root.toString(), Charsets.UTF_8)
+            if (!temp.renameTo(output)) {
+                output.writeText(root.toString(), Charsets.UTF_8)
+                temp.delete()
+            }
+        }
+    }
+
+    private fun readCachedSnapshotItem(cacheRoot: File, item: JSONObject): AppInfo? {
+        val label = item.optString("label").takeIf(String::isNotBlank) ?: return null
+        val packageName = item.optString("packageName")
+        val activityName = item.optString("activityName").takeIf(String::isNotBlank) ?: return null
+        val itemType = runCatching {
+            AppListItemType.valueOf(item.optString("itemType", AppListItemType.APP.name))
+        }.getOrDefault(AppListItemType.APP)
+        if (itemType == AppListItemType.FOLDER) return null
+        val icon = readCachedSnapshotIcon(cacheRoot, item.optString("icon"))
+            ?: return null
+        val blurredIcon = readCachedSnapshotIcon(cacheRoot, item.optString("blur")) ?: icon
+        val installTime = item.optLong("installTime", Long.MAX_VALUE)
+        synchronized(installTimeCache) {
+            installTimeCache[packageName] = installTime
+        }
+        return AppInfo(
+            label = label,
+            packageName = packageName,
+            activityName = activityName,
+            cachedIcon = icon,
+            cachedBlurredIcon = blurredIcon,
+            cachedTwoToneIcon = readCachedSnapshotIcon(cacheRoot, item.optString("twoTone")),
+            cachedTwoToneBlurredIcon = readCachedSnapshotIcon(cacheRoot, item.optString("twoToneBlur")),
+            cachedPlainIcon = readCachedSnapshotIcon(cacheRoot, item.optString("plain")),
+            cachedPlainBlurredIcon = readCachedSnapshotIcon(cacheRoot, item.optString("plainBlur")),
+            cachedPlainTwoToneIcon = readCachedSnapshotIcon(cacheRoot, item.optString("plainTwoTone")),
+            cachedPlainTwoToneBlurredIcon = readCachedSnapshotIcon(cacheRoot, item.optString("plainTwoToneBlur")),
+            isBuiltInSettingsEntry = item.optBoolean("builtIn", false),
+            itemType = itemType,
+            shortcutIntentUri = item.optString("shortcutIntentUri").takeIf(String::isNotBlank),
+            pinnedShortcutId = item.optString("pinnedShortcutId").takeIf(String::isNotBlank)
+        )
+    }
+
+    private fun writeCachedSnapshotIcon(
+        cacheRoot: File,
+        iconDir: File,
+        stem: String,
+        role: String,
+        icon: ImageBitmap?
+    ): String? {
+        if (icon == null) return null
+        return runCatching {
+            val file = File(iconDir, "$stem-$role.png")
+            file.outputStream().use { output ->
+                icon.asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, output)
+            }
+            "$APP_LIST_CACHE_ICON_DIR/${file.name}"
+        }.getOrNull()
+    }
+
+    private fun readCachedSnapshotIcon(cacheRoot: File, relativePath: String?): ImageBitmap? {
+        if (relativePath.isNullOrBlank()) return null
+        val file = File(cacheRoot, relativePath)
+        if (!file.isFile) return null
+        return runCatching {
+            BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap()
+        }.getOrNull()
+    }
+
+    private fun appListCacheRoot(): File = File(context.filesDir, APP_LIST_CACHE_DIR)
+
+    private fun snapshotFileStem(componentKey: String): String {
+        val readable = componentKey.map { char ->
+            if (char.isLetterOrDigit()) char else '_'
+        }.joinToString("").take(72).ifBlank { "item" }
+        return "$readable-${Integer.toHexString(componentKey.hashCode())}"
     }
 
     private fun isCurrentRefresh(generation: Int): Boolean =
