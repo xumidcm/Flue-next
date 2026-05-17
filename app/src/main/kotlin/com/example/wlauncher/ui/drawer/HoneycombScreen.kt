@@ -798,15 +798,14 @@ fun HoneycombScreen(
                                                 spring(dampingRatio = 0.64f, stiffness = 360f)
                                             )
                                         } else {
-                                            scrollOffset.animateDecay(velocity, exponentialDecay()) {
-                                                if (value < minScroll || value > maxScroll) {
-                                                    scope.launch {
-                                                        scrollOffset.animateTo(
-                                                            value.coerceIn(minScroll, maxScroll),
-                                                            spring(dampingRatio = 0.64f, stiffness = 360f)
-                                                        )
-                                                    }
-                                                }
+                                            scrollOffset.updateBounds(lowerBound = minScroll, upperBound = maxScroll)
+                                            try {
+                                                scrollOffset.animateDecay(velocity, exponentialDecay())
+                                            } finally {
+                                                scrollOffset.updateBounds(
+                                                    lowerBound = Float.NEGATIVE_INFINITY,
+                                                    upperBound = Float.POSITIVE_INFINITY
+                                                )
                                             }
                                         }
                                     } finally {
@@ -998,6 +997,7 @@ fun HoneycombScreen(
                         enabled = useFisheyeEffects && edgeSpacingCompressionEnabled
                     )
                     val effectiveItemBlur = reduceHoneycombBlurForFastScroll(itemBlur, reduceVisualLoad)
+                    val itemShadowPx = if (reduceVisualLoad) iconShadowElevationPx * 0.62f else iconShadowElevationPx
                     val clickCenterX = screenCenterX + slotX
                     val clickCenterY = screenCenterY + slotY + currentScroll
                     val baseFlowOffset = honeycombFlowOffset(
@@ -1076,7 +1076,7 @@ fun HoneycombScreen(
                                 }
                                 alpha = itemAlpha
                                 shadowElevation = if (itemAlpha > 0.001f) {
-                                    if (reduceVisualLoad) iconShadowElevationPx * 0.62f else iconShadowElevationPx
+                                    itemShadowPx
                                 } else {
                                     0f
                                 }
@@ -1830,12 +1830,13 @@ private fun MaterialDenseGridScreen(
                     fallback = estimatedCenterY
                 )
                 val visualCenterY = itemCenterY + overscroll.value + entryOffsetY
+                val effectCenterY = visualCenterY
                 val materialFisheyeActive =
                     fisheyeEnabled &&
                         (active || entryProgress > 0.001f)
                 val itemBlur = if (edgeBlurEnabled) {
                     val rawBlur = computeHoneycombEdgeBlur(
-                        centerY = visualCenterY,
+                        centerY = effectCenterY,
                         screenHeight = screenHeightPx,
                         topBlurZonePx = topFadePx,
                         bottomBlurZonePx = bottomFadePx,
@@ -1847,14 +1848,15 @@ private fun MaterialDenseGridScreen(
                     0f
                 }
                 val itemScale = computeMaterialItemScale(
-                    centerY = visualCenterY,
+                    centerY = effectCenterY,
                     screenCenterY = materialFisheyeCenterY,
                     deadZonePx = fisheyeDeadZonePx,
                     rangePx = fisheyeRangePx,
                     minScale = fisheyeMinScale,
-                    fisheyeEnabled = materialFisheyeActive
+                    fisheyeEnabled = materialFisheyeActive,
+                    topFisheyeEnabled = topFisheyeEnabled
                 )
-                val itemAlpha = if (materialFisheyeActive) itemScale.coerceIn(0.30f, 1f) else 1f
+                val itemAlpha = 1f
                 val itemHeightPx = itemInfo?.size?.height?.toFloat()
                     ?: itemBounds?.height
                     ?: estimatedGridItemHeightPx
@@ -1866,13 +1868,13 @@ private fun MaterialDenseGridScreen(
                 val edgeSpacingOffsetX = if (
                     materialFisheyeActive &&
                     edgeSpacingCompressionEnabled &&
-                    (topFisheyeEnabled || visualCenterY >= materialFisheyeCenterY) &&
+                    (topFisheyeEnabled || effectCenterY >= materialFisheyeCenterY) &&
                     dragFromIndex == null &&
                     longPressedApp == null
                 ) {
                     edgeSpacingCompressionHorizontalOffset(
                         centerX = itemCenterX,
-                        rowCenterY = visualCenterY,
+                        rowCenterY = effectCenterY,
                         screenCenterX = materialContentCenterX,
                         screenCenterY = materialFisheyeCenterY,
                         screenHeight = screenHeightPx,
@@ -1887,7 +1889,6 @@ private fun MaterialDenseGridScreen(
                 val isFolderHoverTarget = folderHoverIndex == index
                 val itemShadowElevationPx = when {
                     entryProgress < 0.985f || !active -> 0f
-                    materialScrollOptimizationActive -> iconShadowElevationPx * 0.62f
                     else -> iconShadowElevationPx
                 }
                 val dragTarget = materialDraggedTargetOffset(
@@ -1915,10 +1916,7 @@ private fun MaterialDenseGridScreen(
                 ) {
                     app.plainIconForDisplay(
                         useTwoTone = twoToneIconsEnabled,
-                        blurred = blurEnabled &&
-                            edgeBlurEnabled &&
-                            itemBlur > 0.25f &&
-                            Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+                        blurred = false
                     )
                 }
                 val pressedScale by animateFloatAsState(
@@ -2023,7 +2021,9 @@ private fun MaterialDenseGridScreen(
             val overlayIcon = remember(
                 dragOverlayApp.componentKey,
                 dragOverlayApp.cachedPlainIcon,
+                dragOverlayApp.cachedPlainBlurredIcon,
                 dragOverlayApp.cachedPlainTwoToneIcon,
+                dragOverlayApp.cachedPlainTwoToneBlurredIcon,
                 twoToneIconsEnabled
             ) {
                 dragOverlayApp.plainIconForDisplay(
@@ -2214,9 +2214,11 @@ private fun computeMaterialItemScale(
     deadZonePx: Float,
     rangePx: Float,
     minScale: Float,
-    fisheyeEnabled: Boolean
+    fisheyeEnabled: Boolean,
+    topFisheyeEnabled: Boolean = true
 ): Float {
     if (!fisheyeEnabled) return 1f
+    if (!topFisheyeEnabled && centerY < screenCenterY) return 1f
     val distance = max(0f, abs(centerY - screenCenterY) - deadZonePx)
     return fisheyeScale(distance, rangePx, minScale = minScale)
 }

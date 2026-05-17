@@ -1,8 +1,10 @@
 package com.flue.launcher.watchface.dingdingcat
 
+import android.graphics.BitmapFactory
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import kotlin.math.ceil
 
 object DingDingCatDialParser {
     fun parse(rootDir: File): DingDingCatDial {
@@ -12,9 +14,10 @@ object DingDingCatDialParser {
         val rawId = json.optString("id").trim()
         val id = rawId.ifBlank { rootDir.name }
         val title = json.optString("title").trim().ifBlank { id }
-        val width = json.optInt("width", 480).takeIf { it > 0 } ?: 480
-        val height = json.optInt("height", 480).takeIf { it > 0 } ?: 480
         val drawPoints = json.optJSONArray("drawpoints").toDrawPoints()
+        val inferredSize = inferDialSize(rootDir, drawPoints)
+        val width = json.optInt("width", 0).takeIf { it > 0 } ?: inferredSize.first
+        val height = json.optInt("height", 0).takeIf { it > 0 } ?: inferredSize.second
         return DingDingCatDial(
             id = id,
             title = title,
@@ -98,6 +101,37 @@ object DingDingCatDialParser {
                 optString(index).takeIf { it.isNotBlank() }?.let(::add)
             }
         }
+    }
+
+    private fun inferDialSize(rootDir: File, points: List<DingDingCatDrawPoint>): Pair<Int, Int> {
+        var maxRight = 0f
+        var maxBottom = 0f
+        points.forEach { point ->
+            val bounds = point.pieces.firstOrNull()
+                ?.let { piece -> readBitmapBounds(File(rootDir, piece)) }
+            val rawWidth = point.width.takeIf { it > 0f }
+                ?: bounds?.first?.toFloat()
+                ?: 0f
+            val rawHeight = point.height.takeIf { it > 0f }
+                ?: bounds?.second?.toFloat()
+                ?: 0f
+            val contentWidth = if (point.width > 0f) point.width else rawWidth * point.scale
+            val contentHeight = if (point.height > 0f) point.height else rawHeight * point.scale
+            val left = if (point.hasStartX) point.startX else 0f
+            val top = if (point.hasStartY) point.startY else 0f
+            maxRight = maxOf(maxRight, left + contentWidth.coerceAtLeast(0f))
+            maxBottom = maxOf(maxBottom, top + contentHeight.coerceAtLeast(0f))
+        }
+        return ceil(maxRight).toInt().coerceAtLeast(1) to ceil(maxBottom).toInt().coerceAtLeast(1)
+    }
+
+    private fun readBitmapBounds(file: File): Pair<Int, Int>? {
+        if (!file.isFile) return null
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, options)
+        val width = options.outWidth.takeIf { it > 0 } ?: return null
+        val height = options.outHeight.takeIf { it > 0 } ?: return null
+        return width to height
     }
 
     private fun JSONObject.optFloat(name: String, fallback: Float): Float {

@@ -68,7 +68,7 @@ class AppRepository(private val context: Context) {
         private const val APP_LIST_CACHE_DIR = "app_list_cache"
         private const val APP_LIST_CACHE_ICON_DIR = "icons"
         private const val APP_LIST_CACHE_FILE = "snapshot.json"
-        private const val APP_LIST_CACHE_VERSION = 1
+        private const val APP_LIST_CACHE_VERSION = 3
     }
 
     private val _allApps = MutableStateFlow<List<AppInfo>>(emptyList())

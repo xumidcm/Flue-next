@@ -578,6 +578,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appListLayerBlurEnabled = layerBlurEnabled
     val effectiveIconShadowEnabled = iconShadowEnabled && appListShadowsReady
     val fadeLaunch = launchSourceState == ScreenState.Stack || launchSourceState == ScreenState.Notifications
+    val iconLaunchAvailable = currentLaunchIcon != null || retainedLaunchIcon != null
+    val iconlessFadeLaunch = fadeLaunch && !iconLaunchAvailable
     val directLaunchBlackBackdropVisible = directLaunchStartupWindowOpen && (
         !directLaunchAppListPreferenceLoaded ||
             (!directLaunchAppListConsumed && directLaunchAppListEnabled && screenState == ScreenState.Face) ||
@@ -606,14 +608,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
 
     var showSplash by remember { mutableStateOf(false) }
-    val showLaunchBackdrop = screenState == ScreenState.App && (fadeLaunch || currentLaunchIcon != null || retainedLaunchIcon != null)
-    val effectiveLaunchIcon = if (fadeLaunch) null else (currentLaunchIcon ?: retainedLaunchIcon)
-    val effectiveLaunchSplash = !fadeLaunch && (
+    val showLaunchBackdrop = screenState == ScreenState.App && (iconlessFadeLaunch || iconLaunchAvailable)
+    val effectiveLaunchIcon = currentLaunchIcon ?: retainedLaunchIcon
+    val effectiveLaunchSplash = !iconlessFadeLaunch && (
             (showSplash && currentLaunchIcon != null) ||
             (retainedLaunchSplash && retainedLaunchIcon != null)
     )
-    LaunchedEffect(screenState, splashIcon, splashDelay, currentLaunchIcon, fadeLaunch) {
-        if (!fadeLaunch && screenState == ScreenState.App && splashIcon && currentLaunchIcon != null) {
+    LaunchedEffect(screenState, splashIcon, splashDelay, currentLaunchIcon, iconlessFadeLaunch) {
+        if (!iconlessFadeLaunch && screenState == ScreenState.App && splashIcon && currentLaunchIcon != null) {
             showSplash = false
             delay(BASE_LAUNCH_MASK_DELAY_MS)
             showSplash = true
@@ -621,8 +623,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
             showSplash = false
         }
     }
-    LaunchedEffect(showLaunchBackdrop, currentLaunchIcon, showSplash, fadeLaunch) {
-        if (!fadeLaunch && showLaunchBackdrop && currentLaunchIcon != null) {
+    LaunchedEffect(showLaunchBackdrop, currentLaunchIcon, showSplash, iconlessFadeLaunch) {
+        if (!iconlessFadeLaunch && showLaunchBackdrop && currentLaunchIcon != null) {
             retainedLaunchIcon = currentLaunchIcon
             retainedLaunchSplash = showSplash
         } else if (!showLaunchBackdrop) {
@@ -1122,7 +1124,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             }
                         },
                         onOpenNotification = { key, origin ->
-                            vm.openNotification(key, origin, ScreenState.Stack, 0L)
+                            vm.openNotification(
+                                key,
+                                origin,
+                                ScreenState.Stack,
+                                BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
+                            )
                         },
                         onLaunchApp = { appInfo, origin ->
                             launchAppFromLauncher(appInfo, origin, ScreenState.Stack)
@@ -1221,7 +1228,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onDismissAllNotifications = vm::dismissAllNotifications,
                         onRunNotificationAction = vm::runNotificationAction,
                         onOpenNotification = { key, origin ->
-                            vm.openNotification(key, origin, notificationReturnState, 0L)
+                            vm.openNotification(
+                                key,
+                                origin,
+                                notificationReturnState,
+                                BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
+                            )
                         },
                         stackCardColor = notificationStackTint
                     )

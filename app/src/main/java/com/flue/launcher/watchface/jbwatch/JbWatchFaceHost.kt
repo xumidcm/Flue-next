@@ -53,8 +53,11 @@ import java.util.Calendar
 import java.util.Locale
 import javax.xml.parsers.DocumentBuilderFactory
 import org.xml.sax.InputSource
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 
 private const val JB_LAYOUT_CANVAS_WIDTH = 512
 private const val JB_LAYOUT_CANVAS_HEIGHT = 512
@@ -109,6 +112,16 @@ data class JbWatchLayer(
     val condGrid: String? = null,
     val weatherNight: String? = null,
     val name: String? = null,
+    val radiusOuter: Float = 0f,
+    val radiusInner: Float = 0f,
+    val radius: Float = 0f,
+    val angle: String = "0",
+    val angleTotal: Float = 0f,
+    val isClockwise: Boolean = true,
+    val color2: String = "ffffff",
+    val color3: String = "ffffff",
+    val outsideOpacity: Int = 100,
+    val curveDir: String = "Up",
     val pathFrames: List<String> = emptyList()
 )
 
@@ -207,7 +220,17 @@ object JbWatchParser {
                         tapAction = sanitizeVisibleText(element.getAttribute("tap_action")).takeIf { it.isNotBlank() },
                         condValue = sanitizeVisibleText(element.getAttribute("cond_value")).takeIf { it.isNotBlank() },
                         condGrid = sanitizeVisibleText(element.getAttribute("cond_grid")).takeIf { it.isNotBlank() },
-                        weatherNight = sanitizeVisibleText(element.getAttribute("weather_night")).takeIf { it.isNotBlank() }
+                        weatherNight = sanitizeVisibleText(element.getAttribute("weather_night")).takeIf { it.isNotBlank() },
+                        radiusOuter = element.getAttribute("radius_outer").toFloatOrZero(),
+                        radiusInner = element.getAttribute("radius_inner").toFloatOrZero(),
+                        radius = element.getAttribute("radius").toFloatOrZero(),
+                        angle = sanitizeVisibleText(element.getAttribute("angle")).ifBlank { "0" },
+                        angleTotal = element.getAttribute("angle_total").toFloatOrZero(),
+                        isClockwise = !element.getAttribute("is_clockwise").equals("N", ignoreCase = true),
+                        color2 = sanitizeVisibleText(element.getAttribute("color2")).ifBlank { "ffffff" },
+                        color3 = sanitizeVisibleText(element.getAttribute("color3")).ifBlank { "ffffff" },
+                        outsideOpacity = element.getAttribute("outside_opacity").toIntOrZero(default = 100),
+                        curveDir = sanitizeVisibleText(element.getAttribute("curve_dir")).ifBlank { "Up" }
                     )
                 )
             }
@@ -450,7 +473,10 @@ private fun drawJbBitmapLayer(
         val index = evaluateWeatherIndex(layer.condValue, weatherCode = "01d")
         drawConditionBitmap(canvas, bitmap, rect, layer.condGrid, index, paint)
     } else {
+        canvas.save()
+        rotateJbLayer(canvas, rect, layer.rotation)
         canvas.drawBitmap(bitmap, null, rect, paint)
+        canvas.restore()
     }
 }
 
@@ -495,9 +521,117 @@ private fun drawJbTextLayer(
             color = parseJbColor(layer.oColor)
             alpha = ((layer.oOpacity.coerceIn(0, 100) / 100f) * 255).toInt()
         }
+        canvas.save()
+        rotateJbLayer(canvas, rect, layer.rotation)
         canvas.drawText(text, x, y, outlinePaint)
+        canvas.restore()
     }
+    canvas.save()
+    rotateJbLayer(canvas, rect, layer.rotation)
     canvas.drawText(text, x, y, paint)
+    canvas.restore()
+}
+
+private fun drawJbCurvedTextLayer(
+    canvas: AndroidCanvas,
+    face: JbWatchFace,
+    layer: JbWatchLayer,
+    nowMillis: Long,
+    batteryLevel: Int,
+    is24Hour: Boolean
+) {
+    if (!shouldDisplayLayer(layer, nowMillis, batteryLevel)) return
+    val text = resolveJbText(layer.text, nowMillis, batteryLevel, is24Hour)
+    if (text.isBlank()) return
+    val center = jbLayerCenter(face, layer)
+    val radius = layer.radius.takeIf { it > 0f } ?: 180f
+    val angle = evaluateJbNumericExpression(layer.rotation, nowMillis, batteryLevel)
+    val radians = Math.toRadians((angle - 90f).toDouble())
+    val x = center.x + cos(radians).toFloat() * radius
+    val y = center.y + sin(radians).toFloat() * radius
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = parseJbColor(layer.color)
+        textSize = layer.textSize
+        textAlign = when (jbAlignmentHorizontal(layer.alignment)) {
+            0f -> Paint.Align.LEFT
+            1f -> Paint.Align.RIGHT
+            else -> Paint.Align.CENTER
+        }
+        alpha = resolveJbLayerOpacity(layer)
+        typeface = JbWatchTypefaceCache.get(face.rootDir, layer.font)
+    }
+    canvas.save()
+    canvas.rotate(angle + if (layer.curveDir.equals("Down", ignoreCase = true)) 180f else 0f, x, y)
+    canvas.drawText(text, x, y - (paint.descent() + paint.ascent()) / 2f, paint)
+    canvas.restore()
+}
+
+private fun drawJbRingLayer(
+    canvas: AndroidCanvas,
+    face: JbWatchFace,
+    layer: JbWatchLayer,
+    nowMillis: Long,
+    batteryLevel: Int
+) {
+    if (!shouldDisplayLayer(layer, nowMillis, batteryLevel)) return
+    val center = jbLayerCenter(face, layer)
+    val outer = layer.radiusOuter.takeIf { it > 0f } ?: layer.radius.takeIf { it > 0f } ?: 210f
+    val inner = layer.radiusInner.takeIf { it > 0f } ?: (outer - 14f)
+    val stroke = (outer - inner).coerceAtLeast(1f)
+    val radius = inner + stroke / 2f
+    val sweep = evaluateJbNumericExpression(layer.angle, nowMillis, batteryLevel)
+        .takeIf { it > 0f }
+        ?: layer.angleTotal.takeIf { it > 0f }
+        ?: 360f
+    val start = evaluateJbNumericExpression(layer.rotation, nowMillis, batteryLevel) - 90f
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeWidth = stroke
+        color = parseJbColor(layer.color)
+        alpha = resolveJbLayerOpacity(layer)
+    }
+    val oval = RectF(center.x - radius, center.y - radius, center.x + radius, center.y + radius)
+    canvas.drawArc(oval, start, if (layer.isClockwise) sweep else -sweep, false, paint)
+}
+
+private fun drawJbMarkersLayer(canvas: AndroidCanvas, face: JbWatchFace, layer: JbWatchLayer) {
+    val center = jbLayerCenter(face, layer)
+    val radius = layer.radius.takeIf { it > 0f } ?: 181f
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeWidth = 3f
+        color = parseJbColor(layer.color)
+        alpha = resolveJbLayerOpacity(layer)
+    }
+    repeat(60) { tick ->
+        val radians = (tick * 6f - 90f) * (PI.toFloat() / 180f)
+        val major = tick % 5 == 0
+        val outer = radius
+        val inner = radius - if (major) 14f else 7f
+        canvas.drawLine(
+            center.x + cos(radians) * inner,
+            center.y + sin(radians) * inner,
+            center.x + cos(radians) * outer,
+            center.y + sin(radians) * outer,
+            paint
+        )
+    }
+}
+
+private fun drawJbShapeLayer(canvas: AndroidCanvas, face: JbWatchFace, layer: JbWatchLayer) {
+    val center = jbLayerCenter(face, layer)
+    val radius = layer.radius.takeIf { it > 0f }
+        ?: (min(layer.width.takeIf { it > 0 } ?: 0, layer.height.takeIf { it > 0 } ?: 0) / 2f)
+        .takeIf { it > 0f }
+        ?: 24f
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = parseJbColor(layer.color)
+        alpha = resolveJbLayerOpacity(layer)
+    }
+    canvas.drawCircle(center.x, center.y, radius, paint)
 }
 
 private fun resolveJbText(raw: String, nowMillis: Long, batteryLevel: Int, is24Hour: Boolean): String {
@@ -564,6 +698,13 @@ private fun resolveJbRect(face: JbWatchFace, layer: JbWatchLayer, contentWidth: 
     return RectF(left, top, left + contentWidth, top + contentHeight)
 }
 
+private fun jbLayerCenter(face: JbWatchFace, layer: JbWatchLayer): Offset {
+    return Offset(
+        x = face.designWidth / 2f + layer.x,
+        y = face.designHeight / 2f - layer.y
+    )
+}
+
 private fun jbAlignmentAnchor(alignment: String): Pair<Float, Float> {
     return when (alignment.lowercase(Locale.ROOT)) {
         "cr" -> 1f to 0.5f
@@ -620,6 +761,64 @@ private fun applyJbLayerScale(layer: JbWatchLayer, width: Float, height: Float):
     val scaleX = (layer.animScaleX.takeIf { it > 0f } ?: 100f) / 100f
     val scaleY = (layer.animScaleY.takeIf { it > 0f } ?: 100f) / 100f
     return (width * scaleX).coerceAtLeast(1f) to (height * scaleY).coerceAtLeast(1f)
+}
+
+private fun rotateJbLayer(canvas: AndroidCanvas, rect: RectF, rotationRaw: String) {
+    val rotation = rotationRaw.toFloatOrNull() ?: 0f
+    if (rotation == 0f) return
+    canvas.rotate(rotation, rect.centerX(), rect.centerY())
+}
+
+private fun evaluateJbNumericExpression(raw: String, nowMillis: Long, batteryLevel: Int): Float {
+    val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val second = calendar.get(Calendar.SECOND) + calendar.get(Calendar.MILLISECOND) / 1_000f
+    val minute = calendar.get(Calendar.MINUTE) + second / 60f
+    val hour = (calendar.get(Calendar.HOUR_OF_DAY) % 12) + minute / 60f
+    val stepCount = 0f
+    val value = raw
+        .replace("{blp}", batteryLevel.toString())
+        .replace("{bl}", batteryLevel.toString())
+        .replace("{pblp}", batteryLevel.toString())
+        .replace("{wt}", batteryLevel.toString())
+        .replace("{ssc}", stepCount.toString())
+        .replace("{sgx}", "0")
+        .replace("{sgy}", "0")
+        .replace("{dsz}", second.toString())
+        .replace("{dm}", minute.toString())
+        .replace("{dh}", hour.toString())
+        .replace("{dmz}", minute.toString())
+        .replace("{dh23z}", calendar.get(Calendar.HOUR_OF_DAY).toString())
+        .replace("{dh12z}", hour.toString())
+        .replace(" ", "")
+    return evaluateJbArithmetic(value)
+}
+
+private fun evaluateJbArithmetic(raw: String): Float {
+    if (raw.isBlank()) return 0f
+    val normalized = raw.replace(',', '.')
+    normalized.toFloatOrNull()?.let { return it }
+    val tokens = Regex("""[*/+-]?[^*/+-]+""").findAll(normalized).map { it.value }.toList()
+    if (tokens.isEmpty()) return normalized.filter { it.isDigit() || it == '.' || it == '-' }
+        .toFloatOrNull() ?: 0f
+    var result = tokens.first().toFloatOrNull() ?: return 0f
+    var cursor = tokens.first().length
+    while (cursor < normalized.length) {
+        val op = normalized[cursor]
+        cursor += 1
+        val nextStart = cursor
+        while (cursor < normalized.length && normalized[cursor] !in charArrayOf('*', '/', '+', '-')) {
+            cursor += 1
+        }
+        val number = normalized.substring(nextStart, cursor).toFloatOrNull() ?: continue
+        result = when (op) {
+            '*' -> result * number
+            '/' -> if (number != 0f) result / number else result
+            '+' -> result + number
+            '-' -> result - number
+            else -> result
+        }
+    }
+    return result
 }
 
 private fun readJbBitmapBounds(file: File): Pair<Int, Int>? {
@@ -804,6 +1003,24 @@ private fun launchJbWatchTapAction(context: Context, action: String, rootDir: Fi
             true
         }
         else -> {
+            parseJbWatchAppAction(normalized)?.let { appAction ->
+                val launchedComponent = runCatching {
+                    context.startActivity(Intent().apply {
+                        component = ComponentName(appAction.packageName, appAction.className)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    })
+                    true
+                }.getOrDefault(false)
+                if (launchedComponent) return true
+                return context.packageManager.getLaunchIntentForPackage(appAction.packageName)?.apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }?.let { intent ->
+                    runCatching {
+                        context.startActivity(intent)
+                        true
+                    }.getOrDefault(false)
+                } == true
+            }
             val parts = normalized.split('/')
             if (parts.size == 2) {
                 runCatching {
@@ -817,6 +1034,25 @@ private fun launchJbWatchTapAction(context: Context, action: String, rootDir: Fi
             }
         }
     }
+}
+
+private data class JbWatchAppAction(
+    val packageName: String,
+    val className: String
+)
+
+private fun parseJbWatchAppAction(action: String): JbWatchAppAction? {
+    val stripped = when {
+        action.startsWith("w_app:") -> action.removePrefix("w_app:")
+        action.startsWith("m_app:") -> action.removePrefix("m_app:")
+        else -> return null
+    }
+    val parts = stripped.split('`').map { it.trim() }.filter { it.isNotBlank() }
+    if (parts.size < 3) return null
+    val packageName = parts[1]
+    val className = parts[2]
+    if (packageName.isBlank() || className.isBlank()) return null
+    return JbWatchAppAction(packageName, className)
 }
 
 private fun normalizeJbTapAction(raw: String): String {

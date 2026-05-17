@@ -2495,7 +2495,7 @@ private fun SettingsSwitchRow(
         label = "switch_track_color"
     )
     val knobOffset by animateDpAsState(
-        if (checked) launcherStyle.switchThumbTravel.dp else 2.dp,
+        if (checked) 24.dp else 2.dp,
         animationSpec = spring(stiffness = 760f, dampingRatio = 0.82f),
         label = "switch_knob_offset"
     )

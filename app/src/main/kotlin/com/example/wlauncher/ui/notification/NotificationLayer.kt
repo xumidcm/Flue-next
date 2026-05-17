@@ -62,6 +62,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -429,7 +430,7 @@ fun NotificationLayer(
                                                             entry = entry,
                                                             subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
                                                             trailing = formatNotificationTime(entry.time),
-                                                            onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) },
+                                                            onClick = { origin -> onOpenNotification(entry.key, origin) },
                                                             onRunNotificationAction = onRunNotificationAction
                                                         )
                                                     }
@@ -477,7 +478,7 @@ fun NotificationLayer(
                                             entry = entry,
                                             subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
                                             trailing = formatNotificationTime(entry.time),
-                                            onClick = { onOpenNotification(entry.key, Offset(0.5f, 0.5f)) },
+                                            onClick = { origin -> onOpenNotification(entry.key, origin) },
                                             onRunNotificationAction = onRunNotificationAction
                                         )
                                     }
@@ -648,13 +649,18 @@ private fun NotificationCard(
     entry: NotificationEntryUi,
     subtitle: String,
     trailing: String,
-    onClick: () -> Unit,
+    onClick: (Offset) -> Unit,
     onRunNotificationAction: (String) -> Boolean = { false },
     onMeasuredHeight: ((Int) -> Unit)? = null
 ) {
     val pressed = rememberPressedState()
     val isPressed by pressed
     val launcherStyle = LauncherTheme.style
+    val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
+    val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }.coerceAtLeast(1f)
+    val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }.coerceAtLeast(1f)
+    var launchOrigin by remember { mutableStateOf(Offset(0.5f, 0.5f)) }
     val cardColor = if (launcherStyle.cardColor.alpha < 0.35f) {
         if (launcherStyle.titleColor == Color.White) Color(0xFF353535) else Color(0xFFE8E8ED)
     } else {
@@ -666,6 +672,11 @@ private fun NotificationCard(
             .width(width)
             .onGloballyPositioned { coordinates ->
                 onMeasuredHeight?.invoke(coordinates.size.height)
+                val position = coordinates.positionInRoot()
+                launchOrigin = Offset(
+                    x = ((position.x + coordinates.size.width / 2f) / screenWidthPx).coerceIn(0f, 1f),
+                    y = ((position.y + coordinates.size.height / 2f) / screenHeightPx).coerceIn(0f, 1f)
+                )
             }
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(RoundedCornerShape(28.dp))
@@ -673,7 +684,7 @@ private fun NotificationCard(
             .instantPressGesture(
                 pressed,
                 enabled = entry.key == "perm" || entry.key == "empty" || entry.contentIntentAvailable,
-                onClick = onClick
+                onClick = { onClick(launchOrigin) }
             )
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {

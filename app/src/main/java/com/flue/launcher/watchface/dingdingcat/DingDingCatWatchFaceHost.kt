@@ -3,6 +3,7 @@ package com.flue.launcher.watchface.dingdingcat
 import android.Manifest
 import android.content.ContentValues
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -440,24 +441,51 @@ private fun handleDingDingCatTap(
 ) {
     val activeDial = dial ?: return
     val designPoint = renderTransform?.screenToDesign(screenPoint) ?: screenPoint
-    activeDial.drawPoints
+    val hitPoint = activeDial.drawPoints
         .asReversed()
         .firstOrNull { point ->
             point.visible &&
-                !point.launchAction.isNullOrBlank() &&
+                (!point.launchAction.isNullOrBlank() || isTapTriggeredAnimation(point)) &&
                 point.containsDesignPoint(activeDial, designPoint)
         }
-        ?.launchAction
-        ?.let { action -> launchDingDingCatAction(context, action) }
+    if (hitPoint?.launchAction?.let { action -> launchDingDingCatAction(context, action) } == true) {
+        return
+    }
 
     val now = System.currentTimeMillis()
+    if (hitPoint?.let(::isTapTriggeredAnimation) == true && hitPoint.launchAction.isNullOrBlank()) {
+        hitPoint.toggleDingDingCatTapLayer(triggeredAnimations, now)
+        return
+    }
     activeDial.drawPoints
         .filter(::isTapTriggeredAnimation)
-        .forEach { point -> triggeredAnimations[point.sourceIndex] = now }
+        .forEach { point -> point.toggleDingDingCatTapLayer(triggeredAnimations, now) }
 }
 
 private fun launchDingDingCatAction(context: Context, action: String): Boolean {
     val packageManager = context.packageManager
+    parseDingDingCatComponentAction(action)?.let { target ->
+        val launchedComponent = runCatching {
+            context.startActivity(Intent().apply {
+                component = ComponentName(target.packageName, target.className)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+            true
+        }.getOrDefault(false)
+        if (launchedComponent) return true
+
+        val fallbackIntent = packageManager.getLaunchIntentForPackage(target.packageName)?.apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val launchedPackage = fallbackIntent?.let { intent ->
+            runCatching {
+                context.startActivity(intent)
+                true
+            }.getOrDefault(false)
+        } == true
+        if (launchedPackage) return true
+    }
+
     val mappedIntent = dingDingCatMappedActionIntent(context, action)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     val launchedByMappedAction = mappedIntent?.let { intent ->
         runCatching {
@@ -491,6 +519,41 @@ private fun launchDingDingCatAction(context: Context, action: String): Boolean {
             true
         }
     }.getOrDefault(false)
+}
+
+private data class DingDingCatComponentAction(
+    val packageName: String,
+    val className: String
+)
+
+private fun parseDingDingCatComponentAction(raw: String): DingDingCatComponentAction? {
+    val action = raw.trim()
+    val normalized = when {
+        action.startsWith("w_app:", ignoreCase = true) -> action.substringAfter(':')
+        action.startsWith("m_app:", ignoreCase = true) -> action.substringAfter(':')
+        else -> action
+    }
+    val backtickParts = normalized.split('`').map { it.trim() }.filter { it.isNotBlank() }
+    if (backtickParts.size >= 3) {
+        val packageName = backtickParts[1]
+        val className = backtickParts[2]
+        if (packageName.contains('.') && className.contains('.')) {
+            return DingDingCatComponentAction(packageName, className)
+        }
+    }
+    val slashParts = normalized.split('/', limit = 2).map { it.trim() }
+    if (slashParts.size == 2 && slashParts[0].contains('.')) {
+        val packageName = slashParts[0]
+        val className = if (slashParts[1].startsWith(".")) {
+            packageName + slashParts[1]
+        } else {
+            slashParts[1]
+        }
+        if (className.contains('.')) {
+            return DingDingCatComponentAction(packageName, className)
+        }
+    }
+    return null
 }
 
 private fun dingDingCatMappedActionIntent(context: Context, action: String): Intent? {
@@ -1111,8 +1174,11 @@ private fun selectAnimatedPiece(
     playbackSpeedPercent: Int
 ): String? {
     if (point.pieces.isEmpty()) return null
-    if (point.pieces.size == 1) return point.pieces.first()
     if (isTapTriggeredAnimation(point)) {
+        if (point.isSingleFrameToggleTapLayer()) {
+            if (triggeredAt == null && point.launchAction.isNullOrBlank()) return null
+            return point.pieces.first()
+        }
         val start = triggeredAt ?: return point.pieces.first()
         val frameMs = point.frameDurationMs(playbackSpeedPercent)
         val elapsed = nowMillis - start
@@ -1133,9 +1199,39 @@ private fun selectAnimatedPiece(
 
 private fun isTapTriggeredAnimation(point: DingDingCatDrawPoint): Boolean {
     val animator = point.animator ?: return false
-    return point.pieces.size > 1 &&
+    return point.pieces.isNotEmpty() &&
         animator.triggerType == 1024 &&
         !animator.startWithStatusPlay
+}
+
+private fun DingDingCatDrawPoint.isToggleTapLayer(): Boolean {
+    if (isSingleFrameToggleTapLayer()) return true
+    val animator = animator ?: return false
+    return pieces.size == 2 &&
+        animator.triggerType == 1024 &&
+        !animator.startWithStatusPlay &&
+        !animator.endWithStatusGone &&
+        !animator.animEndSaveData
+}
+
+private fun DingDingCatDrawPoint.isSingleFrameToggleTapLayer(): Boolean {
+    val animator = animator ?: return false
+    return pieces.size == 1 &&
+        animator.triggerType == 1024 &&
+        !animator.startWithStatusPlay &&
+        !animator.endWithStatusGone &&
+        !animator.animEndSaveData
+}
+
+private fun DingDingCatDrawPoint.toggleDingDingCatTapLayer(
+    triggeredAnimations: MutableMap<Int, Long>,
+    now: Long
+) {
+    if (isToggleTapLayer() && triggeredAnimations.containsKey(sourceIndex)) {
+        triggeredAnimations.remove(sourceIndex)
+    } else {
+        triggeredAnimations[sourceIndex] = now
+    }
 }
 
 private fun DingDingCatDrawPoint.containsDesignPoint(dial: DingDingCatDial, point: Offset): Boolean {
@@ -1144,7 +1240,16 @@ private fun DingDingCatDrawPoint.containsDesignPoint(dial: DingDingCatDial, poin
 }
 
 private fun DingDingCatDrawPoint.drawBounds(dial: DingDingCatDial): RectF {
-    return layoutAreaRect(dial, this.width.takeIf { it > 0f } ?: dial.width.toFloat(), this.height.takeIf { it > 0f } ?: dial.height.toFloat())
+    val piece = pieces.firstOrNull()
+    val bounds = piece?.let { DingDingCatBitmapCache.bounds(File(dial.rootDir, it)) }
+    val fallbackWidth = bounds?.width?.toFloat() ?: dial.width.toFloat()
+    val fallbackHeight = bounds?.height?.toFloat() ?: dial.height.toFloat()
+    val area = layoutAreaRect(dial, fallbackWidth, fallbackHeight)
+    val stretchToArea = bounds?.let { shouldStretchBitmapToArea(dial, area, it) } == true
+    val displayScale = if (isDingDingCatBackgroundLayer(this, dial)) 1f else scale
+    val contentWidth = if (stretchToArea) area.width() * displayScale else fallbackWidth * scale
+    val contentHeight = if (stretchToArea) area.height() * displayScale else fallbackHeight * scale
+    return alignedRectInArea(area, contentWidth, contentHeight)
 }
 
 private fun DingDingCatDrawPoint.destinationRect(
