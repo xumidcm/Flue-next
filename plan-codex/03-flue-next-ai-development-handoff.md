@@ -11,6 +11,7 @@
 - 不要把旧版大文件搬进新版。
 - 不要复制外部 GitLab/GitHub 参考项目源码，除非用户提供授权。
 - 不确定需求时先问用户；用户说得模糊的内容放入 TODO，不要擅自变成当前实现范围。
+- 所有用户可见文案必须使用 Android `strings.xml` 资源体系；不要在 Compose、View、Activity、ViewModel、Repository 中硬编码中文或英文 UI 文案。
 - 修改文档或代码后，如果在 git 仓库内，默认只提交自己改的文件。
 
 ## 2. 当前旧仓库事实
@@ -328,7 +329,40 @@ BackdropLayer 是唯一负责“表盘背景压暗、模糊、混色、圆角裁
 
 预览值和应用值要分开。
 
-## 11. 测试建议
+## 11. 国际化接手说明
+
+flue-next 必须从项目初期就使用 `strings.xml` 做 i18n。
+
+资源规则：
+
+- 默认文案放在 `app/src/main/res/values/strings.xml`。
+- 简体中文可放在 `values-zh-rCN/strings.xml`，英文可放在 `values-en/strings.xml`。
+- string key 使用稳定、可搜索的命名，例如 `settings_display_title`、`onboarding_device_round_watch`。
+- 同一含义的文案不要重复建 key。
+- 带变量的文案使用 Android 格式化占位符，例如 `%1$s`、`%2$d`。
+
+代码规则：
+
+- Compose 中使用 `stringResource(R.string.xxx)`。
+- Activity、Service、View、自定义 View 中使用 `context.getString(R.string.xxx)`。
+- 领域层、状态机、仓库层不要持有 `Context` 只为了取文案；需要文案时返回 `ResourceText`、string resource id 或稳定错误码。
+- `SettingDefinition` 只能保存标题/摘要/选项的 resource id，不保存本地化后的字符串。
+- Toast、Dialog、权限说明、错误提示、空状态、引导页、设置页标题都必须走 string resource。
+
+不要资源化：
+
+- 应用名、表盘名、用户自定义文件夹名。
+- 日志 tag。
+- 数据库字段、DataStore key、备份 key、协议字段。
+- 内部 enum/id。
+
+检查要求：
+
+- 开启 Android Lint hardcoded text 检查。
+- 新增页面时同步新增或复用 string key。
+- PR/提交说明里说明是否新增文案资源。
+
+## 12. 测试建议
 
 优先补：
 
@@ -340,10 +374,11 @@ BackdropLayer 是唯一负责“表盘背景压暗、模糊、混色、圆角裁
 - `ExternalLaunchSession` 状态机单测。
 - `.watch` zip 安全校验单测。
 - setting schema migration 单测。
+- string resource 覆盖检查，避免设置项缺 title/summary。
 - 圆屏/背屏截图回归。
 - 应用列表 macrobenchmark。
 
-## 12. 外部参考
+## 13. 外部参考
 
 参考链接：
 
@@ -359,7 +394,7 @@ BackdropLayer 是唯一负责“表盘背景压暗、模糊、混色、圆角裁
 - 不要复制源码和素材。
 - 只参考行为、格式、API 和架构方向。
 
-## 13. 开工前必须问用户的问题
+## 14. 开工前必须问用户的问题
 
 如果开始真正实现 `flue-next`，先问：
 
@@ -371,4 +406,4 @@ BackdropLayer 是唯一负责“表盘背景压暗、模糊、混色、圆角裁
 6. `DESIGN.md` 是否先由 AI 单独起草。
 7. 圆屏和背屏优先测试设备有哪些。
 8. 激活码/商店是否完全推迟到 MVP 后。
-
+9. i18n 首批维护哪些语言，默认 `values/strings.xml` 使用简体中文还是英文。

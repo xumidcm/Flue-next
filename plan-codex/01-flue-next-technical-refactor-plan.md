@@ -16,6 +16,7 @@
 - 重做下拉通知中心、负一屏/控制中心、小组件卡片、表盘压暗、表盘模糊、混色背景、圆角裁切。
 - 重构应用列表、鱼眼、排序、关闭动画、启动/退出动画、最近 7 个应用界面、手势映射。
 - 重构设置界面。Compose 自写 Apple Watch 风格一套，Miuix 一套。kyant 液态玻璃库作为后续性能分档特效。
+- 全项目用户可见文案必须走 Android `strings.xml` 资源体系，为 i18n 做准备，禁止在 Compose/View/业务层硬编码中文文案。
 - 保留旧版可迁移能力，但迁移前先审查，不直接复制旧版大文件。
 
 不在本计划主线深挖的内容：
@@ -64,6 +65,7 @@ flue-next/
         settings/           typed settings schema、迁移、备份映射
         device/             DeviceProfile、Insets、InputProfile
         performance/        特效等级、能力探测、帧率预算
+        i18n/               ResourceText、文案 key、格式化约束
       data/
         apps/               InstalledAppSource、ShortcutStore、FolderStore、OrderStore
         icons/              IconPipeline、IconCache、IconRef
@@ -87,6 +89,7 @@ flue-next/
 
 - 领域层不依赖 Compose、View、Android Canvas。
 - UI 配置以 typed schema 为准，所有设置项有 id、默认值、范围、分组、迁移策略。
+- 用户可见文案统一使用 `res/values/strings.xml` 和对应 locale 目录，设置项、错误提示、权限说明、引导页文案都通过 string resource id 引用。
 - Launcher 导航使用显式状态机，禁止散落的布尔 flag 互相推断。
 - 应用列表布局、鱼眼、边缘压缩、fast flow 都做成纯函数或策略接口，可单测。
 - 模糊和液态玻璃类高级特效必须有性能等级和关闭开关。
@@ -508,6 +511,8 @@ sealed interface WidgetCard {
 data class SettingDefinition<T>(
     val key: SettingKey<T>,
     val group: SettingGroup,
+    val titleRes: StringResourceId,
+    val summaryRes: StringResourceId?,
     val defaultValue: T,
     val range: ValueRange<T>?,
     val migration: MigrationRule<T>?
@@ -517,10 +522,12 @@ data class SettingDefinition<T>(
 要求：
 
 - 每个设置项有默认值、范围、说明、所属 feature。
+- 每个设置项的标题、摘要、选项名必须引用 `strings.xml`，不能保存或传递硬编码中文。
 - 支持 schema version。
 - 支持旧配置迁移。
 - 支持备份/恢复映射。
 - 支持“预览值”和“已应用值”区分。
+- 存储层只保存稳定 key/value，不保存本地化后的显示文案。
 
 ### 10.2 两套 UI
 
@@ -543,6 +550,20 @@ kyant 液态玻璃：
 - 必须分档开放。
 - 低性能设备默认关闭或使用弱特效。
 - 所有液态玻璃组件要能回退到普通材质。
+
+### 10.3 国际化与 strings.xml
+
+flue-next 从第一天开始使用 Android string resources：
+
+- 默认文案放在 `app/src/main/res/values/strings.xml`。
+- 后续语言放在 `values-zh-rCN/strings.xml`、`values-en/strings.xml` 等 locale 目录。
+- Compose 使用 `stringResource(id)`。
+- View/Activity/Service 使用 `context.getString(id)`。
+- 领域层和 settings schema 不直接依赖 Android `Context`，需要显示文案时返回 `ResourceText` 或 string resource id。
+- 带变量的文案必须使用格式化占位符，例如 `%1$s`、`%2$d`，不要用字符串拼接。
+- 表盘名、应用名、用户自定义文件夹名属于用户内容，不做资源化。
+- 日志、内部稳定 id、备份 key、协议字段不做本地化。
+- Lint/自定义检查需要阻止新增硬编码用户可见文案。
 
 ## 11. 兼容与性能策略
 
@@ -567,6 +588,7 @@ kyant 液态玻璃：
 - 圆屏/方屏/背屏三类截图回归。
 - API 27、30、31、36 至少覆盖一轮兼容测试。
 - 通知中心/负一屏跟手动画无明显层级错乱。
+- Android Lint 不允许新增 hardcoded user-facing text；新增页面必须同步补齐 `strings.xml` key。
 
 ## 12. 分阶段工期
 
@@ -578,6 +600,7 @@ kyant 液态玻璃：
 - 建立模块/包结构。
 - 建立 ktlint/detekt 或等价静态检查。
 - 写 `DESIGN.md` 初版。
+- 建立 `strings.xml` 命名规范和 `ResourceText`/string resource 使用规范。
 - 写 settings schema 雏形。
 - 建立测试与 benchmark 骨架。
 
@@ -764,3 +787,4 @@ P3：
 6. 安全区是否按全局保存，还是允许每个页面单独覆盖。
 7. 最近 7 个应用界面是否只按启动时间排序，还是允许固定/隐藏。
 8. 设置页 `DESIGN.md` 需要先单独设计，还是直接在 flue-next 中边做边沉淀。
+9. i18n 首批维护哪些语言，默认 `values/strings.xml` 使用简体中文还是英文。
