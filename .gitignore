@@ -13,3 +13,17 @@ local.properties
 .codex-temp-watchface-utils/
 403D16A9454EA268EFC1A6F5F7426009.png
 pr-body.md
+
+# Local AI/tooling state
+/.claude/settings.local.json
+/.claude/*.bak-before-*
+/.codex/
+/.kotlin/
+/.playwright-mcp/
+
+# Local diagnostics and one-off build output
+/*.log
+/honeycomb_current_backup.kt
+/honeycomb_diff.txt
+/honeycomb_main.txt
+/honeycomb_main_utf8.txt
