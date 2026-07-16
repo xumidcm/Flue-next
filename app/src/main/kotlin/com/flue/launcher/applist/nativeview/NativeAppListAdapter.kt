@@ -7,6 +7,7 @@ import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.flue.launcher.applist.model.AppListCommand
+import com.flue.launcher.applist.model.AppItemKey
 
 internal class NativeAppListAdapter(
     private val commandSink: (AppListCommand) -> Unit,
@@ -53,6 +54,11 @@ internal class NativeAppListAdapter(
         submitList(null)
     }
 
+    fun currentKeysSnapshot(): List<AppItemKey> = currentList.map { it.stableKey }
+
+    fun keyAtPositionOrNull(position: Int): AppItemKey? =
+        currentList.getOrNull(position)?.stableKey
+
     internal class AppItemViewHolder private constructor(
         private val rowView: NativeAppListRowView,
         private val commandSink: (AppListCommand) -> Unit,
@@ -88,6 +94,8 @@ internal class NativeAppListAdapter(
             boundRow = null
             rowView.clearBinding()
         }
+
+        fun boundKeyOrNull(): AppItemKey? = boundRow?.stableKey
 
         companion object {
             fun create(

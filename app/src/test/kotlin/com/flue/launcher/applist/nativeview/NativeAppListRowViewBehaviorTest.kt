@@ -287,6 +287,7 @@ class NativeAppListRowViewBehaviorTest {
         holder.bind(boundRow(null, key = "component:first"), config)
         val firstListener = clickListenerOf(holder.itemView)
         holder.bind(boundRow(null, key = "component:second"), config)
+        assertEquals(AppItemKey("component:second"), holder.boundKeyOrNull())
 
         assertSame(firstListener, clickListenerOf(holder.itemView))
         holder.itemView.performClick()
@@ -296,6 +297,7 @@ class NativeAppListRowViewBehaviorTest {
         )
 
         holder.clear()
+        assertNull(holder.boundKeyOrNull())
         assertNull(clickListenerOf(holder.itemView))
         holder.bind(boundRow(null, key = "component:third"), config)
         assertSame(firstListener, clickListenerOf(holder.itemView))
