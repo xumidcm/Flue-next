@@ -58,6 +58,10 @@ sealed interface AppListCommand {
         val origin: NormalizedPoint,
     ) : AppListCommand
 
+    data class ShowActions(
+        val key: AppItemKey,
+    ) : AppListCommand
+
     data class Move(
         val key: AppItemKey,
         val beforeKey: AppItemKey?,

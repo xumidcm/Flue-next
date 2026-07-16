@@ -42,12 +42,14 @@ class NativeAppListView @JvmOverloads constructor(
         setHasFixedSize(true)
         layoutManager = activeLayoutStrategy.createLayoutManager(context)
         itemAnimator = null
+        clipToPadding = false
         adapter = nativeAdapter
         addOnScrollListener(childVisualScrollListener)
         addOnChildAttachStateChangeListener(childVisualAttachListener)
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        updateViewportPadding(bottom - top)
         super.onLayout(changed, left, top, right, bottom)
         applyAttachedChildVisuals()
     }
@@ -79,6 +81,7 @@ class NativeAppListView @JvmOverloads constructor(
             currentConfig.value.initialResetToken != next.value.initialResetToken
         currentConfig = next
         nativeAdapter.setConfig(next)
+        updateViewportPadding(height)
         applyAttachedChildVisuals()
         if (resetInitialScroll) {
             stopScroll()
@@ -157,6 +160,10 @@ class NativeAppListView @JvmOverloads constructor(
         if (child.scaleX != visual.scale) child.scaleX = visual.scale
         if (child.scaleY != visual.scale) child.scaleY = visual.scale
         if (child.alpha != visual.alpha) child.alpha = visual.alpha
+        (child as? NativeAppListRowView)?.setIconBlurRadiusPx(
+            radiusPx = visual.blurRadiusPx,
+            tier = currentConfig.value.blurTier,
+        )
     }
 
     private fun resetAttachedChildVisuals() {
@@ -169,5 +176,17 @@ class NativeAppListView @JvmOverloads constructor(
         if (child.scaleX != 1f) child.scaleX = 1f
         if (child.scaleY != 1f) child.scaleY = 1f
         if (child.alpha != 1f) child.alpha = 1f
+        (child as? NativeAppListRowView)?.setIconBlurRadiusPx(0f, NativeBlurTier.OFF)
+    }
+
+    private fun updateViewportPadding(viewportHeight: Int) {
+        val verticalPadding = if (currentConfig.value.centerEdgeItems) {
+            ((viewportHeight - currentConfig.value.rowHeightPx) / 2).coerceAtLeast(0)
+        } else {
+            0
+        }
+        if (paddingTop != verticalPadding || paddingBottom != verticalPadding) {
+            setPadding(0, verticalPadding, 0, verticalPadding)
+        }
     }
 }

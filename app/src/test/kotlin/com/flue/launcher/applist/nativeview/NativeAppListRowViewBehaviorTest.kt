@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.view.View
+import android.view.MotionEvent
 import com.flue.launcher.applist.model.AppItemKey
 import com.flue.launcher.applist.model.AppItemType
 import com.flue.launcher.applist.model.AppListEntry
@@ -119,6 +120,7 @@ class NativeAppListRowViewBehaviorTest {
         val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
             setConfig(
                 drawingConfig().copy(
+                    centerEdgeItems = false,
                     fisheyeEnabled = true,
                     fisheyeRange = 1f,
                     fisheyeStrength = 1f,
@@ -142,12 +144,39 @@ class NativeAppListRowViewBehaviorTest {
         val scales = (0 until view.childCount).map { view.getChildAt(it).scaleX }
         assertTrue(scales.max() > scales.min())
 
-        view.setConfig(drawingConfig().copy(fisheyeEnabled = false))
+        view.setConfig(
+            drawingConfig().copy(
+                centerEdgeItems = false,
+                fisheyeEnabled = false,
+            ),
+        )
 
         (0 until view.childCount).forEach { index ->
             assertEquals(1f, view.getChildAt(index).scaleX, 0f)
             assertEquals(1f, view.getChildAt(index).alpha, 0f)
         }
+        view.release()
+    }
+
+    @Test
+    fun centeredEdgePaddingLetsTheFirstAndLastRowsReachViewportCenter() {
+        val view = NativeAppListView(RuntimeEnvironment.getApplication())
+        view.setConfig(
+            drawingConfig().copy(
+                rowHeightPx = 40,
+                centerEdgeItems = true,
+            ),
+        )
+
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(120, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 100, 120)
+
+        assertEquals(40, view.paddingTop)
+        assertEquals(40, view.paddingBottom)
+        assertFalse(view.clipToPadding)
         view.release()
     }
 
@@ -270,6 +299,43 @@ class NativeAppListRowViewBehaviorTest {
         assertNull(clickListenerOf(holder.itemView))
         holder.bind(boundRow(null, key = "component:third"), config)
         assertSame(firstListener, clickListenerOf(holder.itemView))
+    }
+
+    @Test
+    fun longPressRequestsActionsForTheLatestStableKey() {
+        val parent = androidx.recyclerview.widget.RecyclerView(
+            RuntimeEnvironment.getApplication(),
+        )
+        val commands = mutableListOf<AppListCommand>()
+        val holder = NativeAppListAdapter.AppItemViewHolder.create(parent, commands::add)
+        val config = resolvedDrawingConfig()
+
+        holder.bind(boundRow(null, key = "component:first"), config)
+        holder.bind(boundRow(null, key = "component:latest"), config)
+
+        assertTrue(holder.itemView.performLongClick())
+        assertEquals(
+            AppListCommand.ShowActions(AppItemKey("component:latest")),
+            commands.single(),
+        )
+    }
+
+    @Test
+    fun leftSafeInsetIsExcludedFromTheNativeRowHitRegion() {
+        val row = NativeAppListRowView(RuntimeEnvironment.getApplication())
+        row.bind(
+            boundRow(null),
+            NativeAppListResolvedConfig.from(drawingConfig().copy(leftSafeInsetPx = 20)),
+        )
+        measureAndLayout(row)
+        val outside = MotionEvent.obtain(0L, 0L, MotionEvent.ACTION_DOWN, 5f, 20f, 0)
+        val inside = MotionEvent.obtain(0L, 0L, MotionEvent.ACTION_DOWN, 30f, 20f, 0)
+
+        assertFalse(row.onTouchEvent(outside))
+        assertTrue(row.onTouchEvent(inside))
+
+        outside.recycle()
+        inside.recycle()
     }
 
     @Test

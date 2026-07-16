@@ -34,11 +34,16 @@ data class NativeAppListConfig(
     val rowPaddingBottomPx: Int = DEFAULT_VERTICAL_PADDING_PX,
     val labelTextSizePx: Float = DEFAULT_LABEL_TEXT_SIZE_PX,
     val iconLabelGapPx: Int = DEFAULT_ICON_LABEL_GAP_PX,
+    val centerEdgeItems: Boolean = true,
     val palette: NativeAppListPalette = NativeAppListPalette(),
     val appScale: Float = 1f,
     val fisheyeEnabled: Boolean = false,
     val fisheyeRange: Float = 0.4f,
     val fisheyeStrength: Float = 1f,
+    val topFadeRangePx: Float = 0f,
+    val bottomFadeRangePx: Float = 0f,
+    val topBlurRadiusPx: Float = 0f,
+    val bottomBlurRadiusPx: Float = 0f,
     val blurTier: NativeBlurTier = NativeBlurTier.OFF,
     val rotaryHapticsEnabled: Boolean = true,
     val theme: NativeAppListTheme = NativeAppListTheme.DARK,
@@ -89,7 +94,11 @@ internal fun NativeAppListConfig.legalized(): NativeAppListConfig {
             .coerceIn(MIN_FISHEYE_RANGE, 1f),
         fisheyeStrength = fisheyeStrength
             .finiteOr(0f)
-            .coerceIn(0f, 1f),
+            .coerceIn(0f, 2f),
+        topFadeRangePx = topFadeRangePx.nonNegativeFiniteMetric(),
+        bottomFadeRangePx = bottomFadeRangePx.nonNegativeFiniteMetric(),
+        topBlurRadiusPx = topBlurRadiusPx.nonNegativeFiniteMetric(),
+        bottomBlurRadiusPx = bottomBlurRadiusPx.nonNegativeFiniteMetric(),
         rowBorder = rowBorder.copy(
             colorArgb = rowBorder.colorArgb.sanitizedArgb(),
             widthPx = rowBorder.widthPx
@@ -117,6 +126,9 @@ private fun Int.positiveMetricOr(fallback: Int): Int =
 
 private fun Float.finiteOr(fallback: Float): Float = takeIf(Float::isFinite) ?: fallback
 
+private fun Float.nonNegativeFiniteMetric(): Float =
+    finiteOr(0f).coerceIn(0f, MAX_NATIVE_METRIC_PX.toFloat())
+
 private fun Long.sanitizedArgb(): Long = this and 0xffffffffL
 
 private const val MAX_NATIVE_METRIC_PX = 4096
@@ -135,6 +147,7 @@ private const val DEFAULT_ICON_LABEL_GAP_PX = 12
 internal data class NativeLinearChildVisual(
     var scale: Float,
     var alpha: Float,
+    var blurRadiusPx: Float = 0f,
 )
 
 internal fun nativeLinearChildVisual(
@@ -146,25 +159,51 @@ internal fun nativeLinearChildVisual(
     val baseScale = config.appScale.takeIf(Float::isFinite)?.coerceAtLeast(0f) ?: 1f
     if (
         !config.active ||
-        !config.fisheyeEnabled ||
         !childCenterY.isFinite() ||
         viewportHeight <= 0
     ) {
         output.scale = baseScale
         output.alpha = 1f
+        output.blurRadiusPx = 0f
         return output
     }
 
-    val halfHeight = viewportHeight / 2f
-    val normalizedDistance = (abs(childCenterY - halfHeight) / halfHeight).coerceIn(0f, 1f)
-    val edgeBand = config.fisheyeRange.takeIf(Float::isFinite)?.coerceIn(0.01f, 1f) ?: 0.4f
-    val edgeStart = 1f - edgeBand
-    val linearProgress = ((normalizedDistance - edgeStart) / edgeBand).coerceIn(0f, 1f)
-    val smoothProgress = linearProgress * linearProgress * (3f - 2f * linearProgress)
-    val strength = config.fisheyeStrength.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 0f
-    val effectProgress = smoothProgress * strength
+    val effectProgress = if (config.fisheyeEnabled) {
+        val halfHeight = viewportHeight / 2f
+        val normalizedDistance = (abs(childCenterY - halfHeight) / halfHeight).coerceIn(0f, 1f)
+        val edgeBand = config.fisheyeRange.takeIf(Float::isFinite)?.coerceIn(0.01f, 1f) ?: 0.4f
+        val edgeStart = 1f - edgeBand
+        val linearProgress = ((normalizedDistance - edgeStart) / edgeBand).coerceIn(0f, 1f)
+        val smoothProgress = linearProgress * linearProgress * (3f - 2f * linearProgress)
+        val strength = config.fisheyeStrength.takeIf(Float::isFinite)?.coerceIn(0f, 2f) ?: 0f
+        smoothProgress * strength
+    } else {
+        0f
+    }
 
+    val topEdgeProgress = edgeProgress(
+        coordinate = childCenterY,
+        edgeRange = config.topFadeRangePx,
+    )
+    val bottomEdgeProgress = edgeProgress(
+        coordinate = viewportHeight - childCenterY,
+        edgeRange = config.bottomFadeRangePx,
+    )
+    val fadeProgress = maxOf(topEdgeProgress, bottomEdgeProgress)
     output.scale = baseScale * (1f - 0.45f * effectProgress)
-    output.alpha = 1f - 0.45f * effectProgress
+    output.alpha = (1f - 0.45f * effectProgress) * (1f - fadeProgress)
+    output.blurRadiusPx = if (config.blurTier == NativeBlurTier.SYSTEM) {
+        maxOf(
+            config.topBlurRadiusPx * topEdgeProgress,
+            config.bottomBlurRadiusPx * bottomEdgeProgress,
+        )
+    } else {
+        0f
+    }
     return output
+}
+
+private fun edgeProgress(coordinate: Float, edgeRange: Float): Float {
+    if (!coordinate.isFinite() || !edgeRange.isFinite() || edgeRange <= 0f) return 0f
+    return (1f - coordinate / edgeRange).coerceIn(0f, 1f)
 }

@@ -118,7 +118,7 @@ class NativeAppListPerformancePolicyTest {
         assertTrue(legalized.appScale.isFinite())
         assertTrue(legalized.appScale > 0f)
         assertTrue(legalized.fisheyeRange in 0.01f..1f)
-        assertTrue(legalized.fisheyeStrength in 0f..1f)
+        assertTrue(legalized.fisheyeStrength in 0f..2f)
         assertEquals(0f, legalized.rowBorder.widthPx, 0f)
         assertEquals(0f, legalized.rowBorder.cornerRadiusPx, 0f)
     }
@@ -198,5 +198,28 @@ class NativeAppListPerformancePolicyTest {
         assertSame(output, result)
         assertEquals(1f, result.scale, 0f)
         assertEquals(1f, result.alpha, 0f)
+    }
+
+    @Test
+    fun edgeFadeAndBlurAreComputedInTheReusableChildVisual() {
+        val config = NativeAppListConfig(
+            fisheyeEnabled = false,
+            topFadeRangePx = 60f,
+            bottomFadeRangePx = 60f,
+            topBlurRadiusPx = 8f,
+            bottomBlurRadiusPx = 8f,
+            blurTier = NativeBlurTier.SYSTEM,
+        )
+
+        val center = nativeLinearChildVisual(120f, 240, config)
+        val topEdge = nativeLinearChildVisual(0f, 240, config)
+        val bottomEdge = nativeLinearChildVisual(240f, 240, config)
+
+        assertEquals(1f, center.alpha, 0f)
+        assertEquals(0f, center.blurRadiusPx, 0f)
+        assertEquals(0f, topEdge.alpha, 0f)
+        assertEquals(8f, topEdge.blurRadiusPx, 0f)
+        assertEquals(0f, bottomEdge.alpha, 0f)
+        assertEquals(8f, bottomEdge.blurRadiusPx, 0f)
     }
 }

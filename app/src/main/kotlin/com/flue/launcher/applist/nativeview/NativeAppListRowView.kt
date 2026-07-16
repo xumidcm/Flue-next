@@ -6,7 +6,9 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.os.Build
 import android.view.View
+import android.view.MotionEvent
 import androidx.recyclerview.widget.RecyclerView
 import com.flue.launcher.applist.model.NormalizedPoint
 import kotlin.math.min
@@ -43,6 +45,14 @@ internal class NativeAppListRowView(
     private val iconRenderOwner = NativeAppListIconRenderOwner()
     private var label: String = ""
     private var geometryDirty = true
+    private var iconBlurRadiusBucketPx = 0
+    private val iconEffectRenderer: NativeIconEffectRenderer? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            RenderNodeNativeIconEffectRenderer()
+        } else {
+            null
+        }
+    private val drawIconContentBlock: (Canvas) -> Unit = ::drawIconContent
 
     init {
         isClickable = false
@@ -57,6 +67,7 @@ internal class NativeAppListRowView(
     ) {
         applyConfig(config)
         iconRenderOwner.bind(row.icon)
+        iconEffectRenderer?.invalidateContent()
         label = row.entry.label
         contentDescription = row.entry.label
         isClickable = true
@@ -77,6 +88,7 @@ internal class NativeAppListRowView(
                 this.config.iconLabelGapPx != next.iconLabelGapPx
         this.config = next
         geometryDirty = true
+        iconEffectRenderer?.invalidateContent()
         updatePaints()
         if (drawingMetricsChanged) {
             requestLayout()
@@ -86,10 +98,13 @@ internal class NativeAppListRowView(
 
     fun clearBinding() {
         iconRenderOwner.clear()
+        iconEffectRenderer?.discardContent()
         label = ""
         contentDescription = null
         setOnClickListener(null)
+        setOnLongClickListener(null)
         isClickable = false
+        isLongClickable = false
         isPressed = false
         scaleX = 1f
         scaleY = 1f
@@ -97,6 +112,19 @@ internal class NativeAppListRowView(
         translationX = 0f
         translationY = 0f
         rotation = 0f
+        setIconBlurRadiusPx(0f, NativeBlurTier.OFF)
+        invalidate()
+    }
+
+    fun setIconBlurRadiusPx(radiusPx: Float, tier: NativeBlurTier) {
+        val nextBucket = if (tier == NativeBlurTier.SYSTEM && Build.VERSION.SDK_INT >= 31) {
+            quantizeNativeBlurRadiusPx(radiusPx)
+        } else {
+            0
+        }
+        if (nextBucket == iconBlurRadiusBucketPx) return
+        iconBlurRadiusBucketPx = nextBucket
+        iconEffectRenderer?.setBlurRadiusBucket(nextBucket)
         invalidate()
     }
 
@@ -139,6 +167,7 @@ internal class NativeAppListRowView(
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
         super.onSizeChanged(width, height, oldWidth, oldHeight)
         geometryDirty = true
+        iconEffectRenderer?.invalidateContent()
         ensureGeometry()
     }
 
@@ -169,17 +198,10 @@ internal class NativeAppListRowView(
             )
         }
 
-        val drawableBitmap = iconRenderOwner.bitmapForDraw()
-        if (drawableBitmap != null) {
-            canvas.drawBitmap(drawableBitmap, null, iconBounds, iconPaint)
+        if (iconBlurRadiusBucketPx > 0 && iconEffectRenderer != null) {
+            iconEffectRenderer.draw(canvas, width, height, drawIconContentBlock)
         } else {
-            canvas.drawRoundRect(
-                iconBounds,
-                iconBounds.width() * 0.25f,
-                iconBounds.height() * 0.25f,
-                fallbackBackgroundPaint,
-            )
-            canvas.drawPath(fallbackPath, fallbackForegroundPaint)
+            drawIconContent(canvas)
         }
 
         val labelLeft = iconBounds.right + config.iconLabelGapPx
@@ -211,6 +233,29 @@ internal class NativeAppListRowView(
 
     override fun performClick(): Boolean = super.performClick()
 
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        ensureGeometry()
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && !rowBounds.contains(event.x, event.y)) {
+            return false
+        }
+        return super.onTouchEvent(event)
+    }
+
+    private fun drawIconContent(canvas: Canvas) {
+        val drawableBitmap = iconRenderOwner.bitmapForDraw()
+        if (drawableBitmap != null) {
+            canvas.drawBitmap(drawableBitmap, null, iconBounds, iconPaint)
+        } else {
+            canvas.drawRoundRect(
+                iconBounds,
+                iconBounds.width() * 0.25f,
+                iconBounds.height() * 0.25f,
+                fallbackBackgroundPaint,
+            )
+            canvas.drawPath(fallbackPath, fallbackForegroundPaint)
+        }
+    }
+
     private fun updatePaints() {
         rowPaint.color = config.palette.rowBackgroundColorArgb.toInt()
         borderPaint.color = config.rowBorder.colorArgb.toInt()
@@ -226,7 +271,12 @@ internal class NativeAppListRowView(
 
     private fun ensureGeometry() {
         if (!geometryDirty) return
-        rowBounds.set(0f, 0f, width.toFloat(), height.toFloat())
+        rowBounds.set(
+            config.leftSafeInsetPx.toFloat().coerceAtMost(width.toFloat()),
+            0f,
+            width.toFloat(),
+            height.toFloat(),
+        )
 
         val availableIconHeight =
             height - config.rowPaddingTopPx - config.rowPaddingBottomPx

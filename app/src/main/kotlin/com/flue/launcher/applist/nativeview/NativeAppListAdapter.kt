@@ -68,6 +68,11 @@ internal class NativeAppListAdapter(
                 ),
             )
         }
+        private val longClickListener = View.OnLongClickListener longClick@ {
+            val row = boundRow ?: return@longClick false
+            commandSink(AppListCommand.ShowActions(row.stableKey))
+            true
+        }
 
         fun bind(
             row: NativeAppListBoundRow<Bitmap>,
@@ -76,6 +81,7 @@ internal class NativeAppListAdapter(
             boundRow = row
             rowView.bind(row = row, config = config)
             rowView.setOnClickListener(clickListener)
+            rowView.setOnLongClickListener(longClickListener)
         }
 
         fun clear() {
