@@ -44,6 +44,7 @@ data class NativeAppListConfig(
     val bottomFadeRangePx: Float = 0f,
     val topBlurRadiusPx: Float = 0f,
     val bottomBlurRadiusPx: Float = 0f,
+    val contentOverlayBlurRadiusPx: Float = 0f,
     val blurTier: NativeBlurTier = NativeBlurTier.OFF,
     val rotaryHapticsEnabled: Boolean = true,
     val theme: NativeAppListTheme = NativeAppListTheme.DARK,
@@ -99,6 +100,7 @@ internal fun NativeAppListConfig.legalized(): NativeAppListConfig {
         bottomFadeRangePx = bottomFadeRangePx.nonNegativeFiniteMetric(),
         topBlurRadiusPx = topBlurRadiusPx.nonNegativeFiniteMetric(),
         bottomBlurRadiusPx = bottomBlurRadiusPx.nonNegativeFiniteMetric(),
+        contentOverlayBlurRadiusPx = contentOverlayBlurRadiusPx.nonNegativeFiniteMetric(),
         rowBorder = rowBorder.copy(
             colorArgb = rowBorder.colorArgb.sanitizedArgb(),
             widthPx = rowBorder.widthPx

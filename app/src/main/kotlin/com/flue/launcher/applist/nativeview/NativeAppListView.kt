@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
+import android.os.Build
 import androidx.recyclerview.widget.RecyclerView
 import com.flue.launcher.applist.model.AppListCommand
 
@@ -81,6 +82,7 @@ class NativeAppListView @JvmOverloads constructor(
             currentConfig.value.initialResetToken != next.value.initialResetToken
         currentConfig = next
         nativeAdapter.setConfig(next)
+        applyContentOverlayBlur()
         updateViewportPadding(height)
         applyAttachedChildVisuals()
         if (resetInitialScroll) {
@@ -121,6 +123,7 @@ class NativeAppListView @JvmOverloads constructor(
         stopScroll()
         removeOnScrollListener(childVisualScrollListener)
         removeOnChildAttachStateChangeListener(childVisualAttachListener)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) setRenderEffect(null)
         onCommand = null
         nativeAdapter.clearSynchronously()
         adapter = null
@@ -188,5 +191,15 @@ class NativeAppListView @JvmOverloads constructor(
         if (paddingTop != verticalPadding || paddingBottom != verticalPadding) {
             setPadding(0, verticalPadding, 0, verticalPadding)
         }
+    }
+
+    private fun applyContentOverlayBlur() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val bucket = if (currentConfig.value.blurTier == NativeBlurTier.SYSTEM) {
+            quantizeNativeBlurRadiusPx(currentConfig.value.contentOverlayBlurRadiusPx)
+        } else {
+            0
+        }
+        setRenderEffect(bucket.takeIf { it > 0 }?.let(NativeSystemBlurEffectCache::get))
     }
 }

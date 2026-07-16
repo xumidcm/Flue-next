@@ -76,6 +76,15 @@ class NativeListDrawerConfigTest {
         assertEquals(25f, config.labelTextSizePx)
     }
 
+    @Test
+    fun actionOverlayRequestsTheLegacySixteenDpContentBlur() {
+        val config = nativeListDrawerConfig(
+            request(density = 2f, overlayOpen = true),
+        )
+
+        assertEquals(32f, config.contentOverlayBlurRadiusPx)
+    }
+
     private fun request(
         density: Float = 1f,
         fontScale: Float = 1f,
@@ -87,6 +96,7 @@ class NativeListDrawerConfigTest {
         fisheyeStrengthPercent: Int = 100,
         sdkInt: Int = Build.VERSION_CODES.S,
         suppressHeavyEffects: Boolean = false,
+        overlayOpen: Boolean = false,
         rowBorderEnabled: Boolean = false,
     ) = NativeListDrawerConfigRequest(
         density = density,
@@ -105,6 +115,7 @@ class NativeListDrawerConfigTest {
         bottomFadeRangeDp = 56,
         topBlurRadiusDp = 4f,
         bottomBlurRadiusDp = 4f,
+        overlayOpen = overlayOpen,
         blurEnabled = true,
         edgeBlurEnabled = true,
         suppressHeavyEffects = suppressHeavyEffects,

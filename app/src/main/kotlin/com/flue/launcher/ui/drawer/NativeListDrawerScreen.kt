@@ -5,6 +5,11 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.background
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -13,6 +18,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.flue.launcher.applist.integration.rememberNativeAppListProjection
+import com.flue.launcher.applist.model.AppItemKey
 import com.flue.launcher.applist.model.AppListCommand
 import com.flue.launcher.applist.nativeview.NativeAppListConfig
 import com.flue.launcher.applist.nativeview.NativeAppListHost
@@ -60,6 +66,11 @@ fun NativeListDrawerScreen(
     modifier: Modifier = Modifier,
 ) {
     val projection = rememberNativeAppListProjection(apps, twoToneIconsEnabled)
+    var actionAppKey by remember { mutableStateOf<String?>(null) }
+    val actionApp = actionAppKey?.let { key -> projection.appsByKey[AppItemKey(key)] }
+    LaunchedEffect(actionAppKey, projection) {
+        if (actionAppKey != null && actionApp == null) actionAppKey = null
+    }
     val localDensity = LocalDensity.current
     val density = localDensity.density
     val paletteStyle = if (uiStyle == UiStyle.MATERIAL_3) UiStyle.APPLE_WATCH else uiStyle
@@ -86,6 +97,7 @@ fun NativeListDrawerScreen(
                 bottomFadeRangeDp = bottomFadeRangeDp,
                 topBlurRadiusDp = topBlurRadiusDp,
                 bottomBlurRadiusDp = bottomBlurRadiusDp,
+                overlayOpen = actionApp != null,
                 blurEnabled = blurEnabled,
                 edgeBlurEnabled = edgeBlurEnabled,
                 suppressHeavyEffects = suppressHeavyEffects,
@@ -107,7 +119,10 @@ fun NativeListDrawerScreen(
                     is AppListCommand.Open -> if (app != null) {
                         onAppClick(app, Offset(command.origin.x, command.origin.y))
                     }
-                    is AppListCommand.ShowActions -> if (app != null) onLongClick(app)
+                    is AppListCommand.ShowActions -> if (app != null) {
+                        actionAppKey = command.key.value
+                        onLongClick(app)
+                    }
                     is AppListCommand.Move -> onReorder(command)
                     is AppListCommand.CreateFolder -> onCreateFolder(command)
                     is AppListCommand.Hide -> if (app != null) onExcludeApp(app)
@@ -120,6 +135,29 @@ fun NativeListDrawerScreen(
                 .fillMaxSize()
                 .background(palette.background),
         )
+        actionApp?.let { app ->
+            AppShortcutOverlay(
+                app = app,
+                blurEnabled = blurEnabled,
+                onExcludeApp = { onExcludeApp(app) },
+                onRemoveShortcut = if (app.isAppListShortcut) {
+                    { onRemoveShortcut(app) }
+                } else {
+                    null
+                },
+                onRenameFolder = if (app.isFolder) {
+                    { name -> onRenameFolder(app, name) }
+                } else {
+                    null
+                },
+                onDissolveFolder = if (app.isFolder) {
+                    { onDissolveFolder(app) }
+                } else {
+                    null
+                },
+                onDismiss = { actionAppKey = null },
+            )
+        }
     }
 }
 
@@ -140,6 +178,7 @@ internal data class NativeListDrawerConfigRequest(
     val bottomFadeRangeDp: Int,
     val topBlurRadiusDp: Float,
     val bottomBlurRadiusDp: Float,
+    val overlayOpen: Boolean,
     val blurEnabled: Boolean,
     val edgeBlurEnabled: Boolean,
     val suppressHeavyEffects: Boolean,
@@ -217,6 +256,7 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
             ?.coerceAtLeast(0f)
             ?.times(density)
             ?: 0f,
+        contentOverlayBlurRadiusPx = if (request.overlayOpen) 16f * density else 0f,
         blurTier = blurTier,
         rotaryHapticsEnabled = request.rotaryHapticsEnabled,
         theme = if (request.darkMode) NativeAppListTheme.DARK else NativeAppListTheme.LIGHT,
