@@ -52,6 +52,7 @@ internal class NativeAppListRowView(
     private var moveTranslationY = 0f
     private var dragTranslationY = 0f
     private var flowTranslationY = 0f
+    private var flowTranslationX = 0f
     private var visualScale = 1f
     private var interactionScale = 1f
     private var dragVisual = false
@@ -134,6 +135,7 @@ internal class NativeAppListRowView(
         moveTranslationY = 0f
         dragTranslationY = 0f
         flowTranslationY = 0f
+        flowTranslationX = 0f
         rotation = 0f
         setIconBlurRadiusPx(0f, NativeBlurTier.OFF)
         invalidate()
@@ -183,6 +185,11 @@ internal class NativeAppListRowView(
     }
 
     fun setFlowTranslationY(y: Float) {
+        setFlowTranslation(flowTranslationX, y)
+    }
+
+    fun setFlowTranslation(x: Float, y: Float) {
+        flowTranslationX = x
         flowTranslationY = y
         applyCompositeTranslation()
     }
@@ -190,7 +197,7 @@ internal class NativeAppListRowView(
     fun positionTranslationYWithoutFlow(): Float = moveTranslationY + dragTranslationY
 
     private fun applyCompositeTranslation() {
-        translationX = moveTranslationX
+        translationX = moveTranslationX + flowTranslationX
         translationY = moveTranslationY + dragTranslationY + flowTranslationY
     }
 
@@ -242,16 +249,25 @@ internal class NativeAppListRowView(
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val desiredWidth = (
-            config.leftSafeInsetPx.toLong() +
-                config.rowPaddingStartPx.toLong() +
-                config.iconSizePx.toLong() +
-                config.iconLabelGapPx.toLong() +
-                config.rowPaddingEndPx.toLong()
-            ).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        val desiredWidth = if (config.presentation == NativeAppListPresentation.HONEYCOMB) {
+            config.honeycombCellSizePx.toInt().coerceAtLeast(config.iconSizePx)
+        } else {
+            (
+                config.leftSafeInsetPx.toLong() +
+                    config.rowPaddingStartPx.toLong() +
+                    config.iconSizePx.toLong() +
+                    config.iconLabelGapPx.toLong() +
+                    config.rowPaddingEndPx.toLong()
+                ).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        }
+        val desiredHeight = if (config.presentation == NativeAppListPresentation.HONEYCOMB) {
+            config.honeycombCellSizePx.toInt().coerceAtLeast(config.iconSizePx)
+        } else {
+            config.rowHeightPx
+        }
         setMeasuredDimension(
             resolveSizeAndState(desiredWidth, widthMeasureSpec, 0),
-            resolveSizeAndState(config.rowHeightPx, heightMeasureSpec, 0),
+            resolveSizeAndState(desiredHeight, heightMeasureSpec, 0),
         )
     }
 
@@ -297,7 +313,11 @@ internal class NativeAppListRowView(
 
         val labelLeft = iconBounds.right + config.iconLabelGapPx
         val labelRight = width.toFloat() - config.rowPaddingEndPx
-        if (label.isNotEmpty() && labelRight > labelLeft) {
+        if (
+            config.presentation == NativeAppListPresentation.LINEAR &&
+            label.isNotEmpty() &&
+            labelRight > labelLeft
+        ) {
             labelPaint.getFontMetrics(labelFontMetrics)
             val baseline = height / 2f -
                 (labelFontMetrics.ascent + labelFontMetrics.descent) / 2f
@@ -373,11 +393,18 @@ internal class NativeAppListRowView(
             height.toFloat(),
         )
 
-        val availableIconHeight =
-            height - config.rowPaddingTopPx - config.rowPaddingBottomPx
-        val iconTop = config.rowPaddingTopPx +
-            (availableIconHeight - config.iconSizePx) / 2f
-        val iconLeft = config.leftSafeInsetPx + config.rowPaddingStartPx.toFloat()
+        val iconTop: Float
+        val iconLeft: Float
+        if (config.presentation == NativeAppListPresentation.HONEYCOMB) {
+            iconTop = (height - config.iconSizePx) / 2f
+            iconLeft = (width - config.iconSizePx) / 2f
+        } else {
+            val availableIconHeight =
+                height - config.rowPaddingTopPx - config.rowPaddingBottomPx
+            iconTop = config.rowPaddingTopPx +
+                (availableIconHeight - config.iconSizePx) / 2f
+            iconLeft = config.leftSafeInsetPx + config.rowPaddingStartPx.toFloat()
+        }
         iconBounds.set(
             iconLeft,
             iconTop,

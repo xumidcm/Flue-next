@@ -1,6 +1,7 @@
 package com.flue.launcher.applist.nativeview
 
 import kotlin.math.abs
+import kotlin.math.hypot
 
 enum class NativeAppListTheme {
     LIGHT,
@@ -10,6 +11,11 @@ enum class NativeAppListTheme {
 enum class NativeAppListIconShape {
     CIRCLE,
     ROUNDED_RECT,
+}
+
+enum class NativeAppListPresentation {
+    LINEAR,
+    HONEYCOMB,
 }
 
 data class NativeAppListRowBorder(
@@ -29,6 +35,7 @@ data class NativeAppListPalette(
 )
 
 data class NativeAppListConfig(
+    val presentation: NativeAppListPresentation = NativeAppListPresentation.LINEAR,
     val active: Boolean = true,
     val initialResetToken: Long = 0L,
     val leftSafeInsetPx: Int = 0,
@@ -42,6 +49,9 @@ data class NativeAppListConfig(
     val iconLabelGapPx: Int = DEFAULT_ICON_LABEL_GAP_PX,
     val iconShape: NativeAppListIconShape = NativeAppListIconShape.CIRCLE,
     val iconCornerRadiusPx: Float = 0f,
+    val honeycombCellSizePx: Float = 0f,
+    val honeycombNarrowColumns: Int = 4,
+    val honeycombFisheyeRangeRows: Int = 4,
     val centerEdgeItems: Boolean = true,
     val allowFolderCreation: Boolean = true,
     val iconShadowEnabled: Boolean = true,
@@ -100,6 +110,9 @@ internal fun NativeAppListConfig.legalized(): NativeAppListConfig {
             .coerceIn(MIN_POSITIVE_DRAWING_VALUE, MAX_NATIVE_METRIC_PX.toFloat()),
         iconLabelGapPx = iconLabelGapPx.nonNegativeMetric(),
         iconCornerRadiusPx = iconCornerRadiusPx.nonNegativeFiniteMetric(),
+        honeycombCellSizePx = honeycombCellSizePx.nonNegativeFiniteMetric(),
+        honeycombNarrowColumns = honeycombNarrowColumns.coerceIn(1, 10),
+        honeycombFisheyeRangeRows = honeycombFisheyeRangeRows.coerceIn(1, 8),
         entryProgress = entryProgress.finiteOr(1f).coerceIn(0f, 1f),
         palette = palette.legalized(),
         appScale = appScale
@@ -257,6 +270,89 @@ internal fun nativeInteractionScale(
     folderHover -> 0.90f
     pressed -> 0.97f
     else -> 1f
+}
+
+internal data class NativeHoneycombChildVisual(
+    val scale: Float,
+    val alpha: Float,
+    val translationX: Float,
+    val translationY: Float,
+    val blurRadiusPx: Float,
+)
+
+internal fun nativeHoneycombChildVisual(
+    centerX: Float,
+    centerY: Float,
+    viewportWidth: Float,
+    viewportHeight: Float,
+    iconSizePx: Float,
+    config: NativeAppListConfig,
+): NativeHoneycombChildVisual {
+    if (
+        viewportWidth <= 0f || viewportHeight <= 0f ||
+        !centerX.isFinite() || !centerY.isFinite()
+    ) {
+        return NativeHoneycombChildVisual(1f, 1f, 0f, 0f, 0f)
+    }
+    val screenCenterX = config.leftSafeInsetPx +
+        (viewportWidth - config.leftSafeInsetPx) / 2f
+    val screenCenterY = viewportHeight / 2f
+    val strength = config.fisheyeStrength.coerceIn(0f, 2f)
+    val minimumScale = (1f - 0.42f * strength).coerceIn(0.16f, 1f)
+    val screenRadius = minOf(
+        viewportWidth - config.leftSafeInsetPx,
+        viewportHeight,
+    ) / 2f
+    val maximumDistance = screenRadius *
+        (config.honeycombFisheyeRangeRows.coerceIn(1, 8) * 0.42f).coerceAtLeast(0.42f)
+    val distance = hypot(centerX - screenCenterX, centerY - screenCenterY)
+    val scale = if (config.fisheyeEnabled && maximumDistance > 0f) {
+        val progress = (distance / maximumDistance).coerceIn(0f, 1f)
+        1f - (1f - minimumScale) * progress
+    } else {
+        1f
+    }
+    val edgeProgress = (abs(centerY - screenCenterY) / (viewportHeight / 2f)).coerceIn(0f, 1f)
+    val easedEdge = edgeProgress * edgeProgress * (3f - 2f * edgeProgress)
+    val compression = if (
+        config.fisheyeEnabled && config.edgeSpacingCompressionEnabled
+    ) {
+        (0.18f * strength * easedEdge).coerceIn(0f, 0.32f)
+    } else {
+        0f
+    }
+    val translationX = -(centerX - screenCenterX) * compression
+    val translationY = nativeFastFlowOffset(
+        rowCenterY = centerY,
+        viewportHeight = viewportHeight,
+        enabled = config.fastFlowAnimationEnabled,
+    ) + (1f - config.entryProgress.coerceIn(0f, 1f)) * 0.08f * viewportHeight
+    val topProgress = edgeProgress(centerY + translationY, config.topFadeRangePx)
+    val bottomProgress = edgeProgress(
+        viewportHeight - centerY - translationY,
+        config.bottomFadeRangePx,
+    )
+    val blur = if (config.blurTier == NativeBlurTier.SYSTEM) {
+        maxOf(
+            config.topBlurRadiusPx * topProgress,
+            config.bottomBlurRadiusPx * bottomProgress,
+        )
+    } else {
+        0f
+    }
+    val compatibilityFade = if (config.blurTier == NativeBlurTier.LITE) {
+        1f - maxOf(topProgress, bottomProgress)
+    } else {
+        1f
+    }
+    return NativeHoneycombChildVisual(
+        scale = scale,
+        alpha = (if (config.fisheyeEnabled) scale.coerceIn(0.24f, 1f) else 1f) *
+            config.entryProgress.coerceIn(0f, 1f) * compatibilityFade,
+        translationX = translationX,
+        translationY = translationY,
+        blurRadiusPx = blur,
+    )
 }
 
 private fun edgeProgress(coordinate: Float, edgeRange: Float): Float {

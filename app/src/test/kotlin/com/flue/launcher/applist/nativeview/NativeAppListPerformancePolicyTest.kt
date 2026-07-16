@@ -24,6 +24,27 @@ class NativeAppListPerformancePolicyTest {
     }
 
     @Test
+    fun honeycombVisualCombinesRadialFisheyeEdgeCompressionAndFlow() {
+        val config = NativeAppListConfig(
+            presentation = NativeAppListPresentation.HONEYCOMB,
+            fisheyeEnabled = true,
+            fisheyeStrength = 1f,
+            honeycombFisheyeRangeRows = 2,
+            edgeSpacingCompressionEnabled = true,
+            fastFlowAnimationEnabled = true,
+        )
+        val center = nativeHoneycombChildVisual(160f, 160f, 320f, 320f, 64f, config)
+        val edge = nativeHoneycombChildVisual(260f, 20f, 320f, 320f, 64f, config)
+
+        assertEquals(1f, center.scale, 0f)
+        assertEquals(1f, center.alpha, 0f)
+        assertTrue(edge.scale < 1f)
+        assertTrue(edge.alpha < 1f)
+        assertTrue(edge.translationX < 0f)
+        assertTrue(edge.translationY < 0f)
+    }
+
+    @Test
     fun api27To30NeverRunsPerIconConvolutionInTheScrollPath() {
         assertEquals(
             NativeBlurTier.LITE,

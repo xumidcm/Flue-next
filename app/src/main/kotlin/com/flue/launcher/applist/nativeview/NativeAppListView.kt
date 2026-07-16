@@ -93,7 +93,7 @@ class NativeAppListView @JvmOverloads constructor(
 
     init {
         setHasFixedSize(true)
-        layoutManager = activeLayoutStrategy.createLayoutManager(context)
+        layoutManager = activeLayoutStrategy.createLayoutManager(context) { currentConfig.value }
         itemAnimator = NativeStableKeyItemAnimator(
             moveDurationMillis = 180L,
             shouldAnimateHolder = { holder -> holder.itemView !== draggedView },
@@ -296,7 +296,7 @@ class NativeAppListView @JvmOverloads constructor(
         resetAttachedChildVisuals()
         val previousLayoutManager = layoutManager
         val savedLayoutState = previousLayoutManager?.onSaveInstanceState()
-        val nextLayoutManager = strategy.createLayoutManager(context)
+        val nextLayoutManager = strategy.createLayoutManager(context) { currentConfig.value }
         activeLayoutStrategy = strategy
         layoutManager = nextLayoutManager
         if (

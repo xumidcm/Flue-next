@@ -7,12 +7,27 @@ import androidx.recyclerview.widget.RecyclerView
 interface NativeAppListLayoutStrategy {
     val semanticKey: Any
 
-    fun createLayoutManager(context: Context): RecyclerView.LayoutManager
+    fun createLayoutManager(
+        context: Context,
+        configProvider: () -> NativeAppListConfig,
+    ): RecyclerView.LayoutManager
 }
 
 object LinearNativeAppListLayoutStrategy : NativeAppListLayoutStrategy {
     override val semanticKey: Any = "linear"
 
-    override fun createLayoutManager(context: Context): RecyclerView.LayoutManager =
+    override fun createLayoutManager(
+        context: Context,
+        configProvider: () -> NativeAppListConfig,
+    ): RecyclerView.LayoutManager =
         LinearLayoutManager(context, RecyclerView.VERTICAL, false)
+}
+
+object HoneycombNativeAppListLayoutStrategy : NativeAppListLayoutStrategy {
+    override val semanticKey: Any = "honeycomb"
+
+    override fun createLayoutManager(
+        context: Context,
+        configProvider: () -> NativeAppListConfig,
+    ): RecyclerView.LayoutManager = NativeHoneycombLayoutManager(configProvider)
 }

@@ -33,6 +33,47 @@ import java.time.Duration
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NativeAppListRowViewBehaviorTest {
     @Test
+    fun honeycombLayoutManagerCentersTheFirstRowAndKeepsAttachedViewsBounded() {
+        val entries = (0 until 100).map { appEntry("component:honey-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    presentation = NativeAppListPresentation.HONEYCOMB,
+                    iconSizePx = 64,
+                    rowHeightPx = 66,
+                    honeycombCellSizePx = 66f,
+                    honeycombNarrowColumns = 3,
+                    centerEdgeItems = false,
+                    fisheyeEnabled = false,
+                ),
+            )
+            setLayoutStrategy(HoneycombNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 320, 320)
+
+        val manager = view.layoutManager as NativeHoneycombLayoutManager
+        val first = manager.findViewByPosition(0)
+        assertTrue(first != null)
+        assertEquals(160f, requireNotNull(first).top + first.height / 2f, 1f)
+        assertTrue("initial childCount=${view.childCount}", view.childCount < 36)
+
+        view.scrollBy(0, 300)
+        assertNull(manager.findViewByPosition(0))
+        assertTrue("scrolled childCount=${view.childCount}", view.childCount < 36)
+        view.release()
+    }
+
+    @Test
     fun rowComposesFlowDragAndDiffTranslationsWithoutOwnersOverwritingEachOther() {
         val row = NativeAppListRowView(RuntimeEnvironment.getApplication())
 
@@ -354,6 +395,7 @@ class NativeAppListRowViewBehaviorTest {
 
             override fun createLayoutManager(
                 context: android.content.Context,
+                configProvider: () -> NativeAppListConfig,
             ): androidx.recyclerview.widget.RecyclerView.LayoutManager =
                 androidx.recyclerview.widget.LinearLayoutManager(context)
         }
