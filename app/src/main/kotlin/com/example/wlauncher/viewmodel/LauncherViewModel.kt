@@ -21,14 +21,10 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.flue.launcher.FlueApplication
-import com.flue.launcher.applist.model.AppItemKey
-import com.flue.launcher.applist.model.AppItemType
+import com.flue.launcher.applist.integration.toNativeAppListEntry
 import com.flue.launcher.applist.model.AppListCommand
-import com.flue.launcher.applist.model.AppListEntry
 import com.flue.launcher.applist.model.AppListReducer
 import com.flue.launcher.applist.model.AppListSnapshot
-import com.flue.launcher.applist.model.IconKey
-import com.flue.launcher.applist.model.LaunchTarget
 import com.flue.launcher.applist.model.NormalizedPoint
 import com.flue.launcher.applist.persistence.AppOrderWriteCoordinator
 import com.flue.launcher.backup.FlueBackupManager
@@ -2715,7 +2711,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val snapshot = runCatching {
             AppListSnapshot.create(
                 generation = SystemClock.elapsedRealtime(),
-                entries = apps.value.map { it.toAppListEntry() },
+                entries = apps.value.map { it.toNativeAppListEntry() },
             )
         }.getOrNull() ?: return
         val reordered = AppListReducer.reduce(snapshot.entries, command)
@@ -3178,26 +3174,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         super.onCleared()
     }
 }
-
-private fun AppInfo.toAppListEntry(): AppListEntry = AppListEntry(
-    key = AppItemKey(componentKey),
-    label = label,
-    type = when {
-        isFolder -> AppItemType.FOLDER
-        isAppListShortcut -> AppItemType.SHORTCUT
-        else -> AppItemType.APP
-    },
-    launchTarget = when {
-        isFolder -> null
-        isAppListShortcut -> shortcutIntentUri?.let { LaunchTarget.IntentUri(it) }
-        else -> LaunchTarget.Component(
-            packageName = packageName,
-            className = activityName,
-        )
-    },
-    iconKey = IconKey(componentKey),
-    folderChildren = folderItemKeys.map(::AppItemKey),
-)
 
 private fun Offset.toNormalizedPoint(): NormalizedPoint = NormalizedPoint(
     x = x.coerceIn(0f, 1f),
