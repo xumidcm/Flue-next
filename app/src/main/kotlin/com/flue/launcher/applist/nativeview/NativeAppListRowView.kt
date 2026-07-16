@@ -1,5 +1,6 @@
 package com.flue.launcher.applist.nativeview
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -39,6 +40,7 @@ internal class NativeAppListRowView(
     private val borderBounds = RectF()
     private val iconBounds = RectF()
     private val fallbackPath = Path()
+    private val iconClipPath = Path()
     private val labelFontMetrics = Paint.FontMetrics()
 
     private var config = NativeAppListConfig()
@@ -46,6 +48,14 @@ internal class NativeAppListRowView(
     private var label: String = ""
     private var geometryDirty = true
     private var folderHover = false
+    private var moveTranslationX = 0f
+    private var moveTranslationY = 0f
+    private var dragTranslationY = 0f
+    private var flowTranslationY = 0f
+    private var visualScale = 1f
+    private var interactionScale = 1f
+    private var dragVisual = false
+    private var interactionAnimator: ValueAnimator? = null
     private var iconBlurRadiusBucketPx = 0
     private val iconEffectRenderer: NativeIconEffectRenderer? =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -87,6 +97,8 @@ internal class NativeAppListRowView(
                 this.config.rowPaddingEndPx != next.rowPaddingEndPx ||
                 this.config.rowPaddingBottomPx != next.rowPaddingBottomPx ||
                 this.config.iconLabelGapPx != next.iconLabelGapPx
+                || this.config.iconShape != next.iconShape
+                || this.config.iconCornerRadiusPx != next.iconCornerRadiusPx
         this.config = next
         geometryDirty = true
         iconEffectRenderer?.invalidateContent()
@@ -108,11 +120,20 @@ internal class NativeAppListRowView(
         isLongClickable = false
         isPressed = false
         folderHover = false
+        dragVisual = false
+        interactionAnimator?.cancel()
+        interactionAnimator = null
+        visualScale = 1f
+        interactionScale = 1f
         scaleX = 1f
         scaleY = 1f
         alpha = 1f
         translationX = 0f
         translationY = 0f
+        moveTranslationX = 0f
+        moveTranslationY = 0f
+        dragTranslationY = 0f
+        flowTranslationY = 0f
         rotation = 0f
         setIconBlurRadiusPx(0f, NativeBlurTier.OFF)
         invalidate()
@@ -133,7 +154,69 @@ internal class NativeAppListRowView(
     fun setFolderHoverState(enabled: Boolean) {
         if (folderHover == enabled) return
         folderHover = enabled
+        updateInteractionScale()
         invalidate()
+    }
+
+    fun setVisualScale(scale: Float) {
+        val next = scale.takeIf(Float::isFinite)?.coerceAtLeast(0f) ?: 1f
+        if (visualScale == next) return
+        visualScale = next
+        applyCompositeScale()
+    }
+
+    fun setDragVisualState(enabled: Boolean) {
+        if (dragVisual == enabled) return
+        dragVisual = enabled
+        updateInteractionScale()
+    }
+
+    fun setMoveTranslation(x: Float, y: Float) {
+        moveTranslationX = x
+        moveTranslationY = y
+        applyCompositeTranslation()
+    }
+
+    fun setDragTranslationY(y: Float) {
+        dragTranslationY = y
+        applyCompositeTranslation()
+    }
+
+    fun setFlowTranslationY(y: Float) {
+        flowTranslationY = y
+        applyCompositeTranslation()
+    }
+
+    fun positionTranslationYWithoutFlow(): Float = moveTranslationY + dragTranslationY
+
+    private fun applyCompositeTranslation() {
+        translationX = moveTranslationX
+        translationY = moveTranslationY + dragTranslationY + flowTranslationY
+    }
+
+    private fun updateInteractionScale() {
+        val target = nativeInteractionScale(isPressed, dragVisual, folderHover)
+        if (target == interactionScale) return
+        interactionAnimator?.cancel()
+        if (!isLaidOut) {
+            interactionScale = target
+            applyCompositeScale()
+            return
+        }
+        interactionAnimator = ValueAnimator.ofFloat(interactionScale, target).apply {
+            duration = 170L
+            addUpdateListener { animator ->
+                interactionScale = animator.animatedValue as Float
+                applyCompositeScale()
+            }
+            start()
+        }
+    }
+
+    private fun applyCompositeScale() {
+        val scale = visualScale * interactionScale
+        scaleX = scale
+        scaleY = scale
     }
 
     fun normalizedIconOrigin(viewport: RecyclerView): NormalizedPoint {
@@ -236,6 +319,7 @@ internal class NativeAppListRowView(
 
     override fun drawableStateChanged() {
         super.drawableStateChanged()
+        updateInteractionScale()
         invalidate()
     }
 
@@ -250,6 +334,8 @@ internal class NativeAppListRowView(
     }
 
     private fun drawIconContent(canvas: Canvas) {
+        val saveCount = canvas.save()
+        canvas.clipPath(iconClipPath)
         val drawableBitmap = iconRenderOwner.bitmapForDraw()
         if (drawableBitmap != null) {
             canvas.drawBitmap(drawableBitmap, null, iconBounds, iconPaint)
@@ -262,6 +348,7 @@ internal class NativeAppListRowView(
             )
             canvas.drawPath(fallbackPath, fallbackForegroundPaint)
         }
+        canvas.restoreToCount(saveCount)
     }
 
     private fun updatePaints() {
@@ -297,6 +384,22 @@ internal class NativeAppListRowView(
             iconLeft + config.iconSizePx,
             iconTop + config.iconSizePx,
         )
+
+        iconClipPath.reset()
+        when (config.iconShape) {
+            NativeAppListIconShape.CIRCLE -> iconClipPath.addCircle(
+                iconBounds.centerX(),
+                iconBounds.centerY(),
+                min(iconBounds.width(), iconBounds.height()) / 2f,
+                Path.Direction.CW,
+            )
+            NativeAppListIconShape.ROUNDED_RECT -> {
+                val radius = config.iconCornerRadiusPx.coerceAtMost(
+                    min(iconBounds.width(), iconBounds.height()) / 2f,
+                )
+                iconClipPath.addRoundRect(iconBounds, radius, radius, Path.Direction.CW)
+            }
+        }
 
         val tileSize = iconBounds.width() * 0.16f
         val tileGap = iconBounds.width() * 0.08f

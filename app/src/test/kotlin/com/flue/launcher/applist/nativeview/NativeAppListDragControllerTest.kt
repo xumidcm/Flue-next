@@ -31,6 +31,7 @@ class NativeAppListDragControllerTest {
         assertTrue(controller.onMove(10f, 121f, 621L))
         assertEquals(key("a"), host.draggingKey)
         assertEquals(AppListCommand.DismissActions, host.commands.last())
+        assertEquals(2, host.hapticCount)
 
         host.hitKey = key("b")
         assertTrue(controller.onMove(10f, 150f, 700L))
@@ -78,6 +79,27 @@ class NativeAppListDragControllerTest {
     }
 
     @Test
+    fun `folder hover and creation stay disabled when the current setting is off`() {
+        val host = FakeDragHost()
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(
+            host = host,
+            scheduler = scheduler,
+            policy = policy,
+            allowFolderCreation = { false },
+        )
+        startDrag(controller, scheduler)
+
+        host.hitKey = key("b")
+        controller.onMove(10f, 150f, 700L)
+        controller.onMove(10f, 151f, 1200L)
+        controller.onUp(10f, 151f, 1201L)
+
+        assertEquals(null, host.folderHoverKey)
+        assertFalse(host.commands.any { it is AppListCommand.CreateFolder })
+    }
+
+    @Test
     fun `snapshot source removal and release cancel callbacks once`() {
         val host = FakeDragHost()
         val scheduler = FakeDragScheduler()
@@ -115,6 +137,7 @@ class NativeAppListDragControllerTest {
         var folderHoverKey: AppItemKey? = null
         var longClickSuppressed = false
         var endDragCount = 0
+        var hapticCount = 0
 
         override val viewportHeightPx: Float = 400f
         override fun keyAt(x: Float, y: Float): AppItemKey? = hitKey
@@ -128,6 +151,7 @@ class NativeAppListDragControllerTest {
         override fun endDrag() { draggingKey = null; endDragCount++ }
         override fun setFolderHover(key: AppItemKey?) { folderHoverKey = key }
         override fun scrollBy(deltaPx: Float) { scrollDeltas += deltaPx }
+        override fun performDragHaptic() { hapticCount++ }
     }
 
     private class FakeDragScheduler : NativeDragScheduler {

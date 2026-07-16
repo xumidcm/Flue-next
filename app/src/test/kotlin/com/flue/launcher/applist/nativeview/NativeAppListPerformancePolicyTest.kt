@@ -8,6 +8,22 @@ import org.junit.Test
 
 class NativeAppListPerformancePolicyTest {
     @Test
+    fun fastFlowUsesTheLegacyCenterCompressionAndOuterAccelerationCurve() {
+        assertEquals(0f, nativeFastFlowOffset(200f, 400f, enabled = true), 0f)
+        assertEquals(35.2f, nativeFastFlowOffset(120f, 400f, enabled = true), 0.001f)
+        assertEquals(-66.8f, nativeFastFlowOffset(0f, 400f, enabled = true), 0.001f)
+        assertEquals(0f, nativeFastFlowOffset(0f, 400f, enabled = false), 0f)
+    }
+
+    @Test
+    fun interactionScaleKeepsTheLegacyPriorityAndTargets() {
+        assertEquals(1f, nativeInteractionScale(false, false, false), 0f)
+        assertEquals(0.97f, nativeInteractionScale(true, false, false), 0f)
+        assertEquals(0.90f, nativeInteractionScale(true, false, true), 0f)
+        assertEquals(0.965f, nativeInteractionScale(true, true, true), 0f)
+    }
+
+    @Test
     fun api27To30NeverRunsPerIconConvolutionInTheScrollPath() {
         assertEquals(
             NativeBlurTier.LITE,
@@ -217,9 +233,16 @@ class NativeAppListPerformancePolicyTest {
 
         assertEquals(1f, center.alpha, 0f)
         assertEquals(0f, center.blurRadiusPx, 0f)
-        assertEquals(0f, topEdge.alpha, 0f)
+        assertEquals(1f, topEdge.alpha, 0f)
         assertEquals(8f, topEdge.blurRadiusPx, 0f)
-        assertEquals(0f, bottomEdge.alpha, 0f)
+        assertEquals(1f, bottomEdge.alpha, 0f)
         assertEquals(8f, bottomEdge.blurRadiusPx, 0f)
+
+        val liteEdge = nativeLinearChildVisual(
+            0f,
+            240,
+            config.copy(blurTier = NativeBlurTier.LITE),
+        )
+        assertEquals(0f, liteEdge.alpha, 0f)
     }
 }

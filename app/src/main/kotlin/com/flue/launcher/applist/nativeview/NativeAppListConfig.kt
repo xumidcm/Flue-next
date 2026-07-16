@@ -7,6 +7,11 @@ enum class NativeAppListTheme {
     DARK,
 }
 
+enum class NativeAppListIconShape {
+    CIRCLE,
+    ROUNDED_RECT,
+}
+
 data class NativeAppListRowBorder(
     val enabled: Boolean = false,
     val colorArgb: Long = 0L,
@@ -20,6 +25,7 @@ data class NativeAppListPalette(
     val pressedOverlayColorArgb: Long = 0x24ffffffL,
     val fallbackIconBackgroundColorArgb: Long = 0x33ffffffL,
     val fallbackIconForegroundColorArgb: Long = 0xccffffffL,
+    val fadeEdgeColorArgb: Long = 0xff000000L,
 )
 
 data class NativeAppListConfig(
@@ -34,7 +40,14 @@ data class NativeAppListConfig(
     val rowPaddingBottomPx: Int = DEFAULT_VERTICAL_PADDING_PX,
     val labelTextSizePx: Float = DEFAULT_LABEL_TEXT_SIZE_PX,
     val iconLabelGapPx: Int = DEFAULT_ICON_LABEL_GAP_PX,
+    val iconShape: NativeAppListIconShape = NativeAppListIconShape.CIRCLE,
+    val iconCornerRadiusPx: Float = 0f,
     val centerEdgeItems: Boolean = true,
+    val allowFolderCreation: Boolean = true,
+    val iconShadowEnabled: Boolean = true,
+    val fastFlowAnimationEnabled: Boolean = false,
+    val edgeSpacingCompressionEnabled: Boolean = true,
+    val entryProgress: Float = 1f,
     val palette: NativeAppListPalette = NativeAppListPalette(),
     val appScale: Float = 1f,
     val fisheyeEnabled: Boolean = false,
@@ -86,6 +99,8 @@ internal fun NativeAppListConfig.legalized(): NativeAppListConfig {
             .finiteOr(DEFAULT_LABEL_TEXT_SIZE_PX)
             .coerceIn(MIN_POSITIVE_DRAWING_VALUE, MAX_NATIVE_METRIC_PX.toFloat()),
         iconLabelGapPx = iconLabelGapPx.nonNegativeMetric(),
+        iconCornerRadiusPx = iconCornerRadiusPx.nonNegativeFiniteMetric(),
+        entryProgress = entryProgress.finiteOr(1f).coerceIn(0f, 1f),
         palette = palette.legalized(),
         appScale = appScale
             .finiteOr(1f)
@@ -119,6 +134,7 @@ private fun NativeAppListPalette.legalized(): NativeAppListPalette = copy(
     pressedOverlayColorArgb = pressedOverlayColorArgb.sanitizedArgb(),
     fallbackIconBackgroundColorArgb = fallbackIconBackgroundColorArgb.sanitizedArgb(),
     fallbackIconForegroundColorArgb = fallbackIconForegroundColorArgb.sanitizedArgb(),
+    fadeEdgeColorArgb = fadeEdgeColorArgb.sanitizedArgb(),
 )
 
 private fun Int.nonNegativeMetric(): Int = coerceIn(0, MAX_NATIVE_METRIC_PX)
@@ -157,6 +173,7 @@ internal fun nativeLinearChildVisual(
     viewportHeight: Int,
     config: NativeAppListConfig,
     output: NativeLinearChildVisual = NativeLinearChildVisual(scale = 1f, alpha = 1f),
+    edgeCenterY: Float = childCenterY,
 ): NativeLinearChildVisual {
     val baseScale = config.appScale.takeIf(Float::isFinite)?.coerceAtLeast(0f) ?: 1f
     if (
@@ -184,16 +201,21 @@ internal fun nativeLinearChildVisual(
     }
 
     val topEdgeProgress = edgeProgress(
-        coordinate = childCenterY,
+        coordinate = edgeCenterY,
         edgeRange = config.topFadeRangePx,
     )
     val bottomEdgeProgress = edgeProgress(
-        coordinate = viewportHeight - childCenterY,
+        coordinate = viewportHeight - edgeCenterY,
         edgeRange = config.bottomFadeRangePx,
     )
     val fadeProgress = maxOf(topEdgeProgress, bottomEdgeProgress)
     output.scale = baseScale * (1f - 0.45f * effectProgress)
-    output.alpha = (1f - 0.45f * effectProgress) * (1f - fadeProgress)
+    val compatibilityFade = if (config.blurTier == NativeBlurTier.LITE) {
+        1f - fadeProgress
+    } else {
+        1f
+    }
+    output.alpha = (1f - 0.45f * effectProgress) * compatibilityFade
     output.blurRadiusPx = if (config.blurTier == NativeBlurTier.SYSTEM) {
         maxOf(
             config.topBlurRadiusPx * topEdgeProgress,
@@ -203,6 +225,38 @@ internal fun nativeLinearChildVisual(
         0f
     }
     return output
+}
+
+internal fun nativeFastFlowOffset(
+    rowCenterY: Float,
+    viewportHeight: Float,
+    enabled: Boolean,
+): Float {
+    if (!enabled || !rowCenterY.isFinite() || !viewportHeight.isFinite() || viewportHeight <= 0f) {
+        return 0f
+    }
+    val centerY = viewportHeight * 0.5f
+    val slowTopY = viewportHeight * 0.30f
+    val slowBottomY = viewportHeight * 0.70f
+    val transformedY = when {
+        rowCenterY < slowTopY ->
+            centerY + (slowTopY - centerY) * 0.56f + (rowCenterY - slowTopY) * 1.85f
+        rowCenterY > slowBottomY ->
+            centerY + (slowBottomY - centerY) * 0.56f + (rowCenterY - slowBottomY) * 1.85f
+        else -> centerY + (rowCenterY - centerY) * 0.56f
+    }
+    return (transformedY - rowCenterY).coerceIn(-260f, 260f)
+}
+
+internal fun nativeInteractionScale(
+    pressed: Boolean,
+    dragged: Boolean,
+    folderHover: Boolean,
+): Float = when {
+    dragged -> 0.965f
+    folderHover -> 0.90f
+    pressed -> 0.97f
+    else -> 1f
 }
 
 private fun edgeProgress(coordinate: Float, edgeRange: Float): Float {

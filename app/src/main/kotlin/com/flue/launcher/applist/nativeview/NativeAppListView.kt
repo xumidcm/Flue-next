@@ -1,9 +1,15 @@
 package com.flue.launcher.applist.nativeview
 
+import android.animation.ValueAnimator
 import android.content.Context
+import android.graphics.Canvas
+import android.graphics.LinearGradient
+import android.graphics.Paint
+import android.graphics.Shader
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
+import android.view.HapticFeedbackConstants
 import android.os.Build
 import androidx.recyclerview.widget.RecyclerView
 import androidx.core.view.ViewCompat
@@ -36,6 +42,7 @@ class NativeAppListView @JvmOverloads constructor(
             folderHoverMaxSpeedPxPerMs = 0.55f,
             longPressMillis = 620L,
         ),
+        allowFolderCreation = { currentConfig.value.allowFolderCreation },
     )
     private var activeLayoutStrategy: NativeAppListLayoutStrategy =
         LinearNativeAppListLayoutStrategy
@@ -69,8 +76,20 @@ class NativeAppListView @JvmOverloads constructor(
     private var draggedViewOriginalElevation = 0f
     private var folderHoverKey: AppItemKey? = null
     private var autoScrollRemainder = 0f
+    private val topFadePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val bottomFadePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var topFadeHeight = 0f
+    private var bottomFadeHeight = 0f
+    private val pullToFaceState = NativePullToFaceState(
+        triggerThresholdPx = 72f * resources.displayMetrics.density,
+        maxOffsetPx = resources.displayMetrics.heightPixels.coerceAtLeast(1) / 2f,
+    )
+    private var pullOffsetPx = 0f
+    private var pullTouchOwned = false
+    private var pullSettleAnimator: ValueAnimator? = null
 
     var onCommand: ((AppListCommand) -> Unit)? = null
+    var onScrollToTop: (() -> Unit)? = null
 
     init {
         setHasFixedSize(true)
@@ -92,7 +111,31 @@ class NativeAppListView @JvmOverloads constructor(
         applyAttachedChildVisuals()
     }
 
+    override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
+        super.onSizeChanged(width, height, oldWidth, oldHeight)
+        updateEdgeFadeShaders()
+    }
+
+    override fun dispatchDraw(canvas: Canvas) {
+        val saveCount = canvas.save()
+        if (pullOffsetPx != 0f) canvas.translate(0f, pullOffsetPx)
+        super.dispatchDraw(canvas)
+        canvas.restoreToCount(saveCount)
+        if (!currentConfig.value.active && currentConfig.value.entryProgress <= 0.001f) return
+        if (topFadeHeight > 0f) canvas.drawRect(0f, 0f, width.toFloat(), topFadeHeight, topFadePaint)
+        if (bottomFadeHeight > 0f) {
+            canvas.drawRect(
+                0f,
+                height - bottomFadeHeight,
+                width.toFloat(),
+                height.toFloat(),
+                bottomFadePaint,
+            )
+        }
+    }
+
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (!currentConfig.value.active) return false
         if (dragController.isDragging) return true
         return scrollController.onGenericMotionEvent(event) ||
             super.onGenericMotionEvent(event)
@@ -100,22 +143,54 @@ class NativeAppListView @JvmOverloads constructor(
 
     override fun onDetachedFromWindow() {
         cancelActiveDrag()
+        cancelPull()
         super.onDetachedFromWindow()
     }
 
     override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
-        if (released) return false
+        if (released || !currentConfig.value.active) return false
         if (dragTouchOwned) return true
         val consume = when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                cancelPullSettle()
+                pullToFaceState.onDown(event.y)
                 dragController.onDown(event.x, event.y, event.eventTime)
                 false
             }
-            MotionEvent.ACTION_MOVE ->
-                dragController.onMove(event.x, event.y, event.eventTime)
-            MotionEvent.ACTION_UP ->
+            MotionEvent.ACTION_MOVE -> {
+                val dragConsumed = dragController.onMove(event.x, event.y, event.eventTime)
+                if (dragConsumed) {
+                    pullToFaceState.cancel()
+                    true
+                } else {
+                    val offset = pullToFaceState.onMove(
+                        pointerY = event.y,
+                        atTop = !canScrollVertically(-1),
+                        blocked = dragController.isDragging,
+                    )
+                    if (offset > 0f) {
+                        dragController.onCancel()
+                        pullTouchOwned = true
+                        setPullOffset(offset)
+                        stopScroll()
+                        true
+                    } else {
+                        false
+                    }
+                }
+            }
+            MotionEvent.ACTION_UP -> if (pullToFaceState.isPulling) {
+                releasePull()
+                true
+            } else {
                 dragController.onUp(event.x, event.y, event.eventTime)
-            MotionEvent.ACTION_CANCEL -> dragController.onCancel()
+            }
+            MotionEvent.ACTION_CANCEL -> if (pullToFaceState.isPulling) {
+                cancelPull()
+                true
+            } else {
+                dragController.onCancel()
+            }
             else -> false
         }
         if (consume) {
@@ -143,14 +218,25 @@ class NativeAppListView @JvmOverloads constructor(
             return true
         }
         when (event.actionMasked) {
-            MotionEvent.ACTION_MOVE ->
+            MotionEvent.ACTION_MOVE -> if (pullTouchOwned) {
+                setPullOffset(
+                    pullToFaceState.onMove(
+                        pointerY = event.y,
+                        atTop = !canScrollVertically(-1),
+                        blocked = false,
+                    ),
+                )
+            } else {
                 dragController.onMove(event.x, event.y, event.eventTime)
+            }
             MotionEvent.ACTION_UP -> {
-                dragController.onUp(event.x, event.y, event.eventTime)
+                if (pullTouchOwned) releasePull()
+                else dragController.onUp(event.x, event.y, event.eventTime)
                 finishOwnedTouch()
             }
             MotionEvent.ACTION_CANCEL -> {
-                dragController.onCancel()
+                if (pullTouchOwned) cancelPull()
+                else dragController.onCancel()
                 finishOwnedTouch()
             }
         }
@@ -179,7 +265,12 @@ class NativeAppListView @JvmOverloads constructor(
             currentConfig.value.initialResetToken != next.value.initialResetToken
         if (resetInitialScroll) cancelActiveDrag()
         currentConfig = next
+        if (!next.value.active) {
+            cancelActiveDrag()
+            cancelPull()
+        }
         nativeAdapter.setConfig(next)
+        updateEdgeFadeShaders()
         applyContentOverlayBlur()
         updateViewportPadding(height)
         applyAttachedChildVisuals()
@@ -220,12 +311,14 @@ class NativeAppListView @JvmOverloads constructor(
     fun release() {
         if (released) return
         released = true
+        cancelPull()
         dragController.release()
         stopScroll()
         removeOnScrollListener(childVisualScrollListener)
         removeOnChildAttachStateChangeListener(childVisualAttachListener)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) setRenderEffect(null)
         onCommand = null
+        onScrollToTop = null
         nativeAdapter.clearSynchronously()
         itemAnimator?.endAnimations()
         itemAnimator = null
@@ -244,6 +337,7 @@ class NativeAppListView @JvmOverloads constructor(
 
     private fun finishOwnedTouch() {
         dragTouchOwned = false
+        pullTouchOwned = false
         interceptedEndsGesture = false
         parent?.requestDisallowInterceptTouchEvent(false)
     }
@@ -251,6 +345,44 @@ class NativeAppListView @JvmOverloads constructor(
     private fun cancelActiveDrag() {
         dragController.onCancel()
         if (dragTouchOwned) finishOwnedTouch()
+    }
+
+    private fun releasePull() {
+        val release = pullToFaceState.onUp()
+        if (release.triggerFace) onScrollToTop?.invoke()
+        animatePullToRest(release.releaseOffsetPx)
+    }
+
+    private fun cancelPull() {
+        pullToFaceState.cancel()
+        pullTouchOwned = false
+        cancelPullSettle()
+        setPullOffset(0f)
+    }
+
+    private fun animatePullToRest(startOffset: Float) {
+        cancelPullSettle()
+        if (startOffset <= 0f || released) {
+            setPullOffset(0f)
+            return
+        }
+        pullSettleAnimator = ValueAnimator.ofFloat(startOffset, 0f).apply {
+            duration = 220L
+            addUpdateListener { animator -> setPullOffset(animator.animatedValue as Float) }
+            start()
+        }
+    }
+
+    private fun cancelPullSettle() {
+        pullSettleAnimator?.cancel()
+        pullSettleAnimator = null
+    }
+
+    private fun setPullOffset(offset: Float) {
+        val next = offset.takeIf(Float::isFinite)?.coerceAtLeast(0f) ?: 0f
+        if (pullOffsetPx == next) return
+        pullOffsetPx = next
+        invalidate()
     }
 
     private fun holderForKey(key: AppItemKey): NativeAppListAdapter.AppItemViewHolder? {
@@ -302,19 +434,38 @@ class NativeAppListView @JvmOverloads constructor(
             draggedViewTouchOffsetY = pointerY - (child.top + child.translationY)
             draggedPointerY = pointerY
             draggedViewOriginalElevation = ViewCompat.getElevation(child)
-            ViewCompat.setElevation(child, resources.displayMetrics.density * 12f)
+            ViewCompat.setElevation(
+                child,
+                if (currentConfig.value.iconShadowEnabled) {
+                    resources.displayMetrics.density * 18f
+                } else {
+                    0f
+                },
+            )
             child.isPressed = false
+            (child as? NativeAppListRowView)?.setDragVisualState(true)
         }
 
         override fun updateDrag(pointerY: Float) {
             val child = draggedView ?: return
             draggedPointerY = pointerY
-            child.translationY = pointerY - draggedViewTouchOffsetY - child.top
+            val offset = pointerY - draggedViewTouchOffsetY - child.top
+            if (child is NativeAppListRowView) {
+                child.setDragTranslationY(offset)
+                child.setFlowTranslationY(0f)
+            } else {
+                child.translationY = offset
+            }
         }
 
         override fun endDrag() {
             draggedView?.let { child ->
-                child.translationY = 0f
+                if (child is NativeAppListRowView) {
+                    child.setDragTranslationY(0f)
+                    child.setDragVisualState(false)
+                } else {
+                    child.translationY = 0f
+                }
                 ViewCompat.setElevation(child, draggedViewOriginalElevation)
                 applyChildVisual(child)
             }
@@ -345,6 +496,10 @@ class NativeAppListView @JvmOverloads constructor(
             autoScrollRemainder -= wholePixels
             this@NativeAppListView.scrollBy(0, wholePixels)
         }
+
+        override fun performDragHaptic() {
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        }
     }
 
     private fun applyAttachedChildVisuals() {
@@ -358,20 +513,35 @@ class NativeAppListView @JvmOverloads constructor(
         if (activeLayoutStrategy.semanticKey != LinearNativeAppListLayoutStrategy.semanticKey) {
             return
         }
+        val rowView = child as? NativeAppListRowView
+        val positionTranslationY =
+            rowView?.positionTranslationYWithoutFlow() ?: child.translationY
+        val baseCenterY = child.top + child.height / 2f + positionTranslationY
+        val flowOffset = nativeFastFlowOffset(
+            rowCenterY = baseCenterY,
+            viewportHeight = height.toFloat(),
+            enabled = currentConfig.value.fastFlowAnimationEnabled && !dragController.isDragging,
+        )
+        rowView?.setFlowTranslationY(flowOffset)
         val visual = nativeLinearChildVisual(
-            childCenterY = child.top + child.height / 2f + child.translationY,
+            childCenterY = baseCenterY,
             viewportHeight = height,
             config = currentConfig.value,
             output = childVisualScratch,
+            edgeCenterY = baseCenterY + flowOffset,
         )
         val centerPivotX = child.width / 2f
         val centerPivotY = child.height / 2f
         if (child.pivotX != centerPivotX) child.pivotX = centerPivotX
         if (child.pivotY != centerPivotY) child.pivotY = centerPivotY
-        if (child.scaleX != visual.scale) child.scaleX = visual.scale
-        if (child.scaleY != visual.scale) child.scaleY = visual.scale
+        if (rowView != null) {
+            rowView.setVisualScale(visual.scale)
+        } else {
+            if (child.scaleX != visual.scale) child.scaleX = visual.scale
+            if (child.scaleY != visual.scale) child.scaleY = visual.scale
+        }
         if (child.alpha != visual.alpha) child.alpha = visual.alpha
-        (child as? NativeAppListRowView)?.setIconBlurRadiusPx(
+        rowView?.setIconBlurRadiusPx(
             radiusPx = visual.blurRadiusPx,
             tier = currentConfig.value.blurTier,
         )
@@ -387,7 +557,11 @@ class NativeAppListView @JvmOverloads constructor(
         if (child.scaleX != 1f) child.scaleX = 1f
         if (child.scaleY != 1f) child.scaleY = 1f
         if (child.alpha != 1f) child.alpha = 1f
-        (child as? NativeAppListRowView)?.setIconBlurRadiusPx(0f, NativeBlurTier.OFF)
+        (child as? NativeAppListRowView)?.apply {
+            setVisualScale(1f)
+            setFlowTranslationY(0f)
+            setIconBlurRadiusPx(0f, NativeBlurTier.OFF)
+        }
     }
 
     private fun updateViewportPadding(viewportHeight: Int) {
@@ -410,4 +584,37 @@ class NativeAppListView @JvmOverloads constructor(
         }
         setRenderEffect(bucket.takeIf { it > 0 }?.let(NativeSystemBlurEffectCache::get))
     }
+
+    private fun updateEdgeFadeShaders() {
+        val viewportHeight = height.toFloat().coerceAtLeast(0f)
+        topFadeHeight = currentConfig.value.topFadeRangePx.coerceIn(0f, viewportHeight)
+        bottomFadeHeight = currentConfig.value.bottomFadeRangePx.coerceIn(0f, viewportHeight)
+        val color = currentConfig.value.palette.fadeEdgeColorArgb.toInt()
+        topFadePaint.shader = if (topFadeHeight > 0f) {
+            LinearGradient(
+                0f,
+                0f,
+                0f,
+                topFadeHeight,
+                intArrayOf(color.withAlphaFraction(0.78f), color.withAlphaFraction(0.28f), color.withAlphaFraction(0f)),
+                floatArrayOf(0f, 0.45f, 1f),
+                Shader.TileMode.CLAMP,
+            )
+        } else null
+        bottomFadePaint.shader = if (bottomFadeHeight > 0f) {
+            LinearGradient(
+                0f,
+                viewportHeight - bottomFadeHeight,
+                0f,
+                viewportHeight,
+                intArrayOf(color.withAlphaFraction(0f), color.withAlphaFraction(0.28f), color.withAlphaFraction(0.82f)),
+                floatArrayOf(0f, 0.55f, 1f),
+                Shader.TileMode.CLAMP,
+            )
+        } else null
+        invalidate()
+    }
 }
+
+private fun Int.withAlphaFraction(alpha: Float): Int =
+    (this and 0x00ffffff) or ((alpha.coerceIn(0f, 1f) * 255f).roundToInt() shl 24)

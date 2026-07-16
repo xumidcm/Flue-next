@@ -57,8 +57,7 @@ internal class NativeStableKeyItemAnimator(
         val deltaY = (preLayoutInfo.top - postLayoutInfo.top).toFloat()
         if (deltaX == 0f && deltaY == 0f) return false
         endAnimation(viewHolder)
-        viewHolder.itemView.translationX = deltaX
-        viewHolder.itemView.translationY = deltaY
+        setMoveTranslation(viewHolder, deltaX, deltaY)
         pendingMoves[viewHolder] = Move(viewHolder, deltaX, deltaY)
         return true
     }
@@ -92,8 +91,11 @@ internal class NativeStableKeyItemAnimator(
                 while (index < activeFrameMoves.size) {
                     val move = activeFrameMoves[index]
                     if (move.active) {
-                        move.holder.itemView.translationX = move.startTranslationX * remaining
-                        move.holder.itemView.translationY = move.startTranslationY * remaining
+                    setMoveTranslation(
+                        move.holder,
+                        move.startTranslationX * remaining,
+                        move.startTranslationY * remaining,
+                    )
                     }
                     index++
                 }
@@ -165,8 +167,17 @@ internal class NativeStableKeyItemAnimator(
     }
 
     private fun reset(holder: RecyclerView.ViewHolder) {
-        holder.itemView.translationX = 0f
-        holder.itemView.translationY = 0f
+        setMoveTranslation(holder, 0f, 0f)
+    }
+
+    private fun setMoveTranslation(holder: RecyclerView.ViewHolder, x: Float, y: Float) {
+        val view = holder.itemView
+        if (view is NativeAppListRowView) {
+            view.setMoveTranslation(x, y)
+        } else {
+            view.translationX = x
+            view.translationY = y
+        }
     }
 
     private fun dispatchFinishedWhenIdle() {

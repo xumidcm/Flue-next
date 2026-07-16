@@ -85,6 +85,25 @@ class NativeListDrawerConfigTest {
         assertEquals(32f, config.contentOverlayBlurRadiusPx)
     }
 
+    @Test
+    fun carriesEveryLegacyBehaviorSwitchIntoTheNativeConfig() {
+        val config = nativeListDrawerConfig(
+            request(
+                allowFolderCreation = false,
+                iconShadowEnabled = false,
+                fastFlowAnimationEnabled = true,
+                edgeSpacingCompressionEnabled = false,
+                entryProgress = 0.35f,
+            ),
+        )
+
+        assertFalse(config.allowFolderCreation)
+        assertFalse(config.iconShadowEnabled)
+        assertTrue(config.fastFlowAnimationEnabled)
+        assertFalse(config.edgeSpacingCompressionEnabled)
+        assertEquals(0.35f, config.entryProgress)
+    }
+
     private fun request(
         density: Float = 1f,
         fontScale: Float = 1f,
@@ -98,6 +117,11 @@ class NativeListDrawerConfigTest {
         suppressHeavyEffects: Boolean = false,
         overlayOpen: Boolean = false,
         rowBorderEnabled: Boolean = false,
+        allowFolderCreation: Boolean = true,
+        iconShadowEnabled: Boolean = true,
+        fastFlowAnimationEnabled: Boolean = false,
+        edgeSpacingCompressionEnabled: Boolean = true,
+        entryProgress: Float = 1f,
     ) = NativeListDrawerConfigRequest(
         density = density,
         fontScale = fontScale,
@@ -108,9 +132,12 @@ class NativeListDrawerConfigTest {
         leftSafeInsetPercent = leftSafeInsetPercent,
         appListScalePercent = appListScalePercent,
         iconSizeDp = 48f,
+        appleWatchIconShape = true,
         fisheyeEnabled = true,
         fisheyeRangeRows = fisheyeRangeRows,
         fisheyeStrengthPercent = fisheyeStrengthPercent,
+        edgeSpacingCompressionEnabled = edgeSpacingCompressionEnabled,
+        fastFlowAnimationEnabled = fastFlowAnimationEnabled,
         topFadeRangeDp = 56,
         bottomFadeRangeDp = 56,
         topBlurRadiusDp = 4f,
@@ -123,8 +150,12 @@ class NativeListDrawerConfigTest {
         rotaryHapticsEnabled = true,
         darkMode = true,
         rowBorderEnabled = rowBorderEnabled,
+        allowFolderCreation = allowFolderCreation,
+        iconShadowEnabled = iconShadowEnabled,
+        entryProgress = entryProgress,
         rowBackgroundArgb = 0xff112233L,
         labelArgb = 0xffffffffL,
         pressedArgb = 0x22ffffffL,
+        fadeEdgeArgb = 0xff000000L,
     )
 }

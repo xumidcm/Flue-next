@@ -23,6 +23,7 @@ import com.flue.launcher.applist.model.AppListCommand
 import com.flue.launcher.applist.nativeview.NativeAppListConfig
 import com.flue.launcher.applist.nativeview.NativeAppListHost
 import com.flue.launcher.applist.nativeview.NativeAppListPalette
+import com.flue.launcher.applist.nativeview.NativeAppListIconShape
 import com.flue.launcher.applist.nativeview.NativeAppListRowBorder
 import com.flue.launcher.applist.nativeview.NativeAppListTheme
 import com.flue.launcher.applist.nativeview.selectNativeBlurTier
@@ -39,7 +40,10 @@ fun NativeListDrawerScreen(
     fisheyeEnabled: Boolean = true,
     fisheyeRangeRows: Int = 4,
     fisheyeStrengthPercent: Int = 100,
+    edgeSpacingCompressionEnabled: Boolean = true,
+    fastFlowAnimationEnabled: Boolean = false,
     twoToneIconsEnabled: Boolean = false,
+    iconShadowEnabled: Boolean = true,
     themeColor: Color = Color(0xFF7BE8FF),
     uiStyle: UiStyle = UiStyle.APPLE_WATCH,
     darkMode: Boolean = true,
@@ -53,8 +57,11 @@ fun NativeListDrawerScreen(
     initialScrollResetKey: Int = 0,
     leftSafeInsetPercent: Int = 0,
     appListScalePercent: Int = 100,
+    entryProgress: Float = 1f,
+    folderOpen: Boolean = false,
     useWatchFaceColors: Boolean = false,
     rowBorderEnabled: Boolean = false,
+    allowFolderCreation: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,
     onLongClick: (AppInfo) -> Unit = {},
     onReorder: (AppListCommand.Move) -> Unit = {},
@@ -63,6 +70,7 @@ fun NativeListDrawerScreen(
     onRemoveShortcut: (AppInfo) -> Unit = {},
     onRenameFolder: (AppInfo, String) -> Unit = { _, _ -> },
     onDissolveFolder: (AppInfo) -> Unit = {},
+    onScrollToTop: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val projection = rememberNativeAppListProjection(apps, twoToneIconsEnabled)
@@ -90,14 +98,17 @@ fun NativeListDrawerScreen(
                 leftSafeInsetPercent = leftSafeInsetPercent,
                 appListScalePercent = appListScalePercent,
                 iconSizeDp = iconSize.value,
+                appleWatchIconShape = uiStyle == UiStyle.APPLE_WATCH,
                 fisheyeEnabled = fisheyeEnabled,
                 fisheyeRangeRows = fisheyeRangeRows,
                 fisheyeStrengthPercent = fisheyeStrengthPercent,
+                edgeSpacingCompressionEnabled = edgeSpacingCompressionEnabled,
+                fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                 topFadeRangeDp = topFadeRangeDp,
                 bottomFadeRangeDp = bottomFadeRangeDp,
                 topBlurRadiusDp = topBlurRadiusDp,
                 bottomBlurRadiusDp = bottomBlurRadiusDp,
-                overlayOpen = actionApp != null,
+                overlayOpen = actionApp != null || folderOpen,
                 blurEnabled = blurEnabled,
                 edgeBlurEnabled = edgeBlurEnabled,
                 suppressHeavyEffects = suppressHeavyEffects,
@@ -105,9 +116,13 @@ fun NativeListDrawerScreen(
                 rotaryHapticsEnabled = rotaryHapticsEnabled,
                 darkMode = darkMode,
                 rowBorderEnabled = rowBorderEnabled,
+                allowFolderCreation = allowFolderCreation,
+                iconShadowEnabled = iconShadowEnabled,
+                entryProgress = entryProgress,
                 rowBackgroundArgb = palette.item.toUnsignedArgbLong(),
                 labelArgb = palette.text.toUnsignedArgbLong(),
                 pressedArgb = palette.itemPressedOverlay.toUnsignedArgbLong(),
+                fadeEdgeArgb = palette.fadeEdge.toUnsignedArgbLong(),
             ),
         )
         NativeAppListHost(
@@ -132,9 +147,18 @@ fun NativeListDrawerScreen(
                     is AppListCommand.DissolveFolder -> if (app != null) onDissolveFolder(app)
                 }
             },
+            onScrollToTop = onScrollToTop,
             modifier = Modifier
                 .fillMaxSize()
-                .background(palette.background),
+                .background(
+                    palette.background.copy(
+                        alpha = if (uiStyle == UiStyle.APPLE_WATCH) {
+                            1f
+                        } else {
+                            entryProgress.coerceIn(0f, 1f)
+                        },
+                    ),
+                ),
         )
         actionApp?.let { app ->
             AppShortcutOverlay(
@@ -172,9 +196,12 @@ internal data class NativeListDrawerConfigRequest(
     val leftSafeInsetPercent: Int,
     val appListScalePercent: Int,
     val iconSizeDp: Float,
+    val appleWatchIconShape: Boolean,
     val fisheyeEnabled: Boolean,
     val fisheyeRangeRows: Int,
     val fisheyeStrengthPercent: Int,
+    val edgeSpacingCompressionEnabled: Boolean,
+    val fastFlowAnimationEnabled: Boolean,
     val topFadeRangeDp: Int,
     val bottomFadeRangeDp: Int,
     val topBlurRadiusDp: Float,
@@ -187,9 +214,13 @@ internal data class NativeListDrawerConfigRequest(
     val rotaryHapticsEnabled: Boolean,
     val darkMode: Boolean,
     val rowBorderEnabled: Boolean,
+    val allowFolderCreation: Boolean,
+    val iconShadowEnabled: Boolean,
+    val entryProgress: Float,
     val rowBackgroundArgb: Long,
     val labelArgb: Long,
     val pressedArgb: Long,
+    val fadeEdgeArgb: Long,
 )
 
 internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): NativeAppListConfig {
@@ -231,13 +262,25 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         rowPaddingBottomPx = verticalPaddingPx,
         labelTextSizePx = (scaledTextSizeSp * density * fontScale).coerceAtLeast(1f),
         iconLabelGapPx = (scaledIconTextGapDp * density).roundToInt().coerceAtLeast(0),
+        iconShape = if (request.appleWatchIconShape) {
+            NativeAppListIconShape.CIRCLE
+        } else {
+            NativeAppListIconShape.ROUNDED_RECT
+        },
+        iconCornerRadiusPx = (14f * scale).coerceIn(10f, 24f) * density,
         centerEdgeItems = true,
+        allowFolderCreation = request.allowFolderCreation,
+        iconShadowEnabled = request.iconShadowEnabled,
+        fastFlowAnimationEnabled = request.fastFlowAnimationEnabled,
+        edgeSpacingCompressionEnabled = request.edgeSpacingCompressionEnabled,
+        entryProgress = request.entryProgress,
         palette = NativeAppListPalette(
             rowBackgroundColorArgb = if (request.rowBorderEnabled) request.rowBackgroundArgb else 0L,
             labelColorArgb = request.labelArgb,
             pressedOverlayColorArgb = request.pressedArgb,
             fallbackIconBackgroundColorArgb = request.rowBackgroundArgb,
             fallbackIconForegroundColorArgb = request.labelArgb,
+            fadeEdgeColorArgb = request.fadeEdgeArgb,
         ),
         // Geometry is already scaled above; applying the scale again as a
         // child transform would shrink/grow hit regions and launch origins twice.

@@ -16,6 +16,7 @@ internal interface NativeAppListDragHost {
     fun endDrag()
     fun setFolderHover(key: AppItemKey?)
     fun scrollBy(deltaPx: Float)
+    fun performDragHaptic()
 }
 
 internal interface NativeDragScheduler {
@@ -31,6 +32,7 @@ internal class NativeAppListDragController(
     private val host: NativeAppListDragHost,
     private val scheduler: NativeDragScheduler,
     private val policy: NativeDragPolicy,
+    private val allowFolderCreation: () -> Boolean = { true },
 ) {
     private val machine = NativeDragGestureMachine(policy)
     private var suppressedLongClickKey: AppItemKey? = null
@@ -126,11 +128,16 @@ internal class NativeAppListDragController(
         effects.forEach { effect ->
             when (effect) {
                 is NativeDragEffect.ShowActions ->
-                    host.dispatch(AppListCommand.ShowActions(effect.key))
+                    {
+                        host.performDragHaptic()
+                        host.dispatch(AppListCommand.ShowActions(effect.key))
+                    }
                 NativeDragEffect.DismissActions ->
                     host.dispatch(AppListCommand.DismissActions)
-                is NativeDragEffect.StartDrag ->
+                is NativeDragEffect.StartDrag -> {
+                    host.performDragHaptic()
                     host.beginDrag(effect.key, lastPointerY)
+                }
                 is NativeDragEffect.Move ->
                     AppListMovePlanner.fromKeys(
                         keys = host.currentKeys(),
@@ -138,13 +145,15 @@ internal class NativeAppListDragController(
                         targetKey = effect.target,
                     )?.let(host::dispatch)
                 is NativeDragEffect.FolderHoverChanged ->
-                    host.setFolderHover(effect.target)
+                    host.setFolderHover(effect.target.takeIf { allowFolderCreation() })
                 is NativeDragEffect.CreateFolder ->
-                    AppListMovePlanner.folderFromKeys(
-                        keys = host.currentKeys(),
-                        sourceKey = effect.source,
-                        targetKey = effect.target,
-                    )?.let(host::dispatch)
+                    if (allowFolderCreation()) {
+                        AppListMovePlanner.folderFromKeys(
+                            keys = host.currentKeys(),
+                            sourceKey = effect.source,
+                            targetKey = effect.target,
+                        )?.let(host::dispatch)
+                    }
                 NativeDragEffect.FinishDrag -> host.endDrag()
             }
         }

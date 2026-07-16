@@ -10,6 +10,7 @@ fun NativeAppListHost(
     content: NativeAppListContent,
     config: NativeAppListConfig,
     onCommand: (AppListCommand) -> Unit,
+    onScrollToTop: () -> Unit = {},
     modifier: Modifier = Modifier,
     layoutStrategy: NativeAppListLayoutStrategy = LinearNativeAppListLayoutStrategy,
 ) {
@@ -25,6 +26,7 @@ fun NativeAppListHost(
             view.setLayoutStrategy(layoutStrategy)
             view.setConfig(config)
             view.onCommand = onCommand
+            view.onScrollToTop = onScrollToTop
             view.submit(content)
         },
         onRelease = NativeAppListView::release,

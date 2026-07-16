@@ -33,6 +33,21 @@ import java.time.Duration
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NativeAppListRowViewBehaviorTest {
     @Test
+    fun rowComposesFlowDragAndDiffTranslationsWithoutOwnersOverwritingEachOther() {
+        val row = NativeAppListRowView(RuntimeEnvironment.getApplication())
+
+        row.setFlowTranslationY(10f)
+        row.setMoveTranslation(-3f, -20f)
+        row.setDragTranslationY(5f)
+        assertEquals(-3f, row.translationX, 0f)
+        assertEquals(-5f, row.translationY, 0f)
+        assertEquals(-15f, row.positionTranslationYWithoutFlow(), 0f)
+
+        row.setMoveTranslation(0f, 0f)
+        assertEquals(15f, row.translationY, 0f)
+    }
+
+    @Test
     fun nativeViewUsesTheMoveOnlySharedBatchAnimator() {
         val view = NativeAppListView(RuntimeEnvironment.getApplication())
 
@@ -140,6 +155,85 @@ class NativeAppListRowViewBehaviorTest {
         )
         view.draw(Canvas(output))
         assertEquals(FALLBACK_COLOR, output.getPixel(5, 20))
+    }
+
+    @Test
+    fun appleStyleClipsRealBitmapToTheNativeCircularIconShape() {
+        val view = NativeAppListRowView(RuntimeEnvironment.getApplication())
+        val output = Bitmap.createBitmap(100, 40, Bitmap.Config.ARGB_8888)
+        view.bind(
+            row = boundRow(solidBitmap(REAL_ICON_COLOR)),
+            config = NativeAppListResolvedConfig.from(
+                drawingConfig().copy(iconShape = NativeAppListIconShape.CIRCLE),
+            ),
+        )
+        measureAndLayout(view)
+
+        view.draw(Canvas(output))
+
+        assertEquals(Color.TRANSPARENT, output.getPixel(5, 11))
+        assertEquals(REAL_ICON_COLOR, output.getPixel(14, 20))
+    }
+
+    @Test
+    fun recyclerDrawsStableTopAndBottomFadeMasksInItsOwnCanvasLayer() {
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    topFadeRangePx = 20f,
+                    bottomFadeRangePx = 20f,
+                    palette = drawingConfig().palette.copy(
+                        fadeEdgeColorArgb = 0xffff0000L,
+                    ),
+                ),
+            )
+        }
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 100, 100)
+        val output = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
+
+        view.draw(Canvas(output))
+
+        assertTrue(Color.alpha(output.getPixel(50, 0)) > 0)
+        assertEquals(Color.TRANSPARENT, output.getPixel(50, 50))
+        assertTrue(Color.alpha(output.getPixel(50, 99)) > 0)
+        view.release()
+    }
+
+    @Test
+    fun pullingPastLegacyThresholdAtTheTopRequestsTheWatchFaceOnce() {
+        var requests = 0
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onScrollToTop = { requests++ }
+            setConfig(drawingConfig().copy(fisheyeEnabled = false, centerEdgeItems = false))
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(
+                        1L,
+                        listOf(appEntry("a"), appEntry("b"), appEntry("c")),
+                    ),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(120, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 100, 120)
+
+        dispatch(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
+        dispatch(view, MotionEvent.ACTION_MOVE, y = 93f, eventTime = 100L)
+        dispatch(view, MotionEvent.ACTION_UP, y = 93f, eventTime = 101L)
+
+        assertEquals(1, requests)
+        view.release()
+        activity.finish()
     }
 
     @Test
