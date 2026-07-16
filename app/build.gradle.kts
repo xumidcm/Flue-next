@@ -102,6 +102,7 @@ dependencies {
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.datastore.preferences)
     implementation(libs.mediarouter)
+    implementation(libs.recyclerview)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
@@ -115,4 +116,6 @@ dependencies {
 
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.compose.ui.tooling.preview)
+
+    testImplementation(libs.junit)
 }
