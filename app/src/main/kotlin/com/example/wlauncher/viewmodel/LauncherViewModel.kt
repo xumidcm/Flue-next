@@ -99,16 +99,6 @@ private const val EXTERNAL_LAUNCH_BACKGROUND_TIMEOUT_MS = 1_500L
 private const val APP_ORDER_WRITE_DEBOUNCE_MS = 120L
 private const val EXTERNAL_RETURN_EVIDENCE_WAIT_MS = 300L
 
-enum class HoneycombFastScrollOptimizationMode(val id: String) {
-    Standard("standard"),
-    Aggressive("aggressive");
-
-    companion object {
-        fun fromId(id: String?): HoneycombFastScrollOptimizationMode =
-            entries.firstOrNull { it.id == id } ?: Standard
-    }
-}
-
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
@@ -134,9 +124,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_HONEYCOMB_EDGE_BLUR_TENTHS = intPreferencesKey("honeycomb_edge_blur_tenths")
         val KEY_HONEYCOMB_TOP_FADE = intPreferencesKey("honeycomb_top_fade")
         val KEY_HONEYCOMB_BOTTOM_FADE = intPreferencesKey("honeycomb_bottom_fade")
-        val KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION = booleanPreferencesKey("honeycomb_fast_scroll_optimization")
-        val KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION_MODE =
-            stringPreferencesKey("honeycomb_fast_scroll_optimization_mode")
         val KEY_APP_LIST_FISHEYE = booleanPreferencesKey("app_list_fisheye_enabled")
         val KEY_MATERIAL_HONEYCOMB_TOP_FISHEYE = booleanPreferencesKey("material_honeycomb_top_fisheye_enabled")
         val KEY_APP_LIST_FISHEYE_RANGE_ROWS = intPreferencesKey("app_list_fisheye_range_rows")
@@ -391,12 +378,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _honeycombBottomFade = MutableStateFlow(30)
     val honeycombBottomFade: StateFlow<Int> = _honeycombBottomFade.asStateFlow()
 
-    private val _honeycombFastScrollOptimization = MutableStateFlow(true)
-    val honeycombFastScrollOptimization: StateFlow<Boolean> = _honeycombFastScrollOptimization.asStateFlow()
-    private val _honeycombFastScrollOptimizationMode =
-        MutableStateFlow(HoneycombFastScrollOptimizationMode.Standard)
-    val honeycombFastScrollOptimizationMode: StateFlow<HoneycombFastScrollOptimizationMode> =
-        _honeycombFastScrollOptimizationMode.asStateFlow()
     private val _appListFisheyeEnabled = MutableStateFlow(true)
     val appListFisheyeEnabled: StateFlow<Boolean> = _appListFisheyeEnabled.asStateFlow()
     private val _materialHoneycombTopFisheyeEnabled = MutableStateFlow(true)
@@ -821,16 +802,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 val loadedBottomFade = (prefs[KEY_HONEYCOMB_BOTTOM_FADE] ?: 30).coerceIn(0, 160)
                 if (_honeycombBottomFade.value != loadedBottomFade) _honeycombBottomFade.value = loadedBottomFade
-
-                val loadedFastScrollOptimization = prefs[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION] ?: true
-                if (_honeycombFastScrollOptimization.value != loadedFastScrollOptimization) {
-                    _honeycombFastScrollOptimization.value = loadedFastScrollOptimization
-                }
-                val loadedFastScrollOptimizationMode =
-                    HoneycombFastScrollOptimizationMode.fromId(prefs[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION_MODE])
-                if (_honeycombFastScrollOptimizationMode.value != loadedFastScrollOptimizationMode) {
-                    _honeycombFastScrollOptimizationMode.value = loadedFastScrollOptimizationMode
-                }
 
                 val loadedFisheyeEnabled = prefs[KEY_APP_LIST_FISHEYE] ?: true
                 if (_appListFisheyeEnabled.value != loadedFisheyeEnabled) {
@@ -1896,16 +1867,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persistDebounced("key_honeycomb_bottom_fade") { store.edit { it[KEY_HONEYCOMB_BOTTOM_FADE] = savedValue } }
     }
 
-    fun setHoneycombFastScrollOptimization(enabled: Boolean) {
-        _honeycombFastScrollOptimization.value = enabled
-        persist { store.edit { it[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION] = enabled } }
-    }
-
-    fun setHoneycombFastScrollOptimizationMode(mode: HoneycombFastScrollOptimizationMode) {
-        _honeycombFastScrollOptimizationMode.value = mode
-        persist { store.edit { it[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION_MODE] = mode.id } }
-    }
-
     fun setAppListFisheyeEnabled(enabled: Boolean) {
         _appListFisheyeEnabled.value = enabled
         persist { store.edit { it[KEY_APP_LIST_FISHEYE] = enabled } }
@@ -2784,8 +2745,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _honeycombEdgeBlurRadius.value = 4f
         _honeycombTopFade.value = 30
         _honeycombBottomFade.value = 30
-        _honeycombFastScrollOptimization.value = true
-        _honeycombFastScrollOptimizationMode.value = HoneycombFastScrollOptimizationMode.Standard
         _appListFisheyeEnabled.value = true
         _materialHoneycombTopFisheyeEnabled.value = true
         _appListFisheyeRangeRows.value = 4
@@ -2887,8 +2846,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_HONEYCOMB_EDGE_BLUR_TENTHS] = 40
                 it[KEY_HONEYCOMB_TOP_FADE] = 30
                 it[KEY_HONEYCOMB_BOTTOM_FADE] = 30
-                it[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION] = true
-                it[KEY_HONEYCOMB_FAST_SCROLL_OPTIMIZATION_MODE] = HoneycombFastScrollOptimizationMode.Standard.id
                 it[KEY_APP_LIST_FISHEYE] = true
                 it[KEY_MATERIAL_HONEYCOMB_TOP_FISHEYE] = true
                 it[KEY_APP_LIST_FISHEYE_RANGE_ROWS] = 4

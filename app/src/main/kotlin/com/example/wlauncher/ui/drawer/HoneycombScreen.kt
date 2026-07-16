@@ -2,7 +2,6 @@ package com.flue.launcher.ui.drawer
 
 import android.os.Build
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.exponentialDecay
 import androidx.compose.animation.core.spring
@@ -129,7 +128,6 @@ fun HoneycombScreen(
     bottomBlurRadiusDp: Float = 4f,
     topFadeRangeDp: Int = 56,
     bottomFadeRangeDp: Int = 56,
-    fastScrollOptimizationEnabled: Boolean = true,
     rotaryHapticsEnabled: Boolean = true,
     active: Boolean = true,
     leftSafeInsetPercent: Int = 0,
@@ -212,8 +210,6 @@ fun HoneycombScreen(
     var directScrollOffset by remember { mutableFloatStateOf(Float.NaN) }
     var dragScrollActive by remember { mutableStateOf(false) }
     var returnTriggered by remember { mutableStateOf(false) }
-    var fastScrollActive by remember { mutableStateOf(false) }
-    var fastScrollResetJob by remember { mutableStateOf<Job?>(null) }
     val appPalette = appListPalette(themeColor, darkMode, uiStyle, useWatchFaceColors)
 
     LaunchedEffect(focusReady) {
@@ -286,7 +282,6 @@ fun HoneycombScreen(
         val scope = rememberCoroutineScope()
         val overlayBlurActive = (longPressedApp != null || folderOpen) && blurEnabled && !suppressHeavyEffects
         val honeycombAutoScrollEdgePx = with(density) { HONEYCOMB_AUTO_SCROLL_EDGE_DP.dp.toPx() }
-        val fastDragThresholdPx = with(density) { 10.dp.toPx() }
         LaunchedEffect(apps) {
             val validKeys = apps.mapTo(mutableSetOf()) { it.componentKey }
             appLaunchCenters.keys
@@ -297,17 +292,6 @@ fun HoneycombScreen(
             directScrollOffset = directScrollOffset,
             animatedScrollOffset = scrollOffset.value
         )
-        fun reducedMotionPhase(): Boolean =
-            fastScrollOptimizationEnabled && (fastScrollActive || scrollOffset.isRunning)
-        fun markFastScrollActive(durationMs: Long = 180L) {
-            if (!fastScrollOptimizationEnabled) return
-            fastScrollActive = true
-            fastScrollResetJob?.cancel()
-            fastScrollResetJob = scope.launch {
-                delay(durationMs)
-                fastScrollActive = false
-            }
-        }
         fun launchWheelScroll(delta: Float) {
             if (delta == 0f) return
             wheelMomentumJob?.cancel()
@@ -315,7 +299,6 @@ fun HoneycombScreen(
                 if (scrollOffset.isRunning) {
                     scrollOffset.stop()
                 }
-                markFastScrollActive(220L)
                 val start = currentScrollOffsetValue()
                 scrollOffset.snapTo((start + delta).coerceIn(minScroll, maxScroll))
                 directScrollOffset = Float.NaN
@@ -371,12 +354,6 @@ fun HoneycombScreen(
             } else {
                 returnTriggered = false
                 focusRequester.requestFocusAfterFirstFrame()
-            }
-        }
-        LaunchedEffect(fastScrollOptimizationEnabled) {
-            if (!fastScrollOptimizationEnabled) {
-                fastScrollResetJob?.cancel()
-                fastScrollActive = false
             }
         }
         LaunchedEffect(dragFromIndex, minScroll, maxScroll, screenHeightPx) {
@@ -773,9 +750,6 @@ fun HoneycombScreen(
                                     next < minScroll -> next - minScroll
                                     else -> 0f
                                 }
-                                if (abs(dragAmount.y) >= fastDragThresholdPx) {
-                                    markFastScrollActive(180L)
-                                }
                                 val dampedDrag = if (overscroll != 0f) dragAmount.y * 0.28f else dragAmount.y
                                 val nextScroll = current + dampedDrag
                                 directScrollOffset = nextScroll
@@ -789,9 +763,6 @@ fun HoneycombScreen(
                                 val velocity = velocityTracker.calculateVelocity().y
                                 val current = currentScrollOffsetValue()
                                 glidePressedKey = null
-                                if (abs(velocity) > 1600f) {
-                                    markFastScrollActive(260L)
-                                }
                                 directScrollOffset = current
                                 if (current >= maxScroll + iconSizePx * 0.28f) {
                                     val returnStart = current
@@ -894,7 +865,7 @@ fun HoneycombScreen(
                     screenCenterY = screenCenterY,
                     screenHeightPx = screenHeightPx,
                     iconSizePx = iconSizePx,
-                    bufferRows = if (reducedMotionPhase()) 1 else 2,
+                    bufferRows = 2,
                     pinnedIndexes = listOfNotNull(menuPressedIndex, dragFromIndex, dragCurrentIndex, folderHoverIndex)
                 )
             }
@@ -941,7 +912,7 @@ fun HoneycombScreen(
                 if (!isDragged && index != menuPressedIndex && (visibilityY < visibleTop || visibilityY > visibleBottom)) {
                     return@forEach
                 }
-                val itemBlur = computeHoneycombEdgeBlur(
+                val itemBlur = computeAppListEdgeBlur(
                     centerY = visibilityY,
                     screenHeight = screenHeightPx,
                     topBlurZonePx = topFadePx,
@@ -956,52 +927,41 @@ fun HoneycombScreen(
                     iconSizePx = iconSizePx,
                     cellSize = cellSize
                 )
-                val reduceVisualLoad = reducedMotionPhase() &&
-                    !isDragged &&
-                    settlingKey != app.componentKey &&
-                    menuPressedKey != appKey &&
-                    !isGlidePressed
-
                 key(appKey) {
-                    val neighborScale = animateOrSnapFloat(
-                        animate = !reduceVisualLoad,
+                    val neighborScale = animateFloatAsState(
                         targetValue = 1f - motion.scaleReduction,
                         animationSpec = tween(
                             durationMillis = 260,
                             delayMillis = if (motion.scaleReduction > 0f) 180 else 0
                         ),
                         label = "neighbor_scale"
-                    )
-                    val neighborShiftX = animateOrSnapFloat(
-                        animate = !reduceVisualLoad,
+                    ).value
+                    val neighborShiftX = animateFloatAsState(
                         targetValue = motion.shiftX,
                         animationSpec = tween(
                             durationMillis = 280,
                             delayMillis = if (motion.shiftX != 0f) 180 else 0
                         ),
                         label = "neighbor_shift_x"
-                    )
-                    val neighborShiftY = animateOrSnapFloat(
-                        animate = !reduceVisualLoad,
+                    ).value
+                    val neighborShiftY = animateFloatAsState(
                         targetValue = motion.shiftY,
                         animationSpec = tween(
                             durationMillis = 280,
                             delayMillis = if (motion.shiftY != 0f) 180 else 0
                         ),
                         label = "neighbor_shift_y"
-                    )
-                    val slotX = animateOrSnapFloat(
-                        animate = !reduceVisualLoad,
+                    ).value
+                    val slotX = animateFloatAsState(
                         targetValue = visualPos.x,
                         animationSpec = spring(dampingRatio = 0.80f, stiffness = 360f),
                         label = "honeycomb_slot_x"
-                    )
-                    val slotY = animateOrSnapFloat(
-                        animate = !reduceVisualLoad,
+                    ).value
+                    val slotY = animateFloatAsState(
                         targetValue = visualPos.y,
                         animationSpec = spring(dampingRatio = 0.80f, stiffness = 360f),
                         label = "honeycomb_slot_y"
-                    )
+                    ).value
                     val edgeSpacingOffsetX = edgeSpacingCompressionHorizontalOffset(
                         centerX = screenCenterX + slotX,
                         rowCenterY = screenCenterY + slotY + currentScroll,
@@ -1014,7 +974,7 @@ fun HoneycombScreen(
                             dragFromIndex == null &&
                             longPressedApp == null
                     )
-                    val effectiveItemBlur = reduceHoneycombBlurForFastScroll(itemBlur, reduceVisualLoad)
+                    val effectiveItemBlur = itemBlur
                     AppBubble(
                         icon = app.iconForDisplay(
                             useTwoTone = twoToneIconsEnabled,
@@ -1124,7 +1084,7 @@ fun HoneycombScreen(
             }
 
             if (dragOverlayApp != null && dragOverlayPointer != null) {
-                val dragOverlayBlur = computeHoneycombEdgeBlur(
+                val dragOverlayBlur = computeAppListEdgeBlur(
                     centerY = dragOverlayPointer.y,
                     screenHeight = screenHeightPx,
                     topBlurZonePx = topFadePx,
@@ -1181,7 +1141,7 @@ fun HoneycombScreen(
 
         val settlingOverlayApp = settlingApp
         if (settlingOverlayApp != null) {
-            val settlingBlur = computeHoneycombEdgeBlur(
+            val settlingBlur = computeAppListEdgeBlur(
                 centerY = settlingY.value,
                 screenHeight = screenHeightPx,
                 topBlurZonePx = topFadePx,
@@ -1248,7 +1208,6 @@ fun HoneycombScreen(
                             )
                         )
                     )
-                    .platformBlur(topBlurRadiusDp, blurEnabled && effectiveEdgeBlur)
             )
         }
         if (edgeFadesVisible && bottomFadeRangeDp > 0) {
@@ -1266,7 +1225,6 @@ fun HoneycombScreen(
                             )
                         )
                     )
-                    .platformBlur(bottomBlurRadiusDp, blurEnabled && effectiveEdgeBlur)
             )
         }
     }
@@ -1810,7 +1768,7 @@ private fun MaterialDenseGridScreen(
                 val isPressed by interactionSource.collectIsPressedAsState()
                 val itemBounds = materialItemBounds[index]
                 val itemCenterY = itemBounds?.center?.y ?: screenHeightPx / 2f
-                val itemBlur = computeHoneycombEdgeBlur(
+                val itemBlur = computeAppListEdgeBlur(
                     centerY = itemCenterY + overscroll.value + entryOffsetY,
                     screenHeight = screenHeightPx,
                     topBlurZonePx = topFadePx,
@@ -2040,7 +1998,6 @@ private fun MaterialDenseGridScreen(
                             )
                         )
                     )
-                    .platformBlur(topBlurRadiusDp, blurEnabled && edgeBlurEnabled)
             )
         }
         if (edgeFadesVisible && bottomFadeRangeDp > 0) {
@@ -2058,7 +2015,6 @@ private fun MaterialDenseGridScreen(
                             )
                         )
                     )
-                    .platformBlur(bottomBlurRadiusDp, blurEnabled && edgeBlurEnabled)
             )
         }
 
@@ -2241,24 +2197,6 @@ private data class HoneycombNeighborMotion(
     val shiftY: Float = 0f
 )
 
-@Composable
-private fun animateOrSnapFloat(
-    animate: Boolean,
-    targetValue: Float,
-    animationSpec: AnimationSpec<Float>,
-    label: String
-): Float {
-    return if (animate) {
-        animateFloatAsState(
-            targetValue = targetValue,
-            animationSpec = animationSpec,
-            label = label
-        ).value
-    } else {
-        targetValue
-    }
-}
-
 private data class HoneycombRowInfo(
     val startIndex: Int,
     val endIndex: Int,
@@ -2337,14 +2275,6 @@ private fun resolveHoneycombScrollOffset(
     animatedScrollOffset: Float
 ): Float = if (directScrollOffset.isNaN()) animatedScrollOffset else directScrollOffset
 
-private fun reduceHoneycombBlurForFastScroll(
-    blurDp: Float,
-    reduced: Boolean
-): Float {
-    if (!reduced) return blurDp
-    return 0f
-}
-
 private fun honeycombFlowOffset(
     enabled: Boolean,
     rowCenterY: Float,
@@ -2365,28 +2295,6 @@ private fun honeycombFlowOffset(
         else -> screenCenterY + (rowCenterY - screenCenterY) * FAST_FLOW_SLOW_SCALE
     }
     return (transformedY - rowCenterY).coerceIn(-FAST_FLOW_MAX_OFFSET_PX, FAST_FLOW_MAX_OFFSET_PX)
-}
-
-private fun computeHoneycombEdgeBlur(
-    centerY: Float,
-    screenHeight: Float,
-    topBlurZonePx: Float,
-    bottomBlurZonePx: Float,
-    topBlurDp: Float,
-    bottomBlurDp: Float
-): Float {
-    val topStrength = if (topBlurZonePx <= 0f) {
-        0f
-    } else {
-        (1f - (centerY / topBlurZonePx)).coerceIn(0f, 1f)
-    }
-    val bottomDistance = screenHeight - centerY
-    val bottomStrength = if (bottomBlurZonePx <= 0f) {
-        0f
-    } else {
-        (1f - (bottomDistance / bottomBlurZonePx)).coerceIn(0f, 1f)
-    }
-    return maxOf(topStrength * topBlurDp, bottomStrength * bottomBlurDp)
 }
 
 private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awaitLongPressByTimeoutOrCancel(

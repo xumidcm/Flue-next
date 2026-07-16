@@ -135,7 +135,6 @@ import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.util.RecentsVisibility
-import com.flue.launcher.viewmodel.HoneycombFastScrollOptimizationMode
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
@@ -301,8 +300,6 @@ private fun SettingsRootScreen(
     val honeycombEdgeBlurRadius by vm.honeycombEdgeBlurRadius.collectAsStateWithLifecycle()
     val honeycombTopFade by vm.honeycombTopFade.collectAsStateWithLifecycle()
     val honeycombBottomFade by vm.honeycombBottomFade.collectAsStateWithLifecycle()
-    val honeycombFastScrollOptimization by vm.honeycombFastScrollOptimization.collectAsStateWithLifecycle()
-    val honeycombFastScrollOptimizationMode by vm.honeycombFastScrollOptimizationMode.collectAsStateWithLifecycle()
     val appListFisheyeEnabled by vm.appListFisheyeEnabled.collectAsStateWithLifecycle()
     val materialHoneycombTopFisheyeEnabled by vm.materialHoneycombTopFisheyeEnabled.collectAsStateWithLifecycle()
     val appListFisheyeRangeRows by vm.appListFisheyeRangeRows.collectAsStateWithLifecycle()
@@ -1683,39 +1680,6 @@ private fun SettingsRootScreen(
                     onToggle = { vm.setLowResIcons(it) },
                     scale = itemFisheye(listState, "low_res", screenCenterY, screenHeightPx)
                 )
-            }
-            item("honeycomb_fast_scroll_opt") {
-                SettingsSwitchRow(
-                    title = "滑动流畅度优化",
-                    subtitle = "先优化底层滚动逻辑，视觉降载由下方档位决定",
-                    checked = honeycombFastScrollOptimization,
-                    onToggle = { vm.setHoneycombFastScrollOptimization(it) },
-                    scale = itemFisheye(listState, "honeycomb_fast_scroll_opt", screenCenterY, screenHeightPx)
-                )
-            }
-            if (honeycombFastScrollOptimization) {
-                item("honeycomb_fast_scroll_standard") {
-                    SettingsChoiceRow(
-                        title = "标准",
-                        subtitle = "保留阴影和边缘模糊，主要修复滚动轨道、惯性和动画切换",
-                        selected = honeycombFastScrollOptimizationMode == HoneycombFastScrollOptimizationMode.Standard,
-                        onClick = {
-                            vm.setHoneycombFastScrollOptimizationMode(HoneycombFastScrollOptimizationMode.Standard)
-                        },
-                        scale = itemFisheye(listState, "honeycomb_fast_scroll_standard", screenCenterY, screenHeightPx)
-                    )
-                }
-                item("honeycomb_fast_scroll_aggressive") {
-                    SettingsChoiceRow(
-                        title = "激进",
-                        subtitle = "快速滑动时临时关闭阴影和边缘模糊，优先保证旧设备帧率",
-                        selected = honeycombFastScrollOptimizationMode == HoneycombFastScrollOptimizationMode.Aggressive,
-                        onClick = {
-                            vm.setHoneycombFastScrollOptimizationMode(HoneycombFastScrollOptimizationMode.Aggressive)
-                        },
-                        scale = itemFisheye(listState, "honeycomb_fast_scroll_aggressive", screenCenterY, screenHeightPx)
-                    )
-                }
             }
             item("fast_flow_animation") {
                 SettingsSwitchRow(

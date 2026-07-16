@@ -33,7 +33,7 @@ class NativeAppListPerformancePolicyTest {
     }
 
     @Test
-    fun fastScrollAndDisabledEffectsForceBlurOff() {
+    fun suppressedOrDisabledEffectsForceBlurOff() {
         assertEquals(
             NativeBlurTier.OFF,
             selectNativeBlurTier(
