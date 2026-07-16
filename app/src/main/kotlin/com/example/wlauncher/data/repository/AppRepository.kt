@@ -80,8 +80,16 @@ class AppRepository(private val context: Context) {
     private val _apps = MutableStateFlow<List<AppInfo>>(emptyList())
     val apps: StateFlow<List<AppInfo>> = _apps.asStateFlow()
 
-    private var customOrder: List<String> = emptyList()
-    private var customOrderIndexMap: Map<String, Int> = emptyMap()
+    private data class CustomOrderSnapshot(
+        val order: List<String>,
+        val indexByKey: Map<String, Int>,
+    )
+
+    private val customOrderMonitor = Any()
+    private var customOrderSnapshot = CustomOrderSnapshot(
+        order = emptyList(),
+        indexByKey = emptyMap(),
+    )
     private var hiddenComponents: Set<String> = emptySet()
     private var currentIconSize = 128
     private var iconPackPackage: String? = null
@@ -130,9 +138,15 @@ class AppRepository(private val context: Context) {
     }
 
     fun setCustomOrder(order: List<String>) {
-        customOrder = order
-        customOrderIndexMap = order.withIndex().associate { it.value to it.index }
-        reorder()
+        val ownedOrder = order.toList()
+        synchronized(customOrderMonitor) {
+            val snapshot = CustomOrderSnapshot(
+                order = ownedOrder,
+                indexByKey = ownedOrder.withIndex().associate { it.value to it.index },
+            )
+            customOrderSnapshot = snapshot
+            reorder(snapshot)
+        }
     }
 
     fun setHiddenComponents(components: Set<String>) {
@@ -173,8 +187,9 @@ class AppRepository(private val context: Context) {
         refreshAsync(nextIconSize)
     }
 
-    private fun reorder() {
-        _allApps.value = sortApps(_allApps.value)
+    private fun reorder(orderSnapshot: CustomOrderSnapshot) {
+        _allSelectableApps.value = sortApps(_allSelectableApps.value, orderSnapshot)
+        _allApps.value = sortApps(_allApps.value, orderSnapshot)
         applyFilters()
     }
 
@@ -303,9 +318,12 @@ class AppRepository(private val context: Context) {
         freshScanPublished = true
         itemCatalog = catalogMap + folderEntries.associateBy { it.componentKey }
         folderCatalog = storedFolders
-        _allSelectableApps.value = sortApps(catalogItems)
-        _allApps.value = sortApps(topLevelItems)
-        applyFilters()
+        synchronized(customOrderMonitor) {
+            val orderSnapshot = customOrderSnapshot
+            _allSelectableApps.value = sortApps(catalogItems, orderSnapshot)
+            _allApps.value = sortApps(topLevelItems, orderSnapshot)
+            applyFilters()
+        }
         saveCachedSnapshot(catalogItems)
     }
 
@@ -350,13 +368,8 @@ class AppRepository(private val context: Context) {
                     Intent.FLAG_ACTIVITY_CLEAR_TOP or
                     Intent.FLAG_ACTIVITY_SINGLE_TOP
             }
-            val options = android.app.ActivityOptions.makeCustomAnimation(
-                context,
-                android.R.anim.fade_in,
-                android.R.anim.fade_out
-            )
             return try {
-                context.startActivity(settingsIntent, options.toBundle())
+                context.startActivity(settingsIntent)
                 true
             } catch (_: ActivityNotFoundException) {
                 false
@@ -370,13 +383,8 @@ class AppRepository(private val context: Context) {
             component = ComponentName(appInfo.packageName, appInfo.activityName)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
-        val options = android.app.ActivityOptions.makeCustomAnimation(
-            context,
-            android.R.anim.fade_in,
-            android.R.anim.fade_out
-        )
         return try {
-            context.startActivity(intent, options.toBundle())
+            context.startActivity(intent)
             true
         } catch (_: ActivityNotFoundException) {
             refreshAsync()
@@ -609,9 +617,12 @@ class AppRepository(private val context: Context) {
 
         itemCatalog = catalogMap + folderEntries.associateBy { it.componentKey }
         folderCatalog = storedFolders
-        _allSelectableApps.value = sortApps(catalogItems)
-        _allApps.value = sortApps(topLevelItems)
-        applyFilters()
+        synchronized(customOrderMonitor) {
+            val orderSnapshot = customOrderSnapshot
+            _allSelectableApps.value = sortApps(catalogItems, orderSnapshot)
+            _allApps.value = sortApps(topLevelItems, orderSnapshot)
+            applyFilters()
+        }
         return true
     }
 
@@ -1043,10 +1054,13 @@ class AppRepository(private val context: Context) {
         return output
     }
 
-    private fun orderRank(app: AppInfo): Int {
-        if (customOrder.isEmpty()) return Int.MAX_VALUE
-        return customOrderIndexMap[app.componentKey]
-            ?: customOrderIndexMap[app.packageName]
+    private fun orderRank(
+        app: AppInfo,
+        orderSnapshot: CustomOrderSnapshot,
+    ): Int {
+        if (orderSnapshot.order.isEmpty()) return Int.MAX_VALUE
+        return orderSnapshot.indexByKey[app.componentKey]
+            ?: orderSnapshot.indexByKey[app.packageName]
             ?: Int.MAX_VALUE
     }
 
@@ -1066,11 +1080,23 @@ class AppRepository(private val context: Context) {
         return installTime
     }
 
-    private fun sortApps(apps: List<AppInfo>): List<AppInfo> {
-        return if (customOrder.isNotEmpty()) {
+    private fun sortApps(
+        apps: List<AppInfo>,
+        orderSnapshot: CustomOrderSnapshot,
+    ): List<AppInfo> {
+        return if (orderSnapshot.order.isNotEmpty()) {
             apps.sortedWith(
-                compareBy<AppInfo> { orderRank(it) }
-                    .thenBy { if (it.isBuiltInSettingsEntry && it.componentKey !in customOrderIndexMap) 1 else 0 }
+                compareBy<AppInfo> { orderRank(it, orderSnapshot) }
+                    .thenBy {
+                        if (
+                            it.isBuiltInSettingsEntry &&
+                            it.componentKey !in orderSnapshot.indexByKey
+                        ) {
+                            1
+                        } else {
+                            0
+                        }
+                    }
                     .thenBy { packageInstallTime(it.packageName) }
                     .thenBy { it.label.lowercase() }
             )

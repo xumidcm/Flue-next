@@ -21,6 +21,16 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.flue.launcher.FlueApplication
+import com.flue.launcher.applist.model.AppItemKey
+import com.flue.launcher.applist.model.AppItemType
+import com.flue.launcher.applist.model.AppListCommand
+import com.flue.launcher.applist.model.AppListEntry
+import com.flue.launcher.applist.model.AppListReducer
+import com.flue.launcher.applist.model.AppListSnapshot
+import com.flue.launcher.applist.model.IconKey
+import com.flue.launcher.applist.model.LaunchTarget
+import com.flue.launcher.applist.model.NormalizedPoint
+import com.flue.launcher.applist.persistence.AppOrderWriteCoordinator
 import com.flue.launcher.backup.FlueBackupManager
 import com.flue.launcher.backup.FlueBackupOptions
 import com.flue.launcher.backup.FlueBackupPreview
@@ -28,6 +38,14 @@ import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.iconForDisplay
 import com.flue.launcher.iconpack.IconPackDescriptor
 import com.flue.launcher.iconpack.IconPackScanner
+import com.flue.launcher.launchsession.CancelReason
+import com.flue.launcher.launchsession.ExternalLaunchRequest
+import com.flue.launcher.launchsession.ExternalLaunchSession
+import com.flue.launcher.launchsession.ExternalLaunchSessionTracker
+import com.flue.launcher.launchsession.ExternalLaunchState
+import com.flue.launcher.launchsession.ReturnKind
+import com.flue.launcher.launchsession.retainsLaunchIcon
+import com.flue.launcher.service.FlueAccessibilityService
 import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.navigation.LayoutMode
@@ -63,15 +81,23 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipFile
 import kotlin.math.roundToInt
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "launcher_settings")
+
+private const val EXTERNAL_LAUNCH_BACKGROUND_TIMEOUT_MS = 1_500L
+private const val APP_ORDER_WRITE_DEBOUNCE_MS = 120L
+private const val EXTERNAL_RETURN_EVIDENCE_WAIT_MS = 300L
 
 enum class HoneycombFastScrollOptimizationMode(val id: String) {
     Standard("standard"),
@@ -603,17 +629,31 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _launchSourceState = MutableStateFlow(ScreenState.Apps)
     val launchSourceState: StateFlow<ScreenState> = _launchSourceState.asStateFlow()
 
-    private var launchingExternalApp = false
-    private var returnStateAfterExternalLaunch = ScreenState.Apps
+    private val externalLaunchTracker = ExternalLaunchSessionTracker(SystemClock::elapsedRealtime)
+    private val _externalLaunchState =
+        MutableStateFlow<ExternalLaunchState>(ExternalLaunchState.Idle)
+    val externalLaunchState: StateFlow<ExternalLaunchState> = _externalLaunchState.asStateFlow()
     private var launchJob: Job? = null
+    private var returnResolutionJob: Job? = null
     private var watchFacePrefsHydrated = false
     private var watchFaceScanHydrated = false
     private var lastWatchFaceRefreshAt = 0L
     private var watchFaceRefreshJob: Job? = null
     private val pendingWriteJobs = ConcurrentHashMap<String, Job>()
+    private val appOrderWriteCoordinator = AppOrderWriteCoordinator()
+    private val pendingAppOrder =
+        AtomicReference<AppOrderWriteCoordinator.Ticket?>(null)
+    private var appOrderWriteJob: Job? = null
     private var pendingNotificationClearJob: Job? = null
     private var refreshIconsJob: Job? = null
     init {
+        viewModelScope.launch {
+            FlueAccessibilityService.lastExternalForegroundEvidence.collect { evidence ->
+                evidence ?: return@collect
+                externalLaunchTracker.recordEvidence(evidence)
+                publishExternalLaunchState()
+            }
+        }
         refreshNotificationAccess()
         viewModelScope.launch {
             combine(
@@ -744,7 +784,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     ?.takeIf { it.isNotEmpty() }
                     ?.split(",")
                     ?: emptyList()
-                if (_appOrder.value != loadedOrder) {
+                val pendingOrderTicket = pendingAppOrder.get()
+                if (pendingOrderTicket != null) {
+                    if (loadedOrder == pendingOrderTicket.order) {
+                        pendingAppOrder.compareAndSet(pendingOrderTicket, null)
+                    }
+                } else if (_appOrder.value != loadedOrder) {
                     _appOrder.value = loadedOrder
                     appRepository.setCustomOrder(loadedOrder)
                 }
@@ -1222,26 +1267,42 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             Toast.makeText(getApplication(), "已阻止启动自身应用", Toast.LENGTH_SHORT).show()
             return
         }
-        returnStateAfterExternalLaunch = returnState
+        cancelPendingReturnResolution()
+        val sessionId = externalLaunchTracker.begin(
+            ExternalLaunchRequest(
+                targetKey = appInfo.componentKey,
+                expectedPackage = appInfo.packageName.takeIf {
+                    !appInfo.isBuiltInSettingsEntry && it.isNotBlank()
+                },
+                sourceState = returnState,
+                origin = origin.toNormalizedPoint(),
+            ),
+        )
+        publishExternalLaunchState()
         _launchSourceState.value = returnState
         _currentApp.value = appInfo
-        _currentLaunchIcon.value = appInfo.iconForDisplay(useTwoTone = _twoToneIconsEnabled.value)
+        val useFlueTransition = _animationOverrideEnabled.value
+        _currentLaunchIcon.value = if (useFlueTransition) {
+            appInfo.iconForDisplay(useTwoTone = _twoToneIconsEnabled.value)
+        } else {
+            null
+        }
         _appOpenOrigin.value = origin
-        _screenState.value = ScreenState.App
+        _screenState.value = if (useFlueTransition) ScreenState.App else returnState
         _revealedNotificationTarget.value = null
 
         launchJob?.cancel()
         launchJob = viewModelScope.launch {
             delay(launchDelayMs)
             val launched = appRepository.launchApp(appInfo)
+            externalLaunchTracker.onDispatchResult(sessionId, launched)
+            publishExternalLaunchState()
+            applyExternalLaunchState(showFailureToast = !launched)
             if (launched) {
-                launchingExternalApp = true
-            } else {
-                launchingExternalApp = false
-                _currentApp.value = null
-                _currentLaunchIcon.value = null
-                _screenState.value = returnStateAfterExternalLaunch
-                Toast.makeText(getApplication(), "应用无法启动，已刷新列表", Toast.LENGTH_SHORT).show()
+                delay(EXTERNAL_LAUNCH_BACKGROUND_TIMEOUT_MS)
+                externalLaunchTracker.onBackgroundConfirmationTimedOut(sessionId)
+                publishExternalLaunchState()
+                applyExternalLaunchState()
             }
         }
     }
@@ -1257,51 +1318,230 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             .flatMap { it.entries.asSequence() }
             .firstOrNull { it.key == key }
             ?: return false
-        returnStateAfterExternalLaunch = returnState
+        cancelPendingReturnResolution()
+        val sessionId = externalLaunchTracker.begin(
+            ExternalLaunchRequest(
+                targetKey = "notification:$key",
+                expectedPackage = targetEntry.packageName.takeIf(String::isNotBlank),
+                sourceState = returnState,
+                origin = origin.toNormalizedPoint(),
+            ),
+        )
+        publishExternalLaunchState()
         _launchSourceState.value = returnState
         _currentApp.value = null
-        _currentLaunchIcon.value = targetEntry.icon
+        val useFlueTransition = _animationOverrideEnabled.value
+        _currentLaunchIcon.value = targetEntry.icon.takeIf { useFlueTransition }
         _appOpenOrigin.value = origin
-        _screenState.value = ScreenState.App
+        _screenState.value = if (useFlueTransition) ScreenState.App else returnState
         _revealedNotificationTarget.value = null
 
         launchJob?.cancel()
         launchJob = viewModelScope.launch {
             delay(launchDelayMs)
             val opened = WLauncherNotificationListener.openNotification(key)
+            externalLaunchTracker.onDispatchResult(sessionId, opened)
+            publishExternalLaunchState()
+            applyExternalLaunchState(showFailureToast = !opened)
             if (opened) {
-                launchingExternalApp = true
-            } else {
-                launchingExternalApp = false
-                _currentLaunchIcon.value = null
-                _screenState.value = returnStateAfterExternalLaunch
+                delay(EXTERNAL_LAUNCH_BACKGROUND_TIMEOUT_MS)
+                externalLaunchTracker.onBackgroundConfirmationTimedOut(sessionId)
+                publishExternalLaunchState()
+                applyExternalLaunchState()
             }
         }
         return true
     }
 
-    fun onReturnToLauncher() {
-        if (launchingExternalApp) {
-            launchingExternalApp = false
-            _currentLaunchIcon.value = null
-            _screenState.value = returnStateAfterExternalLaunch
-            _revealedNotificationTarget.value = null
+    fun onLauncherCreated(restored: Boolean, homeIntent: Boolean) {
+        if (restored && externalLaunchTracker.state !is ExternalLaunchState.Idle) {
+            externalLaunchTracker.invalidateProcessRestore()
+            publishExternalLaunchState()
+            applyExternalLaunchState()
+        }
+        if (homeIntent && externalLaunchTracker.state !is ExternalLaunchState.Idle) {
+            onLauncherHomeIntent()
         }
     }
 
-    fun hasPendingExternalLaunchReturn(): Boolean = launchingExternalApp
+    fun onLauncherPaused() {
+        cancelPendingReturnResolution()
+        externalLaunchTracker.onPaused()
+        publishExternalLaunchState()
+        applyExternalLaunchState()
+    }
+
+    fun onLauncherStopped() {
+        externalLaunchTracker.onStopped()
+        publishExternalLaunchState()
+    }
+
+    fun onLauncherResumed() {
+        cancelPendingReturnResolution()
+        val backgrounded = externalLaunchTracker.state as? ExternalLaunchState.Backgrounded
+        if (
+            backgrounded != null &&
+            !backgrounded.session.homeIntentPending &&
+            backgrounded.session.lastExternalEvidence == null &&
+            FlueAccessibilityService.isConnected()
+        ) {
+            val session = backgrounded.session
+            returnResolutionJob = viewModelScope.launch {
+                val dispatchTime = session.dispatchedAtElapsedMs ?: Long.MAX_VALUE
+                val baselineSequence = session.lastExternalEvidence?.sequence ?: -1L
+                val evidence = withTimeoutOrNull(EXTERNAL_RETURN_EVIDENCE_WAIT_MS) {
+                    FlueAccessibilityService.lastExternalForegroundEvidence
+                        .filterNotNull()
+                        .first { candidate ->
+                            candidate.observedAtElapsedMs > dispatchTime &&
+                                candidate.sequence > baselineSequence
+                        }
+                }
+                evidence?.let(externalLaunchTracker::recordEvidence)
+                val latestState = externalLaunchTracker.state
+                if (
+                    latestState is ExternalLaunchState.Backgrounded &&
+                    latestState.session.id == session.id
+                ) {
+                    externalLaunchTracker.onResumed()
+                    publishExternalLaunchState()
+                    applyExternalLaunchState()
+                }
+                returnResolutionJob = null
+            }
+            return
+        }
+
+        FlueAccessibilityService.latestExternalForegroundEvidence()?.let(
+            externalLaunchTracker::recordEvidence,
+        )
+        externalLaunchTracker.onResumed()
+        publishExternalLaunchState()
+        applyExternalLaunchState()
+    }
+
+    fun onLauncherHomeIntent() {
+        if (externalLaunchTracker.state is ExternalLaunchState.Idle) {
+            requestHomePress()
+            return
+        }
+        if (
+            (externalLaunchTracker.state as? ExternalLaunchState.Invalidated)
+                ?.session == null
+        ) {
+            cancelPendingReturnResolution()
+            _currentApp.value = null
+            _currentLaunchIcon.value = null
+            _screenState.value = ScreenState.Face
+            _revealedNotificationTarget.value = null
+            return
+        }
+        resolveHomeIntent()
+    }
+
+    private fun resolveHomeIntent() {
+        cancelPendingReturnResolution()
+        externalLaunchTracker.onHomeIntent()
+        if (
+            externalLaunchTracker.state is ExternalLaunchState.LaunchDispatched ||
+            externalLaunchTracker.state is ExternalLaunchState.Backgrounded
+        ) {
+            externalLaunchTracker.onResumed()
+        }
+        publishExternalLaunchState()
+        applyExternalLaunchState()
+    }
+
+    private fun cancelPendingReturnResolution() {
+        returnResolutionJob?.cancel()
+        returnResolutionJob = null
+    }
+
+    fun acknowledgeExternalLaunch(sessionId: Long) {
+        externalLaunchTracker.acknowledge(sessionId)
+        publishExternalLaunchState()
+        if (externalLaunchTracker.state is ExternalLaunchState.Idle) {
+            _currentApp.value = null
+            _currentLaunchIcon.value = null
+        }
+    }
+
+    private fun publishExternalLaunchState() {
+        _externalLaunchState.value = externalLaunchTracker.state
+    }
+
+    private fun applyExternalLaunchState(showFailureToast: Boolean = false) {
+        when (val state = externalLaunchTracker.state) {
+            is ExternalLaunchState.Returning -> {
+                launchJob = null
+                _currentApp.value = null
+                if (!state.retainsLaunchIcon) {
+                    _currentLaunchIcon.value = null
+                }
+                _screenState.value = if (state.kind == ReturnKind.HomeReentry) {
+                    ScreenState.Face
+                } else {
+                    state.session.sourceState
+                }
+                _revealedNotificationTarget.value = null
+            }
+
+            is ExternalLaunchState.Failed -> {
+                launchJob = null
+                _currentApp.value = null
+                _currentLaunchIcon.value = null
+                _screenState.value = state.session.sourceState
+                _revealedNotificationTarget.value = null
+                if (showFailureToast) {
+                    Toast.makeText(
+                        getApplication(),
+                        "应用无法启动，已刷新列表",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+
+            is ExternalLaunchState.Cancelled -> {
+                launchJob?.cancel()
+                launchJob = null
+                _currentApp.value = null
+                _currentLaunchIcon.value = null
+                _screenState.value = state.session.sourceState
+                _revealedNotificationTarget.value = null
+            }
+
+            is ExternalLaunchState.Invalidated -> {
+                launchJob?.cancel()
+                launchJob = null
+                _currentApp.value = null
+                _currentLaunchIcon.value = null
+                if (_screenState.value == ScreenState.App) {
+                    _screenState.value = state.session?.sourceState ?: _launchSourceState.value
+                }
+                _revealedNotificationTarget.value = null
+            }
+
+            ExternalLaunchState.Idle,
+            is ExternalLaunchState.MaskEntering,
+            is ExternalLaunchState.LaunchDispatched,
+            is ExternalLaunchState.Backgrounded,
+            -> Unit
+        }
+    }
+
+    private fun cancelCurrentExternalLaunch(reason: CancelReason) {
+        val session = externalLaunchTracker.state.sessionOrNull() ?: return
+        externalLaunchTracker.cancel(session.id, reason)
+        publishExternalLaunchState()
+        applyExternalLaunchState()
+    }
 
     fun handleHomePress() {
         when (_screenState.value) {
             ScreenState.Face -> _screenState.value = ScreenState.Apps
             ScreenState.Apps -> _screenState.value = ScreenState.Face
             ScreenState.App -> {
-                launchJob?.cancel()
-                launchJob = null
-                launchingExternalApp = false
-                _currentLaunchIcon.value = null
-                _screenState.value = returnStateAfterExternalLaunch
-                _revealedNotificationTarget.value = null
+                cancelCurrentExternalLaunch(CancelReason.HomeBeforeDispatch)
             }
             else -> _screenState.value = ScreenState.Face
         }
@@ -1326,12 +1566,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 }
             }
             ScreenState.App -> {
-                launchJob?.cancel()
-                launchJob = null
-                launchingExternalApp = false
-                _currentLaunchIcon.value = null
-                _screenState.value = returnStateAfterExternalLaunch
-                _revealedNotificationTarget.value = null
+                cancelCurrentExternalLaunch(CancelReason.UserBack)
             }
             ScreenState.Settings -> _screenState.value = ScreenState.Apps
             ScreenState.Stack -> _screenState.value = ScreenState.Face
@@ -1415,11 +1650,29 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setAppOrder(order: List<String>) {
-        _appOrder.value = order
-        viewModelScope.launch(Dispatchers.IO) {
-            appRepository.setCustomOrder(order)
+        val orderSnapshot = order.toList()
+        val ticket = appOrderWriteCoordinator.issue(orderSnapshot)
+        pendingAppOrder.set(ticket)
+        _appOrder.value = orderSnapshot
+        // All UI calls arrive on the main thread, so the in-memory repository is updated
+        // synchronously and can never be overwritten later by an older IO coroutine.
+        appRepository.setCustomOrder(orderSnapshot)
+        appOrderWriteJob?.cancel()
+        appOrderWriteJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(APP_ORDER_WRITE_DEBOUNCE_MS)
+            runCatching {
+                appOrderWriteCoordinator.commit(
+                    ticket = ticket,
+                    updateRepository = {},
+                    persist = { latestOrder ->
+                        store.edit { preferences ->
+                            preferences[KEY_APP_ORDER] = latestOrder.joinToString(",")
+                        }
+                    },
+                )
+            }
+            pendingAppOrder.compareAndSet(ticket, null)
         }
-        persist { store.edit { it[KEY_APP_ORDER] = order.joinToString(",") } }
     }
 
     fun openFolder(folder: AppInfo) {
@@ -1433,15 +1686,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _openFolderItems.value = emptyList()
     }
 
-    fun createFolder(fromIndex: Int, toIndex: Int) {
-        val current = apps.value.toMutableList()
-        if (fromIndex !in current.indices || toIndex !in current.indices || fromIndex == toIndex) return
-        val source = current[fromIndex]
-        val target = current[toIndex]
+    fun createFolder(command: AppListCommand.CreateFolder) {
+        if (command.source == command.target) return
+        val current = apps.value
+        if (current.map(AppInfo::componentKey).distinct().size != current.size) return
+        val sourceIndex = current.indexOfFirst { it.componentKey == command.source.value }
+        val targetIndex = current.indexOfFirst { it.componentKey == command.target.value }
+        if (sourceIndex == -1 || targetIndex == -1 || sourceIndex == targetIndex) return
+        val source = current[sourceIndex]
+        val target = current[targetIndex]
         val folderKey = appRepository.createFolder(source.componentKey, target.componentKey) ?: return
-        val insertIndex = minOf(fromIndex, toIndex)
+        val insertIndex = minOf(sourceIndex, targetIndex)
         val nextOrder = current
-            .filterIndexed { index, _ -> index != fromIndex && index != toIndex }
+            .filterIndexed { index, _ -> index != sourceIndex && index != targetIndex }
             .map { it.componentKey }
             .toMutableList()
         nextOrder.add(insertIndex.coerceIn(0, nextOrder.size), folderKey)
@@ -2493,13 +2750,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _pendingDismissedNotificationKeys.value = _pendingDismissedNotificationKeys.value + keys
     }
 
-    fun swapApps(fromIndex: Int, toIndex: Int) {
-        val current = apps.value.toMutableList()
-        if (fromIndex in current.indices && toIndex in current.indices) {
-            val item = current.removeAt(fromIndex)
-            current.add(toIndex, item)
-            setAppOrder(current.map { it.componentKey })
-        }
+    fun moveApp(command: AppListCommand.Move) {
+        val snapshot = runCatching {
+            AppListSnapshot.create(
+                generation = SystemClock.elapsedRealtime(),
+                entries = apps.value.map { it.toAppListEntry() },
+            )
+        }.getOrNull() ?: return
+        val reordered = AppListReducer.reduce(snapshot.entries, command)
+        if (reordered === snapshot.entries) return
+        setAppOrder(reordered.map { it.key.value })
     }
 
     fun resetSettings() {
@@ -2951,10 +3211,49 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     override fun onCleared() {
+        launchJob?.cancel()
+        cancelPendingReturnResolution()
         refreshIconsJob?.cancel()
         pendingNotificationClearJob?.cancel()
+        appOrderWriteJob?.cancel()
         pendingWriteJobs.values.forEach(Job::cancel)
         pendingWriteJobs.clear()
         super.onCleared()
     }
+}
+
+private fun AppInfo.toAppListEntry(): AppListEntry = AppListEntry(
+    key = AppItemKey(componentKey),
+    label = label,
+    type = when {
+        isFolder -> AppItemType.FOLDER
+        isAppListShortcut -> AppItemType.SHORTCUT
+        else -> AppItemType.APP
+    },
+    launchTarget = when {
+        isFolder -> null
+        isAppListShortcut -> shortcutIntentUri?.let { LaunchTarget.IntentUri(it) }
+        else -> LaunchTarget.Component(
+            packageName = packageName,
+            className = activityName,
+        )
+    },
+    iconKey = IconKey(componentKey),
+    folderChildren = folderItemKeys.map(::AppItemKey),
+)
+
+private fun Offset.toNormalizedPoint(): NormalizedPoint = NormalizedPoint(
+    x = x.coerceIn(0f, 1f),
+    y = y.coerceIn(0f, 1f),
+)
+
+private fun ExternalLaunchState.sessionOrNull(): ExternalLaunchSession? = when (this) {
+    ExternalLaunchState.Idle -> null
+    is ExternalLaunchState.MaskEntering -> session
+    is ExternalLaunchState.LaunchDispatched -> session
+    is ExternalLaunchState.Backgrounded -> session
+    is ExternalLaunchState.Returning -> session
+    is ExternalLaunchState.Failed -> session
+    is ExternalLaunchState.Cancelled -> session
+    is ExternalLaunchState.Invalidated -> session
 }

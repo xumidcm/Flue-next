@@ -1,6 +1,5 @@
 package com.flue.launcher
 
-import android.app.Activity
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -10,6 +9,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -20,7 +20,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -54,9 +53,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.animation.core.FastOutSlowInEasing
 import com.flue.launcher.data.model.AppInfo
+import com.flue.launcher.launchsession.ExternalLaunchState
+import com.flue.launcher.launchsession.ReturnKind
 import com.flue.launcher.service.FlueAccessibilityService
 import com.flue.launcher.ui.anim.appListLayerValues
 import com.flue.launcher.ui.anim.faceLayerValues
@@ -82,8 +82,6 @@ import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.WatchLauncherTheme
-import com.flue.launcher.util.applyFadeCloseTransition
-import com.flue.launcher.util.applyFadeOpenTransition
 import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.viewmodel.HoneycombFastScrollOptimizationMode
 import com.flue.launcher.viewmodel.LauncherViewModel
@@ -108,11 +106,15 @@ private const val LAUNCH_MASK_EXIT_RETAIN_MS = 260L
 
 class LauncherActivity : ComponentActivity() {
 
-    private lateinit var vm: LauncherViewModel
+    private val vm: LauncherViewModel by viewModels()
     private var deferredResumeMaintenance: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        vm.onLauncherCreated(
+            restored = savedInstanceState != null,
+            homeIntent = intent.isLauncherHomeIntent(),
+        )
         RecentsVisibility.apply(this)
         CrashHandler(applicationContext).install()
         window.setFlags(
@@ -121,14 +123,12 @@ class LauncherActivity : ComponentActivity() {
         )
         onBackPressedDispatcher.addCallback(this) { vm.requestBackPress() }
         setContent {
-            val viewModel: LauncherViewModel = viewModel()
-            vm = viewModel
-            val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
-            val uiStyle by viewModel.uiStyle.collectAsStateWithLifecycle()
-            val globalUiScalePercent by viewModel.globalUiScalePercent.collectAsStateWithLifecycle()
+            val themeMode by vm.themeMode.collectAsStateWithLifecycle()
+            val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
+            val globalUiScalePercent by vm.globalUiScalePercent.collectAsStateWithLifecycle()
             WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle) {
                 ProvideGlobalUiScale(globalUiScalePercent) {
-                    LauncherScreen(viewModel)
+                    LauncherScreen(vm)
                 }
             }
         }
@@ -137,44 +137,38 @@ class LauncherActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (::vm.isInitialized && intent.isLauncherHomeIntent()) {
-            vm.requestHomePress()
+        if (intent.isLauncherHomeIntent()) {
+            vm.onLauncherHomeIntent()
         }
     }
 
     override fun onResume() {
         super.onResume()
         RecentsVisibility.apply(this)
-        if (::vm.isInitialized && vm.animationOverrideEnabled.value && vm.hasPendingExternalLaunchReturn()) {
-            applyFadeCloseTransition()
-        }
-        if (::vm.isInitialized) {
-            vm.setLauncherInteractive(true)
-            vm.onReturnToLauncher()
-            scheduleDeferredResumeMaintenance()
-        }
+        vm.setLauncherInteractive(true)
+        vm.onLauncherResumed()
+        scheduleDeferredResumeMaintenance()
     }
 
     override fun onPause() {
         super.onPause()
         deferredResumeMaintenance?.let(window.decorView::removeCallbacks)
         deferredResumeMaintenance = null
-        if (::vm.isInitialized) {
-            vm.setLauncherInteractive(false)
-        }
-        if (::vm.isInitialized && vm.animationOverrideEnabled.value) {
-            applyFadeCloseTransition()
-        }
+        vm.setLauncherInteractive(false)
+        vm.onLauncherPaused()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        vm.onLauncherStopped()
     }
 
     private fun scheduleDeferredResumeMaintenance() {
         deferredResumeMaintenance?.let(window.decorView::removeCallbacks)
         val task = Runnable {
             deferredResumeMaintenance = null
-            if (::vm.isInitialized) {
-                vm.refreshWatchFaces()
-                vm.refreshNotificationAccess()
-            }
+            vm.refreshWatchFaces()
+            vm.refreshNotificationAccess()
         }
         deferredResumeMaintenance = task
         window.decorView.postDelayed(task, APP_RETURN_MAINTENANCE_DELAY_MS)
@@ -205,9 +199,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appOpenOrigin by vm.appOpenOrigin.collectAsStateWithLifecycle()
     val splashIcon by vm.splashIcon.collectAsStateWithLifecycle()
     val splashDelay by vm.splashDelay.collectAsStateWithLifecycle()
+    val animationOverrideEnabled by vm.animationOverrideEnabled.collectAsStateWithLifecycle()
     val directLaunchAppListEnabled by vm.directLaunchAppListEnabled.collectAsStateWithLifecycle()
     val directLaunchAppListPreferenceLoaded by vm.directLaunchAppListPreferenceLoaded.collectAsStateWithLifecycle()
     val currentLaunchIcon by vm.currentLaunchIcon.collectAsStateWithLifecycle()
+    val externalLaunchState by vm.externalLaunchState.collectAsStateWithLifecycle()
     val honeycombCols by vm.honeycombCols.collectAsStateWithLifecycle()
     val honeycombEdgeBlurRadius by vm.honeycombEdgeBlurRadius.collectAsStateWithLifecycle()
     val honeycombTopFade by vm.honeycombTopFade.collectAsStateWithLifecycle()
@@ -378,7 +374,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .putExtra(EXTRA_SETTINGS_RETURN_TO_FACE, true)
                     .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             )
-            (context as? Activity)?.applyFadeOpenTransition()
             Unit
         }
     }
@@ -415,7 +410,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
     }
     val launchAppFromLauncher: (AppInfo, Offset, ScreenState) -> Unit = { appInfo, origin, returnState ->
-        val launchDelay = BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
+        val launchDelay = if (animationOverrideEnabled) {
+            BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
+        } else {
+            0L
+        }
         vm.openApp(appInfo, origin, launchDelay, returnState)
     }
     var prevState by remember { mutableStateOf(screenState) }
@@ -428,23 +427,40 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val isDirectLaunchEnteringAppList =
         directLaunchStartupWindowOpen && directLaunchAppListConsumed && screenState == ScreenState.Apps
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
+    val classifiedReturn =
+        (externalLaunchState as? ExternalLaunchState.Returning)?.kind
+    val targetReturn =
+        animationOverrideEnabled && classifiedReturn == ReturnKind.TargetReturn
+    val activeLaunchUsesOrigin = animationOverrideEnabled && when (externalLaunchState) {
+        is ExternalLaunchState.MaskEntering,
+        is ExternalLaunchState.LaunchDispatched,
+        is ExternalLaunchState.Backgrounded,
+        -> true
+
+        is ExternalLaunchState.Returning -> targetReturn
+        else -> false
+    }
     val isOpeningAppList =
         (prevState == ScreenState.Face && screenState == ScreenState.Apps) || isDirectLaunchEnteringAppList
     val isClosingAppListToFace = prevState == ScreenState.Apps && screenState == ScreenState.Face
     val isEnteringAppList = prevState != ScreenState.Apps && screenState == ScreenState.Apps
     var appListReturnOriginActive by remember {
-        mutableStateOf(screenState == ScreenState.App && launchSourceState == ScreenState.Apps)
+        mutableStateOf(
+            screenState == ScreenState.App &&
+                launchSourceState == ScreenState.Apps &&
+                activeLaunchUsesOrigin,
+        )
     }
     var appListShadowsReady by remember { mutableStateOf(screenState == ScreenState.Apps) }
-    LaunchedEffect(screenState, launchSourceState) {
+    LaunchedEffect(screenState, launchSourceState, targetReturn, activeLaunchUsesOrigin) {
         if (launchSourceState != ScreenState.Apps) {
             appListReturnOriginActive = false
             return@LaunchedEffect
         }
         when (screenState) {
-            ScreenState.App -> appListReturnOriginActive = true
+            ScreenState.App -> appListReturnOriginActive = activeLaunchUsesOrigin
             ScreenState.Apps -> {
-                if (appListReturnOriginActive || isReturningFromApp) {
+                if (targetReturn && (appListReturnOriginActive || isReturningFromApp)) {
                     appListReturnOriginActive = true
                     delay(APP_LIST_RETURN_ORIGIN_HOLD_MS)
                     appListReturnOriginActive = false
@@ -534,6 +550,23 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val launcherScope = rememberCoroutineScope()
     var retainedLaunchIcon by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     var retainedLaunchSplash by remember { mutableStateOf(false) }
+    LaunchedEffect(externalLaunchState) {
+        val terminalSessionId = when (val state = externalLaunchState) {
+            is ExternalLaunchState.Returning -> state.session.id
+            is ExternalLaunchState.Failed -> state.session.id
+            is ExternalLaunchState.Cancelled -> state.session.id
+            is ExternalLaunchState.Invalidated -> state.session?.id
+            else -> null
+        } ?: return@LaunchedEffect
+
+        if (!targetReturn) {
+            retainedLaunchIcon = null
+            retainedLaunchSplash = false
+        } else {
+            delay(APP_LIST_RETURN_ORIGIN_HOLD_MS)
+        }
+        vm.acknowledgeExternalLaunch(terminalSessionId)
+    }
     val notificationTransition = remember { Animatable(if (notificationSceneActive) 1f else 0f) }
     var notificationGestureActive by remember { mutableStateOf(false) }
     var notificationTargetProgress by remember { mutableFloatStateOf(if (notificationSceneActive) 1f else 0f) }
@@ -543,11 +576,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
     val appListTransformOrigin = when {
         launchSourceState != ScreenState.Apps -> null
-        screenState == ScreenState.App -> appOpenOrigin
-        appListReturnOriginActive && !classicReturnAnimationEnabled -> appOpenOrigin
+        screenState == ScreenState.App && activeLaunchUsesOrigin -> appOpenOrigin
+        targetReturn && appListReturnOriginActive && !classicReturnAnimationEnabled -> appOpenOrigin
         else -> null
     }
     val appListIconReturnActive =
+        targetReturn &&
         launchSourceState == ScreenState.Apps &&
             screenState == ScreenState.Apps &&
             !classicReturnAnimationEnabled &&
@@ -610,14 +644,30 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
 
     var showSplash by remember { mutableStateOf(false) }
-    val showLaunchBackdrop = screenState == ScreenState.App && (iconlessFadeLaunch || iconLaunchAvailable)
+    val showLaunchBackdrop =
+        animationOverrideEnabled &&
+            screenState == ScreenState.App &&
+            (iconlessFadeLaunch || iconLaunchAvailable)
     val effectiveLaunchIcon = currentLaunchIcon ?: retainedLaunchIcon
     val effectiveLaunchSplash = !iconlessFadeLaunch && (
             (showSplash && currentLaunchIcon != null) ||
             (retainedLaunchSplash && retainedLaunchIcon != null)
     )
-    LaunchedEffect(screenState, splashIcon, splashDelay, currentLaunchIcon, iconlessFadeLaunch) {
-        if (!iconlessFadeLaunch && screenState == ScreenState.App && splashIcon && currentLaunchIcon != null) {
+    LaunchedEffect(
+        animationOverrideEnabled,
+        screenState,
+        splashIcon,
+        splashDelay,
+        currentLaunchIcon,
+        iconlessFadeLaunch,
+    ) {
+        if (
+            animationOverrideEnabled &&
+            !iconlessFadeLaunch &&
+            screenState == ScreenState.App &&
+            splashIcon &&
+            currentLaunchIcon != null
+        ) {
             showSplash = false
             delay(BASE_LAUNCH_MASK_DELAY_MS)
             showSplash = true
@@ -975,8 +1025,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onAppClick = { appInfo, origin ->
                             launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
                         },
-                        onReorder = { from, to -> vm.swapApps(from, to) },
-                        onCreateFolder = { from, to -> vm.createFolder(from, to) },
+                        onReorder = vm::moveApp,
+                        onCreateFolder = vm::createFolder,
                         onExcludeApp = { appInfo -> vm.setAppHidden(appInfo.componentKey, true) },
                         onRemoveShortcut = vm::removeAppListShortcut,
                         onRenameFolder = vm::renameFolder,
@@ -1015,8 +1065,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onAppClick = { appInfo, origin ->
                             launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
                         },
-                        onReorder = { from, to -> vm.swapApps(from, to) },
-                        onCreateFolder = { from, to -> vm.createFolder(from, to) },
+                        onReorder = vm::moveApp,
+                        onCreateFolder = vm::createFolder,
                         onExcludeApp = { appInfo -> vm.setAppHidden(appInfo.componentKey, true) },
                         onRemoveShortcut = vm::removeAppListShortcut,
                         onRenameFolder = vm::renameFolder,
@@ -1075,11 +1125,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 visible = showLaunchBackdrop,
                 modifier = Modifier.zIndex(6f),
                 enter = fadeIn(animationSpec = launcherStyle.launchMaskEnterSpec),
-                exit = fadeOut(animationSpec = launcherStyle.launchMaskExitSpec) +
-                    slideOutVertically(
-                        animationSpec = tween(if (uiStyle == UiStyle.MATERIAL_3) 260 else 220),
-                        targetOffsetY = { fullHeight -> if (uiStyle == UiStyle.MATERIAL_3) fullHeight / 10 else fullHeight / 6 }
-                    )
+                exit = fadeOut(animationSpec = launcherStyle.launchMaskExitSpec)
             ) {
                 LaunchBackdropContent(
                     showSplash = effectiveLaunchSplash,
@@ -1128,7 +1174,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 key,
                                 origin,
                                 ScreenState.Stack,
-                                BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
+                                if (animationOverrideEnabled) {
+                                    BASE_LAUNCH_MASK_DELAY_MS +
+                                        if (splashIcon) splashDelay.toLong() else 0L
+                                } else {
+                                    0L
+                                }
                             )
                         },
                         onLaunchApp = { appInfo, origin ->
@@ -1232,7 +1283,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 key,
                                 origin,
                                 notificationReturnState,
-                                BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
+                                if (animationOverrideEnabled) {
+                                    BASE_LAUNCH_MASK_DELAY_MS +
+                                        if (splashIcon) splashDelay.toLong() else 0L
+                                } else {
+                                    0L
+                                }
                             )
                         },
                         stackCardColor = notificationStackTint
@@ -1251,10 +1307,15 @@ private fun LaunchBackdropContent(
     backgroundColor: Color
 ) {
     val launcherStyle = LauncherTheme.style
+    val overlayAlpha = if (uiStyle == UiStyle.MATERIAL_3) 0.72f else 0.68f
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(backgroundColor),
+            .background(
+                backgroundColor.copy(
+                    alpha = minOf(backgroundColor.alpha, overlayAlpha),
+                ),
+            ),
         contentAlignment = Alignment.Center
     ) {
         AnimatedVisibility(

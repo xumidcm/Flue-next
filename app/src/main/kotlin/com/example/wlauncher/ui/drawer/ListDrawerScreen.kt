@@ -69,6 +69,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.flue.launcher.applist.model.AppItemKey
+import com.flue.launcher.applist.model.AppListCommand
+import com.flue.launcher.applist.model.AppListMovePlanner
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.iconForDisplay
 import com.flue.launcher.ui.anim.platformBlur
@@ -130,8 +133,8 @@ fun ListDrawerScreen(
     rowBorderEnabled: Boolean = false,
     allowFolderCreation: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,
-    onReorder: (Int, Int) -> Unit = { _, _ -> },
-    onCreateFolder: (Int, Int) -> Unit = { _, _ -> },
+    onReorder: (AppListCommand.Move) -> Unit = {},
+    onCreateFolder: (AppListCommand.CreateFolder) -> Unit = {},
     onLongClick: (AppInfo) -> Unit = {},
     onExcludeApp: (AppInfo) -> Unit = {},
     onRemoveShortcut: (AppInfo) -> Unit = {},
@@ -146,6 +149,7 @@ fun ListDrawerScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
+    val appKeys = remember(apps) { apps.map { AppItemKey(it.componentKey) } }
     val effectiveEdgeBlur = edgeBlurEnabled && !suppressHeavyEffects
 
     var longPressedApp by remember { mutableStateOf<AppInfo?>(null) }
@@ -380,7 +384,8 @@ fun ListDrawerScreen(
                     val folderHoverMaxSpeedPxPerMs = with(density) {
                         LIST_FOLDER_HOVER_MAX_SPEED_DP_PER_MS.dp.toPx()
                     }
-                    awaitEachGesture {
+                    try {
+                        awaitEachGesture {
                         val down = awaitPrimaryDown()
                         val startIndex = findNearestListIndex(
                             pointerY = down.position.y,
@@ -453,15 +458,11 @@ fun ListDrawerScreen(
                                     hasDragged = true
                                 }
 
-                                val reorderTarget = if (!allowFolderCreation) {
-                                    findNearestListIndex(
-                                        pointerY = visualCenterY,
-                                        itemCenters = itemCenters,
-                                        maxDistance = Float.MAX_VALUE
-                                    )
-                                } else {
-                                    null
-                                }
+                                val reorderTarget = findNearestListIndex(
+                                    pointerY = visualCenterY,
+                                    itemCenters = itemCenters,
+                                    maxDistance = Float.MAX_VALUE
+                                )
                                 val folderCandidate = if (allowFolderCreation) {
                                     findNearestListIndex(
                                         pointerY = visualCenterY,
@@ -478,7 +479,7 @@ fun ListDrawerScreen(
                                     null
                                 }
                                 if (folderCandidate != null) {
-                                    dragCurrentIndex = activeFromIndex
+                                    dragCurrentIndex = reorderTarget ?: dragCurrentIndex
                                     if (folderHoverIndex != folderCandidate) {
                                         folderHoverIndex = folderCandidate
                                         folderHoverStartedAt = change.uptimeMillis
@@ -490,11 +491,7 @@ fun ListDrawerScreen(
                                     folderHoverIndex = null
                                     folderHoverStartedAt = 0L
                                     folderDropIndex = null
-                                    dragCurrentIndex = if (allowFolderCreation) {
-                                        activeFromIndex
-                                    } else {
-                                        reorderTarget ?: dragCurrentIndex
-                                    }
+                                    dragCurrentIndex = reorderTarget ?: dragCurrentIndex
                                 }
                                 previousVisualCenterY = visualCenterY
                                 previousMoveUptime = change.uptimeMillis
@@ -506,8 +503,35 @@ fun ListDrawerScreen(
 
                         val from = dragFromIndex
                         val to = dragCurrentIndex
-                        val folderTarget = folderDropIndex
-                        if (dragActive && from != null && folderTarget != null && from != folderTarget && hasDragged) {
+                        val currentFolderTarget = if (from != null && !dragPointerY.isNaN()) {
+                            findNearestListIndex(
+                                pointerY = dragPointerY,
+                                itemCenters = itemCenters,
+                                maxDistance = minOf(
+                                    releaseOverlayHeightPx * 0.42f,
+                                    with(density) { scaledIconSize.toPx() } * 0.58f
+                                ),
+                                excludedIndex = from
+                            )
+                        } else {
+                            null
+                        }
+                        val folderTarget = AppListMovePlanner.validatedFolderTarget(
+                            pendingTargetIndex = folderDropIndex,
+                            currentTargetIndex = currentFolderTarget,
+                            sourceIndex = from ?: -1,
+                        )
+                        val folderCommand = if (from != null && folderTarget != null) {
+                            AppListMovePlanner.folderFromIndexes(appKeys, from, folderTarget)
+                        } else {
+                            null
+                        }
+                        val reorderCommand = if (from != null && to != null) {
+                            AppListMovePlanner.fromIndexes(appKeys, from, to)
+                        } else {
+                            null
+                        }
+                        if (dragActive && folderCommand != null && hasDragged) {
                             dragFromIndex = null
                             dragCurrentIndex = null
                             folderHoverIndex = null
@@ -516,8 +540,8 @@ fun ListDrawerScreen(
                             glidePressedIndex = null
                             settlingApp = null
                             settlingKey = null
-                            onCreateFolder(from, folderTarget)
-                        } else if (!allowFolderCreation && dragActive && from != null && to != null && from != to && hasDragged) {
+                            onCreateFolder(folderCommand)
+                        } else if (dragActive && reorderCommand != null && from != null && to != null && hasDragged) {
                             val droppedApp = apps.getOrNull(from)
                             val releaseCenter = dragPointerY.coerceIn(
                                 releaseOverlayHeightPx * 0.5f,
@@ -543,14 +567,14 @@ fun ListDrawerScreen(
                                 scope.launch {
                                     settlingCenterY.snapTo(releaseCenter)
                                     settlingCenterY.animateTo(targetCenter, tween(durationMillis = 170))
-                                    onReorder(from, to)
+                                    onReorder(reorderCommand)
                                     delay(48)
                                     settlingApp = null
                                     settlingKey = null
                                     settlingCenterY.snapTo(0f)
                                 }
                             } else {
-                                onReorder(from, to)
+                                onReorder(reorderCommand)
                             }
                         } else {
                             dragFromIndex = null
@@ -562,6 +586,15 @@ fun ListDrawerScreen(
                             settlingApp = null
                             settlingKey = null
                         }
+                        }
+                    } finally {
+                        longPressedApp = null
+                        glidePressedIndex = null
+                        dragFromIndex = null
+                        dragCurrentIndex = null
+                        folderHoverIndex = null
+                        dragOffsetY = 0f
+                        dragPointerY = Float.NaN
                     }
                 }
         ) {
@@ -638,12 +671,29 @@ fun ListDrawerScreen(
                             }
                             val anchorCenter = itemCenters[activeFromIndex] ?: pointerY
                             dragOffsetY = pointerY - anchorCenter
-                            if (!allowFolderCreation && folderHoverIndex == null) {
-                                dragCurrentIndex = findNearestListIndex(
+                            dragCurrentIndex = findNearestListIndex(
+                                pointerY = pointerY,
+                                itemCenters = itemCenters,
+                                maxDistance = Float.MAX_VALUE
+                            ) ?: dragCurrentIndex
+                            val currentFolderCandidate = if (allowFolderCreation) {
+                                findNearestListIndex(
                                     pointerY = pointerY,
                                     itemCenters = itemCenters,
-                                    maxDistance = Float.MAX_VALUE
-                                ) ?: dragCurrentIndex
+                                    maxDistance = minOf(
+                                        dragOverlayHeightPx * 0.42f,
+                                        with(density) { scaledIconSize.toPx() } * 0.58f
+                                    ),
+                                    excludedIndex = activeFromIndex
+                                )
+                            } else {
+                                null
+                            }
+                            if (
+                                folderHoverIndex != null &&
+                                folderHoverIndex != currentFolderCandidate
+                            ) {
+                                folderHoverIndex = null
                             }
                         }
                     }

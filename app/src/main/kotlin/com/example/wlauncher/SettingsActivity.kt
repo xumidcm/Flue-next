@@ -134,8 +134,6 @@ import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
-import com.flue.launcher.util.applyFadeCloseTransition
-import com.flue.launcher.util.applyFadeOpenTransition
 import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.viewmodel.HoneycombFastScrollOptimizationMode
 import com.flue.launcher.viewmodel.LauncherViewModel
@@ -246,11 +244,6 @@ class SettingsActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         launchConfig = intent.readSettingsLaunchConfig()
-    }
-
-    override fun finish() {
-        super.finish()
-        applyFadeCloseTransition()
     }
 
     private fun Intent.readSettingsLaunchConfig(): SettingsLaunchConfig {
@@ -958,11 +951,8 @@ private fun SettingsRootScreen(
                                     Intent(context, InternalWatchFaceConfigActivity::class.java)
                                         .putExtra(EXTRA_INTERNAL_WATCHFACE_ID, descriptor.id)
                                 )
-                                (context as? Activity)?.applyFadeOpenTransition()
                             } else if (!LunchWatchFaceRuntime.openSettings(context, descriptor)) {
                                 Toast.makeText(context, "没有可用的表盘设置", Toast.LENGTH_SHORT).show()
-                            } else {
-                                (context as? Activity)?.applyFadeOpenTransition()
                             }
                         }
                     } else {
@@ -1765,8 +1755,12 @@ private fun SettingsRootScreen(
             }
             item("anim_override") {
                 SettingsSwitchRow(
-                    title = "桌面返回动画",
-                    subtitle = "启用渐隐过渡",
+                    title = if (isZh) "Flue 启动与返回动画" else "Flue Launch & Return Animation",
+                    subtitle = if (isZh) {
+                        "关闭后跟随系统；开启后使用 Flue 遮罩与图标来源动画"
+                    } else {
+                        "Follow the system when off; use Flue mask and icon-origin motion when on"
+                    },
                     checked = animationOverrideEnabled,
                     onToggle = { vm.setAnimationOverrideEnabled(it) },
                     scale = itemFisheye(listState, "anim_override", screenCenterY, screenHeightPx)

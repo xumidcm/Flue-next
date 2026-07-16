@@ -1,8 +1,10 @@
 package com.flue.launcher.ui.input
 
 import androidx.compose.foundation.focusable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.rotary.onPreRotaryScrollEvent
@@ -13,6 +15,29 @@ import kotlin.math.abs
 import kotlin.math.sign
 
 private const val ROTARY_HAPTIC_MIN_INTERVAL_MS = 90L
+
+internal class RotaryHapticGate(
+    private val minIntervalMs: Long = ROTARY_HAPTIC_MIN_INTERVAL_MS
+) {
+    private var lastAcceptedAtMs: Long? = null
+
+    init {
+        require(minIntervalMs >= 0L) { "minIntervalMs must be non-negative" }
+    }
+
+    fun tryAcquire(nowMs: Long): Boolean {
+        val lastAccepted = lastAcceptedAtMs
+        val shouldAccept = when {
+            lastAccepted == null -> true
+            nowMs < lastAccepted -> true
+            else -> nowMs - lastAccepted >= minIntervalMs
+        }
+        if (shouldAccept) {
+            lastAcceptedAtMs = nowMs
+        }
+        return shouldAccept
+    }
+}
 
 enum class DrawerInputMode {
     Honeycomb,
@@ -139,15 +164,15 @@ fun Modifier.flueRotaryScrollable(
     multiplier: Float = 1f,
     onRotaryScroll: (() -> Unit)? = null,
     onScroll: (Float) -> Unit
-): Modifier {
-    var lastHapticAt = 0L
+): Modifier = composed {
+    val hapticGate = remember { RotaryHapticGate() }
+
     fun consume(deltaPixels: Float): Boolean {
         val tuned = tunedRotaryScrollDelta(-deltaPixels, multiplier)
         if (tuned == 0f) return false
         if (onRotaryScroll != null) {
             val now = android.os.SystemClock.elapsedRealtime()
-            if (now - lastHapticAt >= ROTARY_HAPTIC_MIN_INTERVAL_MS) {
-                lastHapticAt = now
+            if (hapticGate.tryAcquire(now)) {
                 onRotaryScroll()
             }
         }
@@ -155,7 +180,7 @@ fun Modifier.flueRotaryScrollable(
         return true
     }
 
-    return this
+    this
         .onPreRotaryScrollEvent { consume(it.verticalScrollPixels) }
         .onRotaryScrollEvent { consume(it.verticalScrollPixels) }
         .tunedPointerWheelScrollable(multiplier, onScroll)
@@ -169,8 +194,9 @@ fun Modifier.flueDrawerRotaryScrollable(
     mode: DrawerInputMode,
     onRotaryScroll: (() -> Unit)? = null,
     onScroll: (Float) -> Unit
-): Modifier {
-    var lastHapticAt = 0L
+): Modifier = composed {
+    val hapticGate = remember { RotaryHapticGate() }
+
     fun consume(deltaPixels: Float): Boolean {
         val tuned = normalizeDrawerScrollDelta(
             verticalScrollPixels = -deltaPixels,
@@ -180,8 +206,7 @@ fun Modifier.flueDrawerRotaryScrollable(
         if (tuned == 0f) return false
         if (onRotaryScroll != null) {
             val now = android.os.SystemClock.elapsedRealtime()
-            if (now - lastHapticAt >= ROTARY_HAPTIC_MIN_INTERVAL_MS) {
-                lastHapticAt = now
+            if (hapticGate.tryAcquire(now)) {
                 onRotaryScroll()
             }
         }
@@ -189,7 +214,7 @@ fun Modifier.flueDrawerRotaryScrollable(
         return true
     }
 
-    return this
+    this
         .onPreRotaryScrollEvent { consume(it.verticalScrollPixels) }
         .onRotaryScrollEvent { consume(it.verticalScrollPixels) }
         .restoreRotaryFocusOnTouch(focusRequester)
