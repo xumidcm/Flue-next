@@ -14,12 +14,12 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -59,8 +59,12 @@ import com.flue.launcher.launchsession.ExternalLaunchState
 import com.flue.launcher.launchsession.ReturnKind
 import com.flue.launcher.service.FlueAccessibilityService
 import com.flue.launcher.ui.anim.appListLayerValues
+import com.flue.launcher.ui.anim.appListLayerMotionPolicy
 import com.flue.launcher.ui.anim.faceLayerValues
+import com.flue.launcher.ui.anim.launchMaskMotionPolicy
 import com.flue.launcher.ui.anim.scaleBlurAlpha
+import com.flue.launcher.ui.anim.AppListScaleMotion
+import com.flue.launcher.ui.anim.TransitionSpring
 import com.flue.launcher.ui.controlcenter.ControlCenterLayer
 import com.flue.launcher.ui.drawer.AppFolderOverlay
 import com.flue.launcher.ui.drawer.HoneycombScreen
@@ -90,7 +94,6 @@ import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceHost
 import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceHost
 import com.flue.launcher.watchface.jbwatch.JbWatchFaceHost
-import androidx.compose.animation.core.Spring
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -586,29 +589,70 @@ fun LauncherScreen(vm: LauncherViewModel) {
             screenState == ScreenState.Apps &&
             !classicReturnAnimationEnabled &&
             (isReturningFromApp || appListReturnOriginActive)
-    val appListLayerOrigin = if (isOpeningAppList) {
+    val appListLayerOrigin = if (isOpeningAppList || isClosingAppListToFace) {
         Offset(0.5f, 0.5f)
     } else if (appListIconReturnActive) {
         appOpenOrigin
     } else {
         appListTransformOrigin
     }
-    val appListBackgroundProgress by animateFloatAsState(
-        targetValue = if (screenState == ScreenState.Apps) 1f else 0f,
-        animationSpec = if (screenState == ScreenState.Apps) {
-            tween(durationMillis = 400)
-        } else {
-            tween(durationMillis = 400)
-        },
-        label = "app_list_background_progress"
+    val appleWatchStyle = uiStyle == UiStyle.APPLE_WATCH
+    val appListEntryProgress by animateFloatAsState(
+        targetValue = if (appleWatchStyle || screenState == ScreenState.Apps) 1f else 0f,
+        animationSpec = remember { tween(durationMillis = 400) },
+        label = "app_list_entry_progress",
     )
-    val appListMotionSpec = when {
-        isOpeningAppList || isClosingAppListToFace -> tween<Float>(durationMillis = 220)
-        uiStyle == UiStyle.MATERIAL_3 && (isReturningFromApp || appListIconReturnActive) -> tween(
-            durationMillis = 260,
-            easing = FastOutSlowInEasing
+    val appListMotionPolicy = remember(
+        appleWatchStyle,
+        isOpeningAppList,
+        isClosingAppListToFace,
+        isReturningFromApp,
+        appListIconReturnActive,
+    ) {
+        appListLayerMotionPolicy(
+            appleWatchStyle = appleWatchStyle,
+            openingFromFace = isOpeningAppList,
+            closingToFace = isClosingAppListToFace,
+            returningFromApp = isReturningFromApp || appListIconReturnActive,
         )
-        else -> spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow)
+    }
+    val appListMotionSpec = remember(appListMotionPolicy.scaleMotion) {
+        when (appListMotionPolicy.scaleMotion) {
+            AppListScaleMotion.BETA_12_SPRING,
+            AppListScaleMotion.STANDARD_SPRING -> TransitionSpring
+            AppListScaleMotion.TWEEN_220 -> tween<Float>(durationMillis = 220)
+            AppListScaleMotion.MATERIAL_RETURN_260 -> tween(
+                durationMillis = 260,
+                easing = FastOutSlowInEasing,
+            )
+        }
+    }
+    val appListAlphaSpec = remember(appListMotionPolicy.alphaDurationMillis) {
+        tween<Float>(durationMillis = appListMotionPolicy.alphaDurationMillis)
+    }
+    val appListBlurSpec = remember(appListMotionPolicy.blurDurationMillis) {
+        tween<Float>(durationMillis = appListMotionPolicy.blurDurationMillis)
+    }
+    val launchMaskPolicy = remember(appleWatchStyle) {
+        launchMaskMotionPolicy(appleWatchStyle = appleWatchStyle)
+    }
+    val launchMaskEnterTransition = remember(launchMaskPolicy) {
+        fadeIn(animationSpec = tween(launchMaskPolicy.enterDurationMillis))
+    }
+    val launchMaskExitTransition = remember(launchMaskPolicy) {
+        val fade = fadeOut(
+            animationSpec = tween(launchMaskPolicy.exitDurationMillis),
+        )
+        if (launchMaskPolicy.exitSlideDurationMillis > 0) {
+            fade + slideOutVertically(
+                animationSpec = tween(launchMaskPolicy.exitSlideDurationMillis),
+                targetOffsetY = { fullHeight ->
+                    (fullHeight * launchMaskPolicy.exitSlideFraction).toInt()
+                },
+            )
+        } else {
+            fade
+        }
     }
     val faceLayerBlurEnabled = layerBlurEnabled
     val appListLayerBlurEnabled = layerBlurEnabled
@@ -987,8 +1031,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         blurEnabled = appListLayerBlurEnabled,
                         origin = appListLayerOrigin,
                         scaleSpec = appListMotionSpec,
-                        alphaSpec = if (isOpeningAppList) tween(durationMillis = 220) else tween(durationMillis = 400),
-                        blurSpec = if (isOpeningAppList) tween(durationMillis = 220) else tween(durationMillis = 400),
+                        alphaSpec = appListAlphaSpec,
+                        blurSpec = appListBlurSpec,
                         translationSpec = appListMotionSpec
                     )
             ) {
@@ -1021,7 +1065,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         themeColor = appListThemeColor,
                         uiStyle = uiStyle,
                         darkMode = effectiveDarkMode,
-                        entryProgress = appListBackgroundProgress,
+                        entryProgress = appListEntryProgress,
                         onAppClick = { appInfo, origin ->
                             launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
                         },
@@ -1061,7 +1105,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         themeColor = appListThemeColor,
                         uiStyle = uiStyle,
                         darkMode = effectiveDarkMode,
-                        entryProgress = appListBackgroundProgress,
+                        entryProgress = appListEntryProgress,
                         onAppClick = { appInfo, origin ->
                             launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
                         },
@@ -1124,14 +1168,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
             AnimatedVisibility(
                 visible = showLaunchBackdrop,
                 modifier = Modifier.zIndex(6f),
-                enter = fadeIn(animationSpec = launcherStyle.launchMaskEnterSpec),
-                exit = fadeOut(animationSpec = launcherStyle.launchMaskExitSpec)
+                enter = launchMaskEnterTransition,
+                exit = launchMaskExitTransition,
             ) {
                 LaunchBackdropContent(
                     showSplash = effectiveLaunchSplash,
                     icon = effectiveLaunchIcon,
                     uiStyle = uiStyle,
-                    backgroundColor = launchBackdropColor
+                    backgroundColor = launchBackdropColor,
+                    opaqueBlack = launchMaskPolicy.opaqueBlack,
                 )
             }
 
@@ -1304,7 +1349,8 @@ private fun LaunchBackdropContent(
     showSplash: Boolean,
     icon: androidx.compose.ui.graphics.ImageBitmap?,
     uiStyle: UiStyle,
-    backgroundColor: Color
+    backgroundColor: Color,
+    opaqueBlack: Boolean,
 ) {
     val launcherStyle = LauncherTheme.style
     val overlayAlpha = if (uiStyle == UiStyle.MATERIAL_3) 0.72f else 0.68f
@@ -1312,9 +1358,13 @@ private fun LaunchBackdropContent(
         modifier = Modifier
             .fillMaxSize()
             .background(
-                backgroundColor.copy(
-                    alpha = minOf(backgroundColor.alpha, overlayAlpha),
-                ),
+                if (opaqueBlack) {
+                    Color.Black
+                } else {
+                    backgroundColor.copy(
+                        alpha = minOf(backgroundColor.alpha, overlayAlpha),
+                    )
+                },
             ),
         contentAlignment = Alignment.Center
     ) {

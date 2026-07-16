@@ -6,20 +6,45 @@ import org.junit.Test
 class AppListEntryTransitionTest {
 
     @Test
-    fun `global entry progress drives every visual channel`() {
-        val visuals = appListEntryVisuals(0.42f)
-
-        assertEquals(0.42f, visuals.backgroundProgress)
-        assertEquals(0.42f, visuals.backgroundFillProgress)
-        assertEquals(0.42f, visuals.iconProgress)
-        assertEquals(0.42f, visuals.surfaceProgress)
-        assertEquals(0.42f, visuals.edgeProgress)
+    fun `Apple uses beta12 inner motion while Material keeps Flue Next`() {
+        assertEquals(
+            AppListEntryMotion.BETA_12_CLASSIC,
+            appListEntryMotionForStyle(appleWatchStyle = true),
+        )
+        assertEquals(
+            AppListEntryMotion.FLUE_NEXT,
+            appListEntryMotionForStyle(appleWatchStyle = false),
+        )
     }
 
     @Test
-    fun `entry progress is clamped before it reaches visual channels`() {
-        assertVisualProgress(expected = 0f, actual = appListEntryVisuals(-0.5f))
-        assertVisualProgress(expected = 1f, actual = appListEntryVisuals(1.5f))
+    fun `beta12 classic leaves inner content fully visible and geometrically stable`() {
+        val visuals = appListEntryVisuals(
+            progress = 0.42f,
+            motion = AppListEntryMotion.BETA_12_CLASSIC,
+        )
+
+        assertVisualProgress(expected = 1f, actual = visuals)
+        assertEquals(0f, visuals.verticalOffsetFraction)
+    }
+
+    @Test
+    fun `flue next keeps one clamped content progress and an explicit vertical offset`() {
+        val entering = appListEntryVisuals(
+            progress = 0.25f,
+            motion = AppListEntryMotion.FLUE_NEXT,
+        )
+        assertVisualProgress(expected = 0.25f, actual = entering)
+        assertEquals(0.06f, entering.verticalOffsetFraction, 0.0001f)
+
+        assertVisualProgress(
+            expected = 0f,
+            actual = appListEntryVisuals(-0.5f, AppListEntryMotion.FLUE_NEXT),
+        )
+        assertVisualProgress(
+            expected = 1f,
+            actual = appListEntryVisuals(1.5f, AppListEntryMotion.FLUE_NEXT),
+        )
     }
 
     private fun assertVisualProgress(expected: Float, actual: AppListEntryVisuals) {

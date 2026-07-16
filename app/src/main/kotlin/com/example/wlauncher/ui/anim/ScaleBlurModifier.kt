@@ -11,6 +11,24 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.launch
 
+internal class LayerTransformOriginLatch(
+    initialOrigin: Offset = Offset(0.5f, 0.5f),
+) {
+    private var retainedOrigin = initialOrigin.normalizedOrNull() ?: Offset(0.5f, 0.5f)
+
+    fun resolve(requestedOrigin: Offset?): Offset {
+        requestedOrigin?.normalizedOrNull()?.let { retainedOrigin = it }
+        return retainedOrigin
+    }
+}
+
+private fun Offset.normalizedOrNull(): Offset? =
+    if (x.isFinite() && y.isFinite()) {
+        Offset(x.coerceIn(0f, 1f), y.coerceIn(0f, 1f))
+    } else {
+        null
+    }
+
 @Composable
 fun Modifier.scaleBlurAlpha(
     targetValues: LayerAnimValues,
@@ -28,6 +46,8 @@ fun Modifier.scaleBlurAlpha(
     val animBlur = remember { Animatable(targetValues.blur) }
     val animTransX = remember { Animatable(targetValues.translationX) }
     val animTransY = remember { Animatable(targetValues.translationY) }
+    val transformOriginLatch = remember { LayerTransformOriginLatch() }
+    val retainedOrigin = transformOriginLatch.resolve(origin)
 
     LaunchedEffect(targetValues) {
         launch { animScale.animateTo(targetValues.scale, scaleSpec) }
@@ -44,7 +64,7 @@ fun Modifier.scaleBlurAlpha(
             alpha = animAlpha.value
             translationX = animTransX.value * screenWidth
             translationY = animTransY.value * screenHeight
-            transformOrigin = TransformOrigin(origin?.x ?: 0.5f, origin?.y ?: 0.5f)
+            transformOrigin = TransformOrigin(retainedOrigin.x, retainedOrigin.y)
         }
         .platformBlur(
             blurRadiusDp = animBlur.value,

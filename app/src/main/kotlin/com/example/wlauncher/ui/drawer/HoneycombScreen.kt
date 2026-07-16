@@ -257,7 +257,10 @@ fun HoneycombScreen(
         val cellSize = iconSizePx * 1.02f
         val topFadePx = with(density) { topFadeRangeDp.dp.toPx() }
         val bottomFadePx = with(density) { bottomFadeRangeDp.dp.toPx() }
-        val entryVisuals = appListEntryVisuals(entryProgress)
+        val entryVisuals = appListEntryVisuals(
+            progress = entryProgress,
+            motion = appListEntryMotionForStyle(uiStyle == UiStyle.APPLE_WATCH),
+        )
         val edgeFadesVisible = active || entryProgress > 0.001f
         val containerMaxWidth = maxWidth
         val containerMaxHeight = maxHeight
@@ -448,7 +451,7 @@ fun HoneycombScreen(
         }
 
         val currentScroll = currentScrollOffsetValue()
-        val entryOffsetY = (1f - entryProgress.coerceIn(0f, 1f)) * screenHeightPx * 0.08f
+        val entryOffsetY = entryVisuals.verticalOffsetFraction * screenHeightPx
         val fastFlowSlowTopY = screenHeightPx * FAST_FLOW_SLOW_TOP_FRACTION
         val fastFlowSlowBottomY = screenHeightPx * FAST_FLOW_SLOW_BOTTOM_FRACTION
 
@@ -1325,7 +1328,10 @@ private fun MaterialDenseGridScreen(
     val scope = rememberCoroutineScope()
     val launcherStyle = LauncherTheme.style
     val appPalette = appListPalette(themeColor, darkMode, UiStyle.MATERIAL_3, useWatchFaceColors)
-    val entryVisuals = appListEntryVisuals(entryProgress)
+    val entryVisuals = appListEntryVisuals(
+        progress = entryProgress,
+        motion = appListEntryMotionForStyle(appleWatchStyle = false),
+    )
     val edgeFadesVisible = active || entryProgress > 0.001f
     val iconShadowElevationPx by animateFloatAsState(
         targetValue = if (iconShadowEnabled) with(density) { 8.dp.toPx() } else 0f,
@@ -1700,7 +1706,7 @@ private fun MaterialDenseGridScreen(
         val screenHeightPx = with(density) { maxHeight.toPx() }
         val containerMaxWidth = maxWidth
         val containerMaxHeight = maxHeight
-        val entryOffsetY = (1f - entryProgress.coerceIn(0f, 1f)) * screenHeightPx * 0.08f
+        val entryOffsetY = entryVisuals.verticalOffsetFraction * screenHeightPx
         val topFadePx = with(density) { topFadeRangeDp.dp.toPx() }
         val bottomFadePx = with(density) { bottomFadeRangeDp.dp.toPx() }
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)

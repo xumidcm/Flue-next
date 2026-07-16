@@ -184,7 +184,10 @@ fun ListDrawerScreen(
     val appPalette = appListPalette(themeColor, darkMode, listPaletteStyle, useWatchFaceColors)
     val rowShape = RoundedCornerShape(18.dp)
     val listRowTextColor = appPalette.text
-    val entryVisuals = appListEntryVisuals(entryProgress)
+    val entryVisuals = appListEntryVisuals(
+        progress = entryProgress,
+        motion = appListEntryMotionForStyle(uiStyle == UiStyle.APPLE_WATCH),
+    )
     val appListScale = appListScalePercent.coerceIn(50, 200) / 100f
     val scaledIconSize = (iconSize * appListScale).coerceIn(24.dp, 128.dp)
     val scaledRowVerticalPadding = (10.dp * appListScale).coerceIn(4.dp, 24.dp)
