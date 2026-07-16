@@ -141,16 +141,17 @@ class NativeAppListContractsTest {
     }
 
     @Test
-    fun contentVersionGateAcceptsEitherDimensionAdvancingWithoutAllowingRegression() {
+    fun contentVersionGateUsesSnapshotFirstAndRevisionWithinTheSameSnapshot() {
         val gate = NativeAppListContentVersionGate()
 
         assertTrue(gate.tryAccept(snapshotGeneration = 7L, iconRevision = 2L))
         assertFalse(gate.tryAccept(snapshotGeneration = 7L, iconRevision = 2L))
         assertTrue(gate.tryAccept(snapshotGeneration = 7L, iconRevision = 3L))
         assertFalse(gate.tryAccept(snapshotGeneration = 6L, iconRevision = 4L))
-        assertFalse(gate.tryAccept(snapshotGeneration = 8L, iconRevision = 2L))
-        assertTrue(gate.tryAccept(snapshotGeneration = 8L, iconRevision = 3L))
+        assertTrue(gate.tryAccept(snapshotGeneration = 8L, iconRevision = 0L))
+        assertFalse(gate.tryAccept(snapshotGeneration = 8L, iconRevision = 0L))
+        assertTrue(gate.tryAccept(snapshotGeneration = 8L, iconRevision = 1L))
         assertEquals(8L, gate.latestSnapshotGeneration)
-        assertEquals(3L, gate.latestIconRevision)
+        assertEquals(1L, gate.latestIconRevision)
     }
 }

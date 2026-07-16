@@ -13,8 +13,9 @@ import java.util.LinkedHashMap
  *
  * The map is structurally copied and exposed read-only. Bitmap values are only
  * retained by reference: this boundary never copies or recycles them.
- * [iconRevision] is monotonic across the submitted content stream and advances
- * when icon identities change without a new snapshot generation.
+ * [iconRevision] is monotonic within one snapshot generation and advances when
+ * icon identities change without a new snapshot. A newer snapshot starts a new
+ * icon-revision sequence, so callers may reset it to zero.
  */
 class NativeAppListContent(
     val snapshot: AppListSnapshot,

@@ -170,13 +170,12 @@ internal class NativeAppListContentVersionGate {
         require(iconRevision >= 0L) {
             "Icon revision must not be negative"
         }
+        if (snapshotGeneration < latestSnapshotGeneration) {
+            return false
+        }
         if (
-            snapshotGeneration < latestSnapshotGeneration ||
-            iconRevision < latestIconRevision ||
-            (
-                snapshotGeneration == latestSnapshotGeneration &&
-                    iconRevision == latestIconRevision
-            )
+            snapshotGeneration == latestSnapshotGeneration &&
+            iconRevision <= latestIconRevision
         ) {
             return false
         }

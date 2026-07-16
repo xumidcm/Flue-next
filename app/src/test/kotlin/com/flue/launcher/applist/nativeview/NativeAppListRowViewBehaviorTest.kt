@@ -112,7 +112,7 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
-    fun sameSnapshotAcceptsANewerIconRevisionAndRejectsEitherVersionRegressing() {
+    fun sameSnapshotNeedsANewerIconRevisionWhileANewSnapshotMayResetIt() {
         val entry = appEntry()
         val bitmap = solidBitmap(REAL_ICON_COLOR)
         val snapshot = AppListSnapshot.create(10L, listOf(entry))
@@ -145,7 +145,7 @@ class NativeAppListRowViewBehaviorTest {
                 ),
             ),
         )
-        assertFalse(
+        assertTrue(
             view.submit(
                 NativeAppListContent(
                     snapshot = AppListSnapshot.create(11L, listOf(entry)),
