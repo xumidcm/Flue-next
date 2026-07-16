@@ -1,6 +1,6 @@
 package com.flue.launcher.applist.nativeview
 
-internal enum class NativeBlurTier {
+enum class NativeBlurTier {
     OFF,
     LITE,
     SYSTEM,

@@ -1,38 +1,50 @@
 package com.flue.launcher.applist.nativeview
 
-import android.view.Gravity
-import android.view.View
+import android.graphics.Bitmap
 import android.view.ViewGroup
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.TextView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.flue.launcher.applist.model.AppListCommand
-import com.flue.launcher.applist.model.AppListEntry
-import com.flue.launcher.applist.model.AppListSnapshot
 
 internal class NativeAppListAdapter(
     private val commandSink: (AppListCommand) -> Unit,
-) : ListAdapter<AppListEntry, NativeAppListAdapter.AppItemViewHolder>(EntryDiff) {
+) : ListAdapter<NativeAppListBoundRow<Bitmap>, NativeAppListAdapter.AppItemViewHolder>(
+    RowDiff,
+) {
     private val stableIdRegistry = StableIdRegistry()
+    private var config = NativeAppListConfig().legalized()
 
     init {
         setHasStableIds(true)
     }
 
-    override fun getItemId(position: Int): Long = stableIdRegistry.idFor(getItem(position).key)
+    override fun getItemId(position: Int): Long =
+        stableIdRegistry.idFor(getItem(position).stableKey)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): AppItemViewHolder =
         AppItemViewHolder.create(parent)
 
     override fun onBindViewHolder(holder: AppItemViewHolder, position: Int) {
-        holder.bind(getItem(position), commandSink)
+        holder.bind(getItem(position), config, commandSink)
     }
 
-    fun submitSnapshot(snapshot: AppListSnapshot) {
-        submitList(snapshot.entries)
+    override fun onViewRecycled(holder: AppItemViewHolder) {
+        holder.clear()
+        super.onViewRecycled(holder)
+    }
+
+    fun submitContent(content: NativeAppListContent) {
+        submitList(content.rows)
+    }
+
+    fun setConfig(config: NativeAppListConfig) {
+        val next = config.legalized()
+        if (this.config == next) return
+        this.config = next
+        if (itemCount > 0) {
+            notifyItemRangeChanged(0, itemCount)
+        }
     }
 
     fun clear() {
@@ -40,86 +52,57 @@ internal class NativeAppListAdapter(
     }
 
     internal class AppItemViewHolder private constructor(
-        itemView: View,
-        private val iconView: ImageView,
-        private val labelView: TextView,
-    ) : RecyclerView.ViewHolder(itemView) {
+        private val rowView: NativeAppListRowView,
+    ) : RecyclerView.ViewHolder(rowView) {
         fun bind(
-            entry: AppListEntry,
+            row: NativeAppListBoundRow<Bitmap>,
+            config: NativeAppListConfig,
             commandSink: (AppListCommand) -> Unit,
         ) {
-            iconView.setImageResource(android.R.drawable.sym_def_app_icon)
-            labelView.text = entry.label
-            itemView.contentDescription = entry.label
-            itemView.setOnClickListener { clickedView ->
-                val parent = clickedView.parent as? RecyclerView
-                    ?: return@setOnClickListener
-                commandSink(
-                    AppListCommand.Open(
-                        key = entry.key,
-                        origin = normalizedChildCenter(
-                            childLeft = clickedView.x,
-                            childTop = clickedView.y,
-                            childWidth = clickedView.width,
-                            childHeight = clickedView.height,
-                            viewportWidth = parent.width,
-                            viewportHeight = parent.height,
+            rowView.bind(
+                row = row,
+                config = config,
+                clickListener = click@ { clickedView ->
+                    val parent = clickedView.parent as? RecyclerView ?: return@click
+                    commandSink(
+                        AppListCommand.Open(
+                            key = row.stableKey,
+                            origin = rowView.normalizedIconOrigin(parent),
                         ),
                     )
-                )
-            }
+                },
+            )
+        }
+
+        fun clear() {
+            rowView.clearBinding()
         }
 
         companion object {
             fun create(parent: ViewGroup): AppItemViewHolder {
-                val context = parent.context
-                val density = context.resources.displayMetrics.density
-                fun Int.dp(): Int = (this * density).toInt()
-
-                val icon = ImageView(context).apply {
-                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-                    scaleType = ImageView.ScaleType.CENTER_INSIDE
-                    layoutParams = LinearLayout.LayoutParams(40.dp(), 40.dp()).apply {
-                        marginEnd = 12.dp()
-                    }
-                }
-                val label = TextView(context).apply {
-                    maxLines = 1
-                    ellipsize = android.text.TextUtils.TruncateAt.END
-                    layoutParams = LinearLayout.LayoutParams(
-                        0,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        1f,
-                    )
-                }
-                val row = LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    isClickable = true
-                    isFocusable = true
-                    minimumHeight = 64.dp()
-                    setPadding(16.dp(), 8.dp(), 16.dp(), 8.dp())
+                val rowView = NativeAppListRowView(parent.context).apply {
                     layoutParams = RecyclerView.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                     )
-                    addView(icon)
-                    addView(label)
                 }
-                return AppItemViewHolder(
-                    itemView = row,
-                    iconView = icon,
-                    labelView = label,
-                )
+                return AppItemViewHolder(rowView)
             }
         }
     }
 
-    private object EntryDiff : DiffUtil.ItemCallback<AppListEntry>() {
-        override fun areItemsTheSame(oldItem: AppListEntry, newItem: AppListEntry): Boolean =
-            oldItem.key == newItem.key
+    private object RowDiff : DiffUtil.ItemCallback<NativeAppListBoundRow<Bitmap>>() {
+        override fun areItemsTheSame(
+            oldItem: NativeAppListBoundRow<Bitmap>,
+            newItem: NativeAppListBoundRow<Bitmap>,
+        ): Boolean = oldItem.stableKey == newItem.stableKey
 
-        override fun areContentsTheSame(oldItem: AppListEntry, newItem: AppListEntry): Boolean =
-            oldItem == newItem
+        override fun areContentsTheSame(
+            oldItem: NativeAppListBoundRow<Bitmap>,
+            newItem: NativeAppListBoundRow<Bitmap>,
+        ): Boolean =
+            oldItem.snapshotGeneration == newItem.snapshotGeneration &&
+                oldItem.entry == newItem.entry &&
+                oldItem.icon === newItem.icon
     }
 }

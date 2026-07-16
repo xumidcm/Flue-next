@@ -99,6 +99,31 @@ class NativeAppListContractsTest {
     }
 
     @Test
+    fun normalizedOriginUsesTheTransformedIconCenterInsteadOfTheRowCenter() {
+        val origin = normalizedIconCenterAfterChildTransform(
+            iconBounds = NativeAppListIconBounds(
+                left = 16f,
+                top = 12f,
+                right = 56f,
+                bottom = 52f,
+            ),
+            childLeft = 20f,
+            childTop = 40f,
+            childTranslationX = 10f,
+            childTranslationY = -6f,
+            childScaleX = 0.5f,
+            childScaleY = 1.5f,
+            childPivotX = 100f,
+            childPivotY = 32f,
+            viewportWidth = 400,
+            viewportHeight = 300,
+        )
+
+        assertEquals(0.245f, origin.x, 0.0001f)
+        assertEquals(0.22f, origin.y, 0.0001f)
+    }
+
+    @Test
     fun normalizedOriginFallsBackToTheViewportCenterWhenGeometryIsUnavailable() {
         val origin = normalizedDescendantCenterInWindow(
             descendantWindowLeft = Float.NaN,

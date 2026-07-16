@@ -91,6 +91,64 @@ internal fun normalizedDescendantCenterInWindow(
     )
 }
 
+internal data class NativeAppListIconBounds(
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+)
+
+internal fun normalizedIconCenterAfterChildTransform(
+    iconBounds: NativeAppListIconBounds,
+    childLeft: Float,
+    childTop: Float,
+    childTranslationX: Float,
+    childTranslationY: Float,
+    childScaleX: Float,
+    childScaleY: Float,
+    childPivotX: Float,
+    childPivotY: Float,
+    viewportWidth: Int,
+    viewportHeight: Int,
+): NormalizedPoint {
+    val geometry = floatArrayOf(
+        iconBounds.left,
+        iconBounds.top,
+        iconBounds.right,
+        iconBounds.bottom,
+        childLeft,
+        childTop,
+        childTranslationX,
+        childTranslationY,
+        childScaleX,
+        childScaleY,
+        childPivotX,
+        childPivotY,
+    )
+    if (
+        geometry.any { !it.isFinite() } ||
+        iconBounds.right <= iconBounds.left ||
+        iconBounds.bottom <= iconBounds.top ||
+        viewportWidth <= 0 ||
+        viewportHeight <= 0
+    ) {
+        return NormalizedPoint(x = 0.5f, y = 0.5f)
+    }
+
+    val localCenterX = (iconBounds.left + iconBounds.right) / 2f
+    val localCenterY = (iconBounds.top + iconBounds.bottom) / 2f
+    val transformedCenterX =
+        childLeft + childTranslationX + childPivotX +
+            (localCenterX - childPivotX) * childScaleX
+    val transformedCenterY =
+        childTop + childTranslationY + childPivotY +
+            (localCenterY - childPivotY) * childScaleY
+    return NormalizedPoint(
+        x = transformedCenterX.normalizedWithin(viewportWidth),
+        y = transformedCenterY.normalizedWithin(viewportHeight),
+    )
+}
+
 private fun Float.normalizedWithin(viewportSize: Int): Float {
     if (!isFinite() || viewportSize <= 0) return 0.5f
     return (this / viewportSize.toFloat()).coerceIn(0f, 1f)

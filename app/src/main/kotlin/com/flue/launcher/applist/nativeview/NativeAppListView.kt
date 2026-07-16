@@ -5,7 +5,6 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import androidx.recyclerview.widget.RecyclerView
 import com.flue.launcher.applist.model.AppListCommand
-import com.flue.launcher.applist.model.AppListSnapshot
 
 class NativeAppListView @JvmOverloads constructor(
     context: Context,
@@ -14,7 +13,10 @@ class NativeAppListView @JvmOverloads constructor(
 ) : RecyclerView(context, attrs, defStyleAttr) {
     private val generationGate = SnapshotGenerationGate()
     private val nativeAdapter = NativeAppListAdapter(::dispatchCommand)
-    private val scrollController = NativeAppListScrollController(this)
+    private var currentConfig = NativeAppListConfig().legalized()
+    private val scrollController = NativeAppListScrollController(this) {
+        currentConfig
+    }
     private var activeLayoutStrategy: NativeAppListLayoutStrategy =
         LinearNativeAppListLayoutStrategy
     private var released = false
@@ -33,10 +35,29 @@ class NativeAppListView @JvmOverloads constructor(
             super.onGenericMotionEvent(event)
     }
 
-    fun submitSnapshot(snapshot: AppListSnapshot): Boolean {
-        if (released || !generationGate.tryAccept(snapshot.generation)) return false
-        nativeAdapter.submitSnapshot(snapshot)
+    fun submit(content: NativeAppListContent): Boolean {
+        if (
+            released ||
+            !generationGate.tryAccept(content.snapshot.generation)
+        ) {
+            return false
+        }
+        nativeAdapter.submitContent(content)
         return true
+    }
+
+    fun setConfig(config: NativeAppListConfig) {
+        if (released) return
+        val next = config.legalized()
+        if (currentConfig == next) return
+        val resetInitialScroll =
+            currentConfig.initialResetToken != next.initialResetToken
+        currentConfig = next
+        nativeAdapter.setConfig(next)
+        if (resetInitialScroll) {
+            stopScroll()
+            scrollToPosition(0)
+        }
     }
 
     fun setLayoutStrategy(strategy: NativeAppListLayoutStrategy) {

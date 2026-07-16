@@ -82,6 +82,7 @@ class NativeAppListScrollControllerTest {
                 source = NativeAppListScrollSource.RotaryEncoder,
                 enabled = false,
                 gateAccepted = true,
+                scrollOffsetChanged = true,
             ),
         )
         assertFalse(
@@ -89,6 +90,23 @@ class NativeAppListScrollControllerTest {
                 source = NativeAppListScrollSource.MouseOrTouchpad,
                 enabled = true,
                 gateAccepted = true,
+                scrollOffsetChanged = true,
+            ),
+        )
+        assertFalse(
+            shouldPerformNativeAppListHaptic(
+                source = NativeAppListScrollSource.RotaryEncoder,
+                enabled = true,
+                gateAccepted = false,
+                scrollOffsetChanged = true,
+            ),
+        )
+        assertFalse(
+            shouldPerformNativeAppListHaptic(
+                source = NativeAppListScrollSource.RotaryEncoder,
+                enabled = true,
+                gateAccepted = true,
+                scrollOffsetChanged = false,
             ),
         )
         assertTrue(
@@ -96,6 +114,7 @@ class NativeAppListScrollControllerTest {
                 source = NativeAppListScrollSource.RotaryEncoder,
                 enabled = true,
                 gateAccepted = true,
+                scrollOffsetChanged = true,
             ),
         )
     }

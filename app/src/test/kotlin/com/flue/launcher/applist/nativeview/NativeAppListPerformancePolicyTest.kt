@@ -81,6 +81,48 @@ class NativeAppListPerformancePolicyTest {
     }
 
     @Test
+    fun configLegalizationRemovesInvalidAndNegativeDrawingMetrics() {
+        val legalized = NativeAppListConfig(
+            initialResetToken = -9L,
+            leftSafeInsetPx = -1,
+            rowHeightPx = -10,
+            iconSizePx = -20,
+            rowPaddingStartPx = -3,
+            rowPaddingTopPx = -4,
+            rowPaddingEndPx = -5,
+            rowPaddingBottomPx = -6,
+            labelTextSizePx = Float.NaN,
+            iconLabelGapPx = -7,
+            appScale = Float.NaN,
+            fisheyeRange = Float.POSITIVE_INFINITY,
+            fisheyeStrength = -1f,
+            rowBorder = NativeAppListRowBorder(
+                enabled = true,
+                widthPx = Float.NaN,
+                cornerRadiusPx = -8f,
+            ),
+        ).legalized()
+
+        assertEquals(0L, legalized.initialResetToken)
+        assertEquals(0, legalized.leftSafeInsetPx)
+        assertTrue(legalized.rowHeightPx > 0)
+        assertTrue(legalized.iconSizePx > 0)
+        assertEquals(0, legalized.rowPaddingStartPx)
+        assertEquals(0, legalized.rowPaddingTopPx)
+        assertEquals(0, legalized.rowPaddingEndPx)
+        assertEquals(0, legalized.rowPaddingBottomPx)
+        assertTrue(legalized.labelTextSizePx.isFinite())
+        assertTrue(legalized.labelTextSizePx > 0f)
+        assertEquals(0, legalized.iconLabelGapPx)
+        assertTrue(legalized.appScale.isFinite())
+        assertTrue(legalized.appScale > 0f)
+        assertTrue(legalized.fisheyeRange in 0.01f..1f)
+        assertTrue(legalized.fisheyeStrength in 0f..1f)
+        assertEquals(0f, legalized.rowBorder.widthPx, 0f)
+        assertEquals(0f, legalized.rowBorder.cornerRadiusPx, 0f)
+    }
+
+    @Test
     fun nativeChildVisualKeepsTheCenterSharpAndShrinksOnlyAtTheEdge() {
         val config = NativeAppListConfig(
             appScale = 0.9f,
