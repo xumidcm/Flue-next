@@ -112,6 +112,83 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
+    fun attachedRowsReceiveFisheyeVisualsAndResetWhenTheEffectIsDisabled() {
+        val entries = (0 until 6).map { index ->
+            appEntry(key = "component:item-$index")
+        }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    fisheyeEnabled = true,
+                    fisheyeRange = 1f,
+                    fisheyeStrength = 1f,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(120, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 100, 120)
+
+        assertTrue(view.childCount >= 3)
+        val scales = (0 until view.childCount).map { view.getChildAt(it).scaleX }
+        assertTrue(scales.max() > scales.min())
+
+        view.setConfig(drawingConfig().copy(fisheyeEnabled = false))
+
+        (0 until view.childCount).forEach { index ->
+            assertEquals(1f, view.getChildAt(index).scaleX, 0f)
+            assertEquals(1f, view.getChildAt(index).alpha, 0f)
+        }
+        view.release()
+    }
+
+    @Test
+    fun nonLinearStrategyKeepsOwnershipOfItsChildTransforms() {
+        val customStrategy = object : NativeAppListLayoutStrategy {
+            override val semanticKey: Any = "custom-test"
+
+            override fun createLayoutManager(
+                context: android.content.Context,
+            ): androidx.recyclerview.widget.RecyclerView.LayoutManager =
+                androidx.recyclerview.widget.LinearLayoutManager(context)
+        }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setLayoutStrategy(customStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, listOf(appEntry())),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(80, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 100, 80)
+        val child = view.getChildAt(0)
+        child.scaleX = 0.7f
+        child.scaleY = 0.7f
+        child.alpha = 0.6f
+
+        view.layout(0, 0, 100, 81)
+
+        assertEquals(0.7f, child.scaleX, 0f)
+        assertEquals(0.7f, child.scaleY, 0f)
+        assertEquals(0.6f, child.alpha, 0f)
+        view.release()
+    }
+
+    @Test
     fun sameSnapshotNeedsANewerIconRevisionWhileANewSnapshotMayResetIt() {
         val entry = appEntry()
         val bitmap = solidBitmap(REAL_ICON_COLOR)
@@ -213,6 +290,32 @@ class NativeAppListRowViewBehaviorTest {
 
         assertTrue(adapter.currentList.isEmpty())
         assertFalse(bitmap.isRecycled)
+    }
+
+    @Test
+    fun recycledHolderDoesNotLeakLinearVisualsIntoTheNextLayoutStrategy() {
+        val parent = androidx.recyclerview.widget.RecyclerView(
+            RuntimeEnvironment.getApplication(),
+        )
+        val adapter = NativeAppListAdapter(commandSink = {})
+        val holder = NativeAppListAdapter.AppItemViewHolder.create(parent, commandSink = {})
+        holder.itemView.apply {
+            scaleX = 0.55f
+            scaleY = 0.55f
+            alpha = 0.6f
+            translationX = 9f
+            translationY = 11f
+            rotation = 7f
+        }
+
+        adapter.onViewRecycled(holder)
+
+        assertEquals(1f, holder.itemView.scaleX)
+        assertEquals(1f, holder.itemView.scaleY)
+        assertEquals(1f, holder.itemView.alpha)
+        assertEquals(0f, holder.itemView.translationX)
+        assertEquals(0f, holder.itemView.translationY)
+        assertEquals(0f, holder.itemView.rotation)
     }
 
     @Test

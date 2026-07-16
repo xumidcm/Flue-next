@@ -133,14 +133,15 @@ private const val DEFAULT_LABEL_TEXT_SIZE_PX = 16f
 private const val DEFAULT_ICON_LABEL_GAP_PX = 12
 
 internal data class NativeLinearChildVisual(
-    val scale: Float,
-    val alpha: Float,
+    var scale: Float,
+    var alpha: Float,
 )
 
 internal fun nativeLinearChildVisual(
     childCenterY: Float,
     viewportHeight: Int,
     config: NativeAppListConfig,
+    output: NativeLinearChildVisual = NativeLinearChildVisual(scale = 1f, alpha = 1f),
 ): NativeLinearChildVisual {
     val baseScale = config.appScale.takeIf(Float::isFinite)?.coerceAtLeast(0f) ?: 1f
     if (
@@ -149,7 +150,9 @@ internal fun nativeLinearChildVisual(
         !childCenterY.isFinite() ||
         viewportHeight <= 0
     ) {
-        return NativeLinearChildVisual(scale = baseScale, alpha = 1f)
+        output.scale = baseScale
+        output.alpha = 1f
+        return output
     }
 
     val halfHeight = viewportHeight / 2f
@@ -161,8 +164,7 @@ internal fun nativeLinearChildVisual(
     val strength = config.fisheyeStrength.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 0f
     val effectProgress = smoothProgress * strength
 
-    return NativeLinearChildVisual(
-        scale = baseScale * (1f - 0.45f * effectProgress),
-        alpha = 1f - 0.45f * effectProgress,
-    )
+    output.scale = baseScale * (1f - 0.45f * effectProgress)
+    output.alpha = 1f - 0.45f * effectProgress
+    return output
 }

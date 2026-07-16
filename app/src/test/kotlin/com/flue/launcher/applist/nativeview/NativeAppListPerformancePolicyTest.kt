@@ -2,6 +2,7 @@ package com.flue.launcher.applist.nativeview
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -181,5 +182,21 @@ class NativeAppListPerformancePolicyTest {
                 config = inactive,
             ),
         )
+    }
+
+    @Test
+    fun nativeChildVisualCanReuseOutputInTheScrollHotPath() {
+        val output = NativeLinearChildVisual(scale = 0f, alpha = 0f)
+
+        val result = nativeLinearChildVisual(
+            childCenterY = 120f,
+            viewportHeight = 240,
+            config = NativeAppListConfig(fisheyeEnabled = true),
+            output = output,
+        )
+
+        assertSame(output, result)
+        assertEquals(1f, result.scale, 0f)
+        assertEquals(1f, result.alpha, 0f)
     }
 }

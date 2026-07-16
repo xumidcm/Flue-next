@@ -91,6 +91,12 @@ internal class NativeAppListRowView(
         setOnClickListener(null)
         isClickable = false
         isPressed = false
+        scaleX = 1f
+        scaleY = 1f
+        alpha = 1f
+        translationX = 0f
+        translationY = 0f
+        rotation = 0f
         invalidate()
     }
 

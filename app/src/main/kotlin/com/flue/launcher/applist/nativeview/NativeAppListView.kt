@@ -3,6 +3,7 @@ package com.flue.launcher.applist.nativeview
 import android.content.Context
 import android.util.AttributeSet
 import android.view.MotionEvent
+import android.view.View
 import androidx.recyclerview.widget.RecyclerView
 import com.flue.launcher.applist.model.AppListCommand
 
@@ -20,6 +21,19 @@ class NativeAppListView @JvmOverloads constructor(
     }
     private var activeLayoutStrategy: NativeAppListLayoutStrategy =
         LinearNativeAppListLayoutStrategy
+    private val childVisualScratch = NativeLinearChildVisual(scale = 1f, alpha = 1f)
+    private val childVisualScrollListener = object : OnScrollListener() {
+        override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+            applyAttachedChildVisuals()
+        }
+    }
+    private val childVisualAttachListener = object : OnChildAttachStateChangeListener {
+        override fun onChildViewAttachedToWindow(view: View) {
+            applyChildVisual(view)
+        }
+
+        override fun onChildViewDetachedFromWindow(view: View) = Unit
+    }
     private var released = false
 
     var onCommand: ((AppListCommand) -> Unit)? = null
@@ -29,6 +43,13 @@ class NativeAppListView @JvmOverloads constructor(
         layoutManager = activeLayoutStrategy.createLayoutManager(context)
         itemAnimator = null
         adapter = nativeAdapter
+        addOnScrollListener(childVisualScrollListener)
+        addOnChildAttachStateChangeListener(childVisualAttachListener)
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        applyAttachedChildVisuals()
     }
 
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
@@ -58,6 +79,7 @@ class NativeAppListView @JvmOverloads constructor(
             currentConfig.value.initialResetToken != next.value.initialResetToken
         currentConfig = next
         nativeAdapter.setConfig(next)
+        applyAttachedChildVisuals()
         if (resetInitialScroll) {
             stopScroll()
             scrollToPosition(0)
@@ -75,6 +97,7 @@ class NativeAppListView @JvmOverloads constructor(
             return
         }
         stopScroll()
+        resetAttachedChildVisuals()
         val previousLayoutManager = layoutManager
         val savedLayoutState = previousLayoutManager?.onSaveInstanceState()
         val nextLayoutManager = strategy.createLayoutManager(context)
@@ -86,12 +109,15 @@ class NativeAppListView @JvmOverloads constructor(
         ) {
             nextLayoutManager.onRestoreInstanceState(savedLayoutState)
         }
+        applyAttachedChildVisuals()
     }
 
     fun release() {
         if (released) return
         released = true
         stopScroll()
+        removeOnScrollListener(childVisualScrollListener)
+        removeOnChildAttachStateChangeListener(childVisualAttachListener)
         onCommand = null
         nativeAdapter.clearSynchronously()
         adapter = null
@@ -105,5 +131,43 @@ class NativeAppListView @JvmOverloads constructor(
         if (!released) {
             onCommand?.invoke(command)
         }
+    }
+
+    private fun applyAttachedChildVisuals() {
+        if (released || height <= 0) return
+        for (index in 0 until childCount) {
+            applyChildVisual(getChildAt(index))
+        }
+    }
+
+    private fun applyChildVisual(child: View) {
+        if (activeLayoutStrategy.semanticKey != LinearNativeAppListLayoutStrategy.semanticKey) {
+            return
+        }
+        val visual = nativeLinearChildVisual(
+            childCenterY = child.top + child.height / 2f + child.translationY,
+            viewportHeight = height,
+            config = currentConfig.value,
+            output = childVisualScratch,
+        )
+        val centerPivotX = child.width / 2f
+        val centerPivotY = child.height / 2f
+        if (child.pivotX != centerPivotX) child.pivotX = centerPivotX
+        if (child.pivotY != centerPivotY) child.pivotY = centerPivotY
+        if (child.scaleX != visual.scale) child.scaleX = visual.scale
+        if (child.scaleY != visual.scale) child.scaleY = visual.scale
+        if (child.alpha != visual.alpha) child.alpha = visual.alpha
+    }
+
+    private fun resetAttachedChildVisuals() {
+        for (index in 0 until childCount) {
+            resetChildVisual(getChildAt(index))
+        }
+    }
+
+    private fun resetChildVisual(child: View) {
+        if (child.scaleX != 1f) child.scaleX = 1f
+        if (child.scaleY != 1f) child.scaleY = 1f
+        if (child.alpha != 1f) child.alpha = 1f
     }
 }
