@@ -2,6 +2,26 @@ package com.flue.launcher.applist.model
 
 object AppListMovePlanner {
 
+    fun fromKeys(
+        keys: List<AppItemKey>,
+        movedKey: AppItemKey,
+        targetKey: AppItemKey,
+    ): AppListCommand.Move? = fromIndexes(
+        keys = keys,
+        fromIndex = keys.indexOf(movedKey),
+        toIndex = keys.indexOf(targetKey),
+    )
+
+    fun folderFromKeys(
+        keys: List<AppItemKey>,
+        sourceKey: AppItemKey,
+        targetKey: AppItemKey,
+    ): AppListCommand.CreateFolder? = folderFromIndexes(
+        keys = keys,
+        sourceIndex = keys.indexOf(sourceKey),
+        targetIndex = keys.indexOf(targetKey),
+    )
+
     fun fromIndexes(
         keys: List<AppItemKey>,
         fromIndex: Int,

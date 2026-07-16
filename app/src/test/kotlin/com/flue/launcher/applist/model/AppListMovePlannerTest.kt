@@ -141,6 +141,21 @@ class AppListMovePlannerTest {
         )
     }
 
+    @Test
+    fun `native drag resolves current indexes from stable keys after refresh`() {
+        val refreshed = keys("c", "a", "b")
+
+        assertEquals(
+            AppListCommand.Move(AppItemKey("b"), AppItemKey("c")),
+            AppListMovePlanner.fromKeys(refreshed, AppItemKey("b"), AppItemKey("c")),
+        )
+        assertEquals(
+            AppListCommand.CreateFolder(AppItemKey("b"), AppItemKey("a")),
+            AppListMovePlanner.folderFromKeys(refreshed, AppItemKey("b"), AppItemKey("a")),
+        )
+        assertNull(AppListMovePlanner.fromKeys(refreshed, AppItemKey("missing"), AppItemKey("a")))
+    }
+
     private fun keys(vararg values: String): List<AppItemKey> = values.map(::AppItemKey)
 
     private fun entries(vararg values: String): List<AppListEntry> = values.map { value ->
