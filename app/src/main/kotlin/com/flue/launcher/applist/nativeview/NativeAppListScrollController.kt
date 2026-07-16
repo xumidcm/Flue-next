@@ -70,13 +70,60 @@ internal class NativeAppListHapticGate(
     }
 }
 
+internal interface NativeAppListScrollTarget {
+    fun verticalScrollOffset(): Int
+
+    fun scrollBy(deltaPixels: Int)
+
+    fun performClockTick()
+}
+
+internal class NativeAppListConsumedScrollOwner(
+    private val target: NativeAppListScrollTarget,
+    private val configProvider: () -> NativeAppListConfig,
+    private val hapticGate: NativeAppListHapticGate = NativeAppListHapticGate(),
+) {
+    fun scrollBy(
+        source: NativeAppListScrollSource,
+        deltaPixels: Int,
+        eventTimeMs: Long,
+    ): Boolean {
+        if (deltaPixels == 0) return false
+
+        val offsetBeforeScroll = target.verticalScrollOffset()
+        target.scrollBy(deltaPixels)
+        val scrollOffsetChanged =
+            target.verticalScrollOffset() != offsetBeforeScroll
+        val hapticsEnabled = configProvider().rotaryHapticsEnabled
+        val gateAccepted =
+            source == NativeAppListScrollSource.RotaryEncoder &&
+                hapticsEnabled &&
+                scrollOffsetChanged &&
+                hapticGate.tryAcquire(eventTimeMs)
+        if (
+            shouldPerformNativeAppListHaptic(
+                source = source,
+                enabled = hapticsEnabled,
+                gateAccepted = gateAccepted,
+                scrollOffsetChanged = scrollOffsetChanged,
+            )
+        ) {
+            target.performClockTick()
+        }
+        return scrollOffsetChanged
+    }
+}
+
 internal class NativeAppListScrollController(
     private val recyclerView: RecyclerView,
     private val configProvider: () -> NativeAppListConfig = { NativeAppListConfig() },
 ) {
     private val verticalScrollFactor =
         ViewConfiguration.get(recyclerView.context).scaledVerticalScrollFactor
-    private val rotaryHapticGate = NativeAppListHapticGate()
+    private val consumedScrollOwner = NativeAppListConsumedScrollOwner(
+        target = RecyclerViewNativeAppListScrollTarget(recyclerView),
+        configProvider = configProvider,
+    )
 
     fun onGenericMotionEvent(event: MotionEvent): Boolean {
         if (event.actionMasked != MotionEvent.ACTION_SCROLL) return false
@@ -96,27 +143,26 @@ internal class NativeAppListScrollController(
         )
         if (deltaPixels == 0) return false
 
-        val offsetBeforeScroll = recyclerView.computeVerticalScrollOffset()
+        return consumedScrollOwner.scrollBy(
+            source = source,
+            deltaPixels = deltaPixels,
+            eventTimeMs = event.eventTime,
+        )
+    }
+}
+
+private class RecyclerViewNativeAppListScrollTarget(
+    private val recyclerView: RecyclerView,
+) : NativeAppListScrollTarget {
+    override fun verticalScrollOffset(): Int =
+        recyclerView.computeVerticalScrollOffset()
+
+    override fun scrollBy(deltaPixels: Int) {
         recyclerView.scrollBy(0, deltaPixels)
-        val scrollOffsetChanged =
-            recyclerView.computeVerticalScrollOffset() != offsetBeforeScroll
-        val hapticsEnabled = configProvider().rotaryHapticsEnabled
-        val gateAccepted =
-            source == NativeAppListScrollSource.RotaryEncoder &&
-                hapticsEnabled &&
-                scrollOffsetChanged &&
-                rotaryHapticGate.tryAcquire(event.eventTime)
-        if (
-            shouldPerformNativeAppListHaptic(
-                source = source,
-                enabled = hapticsEnabled,
-                gateAccepted = gateAccepted,
-                scrollOffsetChanged = scrollOffsetChanged,
-            )
-        ) {
-            recyclerView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-        }
-        return scrollOffsetChanged
+    }
+
+    override fun performClockTick() {
+        recyclerView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
     }
 }
 

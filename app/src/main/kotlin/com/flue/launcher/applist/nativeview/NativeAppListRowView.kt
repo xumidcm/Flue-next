@@ -40,7 +40,7 @@ internal class NativeAppListRowView(
     private val labelFontMetrics = Paint.FontMetrics()
 
     private var config = NativeAppListConfig().legalized()
-    private var bitmap: Bitmap? = null
+    private val iconRenderOwner = NativeAppListIconRenderOwner()
     private var label: String = ""
     private var geometryDirty = true
 
@@ -57,7 +57,7 @@ internal class NativeAppListRowView(
         clickListener: View.OnClickListener,
     ) {
         applyConfig(config)
-        bitmap = row.icon
+        iconRenderOwner.bind(row.icon)
         label = row.entry.label
         contentDescription = row.entry.label
         isClickable = true
@@ -87,7 +87,7 @@ internal class NativeAppListRowView(
     }
 
     fun clearBinding() {
-        bitmap = null
+        iconRenderOwner.clear()
         label = ""
         contentDescription = null
         setOnClickListener(null)
@@ -165,13 +165,8 @@ internal class NativeAppListRowView(
             )
         }
 
-        val drawableBitmap = bitmap
-        if (
-            drawableBitmap != null &&
-            !drawableBitmap.isRecycled &&
-            drawableBitmap.width > 0 &&
-            drawableBitmap.height > 0
-        ) {
+        val drawableBitmap = iconRenderOwner.bitmapForDraw()
+        if (drawableBitmap != null) {
             canvas.drawBitmap(drawableBitmap, null, iconBounds, iconPaint)
         } else {
             canvas.drawRoundRect(

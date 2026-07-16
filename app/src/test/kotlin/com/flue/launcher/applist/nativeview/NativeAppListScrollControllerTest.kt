@@ -7,6 +7,35 @@ import org.junit.Test
 
 class NativeAppListScrollControllerTest {
     @Test
+    fun consumedScrollOwnerOnlyTicksAfterTheTargetOffsetActuallyChanges() {
+        val target = FakeNativeAppListScrollTarget()
+        val owner = NativeAppListConsumedScrollOwner(
+            target = target,
+            configProvider = { NativeAppListConfig(rotaryHapticsEnabled = true) },
+            hapticGate = NativeAppListHapticGate(minIntervalMs = 0L),
+        )
+
+        assertFalse(
+            owner.scrollBy(
+                source = NativeAppListScrollSource.RotaryEncoder,
+                deltaPixels = 20,
+                eventTimeMs = 0L,
+            ),
+        )
+        assertEquals(0, target.clockTickCount)
+
+        target.consumeScroll = true
+        assertTrue(
+            owner.scrollBy(
+                source = NativeAppListScrollSource.RotaryEncoder,
+                deltaPixels = 20,
+                eventTimeMs = 1L,
+            ),
+        )
+        assertEquals(1, target.clockTickCount)
+    }
+
+    @Test
     fun rotaryAxisUsesTheSystemVerticalScrollFactor() {
         val delta = nativeAppListScrollDeltaPixels(
             source = NativeAppListScrollSource.RotaryEncoder,
@@ -117,5 +146,23 @@ class NativeAppListScrollControllerTest {
                 scrollOffsetChanged = true,
             ),
         )
+    }
+
+    private class FakeNativeAppListScrollTarget : NativeAppListScrollTarget {
+        var consumeScroll: Boolean = false
+        var offset: Int = 0
+        var clockTickCount: Int = 0
+
+        override fun verticalScrollOffset(): Int = offset
+
+        override fun scrollBy(deltaPixels: Int) {
+            if (consumeScroll) {
+                offset += deltaPixels
+            }
+        }
+
+        override fun performClockTick() {
+            clockTickCount += 1
+        }
     }
 }
