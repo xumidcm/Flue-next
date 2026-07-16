@@ -8,6 +8,7 @@ internal data class NativeDragPolicy(
     val maxAutoScrollPxPerFrame: Float,
     val folderHoverMillis: Long = 500L,
     val folderHoverMaxSpeedPxPerMs: Float,
+    val longPressMillis: Long = 620L,
 )
 
 internal fun nativeAutoScrollDelta(

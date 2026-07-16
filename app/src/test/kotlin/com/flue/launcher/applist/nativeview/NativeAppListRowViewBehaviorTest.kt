@@ -1,5 +1,6 @@
 package com.flue.launcher.applist.nativeview
 
+import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -20,14 +21,76 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Robolectric
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import java.time.Duration
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [27])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NativeAppListRowViewBehaviorTest {
+    @Test
+    fun nativeViewOwnsLongPressThenStartsStableKeyDragWithoutDuplicateMenu() {
+        val entries = listOf(
+            appEntry(key = "component:a"),
+            appEntry(key = "component:b"),
+            appEntry(key = "component:c"),
+        )
+        val commands = mutableListOf<AppListCommand>()
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onCommand = commands::add
+            setConfig(
+                drawingConfig().copy(
+                    centerEdgeItems = false,
+                    rowHeightPx = 40,
+                    fisheyeEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(120, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 100, 120)
+        assertEquals(3, view.childCount)
+
+        dispatch(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
+        assertEquals(
+            listOf(AppListCommand.ShowActions(AppItemKey("component:a"))),
+            commands,
+        )
+
+        dispatch(view, MotionEvent.ACTION_MOVE, y = 42f, eventTime = 621L)
+        dispatch(view, MotionEvent.ACTION_MOVE, y = 65f, eventTime = 700L)
+        dispatch(view, MotionEvent.ACTION_UP, y = 65f, eventTime = 701L)
+
+        assertEquals(1, commands.count { it is AppListCommand.ShowActions })
+        assertTrue(commands.contains(AppListCommand.DismissActions))
+        assertTrue(
+            commands.contains(
+                AppListCommand.Move(
+                    key = AppItemKey("component:a"),
+                    beforeKey = AppItemKey("component:c"),
+                ),
+            ),
+        )
+        assertEquals(0f, view.getChildAt(0).translationY, 0f)
+        view.release()
+        activity.finish()
+    }
+
     @Test
     fun iconRenderOwnerKeepsBitmapIdentityAndFallsBackWithoutRecycling() {
         val owner = NativeAppListIconRenderOwner()
@@ -459,6 +522,17 @@ class NativeAppListRowViewBehaviorTest {
             View.MeasureSpec.makeMeasureSpec(40, View.MeasureSpec.EXACTLY),
         )
         view.layout(0, 0, 100, 40)
+    }
+
+    private fun dispatch(view: View, action: Int, y: Float, eventTime: Long) {
+        MotionEvent.obtain(0L, eventTime, action, 30f, y, 0).also { event ->
+            if (view is NativeAppListView) {
+                if (view.onInterceptTouchEvent(event)) view.onTouchEvent(event)
+            } else {
+                view.dispatchTouchEvent(event)
+            }
+            event.recycle()
+        }
     }
 
     private fun clickListenerOf(view: View): View.OnClickListener? {

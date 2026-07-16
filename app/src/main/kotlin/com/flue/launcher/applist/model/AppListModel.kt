@@ -62,6 +62,8 @@ sealed interface AppListCommand {
         val key: AppItemKey,
     ) : AppListCommand
 
+    data object DismissActions : AppListCommand
+
     data class Move(
         val key: AppItemKey,
         val beforeKey: AppItemKey?,

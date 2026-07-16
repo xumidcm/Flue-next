@@ -123,6 +123,7 @@ fun NativeListDrawerScreen(
                         actionAppKey = command.key.value
                         onLongClick(app)
                     }
+                    AppListCommand.DismissActions -> actionAppKey = null
                     is AppListCommand.Move -> onReorder(command)
                     is AppListCommand.CreateFolder -> onCreateFolder(command)
                     is AppListCommand.Hide -> if (app != null) onExcludeApp(app)
@@ -272,6 +273,7 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
 private fun AppListCommand.keyOrNull() = when (this) {
     is AppListCommand.Open -> key
     is AppListCommand.ShowActions -> key
+    AppListCommand.DismissActions -> null
     is AppListCommand.Move -> key
     is AppListCommand.CreateFolder -> source
     is AppListCommand.Hide -> key

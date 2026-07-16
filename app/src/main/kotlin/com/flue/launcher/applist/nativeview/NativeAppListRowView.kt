@@ -45,6 +45,7 @@ internal class NativeAppListRowView(
     private val iconRenderOwner = NativeAppListIconRenderOwner()
     private var label: String = ""
     private var geometryDirty = true
+    private var folderHover = false
     private var iconBlurRadiusBucketPx = 0
     private val iconEffectRenderer: NativeIconEffectRenderer? =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -106,6 +107,7 @@ internal class NativeAppListRowView(
         isClickable = false
         isLongClickable = false
         isPressed = false
+        folderHover = false
         scaleX = 1f
         scaleY = 1f
         alpha = 1f
@@ -125,6 +127,12 @@ internal class NativeAppListRowView(
         if (nextBucket == iconBlurRadiusBucketPx) return
         iconBlurRadiusBucketPx = nextBucket
         iconEffectRenderer?.setBlurRadiusBucket(nextBucket)
+        invalidate()
+    }
+
+    fun setFolderHoverState(enabled: Boolean) {
+        if (folderHover == enabled) return
+        folderHover = enabled
         invalidate()
     }
 
@@ -216,7 +224,7 @@ internal class NativeAppListRowView(
             canvas.restoreToCount(saveCount)
         }
 
-        if (isPressed) {
+        if (isPressed || folderHover) {
             canvas.drawRoundRect(
                 rowBounds,
                 config.rowBorder.cornerRadiusPx,

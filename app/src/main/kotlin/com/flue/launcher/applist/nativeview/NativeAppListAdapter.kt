@@ -38,8 +38,8 @@ internal class NativeAppListAdapter(
         super.onViewRecycled(holder)
     }
 
-    fun submitContent(content: NativeAppListContent) {
-        submitList(content.rows)
+    fun submitContent(content: NativeAppListContent, onCommitted: () -> Unit = {}) {
+        submitList(content.rows, onCommitted)
     }
 
     fun setConfig(config: NativeAppListResolvedConfig) {
