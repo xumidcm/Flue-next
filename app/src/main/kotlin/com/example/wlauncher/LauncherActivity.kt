@@ -68,7 +68,9 @@ import com.flue.launcher.ui.anim.TransitionSpring
 import com.flue.launcher.ui.controlcenter.ControlCenterLayer
 import com.flue.launcher.ui.drawer.AppFolderOverlay
 import com.flue.launcher.ui.drawer.HoneycombScreen
-import com.flue.launcher.ui.drawer.ListDrawerScreen
+import com.flue.launcher.ui.drawer.NativeListDrawerScreen
+import com.flue.launcher.ui.drawer.AppListBackend
+import com.flue.launcher.ui.drawer.appListBackend
 import com.flue.launcher.ui.drawer.appListPalette
 import com.flue.launcher.ui.drawer.vibrateHaptic
 import com.flue.launcher.ui.home.WatchFaceLayer
@@ -1033,8 +1035,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         translationSpec = appListMotionSpec
                     )
             ) {
-                when (layoutMode) {
-                    LayoutMode.Honeycomb -> HoneycombScreen(
+                when (appListBackend(layoutMode)) {
+                    AppListBackend.COMPOSE_HONEYCOMB -> HoneycombScreen(
                         apps = apps,
                         blurEnabled = blurEnabled,
                         edgeBlurEnabled = edgeBlurEnabled,
@@ -1073,7 +1075,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onDissolveFolder = vm::dissolveFolder,
                         onScrollToTop = { vm.setState(ScreenState.Face) }
                     )
-                    LayoutMode.List -> ListDrawerScreen(
+                    AppListBackend.NATIVE_LINEAR -> NativeListDrawerScreen(
                         apps = apps,
                         blurEnabled = blurEnabled,
                         edgeBlurEnabled = edgeBlurEnabled,
