@@ -154,16 +154,34 @@ private fun Float.normalizedWithin(viewportSize: Int): Float {
     return (this / viewportSize.toFloat()).coerceIn(0f, 1f)
 }
 
-internal class SnapshotGenerationGate {
-    var latestGeneration: Long = -1L
+internal class NativeAppListContentVersionGate {
+    var latestSnapshotGeneration: Long = -1L
+        private set
+    var latestIconRevision: Long = -1L
         private set
 
-    fun tryAccept(generation: Long): Boolean {
-        require(generation >= 0L) {
+    fun tryAccept(
+        snapshotGeneration: Long,
+        iconRevision: Long,
+    ): Boolean {
+        require(snapshotGeneration >= 0L) {
             "Snapshot generation must not be negative"
         }
-        if (generation <= latestGeneration) return false
-        latestGeneration = generation
+        require(iconRevision >= 0L) {
+            "Icon revision must not be negative"
+        }
+        if (
+            snapshotGeneration < latestSnapshotGeneration ||
+            iconRevision < latestIconRevision ||
+            (
+                snapshotGeneration == latestSnapshotGeneration &&
+                    iconRevision == latestIconRevision
+            )
+        ) {
+            return false
+        }
+        latestSnapshotGeneration = snapshotGeneration
+        latestIconRevision = iconRevision
         return true
     }
 }

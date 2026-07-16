@@ -7,7 +7,9 @@ import com.flue.launcher.applist.model.AppListSnapshot
 import com.flue.launcher.applist.model.IconKey
 import com.flue.launcher.applist.model.LaunchTarget
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NativeAppListContentTest {
@@ -35,6 +37,40 @@ class NativeAppListContentTest {
         assertEquals(listOf(27L, 27L), rows.map { it.snapshotGeneration })
         assertEquals("first-bitmap-token", rows[0].icon)
         assertNull(rows[1].icon)
+    }
+
+    @Test
+    fun rowDiffIgnoresGenerationAloneButDetectsEntryOrIconIdentityChanges() {
+        val entry = appEntry(
+            key = "component:first",
+            iconKey = "icon:first",
+        )
+        val icon = Any()
+        val original = NativeAppListBoundRow(
+            snapshotGeneration = 1L,
+            stableKey = entry.key,
+            entry = entry,
+            icon = icon,
+        )
+
+        assertTrue(
+            areNativeAppListRowContentsTheSame(
+                original,
+                original.copy(snapshotGeneration = 2L),
+            ),
+        )
+        assertFalse(
+            areNativeAppListRowContentsTheSame(
+                original,
+                original.copy(icon = Any()),
+            ),
+        )
+        assertFalse(
+            areNativeAppListRowContentsTheSame(
+                original,
+                original.copy(entry = entry.copy(label = "Changed")),
+            ),
+        )
     }
 
     private fun appEntry(

@@ -45,6 +45,15 @@ data class NativeAppListConfig(
     val rowBorder: NativeAppListRowBorder = NativeAppListRowBorder(),
 )
 
+internal class NativeAppListResolvedConfig private constructor(
+    val value: NativeAppListConfig,
+) {
+    companion object {
+        fun from(config: NativeAppListConfig): NativeAppListResolvedConfig =
+            NativeAppListResolvedConfig(config.legalized())
+    }
+}
+
 internal fun NativeAppListConfig.legalized(): NativeAppListConfig {
     val safeIconSize = iconSizePx.positiveMetricOr(DEFAULT_ICON_SIZE_PX)
     val safePaddingTop = rowPaddingTopPx.nonNegativeMetric()

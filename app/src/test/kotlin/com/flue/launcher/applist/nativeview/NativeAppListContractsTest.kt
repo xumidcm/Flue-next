@@ -141,22 +141,16 @@ class NativeAppListContractsTest {
     }
 
     @Test
-    fun generationGateRejectsAnOlderOrDuplicateSubmission() {
-        val gate = SnapshotGenerationGate()
+    fun contentVersionGateAcceptsEitherDimensionAdvancingWithoutAllowingRegression() {
+        val gate = NativeAppListContentVersionGate()
 
-        assertTrue(gate.tryAccept(7L))
-        assertFalse(gate.tryAccept(6L))
-        assertFalse(gate.tryAccept(7L))
-        assertEquals(7L, gate.latestGeneration)
-    }
-
-    @Test
-    fun generationGateAcceptsANewerSubmissionAfterRejectingAnOldOne() {
-        val gate = SnapshotGenerationGate()
-
-        assertTrue(gate.tryAccept(4L))
-        assertFalse(gate.tryAccept(3L))
-        assertTrue(gate.tryAccept(5L))
-        assertEquals(5L, gate.latestGeneration)
+        assertTrue(gate.tryAccept(snapshotGeneration = 7L, iconRevision = 2L))
+        assertFalse(gate.tryAccept(snapshotGeneration = 7L, iconRevision = 2L))
+        assertTrue(gate.tryAccept(snapshotGeneration = 7L, iconRevision = 3L))
+        assertFalse(gate.tryAccept(snapshotGeneration = 6L, iconRevision = 4L))
+        assertFalse(gate.tryAccept(snapshotGeneration = 8L, iconRevision = 2L))
+        assertTrue(gate.tryAccept(snapshotGeneration = 8L, iconRevision = 3L))
+        assertEquals(8L, gate.latestSnapshotGeneration)
+        assertEquals(3L, gate.latestIconRevision)
     }
 }

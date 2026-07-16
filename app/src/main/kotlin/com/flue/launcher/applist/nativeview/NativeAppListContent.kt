@@ -13,11 +13,20 @@ import java.util.LinkedHashMap
  *
  * The map is structurally copied and exposed read-only. Bitmap values are only
  * retained by reference: this boundary never copies or recycles them.
+ * [iconRevision] is monotonic across the submitted content stream and advances
+ * when icon identities change without a new snapshot generation.
  */
 class NativeAppListContent(
     val snapshot: AppListSnapshot,
     iconsByKey: Map<IconKey, Bitmap>,
+    val iconRevision: Long = 0L,
 ) {
+    init {
+        require(iconRevision >= 0L) {
+            "Icon revision must not be negative"
+        }
+    }
+
     val iconsByKey: Map<IconKey, Bitmap> =
         Collections.unmodifiableMap(LinkedHashMap(iconsByKey))
 
@@ -45,3 +54,10 @@ internal fun <T> bindNativeAppListRows(
         )
     },
 )
+
+internal fun <T> areNativeAppListRowContentsTheSame(
+    oldItem: NativeAppListBoundRow<T>,
+    newItem: NativeAppListBoundRow<T>,
+): Boolean =
+    oldItem.entry == newItem.entry &&
+        oldItem.icon === newItem.icon

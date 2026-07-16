@@ -1,6 +1,7 @@
 package com.flue.launcher.applist.nativeview
 
 import android.graphics.Bitmap
+import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
@@ -9,11 +10,13 @@ import com.flue.launcher.applist.model.AppListCommand
 
 internal class NativeAppListAdapter(
     private val commandSink: (AppListCommand) -> Unit,
+    initialConfig: NativeAppListResolvedConfig =
+        NativeAppListResolvedConfig.from(NativeAppListConfig()),
 ) : ListAdapter<NativeAppListBoundRow<Bitmap>, NativeAppListAdapter.AppItemViewHolder>(
     RowDiff,
 ) {
     private val stableIdRegistry = StableIdRegistry()
-    private var config = NativeAppListConfig().legalized()
+    private var config = initialConfig
 
     init {
         setHasStableIds(true)
@@ -23,10 +26,10 @@ internal class NativeAppListAdapter(
         stableIdRegistry.idFor(getItem(position).stableKey)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): AppItemViewHolder =
-        AppItemViewHolder.create(parent)
+        AppItemViewHolder.create(parent, commandSink)
 
     override fun onBindViewHolder(holder: AppItemViewHolder, position: Int) {
-        holder.bind(getItem(position), config, commandSink)
+        holder.bind(getItem(position), config)
     }
 
     override fun onViewRecycled(holder: AppItemViewHolder) {
@@ -38,55 +41,60 @@ internal class NativeAppListAdapter(
         submitList(content.rows)
     }
 
-    fun setConfig(config: NativeAppListConfig) {
-        val next = config.legalized()
-        if (this.config == next) return
-        this.config = next
+    fun setConfig(config: NativeAppListResolvedConfig) {
+        if (this.config.value == config.value) return
+        this.config = config
         if (itemCount > 0) {
             notifyItemRangeChanged(0, itemCount)
         }
     }
 
-    fun clear() {
-        submitList(emptyList())
+    fun clearSynchronously() {
+        submitList(null)
     }
 
     internal class AppItemViewHolder private constructor(
         private val rowView: NativeAppListRowView,
+        private val commandSink: (AppListCommand) -> Unit,
     ) : RecyclerView.ViewHolder(rowView) {
-        fun bind(
-            row: NativeAppListBoundRow<Bitmap>,
-            config: NativeAppListConfig,
-            commandSink: (AppListCommand) -> Unit,
-        ) {
-            rowView.bind(
-                row = row,
-                config = config,
-                clickListener = click@ { clickedView ->
-                    val parent = clickedView.parent as? RecyclerView ?: return@click
-                    commandSink(
-                        AppListCommand.Open(
-                            key = row.stableKey,
-                            origin = rowView.normalizedIconOrigin(parent),
-                        ),
-                    )
-                },
+        private var boundRow: NativeAppListBoundRow<Bitmap>? = null
+        private val clickListener = View.OnClickListener click@ { clickedView ->
+            val row = boundRow ?: return@click
+            val parent = clickedView.parent as? RecyclerView ?: return@click
+            commandSink(
+                AppListCommand.Open(
+                    key = row.stableKey,
+                    origin = rowView.normalizedIconOrigin(parent),
+                ),
             )
         }
 
+        fun bind(
+            row: NativeAppListBoundRow<Bitmap>,
+            config: NativeAppListResolvedConfig,
+        ) {
+            boundRow = row
+            rowView.bind(row = row, config = config)
+            rowView.setOnClickListener(clickListener)
+        }
+
         fun clear() {
+            boundRow = null
             rowView.clearBinding()
         }
 
         companion object {
-            fun create(parent: ViewGroup): AppItemViewHolder {
+            fun create(
+                parent: ViewGroup,
+                commandSink: (AppListCommand) -> Unit,
+            ): AppItemViewHolder {
                 val rowView = NativeAppListRowView(parent.context).apply {
                     layoutParams = RecyclerView.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                     )
                 }
-                return AppItemViewHolder(rowView)
+                return AppItemViewHolder(rowView, commandSink)
             }
         }
     }
@@ -100,9 +108,6 @@ internal class NativeAppListAdapter(
         override fun areContentsTheSame(
             oldItem: NativeAppListBoundRow<Bitmap>,
             newItem: NativeAppListBoundRow<Bitmap>,
-        ): Boolean =
-            oldItem.snapshotGeneration == newItem.snapshotGeneration &&
-                oldItem.entry == newItem.entry &&
-                oldItem.icon === newItem.icon
+        ): Boolean = areNativeAppListRowContentsTheSame(oldItem, newItem)
     }
 }

@@ -11,11 +11,12 @@ class NativeAppListView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0,
 ) : RecyclerView(context, attrs, defStyleAttr) {
-    private val generationGate = SnapshotGenerationGate()
-    private val nativeAdapter = NativeAppListAdapter(::dispatchCommand)
-    private var currentConfig = NativeAppListConfig().legalized()
+    private val contentVersionGate = NativeAppListContentVersionGate()
+    private var currentConfig =
+        NativeAppListResolvedConfig.from(NativeAppListConfig())
+    private val nativeAdapter = NativeAppListAdapter(::dispatchCommand, currentConfig)
     private val scrollController = NativeAppListScrollController(this) {
-        currentConfig
+        currentConfig.value
     }
     private var activeLayoutStrategy: NativeAppListLayoutStrategy =
         LinearNativeAppListLayoutStrategy
@@ -38,7 +39,10 @@ class NativeAppListView @JvmOverloads constructor(
     fun submit(content: NativeAppListContent): Boolean {
         if (
             released ||
-            !generationGate.tryAccept(content.snapshot.generation)
+            !contentVersionGate.tryAccept(
+                snapshotGeneration = content.snapshot.generation,
+                iconRevision = content.iconRevision,
+            )
         ) {
             return false
         }
@@ -48,10 +52,10 @@ class NativeAppListView @JvmOverloads constructor(
 
     fun setConfig(config: NativeAppListConfig) {
         if (released) return
-        val next = config.legalized()
-        if (currentConfig == next) return
+        val next = NativeAppListResolvedConfig.from(config)
+        if (currentConfig.value == next.value) return
         val resetInitialScroll =
-            currentConfig.initialResetToken != next.initialResetToken
+            currentConfig.value.initialResetToken != next.value.initialResetToken
         currentConfig = next
         nativeAdapter.setConfig(next)
         if (resetInitialScroll) {
@@ -89,7 +93,7 @@ class NativeAppListView @JvmOverloads constructor(
         released = true
         stopScroll()
         onCommand = null
-        nativeAdapter.clear()
+        nativeAdapter.clearSynchronously()
         adapter = null
         layoutManager = null
         recycledViewPool.clear()

@@ -7,6 +7,7 @@ import android.view.View
 import com.flue.launcher.applist.model.AppItemKey
 import com.flue.launcher.applist.model.AppItemType
 import com.flue.launcher.applist.model.AppListEntry
+import com.flue.launcher.applist.model.AppListCommand
 import com.flue.launcher.applist.model.AppListSnapshot
 import com.flue.launcher.applist.model.IconKey
 import com.flue.launcher.applist.model.LaunchTarget
@@ -14,6 +15,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -45,14 +47,13 @@ class NativeAppListRowViewBehaviorTest {
     @Test
     fun canvasRowDrawsTheRealBitmapAndUsesFallbackWhenItIsMissing() {
         val view = NativeAppListRowView(RuntimeEnvironment.getApplication())
-        val config = drawingConfig()
+        val config = resolvedDrawingConfig()
         val bitmap = solidBitmap(REAL_ICON_COLOR)
         val output = Bitmap.createBitmap(100, 40, Bitmap.Config.ARGB_8888)
 
         view.bind(
             row = boundRow(bitmap),
             config = config,
-            clickListener = View.OnClickListener {},
         )
         measureAndLayout(view)
         view.draw(Canvas(output))
@@ -62,7 +63,6 @@ class NativeAppListRowViewBehaviorTest {
         view.bind(
             row = boundRow(null),
             config = config,
-            clickListener = View.OnClickListener {},
         )
         view.draw(Canvas(output))
         assertEquals(FALLBACK_COLOR, output.getPixel(5, 20))
@@ -83,8 +83,7 @@ class NativeAppListRowViewBehaviorTest {
         val view = NativeAppListRowView(RuntimeEnvironment.getApplication())
         view.bind(
             row = content.rows.single(),
-            config = drawingConfig(),
-            clickListener = View.OnClickListener {},
+            config = resolvedDrawingConfig(),
         )
         measureAndLayout(view)
         val output = Bitmap.createBitmap(100, 40, Bitmap.Config.ARGB_8888)
@@ -113,6 +112,110 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
+    fun sameSnapshotAcceptsANewerIconRevisionAndRejectsEitherVersionRegressing() {
+        val entry = appEntry()
+        val bitmap = solidBitmap(REAL_ICON_COLOR)
+        val snapshot = AppListSnapshot.create(10L, listOf(entry))
+        val view = NativeAppListView(RuntimeEnvironment.getApplication())
+
+        assertTrue(
+            view.submit(
+                NativeAppListContent(
+                    snapshot = snapshot,
+                    iconsByKey = emptyMap(),
+                    iconRevision = 0L,
+                ),
+            ),
+        )
+        assertTrue(
+            view.submit(
+                NativeAppListContent(
+                    snapshot = snapshot,
+                    iconsByKey = mapOf(entry.iconKey to bitmap),
+                    iconRevision = 1L,
+                ),
+            ),
+        )
+        assertFalse(
+            view.submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(9L, listOf(entry)),
+                    iconsByKey = mapOf(entry.iconKey to bitmap),
+                    iconRevision = 2L,
+                ),
+            ),
+        )
+        assertFalse(
+            view.submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(11L, listOf(entry)),
+                    iconsByKey = mapOf(entry.iconKey to bitmap),
+                    iconRevision = 0L,
+                ),
+            ),
+        )
+        view.release()
+    }
+
+    @Test
+    fun viewHolderReusesItsCreatedListenerAndClicksTheLatestBoundRow() {
+        val parent = androidx.recyclerview.widget.RecyclerView(
+            RuntimeEnvironment.getApplication(),
+        ).apply {
+            layoutManager = androidx.recyclerview.widget.LinearLayoutManager(context)
+        }
+        parent.measure(
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(80, View.MeasureSpec.EXACTLY),
+        )
+        parent.layout(0, 0, 100, 80)
+        val commands = mutableListOf<AppListCommand>()
+        val holder = NativeAppListAdapter.AppItemViewHolder.create(
+            parent = parent,
+            commandSink = commands::add,
+        )
+        parent.addView(holder.itemView)
+        measureAndLayout(holder.itemView)
+        val config = resolvedDrawingConfig()
+
+        holder.bind(boundRow(null, key = "component:first"), config)
+        val firstListener = clickListenerOf(holder.itemView)
+        holder.bind(boundRow(null, key = "component:second"), config)
+
+        assertSame(firstListener, clickListenerOf(holder.itemView))
+        holder.itemView.performClick()
+        assertEquals(
+            AppItemKey("component:second"),
+            (commands.single() as AppListCommand.Open).key,
+        )
+
+        holder.clear()
+        assertNull(clickListenerOf(holder.itemView))
+        holder.bind(boundRow(null, key = "component:third"), config)
+        assertSame(firstListener, clickListenerOf(holder.itemView))
+    }
+
+    @Test
+    fun adapterClearSynchronouslyDropsCurrentRowsAndBitmapReferences() {
+        val entry = appEntry()
+        val bitmap = solidBitmap(REAL_ICON_COLOR)
+        val adapter = NativeAppListAdapter(commandSink = {})
+        adapter.submitContent(
+            NativeAppListContent(
+                snapshot = AppListSnapshot.create(1L, listOf(entry)),
+                iconsByKey = mapOf(entry.iconKey to bitmap),
+                iconRevision = 0L,
+            ),
+        )
+        assertSame(bitmap, adapter.currentList.single().icon)
+
+        adapter.clearSynchronously()
+
+        assertTrue(adapter.currentList.isEmpty())
+        assertFalse(bitmap.isRecycled)
+    }
+
+    @Test
     fun paletteArgbValuesAreLegalizedToUnsigned32BitColors() {
         val legalized = NativeAppListConfig(
             palette = NativeAppListPalette(
@@ -131,6 +234,9 @@ class NativeAppListRowViewBehaviorTest {
         assertEquals(0xffaabbccL, legalized.palette.fallbackIconForegroundColorArgb)
     }
 
+    private fun resolvedDrawingConfig(): NativeAppListResolvedConfig =
+        NativeAppListResolvedConfig.from(drawingConfig())
+
     private fun drawingConfig(): NativeAppListConfig = NativeAppListConfig(
         rowHeightPx = 40,
         iconSizePx = 20,
@@ -144,8 +250,11 @@ class NativeAppListRowViewBehaviorTest {
         ),
     )
 
-    private fun boundRow(bitmap: Bitmap?): NativeAppListBoundRow<Bitmap> {
-        val entry = appEntry()
+    private fun boundRow(
+        bitmap: Bitmap?,
+        key: String = "component:com.example/.MainActivity",
+    ): NativeAppListBoundRow<Bitmap> {
+        val entry = appEntry(key)
         return NativeAppListBoundRow(
             snapshotGeneration = 1L,
             stableKey = entry.key,
@@ -154,8 +263,10 @@ class NativeAppListRowViewBehaviorTest {
         )
     }
 
-    private fun appEntry(): AppListEntry = AppListEntry(
-        key = AppItemKey("component:com.example/.MainActivity"),
+    private fun appEntry(
+        key: String = "component:com.example/.MainActivity",
+    ): AppListEntry = AppListEntry(
+        key = AppItemKey(key),
         label = "Example",
         type = AppItemType.APP,
         launchTarget = LaunchTarget.Component(
@@ -177,6 +288,17 @@ class NativeAppListRowViewBehaviorTest {
             View.MeasureSpec.makeMeasureSpec(40, View.MeasureSpec.EXACTLY),
         )
         view.layout(0, 0, 100, 40)
+    }
+
+    private fun clickListenerOf(view: View): View.OnClickListener? {
+        val listenerInfoField = View::class.java.getDeclaredField("mListenerInfo").apply {
+            isAccessible = true
+        }
+        val listenerInfo = listenerInfoField.get(view) ?: return null
+        val clickListenerField = listenerInfo.javaClass
+            .getDeclaredField("mOnClickListener")
+            .apply { isAccessible = true }
+        return clickListenerField.get(listenerInfo) as? View.OnClickListener
     }
 
     private companion object {

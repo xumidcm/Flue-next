@@ -39,7 +39,7 @@ internal class NativeAppListRowView(
     private val fallbackPath = Path()
     private val labelFontMetrics = Paint.FontMetrics()
 
-    private var config = NativeAppListConfig().legalized()
+    private var config = NativeAppListConfig()
     private val iconRenderOwner = NativeAppListIconRenderOwner()
     private var label: String = ""
     private var geometryDirty = true
@@ -53,20 +53,18 @@ internal class NativeAppListRowView(
 
     fun bind(
         row: NativeAppListBoundRow<Bitmap>,
-        config: NativeAppListConfig,
-        clickListener: View.OnClickListener,
+        config: NativeAppListResolvedConfig,
     ) {
         applyConfig(config)
         iconRenderOwner.bind(row.icon)
         label = row.entry.label
         contentDescription = row.entry.label
         isClickable = true
-        setOnClickListener(clickListener)
         invalidate()
     }
 
-    fun applyConfig(config: NativeAppListConfig) {
-        val next = config.legalized()
+    fun applyConfig(config: NativeAppListResolvedConfig) {
+        val next = config.value
         if (this.config == next) return
         val drawingMetricsChanged =
             this.config.rowHeightPx != next.rowHeightPx ||

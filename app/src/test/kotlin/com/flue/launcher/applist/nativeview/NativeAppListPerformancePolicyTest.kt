@@ -123,6 +123,21 @@ class NativeAppListPerformancePolicyTest {
     }
 
     @Test
+    fun resolvedConfigLegalizesAtTheLowFrequencyBoundary() {
+        val resolved = NativeAppListResolvedConfig.from(
+            NativeAppListConfig(
+                rowHeightPx = -1,
+                iconSizePx = -1,
+                labelTextSizePx = Float.NaN,
+            ),
+        )
+
+        assertTrue(resolved.value.rowHeightPx > 0)
+        assertTrue(resolved.value.iconSizePx > 0)
+        assertTrue(resolved.value.labelTextSizePx.isFinite())
+    }
+
+    @Test
     fun nativeChildVisualKeepsTheCenterSharpAndShrinksOnlyAtTheEdge() {
         val config = NativeAppListConfig(
             appScale = 0.9f,
