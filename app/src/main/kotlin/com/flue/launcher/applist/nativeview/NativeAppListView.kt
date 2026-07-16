@@ -65,6 +65,7 @@ class NativeAppListView @JvmOverloads constructor(
     private var interceptedEndsGesture = false
     private var draggedView: View? = null
     private var draggedViewTouchOffsetY = 0f
+    private var draggedPointerY = 0f
     private var draggedViewOriginalElevation = 0f
     private var folderHoverKey: AppItemKey? = null
     private var autoScrollRemainder = 0f
@@ -74,7 +75,10 @@ class NativeAppListView @JvmOverloads constructor(
     init {
         setHasFixedSize(true)
         layoutManager = activeLayoutStrategy.createLayoutManager(context)
-        itemAnimator = null
+        itemAnimator = NativeStableKeyItemAnimator(
+            moveDurationMillis = 180L,
+            shouldAnimateHolder = { holder -> holder.itemView !== draggedView },
+        )
         clipToPadding = false
         adapter = nativeAdapter
         addOnScrollListener(childVisualScrollListener)
@@ -84,6 +88,7 @@ class NativeAppListView @JvmOverloads constructor(
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         updateViewportPadding(bottom - top)
         super.onLayout(changed, left, top, right, bottom)
+        if (draggedView != null) dragHost.updateDrag(draggedPointerY)
         applyAttachedChildVisuals()
     }
 
@@ -196,6 +201,7 @@ class NativeAppListView @JvmOverloads constructor(
         }
         cancelActiveDrag()
         stopScroll()
+        itemAnimator?.endAnimations()
         resetAttachedChildVisuals()
         val previousLayoutManager = layoutManager
         val savedLayoutState = previousLayoutManager?.onSaveInstanceState()
@@ -221,6 +227,8 @@ class NativeAppListView @JvmOverloads constructor(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) setRenderEffect(null)
         onCommand = null
         nativeAdapter.clearSynchronously()
+        itemAnimator?.endAnimations()
+        itemAnimator = null
         adapter = null
         layoutManager = null
         recycledViewPool.clear()
@@ -287,9 +295,12 @@ class NativeAppListView @JvmOverloads constructor(
         }
 
         override fun beginDrag(key: AppItemKey, pointerY: Float) {
-            val child = holderForKey(key)?.itemView ?: return
+            val holder = holderForKey(key) ?: return
+            itemAnimator?.endAnimation(holder)
+            val child = holder.itemView
             draggedView = child
             draggedViewTouchOffsetY = pointerY - (child.top + child.translationY)
+            draggedPointerY = pointerY
             draggedViewOriginalElevation = ViewCompat.getElevation(child)
             ViewCompat.setElevation(child, resources.displayMetrics.density * 12f)
             child.isPressed = false
@@ -297,6 +308,7 @@ class NativeAppListView @JvmOverloads constructor(
 
         override fun updateDrag(pointerY: Float) {
             val child = draggedView ?: return
+            draggedPointerY = pointerY
             child.translationY = pointerY - draggedViewTouchOffsetY - child.top
         }
 
@@ -308,6 +320,7 @@ class NativeAppListView @JvmOverloads constructor(
             }
             draggedView = null
             draggedViewTouchOffsetY = 0f
+            draggedPointerY = 0f
             draggedViewOriginalElevation = 0f
             autoScrollRemainder = 0f
         }

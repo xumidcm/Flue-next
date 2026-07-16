@@ -33,6 +33,16 @@ import java.time.Duration
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NativeAppListRowViewBehaviorTest {
     @Test
+    fun nativeViewUsesTheMoveOnlySharedBatchAnimator() {
+        val view = NativeAppListView(RuntimeEnvironment.getApplication())
+
+        assertTrue(view.itemAnimator is NativeStableKeyItemAnimator)
+        assertEquals(180L, view.itemAnimator?.moveDuration)
+
+        view.release()
+    }
+
+    @Test
     fun nativeViewOwnsLongPressThenStartsStableKeyDragWithoutDuplicateMenu() {
         val entries = listOf(
             appEntry(key = "component:a"),
