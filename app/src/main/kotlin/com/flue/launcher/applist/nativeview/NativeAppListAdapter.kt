@@ -45,9 +45,6 @@ internal class NativeAppListAdapter(
     fun setConfig(config: NativeAppListResolvedConfig) {
         if (this.config.value == config.value) return
         this.config = config
-        if (itemCount > 0) {
-            notifyItemRangeChanged(0, itemCount)
-        }
     }
 
     fun clearSynchronously() {
@@ -96,6 +93,8 @@ internal class NativeAppListAdapter(
         }
 
         fun boundKeyOrNull(): AppItemKey? = boundRow?.stableKey
+
+        fun boundRowOrNull(): NativeAppListBoundRow<Bitmap>? = boundRow
 
         companion object {
             fun create(

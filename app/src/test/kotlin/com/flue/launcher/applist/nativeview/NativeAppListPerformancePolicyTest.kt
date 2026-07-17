@@ -33,8 +33,8 @@ class NativeAppListPerformancePolicyTest {
             edgeSpacingCompressionEnabled = true,
             fastFlowAnimationEnabled = true,
         )
-        val center = nativeHoneycombChildVisual(160f, 160f, 320f, 320f, 64f, config)
-        val edge = nativeHoneycombChildVisual(260f, 20f, 320f, 320f, 64f, config)
+        val center = nativeHoneycombChildVisual(160f, 160f, 320f, 320f, config)
+        val edge = nativeHoneycombChildVisual(260f, 20f, 320f, 320f, config)
 
         assertEquals(1f, center.scale, 0f)
         assertEquals(1f, center.alpha, 0f)
@@ -42,6 +42,26 @@ class NativeAppListPerformancePolicyTest {
         assertTrue(edge.alpha < 1f)
         assertTrue(edge.translationX < 0f)
         assertTrue(edge.translationY < 0f)
+    }
+
+    @Test
+    fun honeycombHotPathReusesTheCallerOwnedVisualResult() {
+        val scratch = NativeHoneycombChildVisual()
+
+        val result = nativeHoneycombChildVisual(
+            centerX = 160f,
+            centerY = 24f,
+            viewportWidth = 320f,
+            viewportHeight = 320f,
+            config = NativeAppListConfig(
+                presentation = NativeAppListPresentation.HONEYCOMB,
+                fisheyeEnabled = true,
+            ),
+            output = scratch,
+        )
+
+        assertSame(scratch, result)
+        assertTrue(result.scale < 1f)
     }
 
     @Test
@@ -173,6 +193,55 @@ class NativeAppListPerformancePolicyTest {
         assertTrue(resolved.value.rowHeightPx > 0)
         assertTrue(resolved.value.iconSizePx > 0)
         assertTrue(resolved.value.labelTextSizePx.isFinite())
+    }
+
+    @Test
+    fun visualOnlyAnimationConfigDoesNotInvalidateNativeRowDrawingContent() {
+        val baseline = NativeAppListConfig()
+        val animated = baseline.copy(
+            entryProgress = 0.4f,
+            fisheyeStrength = 1.5f,
+            topBlurRadiusPx = 8f,
+            fastFlowAnimationEnabled = true,
+        )
+
+        assertFalse(
+            hasDifferentNativeRowRendering(
+                baseline,
+                animated,
+            ),
+        )
+        assertFalse(hasDifferentNativeEdgeFade(baseline, animated))
+        assertFalse(hasDifferentNativeContentOverlayEffect(baseline, animated))
+        assertTrue(
+            hasDifferentNativeEdgeFade(
+                baseline,
+                baseline.copy(topFadeRangePx = baseline.topFadeRangePx + 1f),
+            ),
+        )
+        assertTrue(
+            hasDifferentNativeContentOverlayEffect(
+                baseline,
+                baseline.copy(contentOverlayBlurRadiusPx = 16f),
+            ),
+        )
+        assertTrue(
+            hasDifferentNativeRowRendering(
+                baseline,
+                baseline.copy(
+                    palette = baseline.palette.copy(labelColorArgb = 0xff112233L),
+                ),
+            ),
+        )
+        assertTrue(
+            hasDifferentNativeRowRendering(
+                baseline,
+                baseline.copy(
+                    presentation = NativeAppListPresentation.HONEYCOMB,
+                    honeycombCellSizePx = 72f,
+                ),
+            ),
+        )
     }
 
     @Test

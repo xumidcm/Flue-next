@@ -34,7 +34,8 @@ class NativeAppListDragControllerTest {
         assertEquals(2, host.hapticCount)
 
         host.hitKey = key("b")
-        assertTrue(controller.onMove(10f, 150f, 700L))
+        assertTrue(controller.onMove(40f, 150f, 700L))
+        assertEquals(40f, host.dragPointerX, 0f)
         assertEquals(
             AppListCommand.Move(key("a"), beforeKey = key("c")),
             host.commands.last(),
@@ -74,6 +75,54 @@ class NativeAppListDragControllerTest {
 
         host.hitKey = key("c")
         controller.onUp(10f, 151f, 1201L)
+        assertFalse(host.commands.any { it is AppListCommand.CreateFolder })
+        assertEquals(null, host.folderHoverKey)
+    }
+
+    @Test
+    fun `gesture source requires a strict hit while reorder may use a nearest target`() {
+        val host = FakeDragHost().apply {
+            strictHitKey = null
+            reorderHitKey = key("b")
+        }
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+
+        assertFalse(controller.onDown(10f, 100f, 0L))
+        assertFalse(scheduler.hasDelayed)
+        assertFalse(host.longClickSuppressed)
+
+        host.strictHitKey = key("a")
+        controller.onDown(10f, 100f, 1L)
+        scheduler.advanceTo(621L)
+        controller.onMove(10f, 121f, 622L)
+        host.strictHitKey = null
+        host.reorderHitKey = key("b")
+
+        controller.onMove(40f, 150f, 700L)
+
+        assertEquals(
+            AppListCommand.Move(key("a"), beforeKey = key("c")),
+            host.commands.last(),
+        )
+    }
+
+    @Test
+    fun `folder release requires a strict hit even when reorder keeps a nearest target`() {
+        val host = FakeDragHost()
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+        startDrag(controller, scheduler)
+
+        host.strictHitKey = key("b")
+        host.reorderHitKey = key("b")
+        controller.onMove(10f, 150f, 700L)
+        controller.onMove(10f, 151f, 1200L)
+        assertEquals(key("b"), host.folderHoverKey)
+
+        host.strictHitKey = null
+        controller.onUp(10f, 151f, 1201L)
+
         assertFalse(host.commands.any { it is AppListCommand.CreateFolder })
         assertEquals(null, host.folderHoverKey)
     }
@@ -130,24 +179,37 @@ class NativeAppListDragControllerTest {
 
     private class FakeDragHost : NativeAppListDragHost {
         var keys = listOf(AppItemKey("a"), AppItemKey("b"), AppItemKey("c"))
-        var hitKey: AppItemKey? = AppItemKey("a")
+        var strictHitKey: AppItemKey? = AppItemKey("a")
+        var reorderHitKey: AppItemKey? = AppItemKey("a")
+        var hitKey: AppItemKey?
+            get() = strictHitKey
+            set(value) {
+                strictHitKey = value
+                reorderHitKey = value
+            }
         val commands = mutableListOf<AppListCommand>()
         val scrollDeltas = mutableListOf<Float>()
         var draggingKey: AppItemKey? = null
+        var dragPointerX = 0f
         var folderHoverKey: AppItemKey? = null
         var longClickSuppressed = false
         var endDragCount = 0
         var hapticCount = 0
 
         override val viewportHeightPx: Float = 400f
-        override fun keyAt(x: Float, y: Float): AppItemKey? = hitKey
+        override fun keyAt(x: Float, y: Float): AppItemKey? = strictHitKey
+        override fun reorderKeyAt(x: Float, y: Float): AppItemKey? = reorderHitKey
+        override fun folderKeyAt(x: Float, y: Float): AppItemKey? = strictHitKey
         override fun currentKeys(): List<AppItemKey> = keys
         override fun dispatch(command: AppListCommand) { commands += command }
         override fun suppressLongClick(key: AppItemKey, suppress: Boolean) {
             longClickSuppressed = suppress
         }
-        override fun beginDrag(key: AppItemKey, pointerY: Float) { draggingKey = key }
-        override fun updateDrag(pointerY: Float) = Unit
+        override fun beginDrag(key: AppItemKey, pointerX: Float, pointerY: Float) {
+            draggingKey = key
+            dragPointerX = pointerX
+        }
+        override fun updateDrag(pointerX: Float, pointerY: Float) { dragPointerX = pointerX }
         override fun endDrag() { draggingKey = null; endDragCount++ }
         override fun setFolderHover(key: AppItemKey?) { folderHoverKey = key }
         override fun scrollBy(deltaPx: Float) { scrollDeltas += deltaPx }

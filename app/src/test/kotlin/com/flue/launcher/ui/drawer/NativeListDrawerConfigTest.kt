@@ -2,6 +2,7 @@ package com.flue.launcher.ui.drawer
 
 import android.os.Build
 import com.flue.launcher.applist.nativeview.NativeAppListTheme
+import com.flue.launcher.applist.nativeview.NativeAppListPresentation
 import com.flue.launcher.applist.nativeview.NativeBlurTier
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -104,6 +105,51 @@ class NativeListDrawerConfigTest {
         assertEquals(0.35f, config.entryProgress)
     }
 
+    @Test
+    fun mapsAppleHoneycombColumnsAndCellGeometryWithoutLinearPaddingRules() {
+        val config = nativeListDrawerConfig(
+            request(
+                viewportWidthPx = 320,
+                viewportHeightPx = 320,
+                presentation = NativeAppListPresentation.HONEYCOMB,
+                honeycombNarrowColumns = 3,
+            ),
+        )
+
+        assertEquals(NativeAppListPresentation.HONEYCOMB, config.presentation)
+        assertEquals(69, config.iconSizePx)
+        assertEquals(3, config.honeycombNarrowColumns)
+        assertEquals(69f * 1.02f, config.honeycombCellSizePx, 0.001f)
+    }
+
+    @Test
+    fun preservesLegacyHoneycombMinimumContentWidthForLargeSafeInsets() {
+        val config = nativeListDrawerConfig(
+            request(
+                viewportWidthPx = 800,
+                leftSafeInsetPercent = 50,
+                presentation = NativeAppListPresentation.HONEYCOMB,
+                honeycombNarrowColumns = 4,
+            ),
+        )
+
+        assertEquals(79, config.iconSizePx)
+    }
+
+    @Test
+    fun legalizesHoneycombColumnsBeforeUsingAndPublishingThem() {
+        val config = nativeListDrawerConfig(
+            request(
+                viewportWidthPx = 320,
+                presentation = NativeAppListPresentation.HONEYCOMB,
+                honeycombNarrowColumns = 0,
+            ),
+        )
+
+        assertEquals(1, config.honeycombNarrowColumns)
+        assertEquals(84, config.iconSizePx)
+    }
+
     private fun request(
         density: Float = 1f,
         fontScale: Float = 1f,
@@ -122,11 +168,15 @@ class NativeListDrawerConfigTest {
         fastFlowAnimationEnabled: Boolean = false,
         edgeSpacingCompressionEnabled: Boolean = true,
         entryProgress: Float = 1f,
+        presentation: NativeAppListPresentation = NativeAppListPresentation.LINEAR,
+        honeycombNarrowColumns: Int = 4,
     ) = NativeListDrawerConfigRequest(
         density = density,
         fontScale = fontScale,
         viewportWidthPx = viewportWidthPx,
         viewportHeightPx = viewportHeightPx,
+        presentation = presentation,
+        honeycombNarrowColumns = honeycombNarrowColumns,
         active = true,
         initialResetToken = 3L,
         leftSafeInsetPercent = leftSafeInsetPercent,

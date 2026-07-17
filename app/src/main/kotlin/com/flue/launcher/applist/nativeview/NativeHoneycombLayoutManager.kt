@@ -5,6 +5,7 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
 import kotlin.math.roundToInt
+import kotlin.math.hypot
 
 internal class NativeHoneycombLayoutManager(
     private val configProvider: () -> NativeAppListConfig,
@@ -14,6 +15,7 @@ internal class NativeHoneycombLayoutManager(
     private var scrollOffsetPx = Float.NaN
     private val visibleBounds = IntArray(2)
     private val attachedPositions = SparseBooleanArray()
+    private val childVisualScratch = NativeHoneycombChildVisual()
 
     override fun generateDefaultLayoutParams(): RecyclerView.LayoutParams =
         RecyclerView.LayoutParams(
@@ -74,6 +76,34 @@ internal class NativeHoneycombLayoutManager(
             current.maximumScrollOffsetPx,
         )
         requestLayout()
+    }
+
+    fun findNearestVisiblePosition(
+        x: Float,
+        y: Float,
+        maximumDistancePx: Float,
+        excludedPosition: Int = -1,
+    ): Int {
+        if (!x.isFinite() || !y.isFinite() || maximumDistancePx < 0f) return -1
+        var nearestPosition = -1
+        var nearestDistance = maximumDistancePx
+        for (index in 0 until childCount) {
+            val child = requireNotNull(getChildAt(index))
+            if (getPosition(child) == excludedPosition) continue
+            val centerX = child.left + child.width / 2f + child.translationX
+            val centerY = child.top + child.height / 2f + child.translationY
+            val distance = hypot(x - centerX, y - centerY)
+            if (distance <= nearestDistance) {
+                nearestDistance = distance
+                nearestPosition = getPosition(child)
+            }
+        }
+        return nearestPosition
+    }
+
+    /** Reapplies LayoutManager-owned transforms after a transient drag overlay ends. */
+    fun reapplyChildVisuals() {
+        applyChildVisuals()
     }
 
     private fun ensureGeometry(itemCount: Int): NativeHoneycombGeometry {
@@ -177,8 +207,8 @@ internal class NativeHoneycombLayoutManager(
                 centerY = centerY,
                 viewportWidth = width.toFloat(),
                 viewportHeight = height.toFloat(),
-                iconSizePx = config.iconSizePx.toFloat(),
                 config = config,
+                output = childVisualScratch,
             )
             if (child is NativeAppListRowView) {
                 child.setFlowTranslation(visual.translationX, visual.translationY)

@@ -69,6 +69,7 @@ internal class NativeDragGestureMachine(
         targetKey: AppItemKey?,
         speedPxPerMs: Float,
         nowMillis: Long,
+        folderCandidateKey: AppItemKey? = targetKey,
     ): List<NativeDragEffect> {
         val source = sourceKey ?: return emptyList()
         if (!isTracking) return emptyList()
@@ -90,7 +91,7 @@ internal class NativeDragGestureMachine(
         }
 
         val effects = mutableListOf<NativeDragEffect>()
-        val folderCandidate = targetKey?.takeUnless { it == source }
+        val folderCandidate = folderCandidateKey?.takeUnless { it == source }
         val nextArmedTarget = folderHoverGate.update(
             candidateKey = folderCandidate?.value,
             speedPxPerMs = speedPxPerMs,

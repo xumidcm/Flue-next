@@ -3,16 +3,20 @@ package com.flue.launcher.applist.nativeview
 import com.flue.launcher.applist.model.AppItemKey
 import com.flue.launcher.applist.model.AppListCommand
 import com.flue.launcher.applist.model.AppListMovePlanner
-import kotlin.math.abs
+import kotlin.math.hypot
 
 internal interface NativeAppListDragHost {
     val viewportHeightPx: Float
+    /** Strict visual hit used to acquire a gesture source. */
     fun keyAt(x: Float, y: Float): AppItemKey?
+    /** Reorder may use a nearby cell after a strict source has already been acquired. */
+    fun reorderKeyAt(x: Float, y: Float): AppItemKey? = keyAt(x, y)
+    fun folderKeyAt(x: Float, y: Float): AppItemKey? = keyAt(x, y)
     fun currentKeys(): List<AppItemKey>
     fun dispatch(command: AppListCommand)
     fun suppressLongClick(key: AppItemKey, suppress: Boolean)
-    fun beginDrag(key: AppItemKey, pointerY: Float)
-    fun updateDrag(pointerY: Float)
+    fun beginDrag(key: AppItemKey, pointerX: Float, pointerY: Float)
+    fun updateDrag(pointerX: Float, pointerY: Float)
     fun endDrag()
     fun setFolderHover(key: AppItemKey?)
     fun scrollBy(deltaPx: Float)
@@ -66,16 +70,17 @@ internal class NativeAppListDragController(
     fun onMove(x: Float, y: Float, eventTimeMillis: Long): Boolean {
         if (released || !machine.isTracking) return false
         val elapsed = (eventTimeMillis - lastPointerAtMillis).coerceAtLeast(1L)
-        val speed = abs(y - lastPointerY) / elapsed
+        val speed = hypot(x - lastPointerX, y - lastPointerY) / elapsed
         lastPointerX = x
         lastPointerY = y
         lastPointerAtMillis = eventTimeMillis
         val effects = machine.onMove(
             pointerX = x,
             pointerY = y,
-            targetKey = host.keyAt(x, y),
+            targetKey = host.reorderKeyAt(x, y),
             speedPxPerMs = speed,
             nowMillis = eventTimeMillis,
+            folderCandidateKey = host.folderKeyAt(x, y),
         )
         process(effects)
         if (!machine.isTracking) {
@@ -84,7 +89,7 @@ internal class NativeAppListDragController(
             return false
         }
         if (machine.isDragging) {
-            host.updateDrag(y)
+            host.updateDrag(x, y)
             updateAutoScrollSchedule()
         }
         return machine.isDragging || machine.hasLongPressed
@@ -96,7 +101,7 @@ internal class NativeAppListDragController(
         lastPointerY = y
         lastPointerAtMillis = eventTimeMillis
         val consumed = machine.isDragging || machine.hasLongPressed
-        process(machine.onUp(host.keyAt(x, y)))
+        process(machine.onUp(host.folderKeyAt(x, y)))
         cancelCallbacks()
         restoreLongClick()
         return consumed
@@ -136,7 +141,7 @@ internal class NativeAppListDragController(
                     host.dispatch(AppListCommand.DismissActions)
                 is NativeDragEffect.StartDrag -> {
                     host.performDragHaptic()
-                    host.beginDrag(effect.key, lastPointerY)
+                    host.beginDrag(effect.key, lastPointerX, lastPointerY)
                 }
                 is NativeDragEffect.Move ->
                     AppListMovePlanner.fromKeys(
@@ -175,13 +180,15 @@ internal class NativeAppListDragController(
         val delta = nativeAutoScrollDelta(lastPointerY, host.viewportHeightPx, policy)
         if (delta == 0f) return
         host.scrollBy(delta)
+        host.updateDrag(lastPointerX, lastPointerY)
         process(
             machine.onMove(
                 pointerX = lastPointerX,
                 pointerY = lastPointerY,
-                targetKey = host.keyAt(lastPointerX, lastPointerY),
+                targetKey = host.reorderKeyAt(lastPointerX, lastPointerY),
                 speedPxPerMs = 0f,
                 nowMillis = scheduler.nowMillis,
+                folderCandidateKey = host.folderKeyAt(lastPointerX, lastPointerY),
             ),
         )
         updateAutoScrollSchedule()

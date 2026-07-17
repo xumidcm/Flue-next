@@ -24,6 +24,9 @@ import com.flue.launcher.applist.nativeview.NativeAppListConfig
 import com.flue.launcher.applist.nativeview.NativeAppListHost
 import com.flue.launcher.applist.nativeview.NativeAppListPalette
 import com.flue.launcher.applist.nativeview.NativeAppListIconShape
+import com.flue.launcher.applist.nativeview.NativeAppListPresentation
+import com.flue.launcher.applist.nativeview.HoneycombNativeAppListLayoutStrategy
+import com.flue.launcher.applist.nativeview.LinearNativeAppListLayoutStrategy
 import com.flue.launcher.applist.nativeview.NativeAppListRowBorder
 import com.flue.launcher.applist.nativeview.NativeAppListTheme
 import com.flue.launcher.applist.nativeview.selectNativeBlurTier
@@ -62,6 +65,8 @@ fun NativeListDrawerScreen(
     useWatchFaceColors: Boolean = false,
     rowBorderEnabled: Boolean = false,
     allowFolderCreation: Boolean = true,
+    presentation: NativeAppListPresentation = NativeAppListPresentation.LINEAR,
+    honeycombNarrowColumns: Int = 4,
     onAppClick: (AppInfo, Offset) -> Unit,
     onLongClick: (AppInfo) -> Unit = {},
     onReorder: (AppListCommand.Move) -> Unit = {},
@@ -93,6 +98,8 @@ fun NativeListDrawerScreen(
                 fontScale = localDensity.fontScale,
                 viewportWidthPx = viewportWidthPx,
                 viewportHeightPx = viewportHeightPx,
+                presentation = presentation,
+                honeycombNarrowColumns = honeycombNarrowColumns,
                 active = active,
                 initialResetToken = initialScrollResetKey.toLong().coerceAtLeast(0L),
                 leftSafeInsetPercent = leftSafeInsetPercent,
@@ -148,6 +155,11 @@ fun NativeListDrawerScreen(
                 }
             },
             onScrollToTop = onScrollToTop,
+            layoutStrategy = if (presentation == NativeAppListPresentation.HONEYCOMB) {
+                HoneycombNativeAppListLayoutStrategy
+            } else {
+                LinearNativeAppListLayoutStrategy
+            },
             modifier = Modifier
                 .fillMaxSize()
                 .background(
@@ -191,6 +203,8 @@ internal data class NativeListDrawerConfigRequest(
     val fontScale: Float,
     val viewportWidthPx: Int,
     val viewportHeightPx: Int,
+    val presentation: NativeAppListPresentation,
+    val honeycombNarrowColumns: Int,
     val active: Boolean,
     val initialResetToken: Long,
     val leftSafeInsetPercent: Int,
@@ -226,17 +240,46 @@ internal data class NativeListDrawerConfigRequest(
 internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): NativeAppListConfig {
     val density = request.density.takeIf { it.isFinite() && it > 0f } ?: 1f
     val scale = request.appListScalePercent.coerceIn(50, 200) / 100f
+    val leftSafeInsetPx = (
+        request.viewportWidthPx.coerceAtLeast(0) *
+            request.leftSafeInsetPercent.coerceIn(0, 50) / 100f
+        ).roundToInt()
+    val honeycombNarrowColumns = request.honeycombNarrowColumns.coerceIn(1, 10)
+    val honeycombIconSizePx = if (request.presentation == NativeAppListPresentation.HONEYCOMB) {
+        val viewportWidth = request.viewportWidthPx.coerceAtLeast(1)
+        val contentWidth = (viewportWidth - leftSafeInsetPx).toFloat()
+            .coerceAtLeast(viewportWidth * 0.55f)
+        val availableWidth = (contentWidth - 20f * density).coerceAtLeast(1f)
+        val maxColumns = honeycombNarrowColumns + 1
+        val base = (availableWidth / (maxColumns + 0.35f)).coerceIn(
+            54f * density,
+            84f * density,
+        )
+        (base * scale).coerceIn(28f * density, 148f * density).roundToInt()
+    } else {
+        0
+    }
     val scaledIconSizeDp = (request.iconSizeDp * scale).coerceIn(24f, 128f)
     val scaledVerticalPaddingDp = (10f * scale).coerceIn(4f, 24f)
     val scaledHorizontalPaddingDp = (16f * scale).coerceIn(10f, 32f)
     val scaledIconTextGapDp = (14f * scale).coerceIn(8f, 28f)
     val scaledTextSizeSp = (16f * scale).coerceIn(10f, 32f)
     val fontScale = request.fontScale.takeIf { it.isFinite() && it > 0f } ?: 1f
-    val iconSizePx = (scaledIconSizeDp * density).roundToInt()
+    val iconSizePx = honeycombIconSizePx.takeIf { it > 0 }
+        ?: (scaledIconSizeDp * density).roundToInt()
         .coerceAtLeast(1)
     val verticalPaddingPx = (scaledVerticalPaddingDp * density).roundToInt().coerceAtLeast(0)
     val horizontalPaddingPx = (scaledHorizontalPaddingDp * density).roundToInt().coerceAtLeast(0)
-    val rowHeightPx = iconSizePx + verticalPaddingPx * 2
+    val honeycombCellSizePx = if (request.presentation == NativeAppListPresentation.HONEYCOMB) {
+        iconSizePx * 1.02f
+    } else {
+        0f
+    }
+    val rowHeightPx = if (request.presentation == NativeAppListPresentation.HONEYCOMB) {
+        honeycombCellSizePx.roundToInt()
+    } else {
+        iconSizePx + verticalPaddingPx * 2
+    }
     val halfViewport = request.viewportHeightPx.coerceAtLeast(1) / 2f
     val edgeBand = (
         rowHeightPx * request.fisheyeRangeRows.coerceIn(1, 8) / halfViewport
@@ -250,10 +293,8 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
     return NativeAppListConfig(
         active = request.active,
         initialResetToken = request.initialResetToken,
-        leftSafeInsetPx = (
-            request.viewportWidthPx.coerceAtLeast(0) *
-                request.leftSafeInsetPercent.coerceIn(0, 50) / 100f
-            ).roundToInt(),
+        presentation = request.presentation,
+        leftSafeInsetPx = leftSafeInsetPx,
         rowHeightPx = rowHeightPx,
         iconSizePx = iconSizePx,
         rowPaddingStartPx = horizontalPaddingPx + (12f * density).roundToInt(),
@@ -268,6 +309,9 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
             NativeAppListIconShape.ROUNDED_RECT
         },
         iconCornerRadiusPx = (14f * scale).coerceIn(10f, 24f) * density,
+        honeycombCellSizePx = honeycombCellSizePx,
+        honeycombNarrowColumns = honeycombNarrowColumns,
+        honeycombFisheyeRangeRows = request.fisheyeRangeRows,
         centerEdgeItems = true,
         allowFolderCreation = request.allowFolderCreation,
         iconShadowEnabled = request.iconShadowEnabled,

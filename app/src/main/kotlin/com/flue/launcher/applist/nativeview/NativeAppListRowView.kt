@@ -51,6 +51,7 @@ internal class NativeAppListRowView(
     private var moveTranslationX = 0f
     private var moveTranslationY = 0f
     private var dragTranslationY = 0f
+    private var dragTranslationX = 0f
     private var flowTranslationY = 0f
     private var flowTranslationX = 0f
     private var visualScale = 1f
@@ -134,6 +135,7 @@ internal class NativeAppListRowView(
         moveTranslationX = 0f
         moveTranslationY = 0f
         dragTranslationY = 0f
+        dragTranslationX = 0f
         flowTranslationY = 0f
         flowTranslationX = 0f
         rotation = 0f
@@ -167,6 +169,10 @@ internal class NativeAppListRowView(
         applyCompositeScale()
     }
 
+    fun visualScaleForOverlay(): Float = visualScale
+
+    fun iconBlurRadiusForOverlay(): Float = iconBlurRadiusBucketPx.toFloat()
+
     fun setDragVisualState(enabled: Boolean) {
         if (dragVisual == enabled) return
         dragVisual = enabled
@@ -180,6 +186,11 @@ internal class NativeAppListRowView(
     }
 
     fun setDragTranslationY(y: Float) {
+        setDragTranslation(dragTranslationX, y)
+    }
+
+    fun setDragTranslation(x: Float, y: Float) {
+        dragTranslationX = x
         dragTranslationY = y
         applyCompositeTranslation()
     }
@@ -197,7 +208,7 @@ internal class NativeAppListRowView(
     fun positionTranslationYWithoutFlow(): Float = moveTranslationY + dragTranslationY
 
     private fun applyCompositeTranslation() {
-        translationX = moveTranslationX + flowTranslationX
+        translationX = moveTranslationX + dragTranslationX + flowTranslationX
         translationY = moveTranslationY + dragTranslationY + flowTranslationY
     }
 

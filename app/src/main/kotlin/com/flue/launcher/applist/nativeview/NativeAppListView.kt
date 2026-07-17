@@ -54,14 +54,15 @@ class NativeAppListView @JvmOverloads constructor(
     }
     private val childVisualAttachListener = object : OnChildAttachStateChangeListener {
         override fun onChildViewAttachedToWindow(view: View) {
+            (view as? NativeAppListRowView)?.applyConfig(currentConfig)
             applyChildVisual(view)
             val key = (getChildViewHolder(view) as?
                 NativeAppListAdapter.AppItemViewHolder)?.boundKeyOrNull()
             (view as? NativeAppListRowView)?.setFolderHoverState(key == folderHoverKey)
+            if (key == draggedSourceKey) view.alpha = 0f
         }
 
         override fun onChildViewDetachedFromWindow(view: View) {
-            if (view === draggedView) cancelActiveDrag()
             (view as? NativeAppListRowView)?.setFolderHoverState(false)
         }
     }
@@ -70,10 +71,12 @@ class NativeAppListView @JvmOverloads constructor(
     private var interceptedAction = -1
     private var interceptedEventTime = Long.MIN_VALUE
     private var interceptedEndsGesture = false
-    private var draggedView: View? = null
+    private var draggedSourceKey: AppItemKey? = null
+    private var dragOverlayView: NativeAppListRowView? = null
     private var draggedViewTouchOffsetY = 0f
+    private var draggedViewTouchOffsetX = 0f
     private var draggedPointerY = 0f
-    private var draggedViewOriginalElevation = 0f
+    private var draggedPointerX = 0f
     private var folderHoverKey: AppItemKey? = null
     private var autoScrollRemainder = 0f
     private val topFadePaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -96,7 +99,10 @@ class NativeAppListView @JvmOverloads constructor(
         layoutManager = activeLayoutStrategy.createLayoutManager(context) { currentConfig.value }
         itemAnimator = NativeStableKeyItemAnimator(
             moveDurationMillis = 180L,
-            shouldAnimateHolder = { holder -> holder.itemView !== draggedView },
+            shouldAnimateHolder = { holder ->
+                (holder as? NativeAppListAdapter.AppItemViewHolder)
+                    ?.boundKeyOrNull() != draggedSourceKey
+            },
         )
         clipToPadding = false
         adapter = nativeAdapter
@@ -107,7 +113,7 @@ class NativeAppListView @JvmOverloads constructor(
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         updateViewportPadding(bottom - top)
         super.onLayout(changed, left, top, right, bottom)
-        if (draggedView != null) dragHost.updateDrag(draggedPointerY)
+        if (dragOverlayView != null) dragHost.updateDrag(draggedPointerX, draggedPointerY)
         applyAttachedChildVisuals()
     }
 
@@ -261,19 +267,36 @@ class NativeAppListView @JvmOverloads constructor(
         if (released) return
         val next = NativeAppListResolvedConfig.from(config)
         if (currentConfig.value == next.value) return
+        val previous = currentConfig.value
+        val geometryChanged = hasDifferentLayoutGeometry(
+            current = previous,
+            next = next.value,
+        )
+        val rowRenderingChanged = hasDifferentNativeRowRendering(previous, next.value)
+        val edgeFadeChanged = hasDifferentNativeEdgeFade(previous, next.value)
+        val contentOverlayEffectChanged =
+            hasDifferentNativeContentOverlayEffect(previous, next.value)
         val resetInitialScroll =
-            currentConfig.value.initialResetToken != next.value.initialResetToken
-        if (resetInitialScroll) cancelActiveDrag()
+            previous.initialResetToken != next.value.initialResetToken
+        if ((geometryChanged || resetInitialScroll) && dragController.isActive) {
+            cancelActiveDrag()
+        }
         currentConfig = next
         if (!next.value.active) {
             cancelActiveDrag()
             cancelPull()
         }
         nativeAdapter.setConfig(next)
-        updateEdgeFadeShaders()
-        applyContentOverlayBlur()
-        updateViewportPadding(height)
+        if (rowRenderingChanged) {
+            applyConfigToAttachedRows(next)
+            dragOverlayView?.applyConfig(next)
+        }
+        if (edgeFadeChanged) updateEdgeFadeShaders()
+        if (contentOverlayEffectChanged) applyContentOverlayBlur()
+        if (geometryChanged) updateViewportPadding(height)
+        (layoutManager as? NativeHoneycombLayoutManager)?.reapplyChildVisuals()
         applyAttachedChildVisuals()
+        if (geometryChanged) requestLayout()
         if (resetInitialScroll) {
             stopScroll()
             scrollToPosition(0)
@@ -397,7 +420,9 @@ class NativeAppListView @JvmOverloads constructor(
     private fun keyAtPoint(x: Float, y: Float): AppItemKey? {
         for (index in childCount - 1 downTo 0) {
             val child = getChildAt(index)
-            if (child === draggedView) continue
+            val holder = getChildViewHolder(child) as?
+                NativeAppListAdapter.AppItemViewHolder ?: continue
+            if (holder.boundKeyOrNull() == draggedSourceKey) continue
             val pivotX = child.left + child.pivotX + child.translationX
             val pivotY = child.top + child.pivotY + child.translationY
             val left = pivotX + (child.left - (child.left + child.pivotX)) * child.scaleX
@@ -405,8 +430,7 @@ class NativeAppListView @JvmOverloads constructor(
             val top = pivotY + (child.top - (child.top + child.pivotY)) * child.scaleY
             val bottom = pivotY + (child.bottom - (child.top + child.pivotY)) * child.scaleY
             if (x in left..right && y in top..bottom) {
-                return (getChildViewHolder(child) as?
-                    NativeAppListAdapter.AppItemViewHolder)?.boundKeyOrNull()
+                return holder.boundKeyOrNull()
             }
         }
         return null
@@ -416,7 +440,30 @@ class NativeAppListView @JvmOverloads constructor(
         override val viewportHeightPx: Float
             get() = height.toFloat()
 
-        override fun keyAt(x: Float, y: Float): AppItemKey? = keyAtPoint(x, y)
+        override fun keyAt(x: Float, y: Float): AppItemKey? {
+            return keyAtPoint(x, y)
+        }
+
+        override fun reorderKeyAt(x: Float, y: Float): AppItemKey? {
+            keyAtPoint(x, y)?.let { return it }
+            if (currentConfig.value.presentation != NativeAppListPresentation.HONEYCOMB) {
+                return null
+            }
+            val manager = layoutManager as? NativeHoneycombLayoutManager ?: return null
+            val excludedPosition = draggedSourceKey
+                ?.let(::holderForKey)
+                ?.bindingAdapterPosition
+                ?: -1
+            val position = manager.findNearestVisiblePosition(
+                x = x,
+                y = y,
+                maximumDistancePx = Float.MAX_VALUE,
+                excludedPosition = excludedPosition,
+            )
+            return nativeAdapter.keyAtPositionOrNull(position)
+        }
+
+        override fun folderKeyAt(x: Float, y: Float): AppItemKey? = keyAtPoint(x, y)
 
         override fun currentKeys(): List<AppItemKey> = nativeAdapter.currentKeysSnapshot()
 
@@ -426,54 +473,82 @@ class NativeAppListView @JvmOverloads constructor(
             holderForKey(key)?.itemView?.isLongClickable = !suppress
         }
 
-        override fun beginDrag(key: AppItemKey, pointerY: Float) {
+        override fun beginDrag(key: AppItemKey, pointerX: Float, pointerY: Float) {
             val holder = holderForKey(key) ?: return
             itemAnimator?.endAnimation(holder)
-            val child = holder.itemView
-            draggedView = child
-            draggedViewTouchOffsetY = pointerY - (child.top + child.translationY)
+            val source = holder.itemView as? NativeAppListRowView ?: return
+            val row = holder.boundRowOrNull() ?: return
+            draggedSourceKey = key
+            draggedViewTouchOffsetX = pointerX - (source.left + source.translationX)
+            draggedViewTouchOffsetY = pointerY - (source.top + source.translationY)
+            draggedPointerX = pointerX
             draggedPointerY = pointerY
-            draggedViewOriginalElevation = ViewCompat.getElevation(child)
+            val dragOverlay = NativeAppListRowView(context).apply {
+                bind(row, currentConfig)
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                isFocusable = false
+                isClickable = false
+                alpha = source.alpha
+                setVisualScale(source.visualScaleForOverlay())
+                setIconBlurRadiusPx(
+                    source.iconBlurRadiusForOverlay(),
+                    currentConfig.value.blurTier,
+                )
+            }
+            dragOverlay.measure(
+                View.MeasureSpec.makeMeasureSpec(source.width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(source.height, View.MeasureSpec.EXACTLY),
+            )
+            dragOverlay.layout(
+                source.left,
+                source.top,
+                source.left + source.width,
+                source.top + source.height,
+            )
+            this@NativeAppListView.overlay.add(dragOverlay)
             ViewCompat.setElevation(
-                child,
+                dragOverlay,
                 if (currentConfig.value.iconShadowEnabled) {
                     resources.displayMetrics.density * 18f
                 } else {
                     0f
                 },
             )
-            child.isPressed = false
-            (child as? NativeAppListRowView)?.setDragVisualState(true)
+            dragOverlayView = dragOverlay
+            source.isPressed = false
+            source.alpha = 0f
+            dragOverlay.setDragVisualState(true)
         }
 
-        override fun updateDrag(pointerY: Float) {
-            val child = draggedView ?: return
+        override fun updateDrag(pointerX: Float, pointerY: Float) {
+            val dragOverlay = dragOverlayView ?: return
+            draggedPointerX = pointerX
             draggedPointerY = pointerY
-            val offset = pointerY - draggedViewTouchOffsetY - child.top
-            if (child is NativeAppListRowView) {
-                child.setDragTranslationY(offset)
-                child.setFlowTranslationY(0f)
+            val offsetX = if (currentConfig.value.presentation == NativeAppListPresentation.HONEYCOMB) {
+                pointerX - draggedViewTouchOffsetX - dragOverlay.left
             } else {
-                child.translationY = offset
+                0f
             }
+            val offsetY = pointerY - draggedViewTouchOffsetY - dragOverlay.top
+            dragOverlay.setDragTranslation(offsetX, offsetY)
         }
 
         override fun endDrag() {
-            draggedView?.let { child ->
-                if (child is NativeAppListRowView) {
-                    child.setDragTranslationY(0f)
-                    child.setDragVisualState(false)
-                } else {
-                    child.translationY = 0f
-                }
-                ViewCompat.setElevation(child, draggedViewOriginalElevation)
-                applyChildVisual(child)
+            val sourceKey = draggedSourceKey
+            dragOverlayView?.let { dragOverlay ->
+                this@NativeAppListView.overlay.remove(dragOverlay)
+                dragOverlay.clearBinding()
             }
-            draggedView = null
+            dragOverlayView = null
+            draggedSourceKey = null
             draggedViewTouchOffsetY = 0f
+            draggedViewTouchOffsetX = 0f
             draggedPointerY = 0f
-            draggedViewOriginalElevation = 0f
+            draggedPointerX = 0f
             autoScrollRemainder = 0f
+            sourceKey?.let(::holderForKey)?.itemView?.isPressed = false
+            (layoutManager as? NativeHoneycombLayoutManager)?.reapplyChildVisuals()
+            applyAttachedChildVisuals()
         }
 
         override fun setFolderHover(key: AppItemKey?) {
@@ -506,6 +581,15 @@ class NativeAppListView @JvmOverloads constructor(
         if (released || height <= 0) return
         for (index in 0 until childCount) {
             applyChildVisual(getChildAt(index))
+        }
+        draggedSourceKey?.let { key ->
+            holderForKey(key)?.itemView?.alpha = 0f
+        }
+    }
+
+    private fun applyConfigToAttachedRows(config: NativeAppListResolvedConfig) {
+        for (index in 0 until childCount) {
+            (getChildAt(index) as? NativeAppListRowView)?.applyConfig(config)
         }
     }
 
@@ -559,7 +643,7 @@ class NativeAppListView @JvmOverloads constructor(
         if (child.alpha != 1f) child.alpha = 1f
         (child as? NativeAppListRowView)?.apply {
             setVisualScale(1f)
-            setFlowTranslationY(0f)
+            setFlowTranslation(0f, 0f)
             setIconBlurRadiusPx(0f, NativeBlurTier.OFF)
         }
     }
@@ -615,6 +699,22 @@ class NativeAppListView @JvmOverloads constructor(
         invalidate()
     }
 }
+
+private fun hasDifferentLayoutGeometry(
+    current: NativeAppListConfig,
+    next: NativeAppListConfig,
+): Boolean =
+    current.presentation != next.presentation ||
+        current.leftSafeInsetPx != next.leftSafeInsetPx ||
+        current.rowHeightPx != next.rowHeightPx ||
+        current.iconSizePx != next.iconSizePx ||
+        current.rowPaddingStartPx != next.rowPaddingStartPx ||
+        current.rowPaddingTopPx != next.rowPaddingTopPx ||
+        current.rowPaddingEndPx != next.rowPaddingEndPx ||
+        current.rowPaddingBottomPx != next.rowPaddingBottomPx ||
+        current.honeycombCellSizePx != next.honeycombCellSizePx ||
+        current.honeycombNarrowColumns != next.honeycombNarrowColumns ||
+        current.centerEdgeItems != next.centerEdgeItems
 
 private fun Int.withAlphaFraction(alpha: Float): Int =
     (this and 0x00ffffff) or ((alpha.coerceIn(0f, 1f) * 255f).roundToInt() shl 24)

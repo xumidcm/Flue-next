@@ -105,6 +105,30 @@ class NativeDragGestureMachineTest {
     }
 
     @Test
+    fun `reorder target may be nearest while folder candidate remains strict`() {
+        val machine = draggingMachine()
+
+        machine.onMove(
+            pointerX = 0f,
+            pointerY = 130f,
+            targetKey = key("b"),
+            speedPxPerMs = 0.2f,
+            nowMillis = 700L,
+            folderCandidateKey = null,
+        )
+        val effects = machine.onMove(
+            pointerX = 0f,
+            pointerY = 131f,
+            targetKey = key("b"),
+            speedPxPerMs = 0.2f,
+            nowMillis = 1200L,
+            folderCandidateKey = null,
+        )
+
+        assertFalse(effects.any { it is NativeDragEffect.FolderHoverChanged })
+    }
+
+    @Test
     fun `removing source from latest snapshot cancels drag idempotently`() {
         val machine = draggingMachine()
 

@@ -67,9 +67,250 @@ class NativeAppListRowViewBehaviorTest {
         assertEquals(160f, requireNotNull(first).top + first.height / 2f, 1f)
         assertTrue("initial childCount=${view.childCount}", view.childCount < 36)
 
+        val betweenIcons = manager.findNearestVisiblePosition(
+            x = 160f,
+            y = 210f,
+            maximumDistancePx = Float.MAX_VALUE,
+        )
+        assertTrue(betweenIcons >= 0)
+        assertEquals(
+            -1,
+            manager.findNearestVisiblePosition(160f, 210f, maximumDistancePx = 2f),
+        )
+
         view.scrollBy(0, 300)
         assertNull(manager.findViewByPosition(0))
         assertTrue("scrolled childCount=${view.childCount}", view.childCount < 36)
+        view.release()
+    }
+
+    @Test
+    fun honeycombDragSurvivesWhenItsSourceChildIsDetachedByRecyclerLayout() {
+        val entries = (0 until 100).map { appEntry("component:drag-$it") }
+        val commands = mutableListOf<AppListCommand>()
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onCommand = commands::add
+            setConfig(
+                drawingConfig().copy(
+                    presentation = NativeAppListPresentation.HONEYCOMB,
+                    iconSizePx = 64,
+                    rowHeightPx = 66,
+                    honeycombCellSizePx = 66f,
+                    honeycombNarrowColumns = 3,
+                    centerEdgeItems = false,
+                    fisheyeEnabled = false,
+                ),
+            )
+            setLayoutStrategy(HoneycombNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 320, 320)
+        val manager = view.layoutManager as NativeHoneycombLayoutManager
+        val source = requireNotNull(manager.findViewByPosition(0))
+        val sourceX = source.left + source.width / 2f
+        val sourceY = source.top + source.height / 2f
+
+        dispatch(view, MotionEvent.ACTION_DOWN, x = sourceX, y = sourceY, eventTime = 0L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
+        dispatch(
+            view,
+            MotionEvent.ACTION_MOVE,
+            x = sourceX,
+            y = sourceY + 22f,
+            eventTime = 621L,
+        )
+        assertEquals(0f, source.alpha, 0f)
+        // Custom LayoutManagers detach/scrap children during data relayout. The
+        // gesture must remain owned by a stable-key overlay, not this child.
+        manager.removeView(source)
+        assertNull(source.parent)
+        val target = view.getChildAt(view.childCount / 2)
+
+        dispatch(
+            view,
+            MotionEvent.ACTION_MOVE,
+            x = target.left + target.width / 2f,
+            y = target.top + target.height / 2f,
+            eventTime = 700L,
+        )
+
+        assertTrue(commands.any { it is AppListCommand.Move })
+        dispatch(view, MotionEvent.ACTION_UP, x = 160f, y = 160f, eventTime = 701L)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun honeycombGeometryChangeCancelsAnActiveOverlayBeforeApplyingNewMetrics() {
+        val entries = (0 until 20).map { appEntry("component:geometry-$it") }
+        val commands = mutableListOf<AppListCommand>()
+        val initialConfig = drawingConfig().copy(
+            presentation = NativeAppListPresentation.HONEYCOMB,
+            iconSizePx = 64,
+            rowHeightPx = 66,
+            honeycombCellSizePx = 66f,
+            honeycombNarrowColumns = 3,
+            centerEdgeItems = false,
+            fisheyeEnabled = false,
+        )
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onCommand = commands::add
+            setConfig(initialConfig)
+            setLayoutStrategy(HoneycombNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 320, 320)
+        val source = requireNotNull(view.layoutManager?.findViewByPosition(0))
+        val sourceX = source.left + source.width / 2f
+        val sourceY = source.top + source.height / 2f
+        dispatch(view, MotionEvent.ACTION_DOWN, x = sourceX, y = sourceY, eventTime = 0L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
+        dispatch(
+            view,
+            MotionEvent.ACTION_MOVE,
+            x = sourceX,
+            y = sourceY + 22f,
+            eventTime = 621L,
+        )
+        assertEquals(0f, source.alpha, 0f)
+
+        view.setConfig(
+            initialConfig.copy(
+                iconSizePx = 76,
+                rowHeightPx = 78,
+                honeycombCellSizePx = 78f,
+            ),
+        )
+
+        assertEquals(1f, source.alpha, 0f)
+        val movesBefore = commands.count { it is AppListCommand.Move }
+        dispatch(view, MotionEvent.ACTION_MOVE, x = 200f, y = 200f, eventTime = 700L)
+        assertEquals(movesBefore, commands.count { it is AppListCommand.Move })
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun geometryChangeCancelsAPendingLongPressBeforeTheOverlayStarts() {
+        val entry = appEntry("component:pending-geometry")
+        val commands = mutableListOf<AppListCommand>()
+        val initialConfig = drawingConfig().copy(
+            centerEdgeItems = false,
+            rowHeightPx = 40,
+            fisheyeEnabled = false,
+        )
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onCommand = commands::add
+            setConfig(initialConfig)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, listOf(entry)),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(80, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 100, 80)
+
+        dispatch(view, MotionEvent.ACTION_DOWN, x = 30f, y = 20f, eventTime = 0L)
+        view.setConfig(initialConfig.copy(iconSizePx = initialConfig.iconSizePx + 4))
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
+
+        assertFalse(commands.any { it is AppListCommand.ShowActions })
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun adapterConfigUpdateDoesNotNotifyAFullDatasetRebind() {
+        val adapter = NativeAppListAdapter(commandSink = {})
+        val entries = listOf(appEntry("component:config-a"), appEntry("component:config-b"))
+        adapter.submitContent(
+            NativeAppListContent(
+                snapshot = AppListSnapshot.create(1L, entries),
+                iconsByKey = emptyMap(),
+            ),
+        )
+        var rangeChanges = 0
+        adapter.registerAdapterDataObserver(
+            object : androidx.recyclerview.widget.RecyclerView.AdapterDataObserver() {
+                override fun onItemRangeChanged(positionStart: Int, itemCount: Int) {
+                    rangeChanges++
+                }
+            },
+        )
+
+        adapter.setConfig(
+            NativeAppListResolvedConfig.from(
+                drawingConfig().copy(entryProgress = 0.5f),
+            ),
+        )
+
+        assertEquals(0, rangeChanges)
+    }
+
+    @Test
+    fun cachedNativeRowUsesLatestGeometryWhenItReattachesWithoutAFullRebind() {
+        val entries = (0 until 10).map { appEntry("component:cache-$it") }
+        val initialConfig = drawingConfig().copy(
+            centerEdgeItems = false,
+            rowHeightPx = 40,
+            iconSizePx = 20,
+            fisheyeEnabled = false,
+        )
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(initialConfig)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(80, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 100, 80)
+        view.scrollBy(0, 50)
+        assertNull(view.layoutManager?.findViewByPosition(0))
+
+        view.setConfig(initialConfig.copy(rowHeightPx = 52, iconSizePx = 30))
+        view.scrollToPosition(0)
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(80, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 100, 80)
+
+        assertEquals(52, requireNotNull(view.layoutManager?.findViewByPosition(0)).height)
         view.release()
     }
 
@@ -670,8 +911,14 @@ class NativeAppListRowViewBehaviorTest {
         view.layout(0, 0, 100, 40)
     }
 
-    private fun dispatch(view: View, action: Int, y: Float, eventTime: Long) {
-        MotionEvent.obtain(0L, eventTime, action, 30f, y, 0).also { event ->
+    private fun dispatch(
+        view: View,
+        action: Int,
+        y: Float,
+        eventTime: Long,
+        x: Float = 30f,
+    ) {
+        MotionEvent.obtain(0L, eventTime, action, x, y, 0).also { event ->
             if (view is NativeAppListView) {
                 if (view.onInterceptTouchEvent(event)) view.onTouchEvent(event)
             } else {

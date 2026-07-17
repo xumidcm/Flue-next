@@ -83,6 +83,42 @@ internal class NativeAppListResolvedConfig private constructor(
     }
 }
 
+/** Fields consumed by [NativeAppListRowView] drawing/measurement, not LayoutManager visuals. */
+internal fun hasDifferentNativeRowRendering(
+    current: NativeAppListConfig,
+    next: NativeAppListConfig,
+): Boolean =
+    current.presentation != next.presentation ||
+        current.leftSafeInsetPx != next.leftSafeInsetPx ||
+        current.rowHeightPx != next.rowHeightPx ||
+        current.iconSizePx != next.iconSizePx ||
+        current.rowPaddingStartPx != next.rowPaddingStartPx ||
+        current.rowPaddingTopPx != next.rowPaddingTopPx ||
+        current.rowPaddingEndPx != next.rowPaddingEndPx ||
+        current.rowPaddingBottomPx != next.rowPaddingBottomPx ||
+        current.labelTextSizePx != next.labelTextSizePx ||
+        current.iconLabelGapPx != next.iconLabelGapPx ||
+        current.iconShape != next.iconShape ||
+        current.iconCornerRadiusPx != next.iconCornerRadiusPx ||
+        current.honeycombCellSizePx != next.honeycombCellSizePx ||
+        current.palette != next.palette ||
+        current.rowBorder != next.rowBorder
+
+internal fun hasDifferentNativeEdgeFade(
+    current: NativeAppListConfig,
+    next: NativeAppListConfig,
+): Boolean =
+    current.topFadeRangePx != next.topFadeRangePx ||
+        current.bottomFadeRangePx != next.bottomFadeRangePx ||
+        current.palette.fadeEdgeColorArgb != next.palette.fadeEdgeColorArgb
+
+internal fun hasDifferentNativeContentOverlayEffect(
+    current: NativeAppListConfig,
+    next: NativeAppListConfig,
+): Boolean =
+    current.blurTier != next.blurTier ||
+        current.contentOverlayBlurRadiusPx != next.contentOverlayBlurRadiusPx
+
 internal fun NativeAppListConfig.legalized(): NativeAppListConfig {
     val safeIconSize = iconSizePx.positiveMetricOr(DEFAULT_ICON_SIZE_PX)
     val safePaddingTop = rowPaddingTopPx.nonNegativeMetric()
@@ -272,27 +308,42 @@ internal fun nativeInteractionScale(
     else -> 1f
 }
 
-internal data class NativeHoneycombChildVisual(
-    val scale: Float,
-    val alpha: Float,
-    val translationX: Float,
-    val translationY: Float,
-    val blurRadiusPx: Float,
-)
+internal class NativeHoneycombChildVisual(
+    var scale: Float = 1f,
+    var alpha: Float = 1f,
+    var translationX: Float = 0f,
+    var translationY: Float = 0f,
+    var blurRadiusPx: Float = 0f,
+) {
+    fun set(
+        scale: Float,
+        alpha: Float,
+        translationX: Float,
+        translationY: Float,
+        blurRadiusPx: Float,
+    ): NativeHoneycombChildVisual {
+        this.scale = scale
+        this.alpha = alpha
+        this.translationX = translationX
+        this.translationY = translationY
+        this.blurRadiusPx = blurRadiusPx
+        return this
+    }
+}
 
 internal fun nativeHoneycombChildVisual(
     centerX: Float,
     centerY: Float,
     viewportWidth: Float,
     viewportHeight: Float,
-    iconSizePx: Float,
     config: NativeAppListConfig,
+    output: NativeHoneycombChildVisual = NativeHoneycombChildVisual(),
 ): NativeHoneycombChildVisual {
     if (
         viewportWidth <= 0f || viewportHeight <= 0f ||
         !centerX.isFinite() || !centerY.isFinite()
     ) {
-        return NativeHoneycombChildVisual(1f, 1f, 0f, 0f, 0f)
+        return output.set(1f, 1f, 0f, 0f, 0f)
     }
     val screenCenterX = config.leftSafeInsetPx +
         (viewportWidth - config.leftSafeInsetPx) / 2f
@@ -345,7 +396,7 @@ internal fun nativeHoneycombChildVisual(
     } else {
         1f
     }
-    return NativeHoneycombChildVisual(
+    return output.set(
         scale = scale,
         alpha = (if (config.fisheyeEnabled) scale.coerceIn(0.24f, 1f) else 1f) *
             config.entryProgress.coerceIn(0f, 1f) * compatibilityFade,
