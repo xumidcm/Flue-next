@@ -2,10 +2,45 @@ package com.flue.launcher.applist.nativeview
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 class NativeDragPolicyTest {
     private val policy = NativeDragPolicy(20f, 84f, 30f, 500L, 0.55f)
+
+    @Test
+    fun `presentation maps to exact reusable drag profiles`() {
+        val profiles = NativeDragPolicyProfiles(density = 2f)
+
+        val linear = profiles.forPresentation(NativeAppListPresentation.LINEAR)
+        val honeycomb = profiles.forPresentation(NativeAppListPresentation.HONEYCOMB)
+        val denseGrid = profiles.forPresentation(NativeAppListPresentation.DENSE_GRID)
+
+        assertEquals(
+            NativeDragPolicy(
+                startThresholdPx = 40f,
+                autoScrollEdgePx = 168f,
+                maxAutoScrollPxPerFrame = 30f,
+                folderHoverMillis = 500L,
+                folderHoverMaxSpeedPxPerMs = 0.55f,
+                longPressMillis = 620L,
+            ),
+            linear,
+        )
+        assertEquals(
+            NativeDragPolicy(
+                startThresholdPx = 40f,
+                autoScrollEdgePx = 192f,
+                maxAutoScrollPxPerFrame = 26f,
+                folderHoverMillis = 700L,
+                folderHoverMaxSpeedPxPerMs = 0.55f,
+                longPressMillis = 620L,
+            ),
+            honeycomb,
+        )
+        assertSame(honeycomb, denseGrid)
+        assertSame(linear, profiles.forPresentation(NativeAppListPresentation.LINEAR))
+    }
 
     @Test
     fun `auto scroll is proportional only inside edge zones`() {

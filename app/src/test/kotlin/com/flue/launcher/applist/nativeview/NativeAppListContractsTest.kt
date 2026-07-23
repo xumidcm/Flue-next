@@ -49,6 +49,7 @@ class NativeAppListContractsTest {
     fun semanticLayoutStrategyKeyOnlyReplacesDifferentStrategies() {
         assertFalse(shouldReplaceLayoutStrategy("linear", "linear"))
         assertTrue(shouldReplaceLayoutStrategy("linear", "honeycomb"))
+        assertTrue(shouldReplaceLayoutStrategy("honeycomb", "dense-grid"))
     }
 
     @Test

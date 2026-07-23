@@ -16,6 +16,7 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:name=".FlueApplication"
@@ -95,6 +96,20 @@
             android:name=".BuiltInFileManagerActivity"
             android:exported="false"
             android:label="@string/internal_watchface_config_title"
+            android:theme="@style/Theme.WatchLauncher"
+            android:screenOrientation="portrait" />
+
+        <activity
+            android:name=".WatchStoreActivity"
+            android:exported="false"
+            android:label="表盘市场"
+            android:theme="@style/Theme.WatchLauncher"
+            android:screenOrientation="portrait" />
+
+        <activity
+            android:name=".WatchEditorActivity"
+            android:exported="false"
+            android:label=".watch 编辑器"
             android:theme="@style/Theme.WatchLauncher"
             android:screenOrientation="portrait" />
 

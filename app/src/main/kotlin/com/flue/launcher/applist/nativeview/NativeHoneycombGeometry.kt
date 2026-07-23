@@ -1,6 +1,8 @@
 package com.flue.launcher.applist.nativeview
 
 import kotlin.math.sqrt
+import kotlin.math.ceil
+import kotlin.math.floor
 
 internal data class NativeHoneycombPlacement(
     val position: Int,
@@ -12,12 +14,31 @@ internal data class NativeHoneycombPlacement(
 )
 
 internal class NativeHoneycombGeometry private constructor(
-    val viewportHeightPx: Int,
+    override val viewportHeightPx: Int,
     val iconSizePx: Float,
     val placements: List<NativeHoneycombPlacement>,
-    val minimumScrollOffsetPx: Float,
-    val maximumScrollOffsetPx: Float,
-) {
+    override val minimumScrollOffsetPx: Float,
+    override val maximumScrollOffsetPx: Float,
+) : NativeAppGridGeometry {
+    private val narrowRowColumns = placements.indexOfFirst { it.row != 0 }
+        .takeIf { it > 0 }
+        ?: placements.size
+    private val wideRowColumns = placements.indexOfFirst { it.row > 1 }
+        .takeIf { it > narrowRowColumns }
+        ?.minus(narrowRowColumns)
+        ?: (placements.size - narrowRowColumns).coerceAtLeast(narrowRowColumns)
+
+    override val itemCount: Int
+        get() = placements.size
+
+    override val itemWidthPx: Float
+        get() = iconSizePx
+
+    override val itemHeightPx: Float
+        get() = iconSizePx
+
+    override fun centerX(position: Int): Float = placements[position].centerX
+
     fun visiblePositions(
         scrollOffsetPx: Float,
         extraLayoutSpacePx: Float,
@@ -33,35 +54,54 @@ internal class NativeHoneycombGeometry private constructor(
         }
     }
 
-    fun visiblePositionBounds(
+    override fun visiblePositionBounds(
         scrollOffsetPx: Float,
         extraLayoutSpacePx: Float,
         output: IntArray,
     ) {
         require(output.size >= 2)
+        if (placements.isEmpty()) {
+            output[0] = -1
+            output[1] = -1
+            return
+        }
         val halfIcon = iconSizePx / 2f
         val minimumY = -extraLayoutSpacePx - halfIcon
         val maximumY = viewportHeightPx + extraLayoutSpacePx + halfIcon
         val viewportCenterY = viewportHeightPx / 2f
-        var first = -1
-        var last = -1
-        var index = 0
-        while (index < placements.size) {
-            val screenY = viewportCenterY + placements[index].centerY + scrollOffsetPx
-            if (screenY in minimumY..maximumY) {
-                if (first < 0) first = index
-                last = index
-            } else if (last >= 0 && screenY > maximumY) {
-                break
-            }
-            index++
+        val firstPlacement = placements[0]
+        val lastPlacement = placements[placements.lastIndex]
+        val rowCount = lastPlacement.row + 1
+        val rowHeight = if (rowCount > 1) {
+            (lastPlacement.centerY - firstPlacement.centerY) / (rowCount - 1)
+        } else {
+            iconSizePx
         }
-        output[0] = first
-        output[1] = last
+        val firstRowScreenCenterY = viewportCenterY + firstPlacement.centerY + scrollOffsetPx
+        val firstVisibleRow = ceil(
+            ((minimumY - firstRowScreenCenterY) / rowHeight).toDouble(),
+        ).toInt().coerceAtLeast(0)
+        val lastVisibleRow = floor(
+            ((maximumY - firstRowScreenCenterY) / rowHeight).toDouble(),
+        ).toInt().coerceAtMost(lastPlacement.row)
+        if (lastVisibleRow < firstVisibleRow) {
+            output[0] = -1
+            output[1] = -1
+            return
+        }
+        output[0] = positionAtRowStart(firstVisibleRow)
+        output[1] = (positionAtRowStart(lastVisibleRow + 1) - 1).coerceAtMost(placements.lastIndex)
     }
 
-    fun screenCenterY(position: Int, scrollOffsetPx: Float): Float =
+    override fun screenCenterY(position: Int, scrollOffsetPx: Float): Float =
         viewportHeightPx / 2f + placements[position].centerY + scrollOffsetPx
+
+    private fun positionAtRowStart(row: Int): Int {
+        if (row <= 0) return 0
+        val pairs = row / 2
+        val pairedItems = pairs * (narrowRowColumns + wideRowColumns)
+        return if (row % 2 == 0) pairedItems else pairedItems + narrowRowColumns
+    }
 
     companion object {
         fun create(

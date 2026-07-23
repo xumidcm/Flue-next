@@ -6,6 +6,9 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.view.View
 import android.view.MotionEvent
+import android.view.InputDevice
+import android.view.ViewConfiguration
+import androidx.recyclerview.widget.RecyclerView
 import com.flue.launcher.applist.model.AppItemKey
 import com.flue.launcher.applist.model.AppItemType
 import com.flue.launcher.applist.model.AppListEntry
@@ -32,6 +35,24 @@ import java.time.Duration
 @Config(sdk = [27])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NativeAppListRowViewBehaviorTest {
+    @Test
+    fun nativeHostDisablesFrameworkOverscrollWhenOwningTheEdgeTranslation() {
+        val view = NativeAppListView(RuntimeEnvironment.getApplication())
+
+        assertEquals(View.OVER_SCROLL_NEVER, view.overScrollMode)
+
+        view.release()
+    }
+
+    @Test
+    fun nativeHostDisablesNestedScrollingBeforeOwningRecyclerRemainders() {
+        val view = NativeAppListView(RuntimeEnvironment.getApplication())
+
+        assertFalse(view.isNestedScrollingEnabled)
+
+        view.release()
+    }
+
     @Test
     fun honeycombLayoutManagerCentersTheFirstRowAndKeepsAttachedViewsBounded() {
         val entries = (0 until 100).map { appEntry("component:honey-$it") }
@@ -66,6 +87,8 @@ class NativeAppListRowViewBehaviorTest {
         assertTrue(first != null)
         assertEquals(160f, requireNotNull(first).top + first.height / 2f, 1f)
         assertTrue("initial childCount=${view.childCount}", view.childCount < 36)
+        assertEquals(0, view.computeVerticalScrollOffset())
+        assertTrue(view.computeVerticalScrollRange() > view.computeVerticalScrollExtent())
 
         val betweenIcons = manager.findNearestVisiblePosition(
             x = 160f,
@@ -79,8 +102,638 @@ class NativeAppListRowViewBehaviorTest {
         )
 
         view.scrollBy(0, 300)
+        assertTrue(view.computeVerticalScrollOffset() > 0)
         assertNull(manager.findViewByPosition(0))
         assertTrue("scrolled childCount=${view.childCount}", view.childCount < 36)
+        view.release()
+    }
+
+    @Test
+    fun fractionalHoneycombScrollRangeReachesBothExactEndpoints() {
+        val entries = (0 until 24).map { appEntry("component:fractional-scroll-$it") }
+        val config = drawingConfig().copy(
+            presentation = NativeAppListPresentation.HONEYCOMB,
+            iconSizePx = 64,
+            rowHeightPx = 66,
+            honeycombCellSizePx = 64f,
+            honeycombNarrowColumns = 3,
+            centerEdgeItems = false,
+            fisheyeEnabled = false,
+        )
+        val geometry = NativeHoneycombGeometry.create(
+            itemCount = entries.size,
+            viewportWidthPx = 320,
+            viewportHeightPx = 320,
+            leftSafeInsetPx = 0,
+            narrowColumns = 3,
+            iconSizePx = 64f,
+            cellSizePx = 64f,
+        )
+        assertTrue(
+            "the fixture must keep a fractional range",
+            geometry.minimumScrollOffsetPx % 1f != 0f,
+        )
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(config)
+            setLayoutStrategy(HoneycombNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        measureAndLayout(view, width = 320, height = 320)
+        val manager = view.layoutManager as NativeHoneycombLayoutManager
+
+        view.scrollBy(0, 10_000)
+        assertEquals(
+            geometry.minimumScrollOffsetPx,
+            spatialScrollOffsetOf(manager),
+            0f,
+        )
+        assertFalse(view.canScrollVertically(1))
+
+        view.scrollBy(0, -10_000)
+        assertEquals(
+            geometry.maximumScrollOffsetPx,
+            spatialScrollOffsetOf(manager),
+            0f,
+        )
+        assertFalse(view.canScrollVertically(-1))
+        view.release()
+    }
+
+    @Test
+    fun denseGridHalfPixelRangeRoundTripConservesChildPositionAndConsumedDelta() {
+        val entries = (0 until 2).map { appEntry("component:half-pixel-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    presentation = NativeAppListPresentation.DENSE_GRID,
+                    denseGridColumns = 1,
+                    denseGridHorizontalPaddingPx = 0f,
+                    denseGridItemSpacingPx = 4f,
+                    denseGridItemAspectRatio = 1.6f,
+                    denseGridMinimumItemWidthPx = 1f,
+                    denseGridMinimumItemHeightPx = 1f,
+                    denseGridMinimumVerticalPaddingPx = 0f,
+                    centerEdgeItems = false,
+                    fisheyeEnabled = false,
+                ),
+            )
+            setLayoutStrategy(DenseGridNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        measureAndLayout(view, width = 100, height = 100)
+        val manager = view.layoutManager as NativeDenseGridLayoutManager
+        val initialTop = requireNotNull(manager.findViewByPosition(0)).top
+        var consumedSum = 0
+        view.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                consumedSum += dy
+            }
+        })
+
+        repeat(3) {
+            view.scrollBy(0, 10_000)
+            view.scrollBy(0, -10_000)
+        }
+
+        assertEquals(initialTop, requireNotNull(manager.findViewByPosition(0)).top)
+        assertEquals(0, consumedSum)
+        view.release()
+    }
+
+    @Test
+    fun denseGridLayoutManagerKeepsLegacyGeometryAndBoundedChildren() {
+        val entries = (0 until 100).map { appEntry("component:dense-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    presentation = NativeAppListPresentation.DENSE_GRID,
+                    denseGridColumns = 5,
+                    denseGridHorizontalPaddingPx = 8f,
+                    denseGridItemSpacingPx = 4f,
+                    denseGridItemAspectRatio = 0.92f,
+                    denseGridMinimumItemWidthPx = 48f,
+                    denseGridMinimumItemHeightPx = 48f,
+                    denseGridMinimumVerticalPaddingPx = 8f,
+                    denseGridIconInnerPaddingPx = 3f,
+                    centerEdgeItems = false,
+                    fisheyeEnabled = false,
+                ),
+            )
+            setLayoutStrategy(DenseGridNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 320, 320)
+
+        val manager = view.layoutManager as NativeDenseGridLayoutManager
+        val first = requireNotNull(manager.findViewByPosition(0))
+        assertEquals(160f, first.top + first.height / 2f, 1f)
+        assertEquals(58, first.width)
+        assertEquals(63, first.height)
+        assertTrue("initial childCount=${view.childCount}", view.childCount < 36)
+        assertEquals(0, view.computeVerticalScrollOffset())
+
+        view.scrollBy(0, 300)
+        assertTrue(view.computeVerticalScrollOffset() > 0)
+        assertNull(manager.findViewByPosition(0))
+        assertTrue("scrolled childCount=${view.childCount}", view.childCount < 36)
+        view.release()
+    }
+
+    @Test
+    fun denseGeometryChangeRelaysOutEveryAttachedChildBeforeTheNextScroll() {
+        val entries = (0 until 100).map { appEntry("component:dense-config-$it") }
+        val initial = drawingConfig().copy(
+            presentation = NativeAppListPresentation.DENSE_GRID,
+            denseGridColumns = 5,
+            denseGridHorizontalPaddingPx = 8f,
+            denseGridItemSpacingPx = 4f,
+            denseGridItemAspectRatio = 0.92f,
+            denseGridMinimumItemWidthPx = 48f,
+            denseGridMinimumItemHeightPx = 48f,
+            denseGridMinimumVerticalPaddingPx = 8f,
+            centerEdgeItems = false,
+            fisheyeEnabled = false,
+        )
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(initial)
+            setLayoutStrategy(DenseGridNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        measureAndLayout(view, width = 320, height = 320)
+        assertEquals(58, requireNotNull(view.layoutManager?.findViewByPosition(0)).width)
+
+        view.setConfig(initial.copy(denseGridColumns = 3))
+        view.scrollBy(0, 1)
+
+        val widths = (0 until view.childCount).map { view.getChildAt(it).width }.toSet()
+        assertEquals(setOf(99), widths)
+        view.release()
+    }
+
+    @Test
+    fun spatialChildrenRemainInAdapterOrderAfterScrollingDownAndBackUp() {
+        val entries = (0 until 100).map { appEntry("component:dense-order-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    presentation = NativeAppListPresentation.DENSE_GRID,
+                    denseGridColumns = 5,
+                    centerEdgeItems = false,
+                    fisheyeEnabled = false,
+                ),
+            )
+            setLayoutStrategy(DenseGridNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        measureAndLayout(view, width = 320, height = 320)
+
+        view.scrollBy(0, 500)
+        view.scrollBy(0, -300)
+
+        val positions = (0 until view.childCount).map { index ->
+            view.getChildAdapterPosition(view.getChildAt(index))
+        }
+        assertEquals(positions.sorted(), positions)
+        view.release()
+    }
+
+    @Test
+    fun denseGeometryChangeKeepsTheStableCenterItemAtTheSameScreenY() {
+        val entries = (0 until 100).map { appEntry("component:dense-anchor-$it") }
+        val initial = drawingConfig().copy(
+            presentation = NativeAppListPresentation.DENSE_GRID,
+            denseGridColumns = 5,
+            centerEdgeItems = false,
+            fisheyeEnabled = false,
+        )
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(initial)
+            setLayoutStrategy(DenseGridNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        measureAndLayout(view, width = 320, height = 320)
+        view.scrollBy(0, 500)
+        val anchor = closestChildToViewportCenter(view)
+        val anchorKey = (view.getChildViewHolder(anchor) as
+            NativeAppListAdapter.AppItemViewHolder).boundKeyOrNull()
+        val anchorCenterY = anchor.top + anchor.height / 2f
+
+        view.setConfig(initial.copy(denseGridColumns = 3))
+        measureAndLayout(view, width = 320, height = 320)
+
+        val attached = (0 until view.childCount)
+            .map(view::getChildAt)
+        val anchoredChild = attached.firstOrNull { child ->
+                (view.getChildViewHolder(child) as
+                    NativeAppListAdapter.AppItemViewHolder).boundKeyOrNull() == anchorKey
+            }
+        val attachedKeys = attached.map { child ->
+            (view.getChildViewHolder(child) as
+                NativeAppListAdapter.AppItemViewHolder).boundKeyOrNull()
+        }
+        assertTrue("anchor=$anchorKey attached=$attachedKeys", anchoredChild != null)
+        assertEquals(
+            anchorCenterY,
+            requireNotNull(anchoredChild).top + anchoredChild.height / 2f,
+            1f,
+        )
+        view.release()
+    }
+
+    @Test
+    fun viewportResizeKeepsThePreviouslyCenteredStableKeyAtTheNewViewportCenter() {
+        val entries = (0 until 100).map { appEntry("component:resize-anchor-$it") }
+        val config = drawingConfig().copy(
+            presentation = NativeAppListPresentation.DENSE_GRID,
+            denseGridColumns = 5,
+            centerEdgeItems = false,
+            fisheyeEnabled = false,
+        )
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(config)
+            setLayoutStrategy(DenseGridNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        measureAndLayout(view, width = 320, height = 320)
+        view.scrollToPosition(40)
+        measureAndLayout(view, width = 320, height = 320)
+        val oldAnchor = requireNotNull(view.layoutManager?.findViewByPosition(40))
+        val oldAnchorKey = (view.getChildViewHolder(oldAnchor) as
+            NativeAppListAdapter.AppItemViewHolder).boundKeyOrNull()
+        assertEquals(160f, oldAnchor.top + oldAnchor.height / 2f, 1f)
+
+        measureAndLayout(view, width = 240, height = 480)
+
+        val anchoredChild = (0 until view.childCount)
+            .map(view::getChildAt)
+            .firstOrNull { child ->
+                (view.getChildViewHolder(child) as
+                    NativeAppListAdapter.AppItemViewHolder).boundKeyOrNull() == oldAnchorKey
+            }
+        assertTrue("anchor=$oldAnchorKey", anchoredChild != null)
+        assertEquals(
+            240f,
+            requireNotNull(anchoredChild).top + anchoredChild.height / 2f,
+            1f,
+        )
+        view.release()
+    }
+
+    @Test
+    fun geometryChangeAndInitialResetTokenAlwaysStartAtPositionZero() {
+        val entries = (0 until 100).map { appEntry("component:dense-reset-$it") }
+        val initial = drawingConfig().copy(
+            presentation = NativeAppListPresentation.DENSE_GRID,
+            denseGridColumns = 5,
+            centerEdgeItems = false,
+            fisheyeEnabled = false,
+            initialResetToken = 1L,
+        )
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(initial)
+            setLayoutStrategy(DenseGridNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        measureAndLayout(view, width = 320, height = 320)
+        view.scrollBy(0, 500)
+        assertNull(view.layoutManager?.findViewByPosition(0))
+
+        view.setConfig(
+            initial.copy(
+                denseGridColumns = 3,
+                initialResetToken = 2L,
+            ),
+        )
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        measureAndLayout(view, width = 320, height = 320)
+
+        val first = requireNotNull(view.layoutManager?.findViewByPosition(0))
+        assertEquals(160f, first.top + first.height / 2f, 1f)
+        assertEquals(0, view.computeVerticalScrollOffset())
+        view.release()
+    }
+
+    @Test
+    fun emptyCommitClearsPendingGeometryAnchorBeforeRepopulation() {
+        val initialEntries = (0 until 100).map { appEntry("component:old-anchor-$it") }
+        val replacementEntries = (0 until 100).map { appEntry("component:new-anchor-$it") }
+        val initial = drawingConfig().copy(
+            presentation = NativeAppListPresentation.DENSE_GRID,
+            denseGridColumns = 5,
+            centerEdgeItems = false,
+            fisheyeEnabled = false,
+        )
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(initial)
+            setLayoutStrategy(DenseGridNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, initialEntries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        measureAndLayout(view, width = 320, height = 320)
+        view.scrollBy(0, 500)
+        view.setConfig(initial.copy(denseGridColumns = 3))
+
+        val adapter = view.adapter as NativeAppListAdapter
+        adapter.clearSynchronously()
+        measureAndLayout(view, width = 320, height = 320)
+        assertEquals(0, view.childCount)
+
+        adapter.submitContent(
+            NativeAppListContent(
+                snapshot = AppListSnapshot.create(2L, replacementEntries),
+                iconsByKey = emptyMap(),
+            ),
+        )
+        measureAndLayout(view, width = 320, height = 320)
+
+        val first = requireNotNull(view.layoutManager?.findViewByPosition(0))
+        assertEquals(160f, first.top + first.height / 2f, 1f)
+        assertEquals(0, view.computeVerticalScrollOffset())
+        view.release()
+    }
+
+    @Test
+    fun emptyCommitClearsPendingGeometryAnchorWithoutAnIntermediateEmptyLayout() {
+        val initialEntries = (0 until 100).map { appEntry("component:old-anchor-$it") }
+        val replacementEntries = (0 until 100).map { appEntry("component:new-anchor-$it") }
+        val initial = drawingConfig().copy(
+            presentation = NativeAppListPresentation.DENSE_GRID,
+            denseGridColumns = 5,
+            centerEdgeItems = false,
+            fisheyeEnabled = false,
+        )
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(initial)
+            setLayoutStrategy(DenseGridNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, initialEntries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        measureAndLayout(view, width = 320, height = 320)
+        view.scrollBy(0, 500)
+        view.setConfig(initial.copy(denseGridColumns = 3))
+
+        val adapter = view.adapter as NativeAppListAdapter
+        adapter.clearSynchronously()
+        assertTrue(adapter.currentList.isEmpty())
+        adapter.submitContent(
+            NativeAppListContent(
+                snapshot = AppListSnapshot.create(2L, replacementEntries),
+                iconsByKey = emptyMap(),
+            ),
+        )
+        measureAndLayout(view, width = 320, height = 320)
+
+        val first = requireNotNull(view.layoutManager?.findViewByPosition(0))
+        assertEquals(160f, first.top + first.height / 2f, 1f)
+        assertEquals(0, view.computeVerticalScrollOffset())
+        view.release()
+    }
+
+    @Test
+    fun denseGridUsesSpatialNearestTargetAndTracksDragInBothAxes() {
+        val entries = (0 until 30).map { appEntry("component:dense-drag-$it") }
+        val commands = mutableListOf<AppListCommand>()
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onCommand = commands::add
+            setConfig(
+                drawingConfig().copy(
+                    presentation = NativeAppListPresentation.DENSE_GRID,
+                    denseGridColumns = 5,
+                    denseGridHorizontalPaddingPx = 8f,
+                    denseGridItemSpacingPx = 4f,
+                    denseGridItemAspectRatio = 0.92f,
+                    denseGridMinimumItemWidthPx = 48f,
+                    denseGridMinimumItemHeightPx = 48f,
+                    denseGridMinimumVerticalPaddingPx = 8f,
+                    centerEdgeItems = false,
+                    fisheyeEnabled = false,
+                ),
+            )
+            setLayoutStrategy(DenseGridNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 320, 320)
+        val manager = view.layoutManager as NativeDenseGridLayoutManager
+        val source = requireNotNull(manager.findViewByPosition(0))
+        val target = requireNotNull(manager.findViewByPosition(4))
+        val sourceX = source.left + source.width / 2f
+        val sourceY = source.top + source.height / 2f
+        val targetX = target.left + target.width / 2f
+        val targetY = target.top + target.height / 2f
+
+        dispatch(view, MotionEvent.ACTION_DOWN, x = sourceX, y = sourceY, eventTime = 0L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
+        dispatch(
+            view,
+            MotionEvent.ACTION_MOVE,
+            x = sourceX + 22f,
+            y = sourceY,
+            eventTime = 621L,
+        )
+        val overlay = dragOverlayViewOf(view)
+        assertTrue(overlay != null)
+        // Starting the drag must not make the overlay jump away from its source.
+        assertEquals(0f, requireNotNull(overlay).translationX, 1f)
+        dispatch(
+            view,
+            MotionEvent.ACTION_MOVE,
+            x = targetX,
+            y = targetY,
+            eventTime = 700L,
+        )
+
+        assertTrue(requireNotNull(overlay).translationX > 100f)
+        assertFalse(commands.any { command -> command is AppListCommand.Move })
+        assertEquals(0f, source.alpha, 0f)
+        dispatch(view, MotionEvent.ACTION_UP, x = targetX, y = targetY, eventTime = 701L)
+        assertEquals(1, commands.count { command -> command is AppListCommand.Move })
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun spatialVisualsFollowTheDisplayedPositionDuringAMoveAnimation() {
+        val entries = (0 until 20).map { appEntry("component:visual-move-$it") }
+        val config = drawingConfig().copy(
+            presentation = NativeAppListPresentation.DENSE_GRID,
+            denseGridColumns = 5,
+            denseGridHorizontalPaddingPx = 8f,
+            denseGridItemSpacingPx = 4f,
+            denseGridItemAspectRatio = 0.92f,
+            centerEdgeItems = false,
+            fisheyeEnabled = true,
+            fisheyeStrength = 1f,
+            honeycombFisheyeRangeRows = 4,
+            edgeSpacingCompressionEnabled = true,
+        )
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(config)
+            setLayoutStrategy(DenseGridNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        measureAndLayout(view, width = 320, height = 320)
+        val manager = view.layoutManager as NativeDenseGridLayoutManager
+        val child = requireNotNull(manager.findViewByPosition(0)) as NativeAppListRowView
+        child.setMoveTranslation(0f, 140f)
+        val displayedCenterX = child.left + child.width / 2f
+        val displayedCenterY = child.top + child.height / 2f + 140f
+        val expected = nativeDenseGridChildVisual(
+            centerX = displayedCenterX,
+            centerY = displayedCenterY,
+            viewportWidth = 320f,
+            viewportHeight = 320f,
+            config = config.legalized(),
+        )
+
+        manager.reapplyChildVisuals()
+
+        assertTrue(expected.scale < 1f)
+        assertEquals(expected.scale, child.visualScaleForOverlay(), 0.001f)
+        assertEquals(expected.alpha, child.alpha, 0.001f)
+        view.release()
+    }
+
+    @Test
+    fun switchingFromLinearToSpatialGridClearsLinearViewportPadding() {
+        val entries = (0 until 20).map { appEntry("component:grid-padding-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(drawingConfig().copy(centerEdgeItems = true, rowHeightPx = 80))
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 320, 320)
+        assertEquals(120, view.paddingTop)
+
+        view.setConfig(
+            drawingConfig().copy(
+                presentation = NativeAppListPresentation.DENSE_GRID,
+                centerEdgeItems = false,
+            ),
+        )
+        view.setLayoutStrategy(DenseGridNativeAppListLayoutStrategy)
+        view.layout(0, 0, 320, 320)
+
+        assertEquals(0, view.paddingTop)
+        assertEquals(0, view.paddingBottom)
+        view.release()
+    }
+
+    @Test
+    fun spatialFolderHitUsesOnlyTheLegacyCenterFortyTwoPercentRegion() {
+        val entries = (0 until 10).map { appEntry("component:grid-folder-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    presentation = NativeAppListPresentation.DENSE_GRID,
+                    denseGridColumns = 5,
+                    denseGridHorizontalPaddingPx = 8f,
+                    denseGridItemSpacingPx = 4f,
+                    denseGridItemAspectRatio = 0.92f,
+                    centerEdgeItems = false,
+                    fisheyeEnabled = false,
+                ),
+            )
+            setLayoutStrategy(DenseGridNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 320, 320)
+        val target = requireNotNull(view.layoutManager?.findViewByPosition(1))
+        val centerX = target.left + target.width / 2f
+        val centerY = target.top + target.height / 2f
+
+        assertEquals(entries[1].key, folderKeyAtOf(view, centerX, centerY))
+        assertNull(
+            folderKeyAtOf(
+                view,
+                target.left + target.width * 0.10f,
+                centerY,
+            ),
+        )
         view.release()
     }
 
@@ -145,8 +798,62 @@ class NativeAppListRowViewBehaviorTest {
             eventTime = 700L,
         )
 
-        assertTrue(commands.any { it is AppListCommand.Move })
+        assertFalse(commands.any { it is AppListCommand.Move })
         dispatch(view, MotionEvent.ACTION_UP, x = 160f, y = 160f, eventTime = 701L)
+        assertEquals(1, commands.count { it is AppListCommand.Move })
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun spatialScrollKeepsAnAttachedDragSourceHiddenBehindItsOverlay() {
+        val entries = (0 until 40).map { appEntry("component:hidden-drag-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    presentation = NativeAppListPresentation.HONEYCOMB,
+                    iconSizePx = 64,
+                    rowHeightPx = 66,
+                    honeycombCellSizePx = 66f,
+                    honeycombNarrowColumns = 3,
+                    centerEdgeItems = false,
+                    fisheyeEnabled = false,
+                ),
+            )
+            setLayoutStrategy(HoneycombNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 320, 320)
+        val source = requireNotNull(view.layoutManager?.findViewByPosition(0))
+        val sourceX = source.left + source.width / 2f
+        val sourceY = source.top + source.height / 2f
+        dispatch(view, MotionEvent.ACTION_DOWN, x = sourceX, y = sourceY, eventTime = 0L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
+        dispatch(
+            view,
+            MotionEvent.ACTION_MOVE,
+            x = sourceX,
+            y = sourceY + 22f,
+            eventTime = 621L,
+        )
+        assertEquals(0f, source.alpha, 0f)
+
+        view.scrollBy(0, 20)
+
+        assertSame(source, view.layoutManager?.findViewByPosition(0))
+        assertEquals(0f, source.alpha, 0f)
+        dispatch(view, MotionEvent.ACTION_CANCEL, x = sourceX, y = sourceY, eventTime = 700L)
         view.release()
         activity.finish()
     }
@@ -208,6 +915,43 @@ class NativeAppListRowViewBehaviorTest {
         val movesBefore = commands.count { it is AppListCommand.Move }
         dispatch(view, MotionEvent.ACTION_MOVE, x = 200f, y = 200f, eventTime = 700L)
         assertEquals(movesBefore, commands.count { it is AppListCommand.Move })
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun presentationChangeCancelsPendingGestureBeforeTheNextProfileCanApply() {
+        val entry = appEntry("component:presentation-change")
+        val commands = mutableListOf<AppListCommand>()
+        val initialConfig = drawingConfig().copy(
+            presentation = NativeAppListPresentation.LINEAR,
+            centerEdgeItems = false,
+            rowHeightPx = 40,
+            fisheyeEnabled = false,
+        )
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onCommand = commands::add
+            setConfig(initialConfig)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, listOf(entry)),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(80, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 100, 80)
+
+        dispatch(view, MotionEvent.ACTION_DOWN, x = 30f, y = 20f, eventTime = 0L)
+        view.setConfig(initialConfig.copy(presentation = NativeAppListPresentation.HONEYCOMB))
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
+
+        assertFalse(commands.any { it is AppListCommand.ShowActions })
         view.release()
         activity.finish()
     }
@@ -399,6 +1143,56 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
+    fun recyclerHandoffCancelsPendingNativeLongPress() {
+        val entries = (0 until 20).map { appEntry("component:handoff-$it") }
+        val commands = mutableListOf<AppListCommand>()
+        val context = RuntimeEnvironment.getApplication()
+        val view = NativeAppListView(context).apply {
+            onCommand = commands::add
+            setConfig(
+                drawingConfig().copy(
+                    centerEdgeItems = false,
+                    rowHeightPx = 40,
+                    fisheyeEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+        val sourceRow = requireNotNull(view.layoutManager?.findViewByPosition(0))
+        val handoffDistance = ViewConfiguration.get(context).scaledTouchSlop + 1
+        val dragStartThreshold = 20f * context.resources.displayMetrics.density
+        assertTrue(handoffDistance < dragStartThreshold)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
+        dispatchThroughHierarchy(
+            view,
+            MotionEvent.ACTION_MOVE,
+            y = 20f - handoffDistance,
+            eventTime = 16L,
+        )
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
+
+        assertFalse(commands.any { it is AppListCommand.ShowActions })
+        assertTrue(sourceRow.isLongClickable)
+        dispatchThroughHierarchy(
+            view,
+            MotionEvent.ACTION_CANCEL,
+            y = 20f - handoffDistance,
+            eventTime = 637L,
+        )
+        view.release()
+        activity.finish()
+    }
+
+    @Test
     fun iconRenderOwnerKeepsBitmapIdentityAndFallsBackWithoutRecycling() {
         val owner = NativeAppListIconRenderOwner()
         val bitmap = solidBitmap(REAL_ICON_COLOR)
@@ -486,6 +1280,63 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
+    fun edgeFadeMasksStayStableWhileTheParentSceneTransitionsInactive() {
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    active = false,
+                    topFadeRangePx = 20f,
+                    bottomFadeRangePx = 20f,
+                    palette = drawingConfig().palette.copy(
+                        fadeEdgeColorArgb = 0xffff0000L,
+                    ),
+                ),
+            )
+        }
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 100, 100)
+        val output = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
+
+        view.draw(Canvas(output))
+
+        assertTrue(Color.alpha(output.getPixel(50, 0)) > 0)
+        assertEquals(Color.TRANSPARENT, output.getPixel(50, 50))
+        assertTrue(Color.alpha(output.getPixel(50, 99)) > 0)
+        view.release()
+    }
+
+    @Test
+    fun edgeFadeMaskCanBeOwnedByTheOuterTransitionLayer() {
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    drawEdgeFadeMask = false,
+                    topFadeRangePx = 20f,
+                    bottomFadeRangePx = 20f,
+                    palette = drawingConfig().palette.copy(
+                        fadeEdgeColorArgb = 0xffff0000L,
+                    ),
+                ),
+            )
+        }
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 100, 100)
+        val output = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
+
+        view.draw(Canvas(output))
+
+        assertEquals(Color.TRANSPARENT, output.getPixel(50, 0))
+        assertEquals(Color.TRANSPARENT, output.getPixel(50, 99))
+        view.release()
+    }
+
+    @Test
     fun pullingPastLegacyThresholdAtTheTopRequestsTheWatchFaceOnce() {
         var requests = 0
         val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
@@ -514,6 +1365,677 @@ class NativeAppListRowViewBehaviorTest {
         dispatch(view, MotionEvent.ACTION_UP, y = 93f, eventTime = 101L)
 
         assertEquals(1, requests)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun launchOriginIncludesTheVisibleCanvasPullTranslation() {
+        val entries = (0 until 3).map { appEntry("component:pull-origin-$it") }
+        val commands = mutableListOf<AppListCommand>()
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onCommand = commands::add
+            setConfig(
+                drawingConfig().copy(
+                    fisheyeEnabled = false,
+                    centerEdgeItems = false,
+                    fastFlowAnimationEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+        val firstRow = requireNotNull(view.layoutManager?.findViewByPosition(0))
+
+        firstRow.performClick()
+        val baselineOrigin = (commands.single() as AppListCommand.Open).origin
+        commands.clear()
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 40f, eventTime = 16L)
+        val visiblePullOffset = pullOffsetOf(view)
+        assertEquals(20f, visiblePullOffset, 0.01f)
+        assertEquals(visiblePullOffset, firstRow.translationY, 0.01f)
+        firstRow.performClick()
+        val pulledOrigin = (commands.single() as AppListCommand.Open).origin
+
+        assertEquals(
+            baselineOrigin.y + visiblePullOffset / view.height,
+            pulledOrigin.y,
+            0.0001f,
+        )
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 40f, eventTime = 17L)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun launchOriginUsesTheIconCenterWhenARecycledRowHasAStalePivot() {
+        val commands = mutableListOf<AppListCommand>()
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onCommand = commands::add
+            setConfig(
+                drawingConfig().copy(
+                    fisheyeEnabled = false,
+                    centerEdgeItems = false,
+                    entryMotionEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(
+                        1L,
+                        listOf(appEntry("component:stale-pivot-origin")),
+                    ),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+        val row = requireNotNull(view.layoutManager?.findViewByPosition(0)) as NativeAppListRowView
+        row.pivotY = 0f
+
+        row.performClick()
+
+        val origin = (commands.single() as AppListCommand.Open).origin
+        assertEquals((row.top + row.height / 2f) / view.height, origin.y, 0.0001f)
+        assertEquals(row.height / 2f, row.pivotY, 0f)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun hitTestingTracksTheVisibleCanvasPullTranslation() {
+        val firstKey = AppItemKey("component:pull-hit-0")
+        val entries = (0 until 3).map { appEntry("component:pull-hit-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    fisheyeEnabled = false,
+                    centerEdgeItems = false,
+                    fastFlowAnimationEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 70f, eventTime = 16L)
+        assertEquals(50f, pullOffsetOf(view), 0.01f)
+
+        assertEquals(firstKey, folderKeyAtOf(view, x = 30f, y = 70f))
+        assertNull(folderKeyAtOf(view, x = 30f, y = 20f))
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 70f, eventTime = 17L)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun actionUpAfterPullReturnsToRestPreservesFinalSampleForFlingDirection() {
+        val entries = (0 until 40).map { appEntry("component:up-sample-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(drawingConfig().copy(centerEdgeItems = false))
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+        var capturedVelocityY: Float? = null
+        view.onFlingListener = object : RecyclerView.OnFlingListener() {
+            override fun onFling(velocityX: Int, velocityY: Int): Boolean {
+                capturedVelocityY = velocityY.toFloat()
+                return true
+            }
+        }
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 80f, eventTime = 0L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 160f, eventTime = 16L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 60f, eventTime = 32L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 140f, eventTime = 48L)
+
+        assertTrue("final sample must preserve the downward fling", (capturedVelocityY ?: 0f) < 0f)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun pointerUpRebasesPullTrackingToTheSurvivingPointerId() {
+        val entries = (0 until 8).map { appEntry("component:pointer-$it") }
+        var scrollToTopRequests = 0
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(drawingConfig().copy(centerEdgeItems = false))
+            onScrollToTop = { scrollToTopRequests++ }
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        dispatchMultiThroughHierarchy(
+            view,
+            action = MotionEvent.ACTION_DOWN,
+            actionIndex = 0,
+            pointers = listOf(pointer(7, 20f)),
+            eventTime = 0L,
+        )
+        dispatchMultiThroughHierarchy(
+            view,
+            action = MotionEvent.ACTION_POINTER_DOWN,
+            actionIndex = 1,
+            pointers = listOf(pointer(7, 20f), pointer(9, 100f)),
+            eventTime = 8L,
+        )
+        dispatchMultiThroughHierarchy(
+            view,
+            action = MotionEvent.ACTION_POINTER_UP,
+            actionIndex = 0,
+            pointers = listOf(pointer(7, 20f), pointer(9, 100f)),
+            eventTime = 16L,
+        )
+        dispatchMultiThroughHierarchy(
+            view,
+            action = MotionEvent.ACTION_MOVE,
+            actionIndex = 0,
+            pointers = listOf(pointer(9, 101f)),
+            eventTime = 24L,
+        )
+        dispatchMultiThroughHierarchy(
+            view,
+            action = MotionEvent.ACTION_UP,
+            actionIndex = 0,
+            pointers = listOf(pointer(9, 101f)),
+            eventTime = 32L,
+        )
+
+        assertEquals(0, scrollToTopRequests)
+        assertTrue("surviving pointer movement should not create a large pull", pullOffsetOf(view) <= 2f)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun secondPointerCancelsPendingNativeLongPress() {
+        val commands = mutableListOf<AppListCommand>()
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onCommand = commands::add
+            setConfig(drawingConfig().copy(centerEdgeItems = false))
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, listOf(appEntry("component:multi-pending"))),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        dispatchMultiThroughHierarchy(
+            view,
+            action = MotionEvent.ACTION_DOWN,
+            actionIndex = 0,
+            pointers = listOf(pointer(3, 20f)),
+            eventTime = 0L,
+        )
+        dispatchMultiThroughHierarchy(
+            view,
+            action = MotionEvent.ACTION_POINTER_DOWN,
+            actionIndex = 1,
+            pointers = listOf(pointer(3, 20f), pointer(7, 22f)),
+            eventTime = 100L,
+        )
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(700L))
+
+        assertFalse(commands.any { it is AppListCommand.ShowActions })
+        dispatchMultiThroughHierarchy(
+            view,
+            action = MotionEvent.ACTION_CANCEL,
+            actionIndex = 0,
+            pointers = listOf(pointer(3, 20f), pointer(7, 22f)),
+            eventTime = 801L,
+        )
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun secondPointerCancelsActiveNativeDragWithoutJumpingItsOverlay() {
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(drawingConfig().copy(centerEdgeItems = false))
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(
+                        1L,
+                        listOf(appEntry("component:multi-drag-0"), appEntry("component:multi-drag-1")),
+                    ),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 45f, eventTime = 621L)
+        assertTrue(dragOverlayViewOf(view) != null)
+
+        dispatchMultiThroughHierarchy(
+            view,
+            action = MotionEvent.ACTION_POINTER_DOWN,
+            actionIndex = 1,
+            pointers = listOf(pointer(0, 45f), pointer(9, 100f)),
+            eventTime = 630L,
+        )
+
+        assertNull(dragOverlayViewOf(view))
+        dispatchMultiThroughHierarchy(
+            view,
+            action = MotionEvent.ACTION_CANCEL,
+            actionIndex = 0,
+            pointers = listOf(pointer(0, 45f), pointer(9, 100f)),
+            eventTime = 631L,
+        )
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun singleMoveCrossingTheBottomTransfersOnlyRecyclerRemainderToPull() {
+        val entries = (0 until 10).map { appEntry("component:cross-bottom-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    fisheyeEnabled = false,
+                    centerEdgeItems = false,
+                    fastFlowAnimationEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+        view.scrollBy(0, 10_000)
+        val bottomOffset = view.computeVerticalScrollOffset()
+        view.scrollBy(0, -10)
+        assertEquals(bottomOffset - 10, view.computeVerticalScrollOffset())
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 100f, eventTime = 0L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 80f, eventTime = 16L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 40f, eventTime = 32L)
+
+        assertEquals(bottomOffset, view.computeVerticalScrollOffset())
+        assertEquals(-30f, pullOffsetOf(view), 1f)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 40f, eventTime = 33L)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun honeycombCrossEdgeRemainderUsesTheFrozenTwentyEightPercentDamping() {
+        val entries = (0 until 40).map { appEntry("component:honey-cross-bottom-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    presentation = NativeAppListPresentation.HONEYCOMB,
+                    iconSizePx = 64,
+                    rowHeightPx = 66,
+                    honeycombCellSizePx = 66f,
+                    honeycombNarrowColumns = 3,
+                    centerEdgeItems = false,
+                    fisheyeEnabled = false,
+                    fastFlowAnimationEnabled = false,
+                ),
+            )
+            setLayoutStrategy(HoneycombNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 320, height = 320)
+        view.scrollBy(0, 10_000)
+        val bottomOffset = view.computeVerticalScrollOffset()
+        view.scrollBy(0, -10)
+        assertEquals(bottomOffset - 10, view.computeVerticalScrollOffset())
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 200f, eventTime = 0L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 180f, eventTime = 16L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 140f, eventTime = 32L)
+
+        assertEquals(bottomOffset, view.computeVerticalScrollOffset())
+        assertEquals(-8.4f, pullOffsetOf(view), 1f)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 140f, eventTime = 33L)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun returningPullToRestScrollsTheListWithTheSameMoveRemainder() {
+        val entries = (0 until 10).map { appEntry("component:return-remainder-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    fisheyeEnabled = false,
+                    centerEdgeItems = false,
+                    fastFlowAnimationEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 40f, eventTime = 0L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 100f, eventTime = 16L)
+        assertEquals(60f, pullOffsetOf(view), 0f)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 20f, eventTime = 32L)
+
+        assertEquals(0f, pullOffsetOf(view), 0f)
+        assertEquals(20, view.computeVerticalScrollOffset())
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 20f, eventTime = 33L)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun subTouchSlopPullStillForwardsItsCrossingRemainderWithoutADeadZone() {
+        val entries = (0 until 10).map { appEntry("component:small-pull-remainder-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    fisheyeEnabled = false,
+                    centerEdgeItems = false,
+                    fastFlowAnimationEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 40f, eventTime = 0L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 45f, eventTime = 16L)
+        assertEquals(5f, pullOffsetOf(view), 0f)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 20f, eventTime = 32L)
+
+        assertEquals(0f, pullOffsetOf(view), 0f)
+        assertEquals(20, view.computeVerticalScrollOffset())
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 20f, eventTime = 33L)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun touchingDuringPullSettleContinuesFromTheVisibleOffset() {
+        val entries = (0 until 10).map { appEntry("component:interrupt-settle-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    fisheyeEnabled = false,
+                    centerEdgeItems = false,
+                    fastFlowAnimationEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 40f, eventTime = 0L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 100f, eventTime = 16L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 100f, eventTime = 17L)
+        val interruptedOffset = pullOffsetOf(view)
+        assertTrue(interruptedOffset > 10f)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 100f, eventTime = 18L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 90f, eventTime = 34L)
+
+        assertEquals(interruptedOffset - 10f, pullOffsetOf(view), 0.01f)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 90f, eventTime = 35L)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun firstMoveAfterInterruptingPullSettleForwardsTheRemainderPastRest() {
+        val entries = (0 until 10).map { appEntry("component:interrupt-cross-rest-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    fisheyeEnabled = false,
+                    centerEdgeItems = false,
+                    fastFlowAnimationEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 40f, eventTime = 0L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 100f, eventTime = 16L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 100f, eventTime = 17L)
+        val interruptedOffset = pullOffsetOf(view)
+        assertTrue(interruptedOffset > 20f)
+
+        val visibleFirstCenter = 20f + interruptedOffset
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = visibleFirstCenter, eventTime = 18L)
+        dispatchThroughHierarchy(
+            view,
+            MotionEvent.ACTION_MOVE,
+            y = visibleFirstCenter - interruptedOffset - 20f,
+            eventTime = 34L,
+        )
+
+        assertEquals(0f, pullOffsetOf(view), 0.01f)
+        assertEquals(20, view.computeVerticalScrollOffset())
+        dispatchThroughHierarchy(
+            view,
+            MotionEvent.ACTION_CANCEL,
+            y = visibleFirstCenter - interruptedOffset - 20f,
+            eventTime = 35L,
+        )
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun dragStartingDuringInterruptedPullSettleClearsTheVisiblePullOffset() {
+        val entries = (0 until 10).map { appEntry("component:drag-interrupt-settle-$it") }
+        val commands = mutableListOf<AppListCommand>()
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onCommand = commands::add
+            setConfig(
+                drawingConfig().copy(
+                    fisheyeEnabled = false,
+                    centerEdgeItems = false,
+                    fastFlowAnimationEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 40f, eventTime = 0L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 100f, eventTime = 16L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 100f, eventTime = 17L)
+        val interruptedOffset = pullOffsetOf(view)
+        assertTrue(interruptedOffset > 10f)
+
+        val visibleFirstCenter = 20f + interruptedOffset
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = visibleFirstCenter, eventTime = 18L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = visibleFirstCenter + 22f, eventTime = 639L)
+
+        assertTrue(commands.any { it is AppListCommand.ShowActions })
+        assertTrue(dragOverlayViewOf(view) != null)
+        assertEquals(0f, pullOffsetOf(view), 0.01f)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = visibleFirstCenter + 22f, eventTime = 640L)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun longPressReleaseDuringInterruptedPullSettleRestoresRowLongClickOwnership() {
+        val entries = (0 until 10).map { appEntry("component:release-interrupt-settle-$it") }
+        val commands = mutableListOf<AppListCommand>()
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onCommand = commands::add
+            setConfig(
+                drawingConfig().copy(
+                    fisheyeEnabled = false,
+                    centerEdgeItems = false,
+                    fastFlowAnimationEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 40f, eventTime = 0L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 100f, eventTime = 16L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 100f, eventTime = 17L)
+        assertTrue(pullOffsetOf(view) > 10f)
+
+        val firstRow = requireNotNull(view.layoutManager?.findViewByPosition(0))
+        val visibleFirstCenter = 20f + pullOffsetOf(view)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = visibleFirstCenter, eventTime = 18L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
+        assertTrue(commands.any { it is AppListCommand.ShowActions })
+        assertFalse(firstRow.isLongClickable)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = visibleFirstCenter, eventTime = 639L)
+
+        assertTrue(firstRow.isLongClickable)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun viewportShrinkClampsActivePullStateAndVisibleOffsetTogether() {
+        val entries = (0 until 10).map { appEntry("component:pull-resize-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    fisheyeEnabled = false,
+                    centerEdgeItems = false,
+                    fastFlowAnimationEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        val compactHeight = 100
+        val compactMaximum = maxOf(
+            compactHeight / 2f,
+            72f * view.resources.displayMetrics.density,
+        )
+        val pullDistance = compactMaximum + 20f
+        val expandedHeight = (pullDistance * 2f + 40f).toInt()
+        measureAndLayout(view, width = 100, height = expandedHeight)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
+        dispatchThroughHierarchy(
+            view,
+            MotionEvent.ACTION_MOVE,
+            y = 20f + pullDistance,
+            eventTime = 16L,
+        )
+        assertEquals(pullDistance, pullOffsetOf(view), 0.01f)
+
+        measureAndLayout(view, width = 100, height = compactHeight)
+
+        assertEquals(compactMaximum, pullOffsetOf(view), 0.01f)
+        dispatchThroughHierarchy(
+            view,
+            MotionEvent.ACTION_CANCEL,
+            y = 20f + pullDistance,
+            eventTime = 17L,
+        )
         view.release()
         activity.finish()
     }
@@ -791,6 +2313,38 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
+    fun globalSafeInsetIsNotAppliedInsideSpatialGridCells() {
+        listOf(
+            NativeAppListPresentation.HONEYCOMB,
+            NativeAppListPresentation.DENSE_GRID,
+        ).forEach { presentation ->
+            val row = NativeAppListRowView(RuntimeEnvironment.getApplication())
+            row.bind(
+                boundRow(null),
+                NativeAppListResolvedConfig.from(
+                    drawingConfig().copy(
+                        presentation = presentation,
+                        leftSafeInsetPx = 80,
+                        honeycombCellSizePx = 100f,
+                    ),
+                ),
+            )
+            measureAndLayout(row)
+            val localCellDown = MotionEvent.obtain(
+                0L,
+                0L,
+                MotionEvent.ACTION_DOWN,
+                5f,
+                20f,
+                0,
+            )
+
+            assertTrue("presentation=$presentation", row.onTouchEvent(localCellDown))
+            localCellDown.recycle()
+        }
+    }
+
+    @Test
     fun adapterClearSynchronouslyDropsCurrentRowsAndBitmapReferences() {
         val entry = appEntry()
         val bitmap = solidBitmap(REAL_ICON_COLOR)
@@ -903,12 +2457,90 @@ class NativeAppListRowViewBehaviorTest {
             eraseColor(color)
         }
 
-    private fun measureAndLayout(view: View) {
+    private fun measureAndLayout(
+        view: View,
+        width: Int = 100,
+        height: Int = 40,
+    ) {
         view.measure(
-            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
-            View.MeasureSpec.makeMeasureSpec(40, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY),
         )
-        view.layout(0, 0, 100, 40)
+        view.layout(0, 0, width, height)
+    }
+
+    private fun spatialScrollOffsetOf(manager: NativeAppGridLayoutManager): Float {
+        val field = NativeAppGridLayoutManager::class.java.getDeclaredField("scrollOffsetPx")
+        field.isAccessible = true
+        return field.getFloat(manager)
+    }
+
+    private fun pullOffsetOf(view: NativeAppListView): Float {
+        val field = NativeAppListView::class.java
+            .getDeclaredField("pullOffsetPx")
+            .apply { isAccessible = true }
+        return field.getFloat(view)
+    }
+
+    private fun dispatchThroughHierarchy(
+        view: NativeAppListView,
+        action: Int,
+        y: Float,
+        eventTime: Long,
+        x: Float = 30f,
+    ) {
+        MotionEvent.obtain(0L, eventTime, action, x, y, 0).also { event ->
+            view.dispatchTouchEvent(event)
+            event.recycle()
+        }
+    }
+
+    private data class TestPointer(val id: Int, val y: Float, val x: Float = 30f)
+
+    private fun pointer(id: Int, y: Float, x: Float = 30f): TestPointer =
+        TestPointer(id = id, y = y, x = x)
+
+    private fun dispatchMultiThroughHierarchy(
+        view: NativeAppListView,
+        action: Int,
+        actionIndex: Int,
+        pointers: List<TestPointer>,
+        eventTime: Long,
+    ) {
+        val properties = Array(pointers.size) { index ->
+            MotionEvent.PointerProperties().apply {
+                id = pointers[index].id
+                toolType = MotionEvent.TOOL_TYPE_FINGER
+            }
+        }
+        val coordinates = Array(pointers.size) { index ->
+            MotionEvent.PointerCoords().apply {
+                x = pointers[index].x
+                y = pointers[index].y
+                pressure = 1f
+                size = 1f
+            }
+        }
+        val encodedAction = action or (actionIndex shl MotionEvent.ACTION_POINTER_INDEX_SHIFT)
+        MotionEvent.obtain(
+            0L,
+            eventTime,
+            encodedAction,
+            pointers.size,
+            properties,
+            coordinates,
+            0,
+            0,
+            1f,
+            1f,
+            0,
+            0,
+            InputDevice.SOURCE_TOUCHSCREEN,
+            0,
+        ).also { event ->
+            view.dispatchTouchEvent(event)
+            event.recycle()
+        }
     }
 
     private fun dispatch(
@@ -937,6 +2569,27 @@ class NativeAppListRowViewBehaviorTest {
             .getDeclaredField("mOnClickListener")
             .apply { isAccessible = true }
         return clickListenerField.get(listenerInfo) as? View.OnClickListener
+    }
+
+    private fun dragOverlayViewOf(view: NativeAppListView): NativeAppListRowView? {
+        val field = NativeAppListView::class.java
+            .getDeclaredField("dragOverlayView")
+            .apply { isAccessible = true }
+        return field.get(view) as? NativeAppListRowView
+    }
+
+    private fun closestChildToViewportCenter(view: NativeAppListView): View {
+        val centerY = view.height / 2f
+        return (0 until view.childCount)
+            .map(view::getChildAt)
+            .minBy { child -> kotlin.math.abs(child.top + child.height / 2f - centerY) }
+    }
+
+    private fun folderKeyAtOf(view: NativeAppListView, x: Float, y: Float): AppItemKey? {
+        val field = NativeAppListView::class.java
+            .getDeclaredField("dragHost")
+            .apply { isAccessible = true }
+        return (field.get(view) as NativeAppListDragHost).folderKeyAt(x, y)
     }
 
     private companion object {

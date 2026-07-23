@@ -8,11 +8,207 @@ import org.junit.Test
 
 class NativeAppListPerformancePolicyTest {
     @Test
+    fun spatialScrollPathDoesNotExposePerFrameGeometryKeyFactories() {
+        assertFalse(
+            NativeAppGridLayoutManager::class.java.declaredMethods.any {
+                it.name == "geometryKey"
+            },
+        )
+        assertFalse(
+            NativeHoneycombLayoutManager::class.java.declaredClasses.any {
+                it.simpleName == "GeometryKey"
+            },
+        )
+        assertFalse(
+            NativeDenseGridLayoutManager::class.java.declaredClasses.any {
+                it.simpleName == "GeometryKey"
+            },
+        )
+    }
+
+    @Test
+    fun spatialVisibilityLookupDoesNotWalkEveryItemBeforeTheVisibleWindow() {
+        val itemCount = 10_000
+        val denseBase = NativeDenseGridGeometry.create(
+            itemCount = itemCount,
+            viewportWidthPx = 320,
+            viewportHeightPx = 320,
+            leftSafeInsetPx = 0,
+            columns = 5,
+            horizontalPaddingPx = 8f,
+            itemSpacingPx = 4f,
+            itemAspectRatio = 0.92f,
+            minimumItemHeightPx = 48f,
+        )
+        val densePlacements = CountingAccessList(denseBase.placements)
+        val dense = NativeDenseGridGeometry::class.java.declaredConstructors
+            .single { it.parameterCount == 8 }
+            .apply { isAccessible = true }
+            .newInstance(
+                denseBase.viewportHeightPx,
+                denseBase.itemWidthPx,
+                denseBase.itemHeightPx,
+                denseBase.itemSpacingPx,
+                denseBase.verticalEdgePaddingPx,
+                densePlacements,
+                denseBase.minimumScrollOffsetPx,
+                denseBase.maximumScrollOffsetPx,
+            ) as NativeDenseGridGeometry
+        val denseBounds = IntArray(2)
+
+        dense.visiblePositionBounds(
+            scrollOffsetPx = dense.minimumScrollOffsetPx,
+            extraLayoutSpacePx = dense.itemHeightPx,
+            output = denseBounds,
+        )
+
+        assertEquals(itemCount - 1, denseBounds[1])
+        assertTrue(
+            "dense lookup read ${densePlacements.readCount} placements",
+            densePlacements.readCount <= 64,
+        )
+
+        val honeycombBase = NativeHoneycombGeometry.create(
+            itemCount = itemCount,
+            viewportWidthPx = 320,
+            viewportHeightPx = 320,
+            leftSafeInsetPx = 0,
+            narrowColumns = 3,
+            iconSizePx = 64f,
+        )
+        val honeycombPlacements = CountingAccessList(honeycombBase.placements)
+        val honeycomb = NativeHoneycombGeometry::class.java.declaredConstructors
+            .single { it.parameterCount == 5 }
+            .apply { isAccessible = true }
+            .newInstance(
+                honeycombBase.viewportHeightPx,
+                honeycombBase.iconSizePx,
+                honeycombPlacements,
+                honeycombBase.minimumScrollOffsetPx,
+                honeycombBase.maximumScrollOffsetPx,
+            ) as NativeHoneycombGeometry
+        val honeycombBounds = IntArray(2)
+
+        honeycomb.visiblePositionBounds(
+            scrollOffsetPx = honeycomb.minimumScrollOffsetPx,
+            extraLayoutSpacePx = honeycomb.iconSizePx,
+            output = honeycombBounds,
+        )
+
+        assertEquals(itemCount - 1, honeycombBounds[1])
+        assertTrue(
+            "honeycomb lookup read ${honeycombPlacements.readCount} placements",
+            honeycombPlacements.readCount <= 64,
+        )
+    }
+
+    @Test
+    fun spatialVisibilityBoundsMatchLinearOracleAtTopMiddleAndTail() {
+        val dense = NativeDenseGridGeometry.create(
+            itemCount = 137,
+            viewportWidthPx = 320,
+            viewportHeightPx = 320,
+            leftSafeInsetPx = 0,
+            columns = 5,
+            horizontalPaddingPx = 8f,
+            itemSpacingPx = 4f,
+            itemAspectRatio = 0.92f,
+            minimumItemHeightPx = 48f,
+        )
+        val honeycomb = NativeHoneycombGeometry.create(
+            itemCount = 137,
+            viewportWidthPx = 320,
+            viewportHeightPx = 320,
+            leftSafeInsetPx = 0,
+            narrowColumns = 3,
+            iconSizePx = 64f,
+        )
+
+        assertVisibilityBoundsMatchLinearOracle(
+            geometry = dense,
+            positions = dense.placements.indices,
+            offsets = listOf(
+                dense.maximumScrollOffsetPx,
+                (dense.minimumScrollOffsetPx + dense.maximumScrollOffsetPx) / 2f,
+                dense.minimumScrollOffsetPx,
+            ),
+            extraLayoutSpacePx = dense.itemHeightPx,
+        )
+        assertVisibilityBoundsMatchLinearOracle(
+            geometry = honeycomb,
+            positions = honeycomb.placements.indices,
+            offsets = listOf(
+                honeycomb.maximumScrollOffsetPx,
+                (honeycomb.minimumScrollOffsetPx + honeycomb.maximumScrollOffsetPx) / 2f,
+                honeycomb.minimumScrollOffsetPx,
+            ),
+            extraLayoutSpacePx = honeycomb.iconSizePx,
+        )
+    }
+
+    @Test
+    fun onlyLinearLayoutUsesTheRecyclerHostChildVisualPass() {
+        assertTrue(usesHostChildVisualPass(LinearNativeAppListLayoutStrategy))
+        assertFalse(usesHostChildVisualPass(HoneycombNativeAppListLayoutStrategy))
+        assertFalse(usesHostChildVisualPass(DenseGridNativeAppListLayoutStrategy))
+    }
+
+    @Test
     fun fastFlowUsesTheLegacyCenterCompressionAndOuterAccelerationCurve() {
         assertEquals(0f, nativeFastFlowOffset(200f, 400f, enabled = true), 0f)
         assertEquals(35.2f, nativeFastFlowOffset(120f, 400f, enabled = true), 0.001f)
         assertEquals(-66.8f, nativeFastFlowOffset(0f, 400f, enabled = true), 0.001f)
         assertEquals(0f, nativeFastFlowOffset(0f, 400f, enabled = false), 0f)
+    }
+
+    @Test
+    fun appleHoneycombFastFlowKeepsTheLegacyTwentyFourToSeventySixPercentBand() {
+        assertEquals(
+            45.76f,
+            nativeFastFlowOffset(
+                rowCenterY = 96f,
+                viewportHeight = 400f,
+                enabled = true,
+                presentation = NativeAppListPresentation.HONEYCOMB,
+            ),
+            0.001f,
+        )
+        assertEquals(
+            35.2f,
+            nativeFastFlowOffset(
+                rowCenterY = 120f,
+                viewportHeight = 400f,
+                enabled = true,
+                presentation = NativeAppListPresentation.HONEYCOMB,
+            ),
+            0.001f,
+        )
+    }
+
+    @Test
+    fun honeycombFastFlowKeepsTheLegacyWiderSlowBand() {
+        val config = NativeAppListConfig(
+            presentation = NativeAppListPresentation.HONEYCOMB,
+            fastFlowAnimationEnabled = true,
+        )
+
+        val upperSlowBand = nativeHoneycombChildVisual(
+            centerX = 200f,
+            centerY = 100f,
+            viewportWidth = 400f,
+            viewportHeight = 400f,
+            config = config,
+        )
+        val lowerSlowBand = nativeHoneycombChildVisual(
+            centerX = 200f,
+            centerY = 300f,
+            viewportWidth = 400f,
+            viewportHeight = 400f,
+            config = config,
+        )
+
+        assertEquals(44f, upperSlowBand.translationY, 0.001f)
+        assertEquals(-44f, lowerSlowBand.translationY, 0.001f)
     }
 
     @Test
@@ -46,7 +242,7 @@ class NativeAppListPerformancePolicyTest {
 
     @Test
     fun honeycombHotPathReusesTheCallerOwnedVisualResult() {
-        val scratch = NativeHoneycombChildVisual()
+        val scratch = NativeSpatialChildVisual()
 
         val result = nativeHoneycombChildVisual(
             centerX = 160f,
@@ -62,6 +258,84 @@ class NativeAppListPerformancePolicyTest {
 
         assertSame(scratch, result)
         assertTrue(result.scale < 1f)
+    }
+
+    @Test
+    fun spatialReorderRadiusKeepsAppleHoneycombBoundedButDenseGridNearest() {
+        val honeycomb = NativeAppListConfig(
+            presentation = NativeAppListPresentation.HONEYCOMB,
+            honeycombCellSizePx = 72f,
+        )
+        val dense = NativeAppListConfig(
+            presentation = NativeAppListPresentation.DENSE_GRID,
+        )
+
+        assertEquals(68.4f, nativeSpatialReorderRadiusPx(honeycomb), 0.001f)
+        assertEquals(Float.MAX_VALUE, nativeSpatialReorderRadiusPx(dense), 0f)
+    }
+
+    @Test
+    fun denseGridFisheyeStartsOnlyBelowTheLegacyFiftyTwoPercentLine() {
+        val config = NativeAppListConfig(
+            presentation = NativeAppListPresentation.DENSE_GRID,
+            denseGridColumns = 5,
+            fisheyeEnabled = true,
+            fisheyeStrength = 1f,
+            honeycombFisheyeRangeRows = 4,
+            edgeSpacingCompressionEnabled = true,
+        )
+
+        val upper = nativeDenseGridChildVisual(260f, 160f, 320f, 320f, config)
+        val lower = nativeDenseGridChildVisual(260f, 300f, 320f, 320f, config)
+
+        assertEquals(1f, upper.scale, 0f)
+        assertEquals(1f, upper.alpha, 0f)
+        assertEquals(0f, upper.translationX, 0f)
+        assertTrue(lower.scale < 1f)
+        assertEquals(lower.scale.coerceIn(0.24f, 1f), lower.alpha, 0f)
+        assertTrue(lower.translationX < 0f)
+    }
+
+    @Test
+    fun denseGridEntryMotionAndHotPathReuseOneSpatialScratch() {
+        val scratch = NativeSpatialChildVisual()
+        val result = nativeDenseGridChildVisual(
+            centerX = 160f,
+            centerY = 160f,
+            viewportWidth = 320f,
+            viewportHeight = 320f,
+            config = NativeAppListConfig(
+                presentation = NativeAppListPresentation.DENSE_GRID,
+                denseGridColumns = 5,
+                entryProgress = 0.5f,
+                fastFlowAnimationEnabled = true,
+            ),
+            output = scratch,
+        )
+
+        assertSame(scratch, result)
+        assertEquals(0f, result.translationX, 0f)
+        assertEquals(12.8f, result.translationY, 0.001f)
+        assertEquals(0.5f, result.alpha, 0f)
+    }
+
+    @Test
+    fun classicEntryKeepsNativeChildrenStableWhileNextUsesEntryProgress() {
+        val classic = NativeAppListConfig(
+            presentation = NativeAppListPresentation.DENSE_GRID,
+            denseGridColumns = 5,
+            entryMotionEnabled = false,
+            entryProgress = 0f,
+        )
+        val next = classic.copy(entryMotionEnabled = true)
+
+        val classicVisual = nativeDenseGridChildVisual(160f, 160f, 320f, 320f, classic)
+        val nextVisual = nativeDenseGridChildVisual(160f, 160f, 320f, 320f, next)
+
+        assertEquals(0f, classicVisual.translationY, 0f)
+        assertEquals(1f, classicVisual.alpha, 0f)
+        assertTrue(nextVisual.translationY > 0f)
+        assertEquals(0f, nextVisual.alpha, 0f)
     }
 
     @Test
@@ -307,6 +581,23 @@ class NativeAppListPerformancePolicyTest {
     }
 
     @Test
+    fun linearEntryMotionIsAppliedInsideNativeVisualPass() {
+        val config = NativeAppListConfig(entryMotionEnabled = true).also {
+            it.runtimeEntryProgress = 0.5f
+        }
+
+        val visual = nativeLinearChildVisual(
+            childCenterY = 120f,
+            viewportHeight = 240,
+            config = config,
+        )
+
+        assertEquals(0.95f, visual.scale, 0.0001f)
+        assertEquals(0.5f, visual.alpha, 0.0001f)
+        assertEquals(9.6f, visual.translationY, 0.0001f)
+    }
+
+    @Test
     fun edgeFadeAndBlurAreComputedInTheReusableChildVisual() {
         val config = NativeAppListConfig(
             fisheyeEnabled = false,
@@ -334,5 +625,47 @@ class NativeAppListPerformancePolicyTest {
             config.copy(blurTier = NativeBlurTier.LITE),
         )
         assertEquals(0f, liteEdge.alpha, 0f)
+    }
+}
+
+private fun assertVisibilityBoundsMatchLinearOracle(
+    geometry: NativeAppGridGeometry,
+    positions: IntRange,
+    offsets: List<Float>,
+    extraLayoutSpacePx: Float,
+) {
+    val halfItem = geometry.itemHeightPx / 2f
+    val minimumCenterY = -extraLayoutSpacePx - halfItem
+    val maximumCenterY = geometry.viewportHeightPx + extraLayoutSpacePx + halfItem
+    val actual = IntArray(2)
+    offsets.forEach { scrollOffsetPx ->
+        val expected = positions.filter { position ->
+            geometry.screenCenterY(position, scrollOffsetPx) in
+                minimumCenterY..maximumCenterY
+        }
+
+        geometry.visiblePositionBounds(
+            scrollOffsetPx = scrollOffsetPx,
+            extraLayoutSpacePx = extraLayoutSpacePx,
+            output = actual,
+        )
+
+        assertEquals(expected.firstOrNull() ?: -1, actual[0])
+        assertEquals(expected.lastOrNull() ?: -1, actual[1])
+    }
+}
+
+private class CountingAccessList<T>(
+    private val delegate: List<T>,
+) : AbstractList<T>() {
+    var readCount: Int = 0
+        private set
+
+    override val size: Int
+        get() = delegate.size
+
+    override fun get(index: Int): T {
+        readCount++
+        return delegate[index]
     }
 }

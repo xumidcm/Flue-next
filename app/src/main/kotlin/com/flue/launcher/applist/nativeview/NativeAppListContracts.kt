@@ -108,6 +108,8 @@ internal fun normalizedIconCenterAfterChildTransform(
     childScaleY: Float,
     childPivotX: Float,
     childPivotY: Float,
+    contentTranslationX: Float = 0f,
+    contentTranslationY: Float = 0f,
     viewportWidth: Int,
     viewportHeight: Int,
 ): NormalizedPoint {
@@ -124,6 +126,8 @@ internal fun normalizedIconCenterAfterChildTransform(
         childScaleY,
         childPivotX,
         childPivotY,
+        contentTranslationX,
+        contentTranslationY,
     )
     if (
         geometry.any { !it.isFinite() } ||
@@ -138,10 +142,10 @@ internal fun normalizedIconCenterAfterChildTransform(
     val localCenterX = (iconBounds.left + iconBounds.right) / 2f
     val localCenterY = (iconBounds.top + iconBounds.bottom) / 2f
     val transformedCenterX =
-        childLeft + childTranslationX + childPivotX +
+        contentTranslationX + childLeft + childTranslationX + childPivotX +
             (localCenterX - childPivotX) * childScaleX
     val transformedCenterY =
-        childTop + childTranslationY + childPivotY +
+        contentTranslationY + childTop + childTranslationY + childPivotY +
             (localCenterY - childPivotY) * childScaleY
     return NormalizedPoint(
         x = transformedCenterX.normalizedWithin(viewportWidth),

@@ -11,6 +11,36 @@ internal data class NativeDragPolicy(
     val longPressMillis: Long = 620L,
 )
 
+internal class NativeDragPolicyProfiles(
+    density: Float,
+) {
+    private val safeDensity = density.takeIf { it.isFinite() && it > 0f } ?: 1f
+    private val linear = NativeDragPolicy(
+        startThresholdPx = 20f * safeDensity,
+        autoScrollEdgePx = 84f * safeDensity,
+        maxAutoScrollPxPerFrame = 30f,
+        folderHoverMillis = 500L,
+        folderHoverMaxSpeedPxPerMs = 0.55f,
+        longPressMillis = 620L,
+    )
+    private val spatial = NativeDragPolicy(
+        startThresholdPx = 20f * safeDensity,
+        autoScrollEdgePx = 96f * safeDensity,
+        maxAutoScrollPxPerFrame = 26f,
+        folderHoverMillis = 700L,
+        folderHoverMaxSpeedPxPerMs = 0.55f,
+        longPressMillis = 620L,
+    )
+
+    fun forPresentation(presentation: NativeAppListPresentation): NativeDragPolicy =
+        when (presentation) {
+            NativeAppListPresentation.LINEAR -> linear
+            NativeAppListPresentation.HONEYCOMB,
+            NativeAppListPresentation.DENSE_GRID,
+            -> spatial
+        }
+}
+
 internal fun nativeAutoScrollDelta(
     pointerY: Float,
     viewportHeight: Float,

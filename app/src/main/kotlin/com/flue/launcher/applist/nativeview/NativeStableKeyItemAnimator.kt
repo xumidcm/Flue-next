@@ -13,6 +13,7 @@ import androidx.recyclerview.widget.RecyclerView
 internal class NativeStableKeyItemAnimator(
     moveDurationMillis: Long = 180L,
     private val shouldAnimateHolder: (RecyclerView.ViewHolder) -> Boolean = { true },
+    private val onMoveFrame: () -> Unit = {},
 ) : RecyclerView.ItemAnimator() {
     private class Move(
         val holder: RecyclerView.ViewHolder,
@@ -91,14 +92,15 @@ internal class NativeStableKeyItemAnimator(
                 while (index < activeFrameMoves.size) {
                     val move = activeFrameMoves[index]
                     if (move.active) {
-                    setMoveTranslation(
-                        move.holder,
-                        move.startTranslationX * remaining,
-                        move.startTranslationY * remaining,
-                    )
+                        setMoveTranslation(
+                            move.holder,
+                            move.startTranslationX * remaining,
+                            move.startTranslationY * remaining,
+                        )
                     }
                     index++
                 }
+                onMoveFrame()
             }
             addListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: Animator) {
@@ -117,6 +119,7 @@ internal class NativeStableKeyItemAnimator(
         if (removed != null) {
             removed.active = false
             reset(item)
+            onMoveFrame()
             dispatchAnimationFinished(item)
         }
         if (activeMoves.isEmpty() && batchAnimator != null) {
@@ -139,6 +142,7 @@ internal class NativeStableKeyItemAnimator(
             dispatchAnimationFinished(holder)
         }
         activeFrameMoves = emptyArray()
+        onMoveFrame()
         dispatchFinishedWhenIdle()
     }
 
@@ -154,6 +158,7 @@ internal class NativeStableKeyItemAnimator(
             dispatchAnimationFinished(holder)
         }
         activeFrameMoves = emptyArray()
+        onMoveFrame()
         dispatchFinishedWhenIdle()
     }
 

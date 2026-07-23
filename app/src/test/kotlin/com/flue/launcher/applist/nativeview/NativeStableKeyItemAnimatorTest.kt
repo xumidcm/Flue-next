@@ -76,6 +76,33 @@ class NativeStableKeyItemAnimatorTest {
     }
 
     @Test
+    fun `move frame callback observes translations after the batch update`() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val item = View(activity)
+        activity.setContentView(item)
+        val observedTranslations = mutableListOf<Float>()
+        val animator = NativeStableKeyItemAnimator(
+            moveDurationMillis = 180L,
+            onMoveFrame = { observedTranslations += item.translationY },
+        )
+
+        assertTrue(
+            animator.animatePersistence(
+                TestHolder(item),
+                info(top = 0),
+                info(top = 40),
+            ),
+        )
+        animator.runPendingAnimations()
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(190L))
+
+        assertTrue(observedTranslations.isNotEmpty())
+        assertTrue(observedTranslations.all { it in -40f..0f })
+        assertEquals(0f, observedTranslations.last(), 0f)
+        activity.finish()
+    }
+
+    @Test
     fun `dragged holder is excluded so animator cannot steal pointer translation`() {
         val holder = TestHolder(View(RuntimeEnvironment.getApplication())).apply {
             itemView.translationY = 27f

@@ -311,7 +311,6 @@ private fun SettingsRootScreen(
     val appListWatchFaceColors by vm.appListWatchFaceColors.collectAsStateWithLifecycle()
     val appListRowBorderEnabled by vm.appListRowBorderEnabled.collectAsStateWithLifecycle()
     val appListFoldersEnabled by vm.appListFoldersEnabled.collectAsStateWithLifecycle()
-    val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsStateWithLifecycle()
     val musicTextSwitchAnimation by vm.musicTextSwitchAnimation.collectAsStateWithLifecycle()
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
@@ -415,15 +414,15 @@ private fun SettingsRootScreen(
             }
         }
     }
-    val dingDingCatZipPicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+    val watchFaceArchivePicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
             settingsScope.launch {
                 backupBusy = true
                 backupProgress = BlockingProgressState(
                     title = "导入表盘",
                     detail = when (watchFaceArchiveImportMode) {
-                        WatchFaceArchiveImportMode.WATCH -> "正在导入 jb_watch 表盘"
-                        WatchFaceArchiveImportMode.LEGACY -> "正在识别 jb_watch / 旧版表盘"
+                        WatchFaceArchiveImportMode.WATCH -> "正在识别并导入标准 .watch / jb_watch 表盘"
+                        WatchFaceArchiveImportMode.LEGACY -> "正在识别旧版叮叮猫表盘"
                     }
                 )
                 val result = vm.importWatchFaceArchive(
@@ -529,7 +528,7 @@ private fun SettingsRootScreen(
     var diagnosticLoggingEnabled by remember { mutableStateOf(ILog.isDiagnosticLoggingEnabled()) }
     var dingDingCatVersionTapCount by remember { mutableStateOf(0) }
     var dingDingCatLastVersionTapAt by remember { mutableStateOf(0L) }
-    var dingDingCatDeleteTarget by remember { mutableStateOf<LunchWatchFaceDescriptor?>(null) }
+    var importedWatchFaceDeleteTarget by remember { mutableStateOf<LunchWatchFaceDescriptor?>(null) }
     val pageScrollPositions = remember { mutableStateMapOf<SettingsDestination, SavedScrollPosition>() }
     val pageScrollResetVersions = remember { mutableStateMapOf<SettingsDestination, Int>() }
 
@@ -554,22 +553,24 @@ private fun SettingsRootScreen(
         }
     }
 
-    dingDingCatDeleteTarget?.let { target ->
+    importedWatchFaceDeleteTarget?.let { target ->
         AlertDialog(
-            onDismissRequest = { dingDingCatDeleteTarget = null },
+            onDismissRequest = { importedWatchFaceDeleteTarget = null },
             title = { Text("删除表盘") },
             text = {
                 Text(
                     when {
-                        target.isJbWatch -> "删除 ${target.displayName}？这个 .watch 表盘会从 Flue 私有目录移除。"
-                        else -> "删除 ${target.displayName}？这个旧版导入表盘会从 Flue 私有目录移除。"
+                        target.isWatchmaker -> "删除 ${target.displayName}？这个标准 .watch 表盘会从 Flue 私有目录移除。"
+                        target.isJbWatch -> "删除 ${target.displayName}？这个 jb_watch 兼容表盘会从 Flue 私有目录移除。"
+                        target.isDingDingCat -> "删除 ${target.displayName}？这个旧版叮叮猫表盘会从 Flue 私有目录移除。"
+                        else -> "删除 ${target.displayName}？这个导入表盘会从 Flue 私有目录移除。"
                     }
                 )
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        dingDingCatDeleteTarget = null
+                        importedWatchFaceDeleteTarget = null
                         settingsScope.launch {
                             val result = vm.deleteImportedWatchFace(target.id)
                             result
@@ -590,7 +591,7 @@ private fun SettingsRootScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { dingDingCatDeleteTarget = null }) {
+                TextButton(onClick = { importedWatchFaceDeleteTarget = null }) {
                     Text("取消")
                 }
             }
@@ -631,6 +632,10 @@ private fun SettingsRootScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 accessibilityServiceEnabled = FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected
+                // Market/editor activities can install a content-addressed .watch
+                // archive while this SettingsActivity remains alive. Refresh the
+                // shared registry when returning instead of waiting for a cold start.
+                vm.refreshWatchFaces(force = true)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -955,8 +960,8 @@ private fun SettingsRootScreen(
                     } else {
                         null
                     },
-                    onDelete = if (descriptor.isDingDingCat || descriptor.isJbWatch) {
-                        { dingDingCatDeleteTarget = descriptor }
+                    onDelete = if (descriptor.isDingDingCat || descriptor.isJbWatch || descriptor.isWatchmaker) {
+                        { importedWatchFaceDeleteTarget = descriptor }
                     } else {
                         null
                     },
@@ -966,7 +971,7 @@ private fun SettingsRootScreen(
             item("watchface_refresh") {
                 ActionCard(
                     title = "重新扫描表盘",
-                    subtitle = "刷新launch表盘",
+                    subtitle = "扫描标准 .watch、已安装表盘和兼容表盘目录",
                     scale = itemFisheye(listState, "watchface_refresh", screenCenterY, screenHeightPx),
                     icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
                     onClick = { vm.refreshWatchFaces(force = true) }
@@ -975,12 +980,12 @@ private fun SettingsRootScreen(
             item("watchface_import_archive") {
                 ActionCard(
                     title = "导入表盘",
-                    subtitle = "导入jb_watch表盘",
+                    subtitle = "导入标准 Watchmaker .watch 表盘（兼容 jb_watch 包）",
                     scale = itemFisheye(listState, "watchface_import_archive", screenCenterY, screenHeightPx),
                     icon = { Icon(Icons.Filled.Add, contentDescription = null, tint = WatchColors.ActiveCyan) },
                     onClick = {
                         watchFaceArchiveImportMode = WatchFaceArchiveImportMode.WATCH
-                        dingDingCatZipPicker.launch(
+                        watchFaceArchivePicker.launch(
                             arrayOf(
                                 "application/zip",
                                 "application/x-zip-compressed",
@@ -993,7 +998,7 @@ private fun SettingsRootScreen(
                     onLongPress = {
                         if (dingDingCatImportUnlocked) {
                             watchFaceArchiveImportMode = WatchFaceArchiveImportMode.LEGACY
-                            dingDingCatZipPicker.launch(
+                            watchFaceArchivePicker.launch(
                                 arrayOf(
                                     "application/zip",
                                     "application/x-zip-compressed",
@@ -1009,10 +1014,48 @@ private fun SettingsRootScreen(
                     longPressDurationMs = 2_000L
                 )
             }
+            item("watchface_store") {
+                ActionCard(
+                    title = "表盘市场",
+                    subtitle = "浏览 Watchmaker Community Store，下载后安全安装 .watch 表盘",
+                    scale = itemFisheye(listState, "watchface_store", screenCenterY, screenHeightPx),
+                    icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                    onClick = {
+                        context.startActivity(Intent(context, WatchStoreActivity::class.java))
+                    }
+                )
+            }
+            item("watchface_editor_new") {
+                ActionCard(
+                    title = "新建 .watch 表盘",
+                    subtitle = "使用内置编辑器创建基础图层并实时预览",
+                    scale = itemFisheye(listState, "watchface_editor_new", screenCenterY, screenHeightPx),
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                    onClick = {
+                        context.startActivity(Intent(context, WatchEditorActivity::class.java))
+                    }
+                )
+            }
+            if (selectedWatchFace.isWatchmaker) {
+                item("watchface_editor_current") {
+                    ActionCard(
+                        title = "编辑当前标准表盘",
+                        subtitle = "在隔离草稿中编辑 ${selectedWatchFace.displayName}，另存为新表盘",
+                        scale = itemFisheye(listState, "watchface_editor_current", screenCenterY, screenHeightPx),
+                        icon = { Icon(Icons.Filled.Settings, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                        onClick = {
+                            context.startActivity(
+                                Intent(context, WatchEditorActivity::class.java)
+                                    .putExtra(WatchEditorActivity.EXTRA_WATCH_FACE_ID, selectedWatchFace.id)
+                            )
+                        }
+                    )
+                }
+            }
             item("watchface_more") {
                 SettingsCategoryCard(
                     title = "更多表盘选项",
-                    subtitle = "字体和底部渐隐等表盘选项",
+                    subtitle = "内置表盘字体、底部渐隐与标准/兼容表盘说明",
                     onClick = { navigateTo(SettingsDestination.WATCH_FACE_MORE) },
                     scale = itemFisheye(listState, "watchface_more", screenCenterY, screenHeightPx)
                 )
@@ -1068,10 +1111,19 @@ private fun SettingsRootScreen(
                     )
                 }
             }
+            if (selectedWatchFace.isWatchmaker) {
+                item("watchmaker_info") {
+                    MessageCard(
+                        text = "当前为标准 Watchmaker .watch 表盘，支持 Watchmaker 1.0 / Studio 2.0 定义；未实现的图层效果会按兼容策略跳过。",
+                        background = Color(0x33007AFF),
+                        onClick = {}
+                    )
+                }
+            }
             if (selectedWatchFace.isJbWatch) {
                 item("jbwatch_info") {
                     MessageCard(
-                        text = ".watch 表盘已识别为 watch.xml / watch.pxml 结构，当前走开放 watch 标准兼容链。",
+                        text = "当前为旧版 jb_watch 表盘（watch.xml + watch.pxml）兼容格式。",
                         background = Color(0x33007AFF),
                         onClick = {}
                     )
@@ -1679,15 +1731,6 @@ private fun SettingsRootScreen(
                     checked = lowResIcons,
                     onToggle = { vm.setLowResIcons(it) },
                     scale = itemFisheye(listState, "low_res", screenCenterY, screenHeightPx)
-                )
-            }
-            item("fast_flow_animation") {
-                SettingsSwitchRow(
-                    title = if (isZh) "快速流逝动画" else "Fast Flow Animation",
-                    subtitle = if (isZh) "仅作用于蜂窝模式，越远离屏幕中心滚动越快" else "Honeycomb only; icons farther from center move faster while scrolling",
-                    checked = fastFlowAnimationEnabled,
-                    onToggle = vm::setFastFlowAnimationEnabled,
-                    scale = itemFisheye(listState, "fast_flow_animation", screenCenterY, screenHeightPx)
                 )
             }
             item("music_text_animation") {

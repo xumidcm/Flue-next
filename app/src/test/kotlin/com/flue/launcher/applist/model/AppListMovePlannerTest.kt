@@ -58,6 +58,26 @@ class AppListMovePlannerTest {
     }
 
     @Test
+    fun `index planner does not copy or iterate the complete list`() {
+        val indexedKeys = object : AbstractList<AppItemKey>() {
+            private val values = arrayOf("a", "b", "c", "d").map(::AppItemKey)
+
+            override val size: Int
+                get() = values.size
+
+            override fun get(index: Int): AppItemKey = values[index]
+
+            override fun iterator(): Iterator<AppItemKey> =
+                error("the drag hot path must not iterate or copy the full list")
+        }
+
+        assertEquals(
+            AppListCommand.Move(AppItemKey("b"), beforeKey = AppItemKey("d")),
+            AppListMovePlanner.fromIndexes(indexedKeys, fromIndex = 1, toIndex = 2),
+        )
+    }
+
+    @Test
     fun `captured command still moves the intended app after a refresh`() {
         val command = requireNotNull(
             AppListMovePlanner.fromIndexes(

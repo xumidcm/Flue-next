@@ -13,6 +13,7 @@ import android.view.MotionEvent
 import androidx.recyclerview.widget.RecyclerView
 import com.flue.launcher.applist.model.NormalizedPoint
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 internal class NativeAppListRowView(
     context: Context,
@@ -54,6 +55,7 @@ internal class NativeAppListRowView(
     private var dragTranslationX = 0f
     private var flowTranslationY = 0f
     private var flowTranslationX = 0f
+    private var contentTranslationY = 0f
     private var visualScale = 1f
     private var interactionScale = 1f
     private var dragVisual = false
@@ -101,6 +103,7 @@ internal class NativeAppListRowView(
                 this.config.iconLabelGapPx != next.iconLabelGapPx
                 || this.config.iconShape != next.iconShape
                 || this.config.iconCornerRadiusPx != next.iconCornerRadiusPx
+                || this.config.denseGridIconInnerPaddingPx != next.denseGridIconInnerPaddingPx
         this.config = next
         geometryDirty = true
         iconEffectRenderer?.invalidateContent()
@@ -138,6 +141,7 @@ internal class NativeAppListRowView(
         dragTranslationX = 0f
         flowTranslationY = 0f
         flowTranslationX = 0f
+        contentTranslationY = 0f
         rotation = 0f
         setIconBlurRadiusPx(0f, NativeBlurTier.OFF)
         invalidate()
@@ -205,11 +209,22 @@ internal class NativeAppListRowView(
         applyCompositeTranslation()
     }
 
-    fun positionTranslationYWithoutFlow(): Float = moveTranslationY + dragTranslationY
+    fun setContentTranslationY(y: Float) {
+        val next = y.takeIf(Float::isFinite) ?: 0f
+        if (contentTranslationY == next) return
+        contentTranslationY = next
+        applyCompositeTranslation()
+    }
+
+    fun positionTranslationYWithoutFlow(): Float =
+        moveTranslationY + dragTranslationY + contentTranslationY
+
+    fun positionTranslationXWithoutFlow(): Float = moveTranslationX + dragTranslationX
 
     private fun applyCompositeTranslation() {
         translationX = moveTranslationX + dragTranslationX + flowTranslationX
-        translationY = moveTranslationY + dragTranslationY + flowTranslationY
+        translationY =
+            moveTranslationY + dragTranslationY + flowTranslationY + contentTranslationY
     }
 
     private fun updateInteractionScale() {
@@ -239,6 +254,14 @@ internal class NativeAppListRowView(
 
     fun normalizedIconOrigin(viewport: RecyclerView): NormalizedPoint {
         ensureGeometry()
+        // RecyclerView may dispatch a click in the same frame as a newly
+        // attached child (before the host visual pass has initialized the
+        // transform pivot).  Android's implicit pivot is not a stable source
+        // of truth in that window; an edge row can therefore report a launch
+        // origin several pixels above its icon once the entry scale is
+        // applied.  Rows own their transform, so make the invariant explicit
+        // before projecting the icon center.
+        ensureCenteredTransformPivot()
         return normalizedIconCenterAfterChildTransform(
             iconBounds = NativeAppListIconBounds(
                 left = iconBounds.left,
@@ -259,11 +282,33 @@ internal class NativeAppListRowView(
         )
     }
 
+    fun iconCenterXInParentWithoutFlow(): Float {
+        ensureGeometry()
+        return left + iconBounds.centerX() + positionTranslationXWithoutFlow()
+    }
+
+    fun iconCenterYInParentWithoutFlow(): Float {
+        ensureGeometry()
+        return top + iconBounds.centerY() + positionTranslationYWithoutFlow()
+    }
+
+    fun iconWidthForSafeGeometry(): Float {
+        ensureGeometry()
+        return iconBounds.width()
+    }
+
+    fun iconHeightForSafeGeometry(): Float {
+        ensureGeometry()
+        return iconBounds.height()
+    }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val desiredWidth = if (config.presentation == NativeAppListPresentation.HONEYCOMB) {
-            config.honeycombCellSizePx.toInt().coerceAtLeast(config.iconSizePx)
-        } else {
-            (
+        val desiredWidth = when (config.presentation) {
+            NativeAppListPresentation.HONEYCOMB ->
+                config.honeycombCellSizePx.toInt().coerceAtLeast(config.iconSizePx)
+            NativeAppListPresentation.DENSE_GRID ->
+                config.denseGridMinimumItemWidthPx.roundToInt().coerceAtLeast(1)
+            NativeAppListPresentation.LINEAR -> (
                 config.leftSafeInsetPx.toLong() +
                     config.rowPaddingStartPx.toLong() +
                     config.iconSizePx.toLong() +
@@ -271,10 +316,12 @@ internal class NativeAppListRowView(
                     config.rowPaddingEndPx.toLong()
                 ).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         }
-        val desiredHeight = if (config.presentation == NativeAppListPresentation.HONEYCOMB) {
-            config.honeycombCellSizePx.toInt().coerceAtLeast(config.iconSizePx)
-        } else {
-            config.rowHeightPx
+        val desiredHeight = when (config.presentation) {
+            NativeAppListPresentation.HONEYCOMB ->
+                config.honeycombCellSizePx.toInt().coerceAtLeast(config.iconSizePx)
+            NativeAppListPresentation.DENSE_GRID ->
+                config.denseGridMinimumItemHeightPx.roundToInt().coerceAtLeast(1)
+            NativeAppListPresentation.LINEAR -> config.rowHeightPx
         }
         setMeasuredDimension(
             resolveSizeAndState(desiredWidth, widthMeasureSpec, 0),
@@ -285,8 +332,20 @@ internal class NativeAppListRowView(
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
         super.onSizeChanged(width, height, oldWidth, oldHeight)
         geometryDirty = true
+        ensureCenteredTransformPivot()
         iconEffectRenderer?.invalidateContent()
         ensureGeometry()
+    }
+
+    private fun ensureCenteredTransformPivot() {
+        if (width > 0) {
+            val centerX = width / 2f
+            if (pivotX != centerX) pivotX = centerX
+        }
+        if (height > 0) {
+            val centerY = height / 2f
+            if (pivotY != centerY) pivotY = centerY
+        }
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -398,29 +457,46 @@ internal class NativeAppListRowView(
     private fun ensureGeometry() {
         if (!geometryDirty) return
         rowBounds.set(
-            config.leftSafeInsetPx.toFloat().coerceAtMost(width.toFloat()),
+            if (config.presentation == NativeAppListPresentation.LINEAR) {
+                config.leftSafeInsetPx.toFloat().coerceAtMost(width.toFloat())
+            } else {
+                0f
+            },
             0f,
             width.toFloat(),
             height.toFloat(),
         )
 
+        val iconSize: Float
         val iconTop: Float
         val iconLeft: Float
-        if (config.presentation == NativeAppListPresentation.HONEYCOMB) {
-            iconTop = (height - config.iconSizePx) / 2f
-            iconLeft = (width - config.iconSizePx) / 2f
-        } else {
-            val availableIconHeight =
-                height - config.rowPaddingTopPx - config.rowPaddingBottomPx
-            iconTop = config.rowPaddingTopPx +
-                (availableIconHeight - config.iconSizePx) / 2f
-            iconLeft = config.leftSafeInsetPx + config.rowPaddingStartPx.toFloat()
+        when (config.presentation) {
+            NativeAppListPresentation.HONEYCOMB -> {
+                iconSize = config.iconSizePx.toFloat()
+                iconTop = (height - iconSize) / 2f
+                iconLeft = (width - iconSize) / 2f
+            }
+            NativeAppListPresentation.DENSE_GRID -> {
+                val innerPadding = config.denseGridIconInnerPaddingPx
+                    .coerceAtMost(min(width, height) / 2f)
+                iconSize = (min(width, height) - innerPadding * 2f).coerceAtLeast(1f)
+                iconTop = (height - iconSize) / 2f
+                iconLeft = (width - iconSize) / 2f
+            }
+            NativeAppListPresentation.LINEAR -> {
+                iconSize = config.iconSizePx.toFloat()
+                val availableIconHeight =
+                    height - config.rowPaddingTopPx - config.rowPaddingBottomPx
+                iconTop = config.rowPaddingTopPx +
+                    (availableIconHeight - iconSize) / 2f
+                iconLeft = config.leftSafeInsetPx + config.rowPaddingStartPx.toFloat()
+            }
         }
         iconBounds.set(
             iconLeft,
             iconTop,
-            iconLeft + config.iconSizePx,
-            iconTop + config.iconSizePx,
+            iconLeft + iconSize,
+            iconTop + iconSize,
         )
 
         iconClipPath.reset()

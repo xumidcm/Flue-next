@@ -2,7 +2,6 @@ package com.flue.launcher.applist.nativeview
 
 import com.flue.launcher.applist.model.AppItemKey
 import com.flue.launcher.applist.model.AppListCommand
-import com.flue.launcher.applist.model.AppListMovePlanner
 import kotlin.math.hypot
 
 internal interface NativeAppListDragHost {
@@ -13,6 +12,11 @@ internal interface NativeAppListDragHost {
     fun reorderKeyAt(x: Float, y: Float): AppItemKey? = keyAt(x, y)
     fun folderKeyAt(x: Float, y: Float): AppItemKey? = keyAt(x, y)
     fun currentKeys(): List<AppItemKey>
+    fun planMove(source: AppItemKey, target: AppItemKey): AppListCommand.Move?
+    fun planFolder(source: AppItemKey, target: AppItemKey): AppListCommand.CreateFolder?
+    fun beginDragPreview(source: AppItemKey): Boolean = false
+    fun previewMove(source: AppItemKey, target: AppItemKey): Boolean = false
+    fun finishDragPreview(commit: Boolean): AppListCommand.Move? = null
     fun dispatch(command: AppListCommand)
     fun suppressLongClick(key: AppItemKey, suppress: Boolean)
     fun beginDrag(key: AppItemKey, pointerX: Float, pointerY: Float)
@@ -35,15 +39,24 @@ internal interface NativeDragScheduler {
 internal class NativeAppListDragController(
     private val host: NativeAppListDragHost,
     private val scheduler: NativeDragScheduler,
-    private val policy: NativeDragPolicy,
+    private val policyProvider: () -> NativeDragPolicy,
     private val allowFolderCreation: () -> Boolean = { true },
 ) {
-    private val machine = NativeDragGestureMachine(policy)
+    constructor(
+        host: NativeAppListDragHost,
+        scheduler: NativeDragScheduler,
+        policy: NativeDragPolicy,
+        allowFolderCreation: () -> Boolean = { true },
+    ) : this(host, scheduler, { policy }, allowFolderCreation)
+
+    private val machine = NativeDragGestureMachine()
+    private var activePolicy: NativeDragPolicy? = null
     private var suppressedLongClickKey: AppItemKey? = null
     private var lastPointerX = 0f
     private var lastPointerY = 0f
     private var lastPointerAtMillis = 0L
     private var frameScheduled = false
+    private var folderCommandDispatched = false
     private var released = false
 
     val isActive: Boolean
@@ -55,10 +68,12 @@ internal class NativeAppListDragController(
         if (released) return false
         cancelCurrentGesture()
         val source = host.keyAt(x, y) ?: return false
+        val policy = policyProvider()
+        activePolicy = policy
         lastPointerX = x
         lastPointerY = y
         lastPointerAtMillis = eventTimeMillis
-        machine.onDown(source, x, y, eventTimeMillis)
+        machine.onDown(source, x, y, eventTimeMillis, policy)
         suppressedLongClickKey = source
         host.suppressLongClick(source, true)
         scheduler.postDelayed(policy.longPressMillis) {
@@ -141,30 +156,39 @@ internal class NativeAppListDragController(
                     host.dispatch(AppListCommand.DismissActions)
                 is NativeDragEffect.StartDrag -> {
                     host.performDragHaptic()
+                    folderCommandDispatched = false
+                    host.beginDragPreview(effect.key)
                     host.beginDrag(effect.key, lastPointerX, lastPointerY)
                 }
                 is NativeDragEffect.Move ->
-                    AppListMovePlanner.fromKeys(
-                        keys = host.currentKeys(),
-                        movedKey = effect.source,
-                        targetKey = effect.target,
-                    )?.let(host::dispatch)
+                    host.previewMove(effect.source, effect.target)
                 is NativeDragEffect.FolderHoverChanged ->
                     host.setFolderHover(effect.target.takeIf { allowFolderCreation() })
                 is NativeDragEffect.CreateFolder ->
                     if (allowFolderCreation()) {
-                        AppListMovePlanner.folderFromKeys(
-                            keys = host.currentKeys(),
-                            sourceKey = effect.source,
-                            targetKey = effect.target,
-                        )?.let(host::dispatch)
+                        host.planFolder(effect.source, effect.target)?.let { command ->
+                            folderCommandDispatched = true
+                            host.dispatch(command)
+                        }
                     }
-                NativeDragEffect.FinishDrag -> host.endDrag()
+                NativeDragEffect.CommitDrag -> {
+                    host.finishDragPreview(commit = !folderCommandDispatched)
+                        ?.let(host::dispatch)
+                    host.endDrag()
+                    folderCommandDispatched = false
+                }
+                NativeDragEffect.FinishDrag -> {
+                    host.finishDragPreview(commit = false)
+                    host.endDrag()
+                    folderCommandDispatched = false
+                }
             }
         }
+        if (!machine.isTracking) activePolicy = null
     }
 
     private fun updateAutoScrollSchedule() {
+        val policy = activePolicy ?: return
         val delta = nativeAutoScrollDelta(lastPointerY, host.viewportHeightPx, policy)
         if (delta == 0f) {
             cancelFrame()
@@ -177,6 +201,7 @@ internal class NativeAppListDragController(
     private fun onAutoScrollFrame() {
         frameScheduled = false
         if (released || !machine.isDragging) return
+        val policy = activePolicy ?: return
         val delta = nativeAutoScrollDelta(lastPointerY, host.viewportHeightPx, policy)
         if (delta == 0f) return
         host.scrollBy(delta)

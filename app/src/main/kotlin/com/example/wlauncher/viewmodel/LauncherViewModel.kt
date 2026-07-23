@@ -70,6 +70,8 @@ import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceScanner
 import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceStorage
 import com.flue.launcher.watchface.jbwatch.JBWATCH_ID_PREFIX
 import com.flue.launcher.watchface.jbwatch.JbWatchFaceStorage
+import com.flue.launcher.watchface.standard.WATCHMAKER_ID_PREFIX
+import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStorage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -94,6 +96,7 @@ val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "la
 private const val EXTERNAL_LAUNCH_BACKGROUND_TIMEOUT_MS = 1_500L
 private const val APP_ORDER_WRITE_DEBOUNCE_MS = 120L
 private const val EXTERNAL_RETURN_EVIDENCE_WAIT_MS = 300L
+private const val MAX_GENERIC_WATCH_ARCHIVE_BYTES = 32L * 1024L * 1024L
 
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -857,9 +860,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListFoldersEnabled.value = loadedAppListFoldersEnabled
                 }
 
-                val loadedFastFlowEnabled = prefs[KEY_FAST_FLOW_ANIMATION] ?: false
-                if (_fastFlowAnimationEnabled.value != loadedFastFlowEnabled) {
-                    _fastFlowAnimationEnabled.value = loadedFastFlowEnabled
+                // Fast-flow displacement was removed from the native list: it
+                // changed child positions during fling and regressed legacy
+                // watches. Retain the preference key only for downgrade/data
+                // compatibility, but never revive the production behavior.
+                if (_fastFlowAnimationEnabled.value) {
+                    _fastFlowAnimationEnabled.value = false
                 }
 
                 val loadedMusicTextSwitchAnimation = MusicTextSwitchAnimations.normalizeId(
@@ -1933,9 +1939,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_APP_LIST_FOLDERS_ENABLED] = enabled } }
     }
 
-    fun setFastFlowAnimationEnabled(enabled: Boolean) {
-        _fastFlowAnimationEnabled.value = enabled
-        persist { store.edit { it[KEY_FAST_FLOW_ANIMATION] = enabled } }
+    fun setFastFlowAnimationEnabled(@Suppress("UNUSED_PARAMETER") enabled: Boolean) {
+        _fastFlowAnimationEnabled.value = false
+        persist { store.edit { it[KEY_FAST_FLOW_ANIMATION] = false } }
     }
 
     fun setMusicTextSwitchAnimation(id: String) {
@@ -2151,6 +2157,44 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    suspend fun importWatchmakerWatchFace(uri: Uri): Result<LunchWatchFaceDescriptor> {
+        return runCatching {
+            watchFaceRefreshJob?.cancel()
+            val descriptor = withContext(Dispatchers.IO) {
+                WatchmakerWatchFaceStorage.importArchive(getApplication(), uri)
+            }
+            finishImportedWatchFaceImport(descriptor)
+        }
+    }
+
+    /**
+     * Installs an editor-produced archive through the same validator and
+     * content-addressed storage path as a user-imported .watch file.
+     * The caller owns the temporary file and may delete it after completion.
+     */
+    suspend fun importWatchmakerWatchFaceFile(archive: File): Result<LunchWatchFaceDescriptor> {
+        return runCatching {
+            watchFaceRefreshJob?.cancel()
+            require(archive.isFile) { "编辑后的 .watch 文件不存在" }
+            val descriptor = withContext(Dispatchers.IO) {
+                WatchmakerWatchFaceStorage.importArchiveFile(getApplication(), archive)
+            }
+            finishImportedWatchFaceImport(descriptor)
+        }
+    }
+
+    /** Installs a community-store download through the standard .watch path. */
+    suspend fun installWatchStoreArchive(archive: File): Result<LunchWatchFaceDescriptor> {
+        return runCatching {
+            watchFaceRefreshJob?.cancel()
+            require(archive.isFile) { "市场下载的 .watch 文件不存在" }
+            val descriptor = withContext(Dispatchers.IO) {
+                WatchmakerWatchFaceStorage.importArchiveFile(getApplication(), archive)
+            }
+            finishImportedWatchFaceImport(descriptor)
+        }
+    }
+
     suspend fun importWatchFaceArchive(
         uri: Uri,
         allowDingDingCat: Boolean = true
@@ -2160,6 +2204,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             val descriptor = withContext(Dispatchers.IO) {
                 withTemporaryWatchFaceArchive(uri) { archive ->
                     when (sniffWatchFaceArchive(archive)) {
+                        WatchFaceArchiveKind.Watchmaker ->
+                            WatchmakerWatchFaceStorage.importArchiveFile(getApplication(), archive)
                         WatchFaceArchiveKind.JbWatch -> JbWatchFaceStorage.importArchiveFile(getApplication(), archive)
                         WatchFaceArchiveKind.DingDingCat -> {
                             if (!allowDingDingCat) {
@@ -2169,9 +2215,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                         }
                         WatchFaceArchiveKind.Unknown -> {
                             if (allowDingDingCat) {
-                                error("无法识别表盘包：需要 watch.xml/watch.pxml 或 dial.json")
+                                error("无法识别表盘包：需要标准 .watch、jb_watch 或 dial.json")
                             } else {
-                                error("无法识别 jb_watch/.watch 表盘包：需要 watch.xml/watch.pxml")
+                                error("无法识别标准 .watch/jb_watch 表盘包：需要 watch.xml")
                             }
                         }
                     }
@@ -2245,12 +2291,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     suspend fun deleteImportedWatchFace(id: String): Result<Unit> {
         return runCatching {
             val descriptor = _availableWatchFaces.value.firstOrNull {
-                it.id == id && (it.isDingDingCat || it.isJbWatch)
+                it.id == id && (it.isDingDingCat || it.isJbWatch || it.isWatchmaker)
             } ?: error("表盘不存在")
             val deleted = withContext(Dispatchers.IO) {
                 when {
                     descriptor.isDingDingCat -> DingDingCatWatchFaceStorage.delete(getApplication(), descriptor)
                     descriptor.isJbWatch -> JbWatchFaceStorage.delete(getApplication(), descriptor)
+                    descriptor.isWatchmaker -> WatchmakerWatchFaceStorage.delete(getApplication(), descriptor)
                     else -> false
                 }
             }
@@ -2303,7 +2350,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         return LunchWatchFaceScanner.builtInDescriptors() +
             LunchWatchFaceScanner.scanInstalled(context) +
             DingDingCatWatchFaceScanner.scanImported(context) +
-            JbWatchFaceStorage.scan(context)
+            JbWatchFaceStorage.scan(context) +
+            WatchmakerWatchFaceStorage.scan(context)
     }
 
     private fun publishWatchFaces(watchFaces: List<LunchWatchFaceDescriptor>) {
@@ -2965,7 +3013,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
             isImportedArchiveId(requestedId) &&
                 _selectedWatchFace.value.id == requestedId &&
-                (_selectedWatchFace.value.isDingDingCat || _selectedWatchFace.value.isJbWatch) -> {
+                (
+                    _selectedWatchFace.value.isDingDingCat ||
+                        _selectedWatchFace.value.isJbWatch ||
+                        _selectedWatchFace.value.isWatchmaker
+                    ) -> {
                 LunchWatchFaceRegistry.setCurrentSelectedId(requestedId)
             }
             isImportedArchiveId(requestedId) && !freshScanCompleted -> {
@@ -2998,10 +3050,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun isImportedArchiveId(id: String): Boolean {
-        return id.startsWith(DINGDINGCAT_ID_PREFIX) || id.startsWith(JBWATCH_ID_PREFIX)
+        return id.startsWith(DINGDINGCAT_ID_PREFIX) ||
+            id.startsWith(JBWATCH_ID_PREFIX) ||
+            id.startsWith(WATCHMAKER_ID_PREFIX)
     }
 
     private enum class WatchFaceArchiveKind {
+        Watchmaker,
         JbWatch,
         DingDingCat,
         Unknown
@@ -3012,7 +3067,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val tempZip = File.createTempFile("watchface_import_", ".zip", context.cacheDir)
         return try {
             context.contentResolver.openInputStream(uri)?.use { input ->
-                tempZip.outputStream().use { output -> input.copyTo(output) }
+                tempZip.outputStream().use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var copied = 0L
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        copied += count.toLong()
+                        if (copied > MAX_GENERIC_WATCH_ARCHIVE_BYTES) {
+                            throw IllegalArgumentException("表盘包超过 32MB 限制")
+                        }
+                        output.write(buffer, 0, count)
+                    }
+                }
             } ?: error("无法读取表盘包")
             block(tempZip)
         } finally {
@@ -3024,10 +3091,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         return ZipFile(archive).use { zip ->
             val names = zip.entries().asSequence()
                 .filterNot { it.isDirectory }
-                .map { it.name.replace('\\', '/').substringAfterLast('/') }
+                .map { it.name.replace('\\', '/').substringAfterLast('/').lowercase(Locale.ROOT) }
                 .toSet()
             when {
                 "watch.xml" in names && "watch.pxml" in names -> WatchFaceArchiveKind.JbWatch
+                "watch.xml" in names -> WatchFaceArchiveKind.Watchmaker
                 "dial.json" in names -> WatchFaceArchiveKind.DingDingCat
                 else -> WatchFaceArchiveKind.Unknown
             }

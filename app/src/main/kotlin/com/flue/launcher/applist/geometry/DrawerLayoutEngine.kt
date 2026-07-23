@@ -41,54 +41,133 @@ data class DrawerItemGeometry(
     val launchOrigin: NormalizedPoint,
 )
 
-class DrawerLayoutEngine {
-    fun layout(request: DrawerLayoutRequest): List<DrawerItemGeometry> {
-        val outline = SafeOutline.create(
-            viewport = request.viewport,
-            deviceProfile = request.deviceProfile,
-            itemSize = request.itemSize,
+/**
+ * Reusable, allocation-free result used by the native View hot path.
+ *
+ * [DrawerLayoutEngine.layout] intentionally keeps returning immutable geometry
+ * for snapshot/tests. Native adapters use [DrawerLayoutSession.resolve] with
+ * one caller-owned instance instead, so a scroll frame does not allocate a
+ * list, a rect, or a point for every attached icon.
+ */
+internal class MutableDrawerItemGeometry(
+    var centerX: Float = 0f,
+    var centerY: Float = 0f,
+    var scale: Float = 1f,
+    var alpha: Float = 1f,
+    var spacingCompression: Float = 0f,
+    var effectProgress: Float = 0f,
+    var blurBucket: BlurBucket = BlurBucket.NONE,
+) {
+    fun reset(centerX: Float, centerY: Float): MutableDrawerItemGeometry {
+        this.centerX = centerX
+        this.centerY = centerY
+        scale = 1f
+        alpha = 1f
+        spacingCompression = 0f
+        effectProgress = 0f
+        blurBucket = BlurBucket.NONE
+        return this
+    }
+}
+
+/**
+ * Geometry snapshot for one viewport/configuration.
+ *
+ * The outline and fish-eye parameters are built once when a LayoutManager's
+ * viewport or settings change. [resolve] then only performs scalar math and
+ * writes to the supplied output object.
+ */
+internal class DrawerLayoutSession internal constructor(
+    private val viewport: ViewportPx,
+    private val outline: SafeOutline,
+    private val itemSize: PixelSize,
+    private val fisheye: FisheyeParameters,
+) {
+    fun resolve(
+        desiredCenterX: Float,
+        desiredCenterY: Float,
+        output: MutableDrawerItemGeometry,
+    ): MutableDrawerItemGeometry {
+        if (!desiredCenterX.isFinite() || !desiredCenterY.isFinite()) {
+            return output.reset(desiredCenterX, desiredCenterY)
+        }
+        val fisheyeVisuals = calculateFisheyeVisuals(
+            screenCenterY = desiredCenterY,
+            safeCenterY = outline.center.y,
+            safeHalfHeight = outline.halfHeight,
+            parameters = fisheye,
         )
+        val compressedCenterX = desiredCenterX
+        val compressedCenterY = outline.center.y +
+            (desiredCenterY - outline.center.y) *
+            (1f - fisheyeVisuals.spacingCompression)
+        outline.constrainCenter(
+            desiredCenterX = compressedCenterX,
+            desiredCenterY = compressedCenterY,
+            hitSize = itemSize,
+            output = output,
+        )
+        output.scale = fisheyeVisuals.scale
+        output.alpha = fisheyeVisuals.alpha
+        output.spacingCompression = fisheyeVisuals.spacingCompression
+        output.effectProgress = fisheyeVisuals.effectProgress
+        output.blurBucket = blurBucketFor(
+            progress = fisheyeVisuals.effectProgress,
+            maximum = fisheye.maximumBlur,
+        )
+        return output
+    }
+
+    val viewportWidth: Float
+        get() = viewport.width
+
+    val viewportHeight: Float
+        get() = viewport.height
+}
+
+class DrawerLayoutEngine {
+    /** Builds a reusable geometry snapshot for native View adapters. */
+    internal fun session(request: DrawerLayoutRequest): DrawerLayoutSession =
+        DrawerLayoutSession(
+            viewport = request.viewport,
+            outline = SafeOutline.create(
+                viewport = request.viewport,
+                deviceProfile = request.deviceProfile,
+                itemSize = request.itemSize,
+            ),
+            itemSize = request.itemSize,
+            fisheye = request.fisheye,
+        )
+
+    fun layout(request: DrawerLayoutRequest): List<DrawerItemGeometry> {
+        val session = session(request)
         return request.itemPlacements.map { placement ->
             val screenCenter = PixelPoint(
                 x = placement.contentCenter.x,
                 y = placement.contentCenter.y - request.scrollOffsetPx,
             )
-            val fisheyeVisuals = calculateFisheyeVisuals(
-                screenCenterY = screenCenter.y,
-                safeCenterY = outline.center.y,
-                safeHalfHeight = outline.halfHeight,
-                parameters = request.fisheye,
-            )
-            val compressedCenter = PixelPoint(
-                x = screenCenter.x,
-                y = outline.center.y +
-                    (screenCenter.y - outline.center.y) *
-                    (1f - fisheyeVisuals.spacingCompression),
-            )
-            val finalCenter = outline.constrainCenter(
-                desiredCenter = compressedCenter,
-                hitSize = request.itemSize,
+            val resolved = session.resolve(
+                desiredCenterX = screenCenter.x,
+                desiredCenterY = screenCenter.y,
+                output = MutableDrawerItemGeometry(),
             )
             val bounds = PixelRect.centeredAt(
-                center = finalCenter,
-                size = request.itemSize.scaledBy(fisheyeVisuals.scale),
+                center = PixelPoint(resolved.centerX, resolved.centerY),
+                size = request.itemSize.scaledBy(resolved.scale),
             )
             val hitRegion = PixelRect.centeredAt(
-                center = finalCenter,
+                center = PixelPoint(resolved.centerX, resolved.centerY),
                 size = request.itemSize,
             )
 
             DrawerItemGeometry(
                 key = placement.key,
                 bounds = bounds,
-                scale = fisheyeVisuals.scale,
-                alpha = fisheyeVisuals.alpha,
-                blurBucket = blurBucketFor(
-                    progress = fisheyeVisuals.effectProgress,
-                    maximum = request.fisheye.maximumBlur,
-                ),
+                scale = resolved.scale,
+                alpha = resolved.alpha,
+                blurBucket = resolved.blurBucket,
                 hitRegion = hitRegion,
-                zOrder = 1f - fisheyeVisuals.effectProgress,
+                zOrder = 1f - resolved.effectProgress,
                 launchOrigin = NormalizedPoint(
                     x = (bounds.centerX / request.viewport.width).coerceIn(0f, 1f),
                     y = (bounds.centerY / request.viewport.height).coerceIn(0f, 1f),
@@ -153,14 +232,16 @@ private fun blurBucketFor(
     return candidates[index]
 }
 
-private sealed interface SafeOutline {
+internal sealed interface SafeOutline {
     val center: PixelPoint
     val halfHeight: Float
 
     fun constrainCenter(
-        desiredCenter: PixelPoint,
+        desiredCenterX: Float,
+        desiredCenterY: Float,
         hitSize: PixelSize,
-    ): PixelPoint
+        output: MutableDrawerItemGeometry,
+    )
 
     data class Rectangle(
         val safeBounds: PixelRect,
@@ -172,20 +253,20 @@ private sealed interface SafeOutline {
         override val halfHeight: Float = safeBounds.height / 2f
 
         override fun constrainCenter(
-            desiredCenter: PixelPoint,
+            desiredCenterX: Float,
+            desiredCenterY: Float,
             hitSize: PixelSize,
-        ): PixelPoint {
+            output: MutableDrawerItemGeometry,
+        ) {
             val halfWidth = hitSize.width / 2f
             val halfItemHeight = hitSize.height / 2f
-            return PixelPoint(
-                x = desiredCenter.x.coerceIn(
-                    minimumValue = safeBounds.left + halfWidth,
-                    maximumValue = safeBounds.right - halfWidth,
-                ),
-                y = desiredCenter.y.coerceIn(
-                    minimumValue = safeBounds.top + halfItemHeight,
-                    maximumValue = safeBounds.bottom - halfItemHeight,
-                ),
+            output.centerX = desiredCenterX.coerceIn(
+                minimumValue = safeBounds.left + halfWidth,
+                maximumValue = safeBounds.right - halfWidth,
+            )
+            output.centerY = desiredCenterY.coerceIn(
+                minimumValue = safeBounds.top + halfItemHeight,
+                maximumValue = safeBounds.bottom - halfItemHeight,
             )
         }
     }
@@ -197,16 +278,18 @@ private sealed interface SafeOutline {
         override val halfHeight: Float = radius
 
         override fun constrainCenter(
-            desiredCenter: PixelPoint,
+            desiredCenterX: Float,
+            desiredCenterY: Float,
             hitSize: PixelSize,
-        ): PixelPoint {
+            output: MutableDrawerItemGeometry,
+        ) {
             val halfWidth = hitSize.width / 2f
             val halfItemHeight = hitSize.height / 2f
             val maximumVerticalOffset = (
                 sqrt((radius * radius - halfWidth * halfWidth).coerceAtLeast(0f)) -
                     halfItemHeight
                 ).coerceAtLeast(0f)
-            val constrainedY = desiredCenter.y.coerceIn(
+            val constrainedY = desiredCenterY.coerceIn(
                 minimumValue = center.y - maximumVerticalOffset,
                 maximumValue = center.y + maximumVerticalOffset,
             )
@@ -217,13 +300,11 @@ private sealed interface SafeOutline {
                     .coerceAtLeast(0f),
             )
             val maximumHorizontalOffset = (halfChord - halfWidth).coerceAtLeast(0f)
-            return PixelPoint(
-                x = desiredCenter.x.coerceIn(
-                    minimumValue = center.x - maximumHorizontalOffset,
-                    maximumValue = center.x + maximumHorizontalOffset,
-                ),
-                y = constrainedY,
+            output.centerX = desiredCenterX.coerceIn(
+                minimumValue = center.x - maximumHorizontalOffset,
+                maximumValue = center.x + maximumHorizontalOffset,
             )
+            output.centerY = constrainedY
         }
     }
 

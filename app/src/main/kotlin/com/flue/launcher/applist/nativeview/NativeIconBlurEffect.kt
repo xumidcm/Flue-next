@@ -22,6 +22,13 @@ internal fun quantizeNativeBlurRadiusPx(radiusPx: Float): Int {
     return selected
 }
 
+internal fun nativeContentOverlayBlurBucketPx(config: NativeAppListConfig): Int =
+    if (config.effectiveBlurTier() == NativeBlurTier.SYSTEM) {
+        quantizeNativeBlurRadiusPx(config.contentOverlayBlurRadiusPx)
+    } else {
+        0
+    }
+
 internal object NativeSystemBlurEffectCache {
     private val cache = LruCache<Int, RenderEffect>(NativeBlurRadiusBucketsPx.size)
 
@@ -53,17 +60,21 @@ internal interface NativeIconEffectRenderer {
 @RequiresApi(Build.VERSION_CODES.S)
 internal class RenderNodeNativeIconEffectRenderer : NativeIconEffectRenderer {
     private val renderNode = RenderNode("flue-native-app-icon")
-    private var blurRadiusBucketPx = 0
+    /**
+     * Effect currently installed on [renderNode]. A zero requested bucket only
+     * bypasses this node in [NativeAppListRowView]; keeping the last effect
+     * installed avoids detaching and reattaching every visible row when a
+     * scroll starts and settles.
+     */
+    private var installedBlurRadiusBucketPx = 0
     private var recordedWidth = 0
     private var recordedHeight = 0
     private var contentDirty = true
 
     override fun setBlurRadiusBucket(radiusPx: Int) {
-        if (blurRadiusBucketPx == radiusPx) return
-        blurRadiusBucketPx = radiusPx
-        renderNode.setRenderEffect(
-            radiusPx.takeIf { it > 0 }?.let(NativeSystemBlurEffectCache::get),
-        )
+        if (radiusPx <= 0 || installedBlurRadiusBucketPx == radiusPx) return
+        installedBlurRadiusBucketPx = radiusPx
+        renderNode.setRenderEffect(NativeSystemBlurEffectCache.get(radiusPx))
     }
 
     override fun invalidateContent() {
@@ -72,6 +83,8 @@ internal class RenderNodeNativeIconEffectRenderer : NativeIconEffectRenderer {
 
     override fun discardContent() {
         renderNode.discardDisplayList()
+        renderNode.setRenderEffect(null)
+        installedBlurRadiusBucketPx = 0
         recordedWidth = 0
         recordedHeight = 0
         contentDirty = true

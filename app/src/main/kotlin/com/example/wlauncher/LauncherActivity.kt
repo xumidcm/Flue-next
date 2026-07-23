@@ -65,10 +65,12 @@ import com.flue.launcher.ui.anim.launchMaskMotionPolicy
 import com.flue.launcher.ui.anim.scaleBlurAlpha
 import com.flue.launcher.ui.anim.AppListScaleMotion
 import com.flue.launcher.ui.anim.TransitionSpring
+import com.flue.launcher.ui.anim.LayerPivot
 import com.flue.launcher.ui.controlcenter.ControlCenterLayer
 import com.flue.launcher.ui.drawer.AppFolderOverlay
-import com.flue.launcher.ui.drawer.HoneycombScreen
 import com.flue.launcher.ui.drawer.NativeListDrawerScreen
+import com.flue.launcher.ui.drawer.NativeAppListEdgeFadeOverlay
+import com.flue.launcher.applist.nativeview.NativeAppListPresentation
 import com.flue.launcher.ui.drawer.AppListBackend
 import com.flue.launcher.ui.drawer.appListBackend
 import com.flue.launcher.ui.drawer.appListPalette
@@ -95,6 +97,7 @@ import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.LunchWatchFaceHost
 import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceHost
 import com.flue.launcher.watchface.jbwatch.JbWatchFaceHost
+import com.flue.launcher.watchface.standard.WatchmakerWatchFaceHost
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -420,6 +423,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
         vm.openApp(appInfo, origin, launchDelay, returnState)
     }
     var prevState by remember { mutableStateOf(screenState) }
+    // One low-frequency token per transition into Apps. NativeAppListView
+    // owns all per-frame entry motion so Compose never drives AndroidView
+    // updates at animation cadence.
+    var appListEntryAnimationToken by remember { mutableStateOf(0L) }
     var appListLayerReleaseHold by remember { mutableStateOf(false) }
     var directLaunchAppListConsumed by rememberSaveable { mutableStateOf(false) }
     var directLaunchStartupWindowOpen by rememberSaveable { mutableStateOf(true) }
@@ -533,6 +540,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
             prevState = screenState
         }
     }
+    LaunchedEffect(screenState) {
+        if (screenState == ScreenState.Apps) {
+            appListEntryAnimationToken = if (appListEntryAnimationToken == Long.MAX_VALUE) {
+                0L
+            } else {
+                appListEntryAnimationToken + 1L
+            }
+        }
+    }
     LaunchedEffect(screenState, iconShadowEnabled) {
         if (!iconShadowEnabled || screenState != ScreenState.Apps) {
             appListShadowsReady = false
@@ -577,10 +593,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val homePressRequests by vm.homePressRequests.collectAsStateWithLifecycle()
 
     val appListTransformOrigin = when {
-        launchSourceState != ScreenState.Apps -> null
-        screenState == ScreenState.App && activeLaunchUsesOrigin -> appOpenOrigin
-        targetReturn && appListReturnOriginActive && !classicReturnAnimationEnabled -> appOpenOrigin
-        else -> null
+        launchSourceState != ScreenState.Apps -> LayerPivot.Center
+        screenState == ScreenState.App && activeLaunchUsesOrigin ->
+            LayerPivot.LaunchIcon(appOpenOrigin)
+        targetReturn && appListReturnOriginActive && !classicReturnAnimationEnabled ->
+            LayerPivot.LaunchIcon(appOpenOrigin)
+        else -> LayerPivot.Center
     }
     val appListIconReturnActive =
         targetReturn &&
@@ -589,18 +607,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
             !classicReturnAnimationEnabled &&
             (isReturningFromApp || appListReturnOriginActive)
     val appListLayerOrigin = if (isOpeningAppList || isClosingAppListToFace) {
-        Offset(0.5f, 0.5f)
+        LayerPivot.Center
     } else if (appListIconReturnActive) {
-        appOpenOrigin
+        LayerPivot.LaunchIcon(appOpenOrigin)
     } else {
         appListTransformOrigin
     }
     val appleWatchStyle = uiStyle == UiStyle.APPLE_WATCH
-    val appListEntryProgress by animateFloatAsState(
-        targetValue = if (appleWatchStyle || screenState == ScreenState.Apps) 1f else 0f,
-        animationSpec = remember { tween(durationMillis = 400) },
-        label = "app_list_entry_progress",
-    )
+    val activeAppListBackend = appListBackend(layoutMode, uiStyle)
     val appListMotionPolicy = remember(
         appleWatchStyle,
         isOpeningAppList,
@@ -653,8 +667,21 @@ fun LauncherScreen(vm: LauncherViewModel) {
             fade
         }
     }
-    val faceLayerBlurEnabled = layerBlurEnabled
-    val appListLayerBlurEnabled = layerBlurEnabled
+    val launchTransitionUnderlying =
+        animationOverrideEnabled && launchMaskPolicy.opaqueBlack && screenState == ScreenState.App
+    val nativeListTransitionInMotion =
+        isOpeningAppList ||
+            isClosingAppListToFace ||
+            isReturningFromApp ||
+            appListIconReturnActive ||
+            appListReturnOriginActive
+    // Keep logical blur animation clocks alive, but skip expensive RenderEffect
+    // attachment while a native list is moving. A static edge mask/scrim still
+    // supplies the visual depth and avoids GPU stalls on older watches.
+    val faceLayerBlurEnabled =
+        layerBlurEnabled && !launchTransitionUnderlying && !nativeListTransitionInMotion
+    val appListLayerBlurEnabled =
+        layerBlurEnabled && !launchTransitionUnderlying && !nativeListTransitionInMotion
     val effectiveIconShadowEnabled = iconShadowEnabled && appListShadowsReady
     val fadeLaunch = launchSourceState == ScreenState.Stack || launchSourceState == ScreenState.Notifications
     val iconLaunchAvailable = currentLaunchIcon != null || retainedLaunchIcon != null
@@ -819,6 +846,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val sideSceneOverlayActive = sideScreenVisible || widgetPageVisible || controlCenterVisible
         val appListLayerRaised = screenState == ScreenState.Apps ||
             isOpeningAppList ||
+            isClosingAppListToFace ||
+            isReturningFromApp ||
             appListLayerReleaseHold ||
             (screenState == ScreenState.App && launchSourceState == ScreenState.Apps && showLaunchBackdrop)
         val suppressAppListHeavyEffects =
@@ -859,7 +888,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         targetValues = faceLayerValues(faceAnimState, uiStyle),
                         screenHeight = screenHeightPx,
                         blurEnabled = faceLayerBlurEnabled,
-                        origin = Offset(0.5f, 0.5f)
+                        origin = LayerPivot.Center
                     )
             ) {
                 AnimatedContent(
@@ -869,7 +898,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         selectedWatchFaceId == BUILT_IN_WATCHFACE_ID ||
                         (
                             selectedWatchFace.id == selectedWatchFaceId &&
-                                (selectedWatchFace.isDingDingCat || selectedWatchFace.isJbWatch) &&
+                                (
+                                    selectedWatchFace.isDingDingCat ||
+                                        selectedWatchFace.isJbWatch ||
+                                        selectedWatchFace.isWatchmaker
+                                    ) &&
                                 !selectedWatchFace.sourceDirPath.isNullOrBlank()
                             )
                     ) {
@@ -914,6 +947,39 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 !sideSceneOverlayActive
                             ) lockScreenWithAccessibility else null
                         )
+                    } else if (selectedWatchFace.isWatchmaker) {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            WatchmakerWatchFaceHost(
+                                descriptor = selectedWatchFace,
+                                isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
+                                refreshToken = watchFaceRefreshToken,
+                                onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
+                                onDoubleTap = if (
+                                    doubleTapLockScreenEnabled &&
+                                    launcherInteractive &&
+                                    screenState == ScreenState.Face &&
+                                    !sideSceneOverlayActive
+                                ) lockScreenWithAccessibility else null,
+                                onLoadFailure = { descriptor, error ->
+                                    val rootCause = generateSequence(error) { it.cause }.last()
+                                    vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
+                                },
+                            )
+                            if (watchFaceBottomFadeEnabled) {
+                                WatchFaceBottomFadeOverlay(
+                                    color = watchFaceFadePalette.fadeEdge,
+                                    heightDp = honeycombBottomFade,
+                                    blurRadiusDp = if (blurEnabled && edgeBlurEnabled) honeycombEdgeBlurRadius else 0f
+                                )
+                            }
+                            WatchFaceStatusIndicatorOverlay(
+                                showStatusIndicators = watchFaceStatusIndicators,
+                                hasNotifications = showNotification && notificationGroups.isNotEmpty(),
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(top = 18.dp)
+                            )
+                        }
                     } else if (selectedWatchFace.isDingDingCat) {
                         Box(modifier = Modifier.fillMaxSize()) {
                             DingDingCatWatchFaceHost(
@@ -1035,47 +1101,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         translationSpec = appListMotionSpec
                     )
             ) {
-                when (appListBackend(layoutMode)) {
-                    AppListBackend.COMPOSE_HONEYCOMB -> HoneycombScreen(
-                        apps = apps,
-                        blurEnabled = blurEnabled,
-                        edgeBlurEnabled = edgeBlurEnabled,
-                        suppressHeavyEffects = suppressAppListHeavyEffects,
-                        narrowCols = honeycombCols,
-                        topBlurRadiusDp = honeycombEdgeBlurRadius,
-                        bottomBlurRadiusDp = honeycombEdgeBlurRadius,
-                        topFadeRangeDp = honeycombTopFade,
-                        bottomFadeRangeDp = honeycombBottomFade,
-                        rotaryHapticsEnabled = rotaryHapticsEnabled,
-                        active = screenState == ScreenState.Apps,
-                        leftSafeInsetPercent = appListLeftSafeInsetPercent,
-                        appListScalePercent = appListScalePercent,
-                        folderOpen = openFolder != null,
-                        useWatchFaceColors = useAppListWatchFaceColors,
-                        allowFolderCreation = appListFoldersEnabled,
-                        fisheyeEnabled = appListFisheyeEnabled,
-                        fisheyeRangeRows = appListFisheyeRangeRows,
-                        fisheyeStrengthPercent = appListFisheyeStrengthPercent,
-                        edgeSpacingCompressionEnabled = appListEdgeSpacingCompressionEnabled,
-                        fastFlowAnimationEnabled = fastFlowAnimationEnabled,
-                        twoToneIconsEnabled = twoToneIconsEnabled,
-                        iconShadowEnabled = effectiveIconShadowEnabled,
-                        themeColor = appListThemeColor,
-                        uiStyle = uiStyle,
-                        darkMode = effectiveDarkMode,
-                        entryProgress = appListEntryProgress,
-                        onAppClick = { appInfo, origin ->
-                            launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
-                        },
-                        onReorder = vm::moveApp,
-                        onCreateFolder = vm::createFolder,
-                        onExcludeApp = { appInfo -> vm.setAppHidden(appInfo.componentKey, true) },
-                        onRemoveShortcut = vm::removeAppListShortcut,
-                        onRenameFolder = vm::renameFolder,
-                        onDissolveFolder = vm::dissolveFolder,
-                        onScrollToTop = { vm.setState(ScreenState.Face) }
-                    )
-                    AppListBackend.NATIVE_LINEAR -> NativeListDrawerScreen(
+                when (val backend = activeAppListBackend) {
+                    AppListBackend.NATIVE_LINEAR,
+                    AppListBackend.NATIVE_HONEYCOMB,
+                    AppListBackend.NATIVE_DENSE_GRID -> NativeListDrawerScreen(
                         apps = apps,
                         blurEnabled = blurEnabled,
                         edgeBlurEnabled = edgeBlurEnabled,
@@ -1084,6 +1113,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         bottomFadeRangeDp = honeycombBottomFade,
                         topBlurRadiusDp = honeycombEdgeBlurRadius,
                         bottomBlurRadiusDp = honeycombEdgeBlurRadius,
+                        drawEdgeFadeMaskInNativeView = false,
                         rotaryHapticsEnabled = rotaryHapticsEnabled,
                         active = screenState == ScreenState.Apps,
                         initialScrollResetKey = directLaunchInitialScrollResetKey,
@@ -1103,7 +1133,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         themeColor = appListThemeColor,
                         uiStyle = uiStyle,
                         darkMode = effectiveDarkMode,
-                        entryProgress = appListEntryProgress,
+                        entryAnimationToken = appListEntryAnimationToken,
+                        presentation = when (backend) {
+                            AppListBackend.NATIVE_LINEAR -> NativeAppListPresentation.LINEAR
+                            AppListBackend.NATIVE_HONEYCOMB -> NativeAppListPresentation.HONEYCOMB
+                            AppListBackend.NATIVE_DENSE_GRID -> NativeAppListPresentation.DENSE_GRID
+                        },
+                        honeycombNarrowColumns = honeycombCols,
                         onAppClick = { appInfo, origin ->
                             launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
                         },
@@ -1117,6 +1153,29 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     )
                 }
             }
+
+            // The edge mask is deliberately a sibling of the blurred list
+            // layer. Drawing it inside NativeAppListView made the parent
+            // RenderEffect blur the mask and caused a flash during launch and
+            // return. Keep the host mounted and animate only its alpha so a
+            // state switch cannot remove it one frame too early.
+            val nativeEdgeFadeVisible =
+                screenState == ScreenState.Apps ||
+                    isOpeningAppList ||
+                    isClosingAppListToFace ||
+                    appListLayerReleaseHold ||
+                    (screenState == ScreenState.App &&
+                        launchSourceState == ScreenState.Apps &&
+                        showLaunchBackdrop)
+            NativeAppListEdgeFadeOverlay(
+                visible = nativeEdgeFadeVisible,
+                topFadeRangeDp = honeycombTopFade,
+                bottomFadeRangeDp = honeycombBottomFade,
+                edgeColor = appListColors.fadeEdge,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(3.1f),
+            )
 
             val visibleFolder = openFolder
             if (screenState == ScreenState.Apps && visibleFolder != null) {

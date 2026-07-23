@@ -2,6 +2,7 @@ package com.flue.launcher.applist.nativeview
 
 import com.flue.launcher.applist.model.AppItemKey
 import com.flue.launcher.applist.model.AppListCommand
+import com.flue.launcher.applist.model.AppListMovePlanner
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -18,7 +19,7 @@ class NativeAppListDragControllerTest {
     )
 
     @Test
-    fun `scheduled long press owns menu and drag emits stable key command`() {
+    fun `scheduled long press owns menu and release emits stable key command`() {
         val host = FakeDragHost()
         val scheduler = FakeDragScheduler()
         val controller = NativeAppListDragController(host, scheduler, policy)
@@ -36,9 +37,60 @@ class NativeAppListDragControllerTest {
         host.hitKey = key("b")
         assertTrue(controller.onMove(40f, 150f, 700L))
         assertEquals(40f, host.dragPointerX, 0f)
+        assertFalse(host.commands.any { it is AppListCommand.Move })
+
+        assertTrue(controller.onUp(40f, 150f, 701L))
         assertEquals(
             AppListCommand.Move(key("a"), beforeKey = key("c")),
             host.commands.last(),
+        )
+        assertEquals(1, host.commands.count { it is AppListCommand.Move })
+    }
+
+    @Test
+    fun `changing drag target does not materialize the complete current key list`() {
+        val host = FakeDragHost()
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+        startDrag(controller, scheduler)
+        host.hitKey = key("b")
+        host.currentKeysReadCount = 0
+
+        controller.onMove(40f, 150f, 700L)
+
+        assertEquals(0, host.currentKeysReadCount)
+        assertFalse(host.commands.any { it is AppListCommand.Move })
+        controller.onUp(40f, 150f, 701L)
+        assertEquals(
+            AppListCommand.Move(key("a"), beforeKey = key("c")),
+            host.commands.last(),
+        )
+    }
+
+    @Test
+    fun `multiple hover targets preview locally and release submits one final move`() {
+        val host = FakeDragHost().apply {
+            keys = listOf(key("a"), key("b"), key("c"), key("d"))
+        }
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+        startDrag(controller, scheduler)
+
+        host.hitKey = key("b")
+        controller.onMove(10f, 150f, 700L)
+        host.hitKey = key("d")
+        controller.onMove(10f, 220f, 710L)
+        host.hitKey = key("c")
+        controller.onMove(10f, 180f, 720L)
+
+        assertEquals(3, host.previewMoveCount)
+        assertFalse(host.commands.any { it is AppListCommand.Move })
+
+        controller.onUp(10f, 150f, 721L)
+
+        assertEquals(
+            listOf(AppListCommand.Move(key("a"), beforeKey = key("c"))),
+            host.commands.filterIsInstance<AppListCommand.Move>(),
         )
     }
 
@@ -59,6 +111,43 @@ class NativeAppListDragControllerTest {
         assertFalse(scheduler.hasFrame)
         assertEquals(null, host.draggingKey)
         assertFalse(host.longClickSuppressed)
+    }
+
+    @Test
+    fun `gesture freezes policy selected on down and next down reads the new profile`() {
+        val host = FakeDragHost().apply { hitKey = key("a") }
+        val scheduler = FakeDragScheduler()
+        var selectedPolicy = policy
+        var policyReads = 0
+        val spatialPolicy = policy.copy(
+            autoScrollEdgePx = 96f,
+            maxAutoScrollPxPerFrame = 26f,
+            folderHoverMillis = 700L,
+        )
+        val controller = NativeAppListDragController(
+            host = host,
+            scheduler = scheduler,
+            policyProvider = {
+                policyReads++
+                selectedPolicy
+            },
+        )
+        startDrag(controller, scheduler)
+
+        selectedPolicy = spatialPolicy
+        controller.onMove(10f, 400f, 700L)
+        scheduler.runFrame()
+        assertEquals(30f, host.scrollDeltas.last(), 0f)
+        assertEquals(1, policyReads)
+        controller.onUp(10f, 400f, 720L)
+
+        controller.onDown(10f, 100f, 1_000L)
+        scheduler.advanceTo(1_620L)
+        controller.onMove(10f, 121f, 1_621L)
+        controller.onMove(10f, 400f, 1_700L)
+        scheduler.runFrame()
+        assertEquals(26f, host.scrollDeltas.last(), 0f)
+        assertEquals(2, policyReads)
     }
 
     @Test
@@ -101,6 +190,8 @@ class NativeAppListDragControllerTest {
 
         controller.onMove(40f, 150f, 700L)
 
+        assertFalse(host.commands.any { it is AppListCommand.Move })
+        controller.onUp(40f, 150f, 701L)
         assertEquals(
             AppListCommand.Move(key("a"), beforeKey = key("c")),
             host.commands.last(),
@@ -195,12 +286,34 @@ class NativeAppListDragControllerTest {
         var longClickSuppressed = false
         var endDragCount = 0
         var hapticCount = 0
+        var currentKeysReadCount = 0
+        var previewMoveCount = 0
+        private val dragPreview = NativeStableKeyDragPreview()
 
         override val viewportHeightPx: Float = 400f
         override fun keyAt(x: Float, y: Float): AppItemKey? = strictHitKey
         override fun reorderKeyAt(x: Float, y: Float): AppItemKey? = reorderHitKey
         override fun folderKeyAt(x: Float, y: Float): AppItemKey? = strictHitKey
-        override fun currentKeys(): List<AppItemKey> = keys
+        override fun currentKeys(): List<AppItemKey> {
+            currentKeysReadCount++
+            return keys
+        }
+        override fun planMove(
+            source: AppItemKey,
+            target: AppItemKey,
+        ): AppListCommand.Move? = AppListMovePlanner.fromKeys(keys, source, target)
+        override fun planFolder(
+            source: AppItemKey,
+            target: AppItemKey,
+        ): AppListCommand.CreateFolder? = AppListMovePlanner.folderFromKeys(keys, source, target)
+        override fun beginDragPreview(source: AppItemKey): Boolean =
+            dragPreview.begin(source, keys)
+        override fun previewMove(source: AppItemKey, target: AppItemKey): Boolean {
+            previewMoveCount++
+            return dragPreview.moveTo(target) != null
+        }
+        override fun finishDragPreview(commit: Boolean): AppListCommand.Move? =
+            dragPreview.finish(commit)
         override fun dispatch(command: AppListCommand) { commands += command }
         override fun suppressLongClick(key: AppItemKey, suppress: Boolean) {
             longClickSuppressed = suppress

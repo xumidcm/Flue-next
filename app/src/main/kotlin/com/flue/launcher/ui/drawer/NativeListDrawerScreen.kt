@@ -4,6 +4,7 @@ import android.os.Build
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -13,7 +14,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -26,13 +31,78 @@ import com.flue.launcher.applist.nativeview.NativeAppListPalette
 import com.flue.launcher.applist.nativeview.NativeAppListIconShape
 import com.flue.launcher.applist.nativeview.NativeAppListPresentation
 import com.flue.launcher.applist.nativeview.HoneycombNativeAppListLayoutStrategy
+import com.flue.launcher.applist.nativeview.DenseGridNativeAppListLayoutStrategy
 import com.flue.launcher.applist.nativeview.LinearNativeAppListLayoutStrategy
 import com.flue.launcher.applist.nativeview.NativeAppListRowBorder
 import com.flue.launcher.applist.nativeview.NativeAppListTheme
+import com.flue.launcher.applist.nativeview.NativeDeviceShape
+import com.flue.launcher.applist.nativeview.NativeFisheyePreset
 import com.flue.launcher.applist.nativeview.selectNativeBlurTier
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.theme.UiStyle
 import kotlin.math.roundToInt
+
+/**
+ * Edge mask owned by a sibling of the blurred app-list layer. Keeping this
+ * tiny paint pass outside the list RenderNode prevents RenderEffect from
+ * blurring the mask itself and removes the one-frame flash on app return.
+ */
+@Composable
+internal fun NativeAppListEdgeFadeOverlay(
+    visible: Boolean,
+    topFadeRangeDp: Int,
+    bottomFadeRangeDp: Int,
+    edgeColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    // This mask is deliberately outside the blurred RecyclerView layer. A
+    // second Compose animation clock here used to outlive the app-list return
+    // transition by one or two frames, which produced the reported top-edge
+    // flash. The parent layer owns the transition; the mask only follows its
+    // committed visibility state.
+    val overlayAlpha = if (visible) 1f else 0f
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .drawWithCache {
+                val topHeight = topFadeRangeDp.dp.toPx().coerceIn(0f, size.height)
+                val bottomHeight = bottomFadeRangeDp.dp.toPx().coerceIn(0f, size.height)
+                val topBrush = if (topHeight > 0f) {
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            edgeColor.copy(alpha = 0.38f),
+                            edgeColor.copy(alpha = 0.14f),
+                            Color.Transparent,
+                        ),
+                        startY = 0f,
+                        endY = topHeight,
+                    )
+                } else null
+                val bottomBrush = if (bottomHeight > 0f) {
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            edgeColor.copy(alpha = 0.14f),
+                            edgeColor.copy(alpha = 0.42f),
+                        ),
+                        startY = size.height - bottomHeight,
+                        endY = size.height,
+                    )
+                } else null
+                onDrawBehind {
+                    topBrush?.let { drawRect(it, size = size.copy(height = topHeight)) }
+                    bottomBrush?.let {
+                        drawRect(
+                            it,
+                            topLeft = androidx.compose.ui.geometry.Offset(0f, size.height - bottomHeight),
+                            size = size.copy(height = bottomHeight),
+                        )
+                    }
+                }
+            }
+            .graphicsLayer { alpha = overlayAlpha },
+    )
+}
 
 @Composable
 fun NativeListDrawerScreen(
@@ -55,9 +125,11 @@ fun NativeListDrawerScreen(
     bottomFadeRangeDp: Int = 56,
     topBlurRadiusDp: Float = 4f,
     bottomBlurRadiusDp: Float = 4f,
+    drawEdgeFadeMaskInNativeView: Boolean = true,
     rotaryHapticsEnabled: Boolean = true,
     active: Boolean = true,
     initialScrollResetKey: Int = 0,
+    entryAnimationToken: Long = 0L,
     leftSafeInsetPercent: Int = 0,
     appListScalePercent: Int = 100,
     entryProgress: Float = 1f,
@@ -85,8 +157,16 @@ fun NativeListDrawerScreen(
         if (actionAppKey != null && actionApp == null) actionAppKey = null
     }
     val localDensity = LocalDensity.current
+    val isRoundDevice = LocalConfiguration.current.isScreenRound
     val density = localDensity.density
-    val paletteStyle = if (uiStyle == UiStyle.MATERIAL_3) UiStyle.APPLE_WATCH else uiStyle
+    val paletteStyle = if (
+        uiStyle == UiStyle.MATERIAL_3 &&
+        presentation != NativeAppListPresentation.DENSE_GRID
+    ) {
+        UiStyle.APPLE_WATCH
+    } else {
+        uiStyle
+    }
     val palette = appListPalette(themeColor, darkMode, paletteStyle, useWatchFaceColors)
 
     BoxWithConstraints(modifier) {
@@ -102,6 +182,7 @@ fun NativeListDrawerScreen(
                 honeycombNarrowColumns = honeycombNarrowColumns,
                 active = active,
                 initialResetToken = initialScrollResetKey.toLong().coerceAtLeast(0L),
+                entryAnimationToken = entryAnimationToken,
                 leftSafeInsetPercent = leftSafeInsetPercent,
                 appListScalePercent = appListScalePercent,
                 iconSizeDp = iconSize.value,
@@ -115,6 +196,7 @@ fun NativeListDrawerScreen(
                 bottomFadeRangeDp = bottomFadeRangeDp,
                 topBlurRadiusDp = topBlurRadiusDp,
                 bottomBlurRadiusDp = bottomBlurRadiusDp,
+                drawEdgeFadeMaskInNativeView = drawEdgeFadeMaskInNativeView,
                 overlayOpen = actionApp != null || folderOpen,
                 blurEnabled = blurEnabled,
                 edgeBlurEnabled = edgeBlurEnabled,
@@ -130,6 +212,7 @@ fun NativeListDrawerScreen(
                 labelArgb = palette.text.toUnsignedArgbLong(),
                 pressedArgb = palette.itemPressedOverlay.toUnsignedArgbLong(),
                 fadeEdgeArgb = palette.fadeEdge.toUnsignedArgbLong(),
+                isRoundDevice = isRoundDevice,
             ),
         )
         NativeAppListHost(
@@ -155,10 +238,10 @@ fun NativeListDrawerScreen(
                 }
             },
             onScrollToTop = onScrollToTop,
-            layoutStrategy = if (presentation == NativeAppListPresentation.HONEYCOMB) {
-                HoneycombNativeAppListLayoutStrategy
-            } else {
-                LinearNativeAppListLayoutStrategy
+            layoutStrategy = when (presentation) {
+                NativeAppListPresentation.HONEYCOMB -> HoneycombNativeAppListLayoutStrategy
+                NativeAppListPresentation.DENSE_GRID -> DenseGridNativeAppListLayoutStrategy
+                NativeAppListPresentation.LINEAR -> LinearNativeAppListLayoutStrategy
             },
             modifier = Modifier
                 .fillMaxSize()
@@ -207,6 +290,7 @@ internal data class NativeListDrawerConfigRequest(
     val honeycombNarrowColumns: Int,
     val active: Boolean,
     val initialResetToken: Long,
+    val entryAnimationToken: Long = 0L,
     val leftSafeInsetPercent: Int,
     val appListScalePercent: Int,
     val iconSizeDp: Float,
@@ -220,6 +304,7 @@ internal data class NativeListDrawerConfigRequest(
     val bottomFadeRangeDp: Int,
     val topBlurRadiusDp: Float,
     val bottomBlurRadiusDp: Float,
+    val drawEdgeFadeMaskInNativeView: Boolean = true,
     val overlayOpen: Boolean,
     val blurEnabled: Boolean,
     val edgeBlurEnabled: Boolean,
@@ -235,6 +320,7 @@ internal data class NativeListDrawerConfigRequest(
     val labelArgb: Long,
     val pressedArgb: Long,
     val fadeEdgeArgb: Long,
+    val isRoundDevice: Boolean = false,
 )
 
 internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): NativeAppListConfig {
@@ -245,6 +331,13 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
             request.leftSafeInsetPercent.coerceIn(0, 50) / 100f
         ).roundToInt()
     val honeycombNarrowColumns = request.honeycombNarrowColumns.coerceIn(1, 10)
+    val denseGridBaseColumns = (honeycombNarrowColumns + 1).coerceIn(2, 6)
+    val denseGridColumns = (denseGridBaseColumns / scale).roundToInt().coerceIn(1, 10)
+    val denseGridHorizontalPaddingPx = 8f * density
+    val denseGridItemSpacingPx = 4f * density
+    val denseGridMinimumItemPx = 48f * density
+    val denseGridMinimumVerticalPaddingPx = 8f * density
+    val denseGridIconInnerPaddingPx = (3f * scale).coerceIn(2f, 6f) * density
     val honeycombIconSizePx = if (request.presentation == NativeAppListPresentation.HONEYCOMB) {
         val viewportWidth = request.viewportWidthPx.coerceAtLeast(1)
         val contentWidth = (viewportWidth - leftSafeInsetPx).toFloat()
@@ -293,6 +386,7 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
     return NativeAppListConfig(
         active = request.active,
         initialResetToken = request.initialResetToken,
+        entryAnimationToken = request.entryAnimationToken,
         presentation = request.presentation,
         leftSafeInsetPx = leftSafeInsetPx,
         rowHeightPx = rowHeightPx,
@@ -308,18 +402,39 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         } else {
             NativeAppListIconShape.ROUNDED_RECT
         },
-        iconCornerRadiusPx = (14f * scale).coerceIn(10f, 24f) * density,
+        iconCornerRadiusPx = if (request.presentation == NativeAppListPresentation.DENSE_GRID) {
+            (18f * scale).coerceIn(12f, 24f) * density
+        } else {
+            (14f * scale).coerceIn(10f, 24f) * density
+        },
         honeycombCellSizePx = honeycombCellSizePx,
         honeycombNarrowColumns = honeycombNarrowColumns,
         honeycombFisheyeRangeRows = request.fisheyeRangeRows,
-        centerEdgeItems = true,
+        denseGridColumns = denseGridColumns,
+        denseGridHorizontalPaddingPx = denseGridHorizontalPaddingPx,
+        denseGridItemSpacingPx = denseGridItemSpacingPx,
+        denseGridItemAspectRatio = 0.92f,
+        denseGridMinimumItemWidthPx = denseGridMinimumItemPx,
+        denseGridMinimumItemHeightPx = denseGridMinimumItemPx,
+        denseGridMinimumVerticalPaddingPx = denseGridMinimumVerticalPaddingPx,
+        denseGridIconInnerPaddingPx = denseGridIconInnerPaddingPx,
+        centerEdgeItems = request.presentation == NativeAppListPresentation.LINEAR,
         allowFolderCreation = request.allowFolderCreation,
         iconShadowEnabled = request.iconShadowEnabled,
-        fastFlowAnimationEnabled = request.fastFlowAnimationEnabled,
+        fastFlowAnimationEnabled = request.fastFlowAnimationEnabled &&
+            request.presentation != NativeAppListPresentation.DENSE_GRID,
         edgeSpacingCompressionEnabled = request.edgeSpacingCompressionEnabled,
+        entryMotionEnabled = !request.appleWatchIconShape,
         entryProgress = request.entryProgress,
         palette = NativeAppListPalette(
-            rowBackgroundColorArgb = if (request.rowBorderEnabled) request.rowBackgroundArgb else 0L,
+            rowBackgroundColorArgb = if (
+                request.rowBorderEnabled ||
+                request.presentation == NativeAppListPresentation.DENSE_GRID
+            ) {
+                request.rowBackgroundArgb
+            } else {
+                0L
+            },
             labelColorArgb = request.labelArgb,
             pressedOverlayColorArgb = request.pressedArgb,
             fallbackIconBackgroundColorArgb = request.rowBackgroundArgb,
@@ -332,6 +447,16 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         fisheyeEnabled = request.fisheyeEnabled,
         fisheyeRange = edgeBand,
         fisheyeStrength = request.fisheyeStrengthPercent.coerceIn(0, 200) / 100f,
+        fisheyePreset = if (request.appleWatchIconShape) {
+            NativeFisheyePreset.CLASSIC
+        } else {
+            NativeFisheyePreset.NEXT
+        },
+        deviceShape = if (request.isRoundDevice) {
+            NativeDeviceShape.ROUND
+        } else {
+            NativeDeviceShape.RECTANGULAR
+        },
         topFadeRangePx = request.topFadeRangeDp.coerceAtLeast(0) * density,
         bottomFadeRangePx = request.bottomFadeRangeDp.coerceAtLeast(0) * density,
         topBlurRadiusPx = request.topBlurRadiusDp
@@ -344,6 +469,7 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
             ?.coerceAtLeast(0f)
             ?.times(density)
             ?: 0f,
+        drawEdgeFadeMask = request.drawEdgeFadeMaskInNativeView,
         contentOverlayBlurRadiusPx = if (request.overlayOpen) 16f * density else 0f,
         blurTier = blurTier,
         rotaryHapticsEnabled = request.rotaryHapticsEnabled,
@@ -352,7 +478,11 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
             enabled = request.rowBorderEnabled,
             colorArgb = request.labelArgb and 0x33ffffffL,
             widthPx = if (request.rowBorderEnabled) density else 0f,
-            cornerRadiusPx = 18f * density,
+            cornerRadiusPx = if (request.presentation == NativeAppListPresentation.DENSE_GRID) {
+                (18f * scale).coerceIn(12f, 24f) * density
+            } else {
+                18f * density
+            },
         ),
     )
 }

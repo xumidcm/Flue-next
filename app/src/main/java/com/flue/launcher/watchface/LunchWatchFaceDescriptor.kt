@@ -12,7 +12,9 @@ enum class LunchWatchFaceType {
     BUILTIN,
     EXTERNAL,
     DINGDINGCAT,
-    JBWATCH
+    JBWATCH,
+    /** Native Watchmaker 1.0/Studio 2.0 archive; not the legacy watch.pxml adapter. */
+    WATCHMAKER,
 }
 
 data class LunchWatchFaceDescriptor(
@@ -37,6 +39,7 @@ data class LunchWatchFaceDescriptor(
     val isBuiltin: Boolean get() = type == LunchWatchFaceType.BUILTIN
     val isDingDingCat: Boolean get() = type == LunchWatchFaceType.DINGDINGCAT
     val isJbWatch: Boolean get() = type == LunchWatchFaceType.JBWATCH
+    val isWatchmaker: Boolean get() = type == LunchWatchFaceType.WATCHMAKER
     val stableKey: String get() = packageName ?: id
 }
 

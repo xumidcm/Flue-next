@@ -3,6 +3,7 @@ package com.flue.launcher.applist.integration
 import android.graphics.Bitmap
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import com.flue.launcher.applist.model.AppItemKey
 import com.flue.launcher.applist.model.AppItemType
@@ -25,27 +26,53 @@ class NativeAppListProjectionFactory {
     private var iconRevision = 0L
     private var previousEntries: List<AppListEntry>? = null
     private var previousIcons: Map<IconKey, Bitmap>? = null
+    private var previousIconSources: Map<IconKey, ImageBitmap>? = null
     private var previousApps: List<AppInfo>? = null
+    private var previousAppsReference: List<AppInfo>? = null
+    private var previousUseTwoTone: Boolean? = null
     private var previousProjection: NativeAppListProjection? = null
 
     fun project(
         apps: List<AppInfo>,
         useTwoTone: Boolean,
     ): NativeAppListProjection {
+        // Compose can re-enter this boundary for unrelated launcher state. If
+        // the repository handed us the same immutable list, returning here
+        // avoids an O(n) map build and, more importantly, avoids touching every
+        // Compose ImageBitmap on the main thread.
+        if (
+            previousProjection != null &&
+            previousAppsReference === apps &&
+            previousUseTwoTone == useTwoTone
+        ) {
+            return previousProjection!!
+        }
         val entries = apps.map(AppInfo::toNativeAppListEntry)
         val icons = LinkedHashMap<IconKey, Bitmap>(apps.size)
+        val iconSources = LinkedHashMap<IconKey, ImageBitmap>(apps.size)
         val appsByKey = LinkedHashMap<AppItemKey, AppInfo>(apps.size)
         apps.forEachIndexed { index, app ->
             val entry = entries[index]
             check(appsByKey.put(entry.key, app) == null) {
                 "App list keys must be unique: ${entry.key.value}"
             }
-            icons[entry.iconKey] = app.iconForDisplay(useTwoTone).asAndroidBitmap()
+            val image = app.iconForDisplay(useTwoTone)
+            iconSources[entry.iconKey] = image
+            val previousSource = previousIconSources?.get(entry.iconKey)
+            val previousBitmap = previousIcons?.get(entry.iconKey)
+            icons[entry.iconKey] = if (previousSource === image && previousBitmap != null) {
+                previousBitmap
+            } else {
+                // On Android ImageBitmap is normally an AndroidImageBitmap, so
+                // this is a zero-copy unwrap. Keep it out of the hot path by
+                // reusing the identity-matched result above.
+                image.asAndroidBitmap()
+            }
         }
 
         val entriesChanged = previousEntries != entries
         val iconsChanged = !sameBitmapIdentities(previousIcons, icons)
-        val commandMetadataChanged = previousApps != apps
+        val commandMetadataChanged = !sameCommandMetadata(previousApps, apps)
         previousProjection?.let { previous ->
             if (!entriesChanged && !iconsChanged && !commandMetadataChanged) return previous
         }
@@ -74,9 +101,31 @@ class NativeAppListProjectionFactory {
         )
         previousEntries = content.snapshot.entries
         previousIcons = projection.content.iconsByKey
+        previousIconSources = Collections.unmodifiableMap(LinkedHashMap(iconSources))
+        previousAppsReference = apps
+        previousUseTwoTone = useTwoTone
         previousApps = Collections.unmodifiableList(ArrayList(apps))
         previousProjection = projection
         return projection
+    }
+
+    private fun sameCommandMetadata(
+        previous: List<AppInfo>?,
+        next: List<AppInfo>,
+    ): Boolean {
+        if (previous == null || previous.size != next.size) return false
+        return previous.indices.all { index ->
+            val old = previous[index]
+            val current = next[index]
+            old.componentKey == current.componentKey &&
+                old.label == current.label &&
+                old.packageName == current.packageName &&
+                old.activityName == current.activityName &&
+                old.itemType == current.itemType &&
+                old.shortcutIntentUri == current.shortcutIntentUri &&
+                old.pinnedShortcutId == current.pinnedShortcutId &&
+                old.folderItemKeys == current.folderItemKeys
+        }
     }
 
     private fun sameBitmapIdentities(
@@ -104,9 +153,10 @@ fun rememberNativeAppListProjection(
     useTwoTone: Boolean,
 ): NativeAppListProjection {
     val factory = remember { NativeAppListProjectionFactory() }
-    return remember(apps, useTwoTone, factory) {
-        factory.project(apps, useTwoTone)
-    }
+    // Do not use `apps` as a Compose remember key: list equality walks every
+    // AppInfo (including image wrappers) during unrelated recompositions. The
+    // stateful factory performs cheap identity/content checks instead.
+    return factory.project(apps, useTwoTone)
 }
 
 fun AppInfo.toNativeAppListEntry(): AppListEntry = AppListEntry(

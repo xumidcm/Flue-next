@@ -31,14 +31,16 @@ object AppListMovePlanner {
             return null
         }
 
-        val reordered = keys.toMutableList()
-        val movedKey = reordered.removeAt(fromIndex)
-        reordered.add(toIndex, movedKey)
-        val movedIndex = reordered.indexOf(movedKey)
+        val movedKey = keys[fromIndex]
+        val beforeKey = when {
+            toIndex == keys.lastIndex -> null
+            fromIndex < toIndex -> keys[toIndex + 1]
+            else -> keys[toIndex]
+        }
 
         return AppListCommand.Move(
             key = movedKey,
-            beforeKey = reordered.getOrNull(movedIndex + 1),
+            beforeKey = beforeKey,
         )
     }
 

@@ -1,5 +1,6 @@
 package com.flue.launcher.ui.anim
 
+import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.runtime.Composable
@@ -9,16 +10,35 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
-internal class LayerTransformOriginLatch(
-    initialOrigin: Offset = Offset(0.5f, 0.5f),
+internal sealed interface LayerPivot {
+    data object Center : LayerPivot
+
+    data class LaunchIcon(val point: Offset) : LayerPivot
+}
+
+internal fun LayerPivot.resolve(): Offset = when (this) {
+    LayerPivot.Center -> Offset(0.5f, 0.5f)
+    is LayerPivot.LaunchIcon -> point.normalizedOrNull() ?: Offset(0.5f, 0.5f)
+}
+
+/**
+ * Keeps a launch-origin pivot stable while the surrounding Compose tree swaps
+ * between face, drawer, and external-app states. A transient `null` origin is
+ * deliberately not interpreted as a request to jump back to the center.
+ */
+internal class LayerPivotLatch(
+    initial: Offset = Offset(0.5f, 0.5f),
 ) {
-    private var retainedOrigin = initialOrigin.normalizedOrNull() ?: Offset(0.5f, 0.5f)
+    private var retained = initial.normalizedOrNull() ?: Offset(0.5f, 0.5f)
 
-    fun resolve(requestedOrigin: Offset?): Offset {
-        requestedOrigin?.normalizedOrNull()?.let { retainedOrigin = it }
-        return retainedOrigin
+    fun resolve(requested: LayerPivot?): Offset {
+        requested?.resolve()?.let { retained = it }
+        return retained
     }
 }
 
@@ -29,13 +49,31 @@ private fun Offset.normalizedOrNull(): Offset? =
         null
     }
 
+/**
+ * A transparent full-screen layer must not keep an expensive RenderEffect
+ * attached. The logical blur animation continues in [Animatable], so the
+ * effect can be restored from the correct bucket as soon as the layer becomes
+ * visible again without introducing a sharp transition frame.
+ */
+internal fun shouldRenderLayerBlur(
+    sdkInt: Int,
+    blurEnabled: Boolean,
+    alpha: Float,
+    radiusPx: Int,
+): Boolean =
+    sdkInt >= Build.VERSION_CODES.S &&
+        blurEnabled &&
+        alpha.isFinite() &&
+        alpha > 0.01f &&
+        radiusPx > 0
+
 @Composable
-fun Modifier.scaleBlurAlpha(
+internal fun Modifier.scaleBlurAlpha(
     targetValues: LayerAnimValues,
     screenWidth: Float = 0f,
     screenHeight: Float = 0f,
     blurEnabled: Boolean = true,
-    origin: Offset? = null,
+    origin: LayerPivot? = null,
     scaleSpec: FiniteAnimationSpec<Float> = TransitionSpring,
     alphaSpec: FiniteAnimationSpec<Float> = AlphaSpec,
     blurSpec: FiniteAnimationSpec<Float> = AlphaSpec,
@@ -46,13 +84,24 @@ fun Modifier.scaleBlurAlpha(
     val animBlur = remember { Animatable(targetValues.blur) }
     val animTransX = remember { Animatable(targetValues.translationX) }
     val animTransY = remember { Animatable(targetValues.translationY) }
-    val transformOriginLatch = remember { LayerTransformOriginLatch() }
-    val retainedOrigin = transformOriginLatch.resolve(origin)
+    val originLatch = remember { LayerPivotLatch() }
+    val resolvedOrigin = originLatch.resolve(origin)
+    val density = LocalDensity.current
 
     LaunchedEffect(targetValues) {
         launch { animScale.animateTo(targetValues.scale, scaleSpec) }
         launch { animAlpha.animateTo(targetValues.alpha, alphaSpec) }
-        launch { animBlur.animateTo(targetValues.blur, blurSpec) }
+        launch {
+            // Keep the logical blur clock running even when rendering is
+            // temporarily suppressed by an opaque launch mask. Snapping the
+            // Animatable to zero there made the return frame lose its blur and
+            // produced a visible sharp flash.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                animBlur.animateTo(targetValues.blur, blurSpec)
+            } else {
+                animBlur.snapTo(0f)
+            }
+        }
         launch { animTransX.animateTo(targetValues.translationX, translationSpec) }
         launch { animTransY.animateTo(targetValues.translationY, translationSpec) }
     }
@@ -64,10 +113,20 @@ fun Modifier.scaleBlurAlpha(
             alpha = animAlpha.value
             translationX = animTransX.value * screenWidth
             translationY = animTransY.value * screenHeight
-            transformOrigin = TransformOrigin(retainedOrigin.x, retainedOrigin.y)
+            transformOrigin = TransformOrigin(resolvedOrigin.x, resolvedOrigin.y)
+            val radiusDp = quantizeSystemBlurRadiusDp(animBlur.value)
+            val radiusPx = with(density) { radiusDp.dp.toPx() }
+                .roundToInt()
+                .coerceAtLeast(0)
+            renderEffect = if (
+                shouldRenderLayerBlur(
+                    sdkInt = Build.VERSION.SDK_INT,
+                    blurEnabled = blurEnabled,
+                    alpha = animAlpha.value,
+                    radiusPx = radiusPx,
+                )
+            ) {
+                systemBlurEffectForRadiusPx(radiusPx)
+            } else null
         }
-        .platformBlur(
-            blurRadiusDp = animBlur.value,
-            enabled = blurEnabled
-        )
 }

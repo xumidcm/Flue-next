@@ -16,6 +16,19 @@ enum class NativeAppListIconShape {
 enum class NativeAppListPresentation {
     LINEAR,
     HONEYCOMB,
+    DENSE_GRID,
+}
+
+/** The two supported production fish-eye profiles. */
+enum class NativeFisheyePreset {
+    CLASSIC,
+    NEXT,
+}
+
+/** Physical screen outline used by the shared drawer geometry seam. */
+enum class NativeDeviceShape {
+    RECTANGULAR,
+    ROUND,
 }
 
 data class NativeAppListRowBorder(
@@ -52,11 +65,26 @@ data class NativeAppListConfig(
     val honeycombCellSizePx: Float = 0f,
     val honeycombNarrowColumns: Int = 4,
     val honeycombFisheyeRangeRows: Int = 4,
+    val denseGridColumns: Int = 5,
+    val denseGridHorizontalPaddingPx: Float = 8f,
+    val denseGridItemSpacingPx: Float = 4f,
+    val denseGridItemAspectRatio: Float = 0.92f,
+    val denseGridMinimumItemWidthPx: Float = 48f,
+    val denseGridMinimumItemHeightPx: Float = 48f,
+    val denseGridMinimumVerticalPaddingPx: Float = 8f,
+    val denseGridIconInnerPaddingPx: Float = 3f,
     val centerEdgeItems: Boolean = true,
     val allowFolderCreation: Boolean = true,
     val iconShadowEnabled: Boolean = true,
     val fastFlowAnimationEnabled: Boolean = false,
     val edgeSpacingCompressionEnabled: Boolean = true,
+    /** Classic (Beta 1.2) keeps content stable; Next animates entry progress. */
+    val entryMotionEnabled: Boolean = true,
+    /**
+     * Monotonic token for a new app-list entry. Compose changes this once per
+     * transition; the native host owns the frame clock for the actual motion.
+     */
+    val entryAnimationToken: Long = 0L,
     val entryProgress: Float = 1f,
     val palette: NativeAppListPalette = NativeAppListPalette(),
     val appScale: Float = 1f,
@@ -65,14 +93,38 @@ data class NativeAppListConfig(
     val fisheyeStrength: Float = 1f,
     val topFadeRangePx: Float = 0f,
     val bottomFadeRangePx: Float = 0f,
+    /** Draw the edge mask in this View; production hosts place it outside blur. */
+    val drawEdgeFadeMask: Boolean = true,
     val topBlurRadiusPx: Float = 0f,
     val bottomBlurRadiusPx: Float = 0f,
     val contentOverlayBlurRadiusPx: Float = 0f,
+    /** Shared DrawerLayoutEngine profile; defaults to the Flue Next curve. */
+    val fisheyePreset: NativeFisheyePreset = NativeFisheyePreset.NEXT,
+    val deviceShape: NativeDeviceShape = NativeDeviceShape.RECTANGULAR,
+    val topSafeInsetPx: Int = 0,
+    val rightSafeInsetPx: Int = 0,
+    val bottomSafeInsetPx: Int = 0,
     val blurTier: NativeBlurTier = NativeBlurTier.OFF,
     val rotaryHapticsEnabled: Boolean = true,
     val theme: NativeAppListTheme = NativeAppListTheme.DARK,
     val rowBorder: NativeAppListRowBorder = NativeAppListRowBorder(),
-)
+){
+    /**
+     * Frame-local entry progress owned by [NativeAppListView]. It deliberately
+     * lives outside the data-class constructor so changing it does not
+     * invalidate a config snapshot or cause Adapter/Compose work on every
+     * animation frame. Legacy callers can still seed [entryProgress].
+     */
+    @Transient
+    internal var runtimeEntryProgress: Float = entryProgress
+
+    /** Runtime-only GPU load shedding while RecyclerView is dragging/flinging. */
+    @Transient
+    internal var runtimeBlurSuppressed: Boolean = false
+}
+
+internal fun NativeAppListConfig.effectiveBlurTier(): NativeBlurTier =
+    if (runtimeBlurSuppressed) NativeBlurTier.OFF else blurTier
 
 internal class NativeAppListResolvedConfig private constructor(
     val value: NativeAppListConfig,
@@ -101,6 +153,7 @@ internal fun hasDifferentNativeRowRendering(
         current.iconShape != next.iconShape ||
         current.iconCornerRadiusPx != next.iconCornerRadiusPx ||
         current.honeycombCellSizePx != next.honeycombCellSizePx ||
+        current.denseGridIconInnerPaddingPx != next.denseGridIconInnerPaddingPx ||
         current.palette != next.palette ||
         current.rowBorder != next.rowBorder
 
@@ -110,6 +163,7 @@ internal fun hasDifferentNativeEdgeFade(
 ): Boolean =
     current.topFadeRangePx != next.topFadeRangePx ||
         current.bottomFadeRangePx != next.bottomFadeRangePx ||
+        current.drawEdgeFadeMask != next.drawEdgeFadeMask ||
         current.palette.fadeEdgeColorArgb != next.palette.fadeEdgeColorArgb
 
 internal fun hasDifferentNativeContentOverlayEffect(
@@ -149,6 +203,20 @@ internal fun NativeAppListConfig.legalized(): NativeAppListConfig {
         honeycombCellSizePx = honeycombCellSizePx.nonNegativeFiniteMetric(),
         honeycombNarrowColumns = honeycombNarrowColumns.coerceIn(1, 10),
         honeycombFisheyeRangeRows = honeycombFisheyeRangeRows.coerceIn(1, 8),
+        denseGridColumns = denseGridColumns.coerceIn(1, 10),
+        denseGridHorizontalPaddingPx = denseGridHorizontalPaddingPx.nonNegativeFiniteMetric(),
+        denseGridItemSpacingPx = denseGridItemSpacingPx.nonNegativeFiniteMetric(),
+        denseGridItemAspectRatio = denseGridItemAspectRatio
+            .finiteOr(DEFAULT_DENSE_GRID_ASPECT_RATIO)
+            .coerceIn(MIN_POSITIVE_DRAWING_VALUE, MAX_DENSE_GRID_ASPECT_RATIO),
+        denseGridMinimumItemWidthPx = denseGridMinimumItemWidthPx
+            .positiveFiniteMetricOr(DEFAULT_DENSE_GRID_MINIMUM_ITEM_PX),
+        denseGridMinimumItemHeightPx = denseGridMinimumItemHeightPx
+            .positiveFiniteMetricOr(DEFAULT_DENSE_GRID_MINIMUM_ITEM_PX),
+        denseGridMinimumVerticalPaddingPx =
+            denseGridMinimumVerticalPaddingPx.nonNegativeFiniteMetric(),
+        denseGridIconInnerPaddingPx = denseGridIconInnerPaddingPx.nonNegativeFiniteMetric(),
+        entryAnimationToken = entryAnimationToken.coerceAtLeast(0L),
         entryProgress = entryProgress.finiteOr(1f).coerceIn(0f, 1f),
         palette = palette.legalized(),
         appScale = appScale
@@ -160,11 +228,19 @@ internal fun NativeAppListConfig.legalized(): NativeAppListConfig {
         fisheyeStrength = fisheyeStrength
             .finiteOr(0f)
             .coerceIn(0f, 2f),
+        // The former fast-flow compensation was removed from the production
+        // native path. Keep the field for persisted-settings compatibility,
+        // but never enable it again for a new resolved snapshot.
+        fastFlowAnimationEnabled = false,
         topFadeRangePx = topFadeRangePx.nonNegativeFiniteMetric(),
         bottomFadeRangePx = bottomFadeRangePx.nonNegativeFiniteMetric(),
+        drawEdgeFadeMask = drawEdgeFadeMask,
         topBlurRadiusPx = topBlurRadiusPx.nonNegativeFiniteMetric(),
         bottomBlurRadiusPx = bottomBlurRadiusPx.nonNegativeFiniteMetric(),
         contentOverlayBlurRadiusPx = contentOverlayBlurRadiusPx.nonNegativeFiniteMetric(),
+        topSafeInsetPx = topSafeInsetPx.nonNegativeMetric(),
+        rightSafeInsetPx = rightSafeInsetPx.nonNegativeMetric(),
+        bottomSafeInsetPx = bottomSafeInsetPx.nonNegativeMetric(),
         rowBorder = rowBorder.copy(
             colorArgb = rowBorder.colorArgb.sanitizedArgb(),
             widthPx = rowBorder.widthPx
@@ -196,6 +272,11 @@ private fun Float.finiteOr(fallback: Float): Float = takeIf(Float::isFinite) ?: 
 private fun Float.nonNegativeFiniteMetric(): Float =
     finiteOr(0f).coerceIn(0f, MAX_NATIVE_METRIC_PX.toFloat())
 
+private fun Float.positiveFiniteMetricOr(fallback: Float): Float =
+    takeIf { it.isFinite() && it > 0f }
+        ?.coerceAtMost(MAX_NATIVE_METRIC_PX.toFloat())
+        ?: fallback
+
 private fun Long.sanitizedArgb(): Long = this and 0xffffffffL
 
 private const val MAX_NATIVE_METRIC_PX = 4096
@@ -210,11 +291,15 @@ private const val DEFAULT_HORIZONTAL_PADDING_PX = 16
 private const val DEFAULT_VERTICAL_PADDING_PX = 8
 private const val DEFAULT_LABEL_TEXT_SIZE_PX = 16f
 private const val DEFAULT_ICON_LABEL_GAP_PX = 12
+private const val DEFAULT_DENSE_GRID_ASPECT_RATIO = 0.92f
+private const val DEFAULT_DENSE_GRID_MINIMUM_ITEM_PX = 48f
+private const val MAX_DENSE_GRID_ASPECT_RATIO = 10f
 
 internal data class NativeLinearChildVisual(
     var scale: Float,
     var alpha: Float,
     var blurRadiusPx: Float = 0f,
+    var translationY: Float = 0f,
 )
 
 internal fun nativeLinearChildVisual(
@@ -233,21 +318,15 @@ internal fun nativeLinearChildVisual(
         output.scale = baseScale
         output.alpha = 1f
         output.blurRadiusPx = 0f
+        output.translationY = 0f
         return output
     }
 
-    val effectProgress = if (config.fisheyeEnabled) {
-        val halfHeight = viewportHeight / 2f
-        val normalizedDistance = (abs(childCenterY - halfHeight) / halfHeight).coerceIn(0f, 1f)
-        val edgeBand = config.fisheyeRange.takeIf(Float::isFinite)?.coerceIn(0.01f, 1f) ?: 0.4f
-        val edgeStart = 1f - edgeBand
-        val linearProgress = ((normalizedDistance - edgeStart) / edgeBand).coerceIn(0f, 1f)
-        val smoothProgress = linearProgress * linearProgress * (3f - 2f * linearProgress)
-        val strength = config.fisheyeStrength.takeIf(Float::isFinite)?.coerceIn(0f, 2f) ?: 0f
-        smoothProgress * strength
-    } else {
-        0f
-    }
+    val effectProgress = nativeLinearFisheyeProgress(
+        childCenterY = childCenterY,
+        viewportHeight = viewportHeight,
+        config = config,
+    )
 
     val topEdgeProgress = edgeProgress(
         coordinate = edgeCenterY,
@@ -258,13 +337,30 @@ internal fun nativeLinearChildVisual(
         edgeRange = config.bottomFadeRangePx,
     )
     val fadeProgress = maxOf(topEdgeProgress, bottomEdgeProgress)
-    output.scale = baseScale * (1f - 0.45f * effectProgress)
+    val entryProgress = if (config.entryMotionEnabled) {
+        config.runtimeEntryProgress.coerceIn(0f, 1f)
+    } else {
+        1f
+    }
+    val entryOffset = (1f - entryProgress) * 0.08f * viewportHeight
+    val entryScale = 0.90f + 0.10f * entryProgress
+    val edgeScaleCoefficient = when (config.fisheyePreset) {
+        NativeFisheyePreset.CLASSIC -> 0.42f
+        NativeFisheyePreset.NEXT -> 0.55f
+    }
+    val edgeAlphaCoefficient = when (config.fisheyePreset) {
+        NativeFisheyePreset.CLASSIC -> 0.35f
+        NativeFisheyePreset.NEXT -> 0.45f
+    }
+    val fisheyeScale = (1f - edgeScaleCoefficient * effectProgress).coerceIn(0.16f, 1f)
+    val fisheyeAlpha = (1f - edgeAlphaCoefficient * effectProgress).coerceIn(0.10f, 1f)
+    output.scale = baseScale * fisheyeScale * entryScale
     val compatibilityFade = if (config.blurTier == NativeBlurTier.LITE) {
         1f - fadeProgress
     } else {
         1f
     }
-    output.alpha = (1f - 0.45f * effectProgress) * compatibilityFade
+    output.alpha = fisheyeAlpha * compatibilityFade * entryProgress
     output.blurRadiusPx = if (config.blurTier == NativeBlurTier.SYSTEM) {
         maxOf(
             config.topBlurRadiusPx * topEdgeProgress,
@@ -273,20 +369,54 @@ internal fun nativeLinearChildVisual(
     } else {
         0f
     }
+    output.translationY = entryOffset
     return output
+}
+
+private fun nativeLinearFisheyeProgress(
+    childCenterY: Float,
+    viewportHeight: Int,
+    config: NativeAppListConfig,
+): Float {
+    if (!config.fisheyeEnabled || !childCenterY.isFinite() || viewportHeight <= 0) return 0f
+    val halfHeight = viewportHeight / 2f
+    val normalizedDistance = (abs(childCenterY - halfHeight) / halfHeight).coerceIn(0f, 1f)
+    val range = config.fisheyeRange.takeIf(Float::isFinite)?.coerceIn(0.01f, 1f) ?: 0.4f
+    val strength = config.fisheyeStrength.takeIf(Float::isFinite)?.coerceIn(0f, 2f) ?: 0f
+    return when (config.fisheyePreset) {
+        NativeFisheyePreset.CLASSIC -> (normalizedDistance / range).coerceIn(0f, 1f) * strength
+        NativeFisheyePreset.NEXT -> {
+            val edgeStart = 1f - range
+            val linearProgress = ((normalizedDistance - edgeStart) / range).coerceIn(0f, 1f)
+            linearProgress * linearProgress * (3f - 2f * linearProgress) * strength
+        }
+    }
+}
+
+internal fun nativeEntryTranslationY(
+    config: NativeAppListConfig,
+    viewportHeight: Float,
+): Float {
+    if (!config.entryMotionEnabled || !viewportHeight.isFinite() || viewportHeight <= 0f) {
+        return 0f
+    }
+    return (1f - config.runtimeEntryProgress.coerceIn(0f, 1f)) *
+        0.08f * viewportHeight
 }
 
 internal fun nativeFastFlowOffset(
     rowCenterY: Float,
     viewportHeight: Float,
     enabled: Boolean,
+    presentation: NativeAppListPresentation = NativeAppListPresentation.LINEAR,
 ): Float {
     if (!enabled || !rowCenterY.isFinite() || !viewportHeight.isFinite() || viewportHeight <= 0f) {
         return 0f
     }
     val centerY = viewportHeight * 0.5f
-    val slowTopY = viewportHeight * 0.30f
-    val slowBottomY = viewportHeight * 0.70f
+    val isHoneycomb = presentation == NativeAppListPresentation.HONEYCOMB
+    val slowTopY = viewportHeight * if (isHoneycomb) 0.24f else 0.30f
+    val slowBottomY = viewportHeight * if (isHoneycomb) 0.76f else 0.70f
     val transformedY = when {
         rowCenterY < slowTopY ->
             centerY + (slowTopY - centerY) * 0.56f + (rowCenterY - slowTopY) * 1.85f
@@ -308,7 +438,16 @@ internal fun nativeInteractionScale(
     else -> 1f
 }
 
-internal class NativeHoneycombChildVisual(
+internal fun nativeSpatialReorderRadiusPx(config: NativeAppListConfig): Float =
+    if (config.presentation == NativeAppListPresentation.HONEYCOMB) {
+        config.honeycombCellSizePx.takeIf { it.isFinite() && it > 0f }
+            ?.times(0.95f)
+            ?: config.iconSizePx.coerceAtLeast(1) * 0.95f
+    } else {
+        Float.MAX_VALUE
+    }
+
+internal class NativeSpatialChildVisual(
     var scale: Float = 1f,
     var alpha: Float = 1f,
     var translationX: Float = 0f,
@@ -321,7 +460,7 @@ internal class NativeHoneycombChildVisual(
         translationX: Float,
         translationY: Float,
         blurRadiusPx: Float,
-    ): NativeHoneycombChildVisual {
+    ): NativeSpatialChildVisual {
         this.scale = scale
         this.alpha = alpha
         this.translationX = translationX
@@ -337,8 +476,8 @@ internal fun nativeHoneycombChildVisual(
     viewportWidth: Float,
     viewportHeight: Float,
     config: NativeAppListConfig,
-    output: NativeHoneycombChildVisual = NativeHoneycombChildVisual(),
-): NativeHoneycombChildVisual {
+    output: NativeSpatialChildVisual = NativeSpatialChildVisual(),
+): NativeSpatialChildVisual {
     if (
         viewportWidth <= 0f || viewportHeight <= 0f ||
         !centerX.isFinite() || !centerY.isFinite()
@@ -373,11 +512,17 @@ internal fun nativeHoneycombChildVisual(
         0f
     }
     val translationX = -(centerX - screenCenterX) * compression
+    val entryProgress = if (config.entryMotionEnabled) {
+        config.runtimeEntryProgress.coerceIn(0f, 1f)
+    } else {
+        1f
+    }
     val translationY = nativeFastFlowOffset(
         rowCenterY = centerY,
         viewportHeight = viewportHeight,
         enabled = config.fastFlowAnimationEnabled,
-    ) + (1f - config.entryProgress.coerceIn(0f, 1f)) * 0.08f * viewportHeight
+        presentation = config.presentation,
+    ) + (1f - entryProgress) * 0.08f * viewportHeight
     val topProgress = edgeProgress(centerY + translationY, config.topFadeRangePx)
     val bottomProgress = edgeProgress(
         viewportHeight - centerY - translationY,
@@ -399,7 +544,86 @@ internal fun nativeHoneycombChildVisual(
     return output.set(
         scale = scale,
         alpha = (if (config.fisheyeEnabled) scale.coerceIn(0.24f, 1f) else 1f) *
-            config.entryProgress.coerceIn(0f, 1f) * compatibilityFade,
+            entryProgress * compatibilityFade,
+        translationX = translationX,
+        translationY = translationY,
+        blurRadiusPx = blur,
+    )
+}
+
+internal fun nativeDenseGridChildVisual(
+    centerX: Float,
+    centerY: Float,
+    viewportWidth: Float,
+    viewportHeight: Float,
+    config: NativeAppListConfig,
+    output: NativeSpatialChildVisual = NativeSpatialChildVisual(),
+): NativeSpatialChildVisual {
+    if (
+        viewportWidth <= 0f || viewportHeight <= 0f ||
+        !centerX.isFinite() || !centerY.isFinite()
+    ) {
+        return output.set(1f, 1f, 0f, 0f, 0f)
+    }
+
+    val safeLeft = config.leftSafeInsetPx.coerceAtLeast(0).toFloat()
+        .coerceAtMost(viewportWidth)
+    val screenCenterX = safeLeft + (viewportWidth - safeLeft) / 2f
+    val screenCenterY = viewportHeight / 2f
+    val bottomFisheyeStartY = viewportHeight * 0.52f
+    val columns = config.denseGridColumns.coerceIn(1, 10)
+    val rangeRows = config.honeycombFisheyeRangeRows.coerceIn(1, 8)
+    val minimumRange = viewportHeight / columns
+    val fisheyeRange = (minimumRange * rangeRows).coerceIn(minimumRange, viewportHeight)
+    val strength = config.fisheyeStrength.coerceIn(0f, 2f)
+    val minimumScale = (1f - 0.42f * strength).coerceIn(0.16f, 1f)
+    val inBottomBand = config.fisheyeEnabled && centerY > bottomFisheyeStartY
+    val scale = if (inBottomBand && fisheyeRange > 0f) {
+        val progress = ((centerY - bottomFisheyeStartY) / fisheyeRange).coerceIn(0f, 1f)
+        1f - (1f - minimumScale) * progress
+    } else {
+        1f
+    }
+
+    val translationX = if (inBottomBand && config.edgeSpacingCompressionEnabled) {
+        val edgeProgress = (
+            kotlin.math.abs(centerY - screenCenterY) / (viewportHeight / 2f)
+            ).coerceIn(0f, 1f)
+        val easedEdge = edgeProgress * edgeProgress * (3f - 2f * edgeProgress)
+        val compression = (0.18f * strength * easedEdge).coerceIn(0f, 0.32f)
+        -(centerX - screenCenterX) * compression
+    } else {
+        0f
+    }
+    val entryProgress = if (config.entryMotionEnabled) {
+        config.runtimeEntryProgress.coerceIn(0f, 1f)
+    } else {
+        1f
+    }
+    val translationY = (1f - entryProgress) * 0.08f * viewportHeight
+    val visualCenterY = centerY + translationY
+    val topProgress = edgeProgress(visualCenterY, config.topFadeRangePx)
+    val bottomProgress = edgeProgress(
+        viewportHeight - visualCenterY,
+        config.bottomFadeRangePx,
+    )
+    val blur = if (config.blurTier == NativeBlurTier.SYSTEM) {
+        maxOf(
+            config.topBlurRadiusPx * topProgress,
+            config.bottomBlurRadiusPx * bottomProgress,
+        )
+    } else {
+        0f
+    }
+    val compatibilityFade = if (config.blurTier == NativeBlurTier.LITE) {
+        1f - maxOf(topProgress, bottomProgress)
+    } else {
+        1f
+    }
+    val fisheyeAlpha = if (config.fisheyeEnabled) scale.coerceIn(0.24f, 1f) else 1f
+    return output.set(
+        scale = scale,
+        alpha = fisheyeAlpha * entryProgress * compatibilityFade,
         translationX = translationX,
         translationY = translationY,
         blurRadiusPx = blur,

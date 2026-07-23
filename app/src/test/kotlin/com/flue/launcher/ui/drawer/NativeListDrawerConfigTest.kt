@@ -150,6 +150,33 @@ class NativeListDrawerConfigTest {
         assertEquals(84, config.iconSizePx)
     }
 
+    @Test
+    fun mapsLegacyMaterialDenseGridGeometryWithoutFastFlow() {
+        val config = nativeListDrawerConfig(
+            request(
+                density = 2f,
+                viewportWidthPx = 640,
+                viewportHeightPx = 640,
+                appListScalePercent = 200,
+                presentation = NativeAppListPresentation.DENSE_GRID,
+                honeycombNarrowColumns = 4,
+                fastFlowAnimationEnabled = true,
+                appleWatchIconShape = false,
+            ),
+        )
+
+        // Legacy Material: ((narrow + 1) / scale).roundToInt().coerceIn(1, 10).
+        assertEquals(3, config.denseGridColumns)
+        assertEquals(16f, config.denseGridHorizontalPaddingPx, 0f)
+        assertEquals(8f, config.denseGridItemSpacingPx, 0f)
+        assertEquals(0.92f, config.denseGridItemAspectRatio, 0f)
+        assertEquals(96f, config.denseGridMinimumItemWidthPx, 0f)
+        assertEquals(96f, config.denseGridMinimumItemHeightPx, 0f)
+        assertEquals(16f, config.denseGridMinimumVerticalPaddingPx, 0f)
+        assertEquals(12f, config.denseGridIconInnerPaddingPx, 0f)
+        assertFalse(config.fastFlowAnimationEnabled)
+    }
+
     private fun request(
         density: Float = 1f,
         fontScale: Float = 1f,
@@ -170,6 +197,7 @@ class NativeListDrawerConfigTest {
         entryProgress: Float = 1f,
         presentation: NativeAppListPresentation = NativeAppListPresentation.LINEAR,
         honeycombNarrowColumns: Int = 4,
+        appleWatchIconShape: Boolean = true,
     ) = NativeListDrawerConfigRequest(
         density = density,
         fontScale = fontScale,
@@ -182,7 +210,7 @@ class NativeListDrawerConfigTest {
         leftSafeInsetPercent = leftSafeInsetPercent,
         appListScalePercent = appListScalePercent,
         iconSizeDp = 48f,
-        appleWatchIconShape = true,
+        appleWatchIconShape = appleWatchIconShape,
         fisheyeEnabled = true,
         fisheyeRangeRows = fisheyeRangeRows,
         fisheyeStrengthPercent = fisheyeStrengthPercent,

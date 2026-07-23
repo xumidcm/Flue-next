@@ -10,6 +10,9 @@ internal sealed interface NativeDragEffect {
     data class Move(val source: AppItemKey, val target: AppItemKey) : NativeDragEffect
     data class FolderHoverChanged(val target: AppItemKey?) : NativeDragEffect
     data class CreateFolder(val source: AppItemKey, val target: AppItemKey) : NativeDragEffect
+    /** The pointer was released; commit the local reorder preview once. */
+    data object CommitDrag : NativeDragEffect
+    /** The gesture was cancelled or invalidated; discard the local preview. */
     data object FinishDrag : NativeDragEffect
 }
 
@@ -18,9 +21,10 @@ internal sealed interface NativeDragEffect {
  * frame scheduling and rendering stay in [NativeAppListDragController].
  */
 internal class NativeDragGestureMachine(
-    private val policy: NativeDragPolicy,
+    private val defaultPolicy: NativeDragPolicy? = null,
 ) {
-    private val folderHoverGate = NativeFolderHoverGate(policy)
+    private var activePolicy: NativeDragPolicy? = null
+    private var folderHoverGate: NativeFolderHoverGate? = null
     private var sourceKey: AppItemKey? = null
     private var downX = 0f
     private var downY = 0f
@@ -41,8 +45,11 @@ internal class NativeDragGestureMachine(
         pointerX: Float,
         pointerY: Float,
         nowMillis: Long,
+        policy: NativeDragPolicy = requireNotNull(defaultPolicy),
     ) {
         resetState()
+        activePolicy = policy
+        folderHoverGate = NativeFolderHoverGate(policy)
         this.sourceKey = sourceKey
         downX = pointerX
         downY = pointerY
@@ -52,6 +59,7 @@ internal class NativeDragGestureMachine(
 
     fun onTime(nowMillis: Long): List<NativeDragEffect> {
         val source = sourceKey ?: return emptyList()
+        val policy = activePolicy ?: return emptyList()
         if (
             !isTracking ||
             longPressDispatched ||
@@ -72,6 +80,7 @@ internal class NativeDragGestureMachine(
         folderCandidateKey: AppItemKey? = targetKey,
     ): List<NativeDragEffect> {
         val source = sourceKey ?: return emptyList()
+        val policy = activePolicy ?: return emptyList()
         if (!isTracking) return emptyList()
 
         val distance = hypot(pointerX - downX, pointerY - downY)
@@ -92,7 +101,7 @@ internal class NativeDragGestureMachine(
 
         val effects = mutableListOf<NativeDragEffect>()
         val folderCandidate = folderCandidateKey?.takeUnless { it == source }
-        val nextArmedTarget = folderHoverGate.update(
+        val nextArmedTarget = folderHoverGate?.update(
             candidateKey = folderCandidate?.value,
             speedPxPerMs = speedPxPerMs,
             nowMillis = nowMillis,
@@ -118,7 +127,7 @@ internal class NativeDragGestureMachine(
             effects += NativeDragEffect.CreateFolder(source, folderTarget)
         }
         if (armedFolderTarget != null) effects += NativeDragEffect.FolderHoverChanged(null)
-        if (wasDragging) effects += NativeDragEffect.FinishDrag
+        if (wasDragging) effects += NativeDragEffect.CommitDrag
         resetState()
         return effects
     }
@@ -145,6 +154,8 @@ internal class NativeDragGestureMachine(
         longPressDispatched = false
         lastMoveTarget = null
         armedFolderTarget = null
-        folderHoverGate.reset()
+        folderHoverGate?.reset()
+        folderHoverGate = null
+        activePolicy = null
     }
 }

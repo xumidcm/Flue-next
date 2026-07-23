@@ -36,25 +36,18 @@ internal fun selectPlatformBlurBackend(
 
 private val SystemBlurRadiusBucketsDp = floatArrayOf(
     0f,
-    0.5f,
     1f,
-    1.5f,
     2f,
-    2.5f,
     3f,
-    3.5f,
     4f,
-    4.5f,
-    5f,
     6f,
     8f,
-    10f,
     12f,
     16f,
 )
 
 internal fun quantizeSystemBlurRadiusDp(radiusDp: Float): Float {
-    if (!radiusDp.isFinite() || radiusDp < 0.5f) return 0f
+    if (!radiusDp.isFinite() || radiusDp < 1f) return 0f
     var selected = 0f
     for (bucket in SystemBlurRadiusBucketsDp) {
         if (bucket > radiusDp) break
@@ -75,6 +68,10 @@ private object SystemBlurEffectCache {
         ).asComposeRenderEffect().also { cache.put(radiusPx, it) }
     }
 }
+
+@RequiresApi(Build.VERSION_CODES.S)
+internal fun systemBlurEffectForRadiusPx(radiusPx: Int): ComposeRenderEffect =
+    SystemBlurEffectCache.get(radiusPx)
 
 @Composable
 fun Modifier.platformBlur(
