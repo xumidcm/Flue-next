@@ -160,11 +160,9 @@ internal abstract class NativeAppGridLayoutManager(
         }
         val previousGeometry = geometry
         val current = ensureGeometry(state.itemCount)
-        var refilled = false
         if (previousGeometry !== current && childCount > 0) {
             detachAndScrapAttachedViews(recycler)
             fillMissing(recycler, current)
-            refilled = true
         }
         val oldOffset = scrollOffsetPx.takeIf(Float::isFinite)
             ?: current.maximumScrollOffsetPx
@@ -178,15 +176,6 @@ internal abstract class NativeAppGridLayoutManager(
         scrollOffsetPx = target
         renderedScrollPositionPx = targetRenderedPosition
         if (consumed == 0) {
-            // Bailing out here used to skip the visual pass entirely. Children
-            // that had just been scrapped and re-attached above therefore kept
-            // whatever transform they happened to carry — a view returned from
-            // the scrap heap is *not* rebound, so it keeps the previous slot's
-            // alpha/scale/blur, and a view rebuilt from the pool comes back at
-            // the neutral alpha 1 / scale 1 / no-blur that `clearBinding()`
-            // leaves behind. Either way the edge band rendered wrong until some
-            // later scroll step happened to consume a non-zero delta.
-            if (refilled) applyChildVisuals(current, configProvider())
             return 0
         }
         offsetChildrenVertical(-consumed)
@@ -412,33 +401,11 @@ internal abstract class NativeAppGridLayoutManager(
         return childCount
     }
 
-    /**
-     * Drops children that have left the retention band.
-     *
-     * The band must be at least as generous as the one [fillMissing] uses,
-     * because the two run back to back on every scroll step and any disagreement
-     * turns into a churn loop rather than a stable layout.
-     *
-     * The original implementation measured only the *transformed* box. Under
-     * fisheye an edge child is scaled to roughly 0.58, so its transformed box
-     * has already left the band while its layout slot — the coordinate
-     * `visiblePositionBounds` reasons about — is still inside it. The child was
-     * therefore recycled and immediately re-created on every single frame near
-     * the boundary, and each round trip runs `clearBinding()` (which discards
-     * the row's RenderNode display list, its installed blur RenderEffect and
-     * its BitmapShader) followed by a full rebind. That is what made rows at
-     * the entering edge pop in unblurred one row at a time.
-     *
-     * So: keep a child while *either* box is inside the band, and widen the
-     * band by half an item so it strictly contains the fill band (which admits
-     * positions by centre, i.e. up to half an item further out).
-     */
     private fun recycleOutsideBounds(
         recycler: RecyclerView.Recycler,
         current: NativeAppGridGeometry,
     ) {
-        val extra = extraLayoutSpacePx(current, configProvider()) +
-            current.itemHeightPx / 2f
+        val extra = extraLayoutSpacePx(current, configProvider())
         for (index in childCount - 1 downTo 0) {
             val child = requireNotNull(getChildAt(index))
             val decoratedTop = getDecoratedTop(child).toFloat()
@@ -448,14 +415,8 @@ internal abstract class NativeAppGridLayoutManager(
                 (decoratedTop - pivotY) * child.scaleY
             val transformedBottom = child.translationY + pivotY +
                 (decoratedBottom - pivotY) * child.scaleY
-            val visibleTop = min(
-                min(decoratedTop, decoratedBottom),
-                min(transformedTop, transformedBottom),
-            )
-            val visibleBottom = max(
-                max(decoratedTop, decoratedBottom),
-                max(transformedTop, transformedBottom),
-            )
+            val visibleTop = min(transformedTop, transformedBottom)
+            val visibleBottom = max(transformedTop, transformedBottom)
             if (visibleBottom < -extra || visibleTop > height + extra) {
                 removeAndRecycleView(child, recycler)
             }

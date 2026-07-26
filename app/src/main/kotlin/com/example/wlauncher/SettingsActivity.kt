@@ -27,8 +27,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
@@ -56,7 +54,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -97,11 +94,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
@@ -113,11 +110,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -146,23 +140,12 @@ import com.flue.launcher.ui.drawer.vibrateHaptic
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.navigation.LayoutMode
-import com.flue.launcher.ui.settings.ROUND_SETTINGS_HORIZONTAL_INSET
-import com.flue.launcher.ui.settings.ROUND_SETTINGS_VERTICAL_INSET
-import com.flue.launcher.ui.settings.SettingsExpandableRow
-import com.flue.launcher.ui.settings.SettingsSearchEntry
-import com.flue.launcher.ui.settings.SettingsSearchField
-import com.flue.launcher.ui.settings.SettingsSearchIndex
 import com.flue.launcher.ui.settings.WatchFaceSettingCard
-import com.flue.launcher.ui.settings.rememberSettingsRowMounted
-import com.flue.launcher.ui.settings.roundScreenChordWidth
 import com.flue.launcher.ui.settings.miuix.MiuixIcons
-import com.flue.launcher.ui.settings.miuix.MiuixLoadingIndicator
 import com.flue.launcher.ui.settings.miuix.MiuixSettingsCard
 import com.flue.launcher.ui.settings.miuix.MiuixSettingsRow
 import com.flue.launcher.ui.settings.miuix.MiuixSlider
 import com.flue.launcher.ui.settings.miuix.MiuixSwitch
-import com.flue.launcher.ui.settings.miuix.SettingsIcon
-import com.flue.launcher.ui.settings.miuix.settingsIcon
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.ThemeMode
@@ -201,21 +184,6 @@ const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
 private val LocalSettingsLeftSafeInsetPercent = compositionLocalOf { 0 }
 
-/**
- * 设置页里唯一的触感来源是表冠滚动，跟随「旋转输入触感」开关。
- * 点行 / 点开关一律不震动 —— 那是用户明确嫌弃过的。
- */
-private val LocalSettingsRotaryHaptics = compositionLocalOf { true }
-
-/**
- * 搜索命中后要滚过去并高亮的 item key（只对当前页有效；
- * 由 [SettingsRootScreen] 按 destination 过滤后下发）。
- */
-private val LocalSettingsHighlightKey = compositionLocalOf<Any?> { null }
-
-/** 高亮播完后回收，避免返回这一页时又闪一次。 */
-private val LocalSettingsHighlightConsumed = compositionLocalOf<() -> Unit> { {} }
-
 enum class SettingsDestination {
     ROOT,
     WATCH_FACES,
@@ -224,18 +192,7 @@ enum class SettingsDestination {
     ICON_PACKS,
     APPEARANCE,
     DISPLAY_SIZE,
-    /** 功能菜单：只放去各功能二级页的入口，不再直接堆开关。 */
     FEATURE_TOGGLES,
-    /** 负一屏（侧屏 + 小组件页）。 */
-    SIDE_SCREEN,
-    /** 通知中心。 */
-    NOTIFICATION_CENTER,
-    /** 控制中心（含音乐卡片）。 */
-    CONTROL_CENTER,
-    /** 手势与无障碍（双击息屏、电源按钮）。 */
-    GESTURES,
-    /** 应用列表行为（遮罩取色、底色遮罩、文件夹）。 */
-    APP_LIST_BEHAVIOR,
     PERFORMANCE,
     MOTION_PROFILE,
     MUSIC_TEXT_ANIMATION,
@@ -408,7 +365,6 @@ private fun SettingsRootScreen(
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
     val appListReturnShrinkEnabled by vm.appListReturnShrinkEnabled.collectAsStateWithLifecycle()
-    val appListReturnIconFloatEnabled by vm.appListReturnIconFloatEnabled.collectAsStateWithLifecycle()
     val reduceDynamicEffects by vm.reduceDynamicEffects.collectAsStateWithLifecycle()
     val screenShapeOverride by vm.screenShapeOverride.collectAsStateWithLifecycle()
     val appListStaggerEnabled by vm.appListStaggerEnabled.collectAsStateWithLifecycle()
@@ -621,21 +577,6 @@ private fun SettingsRootScreen(
         {
             Toast.makeText(context, "请在无障碍中授权 Flue 辅助控制", Toast.LENGTH_SHORT).show()
             context.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS))
-            Unit
-        }
-    }
-    val openNotificationListenerSettings = remember(context) {
-        {
-            // 有的手表 ROM 阉掉了这个页面，跳不过去就退回到通知设置总入口。
-            val opened = runCatching {
-                context.startActivity(Intent(AndroidSettings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-            }.isSuccess
-            if (!opened) {
-                runCatching { context.startActivity(Intent(AndroidSettings.ACTION_SETTINGS)) }
-                    .onFailure {
-                        Toast.makeText(context, "无法打开系统通知设置", Toast.LENGTH_SHORT).show()
-                    }
-            }
             Unit
         }
     }
@@ -900,85 +841,27 @@ private fun SettingsRootScreen(
         }
     }
 
-    // 条件设置项的挂载窗口：LazyListScope 不是 composable，
-    // rememberSettingsRowMounted 必须在这里先算好再带进列表。
-    // 「图标浮动返回」只在「应用列表收缩动画」关闭时才有意义，所以跟着它反向显示。
-    val iconFloatRowVisible = !appListReturnShrinkEnabled
-    val iconFloatRowMounted = rememberSettingsRowMounted(iconFloatRowVisible)
-    val splashDelayRowMounted = rememberSettingsRowMounted(splashIcon)
-    val watchFaceFontClearVisible = !builtInWatchFaceFontPath.isNullOrBlank()
-    val watchFaceFontClearMounted = rememberSettingsRowMounted(watchFaceFontClearVisible)
-    // 通知中心 / 控制中心里「开了上面那个才有意义」的子项
-    val ongoingNotificationRowVisible = sideScreenEnabled && showNotification
-    val ongoingNotificationRowMounted = rememberSettingsRowMounted(ongoingNotificationRowVisible)
-    val musicControlsRowVisible = showControlCenter
-    val musicControlsRowMounted = rememberSettingsRowMounted(musicControlsRowVisible)
-    val mediaCustomActionsRowVisible = showControlCenter && showMusicControls
-    val mediaCustomActionsRowMounted = rememberSettingsRowMounted(mediaCustomActionsRowVisible)
-
-    // 搜索：查询非空时根页用结果列表整体替换分类列表；
-    // 命中后跳到目标页并把 item key 交给 SettingsPageScaffold 去滚动 + 高亮。
-    var settingsSearchQuery by remember { mutableStateOf("") }
-    var pendingHighlight by remember { mutableStateOf<Pair<SettingsDestination, String>?>(null) }
-    val searchHits = remember(settingsSearchQuery) { SettingsSearchIndex.search(settingsSearchQuery) }
-    val openSearchHit: (SettingsSearchEntry) -> Unit = { hit ->
-        val target = runCatching { SettingsDestination.valueOf(hit.destination) }.getOrNull()
-        if (target != null) {
-            pendingHighlight = target to hit.itemKey
-            settingsSearchQuery = ""
-            if (target != destination) {
-                navigateTo(target)
-            }
-        }
-    }
-    val consumeHighlight: () -> Unit = { pendingHighlight = null }
-
     CompositionLocalProvider(
         LocalSettingsLeftSafeInsetPercent provides appListLeftSafeInsetPercent,
-        LocalSettingsRotaryHaptics provides rotaryHapticsEnabled,
         LocalFlueMotionProfile provides activeMotionProfile,
     ) {
         AnimatedContent(
             targetState = destination,
             transitionSpec = {
-                if (uiStyle == UiStyle.MIUIX) {
-                    // MIUIX 层级转场：进子页 = 新页从右侧 1/4 屏滑入 + 淡入，
-                    // 旧页往左小幅让位并淡出；返回时整套反向。
-                    // 方向只看 depth，所以返回手势 / 返回按钮 / 系统返回键
-                    // 走的是同一套动画。
-                    val forward = targetState.depth >= initialState.depth
-                    val offsetSpec = spring<IntOffset>(dampingRatio = 0.9f, stiffness = 400f)
-                    val fadeSpec = spring<Float>(dampingRatio = 0.9f, stiffness = 400f)
-                    val enter = slideInHorizontally(animationSpec = offsetSpec) { full ->
-                        if (forward) full / 4 else -full / 4
-                    } + fadeIn(animationSpec = fadeSpec)
-                    val exit = slideOutHorizontally(animationSpec = offsetSpec) { full ->
-                        if (forward) -full / 6 else full / 6
-                    } + fadeOut(animationSpec = tween(140))
-                    enter togetherWith exit
-                } else {
-                    (fadeIn(animationSpec = launcherStyle.pageMotionSpec) +
-                        scaleIn(
-                            initialScale = if (uiStyle == UiStyle.MATERIAL_3) 0.98f else 0.985f,
-                            animationSpec = launcherStyle.pageMotionSpec
-                        )) togetherWith
-                        (fadeOut(animationSpec = tween(140)) +
-                            scaleOut(
-                                targetScale = if (uiStyle == UiStyle.MATERIAL_3) 0.995f else 0.985f,
-                                animationSpec = tween(140)
-                            ))
-                }
+                (fadeIn(animationSpec = launcherStyle.pageMotionSpec) +
+                    scaleIn(
+                        initialScale = if (uiStyle == UiStyle.MATERIAL_3) 0.98f else 0.985f,
+                        animationSpec = launcherStyle.pageMotionSpec
+                    )) togetherWith
+                    (fadeOut(animationSpec = tween(140)) +
+                        scaleOut(
+                            targetScale = if (uiStyle == UiStyle.MATERIAL_3) 0.995f else 0.985f,
+                            animationSpec = tween(140)
+                        ))
             },
             label = "settings_destination"
         ) { currentDestination ->
         key(currentDestination, pageScrollResetVersions[currentDestination] ?: 0) {
-        CompositionLocalProvider(
-            // 只有「搜索命中的那一页」才拿得到高亮 key，其它页拿到 null。
-            LocalSettingsHighlightKey provides pendingHighlight
-                ?.takeIf { it.first == currentDestination }
-                ?.second,
-            LocalSettingsHighlightConsumed provides consumeHighlight,
-        ) {
         when (currentDestination) {
             SettingsDestination.ROOT -> SettingsPageScaffold(
                 title = "Flue设置",
@@ -991,38 +874,16 @@ private fun SettingsRootScreen(
                 initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.ROOT).offset,
                 onScrollChanged = { index, offset -> updateScroll(SettingsDestination.ROOT, index, offset) }
             ) { listState, screenCenterY, screenHeightPx, _ ->
-                item("settings_search") {
-                    SettingsSearchField(
-                        query = settingsSearchQuery,
-                        onQueryChange = { settingsSearchQuery = it },
-                        modifier = Modifier.roundScreenChordWidth()
+                // 顶部预览头图：迷你手表屏 + 当前配置摘要，点击进入外观设置。
+                item("settings_preview_header") {
+                    SettingsPreviewHeaderCard(
+                        headerTime = headerTime,
+                        uiStyle = uiStyle,
+                        themeMode = themeMode,
+                        layoutMode = layoutMode,
+                        onClick = { navigateTo(SettingsDestination.APPEARANCE) }
                     )
                 }
-                if (settingsSearchQuery.isNotBlank()) {
-                    // 搜索态：结果整体替换掉分类列表，点一条直接跳到那一行。
-                    if (searchHits.isEmpty()) {
-                        item("search_empty") {
-                            MessageCard(
-                                text = "没有匹配的设置项",
-                                background = launcherStyle.cardColor,
-                                onClick = {}
-                            )
-                        }
-                    }
-                    items(searchHits, key = { "search_${it.destination}_${it.itemKey}" }) { hit ->
-                        SettingsCategoryCard(
-                            title = hit.title,
-                            subtitle = hit.breadcrumb,
-                            onClick = { openSearchHit(hit) },
-                            scale = itemFisheye(
-                                listState,
-                                "search_${hit.destination}_${hit.itemKey}",
-                                screenCenterY,
-                                screenHeightPx
-                            )
-                        )
-                    }
-                } else {
                 // 分组顺序对照 SettingsHierarchy：外观 → 表盘 → 应用列表 →
                 // 动画 → 手势与输入 → 系统与工具 → 关于。
                 item("section_appearance") {
@@ -1082,8 +943,8 @@ private fun SettingsRootScreen(
                 }
                 item("feature_toggles") {
                     SettingsCategoryCard(
-                        title = if (isZh) "功能菜单" else "Features",
-                        subtitle = if (isZh) "负一屏、通知中心、控制中心与手势" else "Side screen, notification center, control center, and gestures",
+                        title = "功能开关",
+                        subtitle = if (isZh) "副一屏、通知、控制中心和表盘提示" else "Side screen, notifications, Control Center, and watch face indicators",
                         onClick = { navigateTo(SettingsDestination.FEATURE_TOGGLES) },
                         scale = itemFisheye(listState, "feature_toggles", screenCenterY, screenHeightPx)
                     )
@@ -1109,7 +970,6 @@ private fun SettingsRootScreen(
                         onClick = { navigateTo(SettingsDestination.ABOUT) },
                         scale = itemFisheye(listState, "about", screenCenterY, screenHeightPx)
                     )
-                }
                 }
             }
 
@@ -1181,7 +1041,7 @@ private fun SettingsRootScreen(
                     ActionCard(
                         title = "刷新图标包",
                         subtitle = "重新扫描已安装的 ADW 图标包",
-                        icon = { SettingsIcon(Icons.Filled.Refresh, MiuixIcons.Refresh, tint = launcherStyle.accentColor) },
+                        icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
                         onClick = { vm.refreshIconPacks() },
                         scale = itemFisheye(listState, "icon_pack_refresh", screenCenterY, screenHeightPx)
                     )
@@ -1278,7 +1138,7 @@ private fun SettingsRootScreen(
                     title = "重新扫描表盘",
                     subtitle = "扫描标准 .watch、已安装表盘和兼容表盘目录",
                     scale = itemFisheye(listState, "watchface_refresh", screenCenterY, screenHeightPx),
-                    icon = { SettingsIcon(Icons.Filled.Refresh, MiuixIcons.Refresh, tint = launcherStyle.accentColor) },
+                    icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
                     onClick = { vm.refreshWatchFaces(force = true) }
                 )
             }
@@ -1287,7 +1147,7 @@ private fun SettingsRootScreen(
                     title = "导入表盘",
                     subtitle = "导入标准 Watchmaker .watch 表盘（兼容 jb_watch 包）",
                     scale = itemFisheye(listState, "watchface_import_archive", screenCenterY, screenHeightPx),
-                    icon = { SettingsIcon(Icons.Filled.Add, MiuixIcons.Add, tint = launcherStyle.accentColor) },
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null, tint = WatchColors.ActiveCyan) },
                     onClick = {
                         watchFaceArchiveImportMode = WatchFaceArchiveImportMode.WATCH
                         watchFaceArchivePicker.launch(
@@ -1324,7 +1184,7 @@ private fun SettingsRootScreen(
                     title = "表盘市场",
                     subtitle = "浏览 Watchmaker Community Store，下载后安全安装 .watch 表盘",
                     scale = itemFisheye(listState, "watchface_store", screenCenterY, screenHeightPx),
-                    icon = { SettingsIcon(Icons.Filled.Refresh, MiuixIcons.Refresh, tint = launcherStyle.accentColor) },
+                    icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
                     onClick = {
                         context.startActivity(Intent(context, WatchStoreActivity::class.java))
                     }
@@ -1335,7 +1195,7 @@ private fun SettingsRootScreen(
                     title = "新建 .watch 表盘",
                     subtitle = "使用内置编辑器创建基础图层并实时预览",
                     scale = itemFisheye(listState, "watchface_editor_new", screenCenterY, screenHeightPx),
-                    icon = { SettingsIcon(Icons.Filled.Add, MiuixIcons.Add, tint = launcherStyle.accentColor) },
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null, tint = WatchColors.ActiveCyan) },
                     onClick = {
                         context.startActivity(Intent(context, WatchEditorActivity::class.java))
                     }
@@ -1347,7 +1207,7 @@ private fun SettingsRootScreen(
                         title = "编辑当前标准表盘",
                         subtitle = "在隔离草稿中编辑 ${selectedWatchFace.displayName}，另存为新表盘",
                         scale = itemFisheye(listState, "watchface_editor_current", screenCenterY, screenHeightPx),
-                        icon = { SettingsIcon(Icons.Filled.Settings, MiuixIcons.Settings, tint = launcherStyle.accentColor) },
+                        icon = { Icon(Icons.Filled.Settings, contentDescription = null, tint = WatchColors.ActiveCyan) },
                         onClick = {
                             context.startActivity(
                                 Intent(context, WatchEditorActivity::class.java)
@@ -1450,18 +1310,14 @@ private fun SettingsRootScreen(
                             screenHeightPx,
                         ),
                         icon = {
-                            SettingsIcon(
-                                material = if (bodySensorsPermissionGranted) {
+                            Icon(
+                                if (bodySensorsPermissionGranted) {
                                     Icons.Filled.CheckCircle
                                 } else {
                                     Icons.Filled.Settings
                                 },
-                                miuix = if (bodySensorsPermissionGranted) {
-                                    MiuixIcons.CheckCircle
-                                } else {
-                                    MiuixIcons.Settings
-                                },
-                                tint = launcherStyle.accentColor,
+                                contentDescription = null,
+                                tint = WatchColors.ActiveCyan,
                             )
                         },
                         onClick = {
@@ -1480,7 +1336,7 @@ private fun SettingsRootScreen(
                         title = "表盘字体",
                         subtitle = builtInWatchFaceFontPath?.let { File(it).name } ?: "系统默认字体",
                         scale = itemFisheye(listState, "watchface_font", screenCenterY, screenHeightPx),
-                        icon = { SettingsIcon(Icons.Filled.Settings, MiuixIcons.Settings, tint = launcherStyle.accentColor) },
+                        icon = { Icon(Icons.Filled.Settings, contentDescription = null, tint = WatchColors.ActiveCyan) },
                         onClick = {
                             fontPicker.launch(
                                 arrayOf(
@@ -1494,17 +1350,15 @@ private fun SettingsRootScreen(
                         }
                     )
                 }
-                if (watchFaceFontClearMounted) {
+                if (!builtInWatchFaceFontPath.isNullOrBlank()) {
                     item("watchface_font_clear") {
-                        SettingsExpandableRow(visible = watchFaceFontClearVisible) {
-                            ActionCard(
-                                title = "恢复默认字体",
-                                subtitle = "清除已保存的表盘字体",
-                                scale = itemFisheye(listState, "watchface_font_clear", screenCenterY, screenHeightPx),
-                                icon = { SettingsIcon(Icons.Filled.Refresh, MiuixIcons.Refresh, tint = launcherStyle.accentColor) },
-                                onClick = { vm.setBuiltInWatchFaceFontPath(null) }
-                            )
-                        }
+                        ActionCard(
+                            title = "恢复默认字体",
+                            subtitle = "清除已保存的表盘字体",
+                            scale = itemFisheye(listState, "watchface_font_clear", screenCenterY, screenHeightPx),
+                            icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                            onClick = { vm.setBuiltInWatchFaceFontPath(null) }
+                        )
                     }
                 }
             }
@@ -1519,25 +1373,6 @@ private fun SettingsRootScreen(
                     checked = watchFaceBottomFadeEnabled,
                     onToggle = vm::setWatchFaceBottomFadeEnabled,
                     scale = itemFisheye(listState, "watchface_bottom_fade", screenCenterY, screenHeightPx)
-                )
-            }
-            // 这两项原来堆在「功能开关」里，语义上属于表盘，挪回来。
-            item("watchface_status_indicators") {
-                SettingsSwitchRow(
-                    title = if (isZh) "表盘状态提示" else "Watch Face Status Indicators",
-                    subtitle = if (isZh) "表盘顶部显示充电闪电和通知红点" else "Show charging and notification indicators at the top of the watch face",
-                    checked = watchFaceStatusIndicators,
-                    onToggle = vm::setWatchFaceStatusIndicatorsEnabled,
-                    scale = itemFisheye(listState, "watchface_status_indicators", screenCenterY, screenHeightPx)
-                )
-            }
-            item("watchface_charging_power_text") {
-                SettingsSwitchRow(
-                    title = if (isZh) "充电功率文字" else "Charging Power Text",
-                    subtitle = if (isZh) "充电时在表盘里显示功率或充电文字" else "Show charging wattage or charging text on the watch face",
-                    checked = watchFaceChargingPowerText,
-                    onToggle = vm::setWatchFaceChargingPowerTextEnabled,
-                    scale = itemFisheye(listState, "watchface_charging_power_text", screenCenterY, screenHeightPx)
                 )
             }
         }
@@ -1582,8 +1417,8 @@ private fun SettingsRootScreen(
             }
             item("feature_toggles_menu") {
                 SettingsCategoryCard(
-                    title = if (isZh) "功能菜单" else "Features",
-                    subtitle = if (isZh) "负一屏、通知中心、控制中心与手势" else "Side screen, notification center, control center, and gestures",
+                    title = if (isZh) "功能开关" else "Feature Toggles",
+                    subtitle = if (isZh) "副一屏、通知、控制中心和表盘提示" else "Side screen, notifications, Control Center, and watch face indicators",
                     onClick = { navigateTo(SettingsDestination.FEATURE_TOGGLES) },
                     scale = itemFisheye(listState, "feature_toggles_menu", screenCenterY, screenHeightPx)
                 )
@@ -1753,19 +1588,17 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "direct_launch_app_list", screenCenterY, screenHeightPx)
                 )
             }
-            if (splashDelayRowMounted) {
+            if (splashIcon) {
                 item("splash_delay") {
-                    SettingsExpandableRow(visible = splashIcon) {
-                        SettingsSliderRow(
-                            title = "遮罩时长",
-                            value = splashDelay.toFloat(),
-                            valueText = "${splashDelay} ms",
-                            range = 300f..1500f,
-                            steps = 11,
-                            onValueChange = { vm.setSplashDelay(it.toInt()) },
-                            scale = itemFisheye(listState, "splash_delay", screenCenterY, screenHeightPx)
-                        )
-                    }
+                    SettingsSliderRow(
+                        title = "遮罩时长",
+                        value = splashDelay.toFloat(),
+                        valueText = "${splashDelay} ms",
+                        range = 300f..1500f,
+                        steps = 11,
+                        onValueChange = { vm.setSplashDelay(it.toInt()) },
+                        scale = itemFisheye(listState, "splash_delay", screenCenterY, screenHeightPx)
+                    )
                 }
             }
         }
@@ -1902,77 +1735,13 @@ private fun SettingsRootScreen(
             }
         }
 
-            // 功能菜单只当路牌用：每一项都通到一个语义明确的二级页，
-            // 不再往这里丢「反正不知道放哪」的开关。
             SettingsDestination.FEATURE_TOGGLES -> SettingsPageScaffold(
-            title = if (isZh) "功能菜单" else "Features",
+            title = if (isZh) "功能开关" else "Feature Toggles",
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.FEATURE_TOGGLES).index,
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.FEATURE_TOGGLES).offset,
             onScrollChanged = { index, offset -> updateScroll(SettingsDestination.FEATURE_TOGGLES, index, offset) }
-        ) { listState, screenCenterY, screenHeightPx, _ ->
-            item("feature_side_screen") {
-                SettingsCategoryCard(
-                    title = if (isZh) "负一屏设置" else "Side Screen",
-                    subtitle = if (isZh) {
-                        if (sideScreenEnabled) "已开启 · 快捷启动、小组件页与步数" else "已关闭 · 快捷启动、小组件页与步数"
-                    } else {
-                        "Quick launch, widget page, and step count"
-                    },
-                    onClick = { navigateTo(SettingsDestination.SIDE_SCREEN) },
-                    scale = itemFisheye(listState, "feature_side_screen", screenCenterY, screenHeightPx)
-                )
-            }
-            item("feature_notification_center") {
-                SettingsCategoryCard(
-                    title = if (isZh) "通知中心设置" else "Notification Center",
-                    subtitle = if (isZh) {
-                        if (showNotification) "已开启 · 通知列表与常驻通知" else "已关闭 · 通知列表与常驻通知"
-                    } else {
-                        "Notification list and ongoing notifications"
-                    },
-                    onClick = { navigateTo(SettingsDestination.NOTIFICATION_CENTER) },
-                    scale = itemFisheye(listState, "feature_notification_center", screenCenterY, screenHeightPx)
-                )
-            }
-            item("feature_control_center") {
-                SettingsCategoryCard(
-                    title = if (isZh) "控制中心设置" else "Control Center",
-                    subtitle = if (isZh) {
-                        if (showControlCenter) "已开启 · 快捷开关与音乐卡片" else "已关闭 · 快捷开关与音乐卡片"
-                    } else {
-                        "Quick toggles and the media card"
-                    },
-                    onClick = { navigateTo(SettingsDestination.CONTROL_CENTER) },
-                    scale = itemFisheye(listState, "feature_control_center", screenCenterY, screenHeightPx)
-                )
-            }
-            item("feature_gestures") {
-                SettingsCategoryCard(
-                    title = if (isZh) "手势与无障碍" else "Gestures & Accessibility",
-                    subtitle = if (isZh) "双击息屏、控制中心电源按钮" else "Double-tap lock and the power button",
-                    onClick = { navigateTo(SettingsDestination.GESTURES) },
-                    scale = itemFisheye(listState, "feature_gestures", screenCenterY, screenHeightPx)
-                )
-            }
-            item("feature_app_list_behavior") {
-                SettingsCategoryCard(
-                    title = if (isZh) "应用列表行为" else "App List Behavior",
-                    subtitle = if (isZh) "遮罩取色、列表底色与文件夹" else "Launch mask tint, row background, and folders",
-                    onClick = { navigateTo(SettingsDestination.APP_LIST_BEHAVIOR) },
-                    scale = itemFisheye(listState, "feature_app_list_behavior", screenCenterY, screenHeightPx)
-                )
-            }
-        }
-
-            SettingsDestination.SIDE_SCREEN -> SettingsPageScaffold(
-            title = if (isZh) "负一屏设置" else "Side Screen",
-            onBack = { handleBack() },
-            headerTime = headerTime,
-            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.SIDE_SCREEN).index,
-            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.SIDE_SCREEN).offset,
-            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.SIDE_SCREEN, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("side_screen_toggle") {
                 SettingsSwitchRow(
@@ -1981,6 +1750,34 @@ private fun SettingsRootScreen(
                     checked = sideScreenEnabled,
                     onToggle = vm::setSideScreenEnabled,
                     scale = itemFisheye(listState, "side_screen_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            item("notification_center_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "显示通知" else "Show Notifications",
+                    subtitle = if (showNotification) {
+                        if (isZh) "通知预览会显示在副一屏快捷启动下方" else "Show notification previews below quick launch on the side screen"
+                    } else {
+                        if (isZh) "隐藏副一屏里的通知列表" else "Hide notifications from the side screen"
+                    },
+                    checked = showNotification,
+                    enabled = sideScreenEnabled,
+                    onToggle = vm::setShowNotification,
+                    scale = itemFisheye(listState, "notification_center_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            item("ongoing_notification_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "显示常驻通知" else "Show Ongoing Notifications",
+                    subtitle = if (showOngoingNotifications) {
+                        if (isZh) "显示有内容价值的常驻通知，过滤系统运行和悬浮窗提示" else "Show useful ongoing notifications while filtering system noise"
+                    } else {
+                        if (isZh) "隐藏常驻通知" else "Hide ongoing notifications"
+                    },
+                    checked = showOngoingNotifications,
+                    enabled = sideScreenEnabled && showNotification,
+                    onToggle = vm::setShowOngoingNotifications,
+                    scale = itemFisheye(listState, "ongoing_notification_toggle", screenCenterY, screenHeightPx)
                 )
             }
             item("widget_center_toggle") {
@@ -1996,77 +1793,6 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "widget_center_toggle", screenCenterY, screenHeightPx)
                 )
             }
-            item("show_step_count") {
-                SettingsSwitchRow(
-                    title = if (isZh) "显示步数" else "Show Step Count",
-                    subtitle = if (isZh) "在侧屏底部电池右侧显示步数" else "Show steps to the right of battery on side screen",
-                    checked = showStepCount,
-                    enabled = sideScreenEnabled,
-                    onToggle = vm::setShowStepCountEnabled,
-                    scale = itemFisheye(listState, "show_step_count", screenCenterY, screenHeightPx)
-                )
-            }
-        }
-
-            SettingsDestination.NOTIFICATION_CENTER -> SettingsPageScaffold(
-            title = if (isZh) "通知中心设置" else "Notification Center",
-            onBack = { handleBack() },
-            headerTime = headerTime,
-            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.NOTIFICATION_CENTER).index,
-            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.NOTIFICATION_CENTER).offset,
-            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.NOTIFICATION_CENTER, index, offset) }
-        ) { listState, screenCenterY, screenHeightPx, _ ->
-            item("notification_center_toggle") {
-                SettingsSwitchRow(
-                    title = if (isZh) "显示通知" else "Show Notifications",
-                    subtitle = if (showNotification) {
-                        if (isZh) "通知预览会显示在副一屏快捷启动下方" else "Show notification previews below quick launch on the side screen"
-                    } else {
-                        if (isZh) "隐藏副一屏里的通知列表" else "Hide notifications from the side screen"
-                    },
-                    checked = showNotification,
-                    enabled = sideScreenEnabled,
-                    onToggle = vm::setShowNotification,
-                    scale = itemFisheye(listState, "notification_center_toggle", screenCenterY, screenHeightPx)
-                )
-            }
-            if (ongoingNotificationRowMounted) {
-                item("ongoing_notification_toggle") {
-                    SettingsExpandableRow(visible = ongoingNotificationRowVisible) {
-                        SettingsSwitchRow(
-                            title = if (isZh) "显示常驻通知" else "Show Ongoing Notifications",
-                            subtitle = if (showOngoingNotifications) {
-                                if (isZh) "显示有内容价值的常驻通知，过滤系统运行和悬浮窗提示" else "Show useful ongoing notifications while filtering system noise"
-                            } else {
-                                if (isZh) "隐藏常驻通知" else "Hide ongoing notifications"
-                            },
-                            checked = showOngoingNotifications,
-                            enabled = sideScreenEnabled && showNotification,
-                            onToggle = vm::setShowOngoingNotifications,
-                            scale = itemFisheye(listState, "ongoing_notification_toggle", screenCenterY, screenHeightPx)
-                        )
-                    }
-                }
-            }
-            item("notification_access") {
-                ActionCard(
-                    title = if (isZh) "通知使用权" else "Notification Access",
-                    subtitle = if (isZh) "通知列表读不到内容时来这里授权" else "Grant access when notifications stay empty",
-                    icon = { SettingsIcon(Icons.Filled.Settings, MiuixIcons.Settings, tint = launcherStyle.accentColor) },
-                    onClick = { openNotificationListenerSettings() },
-                    scale = itemFisheye(listState, "notification_access", screenCenterY, screenHeightPx)
-                )
-            }
-        }
-
-            SettingsDestination.CONTROL_CENTER -> SettingsPageScaffold(
-            title = if (isZh) "控制中心设置" else "Control Center",
-            onBack = { handleBack() },
-            headerTime = headerTime,
-            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.CONTROL_CENTER).index,
-            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.CONTROL_CENTER).offset,
-            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.CONTROL_CENTER, index, offset) }
-        ) { listState, screenCenterY, screenHeightPx, _ ->
             item("control_center_toggle") {
                 SettingsSwitchRow(
                     title = if (isZh) "显示控制中心" else "Show Control Center",
@@ -2080,41 +1806,33 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "control_center_toggle", screenCenterY, screenHeightPx)
                 )
             }
-            if (musicControlsRowMounted) {
-                item("music_controls_toggle") {
-                    SettingsExpandableRow(visible = musicControlsRowVisible) {
-                        SettingsSwitchRow(
-                            title = if (isZh) "音乐控制卡片" else "Music Controls",
-                            subtitle = if (showMusicControls) {
-                                if (isZh) "控制中心显示当前媒体播放卡片" else "Show the media card in Control Center"
-                            } else {
-                                if (isZh) "隐藏控制中心里的音乐控制卡片" else "Hide the media card from Control Center"
-                            },
-                            checked = showMusicControls,
-                            enabled = showControlCenter,
-                            onToggle = vm::setShowMusicControls,
-                            scale = itemFisheye(listState, "music_controls_toggle", screenCenterY, screenHeightPx)
-                        )
-                    }
-                }
+            item("music_controls_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "音乐控制卡片" else "Music Controls",
+                    subtitle = if (showMusicControls) {
+                        if (isZh) "控制中心显示当前媒体播放卡片" else "Show the media card in Control Center"
+                    } else {
+                        if (isZh) "隐藏控制中心里的音乐控制卡片" else "Hide the media card from Control Center"
+                    },
+                    checked = showMusicControls,
+                    enabled = showControlCenter,
+                    onToggle = vm::setShowMusicControls,
+                    scale = itemFisheye(listState, "music_controls_toggle", screenCenterY, screenHeightPx)
+                )
             }
-            if (mediaCustomActionsRowMounted) {
-                item("media_custom_actions_toggle") {
-                    SettingsExpandableRow(visible = mediaCustomActionsRowVisible) {
-                        SettingsSwitchRow(
-                            title = if (isZh) "音乐应用自定义按钮" else "Media App Actions",
-                            subtitle = if (showMediaCustomActions) {
-                                if (isZh) "在上一曲、下一曲两侧显示应用自定义操作" else "Show app-defined actions around previous and next"
-                            } else {
-                                if (isZh) "只保留上一曲、播放和下一曲按钮" else "Keep only previous, play, and next"
-                            },
-                            checked = showMediaCustomActions,
-                            enabled = showControlCenter && showMusicControls,
-                            onToggle = vm::setShowMediaCustomActions,
-                            scale = itemFisheye(listState, "media_custom_actions_toggle", screenCenterY, screenHeightPx)
-                        )
-                    }
-                }
+            item("media_custom_actions_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "音乐应用自定义按钮" else "Media App Actions",
+                    subtitle = if (showMediaCustomActions) {
+                        if (isZh) "在上一曲、下一曲两侧显示应用自定义操作" else "Show app-defined actions around previous and next"
+                    } else {
+                        if (isZh) "只保留上一曲、播放和下一曲按钮" else "Keep only previous, play, and next"
+                    },
+                    checked = showMediaCustomActions,
+                    enabled = showControlCenter && showMusicControls,
+                    onToggle = vm::setShowMediaCustomActions,
+                    scale = itemFisheye(listState, "media_custom_actions_toggle", screenCenterY, screenHeightPx)
+                )
             }
             item("music_notification_swap_toggle") {
                 SettingsSwitchRow(
@@ -2130,16 +1848,6 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "music_notification_swap_toggle", screenCenterY, screenHeightPx)
                 )
             }
-        }
-
-            SettingsDestination.GESTURES -> SettingsPageScaffold(
-            title = if (isZh) "手势与无障碍" else "Gestures & Accessibility",
-            onBack = { handleBack() },
-            headerTime = headerTime,
-            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.GESTURES).index,
-            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.GESTURES).offset,
-            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.GESTURES, index, offset) }
-        ) { listState, screenCenterY, screenHeightPx, _ ->
             item("double_tap_lock_screen") {
                 SettingsSwitchRow(
                     title = if (isZh) "双击表盘息屏" else "Double Tap to Lock",
@@ -2179,35 +1887,24 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "power_menu_button", screenCenterY, screenHeightPx)
                 )
             }
-            item("accessibility_settings") {
-                ActionCard(
-                    title = if (isZh) "无障碍授权" else "Accessibility Access",
-                    subtitle = if (accessibilityServiceEnabled) {
-                        if (isZh) "已授权" else "Granted"
-                    } else {
-                        if (isZh) "未授权，上面两项手势需要它" else "Not granted; both gestures above need it"
-                    },
-                    icon = {
-                        SettingsIcon(
-                            material = if (accessibilityServiceEnabled) Icons.Filled.CheckCircle else Icons.Filled.Settings,
-                            miuix = if (accessibilityServiceEnabled) MiuixIcons.CheckCircle else MiuixIcons.Settings,
-                            tint = launcherStyle.accentColor
-                        )
-                    },
-                    onClick = { openAccessibilitySettings() },
-                    scale = itemFisheye(listState, "accessibility_settings", screenCenterY, screenHeightPx)
+            item("watchface_status_indicators") {
+                SettingsSwitchRow(
+                    title = if (isZh) "表盘状态提示" else "Watch Face Status Indicators",
+                    subtitle = if (isZh) "表盘顶部显示充电闪电和通知红点" else "Show charging and notification indicators at the top of the watch face",
+                    checked = watchFaceStatusIndicators,
+                    onToggle = vm::setWatchFaceStatusIndicatorsEnabled,
+                    scale = itemFisheye(listState, "watchface_status_indicators", screenCenterY, screenHeightPx)
                 )
             }
-        }
-
-            SettingsDestination.APP_LIST_BEHAVIOR -> SettingsPageScaffold(
-            title = if (isZh) "应用列表行为" else "App List Behavior",
-            onBack = { handleBack() },
-            headerTime = headerTime,
-            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.APP_LIST_BEHAVIOR).index,
-            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.APP_LIST_BEHAVIOR).offset,
-            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.APP_LIST_BEHAVIOR, index, offset) }
-        ) { listState, screenCenterY, screenHeightPx, _ ->
+            item("watchface_charging_power_text") {
+                SettingsSwitchRow(
+                    title = if (isZh) "充电功率文字" else "Charging Power Text",
+                    subtitle = if (isZh) "充电时在表盘里显示功率或充电文字" else "Show charging wattage or charging text on the watch face",
+                    checked = watchFaceChargingPowerText,
+                    onToggle = vm::setWatchFaceChargingPowerTextEnabled,
+                    scale = itemFisheye(listState, "watchface_charging_power_text", screenCenterY, screenHeightPx)
+                )
+            }
             item("app_list_watchface_colors") {
                 SettingsSwitchRow(
                     title = if (isZh) "应用遮罩表盘取色" else "Watch Face Launch Mask Colors",
@@ -2246,6 +1943,15 @@ private fun SettingsRootScreen(
                     checked = appListFoldersEnabled,
                     onToggle = vm::setAppListFoldersEnabled,
                     scale = itemFisheye(listState, "app_list_folders_enabled", screenCenterY, screenHeightPx)
+                )
+            }
+            item("show_step_count") {
+                SettingsSwitchRow(
+                    title = if (isZh) "显示步数" else "Show Step Count",
+                    subtitle = if (isZh) "在侧屏底部电池右侧显示步数" else "Show steps to the right of battery on side screen",
+                    checked = showStepCount,
+                    onToggle = vm::setShowStepCountEnabled,
+                    scale = itemFisheye(listState, "show_step_count", screenCenterY, screenHeightPx)
                 )
             }
         }
@@ -2319,38 +2025,6 @@ private fun SettingsRootScreen(
                     onToggle = vm::setAppListReturnShrinkEnabled,
                     scale = itemFisheye(listState, "app_list_return_shrink", screenCenterY, screenHeightPx)
                 )
-            }
-            // 收缩动画关掉之后才轮到「图标浮动」决定返回时图标怎么落位，
-            // 所以这一项跟着上面那个开关反向展开 / 收起。
-            if (iconFloatRowMounted) {
-                item("app_list_return_icon_float") {
-                    SettingsExpandableRow(visible = iconFloatRowVisible) {
-                        SettingsSwitchRow(
-                            title = if (isZh) "返回时图标浮动" else "Icon Float on Return",
-                            subtitle = if (appListReturnIconFloatEnabled) {
-                                if (isZh) {
-                                    "不缩放整页时，图标各自浮回原位，层次更明显"
-                                } else {
-                                    "Icons drift back to place individually instead of scaling the page"
-                                }
-                            } else {
-                                if (isZh) {
-                                    "整页直接淡入，图标不做单独位移"
-                                } else {
-                                    "Fade the page in without per-icon motion"
-                                }
-                            },
-                            checked = appListReturnIconFloatEnabled,
-                            onToggle = vm::setAppListReturnIconFloatEnabled,
-                            scale = itemFisheye(
-                                listState,
-                                "app_list_return_icon_float",
-                                screenCenterY,
-                                screenHeightPx
-                            )
-                        )
-                    }
-                }
             }
             item("face_return_shrink") {
                 // 减弱动态效果打开时表盘收缩强制开启且不可修改（回弹被去掉后
@@ -2470,7 +2144,7 @@ private fun SettingsRootScreen(
             item("motion_bounce") {
                 SettingsSwitchRow(
                     title = "触边回弹",
-                    subtitle = "同一手势跨过边界时立即产生边缘回弹",
+                    subtitle = "同一手势跨过边界时立即产生 CloX 风格橡皮筋",
                     checked = activeMotionProfile.bounceEnabled,
                     enabled = motionProfileEditable,
                     onToggle = { vm.setMotionBounceEnabled(it) },
@@ -2503,7 +2177,6 @@ private fun SettingsRootScreen(
                         title = "$keyName 时长",
                         value = phase.durationMillis.toFloat(),
                         valueText = "${phase.durationMillis} ms",
-                        localValueText = { "${it.roundToInt()} ms" },
                         range = 80f..1200f,
                         steps = 55,
                         enabled = motionProfileEditable,
@@ -2517,7 +2190,6 @@ private fun SettingsRootScreen(
                         title = "$keyName 衔接",
                         value = phase.handoffMillis.toFloat(),
                         valueText = "${phase.handoffMillis} ms",
-                        localValueText = { "${it.roundToInt()} ms" },
                         range = 0f..500f,
                         steps = 49,
                         enabled = motionProfileEditable,
@@ -2570,7 +2242,6 @@ private fun SettingsRootScreen(
                                     title = "$keyName $parameter",
                                     value = parameterValue,
                                     valueText = "%.2f".format(Locale.US, parameterValue),
-                                    localValueText = { "%.2f".format(Locale.US, it) },
                                     range = if (isX) 0f..1f else -2f..2f,
                                     steps = if (isX) 19 else 39,
                                     enabled = motionProfileEditable,
@@ -2601,7 +2272,6 @@ private fun SettingsRootScreen(
                                 title = "$keyName 阻尼比",
                                 value = easing.dampingRatio,
                                 valueText = "%.2f".format(Locale.US, easing.dampingRatio),
-                                localValueText = { "%.2f".format(Locale.US, it) },
                                 range = 0.05f..2f,
                                 steps = 38,
                                 enabled = motionProfileEditable,
@@ -2625,7 +2295,6 @@ private fun SettingsRootScreen(
                                 title = "$keyName 刚度",
                                 value = easing.stiffness,
                                 valueText = "${easing.stiffness.roundToInt()}",
-                                localValueText = { "${it.roundToInt()}" },
                                 range = 10f..3000f,
                                 steps = 58,
                                 enabled = motionProfileEditable,
@@ -2945,7 +2614,6 @@ private fun SettingsRootScreen(
         }
         }
         }
-        }
     }
 
     donatePreviewResId?.let { resId ->
@@ -2966,7 +2634,6 @@ private fun SettingsPageScaffold(
     val launcherStyle = LauncherTheme.style
     val context = LocalContext.current
     val leftSafeInsetPercent = LocalSettingsLeftSafeInsetPercent.current
-    val rotaryHapticsEnabled = LocalSettingsRotaryHaptics.current
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = initialFirstVisibleItemIndex,
         initialFirstVisibleItemScrollOffset = initialFirstVisibleItemScrollOffset
@@ -2989,49 +2656,7 @@ private fun SettingsPageScaffold(
         focusRequester.requestFocusAfterFirstFrame()
     }
 
-    // 搜索命中：滚到那一行并闪一下高亮。
-    // LazyListLayoutInfo 只认得见的 item，所以先回到顶部再逐屏往下找 key；
-    // 找到就 animateScrollToItem 并把 index 记下来给高亮框用。
-    val highlightKey = LocalSettingsHighlightKey.current
-    val onHighlightConsumed = LocalSettingsHighlightConsumed.current
-    var highlightIndex by remember { mutableStateOf(-1) }
-    LaunchedEffect(highlightKey) {
-        val key = highlightKey
-        if (key == null) {
-            highlightIndex = -1
-            return@LaunchedEffect
-        }
-        withFrameNanos { }
-        listState.scrollToItem(0)
-        var found = -1
-        var guard = 0
-        while (guard < 60) {
-            val info = listState.layoutInfo
-            val hit = info.visibleItemsInfo.firstOrNull { it.key == key }
-            if (hit != null) {
-                found = hit.index
-                break
-            }
-            if (!listState.canScrollForward) break
-            listState.scrollBy(info.viewportSize.height * 0.7f)
-            withFrameNanos { }
-            guard++
-        }
-        if (found >= 0) {
-            // 往上留一屏的 1/4，别让目标行贴在顶边被表框吃掉
-            listState.animateScrollToItem(
-                found,
-                -(listState.layoutInfo.viewportSize.height * 0.25f).roundToInt()
-            )
-            highlightIndex = found
-            delay(1600)
-            highlightIndex = -1
-        }
-        onHighlightConsumed()
-    }
-
     val rotaryScrollMultiplier = 1.18f
-    val isRound = isFlueScreenRound()
 
     BoxWithConstraints(
         modifier = Modifier
@@ -3041,11 +2666,6 @@ private fun SettingsPageScaffold(
         val screenHeightPx = constraints.maxHeight.toFloat()
         val screenCenterY = screenHeightPx / 2f
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
-        // 圆屏：左右各让出 10% 屏宽、上下各让出 16% 屏高（227dp 屏上约 36dp），
-        // 顶部标题行和底部最后一行都不会被表框啃掉。
-        // 方屏：维持原来的 16dp / 18dp。
-        val horizontalInset = if (isRound) maxWidth * ROUND_SETTINGS_HORIZONTAL_INSET else 16.dp
-        val verticalInset = if (isRound) maxHeight * ROUND_SETTINGS_VERTICAL_INSET else 18.dp
 
         LazyColumn(
             state = listState,
@@ -3054,29 +2674,21 @@ private fun SettingsPageScaffold(
                 .flueRotaryScrollable(
                     focusRequester,
                     rotaryScrollMultiplier,
-                    // 表冠滚动的震动跟随「旋转输入触感」开关；点开关 / 点行
-                    // 不该震动，这里也是设置页里唯一一处触感调用。
-                    onRotaryScroll = if (rotaryHapticsEnabled) {
-                        { vibrateHaptic(context) }
-                    } else {
-                        null
-                    }
+                    onRotaryScroll = { vibrateHaptic(context) }
                 ) { rotaryDelta ->
                     scope.launch {
                         listState.scrollBy(-rotaryDelta)
                     }
                 }
                 .flueElasticNestedScroll(listState)
-                .padding(start = horizontalInset + leftSafeInset, end = horizontalInset),
-            contentPadding = PaddingValues(top = verticalInset, bottom = verticalInset + 28.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            // 圆屏下行会按弦宽收窄，必须居中，否则会全部贴左。
-            horizontalAlignment = if (isRound) Alignment.CenterHorizontally else Alignment.Start
+                .padding(start = 16.dp + leftSafeInset, top = 18.dp, end = 16.dp, bottom = 18.dp),
+            contentPadding = PaddingValues(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             item {
                 Row(
                     modifier = Modifier
-                        .roundScreenChordWidth()
+                        .fillMaxWidth()
                         .padding(bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -3096,50 +2708,13 @@ private fun SettingsPageScaffold(
                     color = launcherStyle.accentColor,
                     fontSize = 26.sp,
                     fontWeight = FontWeight.Bold,
-                    textAlign = if (isRound) TextAlign.Center else TextAlign.Start,
-                    modifier = Modifier
-                        .roundScreenChordWidth()
-                        .padding(bottom = 8.dp)
+                    modifier = Modifier.padding(bottom = 8.dp)
                 )
             }
             content(listState, screenCenterY, screenHeightPx, visibleItemKeys)
             item("tail_spacer") {
                 Spacer(modifier = Modifier.height(56.dp))
             }
-        }
-
-        // 搜索命中的高亮框：贴着目标 item 的实际位置画一圈 accent 描边，
-        // 1.6s 后自动淡出。画在 LazyColumn 之上，不参与列表布局。
-        val highlightBounds = remember(listState) {
-            derivedStateOf {
-                if (highlightIndex < 0) {
-                    null
-                } else {
-                    listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == highlightIndex }
-                        ?.let { it.offset to it.size }
-                }
-            }
-        }.value
-        val highlightAlpha by animateFloatAsState(
-            targetValue = if (highlightBounds != null) 1f else 0f,
-            animationSpec = tween(durationMillis = 260),
-            label = "settings_highlight_alpha"
-        )
-        if (highlightBounds != null && highlightAlpha > 0.01f) {
-            val (itemOffset, itemSize) = highlightBounds
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(start = horizontalInset + leftSafeInset, end = horizontalInset)
-                    .offset { IntOffset(0, itemOffset) }
-                    .fillMaxWidth()
-                    .height(with(LocalDensity.current) { itemSize.toDp() })
-                    .border(
-                        width = 2.dp,
-                        color = launcherStyle.accentColor.copy(alpha = highlightAlpha),
-                        shape = launcherStyle.cardShape
-                    )
-            )
         }
     }
 }
@@ -3159,12 +2734,7 @@ private fun HeaderBackButton(onClick: () -> Unit) {
             .instantPressGesture(pressedState, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Icon(
-            imageVector = settingsIcon(Icons.AutoMirrored.Filled.ArrowBack, MiuixIcons.Back),
-            contentDescription = null,
-            tint = launcherStyle.topBarTextColor,
-            modifier = Modifier.size(if (launcherStyle.uiStyle == UiStyle.MIUIX) 20.dp else 24.dp)
-        )
+        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = launcherStyle.topBarTextColor)
     }
 }
 
@@ -3173,7 +2743,7 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
     val launcherStyle = LauncherTheme.style
     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
         // MIUIX：成组大圆角卡片包一行设置行 + Forward 箭头。
-        MiuixSettingsCard(modifier = Modifier.roundScreenChordWidth()) {
+        MiuixSettingsCard {
             MiuixSettingsRow(
                 title = title,
                 subtitle = subtitle.takeIf { it.isNotBlank() },
@@ -3203,7 +2773,7 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
     )
     Box(
         modifier = Modifier
-            .roundScreenChordWidth()
+            .fillMaxWidth()
             .graphicsLayer {
                 scaleX = scale * pressedScale
                 scaleY = scale * pressedScale
@@ -3229,11 +2799,7 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(subtitle, color = launcherStyle.secondaryTextColor, fontSize = 13.sp)
             }
-            SettingsIcon(
-                material = Icons.Filled.ChevronRight,
-                miuix = MiuixIcons.Forward,
-                tint = launcherStyle.accentColor
-            )
+            Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = launcherStyle.accentColor)
         }
     }
 }
@@ -3243,16 +2809,12 @@ private fun SectionTitle(text: String, scale: Float) {
     val launcherStyle = LauncherTheme.style
     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
         // MIUIX：组标题小灰字，对齐 MiuixSettingsCard 的 title 风格。
-        // 走 roundScreenChordWidth 是为了让标题的左边缘跟下面的卡片对齐
-        // （圆屏下卡片会收窄并居中，标题不跟着收就会歪出去）。
         Text(
             text = text,
             color = launcherStyle.secondaryTextColor,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
-            modifier = Modifier
-                .roundScreenChordWidth()
-                .padding(top = 8.dp, start = 14.dp)
+            modifier = Modifier.padding(top = 8.dp, start = 14.dp)
         )
         return
     }
@@ -3262,7 +2824,6 @@ private fun SectionTitle(text: String, scale: Float) {
         fontSize = 13.sp,
         fontWeight = FontWeight.Bold,
         modifier = Modifier
-            .roundScreenChordWidth()
             .padding(top = 4.dp, start = 4.dp, bottom = 2.dp)
             .graphicsLayer {
                 scaleX = scale
@@ -3270,6 +2831,135 @@ private fun SectionTitle(text: String, scale: Float) {
                 alpha = scale.coerceIn(0.55f, 1f)
             }
     )
+}
+
+/**
+ * 设置根页顶部预览头图：Compose 自绘迷你手表屏（圆 / 方跟随
+ * [isFlueScreenRound]），深色底 + 当前时间 + 两行小图标点缀，外层表框
+ * 描边 + 阴影；下方一行当前配置摘要。点击进入「显示与外观」。
+ */
+@Composable
+private fun SettingsPreviewHeaderCard(
+    headerTime: String,
+    uiStyle: UiStyle,
+    themeMode: ThemeMode,
+    layoutMode: LayoutMode,
+    onClick: () -> Unit
+) {
+    val launcherStyle = LauncherTheme.style
+    val isRound = isFlueScreenRound()
+    val pressedState = rememberPressedState()
+    val pressed by pressedState
+    val pressedScale by animateFloatAsState(
+        if (pressed) 0.97f else 1f,
+        animationSpec = launcherStyle.pressScaleSpec,
+        label = "settings_preview_header_scale"
+    )
+    val watchShape = if (isRound) CircleShape else RoundedCornerShape(22.dp)
+    val watchScreenShape = if (isRound) CircleShape else RoundedCornerShape(16.dp)
+    val styleLabel = when (uiStyle) {
+        UiStyle.APPLE_WATCH -> "Apple Watch 风格"
+        UiStyle.MATERIAL_3 -> "Material 3 风格"
+        UiStyle.MIUIX -> "MIUIX 风格"
+    }
+    val themeLabel = when (themeMode) {
+        ThemeMode.SYSTEM -> "跟随系统"
+        ThemeMode.DARK -> "深色"
+        ThemeMode.LIGHT -> "浅色"
+    }
+    val layoutLabel = when (layoutMode) {
+        LayoutMode.Honeycomb -> "蜂窝布局"
+        LayoutMode.List -> "列表布局"
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = pressedScale
+                scaleY = pressedScale
+            }
+            .clip(launcherStyle.cardShape)
+            .background(if (pressed) launcherStyle.pressedCardColor else launcherStyle.cardColor)
+            .border(1.dp, launcherStyle.outlineColor, launcherStyle.cardShape)
+            .instantPressGesture(pressedState, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(104.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            // 表框：描边 + 阴影，内部承载迷你屏幕。
+            Box(
+                modifier = Modifier
+                    .size(96.dp)
+                    .shadow(elevation = 8.dp, shape = watchShape)
+                    .clip(watchShape)
+                    .background(Color(0xFF23252B))
+                    .border(2.dp, Color.White.copy(alpha = 0.14f), watchShape)
+                    .padding(5.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(watchScreenShape)
+                        .background(Color(0xFF07080C)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = headerTime,
+                            color = Color.White,
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        MiniPreviewIconRow(
+                            listOf(
+                                launcherStyle.accentColor,
+                                launcherStyle.positiveColor,
+                                Color(0xFFF2B84B),
+                                Color(0xFFE06C75)
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        MiniPreviewIconRow(
+                            listOf(
+                                Color(0xFF9C7BFF),
+                                launcherStyle.accentColor.copy(alpha = 0.75f),
+                                Color(0xFF5AC8FA)
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "$styleLabel · $themeLabel · $layoutLabel",
+            color = launcherStyle.secondaryTextColor,
+            fontSize = 12.sp
+        )
+    }
+}
+
+/** 预览头图里的一行小图标点缀（圆点模拟应用图标）。 */
+@Composable
+// Color 是 value class，Kotlin 禁止它作为 vararg 参数类型。
+private fun MiniPreviewIconRow(colors: List<Color>) {
+    Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        colors.forEach { dotColor ->
+            Box(
+                modifier = Modifier
+                    .size(9.dp)
+                    .clip(CircleShape)
+                    .background(dotColor)
+            )
+        }
+    }
 }
 
 @Composable
@@ -3334,10 +3024,6 @@ private val SettingsDestination.depth: Int
     get() = when (this) {
         SettingsDestination.ROOT -> 0
         SettingsDestination.WATCH_FACE_MORE,
-        SettingsDestination.SIDE_SCREEN,
-        SettingsDestination.NOTIFICATION_CENTER,
-        SettingsDestination.CONTROL_CENTER,
-        SettingsDestination.GESTURES,
         SettingsDestination.BACKUP,
         SettingsDestination.DONATE -> 2
         SettingsDestination.MUSIC_TEXT_ANIMATION,
@@ -3389,7 +3075,7 @@ private fun MessageCard(text: String, background: Color, onClick: () -> Unit) {
     )
     Box(
         modifier = Modifier
-            .roundScreenChordWidth()
+            .fillMaxWidth()
             .graphicsLayer {
                 scaleX = pressedScale
                 scaleY = pressedScale
@@ -3415,7 +3101,7 @@ private fun SettingsChoiceRow(
     val launcherStyle = LauncherTheme.style
     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
         // MIUIX：56dp 设置行，选中态在右侧显示 Check 图标。
-        MiuixSettingsCard(modifier = Modifier.roundScreenChordWidth()) {
+        MiuixSettingsCard {
             MiuixSettingsRow(
                 title = title,
                 subtitle = subtitle.takeIf { it.isNotBlank() },
@@ -3444,7 +3130,7 @@ private fun SettingsChoiceRow(
     )
     Box(
         modifier = Modifier
-            .roundScreenChordWidth()
+            .fillMaxWidth()
             .graphicsLayer {
                 scaleX = scale * pressedScale
                 scaleY = scale * pressedScale
@@ -3483,11 +3169,7 @@ private fun SettingsChoiceRow(
                 Text(subtitle, color = launcherStyle.secondaryTextColor, fontSize = 12.sp)
             }
             if (selected) {
-                SettingsIcon(
-                    material = Icons.Filled.CheckCircle,
-                    miuix = MiuixIcons.CheckCircle,
-                    tint = launcherStyle.accentColor
-                )
+                Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = launcherStyle.accentColor)
             }
         }
     }
@@ -3533,7 +3215,7 @@ private fun SettingsSwitchRow(
         } else {
             null
         }
-        MiuixSettingsCard(modifier = Modifier.roundScreenChordWidth()) {
+        MiuixSettingsCard {
             MiuixSettingsRow(
                 title = title,
                 subtitle = subtitle.takeIf { it.isNotBlank() },
@@ -3574,7 +3256,7 @@ private fun SettingsSwitchRow(
 
     Box(
         modifier = Modifier
-            .roundScreenChordWidth()
+            .fillMaxWidth()
             .graphicsLayer {
                 scaleX = scale * pressedScale
                 scaleY = scale * pressedScale
@@ -3665,7 +3347,7 @@ private fun SettingsSliderRow(
     LaunchedEffect(value) { localValue = value }
     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
         // MIUIX：设置行显示标题与当前值，下面接胶囊 MiuixSlider。
-        MiuixSettingsCard(modifier = Modifier.roundScreenChordWidth()) {
+        MiuixSettingsCard {
             MiuixSettingsRow(
                 title = title,
                 subtitle = localValueText?.invoke(localValue) ?: valueText,
@@ -3685,8 +3367,6 @@ private fun SettingsSliderRow(
                         }
                     },
                     valueRange = range,
-                    // steps 交给 M3 Slider 自己吸附，跟 Material 分支保持一致
-                    steps = steps,
                     enabled = enabled,
                     onValueChangeFinished = {
                         onValueChangeFinished?.invoke(localValue)
@@ -3698,7 +3378,7 @@ private fun SettingsSliderRow(
     }
     Box(
         modifier = Modifier
-            .roundScreenChordWidth()
+            .fillMaxWidth()
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -3752,7 +3432,7 @@ private fun ActionCard(
     val pressed by pressedState
     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
         // MIUIX：动作行走强调色标题；保留长按支持（导入表盘彩蛋）。
-        MiuixSettingsCard(modifier = Modifier.roundScreenChordWidth()) {
+        MiuixSettingsCard {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -3791,7 +3471,7 @@ private fun ActionCard(
     )
     Box(
         modifier = Modifier
-            .roundScreenChordWidth()
+            .fillMaxWidth()
             .graphicsLayer {
                 scaleX = scale * pressedScale
                 scaleY = scale * pressedScale
@@ -3852,7 +3532,7 @@ private fun AboutCard(
     }
     Box(
         modifier = Modifier
-            .roundScreenChordWidth()
+            .fillMaxWidth()
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -4037,7 +3717,7 @@ private fun DonateMethodCard(
     )
     Box(
         modifier = Modifier
-            .roundScreenChordWidth()
+            .fillMaxWidth()
             .graphicsLayer {
                 scaleX = scale * pressedScale
                 scaleY = scale * pressedScale
@@ -4397,47 +4077,30 @@ private fun BlockingProgressDialog(
             usePlatformDefaultWidth = false
         )
     ) {
-        val launcherStyle = LauncherTheme.style
-        val isMiuix = launcherStyle.uiStyle == UiStyle.MIUIX
-        val accent = if (isMiuix) launcherStyle.accentColor else WatchColors.ActiveCyan
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(if (isMiuix) launcherStyle.screenBackground else Color.Black),
+                .background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
             Column(
-                // 圆屏上这块是居中的，但仍要给文字留出弦宽余量。
-                modifier = Modifier.padding(horizontal = if (isFlueScreenRound()) 34.dp else 26.dp),
+                modifier = Modifier.padding(horizontal = 26.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 if (state.completed) {
-                    SettingsIcon(
-                        material = Icons.Filled.CheckCircle,
-                        miuix = MiuixIcons.CheckCircle,
-                        tint = accent,
-                        size = 52.dp
+                    Icon(
+                        imageVector = Icons.Filled.CheckCircle,
+                        contentDescription = null,
+                        tint = WatchColors.ActiveCyan,
+                        modifier = Modifier.size(52.dp)
                     )
-                } else if (isMiuix) {
-                    MiuixLoadingIndicator(color = accent)
                 } else {
-                    CircularProgressIndicator(color = accent)
+                    CircularProgressIndicator(color = WatchColors.ActiveCyan)
                 }
                 Spacer(modifier = Modifier.height(18.dp))
-                Text(
-                    state.title,
-                    color = if (isMiuix) launcherStyle.titleColor else Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center
-                )
+                Text(state.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    state.detail,
-                    color = if (isMiuix) launcherStyle.secondaryTextColor else WatchColors.TextTertiary,
-                    fontSize = 12.sp,
-                    textAlign = TextAlign.Center
-                )
+                Text(state.detail, color = WatchColors.TextTertiary, fontSize = 12.sp)
                 if (state.completed) {
                     Spacer(modifier = Modifier.height(22.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

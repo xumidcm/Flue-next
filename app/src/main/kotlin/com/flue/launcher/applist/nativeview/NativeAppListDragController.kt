@@ -161,26 +161,6 @@ internal class NativeAppListDragController(
     }
 
     /**
-     * 因外部状态变更（布局形态换档、几何重算、场景失活）而作废当前手势。
-     *
-     * 与 [onCancel] 的区别只有一处：**行 View 的原生长按保持抑制**，不在这里
-     * 恢复。行 View 自己挂着 `OnLongClickListener`（`NativeAppListAdapter` 发
-     * `ShowActions`），它和本机器是两条独立计时链；这种取消发生时手指通常还
-     * 按着，若立刻恢复，Android 那条 620ms 计时器会照常走完，于是几何都换过
-     * 了、菜单却按旧坐标弹出来。抑制交由真实的 UP/CANCEL 解除。
-     *
-     * [onCancel] 用于手势自身正常让位（例如 RecyclerView 赢得触摸slop 接管
-     * 滚动），那种情况下恢复长按是正确的。
-     */
-    fun invalidateForExternalChange(): Boolean {
-        if (released || !machine.isTracking) return false
-        val consumed = machine.isDragging || machine.hasLongPressed
-        process(machine.cancel())
-        cancelCallbacks()
-        return consumed
-    }
-
-    /**
      * Cancels a gesture after a second pointer arrives, but keeps the source
      * row's long-click suppressed until the real terminal event. Otherwise
      * Android's child View can fire its own long-click a few hundred ms later.
@@ -236,14 +216,8 @@ internal class NativeAppListDragController(
                 }
                 is NativeDragEffect.Move ->
                     host.previewMove(effect.source, effect.target)
-                is NativeDragEffect.FolderHoverChanged -> {
-                    val hoverTarget = effect.target.takeIf { allowFolderCreation() }
-                    host.setFolderHover(hoverTarget)
-                    // The dwell threshold is otherwise invisible until the user
-                    // lifts: confirm it in the hand the moment it arms, the same
-                    // way the long press and the drag start already do.
-                    if (hoverTarget != null) host.performDragHaptic()
-                }
+                is NativeDragEffect.FolderHoverChanged ->
+                    host.setFolderHover(effect.target.takeIf { allowFolderCreation() })
                 is NativeDragEffect.CreateFolder ->
                     if (allowFolderCreation()) {
                         val command = host.planFolder(effect.source, effect.target)

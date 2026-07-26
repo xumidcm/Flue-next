@@ -46,12 +46,6 @@ data class LauncherStyle(
     val chipShape: Shape = CircleShape,
     val rowShape: Shape = RoundedCornerShape(18.dp),
     val panelShape: Shape = RoundedCornerShape(30.dp),
-    /**
-     * 开关「未激活」轨道色。HyperOS 浅色底是极淡的黑 (#0000001F)、深色底是
-     * 淡白 (#FFFFFF33)，不能拿 secondaryTextColor 兑出来 —— 那个太深，
-     * 会让关掉的开关看起来像禁用态。
-     */
-    val switchTrackOffColor: Color = Color(0x33FFFFFF),
     val watchFaceOverlayStrength: Float,
     val faceSwitchEnterSpec: FiniteAnimationSpec<Float>,
     val faceSwitchExitSpec: FiniteAnimationSpec<Float>,
@@ -103,7 +97,6 @@ fun appleWatchLauncherStyle(darkMode: Boolean): LauncherStyle {
         chipShape = CircleShape,
         rowShape = RoundedCornerShape(18.dp),
         panelShape = RoundedCornerShape(30.dp),
-        switchTrackOffColor = if (darkMode) Color(0x33FFFFFF) else Color(0x1F000000),
         watchFaceOverlayStrength = 1f,
         faceSwitchEnterSpec = tween(durationMillis = 220, delayMillis = 70),
         faceSwitchExitSpec = tween(durationMillis = 180),
@@ -151,7 +144,6 @@ fun materialLauncherStyle(darkMode: Boolean): LauncherStyle {
         chipShape = CircleShape,
         rowShape = RoundedCornerShape(24.dp),
         panelShape = RoundedCornerShape(36.dp),
-        switchTrackOffColor = if (darkMode) Color(0x33FFFFFF) else Color(0x1F000000),
         watchFaceOverlayStrength = 1.25f,
         faceSwitchEnterSpec = tween(durationMillis = 300, delayMillis = 20),
         faceSwitchExitSpec = tween(durationMillis = 220),
@@ -167,25 +159,17 @@ fun materialLauncherStyle(darkMode: Boolean): LauncherStyle {
 }
 
 /**
- * MIUIX（HyperOS 视觉语言）风格令牌。
- *
- * 配色按 HyperOS 设置页的实际观感取值，深浅色一一对应：
- * - 页面底：浅色 #F7F7F7 / 深色 纯黑 #000000
- * - 卡片面：浅色 纯白 #FFFFFF / 深色 #1F1F1F
- * - 主文字：#000000E6 / #FFFFFFE6（不是纯黑纯白，HyperOS 一直压 90% 透明度）
- * - 次要字：#00000080 / #FFFFFF80
- * - 强调蓝：#3482FF（深浅色同一支，HyperOS 不随深色变浅）
- * - 分隔线：极淡，浅色 #0000000F / 深色 #FFFFFF14
+ * MIUIX（HyperOS 视觉语言）风格令牌：
+ * 大圆角成组卡片（18dp）、行高较高、辅助文字灰色小号、
+ * 强调色默认蓝（#3482FF）、浅色底 #F7F7F7 / 深色底 #000000、卡片 #1B1B1B。
  */
 fun miuixLauncherStyle(darkMode: Boolean): LauncherStyle {
     val bg = if (darkMode) Color(0xFF000000) else Color(0xFFF7F7F7)
-    val card = if (darkMode) Color(0xFF1F1F1F) else Color(0xFFFFFFFF)
-    // 按下态只比卡片深/浅一档，HyperOS 的按压反馈很克制
-    val cardPressed = if (darkMode) Color(0xFF2C2C2C) else Color(0xFFEDEDED)
+    val card = if (darkMode) Color(0xFF1B1B1B) else Color(0xFFFFFFFF)
+    val cardPressed = if (darkMode) Color(0xFF2A2A2A) else Color(0xFFEDEDED)
     val accent = Color(0xFF3482FF)
-    val text = if (darkMode) Color(0xE6FFFFFF) else Color(0xE6000000)
-    val secondary = if (darkMode) Color(0x80FFFFFF) else Color(0x80000000)
-    val hairline = if (darkMode) Color(0x14FFFFFF) else Color(0x0F000000)
+    val text = if (darkMode) Color(0xFFF2F2F2) else Color(0xFF1A1A1A)
+    val secondary = if (darkMode) Color(0xFF8C8C8C) else Color(0xFF999999)
     return LauncherStyle(
         uiStyle = UiStyle.MIUIX,
         screenBackground = bg,
@@ -198,31 +182,29 @@ fun miuixLauncherStyle(darkMode: Boolean): LauncherStyle {
         ),
         cardColor = card,
         pressedCardColor = cardPressed,
-        selectedCardColor = accent.copy(alpha = if (darkMode) 0.20f else 0.10f),
-        outlineColor = hairline,
+        selectedCardColor = accent.copy(alpha = if (darkMode) 0.24f else 0.14f),
+        outlineColor = if (darkMode) Color.White.copy(alpha = 0.06f) else Color.Black.copy(alpha = 0.05f),
         titleColor = text,
         bodyColor = text,
         secondaryTextColor = secondary,
         accentColor = accent,
         // MIUIX 的开关 / 选中态统一使用蓝色强调色，而不是绿色
         positiveColor = accent,
-        topBarChipColor = if (darkMode) Color(0xFF2C2C2C) else Color(0xFFECECEC),
+        topBarChipColor = card,
         topBarTextColor = text,
         appListBaseColor = card,
         appListFadeColor = bg.copy(alpha = if (darkMode) 0.86f else 0.92f),
-        appListPressedOverlay = if (darkMode) Color(0x14FFFFFF) else Color(0x0D000000),
+        appListPressedOverlay = if (darkMode) Color.White.copy(alpha = 0.06f) else Color.Black.copy(alpha = 0.05f),
         cardShape = RoundedCornerShape(18.dp),
         compactShape = RoundedCornerShape(14.dp),
         bubbleShape = RoundedCornerShape(999.dp),
         chipShape = CircleShape,
         rowShape = RoundedCornerShape(14.dp),
         panelShape = RoundedCornerShape(22.dp),
-        switchTrackOffColor = if (darkMode) Color(0x33FFFFFF) else Color(0x1F000000),
         watchFaceOverlayStrength = 1f,
         faceSwitchEnterSpec = tween(durationMillis = 260, delayMillis = 40),
         faceSwitchExitSpec = tween(durationMillis = 200),
-        // MIUIX 层级转场统一 spring(0.9, 400)：略微过冲、收得干净
-        pageMotionSpec = spring(dampingRatio = 0.9f, stiffness = 400f),
+        pageMotionSpec = spring(dampingRatio = 0.9f, stiffness = 600f),
         launchMaskEnterSpec = tween(durationMillis = 180),
         launchMaskExitSpec = tween(durationMillis = 200),
         pressScaleSpec = spring(stiffness = 600f, dampingRatio = 0.9f),

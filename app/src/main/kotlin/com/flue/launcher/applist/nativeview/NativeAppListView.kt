@@ -25,14 +25,6 @@ import kotlin.math.roundToInt
 
 private const val NATIVE_DRAG_SETTLE_DURATION_MS = 130L
 private const val NATIVE_DRAG_PREVIEW_DURATION_MS = 150L
-
-/**
- * How far the dragged icon's centre may sit from a slot's icon centre and still
- * count as a folder dwell candidate, as a fraction of the target icon radius.
- * Anything looser turns every pass-through into a folder attempt; anything much
- * tighter is unreachable on a watch-sized row pitch.
- */
-private const val FOLDER_DWELL_CORE_RADIUS_SCALE = 0.78f
 private val NATIVE_DRAG_SETTLE_INTERPOLATOR = PathInterpolator(0.2f, 0f, 0f, 1f)
 
 private data class NativeDragPreviewMove(
@@ -292,14 +284,6 @@ class NativeAppListView @JvmOverloads constructor(
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         updateGesturePointer(event)
         prepareLegacyEdgePointer(event)
-        // The edge's pointer window is opened and closed here and nowhere else.
-        // This is the only site that sees every DOWN/UP/CANCEL delivered to the
-        // view: `onInterceptTouchEvent` bails before its own body when the
-        // scene is inactive, and `onTouchEvent` never runs while a child owns
-        // the stream. A terminal sample missed by those two used to leave the
-        // edge permanently "owned", which on API 31+ disables scrolling
-        // outright — see FlueSpringEdgeEffectFactory.distance().
-        observeEdgeGesture(event)
         if (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
             // A pointer-down can be delivered to the currently touched row
             // without another parent interception pass. Cancel at the outer
@@ -321,11 +305,6 @@ class NativeAppListView @JvmOverloads constructor(
         cancelActiveDrag()
         cancelDragSettle(removeOverlay = true)
         springEdgeEffects.finish()
-        // A detach never delivers a terminal MotionEvent, so the pointer window
-        // has to be closed explicitly or it stays open across the next attach.
-        // Ordered after finish() so the edge is already at rest and this cannot
-        // start a rebound animator on a view that is going away.
-        springEdgeEffects.endGesture(terminalUp = false)
         finishOwnedTouch(scheduleMotionBlurRestore = false)
         removeCallbacks(restoreMotionBlur)
         cancelEntryAnimation(resetProgress = true)
@@ -333,35 +312,10 @@ class NativeAppListView @JvmOverloads constructor(
     }
 
     override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
-        if (released) return false
+        if (released || !currentConfig.value.active) return false
         updateGesturePointer(event)
         prepareLegacyEdgePointer(event)
-        if (!currentConfig.value.active) {
-            // An inactive scene must not scroll, but dropping the whole stream
-            // also robbed RecyclerView of the ACTION_DOWN that seeds
-            // mInitialTouchY / mLastTouchY / mScrollPointerId. When `active`
-            // flipped back mid-gesture — exactly what happens when the user
-            // interrupts the app-open animation — the next MOVE was then
-            // measured against anchors left over from the *previous* gesture,
-            // so the list either refused to cross touch slop or jumped.
-            // Forward only the stream boundaries: they are pure bookkeeping,
-            // while a MOVE would actually scroll.
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    super.onInterceptTouchEvent(event)
-                    // DOWN may leave RecyclerView in DRAGGING (it does that when
-                    // it stops a settling scroll). Nothing will clear it while
-                    // we swallow the MOVEs, and a stale DRAGGING makes the next
-                    // gesture scroll with zero touch slop.
-                    stopScroll()
-                }
-
-                MotionEvent.ACTION_UP,
-                MotionEvent.ACTION_CANCEL,
-                -> super.onInterceptTouchEvent(event)
-            }
-            return false
-        }
+        observeEdgeGesture(event)
         if (dragTouchOwned) return true
 
         val dragConsumed = when (event.actionMasked) {
@@ -432,6 +386,7 @@ class NativeAppListView @JvmOverloads constructor(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         prepareLegacyEdgePointer(event)
+        observeEdgeGesture(event)
         val alreadyHandled =
             event.actionMasked == interceptedAction &&
                 event.eventTime == interceptedEventTime
@@ -563,13 +518,7 @@ class NativeAppListView @JvmOverloads constructor(
         recyclerGestureNeedsTerminal = false
     }
 
-    /**
-     * Opens and closes the edge's pointer window. Called from
-     * [dispatchTouchEvent] only — see the note there for why no other dispatch
-     * site is allowed to own this.
-     */
     private fun observeEdgeGesture(event: MotionEvent) {
-        if (released) return
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 edgeTerminalAction = -1
@@ -590,9 +539,8 @@ class NativeAppListView @JvmOverloads constructor(
                 val canCommitFace =
                     event.actionMasked == MotionEvent.ACTION_UP &&
                         !dragTouchOwned &&
-                        !dragController.isDragging &&
-                        currentConfig.value.active
-                if (springEdgeEffects.endGesture(canCommitFace)) {
+                        !dragController.isDragging
+                if (springEdgeEffects.confirmTopRelease(canCommitFace)) {
                     onScrollToTop?.invoke()
                 }
             }
@@ -784,16 +732,7 @@ class NativeAppListView @JvmOverloads constructor(
         val motionProfileChanged = previous.motionProfile != next.value.motionProfile
         val resetInitialScroll =
             previous.initialResetToken != next.value.initialResetToken
-        // presentation 换档（线性↔蜂窝↔密集网格）会整套换掉命中几何，却不算
-        // hasDifferentLayoutGeometry。此时若还留着一个待定的长按定时器，它会在
-        // 新布局上按旧坐标弹出菜单。旧测试手动调 onInterceptTouchEvent 绕过了
-        // dispatchTouchEvent，DOWN 从没到达 dragController，所以这条断言一直
-        // 是假绿；改走真实入口后才暴露出来。
-        val presentationChanged = previous.presentation != next.value.presentation
-        if (
-            (geometryChanged || resetInitialScroll || presentationChanged) &&
-            dragController.isActive
-        ) {
+        if ((geometryChanged || resetInitialScroll) && dragController.isActive) {
             cancelActiveDrag()
         }
         if (geometryChanged) {
@@ -825,7 +764,7 @@ class NativeAppListView @JvmOverloads constructor(
             // A screen transition can remove the list before the terminal
             // pointer sample arrives.  Drop a pending pull-to-face candidate
             // here; a later UP from the old stream must never navigate.
-            springEdgeEffects.endGesture(terminalUp = false)
+            springEdgeEffects.confirmTopRelease(terminalUp = false)
             resetLegacyEdgeGesture()
             clearGlidePressed()
             cancelActiveDrag()
@@ -926,26 +865,14 @@ class NativeAppListView @JvmOverloads constructor(
         recyclerGestureNeedsTerminal = false
         clearGesturePointer()
         resetLegacyEdgeGesture()
-        // A drag hand-off calls springEdgeEffects.finish() mid-stream, so an
-        // edge pulled between the DOWN and the hand-off can be left latched
-        // with nothing scheduled to unwind it. Ending the owned touch is the
-        // last point at which that is still cheap to repair.
-        springEdgeEffects.settleIfOwnerless()
         removeCallbacks(restoreMotionBlur)
         if (scheduleMotionBlurRestore) postDelayed(restoreMotionBlur, MOTION_BLUR_RESTORE_DELAY_MS)
         parent?.requestDisallowInterceptTouchEvent(false)
     }
 
-    /**
-     * 外部状态变更导致当前手势作废（配置换档、几何重算、场景失活、detach）。
-     * 走 [NativeAppListDragController.invalidateForExternalChange]：手指多半
-     * 还按着，行 View 的原生长按必须保持抑制到真实的 UP/CANCEL，否则菜单会
-     * 在新几何上按旧坐标弹出来。
-     */
     private fun cancelActiveDrag() {
-        dragController.invalidateForExternalChange()
+        dragController.onCancel()
         if (dragTouchOwned) finishOwnedTouch()
-        springEdgeEffects.settleIfOwnerless()
     }
 
     /**
@@ -1314,69 +1241,25 @@ class NativeAppListView @JvmOverloads constructor(
             return bestPosition
         }
 
-        /**
-         * Resolves the folder dwell target.
-         *
-         * Two invariants make this different from [reorderKeyAt], and both were
-         * missing while folder creation was silently dead:
-         *
-         * 1. The probe is the **dragged icon's own centre**, not the raw
-         *    pointer. In LINEAR the overlay is pinned to the icon column
-         *    (`updateDrag` zeroes its X), so a finger that grabbed a row by its
-         *    label never overlapped any icon and the old pointer-based icon hit
-         *    test returned null for the entire gesture.
-         * 2. The candidate is read from the **pre-preview** order at a fixed
-         *    layout slot. A reorder preview claims the hovered slot instantly
-         *    and with no dwell of its own, so a translation-inclusive hit test
-         *    lost the target one frame after acquiring it and the 500ms dwell
-         *    clock could never run to completion.
-         */
         override fun folderKeyAt(x: Float, y: Float): AppItemKey? {
-            val source = draggedSourceKey ?: return null
-            val overlay = dragOverlayView
-            val probeX = overlay?.iconCenterXInParentWithoutFlow() ?: x
-            val probeY = overlay?.iconCenterYInParentWithoutFlow() ?: y
-            if (!probeX.isFinite() || !probeY.isFinite()) return null
-
-            var bestPosition = RecyclerView.NO_POSITION
-            var bestDistance = Float.MAX_VALUE
-            var bestRadius = 0f
-            for (index in 0 until childCount) {
-                val row = getChildAt(index) as? NativeAppListRowView ?: continue
-                val holder = getChildViewHolder(row) as?
+            for (index in childCount - 1 downTo 0) {
+                val child = getChildAt(index) as? NativeAppListRowView ?: continue
+                val holder = getChildViewHolder(child) as?
                     NativeAppListAdapter.AppItemViewHolder ?: continue
-                val position = holder.bindingAdapterPosition
-                if (position == RecyclerView.NO_POSITION) continue
-                // Fixed slot coordinates: preview displacement must never feed
-                // back into the hit test that drives the preview.
-                val distance = hypot(
-                    probeX - row.iconCenterXInParentWithoutPreviewOrFlow(),
-                    probeY - row.iconCenterYInParentWithoutPreviewOrFlow(),
-                )
-                if (distance < bestDistance) {
-                    bestDistance = distance
-                    bestPosition = position
-                    bestRadius = minOf(
-                        row.iconWidthForSafeGeometry(),
-                        row.iconHeightForSafeGeometry(),
-                    ) / 2f
+                val key = holder.boundKeyOrNull() ?: continue
+                if (key == draggedSourceKey) continue
+                val targetRow = holder.boundRowOrNull() ?: continue
+                val sourceRow = draggedSourceKey
+                    ?.let(nativeAdapter::rowForKey)
+                    ?: dragOverlayView?.boundRowForOverlay()
+                val targetAllowed = sourceRow?.let { nativeFolderTargetAllowed(it, targetRow) }
+                    ?: (targetRow.entry.type != com.flue.launcher.applist.model.AppItemType.SHORTCUT)
+                if (!targetAllowed) continue
+                if (child.containsTransformedIconPoint(x, y, centerFraction = 0.42f)) {
+                    return key
                 }
             }
-            if (bestPosition == RecyclerView.NO_POSITION || bestRadius <= 0f) return null
-            // Outside the core the gesture is an ordinary reorder, so sweeping
-            // past a row cannot arm a folder.
-            if (bestDistance > bestRadius * FOLDER_DWELL_CORE_RADIUS_SCALE) return null
-
-            val key = dragPreviewOriginalOrder.getOrNull(bestPosition)
-                ?: nativeAdapter.keyAtPositionOrNull(bestPosition)
-                ?: return null
-            if (key == source) return null
-            val targetRow = nativeAdapter.rowForKey(key) ?: return null
-            val sourceRow = nativeAdapter.rowForKey(source)
-                ?: overlay?.boundRowForOverlay()
-                ?: return null
-            if (!nativeFolderTargetAllowed(sourceRow, targetRow)) return null
-            return key
+            return null
         }
 
         override fun currentKeys(): List<AppItemKey> = nativeAdapter.currentKeysView()
@@ -1634,15 +1517,6 @@ class NativeAppListView @JvmOverloads constructor(
 
     private fun applyChildVisual(child: View) {
         if (!usesHostChildVisualPass(activeLayoutStrategy)) return
-        // `onChildViewAttachedToWindow` fires from inside LinearLayoutManager's
-        // addView(), before the child is measured and positioned for this pass,
-        // so a brand-new row still reports height 0. Evaluating the edge maths
-        // at centre 0 assigns it the full top blur and the fisheye alpha floor,
-        // then installs a RenderEffect that the sweep at the end of the same
-        // frame immediately replaces. Declining to guess costs nothing: both
-        // the scroll sweep (onScrolled) and the layout sweep (onLayout) re-run
-        // over every attached child before anything is drawn.
-        if (child.height <= 0) return
         val rowView = child as? NativeAppListRowView
         val positionTranslationY =
             rowView?.positionTranslationYWithoutFlow() ?: child.translationY

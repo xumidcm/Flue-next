@@ -28,35 +28,6 @@ private fun LayerAnimValues.shrinkGated(enabled: Boolean): LayerAnimValues =
     if (enabled) this else withoutShrink()
 
 /**
- * beta1.5 之前的表盘层曲线：打开应用列表时表盘直接放大冲脸。
- * 由「还原旧转场」开关驱动，保留给习惯老手感的用户。
- */
-private fun legacyFaceLayerValues(state: ScreenState, uiStyle: UiStyle): LayerAnimValues =
-    if (uiStyle.isMaterial) {
-        when (state) {
-            ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
-            ScreenState.Apps, ScreenState.Settings ->
-                LayerAnimValues(scale = 1.22f, blur = 7f, alpha = 0.22f)
-            ScreenState.App -> LayerAnimValues(scale = 1.28f, blur = 9f, alpha = 0.14f)
-            ScreenState.Stack -> LayerAnimValues(scale = 0.93f, blur = 3f, alpha = 0.58f)
-            ScreenState.Notifications -> LayerAnimValues(scale = 0.92f, blur = 4f, alpha = 0.52f)
-            ScreenState.Widgets -> LayerAnimValues(scale = 0.93f, blur = 3f, alpha = 0.58f)
-            ScreenState.ControlCenter -> LayerAnimValues(scale = 0.94f, blur = 5f, alpha = 0.48f)
-        }
-    } else {
-        when (state) {
-            ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
-            ScreenState.Apps, ScreenState.Settings ->
-                LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f)
-            ScreenState.App -> LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f)
-            ScreenState.Stack -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
-            ScreenState.Notifications -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
-            ScreenState.Widgets -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
-            ScreenState.ControlCenter -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.5f)
-        }
-    }
-
-/**
  * 表盘层状态映射。
  *
  * [shrinkOnFaceReturn] 关闭后，表盘层在打开应用列表 / 应用时不再放大位移，
@@ -66,17 +37,7 @@ fun faceLayerValues(
     state: ScreenState,
     uiStyle: UiStyle,
     shrinkOnFaceReturn: Boolean = true,
-    legacy: Boolean = false,
-): LayerAnimValues = if (legacy) {
-    legacyFaceLayerValues(state, uiStyle).shrinkGated(
-        shrinkOnFaceReturn ||
-            state == ScreenState.Face ||
-            state == ScreenState.Stack ||
-            state == ScreenState.Notifications ||
-            state == ScreenState.Widgets ||
-            state == ScreenState.ControlCenter
-    )
-} else {
+): LayerAnimValues =
     if (uiStyle.isMaterial) {
         when (state) {
             ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
@@ -84,14 +45,10 @@ fun faceLayerValues(
                 LayerAnimValues(scale = 1.22f, blur = 7f, alpha = 0.22f).shrinkGated(shrinkOnFaceReturn)
             ScreenState.App ->
                 LayerAnimValues(scale = 1.28f, blur = 9f, alpha = 0.14f).shrinkGated(shrinkOnFaceReturn)
-            // 侧屏四态的「下压」现在统一由 OverlayBackdropController 一条链驱动
-            // （缩放 + 下沉 + 模糊 + 压暗都在那里）。这里再叠一份 scale 就是两个
-            // 来源打架，观感是「负一屏打开时表盘先缩一次、覆层再缩一次」。这一层
-            // 只保留模糊与淡出。legacy 分支（:41-55）保持原样。
-            ScreenState.Stack -> LayerAnimValues(scale = 1f, blur = 3f, alpha = 0.58f)
-            ScreenState.Notifications -> LayerAnimValues(scale = 1f, blur = 4f, alpha = 0.52f)
-            ScreenState.Widgets -> LayerAnimValues(scale = 1f, blur = 3f, alpha = 0.58f)
-            ScreenState.ControlCenter -> LayerAnimValues(scale = 1f, blur = 5f, alpha = 0.48f)
+            ScreenState.Stack -> LayerAnimValues(scale = 0.93f, blur = 3f, alpha = 0.58f)
+            ScreenState.Notifications -> LayerAnimValues(scale = 0.92f, blur = 4f, alpha = 0.52f)
+            ScreenState.Widgets -> LayerAnimValues(scale = 0.93f, blur = 3f, alpha = 0.58f)
+            ScreenState.ControlCenter -> LayerAnimValues(scale = 0.94f, blur = 5f, alpha = 0.48f)
         }
     } else {
         when (state) {
@@ -105,13 +62,12 @@ fun faceLayerValues(
             ScreenState.App ->
                 LayerAnimValues(scale = 0.88f, blur = 15f, alpha = 0f, translationY = 0.07f)
                     .shrinkGated(shrinkOnFaceReturn)
-            ScreenState.Stack -> LayerAnimValues(scale = 1f, blur = 5f, alpha = 0.3f)
-            ScreenState.Notifications -> LayerAnimValues(scale = 1f, blur = 5f, alpha = 0.3f)
-            ScreenState.Widgets -> LayerAnimValues(scale = 1f, blur = 5f, alpha = 0.3f)
-            ScreenState.ControlCenter -> LayerAnimValues(scale = 1f, blur = 8f, alpha = 0.5f)
+            ScreenState.Stack -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
+            ScreenState.Notifications -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
+            ScreenState.Widgets -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
+            ScreenState.ControlCenter -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.5f)
         }
     }
-}
 
 /**
  * 应用列表层状态映射。
@@ -147,37 +103,12 @@ fun appListLayerValues(
                 LayerAnimValues(scale = 0.86f, blur = 8f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
             ScreenState.Apps -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
             ScreenState.Settings -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.3f)
-            // 4 倍猛缩是「返回时突然收缩」的来源。启动/返回期间实际生效的是
-            // appListLaunchValues（与遮罩共用时钟），这里只是驱动撤走后的兜底
-            // 目标，必须与它的 p=1 端一致，否则交接仍会跳。
             ScreenState.App ->
-                LayerAnimValues(scale = 1.12f, blur = 14f, alpha = 0f).shrinkGated(shrinkOnAppReturn)
+                LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f).shrinkGated(shrinkOnAppReturn)
             else ->
-                LayerAnimValues(scale = 0.86f, blur = 10f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
+                LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
         }
     }
-
-/**
- * 启动 / 返回期间应用列表层的视觉，由启动遮罩的同一条进度驱动。
- *
- * [progress] 0 = 应用列表静止态，1 = 应用已接管全屏。
- *
- * **p = 0 时必须精确等于 `appListLayerValues(ScreenState.Apps)` 的静止值**
- * （scale 1 / alpha 1 / blur 0），否则驱动撤走的那一帧仍会跳 —— 这正是这套
- * 机制要消灭的东西，改这里的数值时务必守住这个不变量。
- *
- * 曲线本身走 watchOS 的「让位」而不是旧的 4 倍猛缩：列表只轻微前推 +
- * 模糊淡出，把画面交给遮罩，返回时原路淡回来。
- */
-fun appListLaunchValues(progress: Float): LayerAnimValues {
-    val p = progress.coerceIn(0f, 1f)
-    return LayerAnimValues(
-        scale = 1f + 0.12f * p,
-        blur = 14f * p,
-        // 遮罩在 p≈0.5 前就已铺满，列表提前淡完可以省掉一整段昂贵的模糊合成。
-        alpha = (1f - p * 1.8f).coerceIn(0f, 1f),
-    )
-}
 
 /**
  * 应用视图层状态映射。

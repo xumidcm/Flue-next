@@ -669,9 +669,6 @@ class WatchExpressionScope private constructor(
  * explicitly marked unsupported, never returned as raw `{tag}` text.
  */
 object WatchmakerTagResolver {
-    /** WM_TAGS.md:142-143 —— {shr_1}/{shr_2}…；clox 支持 {shr_1}..{shr_9}。 */
-    private val HEART_RATE_HISTORY_TAGS: Set<String> = (1..9).mapTo(LinkedHashSet()) { "shr_$it" }
-
     private val knownUnavailableTags = setOf(
         // Weather/calendar/location providers are optional on Android.  They
         // stay known so a missing provider renders "--" and never leaks the
@@ -695,7 +692,6 @@ object WatchmakerTagResolver {
         "bc", "charging", "is_charging",
         "ssc", "steps", "step_count", "shr", "heart", "heart_rate", "heart_rate_bpm",
         "sthr", "shrp",
-        *HEART_RATE_HISTORY_TAGS.toTypedArray(),
         "sgx", "sgy", "sgz", "pws", "nbc",
         "wt", "wtemp", "weather_temperature",
         "wcond", "weather_condition", "wct",
@@ -759,29 +755,14 @@ object WatchmakerTagResolver {
             "pbr" -> snapshot.batteryPercent?.let { (it * 3.6f).toString() }
             "bc", "charging", "is_charging" -> snapshot.isCharging?.let { if (it) "1" else "0" }
             "ssc", "steps", "step_count" -> snapshot.steps?.toString()
-            // 心率「默认保持不可用」的语义（对齐 UL 渲染器与 clox）：不是渲染
-            // "--"、不是隐藏图层，而是「不去访问传感器，标签静默读作 0」。
-            //   · UL lua renderer/WatchSkinUtils.lua:254-256 —— shr/sthr/shrp
-            //     的全局初值就是 0；WatchSkin.lua:2673-2680 在 sthr<=0 时把
-            //     shrp 兜底成 0。
-            //   · clox lua/watchface_bridge.lua:128-132 —— health_heartRate 的
-            //     种子值 { bpm = 0, maxHeartRate = 200 }；HealthHelper.kt:63-70
-            //     在开关关闭/无健康服务时直接 return null，永不推送数据，于是
-            //     Lua 侧永远停留在 0。wf_tagdefs.lua:360-367 也只做 floor(num())，
-            //     没有任何空值/隐藏分支。
-            // 所以数值型心率标签一律降级到 0，绝不产生 "--"。
-            "shr", "heart", "heart_rate", "heart_rate_bpm" ->
-                (snapshot.heartRateBpm ?: 0).toString()
-            // WM_TAGS.md:139-143 —— {sthr} = Maximum recorded heart rate（示例
-            // 200），{shrp} = Heart rate as % of maximum。Flue 没有用户健康档案，
-            // 因此按规范示例 + clox 种子值使用固定的 200 BPM 作为最大心率。
+            "shr", "heart", "heart_rate", "heart_rate_bpm" -> snapshot.heartRateBpm?.toString()
+            // WM_TAGS.md: {sthr} = Maximum recorded heart rate（示例 200），
+            // {shrp} = Heart rate as % of maximum。Flue 没有用户健康档案，
+            // 因此按规范示例使用固定的 200 BPM 作为最大心率。
             "sthr" -> DEFAULT_MAX_HEART_RATE_BPM.toString()
-            "shrp" -> ((snapshot.heartRateBpm ?: 0) * 100 / DEFAULT_MAX_HEART_RATE_BPM)
-                .coerceIn(0, 100)
-                .toString()
-            // {shr_1}…{shr_9} = 历史心率读数。Flue 不保留读数历史，按 clox
-            // (wf_tagdefs.lua:683-690，缺失条目 → 0) 统一降级到 0。
-            in HEART_RATE_HISTORY_TAGS -> "0"
+            "shrp" -> snapshot.heartRateBpm?.let {
+                (it * 100 / DEFAULT_MAX_HEART_RATE_BPM).coerceIn(0, 100).toString()
+            }
             "sgx" -> renderCompactNumber(snapshot.gyroscopeX ?: 0f)
             "sgy" -> renderCompactNumber(snapshot.gyroscopeY ?: 0f)
             "sgz" -> renderCompactNumber(snapshot.gyroscopeZ ?: 0f)

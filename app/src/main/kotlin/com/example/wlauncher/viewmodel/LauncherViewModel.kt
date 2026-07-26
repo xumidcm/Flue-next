@@ -151,8 +151,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_REDUCE_DYNAMIC_EFFECTS = booleanPreferencesKey("reduce_dynamic_effects")
         val KEY_SCREEN_SHAPE_OVERRIDE = stringPreferencesKey("screen_shape_override")
         val KEY_APP_LIST_STAGGER = booleanPreferencesKey("app_list_stagger_enabled")
-        val KEY_LEGACY_APP_LIST_TRANSITION = booleanPreferencesKey("legacy_app_list_transition")
-        val KEY_APP_LIST_RETURN_ICON_FLOAT = booleanPreferencesKey("app_list_return_icon_float")
         val KEY_MOTION_PROFILE_ID = stringPreferencesKey("motion_profile_id")
         val KEY_CUSTOM_MOTION_PROFILES = stringPreferencesKey("custom_motion_profiles")
         val KEY_SHOW_STEP_COUNT = booleanPreferencesKey("show_step_count")
@@ -433,16 +431,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val screenShapeOverride: StateFlow<FlueScreenShape> = _screenShapeOverride.asStateFlow()
     private val _appListStaggerEnabled = MutableStateFlow(false)
     val appListStaggerEnabled: StateFlow<Boolean> = _appListStaggerEnabled.asStateFlow()
-    private val _legacyAppListTransition = MutableStateFlow(false)
-    val legacyAppListTransition: StateFlow<Boolean> = _legacyAppListTransition.asStateFlow()
-    /**
-     * 关掉「应用列表收缩动画」后，从应用返回列表会露出进入表盘时那种图标
-     * 上浮效果。这个开关单独控制它；只在收缩动画关闭时才有意义（设置页
-     * 据此决定是否展示）。从表盘进入应用列表不受影响。
-     */
-    private val _appListReturnIconFloatEnabled = MutableStateFlow(true)
-    val appListReturnIconFloatEnabled: StateFlow<Boolean> =
-        _appListReturnIconFloatEnabled.asStateFlow()
     private val _motionProfiles = MutableStateFlow(FlueMotionProfiles.builtIns)
     val motionProfiles: StateFlow<List<FlueMotionProfile>> = _motionProfiles.asStateFlow()
     private val _activeMotionProfile = MutableStateFlow(FlueMotionProfiles.Gentle)
@@ -952,16 +940,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedStagger = prefs[KEY_APP_LIST_STAGGER] ?: false
                 if (_appListStaggerEnabled.value != loadedStagger) {
                     _appListStaggerEnabled.value = loadedStagger
-                }
-
-                val loadedLegacyTransition = prefs[KEY_LEGACY_APP_LIST_TRANSITION] ?: false
-                if (_legacyAppListTransition.value != loadedLegacyTransition) {
-                    _legacyAppListTransition.value = loadedLegacyTransition
-                }
-
-                val loadedReturnIconFloat = prefs[KEY_APP_LIST_RETURN_ICON_FLOAT] ?: true
-                if (_appListReturnIconFloatEnabled.value != loadedReturnIconFloat) {
-                    _appListReturnIconFloatEnabled.value = loadedReturnIconFloat
                 }
 
                 val customMotionProfiles = prefs[KEY_CUSTOM_MOTION_PROFILES]
@@ -2097,16 +2075,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_APP_LIST_STAGGER] = enabled } }
     }
 
-    fun setLegacyAppListTransition(enabled: Boolean) {
-        _legacyAppListTransition.value = enabled
-        persist { store.edit { it[KEY_LEGACY_APP_LIST_TRANSITION] = enabled } }
-    }
-
-    fun setAppListReturnIconFloatEnabled(enabled: Boolean) {
-        _appListReturnIconFloatEnabled.value = enabled
-        persist { store.edit { it[KEY_APP_LIST_RETURN_ICON_FLOAT] = enabled } }
-    }
-
     fun setActiveMotionProfile(id: String): Boolean {
         val profile = _motionProfiles.value.firstOrNull { it.id == id } ?: return false
         _activeMotionProfile.value = profile
@@ -3093,8 +3061,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _reduceDynamicEffects.value = false
         _screenShapeOverride.value = FlueScreenShape.AUTO
         _appListStaggerEnabled.value = false
-        _legacyAppListTransition.value = false
-        _appListReturnIconFloatEnabled.value = true
         _motionProfiles.value = FlueMotionProfiles.builtIns
         _activeMotionProfile.value = FlueMotionProfiles.Gentle
         _showStepCount.value = true
@@ -3204,8 +3170,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_REDUCE_DYNAMIC_EFFECTS] = false
                 it.remove(KEY_SCREEN_SHAPE_OVERRIDE)
                 it[KEY_APP_LIST_STAGGER] = false
-                it[KEY_LEGACY_APP_LIST_TRANSITION] = false
-                it[KEY_APP_LIST_RETURN_ICON_FLOAT] = true
                 it[KEY_MOTION_PROFILE_ID] = FlueMotionProfiles.GENTLE_ID
                 it[KEY_CUSTOM_MOTION_PROFILES] = FlueMotionProfileJson.encodeLibrary(emptyList())
                 it[KEY_SHOW_STEP_COUNT] = true

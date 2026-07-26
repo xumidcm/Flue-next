@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
@@ -77,14 +78,7 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.ui.common.FrostedHeader
-import com.flue.launcher.ui.common.LocalOverlayBackdrop
-import com.flue.launcher.ui.common.OverlayBackdropReporter
-import com.flue.launcher.ui.common.OverlayBackdropSource
 import com.flue.launcher.ui.common.instantPressGesture
-import com.flue.launcher.ui.common.overlayClipShape
-import com.flue.launcher.ui.common.overlayGlassSurface
-import com.flue.launcher.ui.common.overlayReleaseTarget
-import com.flue.launcher.ui.common.overlayVelocityToProgress
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.common.FlueElasticOffsetController
 import com.flue.launcher.R
@@ -163,9 +157,6 @@ fun NotificationLayer(
     var dismissDragDistance by remember { mutableFloatStateOf(0f) }
     var dismissDragVelocityY by remember { mutableFloatStateOf(0f) }
     var lastDismissDragEventUptime by remember { mutableStateOf(0L) }
-    // 表盘下压：通知中心可见期间把进度写进共享 controller，手势期间 1:1 跟手。
-    val backdrop = LocalOverlayBackdrop.current
-    OverlayBackdropReporter(OverlayBackdropSource.Notification, visible = isActive)
 
     fun applyOverscroll(delta: Float): Float {
         val profile = latestMotionProfile.value
@@ -209,26 +200,13 @@ fun NotificationLayer(
         listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
     val updateDismissDrag: (Float) -> Unit = { delta ->
         dismissDragDistance = (dismissDragDistance + delta).coerceIn(0f, dismissDragRangePx)
-        val openProgress = (1f - dismissDragDistance / dismissDragRangePx).coerceIn(0f, 1f)
-        // 1:1 跟手：位移直接写进度，不加阻尼。
-        onTransitionProgressChange(openProgress)
-        backdrop.reportGesture(OverlayBackdropSource.Notification, openProgress)
+        onTransitionProgressChange(
+            (1f - dismissDragDistance / dismissDragRangePx).coerceIn(0f, 1f)
+        )
     }
     val releaseDismissDrag: () -> Unit = {
-        // 抬手定向：位置 + 初速度外推，统一走 overlayReleaseTarget，不再用裸阈值。
-        // progress 语义 = 「通知中心还剩多少」，1 = 全开，0 = 已收回。
-        val openProgress = (1f - dismissDragDistance / dismissDragRangePx).coerceIn(0f, 1f)
-        val progressVelocity = overlayVelocityToProgress(
-            velocityPxPerSecond = -dismissDragVelocityY,
-            rangePx = dismissDragRangePx,
-        )
-        val shouldDismiss = dismissDragDistance > 0f &&
-            overlayReleaseTarget(openProgress, progressVelocity) < 0.5f
-        backdrop.reportGesture(
-            OverlayBackdropSource.Notification,
-            if (shouldDismiss) 0f else 1f,
-        )
-        backdrop.endGesture(OverlayBackdropSource.Notification)
+        val shouldDismiss = dismissDragDistance > dismissThresholdPx ||
+            dismissDragVelocityY > NOTIFICATION_DISMISS_FLING_VELOCITY
         dismissDragDistance = 0f
         dismissDragVelocityY = 0f
         lastDismissDragEventUptime = 0L
@@ -252,7 +230,6 @@ fun NotificationLayer(
             onDragStart = {
                 dismissDragVelocityY = 0f
                 lastDismissDragEventUptime = 0L
-                backdrop.beginGesture(OverlayBackdropSource.Notification, 1f)
             },
             onVerticalDrag = { change, dragAmount ->
                 if (lastDismissDragEventUptime != 0L) {
@@ -296,7 +273,6 @@ fun NotificationLayer(
                     lastDismissDragEventUptime = 0L
                     onTransitionRelease(false)
                 }
-                backdrop.endGesture(OverlayBackdropSource.Notification)
                 releaseOverscroll()
             }
         )
@@ -415,9 +391,8 @@ fun NotificationLayer(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            // 覆层不再画不透明底：毛玻璃背衬由表盘层的 OverlayBackdropHost 提供。
-            .clip(overlayClipShape())
-            .overlayGlassSurface(backdrop)
+            .clip(RoundedCornerShape(40.dp))
+            .background(launcherStyle.screenBackground)
             .nestedScroll(nestedScroll)
     ) {
         val contentWidth = maxWidth * NOTIFICATION_CARD_WIDTH_RATIO
@@ -705,16 +680,16 @@ private fun ActionDock(content: @Composable () -> Unit) {
     val launcherStyle = LauncherTheme.style
     val dockColor = if (launcherStyle.cardColor.alpha < 0.35f) {
         if (launcherStyle.titleColor == Color.White) {
-            LauncherTheme.style.pressedCardColor.copy(alpha = 0.82f)
+            Color(0xFF151515).copy(alpha = 0.82f)
         } else {
-            LauncherTheme.style.pressedCardColor.copy(alpha = 0.88f)
+            Color(0xFFF2F2F6).copy(alpha = 0.88f)
         }
     } else {
         launcherStyle.cardColor.copy(alpha = launcherStyle.cardColor.alpha.coerceAtLeast(0.72f))
     }
     Box(
         modifier = Modifier
-            .clip(LauncherTheme.style.chipShape)
+            .clip(RoundedCornerShape(999.dp))
             .background(dockColor)
             .padding(horizontal = 7.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center
@@ -821,14 +796,8 @@ private fun CollapsedStackCard(
                         alpha = 0.42f + (0.18f / (index + 1))
                     }
                     .padding(horizontal = COLLAPSED_STACK_HORIZONTAL_INSET_DP.dp)
-                    .clip(LauncherTheme.style.panelShape)
-                    .background(
-                        notificationStackBackColor(
-                            base = stackCardColor,
-                            index = index,
-                            fallback = LauncherTheme.style.titleColor,
-                        )
-                    )
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(notificationStackBackColor(stackCardColor, index))
             )
         }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 2.dp)) {
@@ -869,7 +838,7 @@ private fun NotificationCard(
     var launchOrigin by remember { mutableStateOf(Offset(0.5f, 0.5f)) }
     val darkCard = launcherStyle.titleColor == Color.White
     val cardColor = if (launcherStyle.cardColor.alpha < 0.35f) {
-        launcherStyle.pressedCardColor
+        if (darkCard) Color(0xFF353535) else Color(0xFFE8E8ED)
     } else {
         launcherStyle.cardColor
     }
@@ -877,12 +846,7 @@ private fun NotificationCard(
     // 边界只有 12% 亮度差，28dp 转角处会因抗锯齿发虚。
     val cardBrush = remember(cardColor, darkCard) {
         if (darkCard) {
-            Brush.verticalGradient(
-                listOf(
-                    cardColor,
-                    cardColor.copy(alpha = cardColor.alpha * 0.86f),
-                )
-            )
+            Brush.verticalGradient(listOf(Color(0xFF3A3A3C), Color(0xFF2C2C2E)))
         } else {
             Brush.verticalGradient(listOf(cardColor, cardColor))
         }
@@ -959,7 +923,7 @@ private fun NotificationActionButton(
                 scaleX = scale
                 scaleY = scale
             }
-            .clip(LauncherTheme.style.chipShape)
+            .clip(RoundedCornerShape(999.dp))
             .background(launcherStyle.topBarChipColor)
             .instantPressGesture(pressed, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 8.dp),
@@ -992,7 +956,7 @@ private fun DockActionButton(
                 scaleX = scale
                 scaleY = scale
             }
-            .clip(LauncherTheme.style.chipShape)
+            .clip(RoundedCornerShape(999.dp))
             .background(launcherStyle.topBarChipColor)
             .instantPressGesture(pressed, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 10.dp),
@@ -1009,22 +973,22 @@ private fun DockActionButton(
 
 @Composable
 private fun NotificationIcon(icon: ImageBitmap?) {
-    val launcherStyle = LauncherTheme.style
-    Box(Modifier.size(46.dp).clip(CircleShape).background(launcherStyle.titleColor.copy(alpha = 0.86f)), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(46.dp).clip(CircleShape).background(Color(0xFFD9D9D9)), contentAlignment = Alignment.Center) {
         if (icon != null) Image(icon, null, modifier = Modifier.fillMaxSize().clip(CircleShape), filterQuality = FilterQuality.Low, contentScale = ContentScale.Crop)
         else Icon(
             painter = painterResource(R.drawable.ic_flue_notification_round),
             contentDescription = null,
-            tint = launcherStyle.screenBackground,
+            tint = Color(0xFF2B2B2B),
             modifier = Modifier.size(24.dp),
         )
     }
 }
 
-private fun notificationStackBackColor(base: Color, index: Int, fallback: Color): Color {
+private fun notificationStackBackColor(base: Color, index: Int): Color {
     return when {
         base != Color.Unspecified && base.alpha > 0f -> base.copy(alpha = (0.40f - index * 0.08f).coerceIn(0.18f, 0.42f))
-        else -> fallback.copy(alpha = (0.40f - index * 0.08f).coerceIn(0.18f, 0.42f))
+        index == 0 -> Color(0xFF404040)
+        else -> Color(0xFF2E2E2E)
     }
 }
 

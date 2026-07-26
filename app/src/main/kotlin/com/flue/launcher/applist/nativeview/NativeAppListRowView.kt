@@ -80,9 +80,6 @@ internal class NativeAppListRowView(
     private val fallbackPath = Path()
     private val iconClipPath = Path()
     private val iconShadowPath = Path()
-    /** Press/hover mask geometry; see [ensureGeometry]. Empty when unused. */
-    private val pressOverlayPath = Path()
-    private var pressOverlayUsesPath = false
     private val shadowBounds = RectF()
     private val labelFontMetrics = Paint.FontMetrics()
 
@@ -178,8 +175,6 @@ internal class NativeAppListRowView(
         iconClipPath.reset()
         iconShadowPath.reset()
         fallbackPath.reset()
-        pressOverlayPath.reset()
-        pressOverlayUsesPath = false
         geometryDirty = true
         setOnClickListener(null)
         setOnLongClickListener(null)
@@ -548,8 +543,8 @@ internal class NativeAppListRowView(
             } else {
                 pressedPaint
             }
-            if (pressOverlayUsesPath) {
-                canvas.drawPath(pressOverlayPath, overlayPaint)
+            if (config.iconShape == NativeAppListIconShape.CIRCLE) {
+                canvas.drawPath(iconClipPath, overlayPaint)
             } else {
                 canvas.drawRoundRect(
                     rowBounds,
@@ -723,40 +718,6 @@ internal class NativeAppListRowView(
                     Path.Direction.CW,
                 )
             }
-        }
-
-        // The press mask follows the *presentation*, not the icon shape.
-        //
-        // HONEYCOMB is the round-icon layout: its cell is a square barely wider
-        // than the icon, so masking `rowBounds` painted a visibly square patch
-        // behind a round icon whenever the user was not on the Apple-Watch UI
-        // style — `iconShape` is CIRCLE only when that style is selected, and it
-        // is chosen independently of the layout mode, so the honeycomb layout
-        // routinely runs with ROUNDED_RECT icons. Only DENSE_GRID (MD3) is
-        // supposed to read as a rounded rectangle.
-        pressOverlayPath.reset()
-        pressOverlayUsesPath = when (config.presentation) {
-            NativeAppListPresentation.HONEYCOMB -> {
-                pressOverlayPath.addCircle(
-                    iconBounds.centerX(),
-                    iconBounds.centerY(),
-                    min(iconBounds.width(), iconBounds.height()) / 2f,
-                    Path.Direction.CW,
-                )
-                true
-            }
-
-            NativeAppListPresentation.DENSE_GRID -> false
-
-            // Unchanged: the Apple-Watch linear style highlights the icon disc,
-            // every other linear style highlights the whole row.
-            NativeAppListPresentation.LINEAR ->
-                if (config.iconShape == NativeAppListIconShape.CIRCLE) {
-                    pressOverlayPath.set(iconClipPath)
-                    true
-                } else {
-                    false
-                }
         }
 
         val tileSize = iconBounds.width() * 0.16f

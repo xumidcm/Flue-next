@@ -18,7 +18,7 @@ import androidx.compose.ui.unit.dp
  * 颜色固定为黑色，实际显示颜色由 `Icon(tint = ...)` 决定。
  *
  * 包含图标：
- * [Back]、[Forward]、[Check]、[CheckCircle]、[Close]、[Add]、[Remove]、[Search]、
+ * [Back]、[Forward]、[Check]、[Close]、[Add]、[Remove]、[Search]、
  * [Settings]、[Info]、[Warning]、[Refresh]、[Delete]、[Wifi]、[Bluetooth]、
  * [Battery]、[Notification]、[Brightness]、[Clock]、[Grid]。
  */
@@ -48,16 +48,6 @@ object MiuixIcons {
             moveTo(5.2f, 12.6f)
             lineTo(10.1f, 17.4f)
             lineTo(18.8f, 7.2f)
-        }
-    }
-
-    /** 勾选（带外圈），用于「已选中 / 已完成」。 */
-    val CheckCircle: ImageVector by lazyIcon("CheckCircle") {
-        stroke { circle(12f, 12f, 8.3f) }
-        stroke {
-            moveTo(7.9f, 12.3f)
-            lineTo(10.8f, 15.2f)
-            lineTo(16.1f, 9.1f)
         }
     }
 

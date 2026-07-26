@@ -34,6 +34,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -141,15 +143,7 @@ import com.flue.launcher.FlueApplication
 import com.flue.launcher.R
 import com.flue.launcher.data.repository.WidgetRepository
 import com.flue.launcher.ui.common.FrostedHeader
-import com.flue.launcher.ui.common.LocalOverlayBackdrop
-import com.flue.launcher.ui.common.OverlayBackdropReporter
-import com.flue.launcher.ui.common.OverlayBackdropSource
 import com.flue.launcher.ui.common.instantPressGesture
-import com.flue.launcher.ui.common.overlayClipShape
-import com.flue.launcher.ui.common.overlayGlassEditColor
-import com.flue.launcher.ui.common.overlayGlassSurface
-import com.flue.launcher.ui.common.overlayReleaseTarget
-import com.flue.launcher.ui.common.overlayVelocityToProgress
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.common.WatchBatteryPill
 import com.flue.launcher.ui.common.fluePressScale
@@ -184,10 +178,6 @@ import kotlin.math.roundToInt
 
 private const val SIDE_SCREEN_CONTENT_WIDTH_RATIO = 0.90f
 private const val SIDE_SCREEN_DISMISS_THRESHOLD = 86f
-
-/** 「向左划回表盘」跑满 1→0 所需的位移，占屏宽比例。跟手进度按这个 1:1 换算。 */
-private const val SIDE_SCREEN_DISMISS_RANGE_RATIO = 0.55f
-private const val SIDE_SCREEN_DISMISS_RANGE_MIN = 200f
 private const val SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_RATIO = 0.78f
 private const val SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_MIN = 300f
 private const val SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS = 0.6f
@@ -539,17 +529,10 @@ fun SmartStackLayer(
         )
     }
     val notificationReleaseThresholdPx = notificationDragRangePx * SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS
-    val dismissDragRangePx = remember(configuration.screenWidthDp, density) {
-        maxOf(
-            with(density) { configuration.screenWidthDp.dp.toPx() } * SIDE_SCREEN_DISMISS_RANGE_RATIO,
-            SIDE_SCREEN_DISMISS_RANGE_MIN
-        )
-    }
     var modalState by remember { mutableStateOf<SideScreenModalState>(SideScreenModalState.None) }
     var dragDx by remember { mutableFloatStateOf(0f) }
     var dragDy by remember { mutableFloatStateOf(0f) }
     var dragVelocityY by remember { mutableFloatStateOf(0f) }
-    var dragVelocityX by remember { mutableFloatStateOf(0f) }
     var lastDragEventUptime by remember { mutableStateOf(0L) }
     var transitionInFlight by remember { mutableStateOf(false) }
     val sideOverscroll = remember { Animatable(0f) }
@@ -585,21 +568,16 @@ fun SmartStackLayer(
         dragDx = 0f
         dragDy = 0f
         dragVelocityY = 0f
-        dragVelocityX = 0f
         lastDragEventUptime = 0L
         transitionInFlight = false
     }
     val launcherStyle = LauncherTheme.style
-    // 表盘下压：负一屏可见期间把进度写进共享 controller，手势期间 1:1 跟手。
-    val backdrop = LocalOverlayBackdrop.current
-    OverlayBackdropReporter(OverlayBackdropSource.SmartStack)
 
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            // 覆层不再画不透明底：半透明玻璃 + 圆屏整圆裁剪，让下面的表盘透出来。
-            .clip(overlayClipShape())
-            .overlayGlassSurface(backdrop)
+            .clip(RoundedCornerShape(40.dp))
+            .background(launcherStyle.screenBackground)
             .pointerInput(notificationAccessGranted, canOpenNotificationsFromSide, modalState, notificationsSceneActive, transitionInFlight) {
                 if (modalState != SideScreenModalState.None || notificationsSceneActive || transitionInFlight) return@pointerInput
                 detectDragGestures(
@@ -607,9 +585,7 @@ fun SmartStackLayer(
                         dragDx = 0f
                         dragDy = 0f
                         dragVelocityY = 0f
-                        dragVelocityX = 0f
                         lastDragEventUptime = 0L
-                        backdrop.beginGesture(OverlayBackdropSource.SmartStack, 1f)
                     },
                     onDrag = { change, dragAmount ->
                         val listAtTop = true
@@ -617,30 +593,17 @@ fun SmartStackLayer(
                         if (lastDragEventUptime != 0L) {
                             val deltaMs = (change.uptimeMillis - lastDragEventUptime).coerceAtLeast(1L)
                             val instantVelocityY = dragAmount.y / deltaMs * 1000f
-                            val instantVelocityX = dragAmount.x / deltaMs * 1000f
                             dragVelocityY = if (dragVelocityY == 0f) {
                                 instantVelocityY
                             } else {
                                 dragVelocityY * 0.35f + instantVelocityY * 0.65f
-                            }
-                            dragVelocityX = if (dragVelocityX == 0f) {
-                                instantVelocityX
-                            } else {
-                                dragVelocityX * 0.35f + instantVelocityX * 0.65f
                             }
                         }
                         lastDragEventUptime = change.uptimeMillis
                         dragDx += dragAmount.x
                         dragDy += dragAmount.y
                         if (abs(dragDx) > abs(dragDy)) {
-                            if (dragDx < 0f) {
-                                change.consume()
-                                // 向左划回表盘：1:1 写进度，表盘同步抬起（模糊 / 缩放随之退）。
-                                backdrop.reportGesture(
-                                    OverlayBackdropSource.SmartStack,
-                                    1f - (-dragDx / dismissDragRangePx).coerceIn(0f, 1f)
-                                )
-                            }
+                            if (dragDx < 0f) change.consume()
                         } else if (sideOverscroll.value != 0f) {
                             change.consume()
                             applySideOverscroll(dragAmount.y)
@@ -662,61 +625,42 @@ fun SmartStackLayer(
                         }
                     },
                     onDragEnd = {
-                        // 抬手一律走「位置 + 初速度外推」定向，不再用裸阈值。
-                        val horizontalProgress =
-                            1f - (-dragDx / dismissDragRangePx).coerceIn(0f, 1f)
-                        val horizontalVelocity = overlayVelocityToProgress(
-                            velocityPxPerSecond = dragVelocityX,
-                            rangePx = dismissDragRangePx,
-                        )
-                        val horizontalIntent = abs(dragDx) > abs(dragDy)
-                        val dismissToFace = horizontalIntent &&
-                            dragDx < 0f &&
-                            abs(dragDx) > SIDE_SCREEN_DISMISS_THRESHOLD * 0.45f &&
-                            overlayReleaseTarget(horizontalProgress, horizontalVelocity) < 0.5f
-
-                        val verticalIntent = !horizontalIntent ||
+                        val verticalIntent = abs(dragDy) > abs(dragDx) ||
                             abs(dragVelocityY) > SIDE_SCREEN_NOTIFICATION_FLING_VELOCITY
-                        val notificationProgressNow = (-dragDy / notificationDragRangePx)
-                            .coerceIn(0f, 1f)
-                            .coerceAtLeast(notificationTransitionProgress)
-                        val notificationVelocity = overlayVelocityToProgress(
-                            velocityPxPerSecond = -dragVelocityY,
-                            rangePx = notificationDragRangePx,
-                        )
+                        val dismissToFace = dragDx < -SIDE_SCREEN_DISMISS_THRESHOLD && abs(dragDx) > abs(dragDy)
                         val openNotifications = canOpenNotificationsFromSide &&
                             verticalIntent &&
-                            notificationProgressNow > 0.02f &&
-                            overlayReleaseTarget(notificationProgressNow, notificationVelocity) > 0.5f
-
-                        fun resetDrag() {
-                            dragDx = 0f
-                            dragDy = 0f
-                            dragVelocityY = 0f
-                            dragVelocityX = 0f
-                            lastDragEventUptime = 0L
-                        }
+                            (
+                                dragDy < -notificationReleaseThresholdPx ||
+                                    notificationTransitionProgress > SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS ||
+                                    dragVelocityY < -SIDE_SCREEN_NOTIFICATION_FLING_VELOCITY
+                                )
 
                         when {
                             dismissToFace -> {
-                                resetDrag()
-                                backdrop.reportGesture(OverlayBackdropSource.SmartStack, 0f)
-                                backdrop.endGesture(OverlayBackdropSource.SmartStack)
+                                dragDx = 0f
+                                dragDy = 0f
+                                dragVelocityY = 0f
+                                lastDragEventUptime = 0L
                                 onNotificationTransitionRelease(false)
                                 onRevealTargetChange(null)
                                 releaseSideOverscroll()
                                 onDismissToFace()
                             }
                             openNotifications -> {
-                                resetDrag()
-                                backdrop.endGesture(OverlayBackdropSource.SmartStack)
+                                dragDx = 0f
+                                dragDy = 0f
+                                dragVelocityY = 0f
+                                lastDragEventUptime = 0L
                                 onRevealTargetChange(null)
                                 releaseSideOverscroll()
                                 onNotificationTransitionRelease(true)
                             }
                             else -> {
-                                resetDrag()
-                                backdrop.endGesture(OverlayBackdropSource.SmartStack)
+                                dragDx = 0f
+                                dragDy = 0f
+                                dragVelocityY = 0f
+                                lastDragEventUptime = 0L
                                 releaseSideOverscroll()
                                 onNotificationTransitionRelease(false)
                             }
@@ -726,9 +670,7 @@ fun SmartStackLayer(
                         dragDx = 0f
                         dragDy = 0f
                         dragVelocityY = 0f
-                        dragVelocityX = 0f
                         lastDragEventUptime = 0L
-                        backdrop.endGesture(OverlayBackdropSource.SmartStack)
                         releaseSideOverscroll()
                         onNotificationTransitionRelease(false)
                     }
@@ -965,6 +907,7 @@ fun WidgetPageLayer(
             }
         }
     }
+    val widgetSections = remember(widgetCards) { groupWidgetCardsIntoSections(widgetCards) }
     val widgetCardCenters = remember { mutableStateMapOf<String, Offset>() }
     val widgetCardBounds = remember { mutableStateMapOf<String, Rect>() }
     var editMode by remember { mutableStateOf(false) }
@@ -977,38 +920,9 @@ fun WidgetPageLayer(
     var widgetDragAutoScrollPx by remember { mutableFloatStateOf(0f) }
     var pendingWidgetDropIndex by remember { mutableStateOf<Int?>(null) }
     var widgetPageRootOffset by remember { mutableStateOf(Offset.Zero) }
-    // 拖动中的浮层代理（WidgetDragPreviewCard）：源卡片留下一个「洞」，
-    // 真正跟手的是这一层，其余卡片靠 LazyColumn.animateItem 做避让。
-    var widgetDragPreview by remember { mutableStateOf<WidgetDragPreview?>(null) }
-    // 拖动起点的卡片中心。**必须在按下时冻结**：避让重排会让源位置那个「洞」
-    // 自己也跟着动，实时读 widgetCardCenters 会让落点索引来回横跳。
-    var draggingStartCenter by remember { mutableStateOf(Offset.Zero) }
     val removingWidgetKeys = remember { mutableStateListOf<String>() }
     val enteringWidgetKeys = remember { mutableStateListOf<String>() }
     var previousWidgetKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
-    // 首帧不能把「已有的卡片」当成新增。否则每次打开小组件页，全部卡片都会走
-    // 一遍入场动画 —— 这就是用户说的「打开像从中间放大」。
-    var widgetEntryTrackerPrimed by remember { mutableStateOf(false) }
-    // 拖动预览顺序：把被拖卡片临时挪到落点，重新分栏后交给 animateItem 播放
-    // 避让。**只改本地顺序，不落盘**；真正的 onSwapWidget 在抬手时才发一次。
-    val widgetPreviewOrder = remember(widgetCards, draggingWidgetKey, pendingWidgetDropIndex) {
-        val fromIndex = widgetCards.indexOfFirst { it.stableKey() == draggingWidgetKey }
-        val insertion = pendingWidgetDropIndex
-        if (fromIndex < 0 || insertion == null || widgetCards.size < 2) {
-            widgetCards
-        } else {
-            val toIndex = (if (insertion > fromIndex) insertion - 1 else insertion)
-                .coerceIn(0, widgetCards.lastIndex)
-            if (toIndex == fromIndex) {
-                widgetCards
-            } else {
-                widgetCards.toMutableList().apply { moveItem(fromIndex, toIndex) }
-            }
-        }
-    }
-    val widgetSections = remember(widgetPreviewOrder) {
-        groupWidgetCardsIntoSections(widgetPreviewOrder)
-    }
     val widgetBorderHotspotPx = with(density) { 26.dp.toPx() }
     val widgetResizeLongPressMs = 420L
     val autoScrollEdgePx = with(density) { 56.dp.toPx() }
@@ -1140,27 +1054,16 @@ fun WidgetPageLayer(
             editMode = false
         }
         val activeKeys = widgetCards.map { it.stableKey() }.toSet()
-        val addedKeys = if (widgetEntryTrackerPrimed) activeKeys - previousWidgetKeys else emptySet()
-        widgetEntryTrackerPrimed = true
+        val addedKeys = activeKeys - previousWidgetKeys
         widgetCardCenters.keys.retainAll(activeKeys)
         widgetCardBounds.keys.retainAll(activeKeys)
         removingWidgetKeys.removeAll { key -> key !in activeKeys }
-        // 「打断时图标消失」的根因：入场遮蔽 key 原本在 `yield()` 之后才清。
-        // widgetCards 在同一帧再变一次就会取消整个 LaunchedEffect，那些 key
-        // 永远留在 enteringWidgetKeys 里，对应卡片的 AnimatedVisibility 从此
-        // 恒为 false —— 卡片再也不出现。现在：
-        //   1) 每轮开头先清掉不再存在的 key（清理上一次被打断的残留）；
-        //   2) 记账在挂起点之前完成；
-        //   3) 遮蔽的解除放进 finally，被取消也一定会跑。
-        enteringWidgetKeys.removeAll { key -> key !in activeKeys }
-        previousWidgetKeys = activeKeys
-        if (addedKeys.isEmpty()) return@LaunchedEffect
-        enteringWidgetKeys += addedKeys
-        try {
+        if (addedKeys.isNotEmpty()) {
+            enteringWidgetKeys += addedKeys
             yield()
-        } finally {
             enteringWidgetKeys.removeAll(addedKeys)
         }
+        previousWidgetKeys = activeKeys
     }
 
     LaunchedEffect(editMode, showPicker) {
@@ -1195,18 +1098,13 @@ fun WidgetPageLayer(
         }
     }
 
-    // 表盘下压：小组件页可见期间把进度写进共享 controller。
-    OverlayBackdropReporter(OverlayBackdropSource.WidgetPage)
-
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .onGloballyPositioned { coordinates ->
                 widgetPageRootOffset = coordinates.positionInRoot()
             }
-            // 覆层不再画不透明底：半透明玻璃 + 圆屏整圆裁剪，表盘从下面透出来。
-            .clip(overlayClipShape())
-            .overlayGlassSurface()
+            .background(launcherStyle.screenBackground, RoundedCornerShape(40.dp))
     ) {
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val availableWidth = maxWidth - leftSafeInset
@@ -1244,19 +1142,14 @@ fun WidgetPageLayer(
                 animationSpec = spring(stiffness = 620f, dampingRatio = 0.86f),
                 label = "widget_card_width"
             )
-            val shellShape = launcherStyle.panelShape
-            // 小组件卡片外壳：非编辑态**完全透明**（用户明确要求去掉背景），
-            // 只有编辑态才留一层极淡底色，用来提示「这块可以拖」。
-            val shellColor = if (editMode) overlayGlassEditColor() else Color.Transparent
+            val shellShape = RoundedCornerShape(28.dp)
             val jiggleActive = editMode && !showPicker
 
             key(cardKey) {
                 AnimatedVisibility(
                     visible = cardKey !in removingWidgetKeys && cardKey !in enteringWidgetKeys,
-                    // 纯淡入淡出，**不带任何缩放分量**：缩放会让整页读起来像
-                    // 「从中间放大」。位置变化交给 LazyColumn 的 animateItem。
-                    enter = fadeIn(tween(180)),
-                    exit = fadeOut(tween(150))
+                    enter = fadeIn(tween(180)) + scaleIn(tween(220), initialScale = 0.88f),
+                    exit = fadeOut(tween(150)) + scaleOut(tween(170), targetScale = 0.86f)
                 ) {
                     val dragging = draggingWidgetKey == cardKey
                     Box(
@@ -1286,49 +1179,39 @@ fun WidgetPageLayer(
                                     bottom = position.y + height
                                 )
                             }
+                            .zIndex(if (dragging) 50f else 0f)
+                            .graphicsLayer {
+                                translationX = if (dragging) draggingWidgetOffset.x else 0f
+                                translationY = if (dragging) draggingWidgetOffset.y else 0f
+                                shadowElevation = if (dragging) 22.dp.toPx() else 0f
+                                alpha = 1f
+                                scaleX = if (dragging) 1.035f else 1f
+                                scaleY = if (dragging) 1.035f else 1f
+                            }
                     ) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(shellShape)
-                                .background(shellColor)
+                                .background(Color.White.copy(alpha = if (editMode) 0.05f else 0.03f))
                                 .padding(4.dp)
                         ) {
-                            if (dragging) {
-                                // 拖动中源位置只留一个「洞」。这里**不能**再挂一份
-                                // WidgetCard：AppWidgetHost.createView 对同一个
-                                // appWidgetId 建第二个 HostView 会把第一个从 host 的
-                                // 映射里挤掉，抬手后源卡片就空白了。浮层
-                                // WidgetDragPreviewCard 才是那份唯一的 HostView。
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(
-                                            (displayLayout.heightDp ?: WIDGET_CARD_MIN_HEIGHT_DP)
-                                                .coerceIn(WIDGET_CARD_MIN_HEIGHT_DP, WIDGET_CARD_MAX_HEIGHT_DP)
-                                                .dp
-                                        )
-                                        .clip(launcherStyle.cardShape)
-                                        .background(launcherStyle.cardColor.copy(alpha = 0.22f))
-                                )
-                            } else {
-                                WidgetCard(
-                                    widget = card.widget,
-                                    layout = displayLayout,
-                                    cardWidth = cardWidth,
-                                    widgetRepository = widgetRepository,
-                                    appWidgetHost = appWidgetHost,
-                                    onLongPress = if (!editMode && !showPicker) {
-                                        {
-                                            editMode = true
-                                            editGestureLocked = true
-                                        }
-                                    } else {
-                                        null
-                                    },
-                                    onMeasuredHeight = {}
-                                )
-                            }
+                            WidgetCard(
+                                widget = card.widget,
+                                layout = displayLayout,
+                                cardWidth = cardWidth,
+                                widgetRepository = widgetRepository,
+                                appWidgetHost = appWidgetHost,
+                                onLongPress = if (!editMode && !showPicker) {
+                                    {
+                                        editMode = true
+                                        editGestureLocked = true
+                                    }
+                                } else {
+                                    null
+                                },
+                                onMeasuredHeight = {}
+                            )
                         }
                         if (jiggleActive) {
                             val blockerInteraction = remember { MutableInteractionSource() }
@@ -1377,15 +1260,6 @@ fun WidgetPageLayer(
                                                 draggingWidgetOffset = Offset.Zero
                                                 widgetDragAutoScrollPx = 0f
                                                 pendingWidgetDropIndex = null
-                                                draggingStartCenter =
-                                                    widgetCardCenters[cardKey] ?: Offset.Zero
-                                                widgetDragPreview = widgetCardBounds[cardKey]?.let { bounds ->
-                                                    WidgetDragPreview(
-                                                        card = card,
-                                                        bounds = bounds,
-                                                        offset = Offset.Zero,
-                                                    )
-                                                }
                                             }
                                             while (true) {
                                                 val event = awaitPointerEvent()
@@ -1399,10 +1273,7 @@ fun WidgetPageLayer(
                                                     activeWidgetResize = resize.copy(delta = resize.delta + dragAmount)
                                                 } else if (draggingWidgetKey == cardKey) {
                                                     draggingWidgetOffset += dragAmount
-                                                    widgetDragPreview = widgetDragPreview
-                                                        ?.copy(offset = draggingWidgetOffset)
-                                                    val cardCenter = draggingStartCenter
-                                                        .takeIf { it != Offset.Zero }
+                                                    val cardCenter = widgetCardCenters[cardKey]
                                                     val pointerScreenY = cardCenter?.y?.let { centerY ->
                                                         centerY - size.height / 2f +
                                                             draggingWidgetOffset.y +
@@ -1423,8 +1294,7 @@ fun WidgetPageLayer(
                                                             widgetDragAutoScrollPx = 0f
                                                         }
                                                     }
-                                                    val sourceCenter =
-                                                        draggingStartCenter.takeIf { it != Offset.Zero }
+                                                    val sourceCenter = widgetCardCenters[cardKey]
                                                     pendingWidgetDropIndex = sourceCenter
                                                         ?.plus(draggingWidgetOffset)
                                                         ?.let { point ->
@@ -1434,10 +1304,8 @@ fun WidgetPageLayer(
                                                                 boundsByKey = widgetCardBounds
                                                             )
                                                         }
-                                                        ?: pendingWidgetDropIndex
                                                 }
                                             }
-                                            widgetDragPreview = null
                                             if (draggingWidgetKey == cardKey) {
                                                 val targetIndex = pendingWidgetDropIndex
                                                 if (
@@ -1465,7 +1333,6 @@ fun WidgetPageLayer(
                                             draggingWidgetOffset = Offset.Zero
                                             widgetDragAutoScrollPx = 0f
                                             pendingWidgetDropIndex = null
-                                            widgetDragPreview = null
                                         }
                                     }
                             )
@@ -1475,7 +1342,7 @@ fun WidgetPageLayer(
                             )
                             WidgetEditIconButton(
                                 enabled = true,
-                                backgroundColor = WatchColors.ActiveRed,
+                                backgroundColor = Color(0xFFE53935),
                                 onClick = {
                                     clearAllocatedWidget(card.widgetIndex)
                                     removingWidgetKeys += cardKey
@@ -1609,15 +1476,6 @@ fun WidgetPageLayer(
                 }
             }
         }
-        widgetDragPreview?.let { preview ->
-            WidgetDragPreviewCard(
-                preview = preview,
-                rootOffset = widgetPageRootOffset,
-                widgetRepository = widgetRepository,
-                appWidgetHost = appWidgetHost,
-                modifier = Modifier.zIndex(50f),
-            )
-        }
         if (showPicker) {
         val repository = requireNotNull(widgetRepository)
         val host = requireNotNull(appWidgetHost)
@@ -1681,7 +1539,7 @@ private fun WidgetPageChip(
     Box(
         modifier = Modifier
             .fluePressScale(pressScale)
-            .clip(LauncherTheme.style.chipShape)
+            .clip(RoundedCornerShape(999.dp))
             .background(if (enabled) launcherStyle.topBarChipColor else launcherStyle.cardColor)
             .clickable(
                 enabled = enabled,
@@ -1739,7 +1597,7 @@ private fun WidgetResizeHandles(
                 .align(Alignment.TopCenter)
                 .width(46.dp)
                 .height(5.dp)
-                .clip(LauncherTheme.style.chipShape)
+                .clip(RoundedCornerShape(999.dp))
                 .background(handleColor)
         )
         Box(
@@ -1747,7 +1605,7 @@ private fun WidgetResizeHandles(
                 .align(Alignment.BottomCenter)
                 .width(46.dp)
                 .height(5.dp)
-                .clip(LauncherTheme.style.chipShape)
+                .clip(RoundedCornerShape(999.dp))
                 .background(handleColor)
         )
         Box(
@@ -1755,7 +1613,7 @@ private fun WidgetResizeHandles(
                 .align(Alignment.CenterStart)
                 .width(5.dp)
                 .height(46.dp)
-                .clip(LauncherTheme.style.chipShape)
+                .clip(RoundedCornerShape(999.dp))
                 .background(handleColor)
         )
         Box(
@@ -1763,7 +1621,7 @@ private fun WidgetResizeHandles(
                 .align(Alignment.CenterEnd)
                 .width(5.dp)
                 .height(46.dp)
-                .clip(LauncherTheme.style.chipShape)
+                .clip(RoundedCornerShape(999.dp))
                 .background(handleColor)
         )
     }
@@ -1779,9 +1637,7 @@ private fun WidgetDragPreviewCard(
 ) {
     val width = with(LocalDensity.current) { preview.bounds.width.toDp() }
     val height = with(LocalDensity.current) { preview.bounds.height.toDp() }
-    // 变量不能叫 shape：graphicsLayer{} 的接收者本身就有一个 shape 属性，
-    // `this.shape = shape` 会解析成自赋值，阴影轮廓永远拿不到卡片圆角。
-    val previewShape = LauncherTheme.style.panelShape
+    val shape = RoundedCornerShape(28.dp)
     Box(
         modifier = modifier
             .size(width, height)
@@ -1789,13 +1645,13 @@ private fun WidgetDragPreviewCard(
                 translationX = preview.bounds.left - rootOffset.x + preview.offset.x
                 translationY = preview.bounds.top - rootOffset.y + preview.offset.y
                 shadowElevation = 22.dp.toPx()
-                shape = previewShape
+                this.shape = shape
                 clip = false
                 scaleX = 1.035f
                 scaleY = 1.035f
             }
-            .clip(previewShape)
-            .border(1.dp, Color.White.copy(alpha = 0.38f), previewShape)
+            .clip(shape)
+            .border(1.dp, Color.White.copy(alpha = 0.38f), shape)
     ) {
         WidgetCard(
             widget = preview.card.widget,
@@ -2000,8 +1856,7 @@ private fun WidgetCard(
         .coerceIn(WIDGET_CARD_MIN_HEIGHT_DP, WIDGET_CARD_MAX_HEIGHT_DP)
         .dp
         .coerceAtLeast(minWidgetHeight)
-    val launcherStyle = LauncherTheme.style
-    val cardShape = launcherStyle.cardShape
+    val cardShape = RoundedCornerShape(24.dp)
     val density = LocalDensity.current
     Box(
         modifier = Modifier
@@ -2012,7 +1867,7 @@ private fun WidgetCard(
                 shape = cardShape
                 clip = true
             }
-            .background(launcherStyle.cardColor)
+            .background(Color(0xFF1F2937))
     ) {
         if (providerInfo != null && widget.widgetId != -1) {
             val widgetBindTag = remember(widget.widgetId, providerInfo) {
@@ -2117,7 +1972,7 @@ private fun WidgetCard(
                         scaleY = scale
                     }
                     .clip(cardShape)
-                    .background(launcherStyle.cardColor)
+                    .background(Color(0xFF1F2937))
                     .combinedClickable(
                         interactionSource = interactionSource,
                         indication = null,
@@ -2148,7 +2003,7 @@ private fun EmptyWidgetCard(width: Dp) {
         modifier = Modifier
             .width(width)
             .height(96.dp)
-            .clip(launcherStyle.cardShape)
+            .clip(RoundedCornerShape(24.dp))
             .background(launcherStyle.cardColor),
         contentAlignment = Alignment.Center
     ) {
@@ -2181,7 +2036,7 @@ private fun EmptyWidgetCard(width: Dp) {
 ) {
     val launcherStyle = LauncherTheme.style
     val cardColor = if (launcherStyle.cardColor.alpha < 0.35f) {
-        launcherStyle.pressedCardColor
+        if (launcherStyle.titleColor == Color.White) Color(0xFF353535) else Color(0xFFE8E8ED)
     } else {
         launcherStyle.cardColor
     }
@@ -2194,7 +2049,7 @@ private fun EmptyWidgetCard(width: Dp) {
                 onMeasuredHeight?.invoke(coordinates.size.height)
             }
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(launcherStyle.panelShape)
+            .clip(RoundedCornerShape(28.dp))
             .background(cardColor)
             .instantPressGesture(pressed, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp)
@@ -2228,7 +2083,6 @@ private fun EmptyWidgetCard(width: Dp) {
     )
     var frontCardHeight by remember { mutableIntStateOf(72) }
     val density = LocalDensity.current
-    val stackFallbackColor = LauncherTheme.style.titleColor
     val stackCardHeight: Dp = with(density) { frontCardHeight.toDp() }
     Box(Modifier.fillMaxWidth()) {
         repeat(hiddenCount.coerceIn(0, 2)) { index ->
@@ -2244,14 +2098,8 @@ private fun EmptyWidgetCard(width: Dp) {
                     .padding(horizontal = STACKED_PREVIEW_HORIZONTAL_INSET_DP.dp)
                     .fillMaxWidth()
                     .height(stackCardHeight)
-                    .clip(LauncherTheme.style.panelShape)
-                    .background(
-                        notificationStackBackColor(
-                            base = stackCardColor,
-                            index = index,
-                            fallback = stackFallbackColor,
-                        )
-                    )
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(notificationStackBackColor(stackCardColor, index))
             )
         }
         Column(modifier = Modifier.padding(bottom = 2.dp)) {
@@ -2270,22 +2118,22 @@ private fun EmptyWidgetCard(width: Dp) {
 }
 
 @Composable private fun NotificationIcon(icon: ImageBitmap?) {
-    val launcherStyle = LauncherTheme.style
-    Box(Modifier.size(46.dp).clip(launcherStyle.chipShape).background(launcherStyle.titleColor.copy(alpha = 0.86f)), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(46.dp).clip(CircleShape).background(Color(0xFFD9D9D9)), contentAlignment = Alignment.Center) {
         if (icon != null) Image(icon, null, modifier = Modifier.fillMaxSize().clip(CircleShape), filterQuality = FilterQuality.Medium, contentScale = ContentScale.Crop)
         else Icon(
             painter = painterResource(R.drawable.ic_flue_notification_round),
             contentDescription = null,
-            tint = launcherStyle.screenBackground,
+            tint = Color(0xFF2B2B2B),
             modifier = Modifier.size(24.dp),
         )
     }
 }
 
-private fun notificationStackBackColor(base: Color, index: Int, fallback: Color): Color {
+private fun notificationStackBackColor(base: Color, index: Int): Color {
     return when {
         base != Color.Unspecified && base.alpha > 0f -> base.copy(alpha = (0.40f - index * 0.08f).coerceIn(0.18f, 0.42f))
-        else -> fallback.copy(alpha = (0.40f - index * 0.08f).coerceIn(0.18f, 0.42f))
+        index == 0 -> Color(0xFF404040)
+        else -> Color(0xFF2E2E2E)
     }
 }
 
@@ -2312,7 +2160,7 @@ private fun ShortcutPickerOverlay(
     val listState = rememberLazyListState()
     val (pickerOverscroll, pickerNestedScroll) = rememberPickerOverscrollConnection(listState)
     ModalShell(onDismiss) { dismiss ->
-        Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(LauncherTheme.style.cardShape).background(LauncherTheme.style.pressedCardColor).padding(vertical = 12.dp)) {
+        Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFF1E1E1E)).padding(vertical = 12.dp)) {
             Text("添加快捷启动", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 10.dp))
             LazyColumn(
                 state = listState,
@@ -2389,7 +2237,7 @@ private fun WidgetPickerOverlay(
         selectedPackage = null
     }
     ModalShell(onDismiss, backHandlerEnabled = selectedPackage == null) { dismiss ->
-        Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(LauncherTheme.style.cardShape).background(LauncherTheme.style.pressedCardColor).padding(vertical = 12.dp)) {
+        Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFF1E1E1E)).padding(vertical = 12.dp)) {
             Text(
                 selectedApp?.label ?: "添加小组件",
                 color = Color.White,
@@ -2478,8 +2326,8 @@ private fun WidgetPickerBackRow(onClick: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .height(54.dp)
-            .clip(LauncherTheme.style.chipShape)
-            .background(if (isPressed) LauncherTheme.style.selectedCardColor else LauncherTheme.style.cardColor)
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (isPressed) Color(0xFF3A3A3A) else Color(0xFF2B2B2D))
             .instantPressGesture(pressed, onClick = onClick)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -2523,8 +2371,8 @@ private fun WidgetPickerAppRow(
                 scaleX = scale
                 scaleY = scale
             }
-            .clip(LauncherTheme.style.rowShape)
-            .background(if (isPressed) LauncherTheme.style.appListPressedOverlay else Color.Transparent)
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (isPressed) Color(0xFF303030) else Color.Transparent)
             .instantPressGesture(pressed, onClick = onClick)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -2535,15 +2383,15 @@ private fun WidgetPickerAppRow(
                 contentDescription = app.label,
                 modifier = Modifier
                     .size(42.dp)
-                    .clip(LauncherTheme.style.compactShape),
+                    .clip(RoundedCornerShape(12.dp)),
                 contentScale = ContentScale.Crop
             )
         } else {
             Box(
                 Modifier
                     .size(42.dp)
-                    .clip(LauncherTheme.style.compactShape)
-                    .background(LauncherTheme.style.accentColor),
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF007AFF)),
                 contentAlignment = Alignment.Center
             ) {
                 Text(app.label.take(1), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
@@ -2587,8 +2435,8 @@ private fun WidgetPickerRow(
                 scaleX = scale
                 scaleY = scale
             }
-            .clip(LauncherTheme.style.rowShape)
-            .background(if (isPressed) LauncherTheme.style.appListPressedOverlay else Color.Transparent)
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (isPressed) Color(0xFF303030) else Color.Transparent)
             .instantPressGesture(pressed, onClick = onClick)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -2596,8 +2444,8 @@ private fun WidgetPickerRow(
         Box(
             Modifier
                 .size(52.dp, 42.dp)
-                .clip(LauncherTheme.style.compactShape)
-                .background(LauncherTheme.style.cardColor),
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(0xFF2A3444)),
             contentAlignment = Alignment.Center
         ) {
             if (previewBitmap != null) {
@@ -2631,8 +2479,8 @@ private fun TypeTab(
     Box(
         modifier
             .height(40.dp)
-            .clip(LauncherTheme.style.compactShape)
-            .background(if (selected) LauncherTheme.style.accentColor else Color.Transparent)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) Color(0xFF007AFF) else Color.Transparent)
             .instantPressGesture(pressed, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
@@ -2665,8 +2513,8 @@ private fun ShortcutPickerRow(
                 scaleX = scale
                 scaleY = scale
             }
-            .clip(LauncherTheme.style.rowShape)
-            .background(if (isPressed) LauncherTheme.style.appListPressedOverlay else Color.Transparent)
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (isPressed) Color(0xFF303030) else Color.Transparent)
             .instantPressGesture(pressed, onClick = onClick)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -2698,9 +2546,9 @@ private fun ShortcutPickerRow(
                 .flueElasticNestedScroll(scrollState)
                 .verticalScroll(scrollState),
         ) {
-            Column(Modifier.fillMaxWidth().clip(LauncherTheme.style.rowShape).background(LauncherTheme.style.pressedCardColor)) {
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xFF2C2C2E))) {
                 Box(Modifier.fillMaxWidth().clickable { onRemove(); dismiss() }.padding(horizontal = 16.dp, vertical = 14.dp)) {
-                    Text("移除", color = WatchColors.ActiveRed, fontSize = 15.sp, fontWeight = FontWeight.W500)
+                    Text("移除", color = Color(0xFFFF453A), fontSize = 15.sp, fontWeight = FontWeight.W500)
                 }
             }
             Spacer(Modifier.height(16.dp))
@@ -2710,7 +2558,7 @@ private fun ShortcutPickerRow(
                 Text(app.label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.W600)
             } else if (widget != null) {
                 Box(
-                    Modifier.size(88.dp).clip(CircleShape).background(LauncherTheme.style.accentColor),
+                    Modifier.size(88.dp).clip(CircleShape).background(Color(0xFF007AFF)),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(widget.label.take(1), color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Bold)
@@ -3022,7 +2870,7 @@ private fun WidgetBubble(
             .size(size)
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(CircleShape)
-            .background(LauncherTheme.style.accentColor)
+            .background(Color(0xFF007AFF))
             .combinedClickable(
                 interactionSource = interactionSource,
                 indication = null,

@@ -53,14 +53,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.CloudUpload
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -96,7 +93,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.isFinite
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -114,13 +110,8 @@ import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.editor.WatchEditorSession
 import com.flue.launcher.watchface.standard.WatchInstallMetadata
-import com.flue.launcher.watchface.store.HttpWatchStoreApi
-import com.flue.launcher.watchface.store.WatchStoreAuthSession
-import com.flue.launcher.watchface.store.WatchStoreAuthStore
 import com.flue.launcher.watchface.store.WatchStoreCategory
 import com.flue.launcher.watchface.store.WatchStoreException
-import com.flue.launcher.watchface.store.WatchStoreHttpException
-import com.flue.launcher.watchface.store.WatchStorePayloadTooLargeException
 import com.flue.launcher.watchface.store.WatchStoreInstallState
 import com.flue.launcher.watchface.store.WatchStoreInstallTransactionException
 import com.flue.launcher.watchface.store.WatchStorePagination
@@ -147,19 +138,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import android.content.Context
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
-import android.util.Base64
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import java.io.File
-import java.security.KeyStore
-import javax.crypto.Cipher
-import javax.crypto.KeyGenerator
-import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
 
 /**
  * Public Watchmaker community store.  The Activity deliberately owns only the
@@ -326,7 +305,6 @@ private fun WatchStoreScreen(
     var catalogWarning by remember { mutableStateOf<String?>(null) }
     var catalogReloadToken by remember { mutableIntStateOf(0) }
     var repairCatalogOnNextRestore by remember { mutableStateOf(false) }
-    var showUpload by remember { mutableStateOf(false) }
     var installedFaces by remember { mutableStateOf<List<LunchWatchFaceDescriptor>>(emptyList()) }
     var lastLegacyAssociationSignature by remember { mutableStateOf<String?>(null) }
     val installedFacesById = remember(installedFaces) { installedFaces.associateBy { it.id } }
@@ -776,7 +754,6 @@ private fun WatchStoreScreen(
                     viewMode = next
                     uiPreferences.writeViewMode(next)
                 },
-                onUpload = { showUpload = true },
             )
             OutlinedTextField(
                 value = searchText,
@@ -1024,23 +1001,6 @@ private fun WatchStoreScreen(
                 )
             }
         }
-
-        // 上传覆层压在详情之上：从详情页也能直接开上传而不丢失下面的状态。
-        AnimatedVisibility(
-            visible = showUpload,
-            modifier = Modifier
-                .fillMaxSize()
-                .zIndex(2f),
-            enter = fadeIn(animationSpec = style.pageMotionSpec) +
-                scaleIn(initialScale = 0.96f, animationSpec = style.pageMotionSpec),
-            exit = fadeOut(animationSpec = style.pageMotionSpec) +
-                scaleOut(targetScale = 0.96f, animationSpec = style.pageMotionSpec),
-        ) {
-            StoreUploadOverlay(
-                installedFaces = installedFaces,
-                onDismiss = { showUpload = false },
-            )
-        }
     }
 }
 
@@ -1049,7 +1009,6 @@ private fun StoreHeader(
     onBack: () -> Unit,
     viewMode: WatchStoreViewMode,
     onToggleViewMode: () -> Unit,
-    onUpload: () -> Unit,
 ) {
     val style = LauncherTheme.style
     Row(
@@ -1062,14 +1021,6 @@ private fun StoreHeader(
         Column(Modifier.weight(1f)) {
             Text("表盘市场", color = style.titleColor, fontSize = 17.sp, fontWeight = FontWeight.Bold)
             Text("Watchmaker Community", color = style.secondaryTextColor, fontSize = 10.sp)
-        }
-        IconButton(onClick = onUpload, modifier = Modifier.size(40.dp)) {
-            Icon(
-                imageVector = Icons.Default.CloudUpload,
-                contentDescription = "上传表盘",
-                tint = style.titleColor,
-                modifier = Modifier.size(20.dp),
-            )
         }
         IconButton(onClick = onToggleViewMode, modifier = Modifier.size(40.dp)) {
             Icon(
@@ -1494,17 +1445,13 @@ private fun WatchFaceDetailPage(
         modifier = Modifier
             .fillMaxSize()
             .background(style.screenBackground)
-            // 覆层要吃掉「没人处理」的指针事件：空白边距的点击/拖动不能落到
+            // 覆层必须吃掉全部指针事件；空白边距的点击/拖动不能落到
             // 底下仍在组合树里的列表上（否则会偷偷改它的滚动位置）。
-            //
-            // 只消费还没被消费的 change。Main pass 是子节点先、父节点后，所以
-            // 详情页自己的 verticalScroll 先拿到事件；它消费过的就跳过，父节点
-            // 不再重复插手，避免把内层滚动/惯性搅坏。
             .pointerInput(Unit) {
                 awaitEachGesture {
                     do {
                         val event = awaitPointerEvent()
-                        event.changes.forEach { if (!it.isConsumed) it.consume() }
+                        event.changes.forEach { it.consume() }
                     } while (event.changes.any { it.pressed })
                 }
             }
@@ -1530,18 +1477,9 @@ private fun WatchFaceDetailPage(
         }
         when {
             detail != null || installedRecord != null -> {
-                // weight(1f) 而不是 fillMaxSize()：滚动视口必须拿到「标题栏之外
-                // 剩下的全部高度」这一确定值。非加权子项的高度取决于测量顺序，
-                // 一旦标题栏因为字号/圆屏内边距变高，视口就会被挤掉而量不出
-                // 可滚动区间（maxValue = 0，表现就是完全滑不动）。
-                //
-                // clipToBounds 把弹性回弹的位移裁在视口里，不让它画到标题栏上。
-                BoxWithConstraints(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .clipToBounds(),
-                ) {
+                // clipToBounds keeps the elastic-overscroll translation inside
+                // the scroll viewport instead of painting over the header row.
+                BoxWithConstraints(Modifier.fillMaxSize().clipToBounds()) {
                     // The preview must be sized against the *viewport*, not the
                     // width: width-derived heights (1:1 round, width/0.72
                     // rectangular) always exceeded the visible height on a
@@ -1549,11 +1487,7 @@ private fun WatchFaceDetailPage(
                     // the preview image, with the name/description/download
                     // button pushed below the fold and reading as "the image
                     // covers the text".
-                    //
-                    // maxHeight 在无界约束下会是 Dp.Infinity，直接乘出来会把
-                    // .height() 喂成无穷大。用 maxWidth 兜底并夹一个上限。
-                    val viewportHeight = if (maxHeight.isFinite) maxHeight else maxWidth
-                    val previewMaxHeight = (viewportHeight * 0.62f).coerceIn(120.dp, 320.dp)
+                    val previewMaxHeight = maxHeight * 0.62f
                     Column(
                         Modifier
                             .fillMaxSize()
@@ -1754,16 +1688,10 @@ private fun WatchFaceDetailPage(
                     }
                 }
             }
-            error != null -> Box(
-                Modifier.weight(1f).fillMaxWidth(),
-                contentAlignment = Alignment.Center,
-            ) {
+            error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 ErrorStateRow(message = error, onRetry = onRetryDetail)
             }
-            else -> Box(
-                Modifier.weight(1f).fillMaxWidth(),
-                contentAlignment = Alignment.Center,
-            ) {
+            else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 LoadingStateRow(if (loading) "正在加载表盘详情…" else "正在准备详情…")
             }
         }
@@ -2090,746 +2018,3 @@ private fun safeStoreExportName(displayName: String): String = displayName
     .replace(Regex("[\\\\/:*?\"<>|]+"), "_")
     .take(80)
     .ifBlank { "Flue-Watch" }
-
-// ---------------------------------------------------------------------------
-// 上传：记住账号 / 记住密码
-// ---------------------------------------------------------------------------
-
-/** 从本地取回的登录信息。[password] 只在「记住密码」勾选过时才非空。 */
-private data class WatchStoreRememberedCredentials(
-    val username: String = "",
-    val password: String = "",
-    val rememberUsername: Boolean = false,
-    val rememberPassword: Boolean = false,
-)
-
-/**
- * 「记住账号 / 记住密码」的本地存储。
- *
- * 用户名是普通字符串，直接进 SharedPreferences；**密码一律先经 Android
- * Keystore 里的 AES/GCM 密钥加密再落盘**，明文任何时候都不会写进文件。
- * 密钥本身留在 Keystore（可用时由硬件支持），应用无法导出它，卸载即销毁。
- *
- * 这里没有用 EncryptedSharedPreferences：那需要新增
- * `androidx.security:security-crypto` 依赖，而构建脚本不在本次改动范围内。
- * 平台自带的 Keystore + Cipher 在 minSdk 27 上可直接使用，安全等级相当。
- *
- * 两个开关默认都是关的：不勾选就什么都不留，并且会顺手清掉旧记录。
- */
-private class WatchStoreCredentialStore(context: Context) {
-    private val preferences = context.applicationContext
-        .getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
-
-    fun read(): WatchStoreRememberedCredentials {
-        val rememberUsername = preferences.getBoolean(KEY_REMEMBER_USERNAME, false)
-        val rememberPassword = preferences.getBoolean(KEY_REMEMBER_PASSWORD, false)
-        if (!rememberUsername && !rememberPassword) return WatchStoreRememberedCredentials()
-        val username = preferences.getString(KEY_USERNAME, null).orEmpty()
-        val password = if (rememberPassword) decryptPassword().orEmpty() else ""
-        return WatchStoreRememberedCredentials(
-            username = username,
-            password = password,
-            rememberUsername = rememberUsername,
-            // 密钥失效（换机、恢复出厂、Keystore 被清）时解不出来，
-            // 就当成没记住，让用户重新输入而不是卡在一个空密码上。
-            rememberPassword = rememberPassword && password.isNotEmpty(),
-        )
-    }
-
-    /** 「记住密码」隐含「记住账号」：只留密码不留用户名没有意义。 */
-    fun save(
-        username: String,
-        password: String,
-        rememberUsername: Boolean,
-        rememberPassword: Boolean,
-    ) {
-        val keepUsername = rememberUsername || rememberPassword
-        val editor = preferences.edit()
-        editor.putBoolean(KEY_REMEMBER_USERNAME, keepUsername)
-        editor.putBoolean(KEY_REMEMBER_PASSWORD, rememberPassword)
-        if (keepUsername) editor.putString(KEY_USERNAME, username) else editor.remove(KEY_USERNAME)
-        val encrypted = if (rememberPassword) encryptPassword(password) else null
-        if (encrypted == null) {
-            editor.remove(KEY_PASSWORD_IV).remove(KEY_PASSWORD_CIPHERTEXT)
-            if (rememberPassword) editor.putBoolean(KEY_REMEMBER_PASSWORD, false)
-        } else {
-            editor.putString(KEY_PASSWORD_IV, encrypted.first)
-            editor.putString(KEY_PASSWORD_CIPHERTEXT, encrypted.second)
-        }
-        editor.apply()
-    }
-
-    fun clear() {
-        preferences.edit().clear().apply()
-    }
-
-    /** 返回 Base64 的 (iv, ciphertext)；Keystore 不可用时返回 null。 */
-    private fun encryptPassword(password: String): Pair<String, String>? {
-        if (password.isEmpty()) return null
-        val key = secretKey() ?: return null
-        return runCatching {
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.ENCRYPT_MODE, key)
-            val ciphertext = cipher.doFinal(password.toByteArray(Charsets.UTF_8))
-            Base64.encodeToString(cipher.iv, Base64.NO_WRAP) to
-                Base64.encodeToString(ciphertext, Base64.NO_WRAP)
-        }.getOrNull()
-    }
-
-    private fun decryptPassword(): String? {
-        val ivText = preferences.getString(KEY_PASSWORD_IV, null) ?: return null
-        val cipherText = preferences.getString(KEY_PASSWORD_CIPHERTEXT, null) ?: return null
-        val key = secretKey() ?: return null
-        return runCatching {
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(
-                Cipher.DECRYPT_MODE,
-                key,
-                GCMParameterSpec(GCM_TAG_BITS, Base64.decode(ivText, Base64.NO_WRAP)),
-            )
-            String(cipher.doFinal(Base64.decode(cipherText, Base64.NO_WRAP)), Charsets.UTF_8)
-        }.getOrNull()
-    }
-
-    private fun secretKey(): SecretKey? = runCatching {
-        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        (keyStore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
-            ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
-                .apply {
-                    init(
-                        KeyGenParameterSpec.Builder(
-                            KEY_ALIAS,
-                            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-                        )
-                            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                            // 不要求用户认证：手表上没有可靠的解锁态可依赖，
-                            // 要求认证会让「记住密码」在多数设备上直接不可用。
-                            .setUserAuthenticationRequired(false)
-                            .build(),
-                    )
-                }
-                .generateKey()
-    }.getOrNull()
-
-    private companion object {
-        const val PREFERENCES_NAME = "flue_watch_store_credentials"
-        const val KEY_USERNAME = "username"
-        const val KEY_PASSWORD_IV = "password_iv"
-        const val KEY_PASSWORD_CIPHERTEXT = "password_ciphertext"
-        const val KEY_REMEMBER_USERNAME = "remember_username"
-        const val KEY_REMEMBER_PASSWORD = "remember_password"
-        const val ANDROID_KEYSTORE = "AndroidKeyStore"
-        const val KEY_ALIAS = "flue_watch_store_credential_key"
-        const val TRANSFORMATION = "AES/GCM/NoPadding"
-        const val GCM_TAG_BITS = 128
-    }
-}
-
-private val STORE_UPLOAD_SCREEN_TYPES = listOf(
-    WatchStoreScreenType.ROUND to "圆形",
-    WatchStoreScreenType.SQUARE to "方形",
-    WatchStoreScreenType.RECTANGULAR to "矩形",
-)
-
-private val STORE_USERNAME_PATTERN = Regex("^[A-Za-z0-9_]{3,50}$")
-
-/** 上传源：已安装表盘，或用户从系统文件选择器挑的本地 .watch。 */
-private sealed interface WatchStoreUploadSource {
-    val label: String
-
-    data class Installed(val descriptor: LunchWatchFaceDescriptor) : WatchStoreUploadSource {
-        override val label: String get() = descriptor.displayName.ifBlank { descriptor.id }
-    }
-
-    data class LocalFile(val uri: Uri, val displayName: String) : WatchStoreUploadSource {
-        override val label: String get() = displayName
-    }
-}
-
-private fun watchStoreUploadFailureMessage(error: Throwable): String = when {
-    error is WatchStorePayloadTooLargeException ->
-        "表盘包超过服务端 ${HttpWatchStoreApi.MAX_UPLOAD_BYTES / (1024 * 1024)} MB 上限"
-    error is WatchStoreHttpException && error.statusCode == 401 -> "登录已过期，请重新登录"
-    error is WatchStoreHttpException && error.statusCode == 409 -> "同名表盘已存在，请换一个名称"
-    error is WatchStoreHttpException -> "服务返回 ${error.statusCode}，请稍后再试"
-    error is WatchStoreException -> error.message ?: "上传失败"
-    else -> error.message ?: "上传失败"
-}
-
-private fun watchStoreLoginFailureMessage(error: Throwable, register: Boolean): String = when {
-    error is WatchStoreHttpException && error.statusCode == 401 -> "用户名或密码不正确"
-    error is WatchStoreHttpException && error.statusCode == 409 -> "用户名已被占用"
-    error is WatchStoreHttpException -> "服务返回 ${error.statusCode}，请稍后再试"
-    error is WatchStoreException -> error.message ?: if (register) "注册失败" else "登录失败"
-    else -> error.message ?: if (register) "注册失败" else "登录失败"
-}
-
-/**
- * 商店内的上传覆层。四步：选来源 → 登录/注册 → 填元数据 → 上传。
- *
- * 来源有两种：
- *  - **已安装表盘**：直接用 [WatchEditorSession.exportWatch] 把安装目录重新打成
- *    .watch（和详情页的「导出」走同一条路径，保证产物一致）。
- *  - **本地 .watch 文件**：用系统文件选择器取 Uri，拷进 cacheDir 再上传。
- *
- * 临时包只在本次上传期间存在于 cacheDir，无论成败都会删掉。
- */
-@Composable
-private fun StoreUploadOverlay(
-    installedFaces: List<LunchWatchFaceDescriptor>,
-    onDismiss: () -> Unit,
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val style = LauncherTheme.style
-    val isScreenRound = isFlueScreenRound()
-    val authStore = remember { WatchStoreAuthStore(context) }
-    val credentialStore = remember { WatchStoreCredentialStore(context) }
-    val api = remember { HttpWatchStoreApi() }
-
-    val uploadableFaces = remember(installedFaces) {
-        installedFaces.filter { it.isWatchmaker && !it.sourceDirPath.isNullOrBlank() }
-    }
-
-    var auth by remember { mutableStateOf<WatchStoreAuthSession?>(null) }
-    var authChecked by remember { mutableStateOf(false) }
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    // 两个开关默认都不勾选，符合「默认不留任何凭据」。
-    var rememberUsername by remember { mutableStateOf(false) }
-    var rememberPassword by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf<String?>(null) }
-    var formError by remember { mutableStateOf<String?>(null) }
-    var uploadPercent by remember { mutableStateOf<Int?>(null) }
-    var source by remember { mutableStateOf<WatchStoreUploadSource?>(null) }
-    var name by remember { mutableStateOf("") }
-    var description by remember { mutableStateOf("") }
-    var categories by remember { mutableStateOf<List<WatchStoreCategory>?>(null) }
-    var categoriesError by remember { mutableStateOf<String?>(null) }
-    var categoriesRetryToken by remember { mutableIntStateOf(0) }
-    var selectedCategoryId by remember { mutableStateOf<String?>(null) }
-    var screenType by remember {
-        mutableStateOf(
-            if (isScreenRound) WatchStoreScreenType.ROUND else WatchStoreScreenType.SQUARE,
-        )
-    }
-
-    val pickLocalArchive = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        if (uri != null) {
-            val displayName = queryStoreDocumentName(context, uri)
-            source = WatchStoreUploadSource.LocalFile(uri, displayName)
-            if (name.isBlank()) name = displayName.removeSuffix(".watch").take(100)
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        val restored = withContext(Dispatchers.IO) {
-            authStore.read() to credentialStore.read()
-        }
-        auth = restored.first
-        val credentials = restored.second
-        username = credentials.username
-        password = credentials.password
-        rememberUsername = credentials.rememberUsername
-        rememberPassword = credentials.rememberPassword
-        authChecked = true
-    }
-
-    LaunchedEffect(auth, categoriesRetryToken) {
-        if (auth == null || categories != null) return@LaunchedEffect
-        categoriesError = null
-        runCatching { withContext(Dispatchers.IO) { api.getCategories() } }
-            .onSuccess { list ->
-                categories = list
-                if (selectedCategoryId == null) selectedCategoryId = list.firstOrNull()?.id
-            }
-            .onFailure { error ->
-                if (error is CancellationException) throw error
-                categoriesError = watchStoreUploadFailureMessage(error)
-            }
-    }
-
-    fun authenticate(register: Boolean) {
-        if (busy != null) return
-        val cleanUsername = username.trim()
-        if (!STORE_USERNAME_PATTERN.matches(cleanUsername)) {
-            formError = "用户名需要 3-50 位字母、数字或下划线"
-            return
-        }
-        if (password.length < 6) {
-            formError = "密码至少需要 6 位"
-            return
-        }
-        val keepUsername = rememberUsername
-        val keepPassword = rememberPassword
-        val submittedPassword = password
-        busy = if (register) "正在注册" else "正在登录"
-        formError = null
-        scope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val result = if (register) {
-                        api.register(cleanUsername, submittedPassword)
-                    } else {
-                        api.login(cleanUsername, submittedPassword)
-                    }
-                    val session = authStore.write(result.token, result.username)
-                    // 只有登录成功才写凭据；失败的用户名/密码不值得留在设备上。
-                    credentialStore.save(
-                        username = cleanUsername,
-                        password = submittedPassword,
-                        rememberUsername = keepUsername,
-                        rememberPassword = keepPassword,
-                    )
-                    session
-                }
-            }.onSuccess { session ->
-                // 没勾「记住密码」就立刻从内存里抹掉。
-                if (!keepPassword) password = ""
-                auth = session
-            }.onFailure { error ->
-                if (error is CancellationException) throw error
-                formError = watchStoreLoginFailureMessage(error, register)
-            }
-            busy = null
-        }
-    }
-
-    fun upload() {
-        if (busy != null) return
-        val activeAuth = auth ?: return
-        val activeSource = source
-        if (activeSource == null) {
-            formError = "请先选择要上传的表盘"
-            return
-        }
-        val trimmedName = name.trim()
-        if (trimmedName.isEmpty()) {
-            formError = "请填写表盘名称"
-            return
-        }
-        if (description.isBlank()) {
-            formError = "请填写表盘描述"
-            return
-        }
-        val categoryId = selectedCategoryId
-        if (categoryId == null) {
-            formError = "请选择一个分类"
-            return
-        }
-        busy = "正在准备表盘包"
-        formError = null
-        uploadPercent = null
-        scope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val archive = File.createTempFile(
-                        "flue_store_upload_",
-                        ".watch",
-                        context.cacheDir,
-                    )
-                    try {
-                        when (activeSource) {
-                            is WatchStoreUploadSource.Installed ->
-                                WatchEditorSession.open(context, activeSource.descriptor)
-                                    .use { session -> session.exportWatch(archive) }
-
-                            is WatchStoreUploadSource.LocalFile ->
-                                context.contentResolver.openInputStream(activeSource.uri)
-                                    ?.use { input ->
-                                        archive.outputStream().buffered().use(input::copyTo)
-                                    }
-                                    ?: error("无法读取所选文件")
-                        }
-                        if (archive.length() <= 0L) error("所选表盘包是空的")
-                        if (archive.length() > HttpWatchStoreApi.MAX_UPLOAD_BYTES) {
-                            throw WatchStorePayloadTooLargeException(HttpWatchStoreApi.MAX_UPLOAD_BYTES)
-                        }
-                        busy = "正在上传"
-                        api.uploadWatchFace(
-                            token = activeAuth.token,
-                            file = archive,
-                            name = trimmedName,
-                            description = description.trim(),
-                            screenType = screenType,
-                            categoryId = categoryId,
-                        ) { sent, total ->
-                            val percent = ((sent * 100L) / total.coerceAtLeast(1L))
-                                .toInt()
-                                .coerceIn(0, 100)
-                            if (uploadPercent != percent) uploadPercent = percent
-                        }
-                    } finally {
-                        archive.delete()
-                    }
-                }
-            }.onSuccess {
-                Toast.makeText(context, "已上传到表盘商店", Toast.LENGTH_SHORT).show()
-                onDismiss()
-            }.onFailure { error ->
-                if (error is CancellationException) throw error
-                if (error is WatchStoreHttpException && error.statusCode == 401) {
-                    // 服务端判定令牌失效比本地过期时间更权威：清掉并回到登录页。
-                    authStore.clear()
-                    auth = null
-                }
-                formError = watchStoreUploadFailureMessage(error)
-            }
-            busy = null
-            uploadPercent = null
-        }
-    }
-
-    // 上传中禁止返回键关闭，避免协程随组合一起被取消而中断传输。
-    BackHandler { if (busy == null) onDismiss() }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(style.screenBackground)
-            // 覆层要吃掉「没人处理」的指针事件，别让下层列表偷偷滚动。
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    do {
-                        val event = awaitPointerEvent()
-                        event.changes.forEach { if (!it.isConsumed) it.consume() }
-                    } while (event.changes.any { it.pressed })
-                }
-            }
-            .padding(
-                horizontal = if (isScreenRound) 16.dp else 10.dp,
-                vertical = if (isScreenRound) 10.dp else 6.dp,
-            ),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .zIndex(1f)
-                .background(style.screenBackground),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(
-                onClick = { if (busy == null) onDismiss() },
-                modifier = Modifier.size(40.dp),
-            ) {
-                Icon(Icons.Default.Close, contentDescription = "关闭上传", tint = style.titleColor)
-            }
-            Text(
-                "上传表盘",
-                modifier = Modifier.weight(1f),
-                color = style.titleColor,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-            )
-        }
-        val uploadScrollState = rememberScrollState()
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .clipToBounds()
-                .flueElasticNestedScroll(uploadScrollState)
-                .verticalScroll(uploadScrollState)
-                .padding(horizontal = if (isScreenRound) 6.dp else 0.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            busy?.let { message ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                    Text(
-                        message + (uploadPercent?.let { " $it%" }.orEmpty()),
-                        color = style.secondaryTextColor,
-                        fontSize = 12.sp,
-                    )
-                }
-            }
-            formError?.let { message ->
-                Text(
-                    message,
-                    modifier = Modifier.fillMaxWidth(),
-                    color = style.accentColor,
-                    fontSize = 12.sp,
-                )
-            }
-
-            val activeAuth = auth
-            when {
-                !authChecked -> Text(
-                    "正在检查登录状态…",
-                    color = style.secondaryTextColor,
-                    fontSize = 12.sp,
-                )
-
-                activeAuth == null -> {
-                    OutlinedTextField(
-                        value = username,
-                        onValueChange = { username = it.take(50) },
-                        label = { Text("用户名") },
-                        singleLine = true,
-                        enabled = busy == null,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it.take(128) },
-                        label = { Text("密码") },
-                        singleLine = true,
-                        enabled = busy == null,
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Checkbox(
-                            checked = rememberUsername,
-                            onCheckedChange = { checked ->
-                                rememberUsername = checked
-                                // 取消记住账号时，记住密码也必须一起取消。
-                                if (!checked) {
-                                    rememberPassword = false
-                                    credentialStore.clear()
-                                }
-                            },
-                            enabled = busy == null,
-                        )
-                        Text("记住账号", color = style.bodyColor, fontSize = 12.sp)
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Checkbox(
-                            checked = rememberPassword,
-                            onCheckedChange = { checked ->
-                                rememberPassword = checked
-                                // 记住密码必然要记住账号。
-                                if (checked) rememberUsername = true else credentialStore.clear()
-                            },
-                            enabled = busy == null,
-                        )
-                        Text("记住密码", color = style.bodyColor, fontSize = 12.sp)
-                    }
-                    Text(
-                        "密码经 Android Keystore 的 AES/GCM 密钥加密后才写入本机，" +
-                            "明文不会落盘；两个开关默认都是关闭的。",
-                        color = style.secondaryTextColor,
-                        fontSize = 10.sp,
-                        lineHeight = 14.sp,
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Button(
-                            onClick = { authenticate(register = false) },
-                            enabled = busy == null,
-                            modifier = Modifier.weight(1f),
-                        ) { Text("登录") }
-                        OutlinedButton(
-                            onClick = { authenticate(register = true) },
-                            enabled = busy == null,
-                            modifier = Modifier.weight(1f),
-                        ) { Text("注册") }
-                    }
-                }
-
-                else -> {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "已登录：${activeAuth.username}",
-                            modifier = Modifier.weight(1f),
-                            color = style.secondaryTextColor,
-                            fontSize = 12.sp,
-                        )
-                        TextButton(
-                            onClick = {
-                                if (busy == null) {
-                                    authStore.clear()
-                                    auth = null
-                                    if (!rememberPassword) password = ""
-                                }
-                            },
-                        ) { Text("退出登录", color = style.accentColor) }
-                    }
-
-                    Text(
-                        "上传来源",
-                        color = style.titleColor,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    source?.let { chosen ->
-                        Text(
-                            "已选择：${chosen.label}",
-                            color = style.bodyColor,
-                            fontSize = 12.sp,
-                        )
-                    }
-                    OutlinedButton(
-                        onClick = {
-                            // 常见的 .watch 走 zip/octet-stream；部分文件提供器
-                            // 只报 */*，所以三种都放行。
-                            pickLocalArchive.launch(
-                                arrayOf("application/zip", "application/octet-stream", "*/*"),
-                            )
-                        },
-                        enabled = busy == null,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("从本地 .watch 文件选择") }
-
-                    Text(
-                        "已安装表盘",
-                        color = style.titleColor,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    if (uploadableFaces.isEmpty()) {
-                        Text(
-                            "还没有可上传的标准 .watch 表盘。",
-                            color = style.secondaryTextColor,
-                            fontSize = 11.sp,
-                        )
-                    } else {
-                        uploadableFaces.forEach { descriptor ->
-                            val selected = (source as? WatchStoreUploadSource.Installed)
-                                ?.descriptor?.id == descriptor.id
-                            val label = descriptor.displayName.ifBlank { descriptor.id }
-                            if (selected) {
-                                Button(
-                                    onClick = {},
-                                    enabled = busy == null,
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) { Text(label, maxLines = 1) }
-                            } else {
-                                OutlinedButton(
-                                    onClick = {
-                                        source = WatchStoreUploadSource.Installed(descriptor)
-                                        if (name.isBlank()) name = label.take(100)
-                                    },
-                                    enabled = busy == null,
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) { Text(label, maxLines = 1) }
-                            }
-                        }
-                    }
-
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it.take(100) },
-                        label = { Text("表盘名称（必填）") },
-                        singleLine = true,
-                        enabled = busy == null,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = description,
-                        onValueChange = { description = it.take(2000) },
-                        label = { Text("描述（必填）") },
-                        minLines = 2,
-                        enabled = busy == null,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-
-                    Text(
-                        "屏幕形状",
-                        color = style.titleColor,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        STORE_UPLOAD_SCREEN_TYPES.forEach { (candidate, label) ->
-                            StorePill(label, screenType == candidate) {
-                                if (busy == null) screenType = candidate
-                            }
-                        }
-                    }
-
-                    Text(
-                        "分类",
-                        color = style.titleColor,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    val loadedCategories = categories
-                    // 委托属性不能智能转换，先取本地快照再判空。
-                    val loadedCategoriesError = categoriesError
-                    when {
-                        loadedCategoriesError != null -> {
-                            Text(loadedCategoriesError, color = style.secondaryTextColor, fontSize = 11.sp)
-                            TextButton(onClick = { categoriesRetryToken++ }) {
-                                Text("重试加载分类", color = style.accentColor)
-                            }
-                        }
-
-                        loadedCategories == null -> Text(
-                            "正在加载分类…",
-                            color = style.secondaryTextColor,
-                            fontSize = 11.sp,
-                        )
-
-                        else -> Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            loadedCategories.forEach { category ->
-                                StorePill(category.name, selectedCategoryId == category.id) {
-                                    if (busy == null) selectedCategoryId = category.id
-                                }
-                            }
-                        }
-                    }
-
-                    Button(
-                        onClick = { upload() },
-                        enabled = busy == null && source != null,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Icon(Icons.Default.CloudUpload, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("上传")
-                    }
-                    // 圆屏底部弦宽较窄，多留出滚动余量。
-                    Spacer(Modifier.height(if (isScreenRound) 36.dp else 14.dp))
-                }
-            }
-        }
-    }
-}
-
-/** 取文件选择器返回的显示名；拿不到就退回 Uri 末段。 */
-private fun queryStoreDocumentName(context: Context, uri: Uri): String {
-    val fromProvider = runCatching {
-        context.contentResolver.query(
-            uri,
-            arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) cursor.getString(0) else null
-        }
-    }.getOrNull()
-    return fromProvider?.takeIf(String::isNotBlank)
-        ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf(String::isNotBlank)
-        ?: "watch-face.watch"
-}
