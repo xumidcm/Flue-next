@@ -53,10 +53,20 @@ class AppListMotionPolicyTest {
     }
 
     @Test
-    fun onlyVerifiedTargetReturnMayReuseTheLaunchOrigin() {
+    fun ownSessionReturnsReuseTheLaunchOriginAndForeignOnesDoNot() {
         assertTrue(returnUsesLaunchOrigin(ReturnKind.TargetReturn))
+        // An unverified return is still *our* session: it was dispatched from
+        // this icon and was confirmed backgrounded, only the accessibility
+        // cross-check is missing. That is the normal case whenever the
+        // accessibility service is not granted, or when a system window (Wear's
+        // swipe-to-dismiss, a toast, the IME) briefly stole the foreground.
+        // Excluding it here meant those devices lost the return animation
+        // entirely and the icon simply blinked out of existence.
+        assertTrue(returnUsesLaunchOrigin(ReturnKind.UnverifiedReturn))
+
+        // These genuinely are not our session, so they must keep a neutral
+        // pivot — an unrelated app must never animate out of the old icon.
         assertFalse(returnUsesLaunchOrigin(ReturnKind.ForeignReturn))
-        assertFalse(returnUsesLaunchOrigin(ReturnKind.UnverifiedReturn))
         assertFalse(returnUsesLaunchOrigin(ReturnKind.HomeReentry))
         assertFalse(returnUsesLaunchOrigin(null))
     }

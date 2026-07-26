@@ -466,8 +466,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val isReturningFromApp = prevState == ScreenState.App && screenState == ScreenState.Apps
     val classifiedReturn =
         (externalLaunchState as? ExternalLaunchState.Returning)?.kind
+    // Same predicate the icon/backdrop use, so the pivot and the icon can never
+    // disagree about whether this return owns the launch origin.
     val targetReturn =
-        animationOverrideEnabled && classifiedReturn == ReturnKind.TargetReturn
+        animationOverrideEnabled && returnUsesLaunchOrigin(classifiedReturn)
     val activeLaunchUsesOrigin = animationOverrideEnabled && when (externalLaunchState) {
         is ExternalLaunchState.MaskEntering,
         is ExternalLaunchState.LaunchDispatched,
@@ -625,6 +627,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
             // through the handoff.  Let the same clock reverse instead of
             // dropping the icon on the first cancelled frame.
             is ExternalLaunchState.Cancelled -> state.session.sourceState == ScreenState.Apps
+            // A transparent/dialog-style target only pauses us, so the
+            // background confirmation times out while the mask is still fully
+            // drawn.  Dropping the icon there made it blink out and leave a bare
+            // colour plate; reverse the same clock instead.
+            is ExternalLaunchState.Invalidated ->
+                state.session?.sourceState == ScreenState.Apps
+            is ExternalLaunchState.Failed -> state.session.sourceState == ScreenState.Apps
             else -> false
         }
         if (!keepIconForReverse) {
@@ -1115,6 +1124,34 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     modifier = Modifier.padding(top = 18.dp),
                 )
             }
+
+            // The app list paints its own background *inside* the layer that
+            // scales, so every frame where that layer is smaller than the screen
+            // (Material closes to 0.88, and its App state slides in from the
+            // left) used to reveal `launcherStyle.screenBackground` around it —
+            // a different colour from the list's own `appListColors.background`
+            // in three of the four style/theme combinations, and always
+            // different once watch-face colours are on.
+            //
+            // This plate carries the same alpha clock but never scales or
+            // translates, so whatever the shrinking list uncovers is its own
+            // background rather than the launcher's.
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(if (appListLayerRaised) 2.9f else -0.1f)
+                    .scaleBlurAlpha(
+                        targetValues = appListLayerValues(screenState, uiStyle)
+                            .copy(scale = 1f, blur = 0f, translationX = 0f, translationY = 0f),
+                        blurEnabled = false,
+                        origin = LayerPivot.Center,
+                        scaleSpec = appListMotionSpec,
+                        alphaSpec = appListAlphaSpec,
+                        blurSpec = appListBlurSpec,
+                        translationSpec = appListMotionSpec,
+                    )
+                    .background(appListColors.background),
+            )
 
             Box(
                 modifier = Modifier

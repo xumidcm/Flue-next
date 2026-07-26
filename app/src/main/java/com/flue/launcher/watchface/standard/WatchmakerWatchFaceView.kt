@@ -1819,7 +1819,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         private const val BITMAP_FAILURE_RETRY_MS = 30_000L
         private val WINDOWS_ABSOLUTE_PATH = Regex("^[a-zA-Z]:[/\\\\].*")
         private val TEXT_RING_LABELS = (1..12).map(Int::toString)
-        private val DYNAMIC_TAG_PATTERN = Regex("\\{[^{}]+}")
+        // ICU (Android 14+ 的 java.util.regex 后端) 要求 '}' 必须转义，且字符组内的
+        // '{' 会被当成 UnicodeSet 的多字符串起始符。裸写 "\\{[^{}]+}" 在 SDK 34+ 上
+        // 抛 PatternSyntaxException，并因为它是 companion object 的字段而升级成
+        // ExceptionInInitializerError —— 整个表盘视图类无法初始化。
+        private val DYNAMIC_TAG_PATTERN = Regex("\\{[^\\{\\}]+\\}")
     }
 }
 

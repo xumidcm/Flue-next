@@ -115,7 +115,16 @@ val ExternalLaunchState.usesLaunchOrigin: Boolean
         is ExternalLaunchState.Backgrounded,
         -> true
 
-        is ExternalLaunchState.Returning -> kind == ReturnKind.TargetReturn
+        // UnverifiedReturn means "we did launch from this icon and we were fully
+        // backgrounded, we just could not get accessibility evidence". That is
+        // not the same as "some other app came back", so reusing the launch
+        // origin is safe. Only ForeignReturn / HomeReentry need a neutral pivot.
+        // Requiring TargetReturn here meant every device without the
+        // accessibility service granted lost its return animation entirely and
+        // the icon simply vanished.
+        is ExternalLaunchState.Returning ->
+            kind == ReturnKind.TargetReturn || kind == ReturnKind.UnverifiedReturn
+
         ExternalLaunchState.Idle,
         is ExternalLaunchState.Failed,
         is ExternalLaunchState.Cancelled,

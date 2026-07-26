@@ -362,10 +362,24 @@ internal class FlueSpringEdgeEffectFactory(
         topReleaseCandidate = false
     }
 
-    /** Starts a new touch gesture without snapping an in-flight rebound. */
+    /**
+     * Starts a new touch gesture.
+     *
+     * The in-flight rebound is deliberately left running. `pull()` and
+     * `absorb()` already call `physics.takeOver()` themselves at the moment the
+     * pointer really engages the edge, so freezing the offset here only created
+     * dead travel: a touch landing during a 350ms rebound used to pin the offset
+     * at up to `maxOffsetPx` (≈64–90px on a 454px viewport), and because
+     * `release()` refuses to run while `gestureActive`, that offset could only
+     * unwind through `pull()`'s inward-consumption path — the finger had to
+     * travel the whole stretch plus touch slop before the list scrolled at all.
+     * That is the "have to wait a moment before it scrolls again" symptom.
+     */
     fun beginGesture() {
         gestureActive = true
-        cancelWithoutSnap()
+        // A stale candidate from the previous gesture must not leak forward,
+        // but the rebound animation itself keeps its own clock.
+        topReleaseCandidate = false
     }
 
     fun finish() {
@@ -433,9 +447,16 @@ internal class FlueSpringEdgeEffectFactory(
 
     internal fun consumeLegacyInwardPointerDelta(pointerDeltaPx: Float): Float {
         if (released) return 0f
-        stopAnimatorForInput()
+        // Only take the animation away once this pointer actually has an edge to
+        // consume. Killing it up front meant an outward MOVE, or a MOVE with no
+        // active edge at all, silently stranded the state machine.
+        if (!physics.hasActiveEdge) return 0f
         val consumed = physics.consumeInwardPointerDelta(pointerDeltaPx)
-        if (consumed == 0f) return 0f
+        if (consumed == 0f) {
+            ensureAnimatorMatchesPhase()
+            return 0f
+        }
+        stopAnimatorForInput()
         topReleaseCandidate = physics.isBeyondTrigger(FlueEdgePhysics.Edge.TOP)
         publish()
         return consumed
@@ -475,6 +496,21 @@ internal class FlueSpringEdgeEffectFactory(
             animator?.cancel()
             animator = null
         }
+        // Cancelling the animator while `phase` is still EXTENDING/REBOUND
+        // leaves `physics.isAnimating == true` with nothing driving it. Both
+        // `release()` and `confirmTopRelease()` guard on `isAnimating`, so that
+        // state froze the edge offset permanently and every later MOVE was
+        // swallowed unwinding it. Handing the offset back to PULL keeps the
+        // visible transform but makes the state machine consistent again.
+        physics.takeOver()
+    }
+
+    /**
+     * Repairs the "animating with no animator" state should any caller ever
+     * recreate it. Cheap enough to run on every publish path.
+     */
+    private fun ensureAnimatorMatchesPhase() {
+        if (!released && physics.isAnimating && animator == null) startAnimator()
     }
 
     private fun startAnimator() {

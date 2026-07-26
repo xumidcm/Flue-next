@@ -96,12 +96,20 @@ internal fun reverseLaunchMotion(snapshot: LaunchMotionSnapshot): LaunchMotionSn
     )
 
 /**
- * Only a return that was verified against the package we launched may reuse
- * the icon's source point.  Foreign, home and unverified returns must use a
- * neutral pivot so an unrelated app is never animated from the old icon.
+ * A return may reuse the icon's source point when the session we launched is
+ * the one coming back.  `UnverifiedReturn` qualifies: the session was
+ * dispatched from that icon and was confirmed backgrounded, only the
+ * accessibility cross-check is missing — which is the normal case whenever the
+ * accessibility service is not granted or a system window (Wear's
+ * swipe-to-dismiss, a toast, the IME) briefly stole the foreground.
+ *
+ * Foreign and home returns still need a neutral pivot so an unrelated app is
+ * never animated out of the old icon.
  */
-internal fun returnUsesLaunchOrigin(kind: ReturnKind?): Boolean =
-    kind == ReturnKind.TargetReturn
+internal fun returnUsesLaunchOrigin(kind: ReturnKind?): Boolean = when (kind) {
+    ReturnKind.TargetReturn, ReturnKind.UnverifiedReturn -> true
+    ReturnKind.ForeignReturn, ReturnKind.HomeReentry, null -> false
+}
 
 private val Beta12LaunchMaskMotionPolicy = LaunchMaskMotionPolicy(
     enterDurationMillis = 140,

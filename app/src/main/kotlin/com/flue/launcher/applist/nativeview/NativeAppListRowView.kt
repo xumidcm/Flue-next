@@ -3,6 +3,7 @@ package com.flue.launcher.applist.nativeview
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
@@ -35,9 +36,30 @@ internal class NativeAppListRowView(
     private val glidePressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
+    /**
+     * The Compose drawer got its icon shadow from a RenderNode
+     * (`graphicsLayer { shadowElevation = 8.dp }`), so the platform drew a real
+     * ambient + spot pair with a Gaussian falloff. The native port replaced that
+     * with a flat `drawPath` of one opaque colour and no mask filter, which is
+     * why it reads as a hard black ring peeking out from behind every icon.
+     *
+     * A [BlurMaskFilter] restores the falloff at a fraction of the cost of a
+     * second RenderNode. HWUI implements blur mask filters for path draws from
+     * API 28; on 27 the filter is ignored and we degrade to the previous look.
+     */
     private val iconShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = 0x36000000
+        color = 0x4D000000
+    }
+    private var iconShadowBlurRadiusPx = 0f
+
+    private fun updateIconShadowBlur(iconSizePx: Float) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
+        // ≈8dp of elevation blur on a 50dp icon, and it tracks icon scaling.
+        val radius = (iconSizePx * 0.15f).coerceIn(1.5f, 24f)
+        if (abs(radius - iconShadowBlurRadiusPx) < 0.25f) return
+        iconShadowBlurRadiusPx = radius
+        iconShadowPaint.maskFilter = BlurMaskFilter(radius, BlurMaskFilter.Blur.NORMAL)
     }
     private val fallbackBackgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
@@ -625,10 +647,14 @@ internal class NativeAppListRowView(
                     min(iconBounds.width(), iconBounds.height()) / 2f,
                     Path.Direction.CW,
                 )
+                updateIconShadowBlur(min(iconBounds.width(), iconBounds.height()))
                 val shadowOffset = (iconBounds.height() * 0.055f).coerceAtLeast(1f)
                 iconShadowPath.addCircle(
                     iconBounds.centerX(),
                     iconBounds.centerY() + shadowOffset,
+                    // Geometry deliberately still extends past the icon: on
+                    // API 27 the mask filter is ignored, and shrinking it there
+                    // would delete the shadow instead of softening it.
                     min(iconBounds.width(), iconBounds.height()) * 0.52f,
                     Path.Direction.CW,
                 )
@@ -638,7 +664,11 @@ internal class NativeAppListRowView(
                     min(iconBounds.width(), iconBounds.height()) / 2f,
                 )
                 iconClipPath.addRoundRect(iconBounds, radius, radius, Path.Direction.CW)
+                updateIconShadowBlur(min(iconBounds.width(), iconBounds.height()))
                 val shadowOffset = (iconBounds.height() * 0.055f).coerceAtLeast(1f)
+                // Kept outset for the same reason as the circular branch: the
+                // mask filter softens this edge on API 28+, but API 27 falls
+                // back to the plain path and still needs the geometric spread.
                 val shadowSpread = (iconBounds.width() * 0.02f).coerceAtLeast(0.5f)
                 shadowBounds.set(iconBounds)
                 shadowBounds.inset(-shadowSpread, -shadowSpread)

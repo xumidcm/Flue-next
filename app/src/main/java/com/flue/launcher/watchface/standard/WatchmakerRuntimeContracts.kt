@@ -795,7 +795,8 @@ object WatchmakerTagResolver {
  * scripts remain unsupported and are surfaced by the compatibility report.
  */
 object WatchmakerExpressionEvaluator {
-    private val tagPattern = Regex("\\{([^{}]+)}")
+    // 同 WatchmakerDefinitionParser：ICU 后端要求 '}' 转义。
+    private val tagPattern = Regex("\\{([^\\{\\}]+)\\}")
     private const val MAX_EXPRESSION_LENGTH = 4 * 1024
     private const val MAX_EXPRESSION_TOKENS = 512
     private const val MAX_FUNCTION_ARGUMENTS = 16

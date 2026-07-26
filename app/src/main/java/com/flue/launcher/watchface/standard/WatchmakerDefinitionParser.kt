@@ -214,7 +214,8 @@ private val SUPPORTED_LAYER_TYPES = setOf(
     "group",
 )
 
-private val DYNAMIC_TAG_PATTERN = Regex("\\{([^{}]+)}")
+// '}' 与字符组内的 '{' 都必须转义，否则 ICU 后端 (SDK 34+) 抛 PatternSyntaxException。
+private val DYNAMIC_TAG_PATTERN = Regex("\\{([^\\{\\}]+)\\}")
 
 /**
  * Side-effect-free numeric/boolean expressions are handled by the runtime's
@@ -237,7 +238,7 @@ private fun containsUnsupportedExpression(value: String): Boolean {
         RegexOption.IGNORE_CASE,
     ).containsMatchIn(value)
     val hasArithmetic = Regex("[+*/%^]").containsMatchIn(value) || value.contains("..") ||
-        Regex("(?:}\\s*-\\s*(?:\\{|\\d)|(?:\\}|\\d)\\s*-\\s*\\{)")
+        Regex("(?:\\}\\s*-\\s*(?:\\{|\\d)|(?:\\}|\\d)\\s*-\\s*\\{)")
             .containsMatchIn(value)
     val looksLikeExpression = hasBoundedFunction ||
         hasDynamicTag && (hasComparisonOrBoolean || hasArithmetic) ||

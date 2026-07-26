@@ -112,6 +112,50 @@ private fun MotionPhase.requireValid(key: MotionPhaseKey) {
 object FlueMotionProfiles {
     const val GENTLE_ID: String = "preset:gentle"
     const val AGGRESSIVE_ID: String = "preset:aggressive"
+    const val CLASSIC_ID: String = "preset:classic"
+
+    /**
+     * The curve Flue shipped before motion profiles existed.
+     *
+     * It came from two constants that every layer transition shared:
+     * `BlurTransition.TransitionSpring = spring(dampingRatio = 0.75f,
+     * stiffness = Spring.StiffnessMediumLow)` (400f) for scale/translation, and
+     * `AlphaSpec = tween(400)` for alpha and blur. Reproducing it as a profile
+     * keeps one damping ratio and one stiffness across every phase — that
+     * uniformity is exactly what made it feel "classic", so resist the urge to
+     * tune the phases apart.
+     */
+    val Classic: FlueMotionProfile = FlueMotionProfile(
+        id = CLASSIC_ID,
+        name = "经典",
+        bounceEnabled = true,
+        edgeStrength = 5,
+        appListEnter = MotionPhase(
+            durationMillis = 400,
+            handoffMillis = 80,
+            easing = MotionEasing.Spring(dampingRatio = 0.75f, stiffness = 400f),
+        ),
+        appLaunch = MotionPhase(
+            durationMillis = 400,
+            handoffMillis = 120,
+            easing = MotionEasing.Spring(dampingRatio = 0.75f, stiffness = 400f),
+        ),
+        appReturn = MotionPhase(
+            durationMillis = 400,
+            handoffMillis = 110,
+            easing = MotionEasing.Spring(dampingRatio = 0.75f, stiffness = 400f),
+        ),
+        pullToFace = MotionPhase(
+            durationMillis = 400,
+            handoffMillis = 80,
+            easing = MotionEasing.Spring(dampingRatio = 0.75f, stiffness = 400f),
+        ),
+        edgeBounce = MotionPhase(
+            durationMillis = 400,
+            handoffMillis = 90,
+            easing = MotionEasing.Spring(dampingRatio = 0.66f, stiffness = 360f),
+        ),
+    ).requireValid()
 
     val Gentle: FlueMotionProfile = FlueMotionProfile(
         id = GENTLE_ID,
@@ -177,9 +221,10 @@ object FlueMotionProfiles {
         ),
     ).requireValid()
 
-    val builtIns: List<FlueMotionProfile> = listOf(Gentle, Aggressive)
+    val builtIns: List<FlueMotionProfile> = listOf(Gentle, Aggressive, Classic)
 
-    fun isBuiltIn(id: String): Boolean = id == GENTLE_ID || id == AGGRESSIVE_ID
+    fun isBuiltIn(id: String): Boolean =
+        id == GENTLE_ID || id == AGGRESSIVE_ID || id == CLASSIC_ID
 
     fun resolve(id: String?, customProfiles: List<FlueMotionProfile>): FlueMotionProfile =
         (builtIns + customProfiles).firstOrNull { it.id == id } ?: Gentle

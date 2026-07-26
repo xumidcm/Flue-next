@@ -14,7 +14,7 @@ import org.robolectric.RobolectricTestRunner
 class FlueMotionProfileTest {
     @Test
     fun `built in profiles satisfy the versioned motion contract`() {
-        assertEquals(2, FlueMotionProfiles.builtIns.size)
+        assertEquals(3, FlueMotionProfiles.builtIns.size)
         FlueMotionProfiles.builtIns.forEach { profile ->
             assertEquals(FLUE_MOTION_SCHEMA_VERSION, profile.requireValid().schemaVersion)
             assertTrue(profile.bounceEnabled)
