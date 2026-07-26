@@ -12,6 +12,7 @@ import android.view.View
 import android.view.MotionEvent
 import androidx.recyclerview.widget.RecyclerView
 import com.flue.launcher.applist.model.NormalizedPoint
+import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -31,6 +32,13 @@ internal class NativeAppListRowView(
     private val pressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
+    private val glidePressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+    private val iconShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0x36000000
+    }
     private val fallbackBackgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
@@ -42,15 +50,21 @@ internal class NativeAppListRowView(
     private val iconBounds = RectF()
     private val fallbackPath = Path()
     private val iconClipPath = Path()
+    private val iconShadowPath = Path()
+    private val shadowBounds = RectF()
     private val labelFontMetrics = Paint.FontMetrics()
 
     private var config = NativeAppListConfig()
     private val iconRenderOwner = NativeAppListIconRenderOwner()
+    private var boundRow: NativeAppListBoundRow<Bitmap>? = null
     private var label: String = ""
     private var geometryDirty = true
     private var folderHover = false
+    private var glidePressed = false
     private var moveTranslationX = 0f
     private var moveTranslationY = 0f
+    private var previewTranslationX = 0f
+    private var previewTranslationY = 0f
     private var dragTranslationY = 0f
     private var dragTranslationX = 0f
     private var flowTranslationY = 0f
@@ -61,6 +75,7 @@ internal class NativeAppListRowView(
     private var dragVisual = false
     private var interactionAnimator: ValueAnimator? = null
     private var iconBlurRadiusBucketPx = 0
+    private var liteSaturationBucket = 0
     private val iconEffectRenderer: NativeIconEffectRenderer? =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             RenderNodeNativeIconEffectRenderer()
@@ -81,6 +96,7 @@ internal class NativeAppListRowView(
         config: NativeAppListResolvedConfig,
     ) {
         applyConfig(config)
+        boundRow = row
         iconRenderOwner.bind(row.icon)
         iconEffectRenderer?.invalidateContent()
         label = row.entry.label
@@ -116,15 +132,24 @@ internal class NativeAppListRowView(
 
     fun clearBinding() {
         iconRenderOwner.clear()
+        boundRow = null
         iconEffectRenderer?.discardContent()
         label = ""
         contentDescription = null
+        // A recycled holder can be drawn once before its next bind. Clear all
+        // geometry paths here so a previous icon/shadow never flashes in that
+        // hand-off frame.
+        iconClipPath.reset()
+        iconShadowPath.reset()
+        fallbackPath.reset()
+        geometryDirty = true
         setOnClickListener(null)
         setOnLongClickListener(null)
         isClickable = false
         isLongClickable = false
         isPressed = false
         folderHover = false
+        glidePressed = false
         dragVisual = false
         interactionAnimator?.cancel()
         interactionAnimator = null
@@ -137,6 +162,8 @@ internal class NativeAppListRowView(
         translationY = 0f
         moveTranslationX = 0f
         moveTranslationY = 0f
+        previewTranslationX = 0f
+        previewTranslationY = 0f
         dragTranslationY = 0f
         dragTranslationX = 0f
         flowTranslationY = 0f
@@ -144,6 +171,7 @@ internal class NativeAppListRowView(
         contentTranslationY = 0f
         rotation = 0f
         setIconBlurRadiusPx(0f, NativeBlurTier.OFF)
+        setIconSaturation(1f)
         invalidate()
     }
 
@@ -166,6 +194,13 @@ internal class NativeAppListRowView(
         invalidate()
     }
 
+    fun setGlidePressedState(enabled: Boolean) {
+        if (glidePressed == enabled) return
+        glidePressed = enabled
+        updateInteractionScale()
+        invalidate()
+    }
+
     fun setVisualScale(scale: Float) {
         val next = scale.takeIf(Float::isFinite)?.coerceAtLeast(0f) ?: 1f
         if (visualScale == next) return
@@ -177,6 +212,8 @@ internal class NativeAppListRowView(
 
     fun iconBlurRadiusForOverlay(): Float = iconBlurRadiusBucketPx.toFloat()
 
+    fun boundRowForOverlay(): NativeAppListBoundRow<Bitmap>? = boundRow
+
     fun setDragVisualState(enabled: Boolean) {
         if (dragVisual == enabled) return
         dragVisual = enabled
@@ -187,6 +224,28 @@ internal class NativeAppListRowView(
         moveTranslationX = x
         moveTranslationY = y
         applyCompositeTranslation()
+    }
+
+    fun setPreviewTranslation(x: Float, y: Float) {
+        val nextX = x.takeIf(Float::isFinite) ?: 0f
+        val nextY = y.takeIf(Float::isFinite) ?: 0f
+        if (previewTranslationX == nextX && previewTranslationY == nextY) return
+        previewTranslationX = nextX
+        previewTranslationY = nextY
+        applyCompositeTranslation()
+    }
+
+    fun previewTranslationX(): Float = previewTranslationX
+
+    fun previewTranslationY(): Float = previewTranslationY
+
+    fun setIconSaturation(saturation: Float) {
+        val bucket = quantizeNativeLiteSaturation(saturation)
+        if (liteSaturationBucket == bucket) return
+        liteSaturationBucket = bucket
+        iconPaint.colorFilter = NativeLiteIconEffectCache.filterForBucket(bucket)
+        iconEffectRenderer?.invalidateContent()
+        invalidate()
     }
 
     fun setDragTranslationY(y: Float) {
@@ -217,18 +276,26 @@ internal class NativeAppListRowView(
     }
 
     fun positionTranslationYWithoutFlow(): Float =
-        moveTranslationY + dragTranslationY + contentTranslationY
+        moveTranslationY + previewTranslationY + dragTranslationY + contentTranslationY
 
-    fun positionTranslationXWithoutFlow(): Float = moveTranslationX + dragTranslationX
+    fun positionTranslationXWithoutFlow(): Float =
+        moveTranslationX + previewTranslationX + dragTranslationX
 
     private fun applyCompositeTranslation() {
-        translationX = moveTranslationX + dragTranslationX + flowTranslationX
+        translationX =
+            moveTranslationX + previewTranslationX + dragTranslationX + flowTranslationX
         translationY =
-            moveTranslationY + dragTranslationY + flowTranslationY + contentTranslationY
+            moveTranslationY + previewTranslationY + dragTranslationY +
+            flowTranslationY + contentTranslationY
     }
 
     private fun updateInteractionScale() {
-        val target = nativeInteractionScale(isPressed, dragVisual, folderHover)
+        val target = nativeInteractionScale(
+            pressed = isPressed,
+            dragged = dragVisual,
+            folderHover = folderHover,
+            glidePressed = glidePressed,
+        )
         if (target == interactionScale) return
         interactionAnimator?.cancel()
         if (!isLaidOut) {
@@ -292,6 +359,18 @@ internal class NativeAppListRowView(
         return top + iconBounds.centerY() + positionTranslationYWithoutFlow()
     }
 
+    fun iconCenterXInParentWithoutPreviewOrFlow(): Float {
+        ensureGeometry()
+        return left + iconBounds.centerX() +
+            moveTranslationX + dragTranslationX
+    }
+
+    fun iconCenterYInParentWithoutPreviewOrFlow(): Float {
+        ensureGeometry()
+        return top + iconBounds.centerY() +
+            moveTranslationY + dragTranslationY + contentTranslationY
+    }
+
     fun iconWidthForSafeGeometry(): Float {
         ensureGeometry()
         return iconBounds.width()
@@ -300,6 +379,26 @@ internal class NativeAppListRowView(
     fun iconHeightForSafeGeometry(): Float {
         ensureGeometry()
         return iconBounds.height()
+    }
+
+    /** Strict transformed icon-center hit used only for folder dwell. */
+    fun containsTransformedIconPoint(
+        parentX: Float,
+        parentY: Float,
+        centerFraction: Float,
+    ): Boolean {
+        if (!parentX.isFinite() || !parentY.isFinite()) return false
+        ensureGeometry()
+        ensureCenteredTransformPivot()
+        val fraction = centerFraction.coerceIn(0f, 1f)
+        val transformedCenterX = left + translationX + pivotX +
+            (iconBounds.centerX() - pivotX) * scaleX
+        val transformedCenterY = top + translationY + pivotY +
+            (iconBounds.centerY() - pivotY) * scaleY
+        val halfWidth = iconBounds.width() * abs(scaleX) * fraction / 2f
+        val halfHeight = iconBounds.height() * abs(scaleY) * fraction / 2f
+        return parentX in (transformedCenterX - halfWidth)..(transformedCenterX + halfWidth) &&
+            parentY in (transformedCenterY - halfHeight)..(transformedCenterY + halfHeight)
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -375,6 +474,10 @@ internal class NativeAppListRowView(
             )
         }
 
+        if (config.iconShadowEnabled) {
+            canvas.drawPath(iconShadowPath, iconShadowPaint)
+        }
+
         if (iconBlurRadiusBucketPx > 0 && iconEffectRenderer != null) {
             iconEffectRenderer.draw(canvas, width, height, drawIconContentBlock)
         } else {
@@ -397,13 +500,22 @@ internal class NativeAppListRowView(
             canvas.restoreToCount(saveCount)
         }
 
-        if (isPressed || folderHover) {
-            canvas.drawRoundRect(
-                rowBounds,
-                config.rowBorder.cornerRadiusPx,
-                config.rowBorder.cornerRadiusPx,
-                pressedPaint,
-            )
+        if (isPressed || folderHover || glidePressed) {
+            val overlayPaint = if (glidePressed && !isPressed && !folderHover) {
+                glidePressedPaint
+            } else {
+                pressedPaint
+            }
+            if (config.iconShape == NativeAppListIconShape.CIRCLE) {
+                canvas.drawPath(iconClipPath, overlayPaint)
+            } else {
+                canvas.drawRoundRect(
+                    rowBounds,
+                    config.rowBorder.cornerRadiusPx,
+                    config.rowBorder.cornerRadiusPx,
+                    overlayPaint,
+                )
+            }
         }
     }
 
@@ -448,6 +560,10 @@ internal class NativeAppListRowView(
         labelPaint.color = config.palette.labelColorArgb.toInt()
         labelPaint.textSize = config.labelTextSizePx
         pressedPaint.color = config.palette.pressedOverlayColorArgb.toInt()
+        val pressedColor = config.palette.pressedOverlayColorArgb.toInt()
+        val glideAlpha = ((pressedColor ushr 24) * (5f / 12f)).roundToInt()
+            .coerceIn(0, 255)
+        glidePressedPaint.color = (pressedColor and 0x00ffffff) or (glideAlpha shl 24)
         fallbackBackgroundPaint.color =
             config.palette.fallbackIconBackgroundColorArgb.toInt()
         fallbackForegroundPaint.color =
@@ -500,18 +616,39 @@ internal class NativeAppListRowView(
         )
 
         iconClipPath.reset()
+        iconShadowPath.reset()
         when (config.iconShape) {
-            NativeAppListIconShape.CIRCLE -> iconClipPath.addCircle(
-                iconBounds.centerX(),
-                iconBounds.centerY(),
-                min(iconBounds.width(), iconBounds.height()) / 2f,
-                Path.Direction.CW,
-            )
+            NativeAppListIconShape.CIRCLE -> {
+                iconClipPath.addCircle(
+                    iconBounds.centerX(),
+                    iconBounds.centerY(),
+                    min(iconBounds.width(), iconBounds.height()) / 2f,
+                    Path.Direction.CW,
+                )
+                val shadowOffset = (iconBounds.height() * 0.055f).coerceAtLeast(1f)
+                iconShadowPath.addCircle(
+                    iconBounds.centerX(),
+                    iconBounds.centerY() + shadowOffset,
+                    min(iconBounds.width(), iconBounds.height()) * 0.52f,
+                    Path.Direction.CW,
+                )
+            }
             NativeAppListIconShape.ROUNDED_RECT -> {
                 val radius = config.iconCornerRadiusPx.coerceAtMost(
                     min(iconBounds.width(), iconBounds.height()) / 2f,
                 )
                 iconClipPath.addRoundRect(iconBounds, radius, radius, Path.Direction.CW)
+                val shadowOffset = (iconBounds.height() * 0.055f).coerceAtLeast(1f)
+                val shadowSpread = (iconBounds.width() * 0.02f).coerceAtLeast(0.5f)
+                shadowBounds.set(iconBounds)
+                shadowBounds.inset(-shadowSpread, -shadowSpread)
+                shadowBounds.offset(0f, shadowOffset)
+                iconShadowPath.addRoundRect(
+                    shadowBounds,
+                    radius + shadowSpread,
+                    radius + shadowSpread,
+                    Path.Direction.CW,
+                )
             }
         }
 

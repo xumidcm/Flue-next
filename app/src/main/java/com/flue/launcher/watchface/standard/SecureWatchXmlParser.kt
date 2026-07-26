@@ -36,7 +36,7 @@ internal object SecureWatchXmlParser {
         "http://javax.xml.XMLConstants/property/accessExternalSchema"
 
     /** The archive validator is stricter; this bound also protects direct reads. */
-    const val DEFAULT_MAX_BYTES: Long = 24L * 1024L * 1024L
+    const val DEFAULT_MAX_BYTES: Long = 4L * 1024L * 1024L
 
     fun parse(
         file: File,
@@ -61,13 +61,15 @@ internal object SecureWatchXmlParser {
             configureFactory?.invoke(this)
             harden(this)
         }
-        return factory.newDocumentBuilder().apply {
+        val document = factory.newDocumentBuilder().apply {
             // This must remain installed even when a provider ignores one or
             // more of the feature names above.
             setEntityResolver { _, _ ->
                 throw SAXException("External XML entities are not allowed")
             }
         }.parse(ByteArrayInputStream(bytes))
+        rejectExternalXmlFeatures(document)
+        return document
     }
 
     private fun harden(factory: DocumentBuilderFactory) {
@@ -80,6 +82,7 @@ internal object SecureWatchXmlParser {
         bestEffort { factory.setFeature(EXTERNAL_PARAMETER_ENTITIES_FEATURE, false) }
         bestEffort { factory.setFeature(LOAD_EXTERNAL_DTD_FEATURE, false) }
         bestEffort { factory.isValidating = false }
+        bestEffort { factory.isNamespaceAware = true }
         bestEffort { factory.setXIncludeAware(false) }
         bestEffort { factory.isExpandEntityReferences = false }
         bestEffort { factory.setAttribute(ACCESS_EXTERNAL_DTD_PROPERTY, "") }
@@ -129,6 +132,32 @@ internal object SecureWatchXmlParser {
         }
     }
 
+    private fun rejectExternalXmlFeatures(document: Document) {
+        val elements = document.getElementsByTagName("*")
+        for (index in 0 until elements.length) {
+            val element = elements.item(index)
+            val tagName = element.nodeName.orEmpty()
+            if (
+                element.namespaceURI == XINCLUDE_NAMESPACE ||
+                tagName.equals("xi:include", ignoreCase = true) ||
+                (tagName.contains(':') && tagName.substringAfter(':').equals("include", true))
+            ) {
+                throw IllegalArgumentException("watch.xml contains forbidden XInclude content")
+            }
+            val attributes = element.attributes ?: continue
+            for (attributeIndex in 0 until attributes.length) {
+                val attribute = attributes.item(attributeIndex)
+                val localName = attribute.localName ?: attribute.nodeName.substringAfter(':')
+                if (
+                    (attribute.namespaceURI == XML_SCHEMA_INSTANCE_NAMESPACE || attribute.nodeName.contains(':')) &&
+                    (localName == "schemaLocation" || localName == "noNamespaceSchemaLocation")
+                ) {
+                    throw IllegalArgumentException("watch.xml contains an external schema reference")
+                }
+            }
+        }
+    }
+
     private fun containsAsciiToken(bytes: ByteArray, token: ByteArray): Boolean {
         var matched = 0
         bytes.forEach { raw ->
@@ -174,4 +203,7 @@ internal object SecureWatchXmlParser {
         0xa7.toByte(),
         0x94.toByte(),
     )
+
+    private const val XINCLUDE_NAMESPACE = "http://www.w3.org/2001/XInclude"
+    private const val XML_SCHEMA_INSTANCE_NAMESPACE = "http://www.w3.org/2001/XMLSchema-instance"
 }

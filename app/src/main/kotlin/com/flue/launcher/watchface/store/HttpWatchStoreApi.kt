@@ -7,6 +7,7 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 
 data class WatchStoreHttpConfig(
     val connectTimeoutMs: Int = 10_000,
@@ -49,12 +50,21 @@ class HttpWatchStoreApi(
 
     override fun downloadPreview(id: String, destination: File): File {
         val url = WatchStoreUrlPolicy.preview(base, id)
-        return download(url, destination, MAX_PREVIEW_BYTES, expectPreview = true)
+        return download(url, destination, MAX_PREVIEW_BYTES, expectPreview = true, onProgress = null)
     }
 
     override fun downloadWatchFace(id: String, destination: File): File {
         val url = WatchStoreUrlPolicy.download(base, id)
-        return download(url, destination, MAX_WATCH_BYTES, expectPreview = false)
+        return download(url, destination, MAX_WATCH_BYTES, expectPreview = false, onProgress = null)
+    }
+
+    override fun downloadWatchFace(
+        id: String,
+        destination: File,
+        onProgress: (bytes: Long, totalBytes: Long?) -> Unit,
+    ): File {
+        val url = WatchStoreUrlPolicy.download(base, id)
+        return download(url, destination, MAX_WATCH_BYTES, expectPreview = false, onProgress = onProgress)
     }
 
     private fun <T> requestJson(
@@ -75,6 +85,7 @@ class HttpWatchStoreApi(
         destination: File,
         maxBytes: Long,
         expectPreview: Boolean,
+        onProgress: ((bytes: Long, totalBytes: Long?) -> Unit)?,
     ): File {
         if (destination.isDirectory) throw IllegalArgumentException("Download destination is a directory")
         destination.parentFile?.takeIf { !it.exists() }?.let { parent ->
@@ -89,7 +100,7 @@ class HttpWatchStoreApi(
                 if (length > maxBytes) throw WatchStorePayloadTooLargeException(maxBytes)
                 connection.inputStream.use { input ->
                     destination.outputStream().use { output ->
-                        copyLimited(input, output, maxBytes)
+                        copyLimited(input, output, maxBytes, connection.contentLengthLong.takeIf { it >= 0L }, onProgress)
                     }
                 }
                 if (!destination.isFile || destination.length() == 0L) {
@@ -109,8 +120,12 @@ class HttpWatchStoreApi(
         try {
             while (true) {
                 // The endpoint and every redirect are validated before a socket is opened.
-                if (!current.scheme.equals("https", ignoreCase = true)) {
-                    throw WatchStoreRedirectException("Watch store connections must use HTTPS")
+                try {
+                    WatchStoreUrlPolicy.requirePublicHttps(current)
+                } catch (error: IllegalArgumentException) {
+                    throw WatchStoreRedirectException(
+                        error.message ?: "Watch store connection target is unsafe",
+                    )
                 }
                 val connection = connectionFactory(current.toURL())
                 connection.requestMethod = "GET"
@@ -145,6 +160,10 @@ class HttpWatchStoreApi(
             }
         } catch (error: WatchStoreException) {
             throw error
+        } catch (cancelled: CancellationException) {
+            // Cancellation is control flow. Wrapping it as a store failure
+            // makes the UI retry an operation the user explicitly cancelled.
+            throw cancelled
         } catch (error: Throwable) {
             throw WatchStoreException("Watch store request failed", error)
         }
@@ -176,7 +195,9 @@ class HttpWatchStoreApi(
     companion object {
         const val MAX_JSON_BYTES: Long = 2L * 1024L * 1024L
         const val MAX_PREVIEW_BYTES: Long = 6L * 1024L * 1024L
-        const val MAX_WATCH_BYTES: Long = 32L * 1024L * 1024L
+        // Keep transport and installer budgets aligned. A lower HTTP limit
+        // would reject valid font/media-heavy packages before validation.
+        const val MAX_WATCH_BYTES: Long = 96L * 1024L * 1024L
         private const val MAX_ERROR_BYTES = 16L * 1024L
         private val REDIRECT_STATUSES = setOf(301, 302, 303, 307, 308)
 
@@ -200,6 +221,8 @@ class HttpWatchStoreApi(
             input: java.io.InputStream,
             output: java.io.OutputStream,
             maxBytes: Long,
+            totalBytes: Long? = null,
+            onProgress: ((bytes: Long, totalBytes: Long?) -> Unit)? = null,
         ) {
             val buffer = ByteArray(32 * 1024)
             var total = 0L
@@ -209,6 +232,7 @@ class HttpWatchStoreApi(
                 total += count
                 if (total > maxBytes) throw WatchStorePayloadTooLargeException(maxBytes)
                 output.write(buffer, 0, count)
+                onProgress?.invoke(total, totalBytes)
             }
         }
     }

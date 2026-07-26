@@ -56,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
+import com.flue.launcher.ui.common.flueElasticNestedScroll
 import kotlinx.coroutines.delay
 
 @Composable
@@ -77,6 +78,7 @@ fun AppShortcutOverlay(
     var renameText by remember(app.componentKey) { mutableStateOf(app.label) }
     val dismissInteraction = remember { MutableInteractionSource() }
     val blockInteraction = remember { MutableInteractionSource() }
+    val panelScrollState = rememberScrollState()
 
     fun animateDismiss() {
         dismissing = true
@@ -159,7 +161,8 @@ fun AppShortcutOverlay(
                     .width(panelWidth)
                     .heightIn(max = panelMaxHeight)
                     .padding(horizontal = 8.dp, vertical = 12.dp)
-                    .verticalScroll(rememberScrollState())
+                    .flueElasticNestedScroll(panelScrollState)
+                    .verticalScroll(panelScrollState)
                     .graphicsLayer {
                         scaleX = animScale
                         scaleY = animScale

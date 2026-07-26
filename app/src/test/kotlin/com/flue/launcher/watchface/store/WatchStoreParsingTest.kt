@@ -1,7 +1,9 @@
 package com.flue.launcher.watchface.store
 
 import java.net.URI
+import java.net.InetAddress
 import java.nio.charset.StandardCharsets
+import kotlinx.coroutines.CancellationException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -68,6 +70,24 @@ class WatchStoreParsingTest {
     }
 
     @Test
+    fun `url policy rejects hostnames resolving to private addresses or no addresses`() {
+        val request = URI("https://watch.example/api")
+        assertThrows(IllegalArgumentException::class.java) {
+            WatchStoreUrlPolicy.requirePublicHttps(request) {
+                arrayOf(InetAddress.getByAddress(byteArrayOf(10, 0, 0, 7)))
+            }
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            WatchStoreUrlPolicy.requirePublicHttps(request) { emptyArray() }
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            WatchStoreUrlPolicy.requirePublicHttps(request) {
+                throw java.net.UnknownHostException("unresolved")
+            }
+        }
+    }
+
+    @Test
     fun `parser reads categories page and detail contract`() {
         val categories = WatchStoreJsonParser.categories(
             """{"data":[{"id":"cat-1","name":"Sport","slug":"sport"}]}""",
@@ -118,6 +138,18 @@ class WatchStoreParsingTest {
                 "123456789".byteInputStream(StandardCharsets.UTF_8),
                 8,
             )
+        }
+    }
+
+    @Test
+    fun `transport preserves coroutine cancellation`() {
+        val api = HttpWatchStoreApi(
+            baseUrl = "https://8.8.8.8/api",
+            connectionFactory = { throw CancellationException("cancelled") },
+        )
+
+        assertThrows(CancellationException::class.java) {
+            api.getCategories()
         }
     }
 }

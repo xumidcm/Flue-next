@@ -94,11 +94,6 @@ private const val LIST_FOLDER_HOVER_MAX_SPEED_DP_PER_MS = 0.55f
 private const val LIST_AUTO_SCROLL_EDGE_DP = 84f
 private const val LIST_AUTO_SCROLL_MAX_PX = 30f
 private const val LIST_EDGE_ITEM_BLUR_DP = 4f
-private const val FAST_FLOW_SLOW_TOP_FRACTION = 0.30f
-private const val FAST_FLOW_SLOW_BOTTOM_FRACTION = 0.70f
-private const val FAST_FLOW_SLOW_SCALE = 0.56f
-private const val FAST_FLOW_FAST_SCALE = 1.85f
-private const val FAST_FLOW_MAX_OFFSET_PX = 260f
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -112,7 +107,6 @@ fun ListDrawerScreen(
     fisheyeRangeRows: Int = 4,
     fisheyeStrengthPercent: Int = 100,
     edgeSpacingCompressionEnabled: Boolean = true,
-    fastFlowAnimationEnabled: Boolean = false,
     twoToneIconsEnabled: Boolean = false,
     iconShadowEnabled: Boolean = true,
     themeColor: Color = Color(0xFF7BE8FF),
@@ -611,8 +605,6 @@ fun ListDrawerScreen(
                     }
                 }
             }
-            val fastFlowSlowTopY = screenHeightPx * FAST_FLOW_SLOW_TOP_FRACTION
-            val fastFlowSlowBottomY = screenHeightPx * FAST_FLOW_SLOW_BOTTOM_FRACTION
             val autoScrollEdgePx = with(density) { LIST_AUTO_SCROLL_EDGE_DP.dp.toPx() }
             val estimatedItemHeight = scaledIconSize.coerceAtLeast(24.dp) + scaledRowVerticalPadding * 2f
             val centeredPadding = ((maxHeight - estimatedItemHeight) / 2f).coerceAtLeast(8.dp)
@@ -731,15 +723,6 @@ fun ListDrawerScreen(
                         scrollTick = if (effectiveListFisheyeEnabled) fisheyeScrollTick else 0
                     )
                     val rowCenterY = itemInfo?.let { it.offset + it.size / 2f } ?: listViewportCenterY
-                    val flowOffset = computeFastFlowOffset(
-                        rowCenterY = rowCenterY,
-                        screenCenterY = listViewportCenterY,
-                        slowTopY = fastFlowSlowTopY,
-                        slowBottomY = fastFlowSlowBottomY,
-                        enabled = fastFlowAnimationEnabled &&
-                            dragFromIndex == null &&
-                            longPressedApp == null
-                    )
                     val displayIcon = remember(
                         app.componentKey,
                         app.cachedIcon,
@@ -773,7 +756,7 @@ fun ListDrawerScreen(
                     ).value
                     val displayDisplacement = if (isDragged) dragOffsetY else animatedDisplacement
                     val visualCenterY =
-                        rowCenterY + displayDisplacement + flowOffset + overscroll.value
+                        rowCenterY + displayDisplacement + overscroll.value
                     val itemEdgeBlur = computeAppListEdgeBlur(
                         centerY = visualCenterY,
                         screenHeight = screenHeightPx,
@@ -820,7 +803,7 @@ fun ListDrawerScreen(
                             }
                             .graphicsLayer {
                                 val targetScale = itemScale * pressedScale
-                                translationY = if (isDragged) 0f else displayDisplacement + flowOffset
+                                translationY = if (isDragged) 0f else displayDisplacement
                                 scaleX = targetScale
                                 scaleY = targetScale
                                 val rowAlpha = if (isDragged || isSettling) {
@@ -848,7 +831,7 @@ fun ListDrawerScreen(
                                 onClick = {
                                     if (longPressedApp != null || dragFromIndex != null) return@combinedClickable
                                     val centerY = (itemCenters[index] ?: rowCenterY)
-                                        .let { it + displayDisplacement + flowOffset }
+                                        .let { it + displayDisplacement }
                                         .coerceIn(0f, screenHeightPx)
                                     onAppClick(
                                         app,
@@ -1085,28 +1068,6 @@ private fun computeItemScale(
     val maxDist = (rowHeight * rangeRows.coerceIn(1, 8)).coerceIn(rowHeight, screenHeight)
     val t = (dist / maxDist).coerceIn(0f, 1f)
     return 1f - (1f - minScale) * t
-}
-
-private fun computeFastFlowOffset(
-    rowCenterY: Float,
-    screenCenterY: Float,
-    slowTopY: Float,
-    slowBottomY: Float,
-    enabled: Boolean
-): Float {
-    if (!enabled) return 0f
-    val transformedY = when {
-        rowCenterY < slowTopY -> {
-            screenCenterY + (slowTopY - screenCenterY) * FAST_FLOW_SLOW_SCALE +
-                (rowCenterY - slowTopY) * FAST_FLOW_FAST_SCALE
-        }
-        rowCenterY > slowBottomY -> {
-            screenCenterY + (slowBottomY - screenCenterY) * FAST_FLOW_SLOW_SCALE +
-                (rowCenterY - slowBottomY) * FAST_FLOW_FAST_SCALE
-        }
-        else -> screenCenterY + (rowCenterY - screenCenterY) * FAST_FLOW_SLOW_SCALE
-    }
-    return (transformedY - rowCenterY).coerceIn(-FAST_FLOW_MAX_OFFSET_PX, FAST_FLOW_MAX_OFFSET_PX)
 }
 
 private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awaitLongPressByTimeoutOrCancel(

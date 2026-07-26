@@ -123,6 +123,7 @@ internal class NativeHoneycombLayoutManager(
                 row.setFlowTranslation(flowTranslationX, flowTranslationY)
                 row.setVisualScale(visual.scale)
                 row.setIconBlurRadiusPx(visual.blurRadiusPx, config.effectiveBlurTier())
+                row.setIconSaturation(visual.saturation)
             } else {
                 child.translationX = visual.translationX
                 child.translationY = visual.translationY

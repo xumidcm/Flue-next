@@ -17,11 +17,22 @@ internal interface NativeAppListDragHost {
     fun beginDragPreview(source: AppItemKey): Boolean = false
     fun previewMove(source: AppItemKey, target: AppItemKey): Boolean = false
     fun finishDragPreview(commit: Boolean): AppListCommand.Move? = null
-    fun dispatch(command: AppListCommand)
+    fun completeDragPreview(accepted: Boolean) = Unit
+    fun previewFolderCommit(source: AppItemKey, target: AppItemKey): Boolean = false
+    fun discardDragPreviewAwaitingAuthoritative() = Unit
+    /**
+     * Dispatches a command and reports whether the owner accepted it.
+     *
+     * Folder creation is optimistic while the pointer is still owned by the
+     * drag controller.  The boolean lets the controller keep that preview
+     * when the repository rejects the command, so the normal move rollback
+     * path can restore it exactly once.
+     */
+    fun dispatch(command: AppListCommand): Boolean
     fun suppressLongClick(key: AppItemKey, suppress: Boolean)
     fun beginDrag(key: AppItemKey, pointerX: Float, pointerY: Float)
     fun updateDrag(pointerX: Float, pointerY: Float)
-    fun endDrag()
+    fun endDrag(committed: Boolean)
     fun setFolderHover(key: AppItemKey?)
     fun scrollBy(deltaPx: Float)
     fun performDragHaptic()
@@ -29,8 +40,10 @@ internal interface NativeAppListDragHost {
 
 internal interface NativeDragScheduler {
     val nowMillis: Long
-    fun postDelayed(delayMillis: Long, action: () -> Unit)
-    fun cancelDelayed()
+    fun postLongPress(delayMillis: Long, action: () -> Unit)
+    fun cancelLongPress()
+    fun postFolderHover(delayMillis: Long, action: () -> Unit)
+    fun cancelFolderHover()
     fun postFrame(action: () -> Unit)
     fun cancelFrame()
 }
@@ -55,8 +68,11 @@ internal class NativeAppListDragController(
     private var lastPointerX = 0f
     private var lastPointerY = 0f
     private var lastPointerAtMillis = 0L
+    private var lastAutoScrollFrameAtMillis: Long? = null
     private var frameScheduled = false
     private var folderCommandDispatched = false
+    private var scheduledFolderTarget: AppItemKey? = null
+    private var scheduledFolderDeadlineMillis = Long.MIN_VALUE
     private var released = false
 
     val isActive: Boolean
@@ -76,7 +92,7 @@ internal class NativeAppListDragController(
         machine.onDown(source, x, y, eventTimeMillis, policy)
         suppressedLongClickKey = source
         host.suppressLongClick(source, true)
-        scheduler.postDelayed(policy.longPressMillis) {
+        scheduler.postLongPress(policy.longPressMillis) {
             if (!released) process(machine.onTime(scheduler.nowMillis))
         }
         return false
@@ -89,22 +105,27 @@ internal class NativeAppListDragController(
         lastPointerX = x
         lastPointerY = y
         lastPointerAtMillis = eventTimeMillis
+        val reorderTarget = host.reorderKeyAt(x, y)
+        val folderCandidate = host.folderKeyAt(x, y).takeIf {
+            allowFolderCreation()
+        }
         val effects = machine.onMove(
             pointerX = x,
             pointerY = y,
-            targetKey = host.reorderKeyAt(x, y),
+            targetKey = reorderTarget,
             speedPxPerMs = speed,
             nowMillis = eventTimeMillis,
-            folderCandidateKey = host.folderKeyAt(x, y),
+            folderCandidateKey = folderCandidate,
         )
         process(effects)
         if (!machine.isTracking) {
-            scheduler.cancelDelayed()
+            scheduler.cancelLongPress()
             restoreLongClick()
             return false
         }
         if (machine.isDragging) {
             host.updateDrag(x, y)
+            updateFolderHoverSchedule(folderCandidate, speed, eventTimeMillis)
             updateAutoScrollSchedule()
         }
         return machine.isDragging || machine.hasLongPressed
@@ -116,7 +137,17 @@ internal class NativeAppListDragController(
         lastPointerY = y
         lastPointerAtMillis = eventTimeMillis
         val consumed = machine.isDragging || machine.hasLongPressed
-        process(machine.onUp(host.folderKeyAt(x, y)))
+        val sampledFolderTarget = host.folderKeyAt(x, y).takeIf {
+            allowFolderCreation()
+        }
+        val folderTarget = sampledFolderTarget.takeIf { it == machine.folderHoverTarget }
+        val reorderTarget = host.reorderKeyAt(x, y)
+        process(
+            machine.onUp(
+                currentFolderTargetKey = folderTarget,
+                currentReorderTargetKey = reorderTarget,
+            ),
+        )
         cancelCallbacks()
         restoreLongClick()
         return consumed
@@ -127,6 +158,23 @@ internal class NativeAppListDragController(
         val consumed = machine.isDragging || machine.hasLongPressed
         cancelCurrentGesture()
         return consumed
+    }
+
+    /**
+     * Cancels a gesture after a second pointer arrives, but keeps the source
+     * row's long-click suppressed until the real terminal event. Otherwise
+     * Android's child View can fire its own long-click a few hundred ms later.
+     */
+    fun onAdditionalPointer(): Boolean {
+        if (released || !machine.isTracking) return false
+        val consumed = machine.isDragging || machine.hasLongPressed
+        process(machine.cancel())
+        cancelCallbacks()
+        return consumed
+    }
+
+    fun finishAdditionalPointer() {
+        restoreLongClick()
     }
 
     fun reconcileCurrentKeys() {
@@ -155,9 +203,15 @@ internal class NativeAppListDragController(
                 NativeDragEffect.DismissActions ->
                     host.dispatch(AppListCommand.DismissActions)
                 is NativeDragEffect.StartDrag -> {
-                    host.performDragHaptic()
                     folderCommandDispatched = false
-                    host.beginDragPreview(effect.key)
+                    if (!host.beginDragPreview(effect.key)) {
+                        // The adapter snapshot changed after the long press.
+                        // Never create an overlay without an owned stable-key
+                        // preview; cancel the machine and restore input state.
+                        process(machine.cancel())
+                        return@forEach
+                    }
+                    host.performDragHaptic()
                     host.beginDrag(effect.key, lastPointerX, lastPointerY)
                 }
                 is NativeDragEffect.Move ->
@@ -166,20 +220,42 @@ internal class NativeAppListDragController(
                     host.setFolderHover(effect.target.takeIf { allowFolderCreation() })
                 is NativeDragEffect.CreateFolder ->
                     if (allowFolderCreation()) {
-                        host.planFolder(effect.source, effect.target)?.let { command ->
-                            folderCommandDispatched = true
-                            host.dispatch(command)
+                        val command = host.planFolder(effect.source, effect.target)
+                        if (command != null) {
+                            if (host.dispatch(command)) {
+                                host.previewFolderCommit(effect.source, effect.target)
+                                folderCommandDispatched = true
+                            } else {
+                                // The UI/repository rejected the folder
+                                // request.  The target remains a valid
+                                // reorder destination, so settle the
+                                // existing preview as a normal move.
+                            }
+                        } else {
+                            // A target rejected by the existing folder policy
+                            // remains a valid reorder destination, so keep the
+                            // already-running stable-key preview as a move.
                         }
                     }
                 NativeDragEffect.CommitDrag -> {
-                    host.finishDragPreview(commit = !folderCommandDispatched)
-                        ?.let(host::dispatch)
-                    host.endDrag()
+                    if (folderCommandDispatched) {
+                        // The repository command is now authoritative. Keep
+                        // the currently presented order until its new snapshot
+                        // arrives instead of submitting the captured original
+                        // rows and producing a reverse Diff animation.
+                        host.discardDragPreviewAwaitingAuthoritative()
+                        host.endDrag(committed = true)
+                    } else {
+                        val move = host.finishDragPreview(commit = true)
+                        val committed = move?.let(host::dispatch) == true
+                        host.completeDragPreview(committed)
+                        host.endDrag(committed = committed)
+                    }
                     folderCommandDispatched = false
                 }
                 NativeDragEffect.FinishDrag -> {
                     host.finishDragPreview(commit = false)
-                    host.endDrag()
+                    host.endDrag(committed = false)
                     folderCommandDispatched = false
                 }
             }
@@ -193,19 +269,101 @@ internal class NativeAppListDragController(
         if (delta == 0f) {
             cancelFrame()
         } else if (!frameScheduled) {
+            if (lastAutoScrollFrameAtMillis == null) {
+                lastAutoScrollFrameAtMillis = lastPointerAtMillis
+            }
             frameScheduled = true
             scheduler.postFrame(::onAutoScrollFrame)
         }
+    }
+
+    private fun updateFolderHoverSchedule(
+        candidate: AppItemKey?,
+        speedPxPerMs: Float,
+        eventTimeMillis: Long,
+    ) {
+        val policy = activePolicy ?: return
+        val eligible = candidate?.takeIf {
+            allowFolderCreation() &&
+                speedPxPerMs.isFinite() &&
+                speedPxPerMs <= policy.folderHoverMaxSpeedPxPerMs
+        }
+        if (machine.folderHoverTarget == eligible) {
+            cancelFolderHoverSchedule()
+            return
+        }
+        if (eligible == scheduledFolderTarget) return
+        cancelFolderHoverSchedule()
+        if (eligible == null) return
+
+        scheduledFolderTarget = eligible
+        scheduledFolderDeadlineMillis = maxOf(
+            eventTimeMillis,
+            scheduler.nowMillis,
+        ) + policy.folderHoverMillis
+        val delay = (scheduledFolderDeadlineMillis - scheduler.nowMillis).coerceAtLeast(0L)
+        scheduler.postFolderHover(delay) {
+            val expectedTarget = scheduledFolderTarget
+            val deadline = scheduledFolderDeadlineMillis
+            scheduledFolderTarget = null
+            scheduledFolderDeadlineMillis = Long.MIN_VALUE
+            if (
+                released ||
+                !machine.isDragging ||
+                expectedTarget == null ||
+                !allowFolderCreation()
+            ) {
+                return@postFolderHover
+            }
+            val currentTarget = host.folderKeyAt(lastPointerX, lastPointerY)
+            val now = maxOf(scheduler.nowMillis, deadline)
+            process(
+                machine.onMove(
+                    pointerX = lastPointerX,
+                    pointerY = lastPointerY,
+                    targetKey = host.reorderKeyAt(lastPointerX, lastPointerY),
+                    speedPxPerMs = 0f,
+                    nowMillis = now,
+                    folderCandidateKey = currentTarget.takeIf { it == expectedTarget },
+                ),
+            )
+        }
+    }
+
+    private fun cancelFolderHoverSchedule() {
+        if (scheduledFolderTarget == null) return
+        scheduler.cancelFolderHover()
+        scheduledFolderTarget = null
+        scheduledFolderDeadlineMillis = Long.MIN_VALUE
     }
 
     private fun onAutoScrollFrame() {
         frameScheduled = false
         if (released || !machine.isDragging) return
         val policy = activePolicy ?: return
-        val delta = nativeAutoScrollDelta(lastPointerY, host.viewportHeightPx, policy)
-        if (delta == 0f) return
+        val baseDelta = nativeAutoScrollDelta(lastPointerY, host.viewportHeightPx, policy)
+        if (baseDelta == 0f) {
+            lastAutoScrollFrameAtMillis = null
+            return
+        }
+        val nowMillis = scheduler.nowMillis
+        val previousFrameMillis = lastAutoScrollFrameAtMillis
+        val elapsedMillis = if (
+            previousFrameMillis == null || nowMillis <= previousFrameMillis
+        ) {
+            AUTO_SCROLL_REFERENCE_FRAME_MILLIS
+        } else {
+            (nowMillis - previousFrameMillis)
+                .toFloat()
+                .coerceIn(MIN_AUTO_SCROLL_FRAME_MILLIS, MAX_AUTO_SCROLL_FRAME_MILLIS)
+        }
+        lastAutoScrollFrameAtMillis = nowMillis
+        val delta = baseDelta * (elapsedMillis / AUTO_SCROLL_REFERENCE_FRAME_MILLIS)
         host.scrollBy(delta)
         host.updateDrag(lastPointerX, lastPointerY)
+        val folderCandidate = host.folderKeyAt(lastPointerX, lastPointerY).takeIf {
+            allowFolderCreation()
+        }
         process(
             machine.onMove(
                 pointerX = lastPointerX,
@@ -213,8 +371,13 @@ internal class NativeAppListDragController(
                 targetKey = host.reorderKeyAt(lastPointerX, lastPointerY),
                 speedPxPerMs = 0f,
                 nowMillis = scheduler.nowMillis,
-                folderCandidateKey = host.folderKeyAt(lastPointerX, lastPointerY),
+                folderCandidateKey = folderCandidate,
             ),
+        )
+        updateFolderHoverSchedule(
+            candidate = folderCandidate,
+            speedPxPerMs = 0f,
+            eventTimeMillis = scheduler.nowMillis,
         )
         updateAutoScrollSchedule()
     }
@@ -226,18 +389,30 @@ internal class NativeAppListDragController(
     }
 
     private fun cancelCallbacks() {
-        scheduler.cancelDelayed()
+        scheduler.cancelLongPress()
+        scheduler.cancelFolderHover()
+        scheduledFolderTarget = null
+        scheduledFolderDeadlineMillis = Long.MIN_VALUE
         cancelFrame()
     }
 
     private fun cancelFrame() {
-        if (!frameScheduled) return
-        frameScheduled = false
-        scheduler.cancelFrame()
+        lastAutoScrollFrameAtMillis = null
+        if (frameScheduled) {
+            frameScheduled = false
+            scheduler.cancelFrame()
+        }
     }
 
     private fun restoreLongClick() {
         suppressedLongClickKey?.let { host.suppressLongClick(it, false) }
         suppressedLongClickKey = null
     }
+
+    private companion object {
+        private const val AUTO_SCROLL_REFERENCE_FRAME_MILLIS = 1000f / 60f
+        private const val MIN_AUTO_SCROLL_FRAME_MILLIS = 1f
+        private const val MAX_AUTO_SCROLL_FRAME_MILLIS = 50f
+    }
+
 }

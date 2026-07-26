@@ -3,6 +3,8 @@ package com.flue.launcher.watchface.standard
 import org.w3c.dom.Element
 import org.w3c.dom.Node
 import java.io.File
+import java.io.InputStream
+import java.util.Locale
 
 enum class WatchmakerDefinitionVersion {
     FORMAT_1,
@@ -39,21 +41,54 @@ data class WatchmakerDefinition(
     val auxiliaryElements: List<WatchmakerXmlElement>,
 ) {
     val name: String get() = rootAttributes["name"].orEmpty()
-    val shape: String get() = rootAttributes["shape"].orEmpty().ifBlank { "R" }
+    val shape: WatchFaceShape get() = watchFaceShape(rootAttributes["shape"])
+    val rawShape: String? get() = rootAttributes["shape"]?.takeIf(String::isNotBlank)
     val designWidth: Int = 512
     val designHeight: Int = 512
 
     /** Unknown types are preserved in the IR instead of being silently dropped. */
     val unsupportedLayerTypes: Set<String> = layers
         .map { it.type }
-        .filterNot { it.lowercase() in SUPPORTED_LAYER_TYPES }
+        .filterNot { it.lowercase(Locale.ROOT) in SUPPORTED_LAYER_TYPES }
         .toSet()
+
+    val compatibilityReport: WatchCompatibilityReport by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        val values = buildList {
+            addAll(rootAttributes.values)
+            layers.forEach { layer ->
+                addAll(layer.attributes.values)
+                layer.children.collectAttributeValues(this)
+            }
+            auxiliaryElements.collectAttributeValues(this)
+        }
+        val unsupportedTags = values.asSequence()
+            .flatMap { value -> DYNAMIC_TAG_PATTERN.findAll(value).map { it.groupValues[1] } }
+            .filterNot(WatchmakerTagResolver::isKnown)
+            .toSet()
+        val unsupportedExpressions = values.asSequence()
+            .filter(::containsUnsupportedExpression)
+            .toSet()
+        WatchCompatibilityReport(
+            unsupportedLayerTypes = unsupportedLayerTypes,
+            unsupportedTags = unsupportedTags,
+            unsupportedExpressions = unsupportedExpressions,
+        )
+    }
 }
 
 /** Secure, lossless parser for Watchmaker 1.0 and Studio 2.0 watch.xml files. */
 class WatchmakerDefinitionParser {
     fun parse(file: File): WatchmakerDefinition {
         val document = SecureWatchXmlParser.parse(file)
+        return parseDocument(document)
+    }
+
+    fun parse(input: InputStream, maximumBytes: Long): WatchmakerDefinition {
+        val document = SecureWatchXmlParser.parse(input, maximumBytes)
+        return parseDocument(document)
+    }
+
+    private fun parseDocument(document: org.w3c.dom.Document): WatchmakerDefinition {
         val root = document.documentElement
             ?: throw IllegalArgumentException("watch.xml has no root element")
         require(root.tagName.equals("Watch", ignoreCase = true)) {
@@ -72,7 +107,7 @@ class WatchmakerDefinitionParser {
         val themes = mutableListOf<WatchmakerTheme>()
         root.childElements().forEach { child ->
             when {
-                child.tagName.equals("Layer", ignoreCase = true) -> layers += child.toLayer()
+                child.tagName.equals("Layer", ignoreCase = true) -> child.collectLayers(layers)
                 child.tagName.equals("ThemeSets", ignoreCase = true) -> {
                     child.childElements()
                         .filter { it.tagName.equals("ThemeSet", ignoreCase = true) }
@@ -83,10 +118,12 @@ class WatchmakerDefinitionParser {
                             )
                         }
                 }
-                else -> auxiliary += child.toModel()
+                else -> {
+                    child.collectLayers(layers)
+                    auxiliary += child.toModel()
+                }
             }
         }
-        validateLayerIdentity(version, layers)
         return WatchmakerDefinition(
             version = version,
             rootAttributes = rootAttributes,
@@ -96,35 +133,13 @@ class WatchmakerDefinitionParser {
         )
     }
 
-    private fun validateLayerIdentity(
-        version: WatchmakerDefinitionVersion,
-        layers: List<WatchmakerLayer>,
-    ) {
-        if (version == WatchmakerDefinitionVersion.FORMAT_1) return
-        val ids = HashSet<String>()
-        layers.forEach { layer ->
-            layer.id?.takeIf(String::isNotBlank)?.let { id ->
-                require(ids.add(id)) { "Duplicate Studio layer id: $id" }
-            }
-        }
-        val knownIds = ids.toSet()
-        layers.forEach { layer ->
-            val parent = layer.parentId?.takeIf(String::isNotBlank) ?: return@forEach
-            require(parent in knownIds) {
-                "Studio layer ${layer.id ?: layer.type} references missing parent $parent"
-            }
-        }
-        val parents = layers.associateNotNull { layer ->
-            layer.id?.let { it to layer.parentId }
-        }
-        parents.keys.forEach { id ->
-            val seen = HashSet<String>()
-            var cursor: String? = id
-            while (cursor != null) {
-                require(seen.add(cursor)) { "Studio layer hierarchy contains a cycle at $cursor" }
-                cursor = parents[cursor].orEmpty().ifBlank { null }
-            }
-        }
+}
+
+private fun List<WatchmakerXmlElement>.collectAttributeValues(destination: MutableList<String>) {
+    forEach { element ->
+        destination += element.attributes.values
+        element.text?.let(destination::add)
+        element.children.collectAttributeValues(destination)
     }
 }
 
@@ -137,6 +152,17 @@ private fun Element.toLayer(): WatchmakerLayer {
         attributes = attributes,
         children = childElements().map { it.toModel() },
     )
+}
+
+/**
+ * Studio exporters may wrap layers in `<Layers>`, folders or other extension
+ * nodes. Treat every descendant `<Layer>` as a render layer while preserving
+ * document order; malformed parent links are handled later by the tolerant
+ * stable-id forest builder instead of rejecting the complete face.
+ */
+private fun Element.collectLayers(destination: MutableList<WatchmakerLayer>) {
+    if (tagName.equals("Layer", ignoreCase = true)) destination += toLayer()
+    childElements().forEach { child -> child.collectLayers(destination) }
 }
 
 private fun Element.toModel(): WatchmakerXmlElement = WatchmakerXmlElement(
@@ -162,31 +188,59 @@ private fun Element.childElements(): List<Element> {
     return result
 }
 
-private fun <T, K, V> Iterable<T>.associateNotNull(transform: (T) -> Pair<K, V>?): Map<K, V> =
-    buildMap {
-        for (item in this@associateNotNull) transform(item)?.let { (key, value) -> put(key, value) }
-    }
-
 private val SUPPORTED_LAYER_TYPES = setOf(
     "image",
     "text",
     "ring",
     "progress",
     "image_cond",
-    "chart",
+    "image_gif",
+    "image_tap",
+    "gif",
+    "series",
+    "calendar",
     "text_curved",
     "text_ring",
     "markers",
     "markers_hm",
+    // WM_FORMAT_1.0/2.0 common data and vector layers.  `video` and `map`
+    // intentionally stay out of this set: they require a MediaPlayer/live
+    // map bridge and are reported as unsupported instead of being claimed as
+    // fully rendered by the Canvas runtime.
+    "chart",
+    "svg",
     "shape",
     "rounded",
-    "image_gif",
-    "video",
-    "map",
-    "series",
-    "calendar",
     "group",
-    "gif",
-    "image_tap",
-    "svg",
 )
+
+private val DYNAMIC_TAG_PATTERN = Regex("\\{([^{}]+)}")
+
+/**
+ * Side-effect-free numeric/boolean expressions are handled by the runtime's
+ * bounded evaluator. Functions, Lua/script actions and syntax outside that
+ * grammar stay in the report instead of being rendered as literal strings.
+ */
+private fun containsUnsupportedExpression(value: String): Boolean {
+    if (value.contains("lua:", ignoreCase = true) ||
+        value.contains("script:", ignoreCase = true)
+    ) {
+        return true
+    }
+    val hasBoundedFunction = value.contains("string.", ignoreCase = true) ||
+        value.contains("math.", ignoreCase = true) ||
+        Regex("\\b(?:tonumber|tostring|type)\\s*\\(", RegexOption.IGNORE_CASE)
+            .containsMatchIn(value)
+    val hasDynamicTag = DYNAMIC_TAG_PATTERN.containsMatchIn(value)
+    val hasComparisonOrBoolean = Regex(
+        "(?:==|~=|>=|<=|(?<![A-Za-z])>(?!=)|(?<![A-Za-z])<(?!=)|\\band\\b|\\bor\\b|\\bnot\\b)",
+        RegexOption.IGNORE_CASE,
+    ).containsMatchIn(value)
+    val hasArithmetic = Regex("[+*/%^]").containsMatchIn(value) || value.contains("..") ||
+        Regex("(?:}\\s*-\\s*(?:\\{|\\d)|(?:\\}|\\d)\\s*-\\s*\\{)")
+            .containsMatchIn(value)
+    val looksLikeExpression = hasBoundedFunction ||
+        hasDynamicTag && (hasComparisonOrBoolean || hasArithmetic) ||
+        (!hasDynamicTag && (hasComparisonOrBoolean || hasArithmetic) && value.contains("=="))
+    return looksLikeExpression && !WatchmakerExpressionEvaluator.supports(value)
+}

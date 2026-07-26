@@ -4,8 +4,11 @@ import android.content.Context
 import android.net.Uri
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.standard.SecureWatchXmlParser
+import com.flue.launcher.watchface.standard.WatchInstallMetadata
 import com.flue.launcher.watchface.standard.WatchArchiveValidator
+import com.flue.launcher.watchface.standard.WatchmakerLayer
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStorage
+import com.flue.launcher.watchface.standard.resolveWatchLayerParentIndices
 import org.w3c.dom.Document
 import org.w3c.dom.Element
 import org.w3c.dom.Node
@@ -34,8 +37,9 @@ import javax.xml.transform.stream.StreamResult
 
 /**
  * A cache-backed, lossless editing session for a standard Watchmaker .watch
- * directory.  The installed directory is copied before this object is
- * created; none of the mutating methods can reach the installed descriptor.
+ * directory. The installed directory is copied before this object is created;
+ * ordinary mutations target only the draft. [saveCurrentRevision] is the
+ * explicit, transactional opt-in for updating an existing logical ID.
  */
 class WatchEditorSession private constructor(
     val draftDirectory: File,
@@ -44,6 +48,8 @@ class WatchEditorSession private constructor(
     private val removeDraftOnClose: Boolean,
     private var document: Document,
     initialLayerKeys: List<WatchEditorLayerKey>?,
+    val logicalId: String? = null,
+    private val installedDirectory: File? = null,
 ) : Closeable {
     private data class EditorState(
         val xml: ByteArray,
@@ -64,6 +70,12 @@ class WatchEditorSession private constructor(
     private var savedXml: ByteArray
     private var savedResourcePaths: Set<String>
     private var closed = false
+    private var activeTransformGesture: TransformGesture? = null
+
+    private data class TransformGesture(
+        val key: WatchEditorLayerKey,
+        val before: EditorState,
+    )
 
     init {
         rebindLayerKeys(initialLayerKeys)
@@ -81,6 +93,15 @@ class WatchEditorSession private constructor(
             return !serializeDocument(document).contentEquals(savedXml) ||
                 resourcePathsInternal().toSet() != savedResourcePaths
         }
+
+    /**
+     * A session opened from an installed face can commit a revision back to
+     * the same logical directory. Blank/import drafts deliberately return
+     * false so the UI presents "另存为" instead of pretending to update an
+     * existing face.
+     */
+    val canSaveCurrentRevision: Boolean
+        get() = logicalId != null && installedDirectory != null
 
     /** Returns a UI-neutral snapshot; DOM nodes never escape the session. */
     @Synchronized
@@ -123,7 +144,118 @@ class WatchEditorSession private constructor(
     fun updateLayerAttribute(key: WatchEditorLayerKey, name: String, value: String?) =
         updateLayerAttributes(key, mapOf(name to value))
 
-    /** Adds a top-level Layer while leaving every unknown root child untouched. */
+    /**
+     * Reads the transform attributes used by the editor canvas. Missing or
+     * malformed values intentionally fall back to the neutral transform so a
+     * vendor-specific layer can still be selected and edited.
+     */
+    @Synchronized
+    fun layerTransform(key: WatchEditorLayerKey): WatchEditorTransform {
+        ensureOpen()
+        val layer = findLayer(key)
+        val sharedScale = layer.attributeValue("anim_scale")
+            ?: layer.attributeValue("scale")
+        return WatchEditorTransform(
+            x = layer.getAttribute("x").toFloatOrNull() ?: 0f,
+            y = layer.getAttribute("y").toFloatOrNull() ?: 0f,
+            scaleX = percentScale(
+                layer.attributeValue("anim_scale_x")
+                    ?: layer.attributeValue("scale_x")
+                    ?: sharedScale,
+            ),
+            scaleY = percentScale(
+                layer.attributeValue("anim_scale_y")
+                    ?: layer.attributeValue("scale_y")
+                    ?: sharedScale,
+            ),
+            rotation = layer.getAttribute("rotation").toFloatOrNull() ?: 0f,
+        )
+    }
+
+    /**
+     * Starts an in-memory transform transaction. Every MOVE updates the DOM
+     * without touching disk or the undo stack; [commitLayerTransformGesture]
+     * creates exactly one undo entry when the pointer is released.
+     */
+    @Synchronized
+    fun beginLayerTransformGesture(key: WatchEditorLayerKey): WatchEditorTransform {
+        ensureOpen()
+        activeTransformGesture?.let { active ->
+            if (active.key == key) return layerTransform(key)
+            activeTransformGesture = null
+            restoreState(active.before)
+        }
+        val before = captureState()
+        val initial = layerTransform(key)
+        activeTransformGesture = TransformGesture(key, before)
+        return initial
+    }
+
+    @Synchronized
+    fun updateLayerTransformPreview(
+        key: WatchEditorLayerKey,
+        transform: WatchEditorTransform,
+    ) {
+        ensureOpen()
+        val active = activeTransformGesture
+            ?: throw WatchEditorException("没有活动的图层变换手势")
+        require(active.key == key) { "图层变换手势目标已改变" }
+        val before = captureState()
+        try {
+            setLayerTransformDirect(findLayer(key), transform.sanitized())
+            validateDocument()
+        } catch (error: Exception) {
+            restoreState(before)
+            throw if (error is WatchEditorException) {
+                error
+            } else {
+                WatchEditorException(error.message ?: "更新图层变换失败", error)
+            }
+        }
+    }
+
+    @Synchronized
+    fun commitLayerTransformGesture(key: WatchEditorLayerKey): Boolean {
+        ensureOpen()
+        val active = activeTransformGesture ?: return false
+        require(active.key == key) { "图层变换手势目标已改变" }
+        activeTransformGesture = null
+        return try {
+            val after = captureState()
+            if (sameState(active.before, after)) {
+                false
+            } else {
+                pushUndo(active.before)
+                clearRedo()
+                pruneResourceStash()
+                true
+            }
+        } catch (error: Exception) {
+            runCatching { restoreState(active.before) }
+            throw if (error is WatchEditorException) {
+                error
+            } else {
+                WatchEditorException(error.message ?: "提交图层变换失败", error)
+            }
+        }
+    }
+
+    @Synchronized
+    fun cancelLayerTransformGesture(key: WatchEditorLayerKey): Boolean {
+        ensureOpen()
+        val active = activeTransformGesture ?: return false
+        require(active.key == key) { "图层变换手势目标已改变" }
+        activeTransformGesture = null
+        restoreState(active.before)
+        pruneResourceStash()
+        return true
+    }
+
+    /**
+     * Adds a render Layer while leaving every unknown root child untouched.
+     * WatchMaker exporters commonly wrap layers in a `<Layers>` element, so a
+     * new layer follows that container instead of changing the document shape.
+     */
     @Synchronized
     fun addLayer(
         type: String,
@@ -138,8 +270,12 @@ class WatchEditorSession private constructor(
             attributes.forEach { (name, value) -> setOrRemoveAttribute(element, name, value) }
             val existing = topLevelLayerElements()
             val targetIndex = index.coerceIn(0, existing.size)
-            existing.getOrNull(targetIndex)?.let { root.insertBefore(element, it) }
-                ?: root.appendChild(element)
+            insertLayerAtDocumentIndex(
+                element = element,
+                targetIndex = targetIndex,
+                existing = existing,
+                emptyContainer = preferredLayerContainer(root),
+            )
             val key = WatchEditorLayerKey.create()
             layerKeys.add(targetIndex, key)
             key
@@ -177,8 +313,12 @@ class WatchEditorSession private constructor(
             }
             val existing = topLevelLayerElements()
             val targetIndex = index.coerceIn(0, existing.size)
-            existing.getOrNull(targetIndex)?.let { document.documentElement.insertBefore(copy, it) }
-                ?: document.documentElement.appendChild(copy)
+            insertLayerAtDocumentIndex(
+                element = copy,
+                targetIndex = targetIndex,
+                existing = existing,
+                emptyContainer = preferredLayerContainer(document.documentElement),
+            )
             val newKey = WatchEditorLayerKey.create()
             layerKeys.add(targetIndex, newKey)
             newKey
@@ -196,8 +336,12 @@ class WatchEditorSession private constructor(
             val element = topLevelLayerElements()[sourceIndex]
             element.parentNode?.removeChild(element)
             val remaining = topLevelLayerElements()
-            remaining.getOrNull(bounded)?.let { document.documentElement.insertBefore(element, it) }
-                ?: document.documentElement.appendChild(element)
+            insertLayerAtDocumentIndex(
+                element = element,
+                targetIndex = bounded,
+                existing = remaining,
+                emptyContainer = preferredLayerContainer(document.documentElement),
+            )
             val moved = layerKeys.removeAt(sourceIndex)
             layerKeys.add(bounded, moved)
             true
@@ -211,6 +355,7 @@ class WatchEditorSession private constructor(
     @Synchronized
     fun undo(): Boolean {
         ensureOpen()
+        cancelActiveTransformGesture()
         if (undoStack.isEmpty()) return false
         val current = captureState()
         val target = popUndo()
@@ -223,6 +368,7 @@ class WatchEditorSession private constructor(
     @Synchronized
     fun redo(): Boolean {
         ensureOpen()
+        cancelActiveTransformGesture()
         if (redoStack.isEmpty()) return false
         val current = captureState()
         val target = popRedo()
@@ -274,12 +420,94 @@ class WatchEditorSession private constructor(
     @Synchronized
     fun save(): File {
         ensureOpen()
+        cancelActiveTransformGesture()
         validateDocument()
         val bytes = serializeDocument(document)
         writeAtomically(watchXmlFile, bytes)
         savedXml = bytes
         savedResourcePaths = resourcePathsInternal().toSet()
         return watchXmlFile
+    }
+
+    /**
+     * Commits a revision to the installed directory while preserving its
+     * logical ID and installation metadata. The draft remains the editing
+     * source, so a failed swap cannot leave a half-written watch face.
+     */
+    @Synchronized
+    fun saveCurrentRevision(): File {
+        ensureOpen()
+        cancelActiveTransformGesture()
+        val target = installedDirectory?.canonicalFile
+            ?: throw WatchEditorException("当前草稿没有可更新的 logicalId")
+        require(target.isDirectory) { "原表盘安装目录不存在" }
+        val parent = target.parentFile
+            ?: throw WatchEditorException("原表盘安装目录无有效父目录")
+        validateDocument()
+        val xmlBytes = serializeDocument(document)
+        val staged = File(parent, ".${target.name}.revision-${UUID.randomUUID()}")
+        val backup = File(parent, ".${target.name}.backup-${UUID.randomUUID()}")
+        if (!staged.mkdirs()) throw WatchEditorException("无法创建表盘修订暂存目录")
+        var originalMoved = false
+        var targetPublished = false
+        var backupRestored = false
+        try {
+            writeAtomically(watchXmlFile, xmlBytes)
+            copyTreeBounded(draftDirectory, staged, limits)
+            // Installation metadata is intentionally excluded from drafts; it
+            // belongs to the logical ID and must survive a revision update.
+            val metadata = File(target, ".flue")
+            if (metadata.isDirectory) {
+                copyTreeBounded(metadata, File(staged, ".flue"), limits)
+            }
+            writeAtomically(resolveFile(staged, watchXmlRelativePath), xmlBytes)
+            atomicMove(target, backup)
+            originalMoved = true
+            atomicMove(staged, target)
+            targetPublished = true
+            savedXml = xmlBytes
+            savedResourcePaths = resourcePathsInternal().toSet()
+            return target
+        } catch (error: Exception) {
+            if (originalMoved && !targetPublished && !target.exists() && backup.exists()) {
+                backupRestored = runCatching {
+                    atomicMove(backup, target)
+                    true
+                }.getOrDefault(false)
+            }
+            val retainedBackup = backup
+                .takeIf {
+                    !shouldDeleteWatchRevisionBackup(
+                        originalMoved = originalMoved,
+                        targetPublished = targetPublished,
+                        backupRestored = backupRestored,
+                    ) && it.exists()
+                }
+                ?.absolutePath
+            if (error is WatchEditorException && retainedBackup == null) throw error
+            throw WatchEditorException(
+                buildString {
+                    append("保存当前 logicalId 修订失败：")
+                    append(error.message ?: error.javaClass.simpleName)
+                    retainedBackup?.let {
+                        append("；原表盘备份保留在：")
+                        append(it)
+                    }
+                },
+                error,
+            )
+        } finally {
+            staged.deleteRecursively()
+            if (
+                shouldDeleteWatchRevisionBackup(
+                    originalMoved = originalMoved,
+                    targetPublished = targetPublished,
+                    backupRestored = backupRestored,
+                )
+            ) {
+                backup.deleteRecursively()
+            }
+        }
     }
 
     /**
@@ -290,6 +518,7 @@ class WatchEditorSession private constructor(
     @Synchronized
     fun flushDraftForPreview(): File {
         ensureOpen()
+        cancelActiveTransformGesture()
         validateDocument()
         writeAtomically(watchXmlFile, serializeDocument(document))
         return watchXmlFile
@@ -299,6 +528,7 @@ class WatchEditorSession private constructor(
     @Synchronized
     fun exportWatch(outputFile: File): WatchEditorExportResult {
         ensureOpen()
+        cancelActiveTransformGesture()
         require(!isWithin(outputFile.canonicalFile, draftDirectory.canonicalFile)) {
             "导出文件不能位于编辑草稿目录内"
         }
@@ -349,6 +579,7 @@ class WatchEditorSession private constructor(
 
     private fun <T> mutate(block: () -> T): T {
         ensureOpen()
+        cancelActiveTransformGesture()
         val before = captureState()
         return try {
             val result = block()
@@ -403,6 +634,13 @@ class WatchEditorSession private constructor(
         first.layerKeys == second.layerKeys &&
             first.resourcePaths == second.resourcePaths &&
             first.xml.contentEquals(second.xml)
+
+    private fun cancelActiveTransformGesture() {
+        val active = activeTransformGesture ?: return
+        activeTransformGesture = null
+        restoreState(active.before)
+        pruneResourceStash()
+    }
 
     private fun pushUndo(state: EditorState) {
         undoStack.addLast(state)
@@ -465,16 +703,87 @@ class WatchEditorSession private constructor(
         layerKeys = keys
     }
 
-    private fun topLevelLayerElements(): List<Element> = document.documentElement.childNodes
-        .elements()
-        .filter { it.tagName.equals("Layer", ignoreCase = true) }
-        .toList()
+    /**
+     * Returns editable layers in document order, including layers inside
+     * exporter wrapper nodes such as `<Layers>` or vendor folders. Descendant
+     * elements inside an actual Layer stay owned by that layer so unknown
+     * extension payloads are not flattened by ordinary editor operations.
+     */
+    private fun topLevelLayerElements(): List<Element> = buildList {
+        fun collect(container: Element) {
+            container.childNodes.elements().forEach { child ->
+                if (child.tagName.equals("Layer", ignoreCase = true)) {
+                    add(child)
+                } else {
+                    collect(child)
+                }
+            }
+        }
+        collect(document.documentElement)
+    }
+
+    private fun insertLayerAtDocumentIndex(
+        element: Element,
+        targetIndex: Int,
+        existing: List<Element>,
+        emptyContainer: Element,
+    ) {
+        existing.getOrNull(targetIndex)?.let { target ->
+            target.parentNode.insertBefore(element, target)
+            return
+        }
+        existing.lastOrNull()?.let { last ->
+            last.parentNode.insertBefore(element, last.nextSibling)
+            return
+        }
+        emptyContainer.appendChild(element)
+    }
+
+    private fun preferredLayerContainer(root: Element): Element {
+        val pending = ArrayDeque<Element>()
+        pending.addLast(root)
+        while (pending.isNotEmpty()) {
+            val candidate = pending.removeFirst()
+            if (candidate.tagName.equals("Layers", ignoreCase = true)) return candidate
+            if (candidate.tagName.equals("Layer", ignoreCase = true)) continue
+
+            val children = candidate.childNodes.elements().toList()
+            for (index in children.indices.reversed()) {
+                pending.addFirst(children[index])
+            }
+        }
+        return root
+    }
 
     private fun findLayer(key: WatchEditorLayerKey): Element {
         val index = layerKeys.indexOf(key)
         require(index >= 0) { "unknown layer key: ${key.value}" }
         return topLevelLayerElements()[index]
     }
+
+    private fun setLayerTransformDirect(
+        layer: Element,
+        transform: WatchEditorTransform,
+    ) {
+        val safe = transform.sanitized()
+        setOrRemoveAttribute(layer, "x", formatTransformNumber(safe.x))
+        setOrRemoveAttribute(layer, "y", formatTransformNumber(safe.y))
+        setOrRemoveAttribute(
+            layer,
+            "anim_scale_x",
+            formatTransformNumber(safe.scaleX * WATCHMAKER_SCALE_NORMAL),
+        )
+        setOrRemoveAttribute(
+            layer,
+            "anim_scale_y",
+            formatTransformNumber(safe.scaleY * WATCHMAKER_SCALE_NORMAL),
+        )
+        setOrRemoveAttribute(layer, "rotation", formatTransformNumber(safe.rotation))
+    }
+
+    private fun percentScale(raw: String?): Float =
+        ((raw?.toFloatOrNull() ?: WATCHMAKER_SCALE_NORMAL) / WATCHMAKER_SCALE_NORMAL)
+            .coerceIn(MIN_TRANSFORM_SCALE, MAX_TRANSFORM_SCALE)
 
     private fun layerSnapshot(key: WatchEditorLayerKey, element: Element, order: Int) =
         WatchEditorLayer(
@@ -501,17 +810,10 @@ class WatchEditorSession private constructor(
         require(otherBytes + xmlBytes <= limits.maxTotalBytes) {
             "表盘资源总大小超过 ${limits.maxTotalBytes} 字节限制"
         }
-        if (!isStudioDefinition()) return
-        val ids = HashSet<String>()
-        topLevelLayerElements().forEach { layer ->
-            val id = layer.getAttribute("id").takeIf(String::isNotBlank) ?: return@forEach
-            require(ids.add(id)) { "Duplicate Studio layer id: $id" }
-        }
-        val known = ids.toSet()
-        topLevelLayerElements().forEach { layer ->
-            val parent = layer.getAttribute("parentId").takeIf(String::isNotBlank) ?: return@forEach
-            require(parent in known) { "Layer references missing parent $parent" }
-        }
+        // Real WatchMaker packages can contain duplicate, missing, self, or
+        // cyclic parent links. The runtime deterministically promotes invalid
+        // links to roots, so the editor preserves the document instead of
+        // rejecting the complete face before the user can repair it.
     }
 
     private fun checkDepth(node: Node, depth: Int) {
@@ -572,9 +874,10 @@ class WatchEditorSession private constructor(
             if (Files.isSymbolicLink(child.toPath())) {
                 throw WatchEditorException("草稿包含不允许的符号链接：${child.name}")
             }
+            val relative = relativePath(child)
+            if (WatchInstallMetadata.isReservedArchivePath(relative)) return@forEach
             if (child.isDirectory) collectFiles(child, result)
             else if (child.isFile) {
-                val relative = relativePath(child)
                 validateRelativePath(relative)
                 if (child.length() > limits.maxFileBytes) {
                     throw WatchEditorException("文件超过 ${limits.maxFileBytes} 字节限制：$relative")
@@ -615,6 +918,9 @@ class WatchEditorSession private constructor(
 
     companion object {
         private const val DRAFT_DIRECTORY_NAME = "flue-watch-editor"
+        private const val WATCHMAKER_SCALE_NORMAL = 100f
+        private const val MIN_TRANSFORM_SCALE = 0.05f
+        private const val MAX_TRANSFORM_SCALE = 8f
 
         /** Keeps memory and disk-history bounded while still allowing a useful edit chain. */
         const val MAX_HISTORY_STEPS: Int = 32
@@ -633,7 +939,13 @@ class WatchEditorSession private constructor(
             require(sourceCanonical.parentFile?.canonicalFile == installedRoot) {
                 "表盘源目录不是有效的 Flue 标准表盘安装目录"
             }
-            return openInstalled(sourceCanonical, File(context.cacheDir, DRAFT_DIRECTORY_NAME), limits)
+            return openInstalled(
+                sourceDirectory = sourceCanonical,
+                cacheDirectory = File(context.cacheDir, DRAFT_DIRECTORY_NAME),
+                limits = limits,
+                logicalId = descriptor.id,
+                installedDirectory = sourceCanonical,
+            )
         }
 
         /** File-based overload keeps the core testable without a UI or ViewModel. */
@@ -642,6 +954,8 @@ class WatchEditorSession private constructor(
             cacheDirectory: File,
             limits: WatchEditorLimits = WatchEditorLimits.DEFAULT,
             removeDraftOnClose: Boolean = true,
+            logicalId: String? = null,
+            installedDirectory: File? = null,
         ): WatchEditorSession {
             val source = sourceDirectory.canonicalFile
             require(source.isDirectory) { "表盘源目录不存在" }
@@ -662,6 +976,8 @@ class WatchEditorSession private constructor(
                     removeDraftOnClose = removeDraftOnClose,
                     document = document,
                     initialLayerKeys = null,
+                    logicalId = logicalId,
+                    installedDirectory = installedDirectory?.canonicalFile,
                 )
             } catch (error: Exception) {
                 draft.deleteRecursively()
@@ -698,6 +1014,8 @@ class WatchEditorSession private constructor(
                     removeDraftOnClose = removeDraftOnClose,
                     document = document,
                     initialLayerKeys = emptyList(),
+                    logicalId = null,
+                    installedDirectory = null,
                 )
             } catch (error: Exception) {
                 draft.deleteRecursively()
@@ -748,6 +1066,7 @@ class WatchEditorSession private constructor(
                     val canonical = child.canonicalFile
                     require(isWithin(canonical, sourceCanonical)) { "源表盘路径越界：${child.name}" }
                     val relative = canonical.relativeTo(sourceCanonical).invariantSeparatorsPath
+                    if (WatchInstallMetadata.isReservedArchivePath(relative)) return@forEach
                     validateRelativePath(relative)
                     if (child.isDirectory) {
                         val childTarget = resolveFile(destination, relative)
@@ -888,6 +1207,110 @@ class WatchEditorSession private constructor(
     }
 }
 
+internal fun shouldDeleteWatchRevisionBackup(
+    originalMoved: Boolean,
+    targetPublished: Boolean,
+    backupRestored: Boolean,
+): Boolean = !originalMoved || targetPublished || backupRestored
+
+data class WatchEditorTransform(
+    val x: Float = 0f,
+    val y: Float = 0f,
+    val scaleX: Float = 1f,
+    val scaleY: Float = 1f,
+    val rotation: Float = 0f,
+) {
+    fun sanitized(): WatchEditorTransform = copy(
+        x = if (x.isFinite()) x.coerceIn(-4096f, 4096f) else 0f,
+        y = if (y.isFinite()) y.coerceIn(-4096f, 4096f) else 0f,
+        scaleX = if (scaleX.isFinite()) scaleX.coerceIn(0.05f, 8f) else 1f,
+        scaleY = if (scaleY.isFinite()) scaleY.coerceIn(0.05f, 8f) else 1f,
+        rotation = if (rotation.isFinite()) normalizeRotation(rotation) else 0f,
+    )
+
+    private fun normalizeRotation(value: Float): Float {
+        var normalized = value % 360f
+        if (normalized > 180f) normalized -= 360f
+        if (normalized < -180f) normalized += 360f
+        return normalized
+    }
+}
+
+data class WatchEditorTreeRow(
+    val layer: WatchEditorLayer,
+    val depth: Int,
+    val hasChildren: Boolean,
+    val expanded: Boolean,
+)
+
+/**
+ * Builds a stable parent/children projection from the flat Watchmaker layer
+ * order.  The XML order remains authoritative for siblings and unknown
+ * elements are untouched; this projection only controls how the editor list
+ * presents them.
+ */
+fun buildWatchEditorTreeRows(
+    layers: List<WatchEditorLayer>,
+    collapsedKeys: Set<String> = emptySet(),
+): List<WatchEditorTreeRow> {
+    if (layers.isEmpty()) return emptyList()
+    val parentIndices = resolveWatchLayerParentIndices(
+        layers.map { layer ->
+            WatchmakerLayer(
+                id = layer.id,
+                type = layer.type,
+                parentId = layer.parentId,
+                attributes = layer.attributes,
+                children = emptyList(),
+            )
+        },
+    )
+    val children = Array(layers.size) { mutableListOf<Int>() }
+    val roots = mutableListOf<Int>()
+    parentIndices.forEachIndexed { index, parentIndex ->
+        if (parentIndex == null) {
+            roots += index
+        } else {
+            children[parentIndex] += index
+        }
+    }
+    val result = mutableListOf<WatchEditorTreeRow>()
+    val visited = BooleanArray(layers.size)
+    data class PendingRow(val index: Int, val depth: Int)
+    val pending = ArrayDeque<PendingRow>()
+    roots.asReversed().forEach { pending.addLast(PendingRow(it, 0)) }
+
+    while (pending.isNotEmpty()) {
+        val (index, depth) = pending.removeLast()
+        if (visited[index]) continue
+        visited[index] = true
+        val layer = layers[index]
+        val descendants = children[index]
+        val expanded = layer.key.value !in collapsedKeys
+        result += WatchEditorTreeRow(
+            layer = layer,
+            depth = depth,
+            hasChildren = descendants.isNotEmpty(),
+            expanded = expanded,
+        )
+        if (expanded) {
+            descendants.asReversed().forEach { childIndex ->
+                pending.addLast(PendingRow(childIndex, depth + 1))
+            }
+        }
+    }
+    return result
+}
+
+private fun formatTransformNumber(value: Float): String =
+    if (value == 0f) {
+        "0"
+    } else {
+        java.lang.String.format(java.util.Locale.US, "%.4f", value)
+            .trimEnd('0')
+            .trimEnd('.')
+    }
+
 private fun attributesOf(element: Element): Map<String, String> = buildMap {
     val attributes = element.attributes
     for (index in 0 until attributes.length) {
@@ -902,6 +1325,9 @@ private fun NodeList.elements(): Sequence<Element> = sequence {
         if (node.nodeType == Node.ELEMENT_NODE) yield(node as Element)
     }
 }
+
+private fun Element.attributeValue(name: String): String? =
+    getAttribute(name).takeIf(String::isNotBlank)
 
 private fun setOrRemoveAttribute(element: Element, name: String, value: String?) {
     require(name.isNotBlank() && !name.contains(Regex("\\s"))) { "XML 属性名非法" }

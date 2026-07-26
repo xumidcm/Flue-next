@@ -1,9 +1,12 @@
 package com.flue.launcher
 
+import android.Manifest
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings as AndroidSettings
@@ -11,6 +14,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.activity.result.contract.ActivityResultContracts.CreateDocument
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.activity.compose.setContent
@@ -99,20 +103,17 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -122,6 +123,12 @@ import com.flue.launcher.backup.FlueBackupOptions
 import com.flue.launcher.backup.FlueBackupPreview
 import com.flue.launcher.service.FlueAccessibilityService
 import com.flue.launcher.ui.common.bottomFisheyeScale
+import com.flue.launcher.ui.common.flueElasticNestedScroll
+import com.flue.launcher.motion.LocalFlueMotionProfile
+import com.flue.launcher.motion.FlueMotionProfile
+import com.flue.launcher.motion.FlueMotionProfiles
+import com.flue.launcher.motion.MotionEasing
+import com.flue.launcher.motion.MotionPhaseKey
 import com.flue.launcher.ui.controlcenter.MusicTextSwitchAnimations
 import com.flue.launcher.ui.drawer.vibrateHaptic
 import com.flue.launcher.ui.input.flueRotaryScrollable
@@ -142,6 +149,7 @@ import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.InternalWatchFaceStorage
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceRuntime
+import com.flue.launcher.watchface.store.WatchStoreRepository
 import java.text.SimpleDateFormat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -175,6 +183,7 @@ enum class SettingsDestination {
     DISPLAY_SIZE,
     FEATURE_TOGGLES,
     PERFORMANCE,
+    MOTION_PROFILE,
     MUSIC_TEXT_ANIMATION,
     TOOLS,
     BACKUP,
@@ -279,9 +288,38 @@ private fun SettingsRootScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val settingsScope = rememberCoroutineScope()
     val vm: LauncherViewModel = viewModel()
-    val watchFaces by vm.availableWatchFaces.collectAsStateWithLifecycle()
+    val rawWatchFaces by vm.availableWatchFaces.collectAsStateWithLifecycle()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsStateWithLifecycle()
-    val selectedWatchFace by vm.selectedWatchFace.collectAsStateWithLifecycle()
+    val rawSelectedWatchFace by vm.selectedWatchFace.collectAsStateWithLifecycle()
+    val watchCatalogRepository = remember(context) { WatchStoreRepository(context) }
+    var watchCatalogReloadToken by remember { mutableStateOf(0) }
+    var watchCatalogDisplayNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    LaunchedEffect(watchCatalogRepository, watchCatalogReloadToken) {
+        val snapshot = runCatching { watchCatalogRepository.readCatalog() }.getOrNull()
+        watchCatalogDisplayNames = if (snapshot?.diagnostic == null) {
+            snapshot?.records.orEmpty().mapNotNull { record ->
+                val launcherId = record.activeLauncherIdOrNull() ?: return@mapNotNull null
+                val displayName = record.resolvedDisplayName() ?: return@mapNotNull null
+                launcherId to displayName
+            }.toMap()
+        } else {
+            emptyMap()
+        }
+    }
+    val watchFaces = remember(rawWatchFaces, watchCatalogDisplayNames) {
+        rawWatchFaces.map { descriptor ->
+            watchCatalogDisplayNames[descriptor.id]
+                ?.takeIf { it != descriptor.displayName }
+                ?.let { descriptor.copy(displayName = it) }
+                ?: descriptor
+        }
+    }
+    val selectedWatchFace = remember(rawSelectedWatchFace, watchCatalogDisplayNames) {
+        watchCatalogDisplayNames[rawSelectedWatchFace.id]
+            ?.takeIf { it != rawSelectedWatchFace.displayName }
+            ?.let { rawSelectedWatchFace.copy(displayName = it) }
+            ?: rawSelectedWatchFace
+    }
     val allSelectableApps by vm.allSelectableApps.collectAsStateWithLifecycle()
     val hiddenApps by vm.hiddenApps.collectAsStateWithLifecycle()
     val availableIconPacks by vm.availableIconPacks.collectAsStateWithLifecycle()
@@ -315,6 +353,8 @@ private fun SettingsRootScreen(
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
     val classicReturnAnimationEnabled by vm.classicReturnAnimationEnabled.collectAsStateWithLifecycle()
+    val activeMotionProfile by vm.activeMotionProfile.collectAsStateWithLifecycle()
+    val motionProfiles by vm.motionProfiles.collectAsStateWithLifecycle()
     val showStepCount by vm.showStepCount.collectAsStateWithLifecycle()
     val builtInPhotoPath by vm.builtInPhotoPath.collectAsStateWithLifecycle()
     val builtInVideoPath by vm.builtInVideoPath.collectAsStateWithLifecycle()
@@ -369,6 +409,7 @@ private fun SettingsRootScreen(
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
+    val watchmakerForceFill by vm.watchmakerForceFill.collectAsStateWithLifecycle()
     val dingDingCatFillScreen by vm.dingDingCatFillScreen.collectAsStateWithLifecycle()
     val dingDingCatPlaybackSpeedPercent by vm.dingDingCatPlaybackSpeedPercent.collectAsStateWithLifecycle()
     val dingDingCatImportUnlocked by vm.dingDingCatImportUnlocked.collectAsStateWithLifecycle()
@@ -388,6 +429,12 @@ private fun SettingsRootScreen(
     var backupBusy by remember { mutableStateOf(false) }
     var backupProgress by remember { mutableStateOf<BlockingProgressState?>(null) }
     var watchFaceArchiveImportMode by remember { mutableStateOf(WatchFaceArchiveImportMode.WATCH) }
+    var bodySensorsPermissionGranted by remember(context) {
+        mutableStateOf(hasBodySensorsPermission(context))
+    }
+    val bodySensorsPermissionLauncher = rememberLauncherForActivityResult(RequestPermission()) {
+        bodySensorsPermissionGranted = hasBodySensorsPermission(context)
+    }
     val dingDingCatBackupAvailability = remember(dingDingCatImportUnlocked) {
         FlueBackupOptions(dingDingCatWatchFaces = dingDingCatImportUnlocked)
     }
@@ -625,6 +672,62 @@ private fun SettingsRootScreen(
     LaunchedEffect(Unit) {
         vm.refreshWatchFaces()
     }
+    val motionExportPicker = rememberLauncherForActivityResult(
+        CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            val payload = vm.exportMotionProfileLibraryJson().getOrNull()
+            if (payload == null) {
+                Toast.makeText(context, "没有可导出的自定义动画曲线", Toast.LENGTH_SHORT).show()
+            } else {
+                settingsScope.launch(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openOutputStream(uri)?.use { output ->
+                            output.write(payload.toByteArray(Charsets.UTF_8))
+                        } ?: error("无法打开导出文件")
+                    }.onSuccess {
+                        launch(Dispatchers.Main) {
+                            Toast.makeText(context, "动画曲线已导出", Toast.LENGTH_SHORT).show()
+                        }
+                    }.onFailure { error ->
+                        launch(Dispatchers.Main) {
+                            Toast.makeText(
+                                context,
+                                "导出失败：${error.message ?: error.javaClass.simpleName}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                }
+            }
+        }
+    }
+    val motionImportPicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+        if (uri != null) {
+            settingsScope.launch(Dispatchers.IO) {
+                val payloadResult = runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        input.readBytes().toString(Charsets.UTF_8)
+                    } ?: error("无法读取动画曲线文件")
+                }
+                val result = payloadResult.fold(
+                    onSuccess = vm::importMotionProfileJson,
+                    onFailure = { Result.failure(it) },
+                )
+                launch(Dispatchers.Main) {
+                    result.onSuccess { imported ->
+                        Toast.makeText(context, "已导入 ${imported.size} 条动画曲线", Toast.LENGTH_SHORT).show()
+                    }.onFailure { error ->
+                        Toast.makeText(
+                            context,
+                            "导入失败：${error.message ?: error.javaClass.simpleName}",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            }
+        }
+    }
     LaunchedEffect(accessibilityServiceConnected) {
         accessibilityServiceEnabled = FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected
     }
@@ -632,10 +735,12 @@ private fun SettingsRootScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 accessibilityServiceEnabled = FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected
+                bodySensorsPermissionGranted = hasBodySensorsPermission(context)
                 // Market/editor activities can install a content-addressed .watch
                 // archive while this SettingsActivity remains alive. Refresh the
                 // shared registry when returning instead of waiting for a cold start.
                 vm.refreshWatchFaces(force = true)
+                watchCatalogReloadToken += 1
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -720,7 +825,10 @@ private fun SettingsRootScreen(
         }
     }
 
-    CompositionLocalProvider(LocalSettingsLeftSafeInsetPercent provides appListLeftSafeInsetPercent) {
+    CompositionLocalProvider(
+        LocalSettingsLeftSafeInsetPercent provides appListLeftSafeInsetPercent,
+        LocalFlueMotionProfile provides activeMotionProfile,
+    ) {
         AnimatedContent(
             targetState = destination,
             transitionSpec = {
@@ -1112,6 +1220,58 @@ private fun SettingsRootScreen(
                 }
             }
             if (selectedWatchFace.isWatchmaker) {
+                item("watchmaker_force_fill") {
+                    SettingsSwitchRow(
+                        title = "强制铺满",
+                        subtitle = if (watchmakerForceFill) {
+                            "以表盘画布中心为锚点等比放大并裁切边缘"
+                        } else {
+                            "完整显示设计画布，并遵循表盘定义的形状"
+                        },
+                        checked = watchmakerForceFill,
+                        onToggle = vm::setWatchmakerForceFillEnabled,
+                        scale = itemFisheye(
+                            listState,
+                            "watchmaker_force_fill",
+                            screenCenterY,
+                            screenHeightPx,
+                        ),
+                    )
+                }
+                item("watchmaker_body_sensors") {
+                    ActionCard(
+                        title = "表盘心率数据",
+                        subtitle = if (bodySensorsPermissionGranted) {
+                            "已授权身体传感器；支持的 .watch 标签可读取心率"
+                        } else {
+                            "未授权时心率保持不可用；点击后由系统询问授权"
+                        },
+                        scale = itemFisheye(
+                            listState,
+                            "watchmaker_body_sensors",
+                            screenCenterY,
+                            screenHeightPx,
+                        ),
+                        icon = {
+                            Icon(
+                                if (bodySensorsPermissionGranted) {
+                                    Icons.Filled.CheckCircle
+                                } else {
+                                    Icons.Filled.Settings
+                                },
+                                contentDescription = null,
+                                tint = WatchColors.ActiveCyan,
+                            )
+                        },
+                        onClick = {
+                            if (bodySensorsPermissionGranted) {
+                                Toast.makeText(context, "身体传感器权限已授权", Toast.LENGTH_SHORT).show()
+                            } else {
+                                bodySensorsPermissionLauncher.launch(Manifest.permission.BODY_SENSORS)
+                            }
+                        },
+                    )
+                }
                 item("watchmaker_info") {
                     MessageCard(
                         text = "当前为标准 Watchmaker .watch 表盘，支持 Watchmaker 1.0 / Studio 2.0 定义；未实现的图层效果会按兼容策略跳过。",
@@ -1694,7 +1854,7 @@ private fun SettingsRootScreen(
             }
             item("app_list_folders_enabled") {
                 SettingsSwitchRow(
-                    title = if (isZh) "允许创建文件夹（实验性）" else "Allow Folders (Experimental)",
+                    title = if (isZh) "允许创建文件夹" else "Allow Folders",
                     subtitle = if (appListFoldersEnabled) {
                         if (isZh) "长按拖动到另一个图标中心并停留 500ms 后合成文件夹" else "Hold a dragged icon over another icon center for 500ms to create a folder"
                     } else {
@@ -1802,6 +1962,248 @@ private fun SettingsRootScreen(
                     checked = builtInManagerThumbnails,
                     onToggle = { vm.setBuiltInManagerThumbnails(it) },
                     scale = itemFisheye(listState, "builtin_manager_thumbnails", screenCenterY, screenHeightPx)
+                )
+            }
+            item("motion_profile") {
+                SettingsCategoryCard(
+                    title = "动画曲线配置",
+                    subtitle = "${activeMotionProfile.name} · 边界回弹 ${if (activeMotionProfile.bounceEnabled) "开启" else "关闭"}",
+                    onClick = { navigateTo(SettingsDestination.MOTION_PROFILE) },
+                    scale = itemFisheye(listState, "motion_profile", screenCenterY, screenHeightPx)
+                )
+            }
+        }
+
+            SettingsDestination.MOTION_PROFILE -> SettingsPageScaffold(
+            title = "动画曲线配置",
+            onBack = { handleBack() },
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.MOTION_PROFILE).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.MOTION_PROFILE).offset,
+            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.MOTION_PROFILE, index, offset) }
+        ) { listState, screenCenterY, screenHeightPx, _ ->
+            val motionProfileEditable = !FlueMotionProfiles.isBuiltIn(activeMotionProfile.id)
+            item("motion_intro") {
+                MessageCard(
+                    text = "选择预设后可复制为自己的曲线。时长 80–1200ms，衔接 0–500ms；边界强度 0 表示关闭回弹。",
+                    background = WatchColors.SurfaceGlass,
+                    onClick = {}
+                )
+            }
+            items(activeMotionProfileOptions(motionProfiles), key = { "motion_profile_${it.id}" }) { profile ->
+                SettingsChoiceRow(
+                    title = profile.name,
+                    subtitle = if (FlueMotionProfiles.isBuiltIn(profile.id)) "内置预设（复制后可编辑）" else "自定义动画曲线",
+                    selected = profile.id == activeMotionProfile.id,
+                    onClick = { vm.setActiveMotionProfile(profile.id) },
+                    scale = itemFisheye(listState, "motion_profile_${profile.id}", screenCenterY, screenHeightPx)
+                )
+            }
+            item("motion_copy") {
+                ActionCard(
+                    title = "复制当前曲线",
+                    subtitle = "创建可编辑副本并立即使用",
+                    onClick = { vm.copyMotionProfile() },
+                    scale = itemFisheye(listState, "motion_copy", screenCenterY, screenHeightPx)
+                )
+            }
+            item("motion_delete") {
+                ActionCard(
+                    title = "删除当前自定义曲线",
+                    subtitle = "内置柔和与激进预设不会被删除",
+                    onClick = { vm.deleteMotionProfile(activeMotionProfile.id) },
+                    scale = itemFisheye(listState, "motion_delete", screenCenterY, screenHeightPx)
+                )
+            }
+            item("motion_bounce") {
+                SettingsSwitchRow(
+                    title = "触边回弹",
+                    subtitle = "同一手势跨过边界时立即产生 CloX 风格橡皮筋",
+                    checked = activeMotionProfile.bounceEnabled,
+                    enabled = motionProfileEditable,
+                    onToggle = { vm.setMotionBounceEnabled(it) },
+                    scale = itemFisheye(listState, "motion_bounce", screenCenterY, screenHeightPx)
+                )
+            }
+            item("motion_edge_strength") {
+                SettingsSliderRow(
+                    title = "边界强度",
+                    value = activeMotionProfile.edgeStrength.toFloat(),
+                    valueText = "${activeMotionProfile.edgeStrength}/10",
+                    range = 0f..10f,
+                    steps = 9,
+                    enabled = motionProfileEditable,
+                    onValueChange = { vm.setMotionEdgeStrength(it.roundToInt()) },
+                    scale = itemFisheye(listState, "motion_edge_strength", screenCenterY, screenHeightPx)
+                )
+            }
+            MotionPhaseKey.entries.forEach { key ->
+                val phase = activeMotionProfile.phase(key)
+                val keyName = key.motionPhaseLabel()
+                item("motion_section_$key") {
+                    SectionTitle(
+                        text = "$keyName · ${phase.easing.motionEasingSummary()}",
+                        scale = itemFisheye(listState, "motion_section_$key", screenCenterY, screenHeightPx),
+                    )
+                }
+                item("motion_duration_$key") {
+                    SettingsSliderRow(
+                        title = "$keyName 时长",
+                        value = phase.durationMillis.toFloat(),
+                        valueText = "${phase.durationMillis} ms",
+                        range = 80f..1200f,
+                        steps = 55,
+                        enabled = motionProfileEditable,
+                        onValueChangeFinished = { vm.setMotionPhaseDuration(key, it.roundToInt()) },
+                        onValueChange = { },
+                        scale = itemFisheye(listState, "motion_duration_$key", screenCenterY, screenHeightPx)
+                    )
+                }
+                item("motion_handoff_$key") {
+                    SettingsSliderRow(
+                        title = "$keyName 衔接",
+                        value = phase.handoffMillis.toFloat(),
+                        valueText = "${phase.handoffMillis} ms",
+                        range = 0f..500f,
+                        steps = 49,
+                        enabled = motionProfileEditable,
+                        onValueChangeFinished = { vm.setMotionPhaseHandoff(key, it.roundToInt()) },
+                        onValueChange = { },
+                        scale = itemFisheye(listState, "motion_handoff_$key", screenCenterY, screenHeightPx)
+                    )
+                }
+                item("motion_easing_cubic_$key") {
+                    SettingsChoiceRow(
+                        title = "三次贝塞尔曲线",
+                        subtitle = "直接控制时间曲线的两个控制点",
+                        selected = phase.easing is MotionEasing.CubicBezier,
+                        enabled = motionProfileEditable,
+                        onClick = {
+                            vm.setMotionPhaseEasing(
+                                key,
+                                MotionEasing.CubicBezier(0.22f, 1f, 0.36f, 1f),
+                            )
+                        },
+                        scale = itemFisheye(listState, "motion_easing_cubic_$key", screenCenterY, screenHeightPx)
+                    )
+                }
+                item("motion_easing_spring_$key") {
+                    SettingsChoiceRow(
+                        title = "物理弹簧",
+                        subtitle = "使用阻尼与刚度控制回弹手感",
+                        selected = phase.easing is MotionEasing.Spring,
+                        enabled = motionProfileEditable,
+                        onClick = {
+                            vm.setMotionPhaseEasing(
+                                key,
+                                MotionEasing.Spring(dampingRatio = 0.78f, stiffness = 420f),
+                            )
+                        },
+                        scale = itemFisheye(listState, "motion_easing_spring_$key", screenCenterY, screenHeightPx)
+                    )
+                }
+                when (val easing = phase.easing) {
+                    is MotionEasing.CubicBezier -> {
+                        listOf(
+                            "x1" to easing.x1,
+                            "y1" to easing.y1,
+                            "x2" to easing.x2,
+                            "y2" to easing.y2,
+                        ).forEach { (parameter, parameterValue) ->
+                            val isX = parameter.startsWith("x")
+                            item("motion_${key}_$parameter") {
+                                SettingsSliderRow(
+                                    title = "$keyName $parameter",
+                                    value = parameterValue,
+                                    valueText = "%.2f".format(Locale.US, parameterValue),
+                                    range = if (isX) 0f..1f else -2f..2f,
+                                    steps = if (isX) 19 else 39,
+                                    enabled = motionProfileEditable,
+                                    onValueChange = { },
+                                    onValueChangeFinished = { nextValue ->
+                                        val next = when (parameter) {
+                                            "x1" -> easing.copy(x1 = nextValue)
+                                            "y1" -> easing.copy(y1 = nextValue)
+                                            "x2" -> easing.copy(x2 = nextValue)
+                                            else -> easing.copy(y2 = nextValue)
+                                        }
+                                        vm.setMotionPhaseEasing(key, next)
+                                    },
+                                    scale = itemFisheye(
+                                        listState,
+                                        "motion_${key}_$parameter",
+                                        screenCenterY,
+                                        screenHeightPx,
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    is MotionEasing.Spring -> {
+                        item("motion_${key}_damping") {
+                            SettingsSliderRow(
+                                title = "$keyName 阻尼比",
+                                value = easing.dampingRatio,
+                                valueText = "%.2f".format(Locale.US, easing.dampingRatio),
+                                range = 0.05f..2f,
+                                steps = 38,
+                                enabled = motionProfileEditable,
+                                onValueChange = { },
+                                onValueChangeFinished = { nextValue ->
+                                    vm.setMotionPhaseEasing(
+                                        key,
+                                        easing.copy(dampingRatio = nextValue),
+                                    )
+                                },
+                                scale = itemFisheye(
+                                    listState,
+                                    "motion_${key}_damping",
+                                    screenCenterY,
+                                    screenHeightPx,
+                                )
+                            )
+                        }
+                        item("motion_${key}_stiffness") {
+                            SettingsSliderRow(
+                                title = "$keyName 刚度",
+                                value = easing.stiffness,
+                                valueText = "${easing.stiffness.roundToInt()}",
+                                range = 10f..3000f,
+                                steps = 58,
+                                enabled = motionProfileEditable,
+                                onValueChange = { },
+                                onValueChangeFinished = { nextValue ->
+                                    vm.setMotionPhaseEasing(
+                                        key,
+                                        easing.copy(stiffness = nextValue),
+                                    )
+                                },
+                                scale = itemFisheye(
+                                    listState,
+                                    "motion_${key}_stiffness",
+                                    screenCenterY,
+                                    screenHeightPx,
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+            item("motion_export") {
+                ActionCard(
+                    title = "导出自定义曲线",
+                    subtitle = "导出为可备份的 JSON 文件",
+                    onClick = { motionExportPicker.launch("flue-motion-profiles.json") },
+                    scale = itemFisheye(listState, "motion_export", screenCenterY, screenHeightPx)
+                )
+            }
+            item("motion_import") {
+                ActionCard(
+                    title = "导入曲线",
+                    subtitle = "从 JSON 导入并生成新的自定义曲线",
+                    onClick = { motionImportPicker.launch(arrayOf("application/json", "text/plain")) },
+                    scale = itemFisheye(listState, "motion_import", screenCenterY, screenHeightPx)
                 )
             }
         }
@@ -2111,63 +2513,10 @@ private fun SettingsPageScaffold(
         initialFirstVisibleItemScrollOffset = initialFirstVisibleItemScrollOffset
     )
     val focusRequester = remember { FocusRequester() }
-    val overscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = rememberCoroutineScope()
-    val settingsOverscrollLimitPx = 140f
     val visibleItemKeys by remember(listState) {
         derivedStateOf {
             listState.layoutInfo.visibleItemsInfo.mapNotNull { it.key }.toSet()
-        }
-    }
-
-    val nestedScrollConnection = remember(listState) {
-        object : NestedScrollConnection {
-            override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: NestedScrollSource): androidx.compose.ui.geometry.Offset {
-                if (source != NestedScrollSource.UserInput) return androidx.compose.ui.geometry.Offset.Zero
-                val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
-                val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-                val atBottom = lastVisible != null &&
-                    lastVisible.index >= listState.layoutInfo.totalItemsCount - 1 &&
-                    lastVisible.offset + lastVisible.size <= listState.layoutInfo.viewportEndOffset
-                if (available.y > 0f && atTop) {
-                    scope.launch {
-                        overscroll.stop()
-                        overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtMost(settingsOverscrollLimitPx))
-                    }
-                    return androidx.compose.ui.geometry.Offset(0f, available.y)
-                }
-                if (available.y < 0f && atBottom) {
-                    scope.launch {
-                        overscroll.stop()
-                        overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtLeast(-settingsOverscrollLimitPx))
-                    }
-                    return androidx.compose.ui.geometry.Offset(0f, available.y)
-                }
-                if (overscroll.value > 0f && available.y < 0f) {
-                    scope.launch {
-                        overscroll.stop()
-                        overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(0f))
-                    }
-                    return androidx.compose.ui.geometry.Offset(0f, available.y)
-                }
-                if (overscroll.value < 0f && available.y > 0f) {
-                    scope.launch {
-                        overscroll.stop()
-                        overscroll.snapTo((overscroll.value + available.y).coerceAtMost(0f))
-                    }
-                    return androidx.compose.ui.geometry.Offset(0f, available.y)
-                }
-                return androidx.compose.ui.geometry.Offset.Zero
-            }
-
-            override suspend fun onPreFling(available: Velocity): Velocity {
-                if (overscroll.value != 0f) {
-                    overscroll.stop()
-                    overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-                    return available
-                }
-                return Velocity.Zero
-            }
         }
     }
 
@@ -2205,8 +2554,7 @@ private fun SettingsPageScaffold(
                         listState.scrollBy(-rotaryDelta)
                     }
                 }
-                .nestedScroll(nestedScrollConnection)
-                .graphicsLayer { translationY = overscroll.value }
+                .flueElasticNestedScroll(listState)
                 .padding(start = 16.dp + leftSafeInset, top = 18.dp, end = 16.dp, bottom = 18.dp),
             contentPadding = PaddingValues(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -2394,6 +2742,7 @@ private val SettingsDestination.depth: Int
         SettingsDestination.BACKUP,
         SettingsDestination.DONATE -> 2
         SettingsDestination.MUSIC_TEXT_ANIMATION,
+        SettingsDestination.MOTION_PROFILE,
         SettingsDestination.BACKUP_EXPORT,
         SettingsDestination.BACKUP_IMPORT -> 3
         else -> 1
@@ -2405,6 +2754,29 @@ private val SettingsDestination.resetsScrollOnEnter: Boolean
         SettingsDestination.FEATURE_TOGGLES -> true
         else -> depth >= 3
     }
+
+private fun activeMotionProfileOptions(
+    profiles: List<FlueMotionProfile>,
+): List<FlueMotionProfile> = profiles.sortedWith(
+    compareBy<FlueMotionProfile> { if (FlueMotionProfiles.isBuiltIn(it.id)) 0 else 1 }
+        .thenBy { it.name },
+)
+
+private fun MotionPhaseKey.motionPhaseLabel(): String = when (this) {
+    MotionPhaseKey.APP_LIST_ENTER -> "应用列表进入"
+    MotionPhaseKey.APP_LAUNCH -> "应用启动"
+    MotionPhaseKey.APP_RETURN -> "应用返回"
+    MotionPhaseKey.PULL_TO_FACE -> "上滑返回表盘"
+    MotionPhaseKey.EDGE_BOUNCE -> "边界回弹"
+}
+
+private fun MotionEasing.motionEasingSummary(): String = when (this) {
+    is MotionEasing.CubicBezier ->
+        "Bezier(%.2f, %.2f, %.2f, %.2f)".format(Locale.US, x1, y1, x2, y2)
+
+    is MotionEasing.Spring ->
+        "Spring(阻尼 %.2f，刚度 %d)".format(Locale.US, dampingRatio, stiffness.roundToInt())
+}
 
 @Composable
 private fun MessageCard(text: String, background: Color, onClick: () -> Unit) {
@@ -2438,7 +2810,8 @@ private fun SettingsChoiceRow(
     subtitle: String,
     selected: Boolean,
     onClick: () -> Unit,
-    scale: Float
+    scale: Float,
+    enabled: Boolean = true,
 ) {
     val launcherStyle = LauncherTheme.style
     val interactionSource = remember { MutableInteractionSource() }
@@ -2454,7 +2827,7 @@ private fun SettingsChoiceRow(
             .graphicsLayer {
                 scaleX = scale * pressedScale
                 scaleY = scale * pressedScale
-                alpha = scale.coerceIn(0.55f, 1f)
+                alpha = if (enabled) scale.coerceIn(0.55f, 1f) else 0.48f
             }
             .clip(launcherStyle.compactShape)
             .background(
@@ -2469,6 +2842,7 @@ private fun SettingsChoiceRow(
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
+                enabled = enabled,
                 onClick = onClick
             )
             .padding(horizontal = 16.dp, vertical = 14.dp)
@@ -3029,6 +3403,7 @@ private fun BackupOptionsDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
+    val listState = rememberLazyListState()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -3037,7 +3412,10 @@ private fun BackupOptionsDialog(
                 Text(subtitle, color = LauncherTheme.style.secondaryTextColor, fontSize = 12.sp)
                 Spacer(modifier = Modifier.height(10.dp))
                 LazyColumn(
-                    modifier = Modifier.height(320.dp),
+                    state = listState,
+                    modifier = Modifier
+                        .height(320.dp)
+                        .flueElasticNestedScroll(listState),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     if (availableOptions.settings) {
@@ -3371,6 +3749,12 @@ private suspend fun exportLog(context: android.content.Context) {
         Toast.makeText(context, "导出失败", Toast.LENGTH_SHORT).show()
     }
 }
+
+private fun hasBodySensorsPermission(context: Context): Boolean =
+    ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.BODY_SENSORS,
+    ) == PackageManager.PERMISSION_GRANTED
 
 @Composable
 private fun rememberSettingsHeaderTime(): String {

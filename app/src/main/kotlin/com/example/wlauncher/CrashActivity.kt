@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.flue.launcher.ui.common.flueElasticNestedScroll
 import com.flue.launcher.util.RecentsVisibility
 import java.io.File
 import java.util.Locale
@@ -107,12 +108,14 @@ fun CrashScreen(
 ) {
     var showFull by remember { mutableStateOf(false) }
     val previewCrash = remember(crashInfo) { crashInfo.lineSequence().take(5).joinToString("\n") }
+    val scrollState = rememberScrollState()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .verticalScroll(rememberScrollState())
+            .flueElasticNestedScroll(scrollState)
+            .verticalScroll(scrollState)
             .padding(horizontal = 24.dp, vertical = 32.dp)
     ) {
         Text(

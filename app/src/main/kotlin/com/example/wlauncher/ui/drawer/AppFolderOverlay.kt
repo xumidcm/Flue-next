@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -82,6 +83,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.scrollBy
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.iconForDisplay
+import com.flue.launcher.ui.common.flueElasticNestedScroll
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -118,6 +120,7 @@ fun AppFolderOverlay(
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val gridState = rememberLazyGridState()
+    val addListState = rememberLazyListState()
     val folderOverscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val visibleItems = remember { mutableStateListOf<AppInfo>() }
     val slotBounds = remember { mutableStateMapOf<Int, Rect>() }
@@ -395,7 +398,10 @@ fun AppFolderOverlay(
                     Text("没有可添加的应用")
                 } else {
                     LazyColumn(
-                        modifier = Modifier.heightIn(max = 320.dp),
+                        state = addListState,
+                        modifier = Modifier
+                            .heightIn(max = 320.dp)
+                            .flueElasticNestedScroll(addListState),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         items(editableCandidates, key = { it.componentKey }) { app ->

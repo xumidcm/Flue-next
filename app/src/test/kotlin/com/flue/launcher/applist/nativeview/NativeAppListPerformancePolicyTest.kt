@@ -154,61 +154,16 @@ class NativeAppListPerformancePolicyTest {
     }
 
     @Test
-    fun fastFlowUsesTheLegacyCenterCompressionAndOuterAccelerationCurve() {
-        assertEquals(0f, nativeFastFlowOffset(200f, 400f, enabled = true), 0f)
-        assertEquals(35.2f, nativeFastFlowOffset(120f, 400f, enabled = true), 0.001f)
-        assertEquals(-66.8f, nativeFastFlowOffset(0f, 400f, enabled = true), 0.001f)
-        assertEquals(0f, nativeFastFlowOffset(0f, 400f, enabled = false), 0f)
-    }
-
-    @Test
-    fun appleHoneycombFastFlowKeepsTheLegacyTwentyFourToSeventySixPercentBand() {
-        assertEquals(
-            45.76f,
-            nativeFastFlowOffset(
-                rowCenterY = 96f,
-                viewportHeight = 400f,
-                enabled = true,
-                presentation = NativeAppListPresentation.HONEYCOMB,
-            ),
-            0.001f,
-        )
-        assertEquals(
-            35.2f,
-            nativeFastFlowOffset(
-                rowCenterY = 120f,
-                viewportHeight = 400f,
-                enabled = true,
-                presentation = NativeAppListPresentation.HONEYCOMB,
-            ),
-            0.001f,
-        )
-    }
-
-    @Test
-    fun honeycombFastFlowKeepsTheLegacyWiderSlowBand() {
+    fun honeycombVisualDoesNotApplyTheRemovedFastFlowDisplacement() {
         val config = NativeAppListConfig(
             presentation = NativeAppListPresentation.HONEYCOMB,
-            fastFlowAnimationEnabled = true,
         )
 
-        val upperSlowBand = nativeHoneycombChildVisual(
-            centerX = 200f,
-            centerY = 100f,
-            viewportWidth = 400f,
-            viewportHeight = 400f,
-            config = config,
-        )
-        val lowerSlowBand = nativeHoneycombChildVisual(
-            centerX = 200f,
-            centerY = 300f,
-            viewportWidth = 400f,
-            viewportHeight = 400f,
-            config = config,
-        )
+        val upper = nativeHoneycombChildVisual(200f, 100f, 400f, 400f, config)
+        val lower = nativeHoneycombChildVisual(200f, 300f, 400f, 400f, config)
 
-        assertEquals(44f, upperSlowBand.translationY, 0.001f)
-        assertEquals(-44f, lowerSlowBand.translationY, 0.001f)
+        assertEquals(0f, upper.translationY, 0.001f)
+        assertEquals(0f, lower.translationY, 0.001f)
     }
 
     @Test
@@ -220,14 +175,13 @@ class NativeAppListPerformancePolicyTest {
     }
 
     @Test
-    fun honeycombVisualCombinesRadialFisheyeEdgeCompressionAndFlow() {
+    fun honeycombVisualCombinesRadialFisheyeAndEdgeCompression() {
         val config = NativeAppListConfig(
             presentation = NativeAppListPresentation.HONEYCOMB,
             fisheyeEnabled = true,
             fisheyeStrength = 1f,
             honeycombFisheyeRangeRows = 2,
             edgeSpacingCompressionEnabled = true,
-            fastFlowAnimationEnabled = true,
         )
         val center = nativeHoneycombChildVisual(160f, 160f, 320f, 320f, config)
         val edge = nativeHoneycombChildVisual(260f, 20f, 320f, 320f, config)
@@ -237,7 +191,9 @@ class NativeAppListPerformancePolicyTest {
         assertTrue(edge.scale < 1f)
         assertTrue(edge.alpha < 1f)
         assertTrue(edge.translationX < 0f)
-        assertTrue(edge.translationY < 0f)
+        // Vertical position is owned by the layout manager. Fisheye only
+        // compresses the radial spacing; entry motion is the sole Y transform.
+        assertEquals(0f, edge.translationY, 0f)
     }
 
     @Test
@@ -308,7 +264,6 @@ class NativeAppListPerformancePolicyTest {
                 presentation = NativeAppListPresentation.DENSE_GRID,
                 denseGridColumns = 5,
                 entryProgress = 0.5f,
-                fastFlowAnimationEnabled = true,
             ),
             output = scratch,
         )
@@ -476,7 +431,6 @@ class NativeAppListPerformancePolicyTest {
             entryProgress = 0.4f,
             fisheyeStrength = 1.5f,
             topBlurRadiusPx = 8f,
-            fastFlowAnimationEnabled = true,
         )
 
         assertFalse(
@@ -542,6 +496,32 @@ class NativeAppListPerformancePolicyTest {
         assertEquals(1f, center.alpha, 0f)
         assertTrue(edge.scale < center.scale)
         assertTrue(edge.alpha < center.alpha)
+    }
+
+    @Test
+    fun inactiveLinearHostKeepsItsSettledFisheyeWhileTheParentAnimatesAway() {
+        val active = NativeAppListConfig(
+            active = true,
+            fisheyeEnabled = true,
+            fisheyeRange = 0.4f,
+            fisheyeStrength = 1f,
+        )
+        val inactive = active.copy(active = false)
+
+        val activeEdge = nativeLinearChildVisual(
+            childCenterY = 0f,
+            viewportHeight = 240,
+            config = active,
+        )
+        val inactiveEdge = nativeLinearChildVisual(
+            childCenterY = 0f,
+            viewportHeight = 240,
+            config = inactive,
+        )
+
+        assertEquals(activeEdge.scale, inactiveEdge.scale, 0f)
+        assertEquals(activeEdge.alpha, inactiveEdge.alpha, 0f)
+        assertEquals(activeEdge.blurRadiusPx, inactiveEdge.blurRadiusPx, 0f)
     }
 
     @Test
@@ -624,7 +604,18 @@ class NativeAppListPerformancePolicyTest {
             240,
             config.copy(blurTier = NativeBlurTier.LITE),
         )
-        assertEquals(0f, liteEdge.alpha, 0f)
+        assertEquals(0.62f, liteEdge.alpha, 0.0001f)
+        assertEquals(0.45f, liteEdge.saturation, 0.0001f)
+        assertEquals(1f, center.saturation, 0f)
+    }
+
+    @Test
+    fun legacySaturationUsesAStableSmallBucketSet() {
+        assertEquals(0, quantizeNativeLiteSaturation(1f))
+        assertEquals(1, quantizeNativeLiteSaturation(0.82f))
+        assertEquals(2, quantizeNativeLiteSaturation(0.64f))
+        assertEquals(3, quantizeNativeLiteSaturation(0.45f))
+        assertEquals(0, quantizeNativeLiteSaturation(Float.NaN))
     }
 }
 

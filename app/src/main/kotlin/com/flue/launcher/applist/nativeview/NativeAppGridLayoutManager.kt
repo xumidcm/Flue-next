@@ -6,6 +6,7 @@ import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
 import kotlin.math.hypot
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 internal interface NativeSpatialAppListLayoutManager {
@@ -37,8 +38,7 @@ internal interface NativeSpatialAppListLayoutManager {
 internal abstract class NativeAppGridLayoutManager(
     private val configProvider: () -> NativeAppListConfig,
 ) : RecyclerView.LayoutManager(),
-    NativeSpatialAppListLayoutManager,
-    NativeTouchScrollConsumptionReporter {
+    NativeSpatialAppListLayoutManager {
     private var geometry: NativeAppGridGeometry? = null
     private var geometryItemCount = -1
     private var geometryViewportWidthPx = -1
@@ -53,7 +53,6 @@ internal abstract class NativeAppGridLayoutManager(
     private var pendingScrollPosition = RecyclerView.NO_POSITION
     private val visibleBounds = IntArray(2)
     private val attachedPositions = SparseBooleanArray()
-    private val touchScrollConsumption = NativeTouchScrollConsumptionTracker()
 
     protected abstract fun createGeometry(
         itemCount: Int,
@@ -157,7 +156,6 @@ internal abstract class NativeAppGridLayoutManager(
         state: RecyclerView.State,
     ): Int {
         if (dy == 0 || state.itemCount == 0) {
-            touchScrollConsumption.record(dy, 0)
             return 0
         }
         val previousGeometry = geometry
@@ -178,21 +176,14 @@ internal abstract class NativeAppGridLayoutManager(
         scrollOffsetPx = target
         renderedScrollPositionPx = targetRenderedPosition
         if (consumed == 0) {
-            touchScrollConsumption.record(dy, 0)
             return 0
         }
         offsetChildrenVertical(-consumed)
         recycleOutsideBounds(recycler, current)
         fillMissing(recycler, current)
         applyChildVisuals(current, configProvider())
-        touchScrollConsumption.record(dy, consumed)
         return consumed
     }
-
-    final override fun beginTouchScrollCapture() = touchScrollConsumption.begin()
-
-    final override fun takeUnconsumedTouchScrollDeltaPx(): Int =
-        touchScrollConsumption.takeUnconsumed()
 
     override fun scrollToPosition(position: Int) {
         if (position < 0) return
@@ -417,7 +408,16 @@ internal abstract class NativeAppGridLayoutManager(
         val extra = extraLayoutSpacePx(current, configProvider())
         for (index in childCount - 1 downTo 0) {
             val child = requireNotNull(getChildAt(index))
-            if (getDecoratedBottom(child) < -extra || getDecoratedTop(child) > height + extra) {
+            val decoratedTop = getDecoratedTop(child).toFloat()
+            val decoratedBottom = getDecoratedBottom(child).toFloat()
+            val pivotY = child.top + child.pivotY
+            val transformedTop = child.translationY + pivotY +
+                (decoratedTop - pivotY) * child.scaleY
+            val transformedBottom = child.translationY + pivotY +
+                (decoratedBottom - pivotY) * child.scaleY
+            val visibleTop = min(transformedTop, transformedBottom)
+            val visibleBottom = max(transformedTop, transformedBottom)
+            if (visibleBottom < -extra || visibleTop > height + extra) {
                 removeAndRecycleView(child, recycler)
             }
         }

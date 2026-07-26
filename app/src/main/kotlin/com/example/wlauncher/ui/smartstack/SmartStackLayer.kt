@@ -83,7 +83,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -126,6 +125,7 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -139,10 +139,15 @@ import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.WidgetInfo
 import com.flue.launcher.data.model.iconForDisplay
 import com.flue.launcher.FlueApplication
+import com.flue.launcher.R
 import com.flue.launcher.data.repository.WidgetRepository
 import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.common.WatchBatteryPill
+import com.flue.launcher.ui.common.fluePressScale
+import com.flue.launcher.ui.common.rememberFluePressScale
+import com.flue.launcher.ui.common.rememberFlueElasticScrollState
+import com.flue.launcher.ui.common.flueElasticNestedScroll
 import com.flue.launcher.ui.controlcenter.CompactControlCenterMusicCard
 import com.flue.launcher.ui.controlcenter.MusicTextSwitchAnimations
 import com.flue.launcher.ui.drawer.AppBubble
@@ -206,61 +211,8 @@ private data class ShortcutPickerItem(
 private fun rememberPickerOverscrollConnection(
     listState: androidx.compose.foundation.lazy.LazyListState
 ): Pair<Float, NestedScrollConnection> {
-    var overscroll by remember { mutableFloatStateOf(0f) }
-    val rebound = remember { Animatable(0f) }
-    val connection = remember(listState, rebound) {
-        object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (source != NestedScrollSource.UserInput) return Offset.Zero
-                val layoutInfo = listState.layoutInfo
-                val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
-                val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()
-                val atBottom = layoutInfo.totalItemsCount > 0 &&
-                    lastVisible != null &&
-                    lastVisible.index >= layoutInfo.totalItemsCount - 1 &&
-                    lastVisible.offset + lastVisible.size <= layoutInfo.viewportEndOffset
-                val next = when {
-                    available.y > 0f && atTop -> (overscroll + available.y * 0.35f).coerceAtMost(112f)
-                    available.y < 0f && atBottom -> (overscroll + available.y * 0.35f).coerceAtLeast(-112f)
-                    overscroll > 0f && available.y < 0f -> (overscroll + available.y).coerceAtLeast(0f)
-                    overscroll < 0f && available.y > 0f -> (overscroll + available.y).coerceAtMost(0f)
-                    else -> overscroll
-                }
-                if (next != overscroll) {
-                    overscroll = next
-                    return Offset(0f, available.y)
-                }
-                return Offset.Zero
-            }
-
-            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                if (source != NestedScrollSource.UserInput || available.y == 0f) return Offset.Zero
-                val next = when {
-                    overscroll > 0f && available.y < 0f -> (overscroll + available.y).coerceAtLeast(0f)
-                    overscroll < 0f && available.y > 0f -> (overscroll + available.y).coerceAtMost(0f)
-                    else -> overscroll
-                }
-                if (next != overscroll) {
-                    overscroll = next
-                    return Offset(0f, available.y)
-                }
-                return Offset.Zero
-            }
-
-            override suspend fun onPreFling(available: Velocity): Velocity {
-                if (overscroll != 0f) {
-                    rebound.snapTo(overscroll)
-                    rebound.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f)) {
-                        overscroll = value
-                    }
-                    overscroll = 0f
-                    return available
-                }
-                return Velocity.Zero
-            }
-        }
-    }
-    return overscroll to connection
+    val state = com.flue.launcher.ui.common.rememberFlueElasticScrollState(listState)
+    return state.offsetPx to state.connection
 }
 
 private data class SideScreenWidgetCardItem(
@@ -923,9 +875,8 @@ fun WidgetPageLayer(
     val appWidgetManager = remember(context) { AppWidgetManager.getInstance(context) }
     val appWidgetHost = remember(context) { AppWidgetHost(context, SIDE_SCREEN_APP_WIDGET_HOST_ID) }
     val listState = rememberLazyListState()
-    val overscroll = remember { Animatable(0f) }
+    val sharedElasticState = rememberFlueElasticScrollState(listState)
     val scope = rememberCoroutineScope()
-    val widgetOverscrollLimitPx = 150f
     val widgetCards = remember(sideScreenWidgetSlots, widgetRepository) {
         val parsedCards = sideScreenWidgetSlots.mapIndexedNotNull { index, raw ->
             widgetRepository.parseSlotValue(raw)?.let { widget ->
@@ -1059,58 +1010,34 @@ fun WidgetPageLayer(
         }
     }
 
-    val nestedScrollConnection = remember(listState) {
+    val nestedScrollConnection = remember(listState, sharedElasticState) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 if (source != NestedScrollSource.UserInput) return Offset.Zero
                 if (draggingWidgetKey != null || activeWidgetResize != null) {
+                    sharedElasticState.reset()
                     return available
                 }
-                val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
-                val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-                val atBottom = lastVisible != null &&
-                    lastVisible.index >= listState.layoutInfo.totalItemsCount - 1 &&
-                    lastVisible.offset + lastVisible.size <= listState.layoutInfo.viewportEndOffset
-                when {
-                    available.y > 0f && atTop -> {
-                        scope.launch {
-                            overscroll.stop()
-                            overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtMost(widgetOverscrollLimitPx))
-                        }
-                        return Offset(0f, available.y)
-                    }
-                    available.y < 0f && atBottom -> {
-                        scope.launch {
-                            overscroll.stop()
-                            overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtLeast(-widgetOverscrollLimitPx))
-                        }
-                        return Offset(0f, available.y)
-                    }
-                    overscroll.value > 0f && available.y < 0f -> {
-                        scope.launch {
-                            overscroll.stop()
-                            overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(0f))
-                        }
-                        return Offset(0f, available.y)
-                    }
-                    overscroll.value < 0f && available.y > 0f -> {
-                        scope.launch {
-                            overscroll.stop()
-                            overscroll.snapTo((overscroll.value + available.y).coerceAtMost(0f))
-                        }
-                        return Offset(0f, available.y)
-                    }
-                }
-                return Offset.Zero
+                return sharedElasticState.connection.onPreScroll(available, source)
+            }
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource,
+            ): Offset {
+                if (draggingWidgetKey != null || activeWidgetResize != null) return Offset.Zero
+                return sharedElasticState.connection.onPostScroll(consumed, available, source)
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (overscroll.value != 0f) {
-                    overscroll.stop()
-                    overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-                    return available
-                }
-                return Velocity.Zero
+                if (draggingWidgetKey != null || activeWidgetResize != null) return available
+                return sharedElasticState.connection.onPreFling(available)
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                if (draggingWidgetKey != null || activeWidgetResize != null) return available
+                return sharedElasticState.connection.onPostFling(consumed, available)
             }
         }
     }
@@ -1440,7 +1367,8 @@ fun WidgetPageLayer(
             modifier = Modifier
                 .fillMaxSize()
                 .nestedScroll(nestedScrollConnection)
-                .graphicsLayer { translationY = overscroll.value }
+                .onSizeChanged { size -> sharedElasticState.setViewportHeight(size.height) }
+                .graphicsLayer { translationY = sharedElasticState.offsetPx }
                 .padding(start = leftSafeInset),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1599,11 +1527,19 @@ private fun WidgetPageChip(
     enabled: Boolean = true
 ) {
     val launcherStyle = LauncherTheme.style
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressScale = rememberFluePressScale(interactionSource, pressedScale = 0.94f)
     Box(
         modifier = Modifier
+            .fluePressScale(pressScale)
             .clip(RoundedCornerShape(999.dp))
             .background(if (enabled) launcherStyle.topBarChipColor else launcherStyle.cardColor)
-            .clickable(enabled = enabled, onClick = onClick)
+            .clickable(
+                enabled = enabled,
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            )
             .padding(horizontal = 12.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -2145,7 +2081,12 @@ private fun EmptyWidgetCard(width: Dp) {
 @Composable private fun NotificationIcon(icon: ImageBitmap?) {
     Box(Modifier.size(46.dp).clip(CircleShape).background(Color(0xFFD9D9D9)), contentAlignment = Alignment.Center) {
         if (icon != null) Image(icon, null, modifier = Modifier.fillMaxSize().clip(CircleShape), filterQuality = FilterQuality.Medium, contentScale = ContentScale.Crop)
-        else Icon(Icons.Filled.Notifications, null, tint = Color(0xFF2B2B2B), modifier = Modifier.size(24.dp))
+        else Icon(
+            painter = painterResource(R.drawable.ic_flue_notification_round),
+            contentDescription = null,
+            tint = Color(0xFF2B2B2B),
+            modifier = Modifier.size(24.dp),
+        )
     }
 }
 
@@ -2557,8 +2498,15 @@ private fun ShortcutPickerRow(
 }
 
 @Composable private fun RemoveOverlay(app: AppInfo?, widget: WidgetInfo?, onRemove: () -> Unit, onDismiss: () -> Unit) {
+    val scrollState = rememberScrollState()
     ModalShell(onDismiss) { dismiss ->
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth(0.74f).verticalScroll(rememberScrollState())) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .fillMaxWidth(0.74f)
+                .flueElasticNestedScroll(scrollState)
+                .verticalScroll(scrollState),
+        ) {
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xFF2C2C2E))) {
                 Box(Modifier.fillMaxWidth().clickable { onRemove(); dismiss() }.padding(horizontal = 16.dp, vertical = 14.dp)) {
                     Text("移除", color = Color(0xFFFF453A), fontSize = 15.sp, fontWeight = FontWeight.W500)

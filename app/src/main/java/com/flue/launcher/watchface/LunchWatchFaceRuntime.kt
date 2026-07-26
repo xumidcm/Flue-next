@@ -15,6 +15,7 @@ import com.flue.launcher.EXTRA_SETTINGS_DESTINATION
 import com.flue.launcher.EXTRA_SETTINGS_RETURN_TO_FACE
 import com.flue.launcher.SETTINGS_DESTINATION_WATCH_FACES
 import com.flue.launcher.SettingsActivity
+import com.flue.launcher.WatchEditorActivity
 import dalvik.system.DexClassLoader
 
 object LunchWatchFaceRuntime {
@@ -32,6 +33,17 @@ object LunchWatchFaceRuntime {
     }
 
     fun openSettings(context: Context, descriptor: LunchWatchFaceDescriptor): Boolean {
+        if (descriptor.isWatchmaker) {
+            return runCatching {
+                context.startActivity(
+                    Intent(context, WatchEditorActivity::class.java).apply {
+                        putExtra(WatchEditorActivity.EXTRA_WATCH_FACE_ID, descriptor.id)
+                        if (context !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    },
+                )
+                true
+            }.getOrDefault(false)
+        }
         val settingsClassName = descriptor.settingsEntryClassName ?: return false
         return runCatching {
             val loader = createDexClassLoader(context, descriptor)

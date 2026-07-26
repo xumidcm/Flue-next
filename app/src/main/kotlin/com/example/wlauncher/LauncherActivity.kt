@@ -11,15 +11,11 @@ import androidx.activity.addCallback
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -41,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,19 +50,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import androidx.compose.animation.core.FastOutSlowInEasing
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.launchsession.ExternalLaunchState
 import com.flue.launcher.launchsession.ReturnKind
 import com.flue.launcher.service.FlueAccessibilityService
 import com.flue.launcher.ui.anim.appListLayerValues
-import com.flue.launcher.ui.anim.appListLayerMotionPolicy
 import com.flue.launcher.ui.anim.faceLayerValues
-import com.flue.launcher.ui.anim.launchMaskMotionPolicy
+import com.flue.launcher.ui.anim.returnUsesLaunchOrigin
 import com.flue.launcher.ui.anim.scaleBlurAlpha
-import com.flue.launcher.ui.anim.AppListScaleMotion
-import com.flue.launcher.ui.anim.TransitionSpring
 import com.flue.launcher.ui.anim.LayerPivot
+import com.flue.launcher.motion.asFloatAnimationSpec
+import com.flue.launcher.motion.LocalFlueMotionProfile
 import com.flue.launcher.ui.controlcenter.ControlCenterLayer
 import com.flue.launcher.ui.drawer.AppFolderOverlay
 import com.flue.launcher.ui.drawer.NativeListDrawerScreen
@@ -98,18 +93,41 @@ import com.flue.launcher.watchface.LunchWatchFaceHost
 import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceHost
 import com.flue.launcher.watchface.jbwatch.JbWatchFaceHost
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceHost
+import com.flue.launcher.watchface.standard.rememberWatchmakerWatchDataProvider
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
-private const val BASE_LAUNCH_MASK_DELAY_MS = 180L
 private const val SIDE_SCREEN_TRANSITION_MS = 260
 private const val NOTIFICATION_TRANSITION_MS = 240
-private const val APP_LIST_OPEN_SHADOW_DELAY_MS = 280L
-private const val APP_LIST_RETURN_SHADOW_DELAY_MS = 320L
-private const val APP_LIST_RETURN_ORIGIN_HOLD_MS = 420L
 private const val APP_RETURN_MAINTENANCE_DELAY_MS = 260L
-private const val APP_LIST_LAYER_RELEASE_HOLD_MS = 32L
-private const val LAUNCH_MASK_EXIT_RETAIN_MS = 260L
+
+/**
+ * The tracker is the source of truth for a launch transition.  Keeping these
+ * projections here prevents the UI from falling back to the last mutable
+ * ViewModel origin while a return is being classified.
+ */
+private fun ExternalLaunchState.sessionOriginOrNull(): Offset? = when (this) {
+    is ExternalLaunchState.MaskEntering -> Offset(session.origin.x, session.origin.y)
+    is ExternalLaunchState.LaunchDispatched -> Offset(session.origin.x, session.origin.y)
+    is ExternalLaunchState.Backgrounded -> Offset(session.origin.x, session.origin.y)
+    is ExternalLaunchState.Returning -> Offset(session.origin.x, session.origin.y)
+    is ExternalLaunchState.Failed -> Offset(session.origin.x, session.origin.y)
+    is ExternalLaunchState.Cancelled -> Offset(session.origin.x, session.origin.y)
+    is ExternalLaunchState.Invalidated -> session?.let { Offset(it.origin.x, it.origin.y) }
+    ExternalLaunchState.Idle -> null
+}
+
+private fun ExternalLaunchState.sessionSourceStateOrNull(): ScreenState? = when (this) {
+    is ExternalLaunchState.MaskEntering -> session.sourceState
+    is ExternalLaunchState.LaunchDispatched -> session.sourceState
+    is ExternalLaunchState.Backgrounded -> session.sourceState
+    is ExternalLaunchState.Returning -> session.sourceState
+    is ExternalLaunchState.Failed -> session.sourceState
+    is ExternalLaunchState.Cancelled -> session.sourceState
+    is ExternalLaunchState.Invalidated -> session?.sourceState
+    ExternalLaunchState.Idle -> null
+}
 
 class LauncherActivity : ComponentActivity() {
 
@@ -224,10 +242,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appListScalePercent by vm.appListScalePercent.collectAsStateWithLifecycle()
     val appListRowBorderEnabled by vm.appListRowBorderEnabled.collectAsStateWithLifecycle()
     val appListFoldersEnabled by vm.appListFoldersEnabled.collectAsStateWithLifecycle()
-    val fastFlowAnimationEnabled by vm.fastFlowAnimationEnabled.collectAsStateWithLifecycle()
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
     val classicReturnAnimationEnabled by vm.classicReturnAnimationEnabled.collectAsStateWithLifecycle()
+    val activeMotionProfile by vm.activeMotionProfile.collectAsStateWithLifecycle()
     val showStepCount by vm.showStepCount.collectAsStateWithLifecycle()
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
     val rotaryHapticsEnabled by vm.rotaryHapticsEnabled.collectAsStateWithLifecycle()
@@ -236,6 +254,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
+    val watchmakerForceFill by vm.watchmakerForceFill.collectAsStateWithLifecycle()
     val dingDingCatFillScreen by vm.dingDingCatFillScreen.collectAsStateWithLifecycle()
     val dingDingCatPlaybackSpeedPercent by vm.dingDingCatPlaybackSpeedPercent.collectAsStateWithLifecycle()
     val doubleTapLockScreenEnabled by vm.doubleTapLockScreenEnabled.collectAsStateWithLifecycle()
@@ -254,6 +273,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val selectedWatchFace by vm.selectedWatchFace.collectAsStateWithLifecycle()
     val watchFaceSelectionReady by vm.watchFaceSelectionReady.collectAsStateWithLifecycle()
     val watchFaceRefreshToken by vm.watchFaceRefreshToken.collectAsStateWithLifecycle()
+    val watchmakerDataProvider = rememberWatchmakerWatchDataProvider(
+        active = selectedWatchFace.isWatchmaker && launcherInteractive,
+    )
     val builtInPhotoPath by vm.builtInPhotoPath.collectAsStateWithLifecycle()
     val builtInVideoPath by vm.builtInVideoPath.collectAsStateWithLifecycle()
     val builtInPhotoClockPosition by vm.builtInPhotoClockPosition.collectAsStateWithLifecycle()
@@ -360,10 +382,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
         uiStyle = uiStyle,
         useWatchFaceColor = if (uiStyle == UiStyle.MATERIAL_3) true else useAppListWatchFaceColors
     )
-    val launchBackdropColor = when (launchSourceState) {
+    val launchBackdropSourceState =
+        externalLaunchState.sessionSourceStateOrNull() ?: launchSourceState
+    // The mask must sample the same palette as the layer it covers.  Using a
+    // translucent black here made light-mode launches flash black and exposed
+    // a second colour boundary while the list was shrinking on return.
+    val launchBackdropColor = when (launchBackdropSourceState) {
         ScreenState.Apps -> appListColors.background
         else -> launcherStyle.screenBackground
-    }
+    }.copy(alpha = 1f)
     val layerBlurEnabled =
         blurEnabled && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || screenState != ScreenState.App)
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
@@ -416,7 +443,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
     val launchAppFromLauncher: (AppInfo, Offset, ScreenState) -> Unit = { appInfo, origin, returnState ->
         val launchDelay = if (animationOverrideEnabled) {
-            BASE_LAUNCH_MASK_DELAY_MS + if (splashIcon) splashDelay.toLong() else 0L
+            activeMotionProfile.appLaunch.handoffMillis.toLong() +
+                if (splashIcon) splashDelay.toLong() else 0L
         } else {
             0L
         }
@@ -471,7 +499,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             ScreenState.Apps -> {
                 if (targetReturn && (appListReturnOriginActive || isReturningFromApp)) {
                     appListReturnOriginActive = true
-                    delay(APP_LIST_RETURN_ORIGIN_HOLD_MS)
+                    delay(activeMotionProfile.appReturn.durationMillis.toLong())
                     appListReturnOriginActive = false
                 } else {
                     appListReturnOriginActive = false
@@ -529,9 +557,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val previousState = prevState
         appListLayerReleaseHold = false
         try {
-            if (previousState == ScreenState.Apps && screenState == ScreenState.App) {
+            if (previousState == ScreenState.Apps && screenState != ScreenState.Apps) {
                 appListLayerReleaseHold = true
-                delay(APP_LIST_LAYER_RELEASE_HOLD_MS)
+                val holdMillis = when (screenState) {
+                    ScreenState.Face -> activeMotionProfile.pullToFace.durationMillis
+                    ScreenState.App -> activeMotionProfile.appLaunch.durationMillis
+                    else -> activeMotionProfile.appListEnter.durationMillis
+                }
+                delay(holdMillis.toLong())
             } else {
                 appListLayerReleaseHold = false
             }
@@ -556,8 +589,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
         appListShadowsReady = false
         val shadowDelayMs = when {
-            isReturningFromApp -> APP_LIST_RETURN_SHADOW_DELAY_MS
-            isEnteringAppList -> APP_LIST_OPEN_SHADOW_DELAY_MS
+            isReturningFromApp -> activeMotionProfile.appReturn.handoffMillis.toLong()
+            isEnteringAppList -> activeMotionProfile.appListEnter.handoffMillis.toLong()
             else -> 0L
         }
         if (shadowDelayMs > 0L) {
@@ -567,7 +600,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
     }
     val launcherScope = rememberCoroutineScope()
     var retainedLaunchIcon by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
-    var retainedLaunchSplash by remember { mutableStateOf(false) }
+    var retainedLaunchOrigin by remember { mutableStateOf<Offset?>(null) }
+    // Capture the source before the ViewModel clears currentLaunchIcon while
+    // resolving a return.  The visual layer owns this short-lived snapshot;
+    // it is never used as evidence for return classification.
+    LaunchedEffect(currentLaunchIcon, appOpenOrigin) {
+        if (currentLaunchIcon != null) {
+            retainedLaunchIcon = currentLaunchIcon
+            retainedLaunchOrigin = appOpenOrigin
+        }
+    }
     LaunchedEffect(externalLaunchState) {
         val terminalSessionId = when (val state = externalLaunchState) {
             is ExternalLaunchState.Returning -> state.session.id
@@ -577,14 +619,25 @@ fun LauncherScreen(vm: LauncherViewModel) {
             else -> null
         } ?: return@LaunchedEffect
 
-        if (!targetReturn) {
+        val keepIconForReverse = when (val state = externalLaunchState) {
+            is ExternalLaunchState.Returning -> returnUsesLaunchOrigin(state.kind)
+            // A launch cancelled before dispatch can still be visibly part way
+            // through the handoff.  Let the same clock reverse instead of
+            // dropping the icon on the first cancelled frame.
+            is ExternalLaunchState.Cancelled -> state.session.sourceState == ScreenState.Apps
+            else -> false
+        }
+        if (!keepIconForReverse) {
             retainedLaunchIcon = null
-            retainedLaunchSplash = false
+            retainedLaunchOrigin = null
         } else {
-            delay(APP_LIST_RETURN_ORIGIN_HOLD_MS)
+            delay(activeMotionProfile.appReturn.durationMillis.toLong())
         }
         vm.acknowledgeExternalLaunch(terminalSessionId)
     }
+    val sessionLaunchOrigin = externalLaunchState.sessionOriginOrNull()
+    val effectiveLaunchOrigin =
+        sessionLaunchOrigin ?: retainedLaunchOrigin ?: appOpenOrigin
     val notificationTransition = remember { Animatable(if (notificationSceneActive) 1f else 0f) }
     var notificationGestureActive by remember { mutableStateOf(false) }
     var notificationTargetProgress by remember { mutableFloatStateOf(if (notificationSceneActive) 1f else 0f) }
@@ -595,9 +648,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appListTransformOrigin = when {
         launchSourceState != ScreenState.Apps -> LayerPivot.Center
         screenState == ScreenState.App && activeLaunchUsesOrigin ->
-            LayerPivot.LaunchIcon(appOpenOrigin)
+            LayerPivot.LaunchIcon(effectiveLaunchOrigin)
         targetReturn && appListReturnOriginActive && !classicReturnAnimationEnabled ->
-            LayerPivot.LaunchIcon(appOpenOrigin)
+            LayerPivot.LaunchIcon(effectiveLaunchOrigin)
         else -> LayerPivot.Center
     }
     val appListIconReturnActive =
@@ -609,66 +662,29 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appListLayerOrigin = if (isOpeningAppList || isClosingAppListToFace) {
         LayerPivot.Center
     } else if (appListIconReturnActive) {
-        LayerPivot.LaunchIcon(appOpenOrigin)
+        LayerPivot.LaunchIcon(effectiveLaunchOrigin)
     } else {
         appListTransformOrigin
     }
-    val appleWatchStyle = uiStyle == UiStyle.APPLE_WATCH
     val activeAppListBackend = appListBackend(layoutMode, uiStyle)
-    val appListMotionPolicy = remember(
-        appleWatchStyle,
-        isOpeningAppList,
-        isClosingAppListToFace,
-        isReturningFromApp,
-        appListIconReturnActive,
-    ) {
-        appListLayerMotionPolicy(
-            appleWatchStyle = appleWatchStyle,
-            openingFromFace = isOpeningAppList,
-            closingToFace = isClosingAppListToFace,
-            returningFromApp = isReturningFromApp || appListIconReturnActive,
-        )
+    val appListMotionPhase = when {
+        isReturningFromApp || appListIconReturnActive -> activeMotionProfile.appReturn
+        isClosingAppListToFace -> activeMotionProfile.pullToFace
+        else -> activeMotionProfile.appListEnter
     }
-    val appListMotionSpec = remember(appListMotionPolicy.scaleMotion) {
-        when (appListMotionPolicy.scaleMotion) {
-            AppListScaleMotion.BETA_12_SPRING,
-            AppListScaleMotion.STANDARD_SPRING -> TransitionSpring
-            AppListScaleMotion.TWEEN_220 -> tween<Float>(durationMillis = 220)
-            AppListScaleMotion.MATERIAL_RETURN_260 -> tween(
-                durationMillis = 260,
-                easing = FastOutSlowInEasing,
-            )
-        }
+    val appListMotionSpec = remember(appListMotionPhase) {
+        appListMotionPhase.asFloatAnimationSpec()
     }
-    val appListAlphaSpec = remember(appListMotionPolicy.alphaDurationMillis) {
-        tween<Float>(durationMillis = appListMotionPolicy.alphaDurationMillis)
+    val appListAlphaSpec = remember(appListMotionPhase) {
+        appListMotionPhase.asFloatAnimationSpec()
     }
-    val appListBlurSpec = remember(appListMotionPolicy.blurDurationMillis) {
-        tween<Float>(durationMillis = appListMotionPolicy.blurDurationMillis)
+    val appListBlurSpec = remember(appListMotionPhase) {
+        appListMotionPhase.asFloatAnimationSpec()
     }
-    val launchMaskPolicy = remember(appleWatchStyle) {
-        launchMaskMotionPolicy(appleWatchStyle = appleWatchStyle)
-    }
-    val launchMaskEnterTransition = remember(launchMaskPolicy) {
-        fadeIn(animationSpec = tween(launchMaskPolicy.enterDurationMillis))
-    }
-    val launchMaskExitTransition = remember(launchMaskPolicy) {
-        val fade = fadeOut(
-            animationSpec = tween(launchMaskPolicy.exitDurationMillis),
-        )
-        if (launchMaskPolicy.exitSlideDurationMillis > 0) {
-            fade + slideOutVertically(
-                animationSpec = tween(launchMaskPolicy.exitSlideDurationMillis),
-                targetOffsetY = { fullHeight ->
-                    (fullHeight * launchMaskPolicy.exitSlideFraction).toInt()
-                },
-            )
-        } else {
-            fade
-        }
-    }
-    val launchTransitionUnderlying =
-        animationOverrideEnabled && launchMaskPolicy.opaqueBlack && screenState == ScreenState.App
+    // The launch mask now has one scalar clock.  Keeping it independent from
+    // AnimatedVisibility means a return can be cancelled without snapping the
+    // icon or backdrop to a fresh enter transition.
+    val launchTransitionUnderlying = false
     val nativeListTransitionInMotion =
         isOpeningAppList ||
             isClosingAppListToFace ||
@@ -686,7 +702,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val fadeLaunch = launchSourceState == ScreenState.Stack || launchSourceState == ScreenState.Notifications
     val iconLaunchAvailable = currentLaunchIcon != null || retainedLaunchIcon != null
     val iconlessFadeLaunch = fadeLaunch && !iconLaunchAvailable
-    val directLaunchBlackBackdropVisible = directLaunchStartupWindowOpen && (
+    val effectiveLaunchIcon = currentLaunchIcon ?: retainedLaunchIcon
+    val directLaunchBackdropVisible = directLaunchStartupWindowOpen && (
         !directLaunchAppListPreferenceLoaded ||
             (!directLaunchAppListConsumed && directLaunchAppListEnabled && screenState == ScreenState.Face) ||
             (directLaunchAppListConsumed && screenState == ScreenState.Apps)
@@ -713,47 +730,62 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
     }
 
-    var showSplash by remember { mutableStateOf(false) }
-    val showLaunchBackdrop =
+    val launchMotionEntering =
         animationOverrideEnabled &&
             screenState == ScreenState.App &&
             (iconlessFadeLaunch || iconLaunchAvailable)
-    val effectiveLaunchIcon = currentLaunchIcon ?: retainedLaunchIcon
-    val effectiveLaunchSplash = !iconlessFadeLaunch && (
-            (showSplash && currentLaunchIcon != null) ||
-            (retainedLaunchSplash && retainedLaunchIcon != null)
-    )
-    LaunchedEffect(
-        animationOverrideEnabled,
-        screenState,
-        splashIcon,
-        splashDelay,
-        currentLaunchIcon,
-        iconlessFadeLaunch,
-    ) {
-        if (
-            animationOverrideEnabled &&
-            !iconlessFadeLaunch &&
-            screenState == ScreenState.App &&
-            splashIcon &&
-            currentLaunchIcon != null
-        ) {
-            showSplash = false
-            delay(BASE_LAUNCH_MASK_DELAY_MS)
-            showSplash = true
+    val launchMotionReturnVisual =
+        animationOverrideEnabled &&
+            !launchMotionEntering &&
+            effectiveLaunchIcon != null &&
+            when (val state = externalLaunchState) {
+                is ExternalLaunchState.Returning ->
+                    returnUsesLaunchOrigin(state.kind)
+                is ExternalLaunchState.Cancelled ->
+                    state.session.sourceState == ScreenState.Apps
+                else -> false
+            }
+    val launchMotionRequested = launchMotionEntering || launchMotionReturnVisual
+    val launchMotionTarget = if (launchMotionEntering) 1f else 0f
+    val launchMotionProgress = remember { Animatable(0f) }
+    LaunchedEffect(launchMotionTarget, activeMotionProfile) {
+        val current = launchMotionProgress.value
+        val currentVelocity = launchMotionProgress.velocity
+        val directedVelocity = when {
+            launchMotionTarget > current -> abs(currentVelocity)
+            launchMotionTarget < current -> -abs(currentVelocity)
+            else -> 0f
+        }
+        val spec = if (launchMotionTarget > current) {
+            activeMotionProfile.appLaunch.asFloatAnimationSpec()
         } else {
-            showSplash = false
+            activeMotionProfile.appReturn.asFloatAnimationSpec()
+        }
+        launchMotionProgress.animateTo(
+            targetValue = launchMotionTarget,
+            animationSpec = spec,
+            initialVelocity = directedVelocity,
+        )
+        if (launchMotionTarget <= 0f && !launchMotionEntering) {
+            // A new launch cancels this coroutine before the snapshot is
+            // released, so an interrupted return can immediately reverse.
+            retainedLaunchIcon = null
+            retainedLaunchOrigin = null
         }
     }
-    LaunchedEffect(showLaunchBackdrop, currentLaunchIcon, showSplash, iconlessFadeLaunch) {
-        if (!iconlessFadeLaunch && showLaunchBackdrop && currentLaunchIcon != null) {
-            retainedLaunchIcon = currentLaunchIcon
-            retainedLaunchSplash = showSplash
-        } else if (!showLaunchBackdrop) {
-            delay(LAUNCH_MASK_EXIT_RETAIN_MS)
-            retainedLaunchIcon = null
-            retainedLaunchSplash = false
+    val showLaunchBackdrop = launchMotionRequested || launchMotionProgress.value > 0.001f
+    // The launch dispatch delay keeps the splash on screen long enough; it
+    // must not also delay the source icon until the last few frames.
+    val iconRevealFraction = 0.06f
+    val iconProgress = if (launchMotionTarget > 0.5f) {
+        if (splashIcon) {
+            ((launchMotionProgress.value - iconRevealFraction) /
+                (1f - iconRevealFraction)).coerceIn(0f, 1f)
+        } else {
+            0f
         }
+    } else {
+        launchMotionProgress.value.coerceIn(0f, 1f)
     }
 
     BoxWithConstraints(
@@ -869,12 +901,21 @@ fun LauncherScreen(vm: LauncherViewModel) {
             widgetsBackGestureLocked = widgetPageEditGestureLocked,
             modifier = Modifier.fillMaxSize()
         ) {
-            if (directLaunchBlackBackdropVisible) {
+            if (directLaunchBackdropVisible) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .zIndex(if (screenState == ScreenState.Face) 4f else 2f)
-                        .background(Color.Black)
+                        // Startup preference hydration used to paint a hard
+                        // black window even in light mode.  Keep the same
+                        // palette as the layer that is about to be shown.
+                        .background(
+                            if (screenState == ScreenState.Apps) {
+                                appListColors.background
+                            } else {
+                                launcherStyle.screenBackground
+                            },
+                        )
                 )
             }
             Box(
@@ -933,7 +974,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             photoOptions = photoWatchOptions,
                             videoOptions = videoWatchOptions,
                             showChargingPowerText = watchFaceChargingPowerText,
-                            showStatusIndicators = watchFaceStatusIndicators,
+                            showStatusIndicators = false,
                             showBottomFade = watchFaceBottomFadeEnabled,
                             bottomFadeColor = watchFaceFadePalette.fadeEdge,
                             bottomFadeHeightDp = honeycombBottomFade,
@@ -964,6 +1005,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                     val rootCause = generateSequence(error) { it.cause }.last()
                                     vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
                                 },
+                                dataProvider = watchmakerDataProvider,
+                                forceFill = watchmakerForceFill,
                             )
                             if (watchFaceBottomFadeEnabled) {
                                 WatchFaceBottomFadeOverlay(
@@ -972,13 +1015,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                     blurRadiusDp = if (blurEnabled && edgeBlurEnabled) honeycombEdgeBlurRadius else 0f
                                 )
                             }
-                            WatchFaceStatusIndicatorOverlay(
-                                showStatusIndicators = watchFaceStatusIndicators,
-                                hasNotifications = showNotification && notificationGroups.isNotEmpty(),
-                                modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .padding(top = 18.dp)
-                            )
                         }
                     } else if (selectedWatchFace.isDingDingCat) {
                         Box(modifier = Modifier.fillMaxSize()) {
@@ -1007,13 +1043,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                     blurRadiusDp = if (blurEnabled && edgeBlurEnabled) honeycombEdgeBlurRadius else 0f
                                 )
                             }
-                            WatchFaceStatusIndicatorOverlay(
-                                showStatusIndicators = watchFaceStatusIndicators,
-                                hasNotifications = showNotification && notificationGroups.isNotEmpty(),
-                                modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .padding(top = 18.dp)
-                            )
                         }
                     } else if (selectedWatchFace.isJbWatch) {
                         Box(modifier = Modifier.fillMaxSize()) {
@@ -1040,13 +1069,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                     blurRadiusDp = if (blurEnabled && edgeBlurEnabled) honeycombEdgeBlurRadius else 0f
                                 )
                             }
-                            WatchFaceStatusIndicatorOverlay(
-                                showStatusIndicators = watchFaceStatusIndicators,
-                                hasNotifications = showNotification && notificationGroups.isNotEmpty(),
-                                modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .padding(top = 18.dp)
-                            )
                         }
                     } else {
                         Box(modifier = Modifier.fillMaxSize()) {
@@ -1073,16 +1095,25 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                     blurRadiusDp = if (blurEnabled && edgeBlurEnabled) honeycombEdgeBlurRadius else 0f
                                 )
                             }
-                            WatchFaceStatusIndicatorOverlay(
-                                showStatusIndicators = watchFaceStatusIndicators,
-                                hasNotifications = showNotification && notificationGroups.isNotEmpty(),
-                                modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .padding(top = 18.dp)
-                            )
                         }
                     }
                 }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(if (screenState == ScreenState.Face && !sideSceneOverlayActive) 3.5f else 0.5f),
+                contentAlignment = Alignment.TopCenter,
+            ) {
+                // This sibling stays above every watch-face implementation,
+                // including the native AndroidView, so face clipping/effects
+                // can never cover charging and notification status.
+                WatchFaceStatusIndicatorOverlay(
+                    showStatusIndicators = watchFaceStatusIndicators,
+                    hasNotifications = showNotification && notificationGroups.isNotEmpty(),
+                    modifier = Modifier.padding(top = 18.dp),
+                )
             }
 
             Box(
@@ -1127,7 +1158,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         fisheyeRangeRows = appListFisheyeRangeRows,
                         fisheyeStrengthPercent = appListFisheyeStrengthPercent,
                         edgeSpacingCompressionEnabled = appListEdgeSpacingCompressionEnabled,
-                        fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                         twoToneIconsEnabled = twoToneIconsEnabled,
                         iconShadowEnabled = effectiveIconShadowEnabled,
                         themeColor = appListThemeColor,
@@ -1174,7 +1204,18 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 edgeColor = appListColors.fadeEdge,
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(3.1f),
+                    .zIndex(3.1f)
+                    .scaleBlurAlpha(
+                        targetValues = appListLayerValues(screenState, uiStyle),
+                        screenWidth = screenWidthPx,
+                        screenHeight = screenHeightPx,
+                        blurEnabled = false,
+                        origin = appListLayerOrigin,
+                        scaleSpec = appListMotionSpec,
+                        alphaSpec = appListAlphaSpec,
+                        blurSpec = appListBlurSpec,
+                        translationSpec = appListMotionSpec,
+                    ),
             )
 
             val visibleFolder = openFolder
@@ -1222,18 +1263,18 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 )
             }
 
-            AnimatedVisibility(
-                visible = showLaunchBackdrop,
-                modifier = Modifier.zIndex(6f),
-                enter = launchMaskEnterTransition,
-                exit = launchMaskExitTransition,
-            ) {
+            if (showLaunchBackdrop) {
                 LaunchBackdropContent(
-                    showSplash = effectiveLaunchSplash,
+                    progress = launchMotionProgress.value,
+                    iconProgress = iconProgress,
+                    entering = launchMotionTarget > 0.5f,
                     icon = effectiveLaunchIcon,
+                    origin = effectiveLaunchOrigin,
+                    screenWidthPx = screenWidthPx,
+                    screenHeightPx = screenHeightPx,
                     uiStyle = uiStyle,
                     backgroundColor = launchBackdropColor,
-                    opaqueBlack = launchMaskPolicy.opaqueBlack,
+                    modifier = Modifier.zIndex(6f),
                 )
             }
 
@@ -1277,7 +1318,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 origin,
                                 ScreenState.Stack,
                                 if (animationOverrideEnabled) {
-                                    BASE_LAUNCH_MASK_DELAY_MS +
+                                    activeMotionProfile.appLaunch.handoffMillis.toLong() +
                                         if (splashIcon) splashDelay.toLong() else 0L
                                 } else {
                                     0L
@@ -1359,6 +1400,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             translationY = (1f - notificationProgress) * screenHeightPx
                         }
                 ) {
+                    CompositionLocalProvider(LocalFlueMotionProfile provides activeMotionProfile) {
                     NotificationLayer(
                         isActive = notificationSceneActive || notificationGestureActive,
                         transitionProgress = notificationProgress,
@@ -1386,7 +1428,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 origin,
                                 notificationReturnState,
                                 if (animationOverrideEnabled) {
-                                    BASE_LAUNCH_MASK_DELAY_MS +
+                                    activeMotionProfile.appLaunch.handoffMillis.toLong() +
                                         if (splashIcon) splashDelay.toLong() else 0L
                                 } else {
                                     0L
@@ -1395,6 +1437,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         },
                         stackCardColor = notificationStackTint
                     )
+                    }
                 }
             }
         }
@@ -1403,43 +1446,60 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
 @Composable
 private fun LaunchBackdropContent(
-    showSplash: Boolean,
+    progress: Float,
+    iconProgress: Float,
+    entering: Boolean,
     icon: androidx.compose.ui.graphics.ImageBitmap?,
+    origin: Offset,
+    screenWidthPx: Float,
+    screenHeightPx: Float,
     uiStyle: UiStyle,
     backgroundColor: Color,
-    opaqueBlack: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     val launcherStyle = LauncherTheme.style
-    val overlayAlpha = if (uiStyle == UiStyle.MATERIAL_3) 0.72f else 0.68f
+    val motionProgress = progress.coerceIn(0f, 1f)
+    val visibleIconProgress = iconProgress.coerceIn(0f, 1f)
+    val initialIconScale = if (uiStyle == UiStyle.MATERIAL_3) 0.82f else 0.5f
+    val exitIconScale = if (uiStyle == UiStyle.MATERIAL_3) 0.88f else 0.3f
+    val iconScale = if (entering) {
+        initialIconScale + (1f - initialIconScale) * visibleIconProgress
+    } else {
+        exitIconScale + (1f - exitIconScale) * visibleIconProgress
+    }
+    val normalizedOrigin = if (origin.x.isFinite() && origin.y.isFinite()) {
+        Offset(origin.x.coerceIn(0f, 1f), origin.y.coerceIn(0f, 1f))
+    } else {
+        Offset(0.5f, 0.5f)
+    }
+    val sourceTranslationX = (normalizedOrigin.x - 0.5f) * screenWidthPx
+    val sourceTranslationY = (normalizedOrigin.y - 0.5f) * screenHeightPx
+    val sourceOffsetFraction = 1f - motionProgress
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
-            .background(
-                if (opaqueBlack) {
-                    Color.Black
-                } else {
-                    backgroundColor.copy(
-                        alpha = minOf(backgroundColor.alpha, overlayAlpha),
-                    )
-                },
-            ),
+            .graphicsLayer {
+                alpha = motionProgress
+            }
+            .background(backgroundColor.copy(alpha = 1f)),
         contentAlignment = Alignment.Center
     ) {
-        AnimatedVisibility(
-            visible = showSplash && icon != null,
-            enter = fadeIn() + scaleIn(initialScale = if (uiStyle == UiStyle.MATERIAL_3) 0.82f else 0.5f),
-            exit = fadeOut() + scaleOut(targetScale = if (uiStyle == UiStyle.MATERIAL_3) 0.88f else 0.3f)
-        ) {
-            icon?.let { launchIcon ->
-                Image(
-                    bitmap = launchIcon,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(96.dp)
-                        .clip(if (uiStyle == UiStyle.MATERIAL_3) launcherStyle.compactShape else CircleShape),
-                    contentScale = ContentScale.Crop
-                )
-            }
+        if (icon != null && visibleIconProgress > 0.001f) {
+            Image(
+                bitmap = icon,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(96.dp)
+                    .graphicsLayer {
+                        scaleX = iconScale
+                        scaleY = iconScale
+                        alpha = visibleIconProgress
+                        translationX = sourceTranslationX * sourceOffsetFraction
+                        translationY = sourceTranslationY * sourceOffsetFraction
+                    }
+                    .clip(if (uiStyle == UiStyle.MATERIAL_3) launcherStyle.compactShape else CircleShape),
+                contentScale = ContentScale.Crop
+            )
         }
     }
 }

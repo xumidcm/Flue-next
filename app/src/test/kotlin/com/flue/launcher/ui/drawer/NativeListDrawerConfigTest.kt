@@ -92,7 +92,6 @@ class NativeListDrawerConfigTest {
             request(
                 allowFolderCreation = false,
                 iconShadowEnabled = false,
-                fastFlowAnimationEnabled = true,
                 edgeSpacingCompressionEnabled = false,
                 entryProgress = 0.35f,
             ),
@@ -100,7 +99,6 @@ class NativeListDrawerConfigTest {
 
         assertFalse(config.allowFolderCreation)
         assertFalse(config.iconShadowEnabled)
-        assertTrue(config.fastFlowAnimationEnabled)
         assertFalse(config.edgeSpacingCompressionEnabled)
         assertEquals(0.35f, config.entryProgress)
     }
@@ -151,7 +149,7 @@ class NativeListDrawerConfigTest {
     }
 
     @Test
-    fun mapsLegacyMaterialDenseGridGeometryWithoutFastFlow() {
+    fun mapsLegacyMaterialDenseGridGeometry() {
         val config = nativeListDrawerConfig(
             request(
                 density = 2f,
@@ -160,7 +158,6 @@ class NativeListDrawerConfigTest {
                 appListScalePercent = 200,
                 presentation = NativeAppListPresentation.DENSE_GRID,
                 honeycombNarrowColumns = 4,
-                fastFlowAnimationEnabled = true,
                 appleWatchIconShape = false,
             ),
         )
@@ -174,7 +171,6 @@ class NativeListDrawerConfigTest {
         assertEquals(96f, config.denseGridMinimumItemHeightPx, 0f)
         assertEquals(16f, config.denseGridMinimumVerticalPaddingPx, 0f)
         assertEquals(12f, config.denseGridIconInnerPaddingPx, 0f)
-        assertFalse(config.fastFlowAnimationEnabled)
     }
 
     private fun request(
@@ -192,7 +188,6 @@ class NativeListDrawerConfigTest {
         rowBorderEnabled: Boolean = false,
         allowFolderCreation: Boolean = true,
         iconShadowEnabled: Boolean = true,
-        fastFlowAnimationEnabled: Boolean = false,
         edgeSpacingCompressionEnabled: Boolean = true,
         entryProgress: Float = 1f,
         presentation: NativeAppListPresentation = NativeAppListPresentation.LINEAR,
@@ -215,7 +210,6 @@ class NativeListDrawerConfigTest {
         fisheyeRangeRows = fisheyeRangeRows,
         fisheyeStrengthPercent = fisheyeStrengthPercent,
         edgeSpacingCompressionEnabled = edgeSpacingCompressionEnabled,
-        fastFlowAnimationEnabled = fastFlowAnimationEnabled,
         topFadeRangeDp = 56,
         bottomFadeRangeDp = 56,
         topBlurRadiusDp = 4f,

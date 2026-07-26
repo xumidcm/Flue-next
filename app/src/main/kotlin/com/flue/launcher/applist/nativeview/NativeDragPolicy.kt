@@ -86,3 +86,10 @@ internal class NativeFolderHoverGate(
         startedAtMillis = 0L
     }
 }
+
+internal fun nativeFolderTargetAllowed(
+    source: NativeAppListBoundRow<*>,
+    target: NativeAppListBoundRow<*>,
+): Boolean =
+    source.stableKey != target.stableKey &&
+        target.entry.type != com.flue.launcher.applist.model.AppItemType.SHORTCUT

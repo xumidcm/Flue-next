@@ -78,7 +78,10 @@ class NativeDragGestureMachineTest {
     fun `slow same target arms folder and release revalidates key`() {
         val machine = draggingMachine()
 
-        machine.onMove(0f, 130f, key("b"), 0.2f, 700L)
+        assertEquals(
+            listOf(NativeDragEffect.Move(key("a"), key("b"))),
+            machine.onMove(0f, 130f, key("b"), 0.2f, 700L),
+        )
         assertEquals(
             listOf(NativeDragEffect.FolderHoverChanged(key("b"))),
             machine.onMove(0f, 131f, key("b"), 0.2f, 1200L),
@@ -89,7 +92,7 @@ class NativeDragGestureMachineTest {
                 NativeDragEffect.FolderHoverChanged(null),
                 NativeDragEffect.CommitDrag,
             ),
-            machine.onUp(currentTargetKey = key("b")),
+            machine.onUp(currentFolderTargetKey = key("b")),
         )
 
         val changedTarget = draggingMachine()
@@ -98,9 +101,30 @@ class NativeDragGestureMachineTest {
         assertEquals(
             listOf(
                 NativeDragEffect.FolderHoverChanged(null),
+                NativeDragEffect.Move(key("a"), key("c")),
                 NativeDragEffect.CommitDrag,
             ),
-            changedTarget.onUp(currentTargetKey = key("c")),
+            changedTarget.onUp(
+                currentFolderTargetKey = key("c"),
+                currentReorderTargetKey = key("c"),
+            ),
+        )
+    }
+
+    @Test
+    fun `release before folder dwell falls back to reorder`() {
+        val machine = draggingMachine()
+
+        assertEquals(
+            listOf(NativeDragEffect.Move(key("a"), key("b"))),
+            machine.onMove(0f, 130f, key("b"), 0.2f, 700L),
+        )
+        assertEquals(
+            listOf(NativeDragEffect.CommitDrag),
+            machine.onUp(
+                currentFolderTargetKey = key("b"),
+                currentReorderTargetKey = key("b"),
+            ),
         )
     }
 

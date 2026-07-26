@@ -1,0 +1,324 @@
+package com.flue.launcher.watchface.standard
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.File
+import java.nio.file.Files
+import java.util.Calendar
+import java.util.Locale
+
+class WatchmakerRuntimePrimitivesTest {
+    @Test
+    fun gifFramesRespectDelayBoundaryAndLoop() {
+        val paths = "images/a.png`images/b.png`images/c.png"
+
+        assertEquals(0, selectWatchGifFrame(paths, 99, 100)?.index)
+        assertEquals("images/b.png", selectWatchGifFrame(paths, 100, 100)?.path)
+        assertEquals(0, selectWatchGifFrame(paths, 300, 100)?.index)
+        assertEquals(1, selectWatchGifFrame(paths, 1, 0)?.index)
+        assertEquals(
+            MAX_WATCH_GIF_FRAME_PATHS,
+            parseWatchGifPaths(
+                (0..MAX_WATCH_GIF_FRAME_PATHS + 10).joinToString("`") { "images/$it.png" },
+            ).size,
+        )
+    }
+
+    @Test
+    fun conditionalImageAndChartInputsAreBoundedAndDeterministic() {
+        assertEquals(3 to 2, parseWatchGrid("3x2"))
+        assertEquals(1 to 1, parseWatchGrid("garbage"))
+        assertEquals(0, watchSpriteIndex(1f, cellCount = 6))
+        assertEquals(5, watchSpriteIndex(99f, cellCount = 6))
+        assertEquals(0, watchSpriteIndex(null, cellCount = 6))
+
+        assertEquals(
+            listOf(1f, 2.5f, 3f, 4f),
+            parseWatchChartValues("[1; 2.5, 3|4]"),
+        )
+        assertEquals(256, parseWatchChartValues((1..300).joinToString(",")).size)
+    }
+
+    @Test
+    fun chartParserStopsAsSoonAsThePointLimitIsReached() {
+        val guarded = object : CharSequence {
+            private val readablePrefix = "1,2,"
+
+            override val length: Int = 1_000_000
+
+            override fun get(index: Int): Char {
+                check(index < readablePrefix.length) {
+                    "parser read beyond the two requested points at index $index"
+                }
+                return readablePrefix[index]
+            }
+
+            override fun subSequence(startIndex: Int, endIndex: Int): CharSequence =
+                readablePrefix.subSequence(startIndex, endIndex)
+        }
+
+        assertEquals(
+            listOf(1f, 2f),
+            parseWatchChartValues(guarded, maxPoints = 2),
+        )
+    }
+
+    @Test
+    fun chartParserCapsInputAndSkipsUnboundedTokens() {
+        assertEquals(
+            listOf(1f, 2f),
+            parseWatchChartValues("1,2,999999", maxPoints = 8, maxInputChars = 4),
+        )
+        assertEquals(
+            listOf(3f),
+            parseWatchChartValues(
+                "${"9".repeat(MAX_WATCH_CHART_TOKEN_CHARS + 1)},3",
+                maxPoints = 8,
+            ),
+        )
+    }
+
+    @Test
+    fun boundedStringCacheUsesLruAndNeverStoresOversizedKeys() {
+        val cache = WatchStringLruCache<String>(
+            maximumEntries = 2,
+            maximumKeyLength = 8,
+        )
+        cache.getOrPut("a") { "A" }
+        cache.getOrPut("b") { "B" }
+        assertEquals("A", cache.getOrPut("a") { error("cached value was not reused") })
+        cache.getOrPut("c") { "C" }
+
+        assertTrue(cache.containsKey("a"))
+        assertFalse(cache.containsKey("b"))
+        assertTrue(cache.containsKey("c"))
+        assertEquals(2, cache.size)
+
+        var oversizedFactoryCalls = 0
+        repeat(2) {
+            assertEquals(
+                "oversized",
+                cache.getOrPut("key-is-too-long") {
+                    oversizedFactoryCalls++
+                    "oversized"
+                },
+            )
+        }
+        assertEquals(2, oversizedFactoryCalls)
+        assertFalse(cache.containsKey("key-is-too-long"))
+        assertEquals(2, cache.size)
+    }
+
+    @Test
+    fun boundedStringCacheKeepsMissesBoundedAndClearsOnReset() {
+        val cache = WatchStringLruCache<String>(
+            maximumEntries = 2,
+            maximumKeyLength = 32,
+        )
+        var missFactoryCalls = 0
+
+        repeat(2) {
+            assertNull(
+                cache.getOrPut("missing") {
+                    missFactoryCalls++
+                    null
+                },
+            )
+        }
+        assertEquals(1, missFactoryCalls)
+        assertEquals(1, cache.size)
+
+        cache.getOrPut("hit") { "value" }
+        cache.getOrPut("newer") { "value-2" }
+        assertFalse(cache.containsKey("missing"))
+        assertEquals(2, cache.size)
+
+        cache.clear()
+        assertEquals(0, cache.size)
+    }
+
+    @Test
+    fun bitmapFontParserKeepsPagesGlyphsAndKerningWithinBounds() {
+        val font = parseWatchBitmapFont(
+            """
+            info face="Digits" size=32
+            common lineHeight=36 base=29 scaleW=256 scaleH=256 pages=1
+            page id=0 file="digits.png"
+            chars count=2
+            char id=65 x=0 y=0 width=10 height=20 xoffset=1 yoffset=3 xadvance=12 page=0 chnl=15
+            char id=86 x=10 y=0 width=9 height=20 xoffset=0 yoffset=3 xadvance=11 page=0 chnl=15
+            kernings count=1
+            kerning first=65 second=86 amount=-2
+            """.trimIndent(),
+        )!!
+
+        assertEquals("Digits", font.face)
+        assertEquals("digits.png", font.pages.single())
+        assertEquals(10, font.glyphs.getValue(65).width)
+        assertEquals(-2, font.kerning(65, 86))
+        assertEquals(21, font.measureAdvance("AV"))
+    }
+
+    @Test
+    fun bitmapFontTextUsesTheUppercaseGlyphContract() {
+        val font = parseWatchBitmapFont(
+            """
+            info face="Uppercase" size=32
+            common lineHeight=36 base=29 scaleW=256 scaleH=256 pages=1
+            page id=0 file="uppercase.png"
+            chars count=2
+            char id=65 x=0 y=0 width=10 height=20 xoffset=1 yoffset=3 xadvance=12 page=0 chnl=15
+            char id=86 x=10 y=0 width=9 height=20 xoffset=0 yoffset=3 xadvance=11 page=0 chnl=15
+            kernings count=1
+            kerning first=65 second=86 amount=-2
+            """.trimIndent(),
+        )!!
+
+        assertEquals(21, font.measureAdvance("av"))
+    }
+
+    @Test
+    fun svgSubsetRejectsActiveContentAndCapsPaths() {
+        val safe = parseWatchSvgDocument(
+            """
+            <svg viewBox="0 0 10 20" width="10" height="20">
+              <path d="M0 0 L10 20" fill="#fff"/>
+            </svg>
+            """.trimIndent(),
+        )
+        assertEquals(listOf(0f, 0f, 10f, 20f), safe?.viewBox)
+        assertEquals(1, safe?.paths?.size)
+
+        assertTrue(
+            parseWatchSvgDocument(
+                """<!DOCTYPE svg><svg><path d="M0 0"/></svg>""",
+            ) == null,
+        )
+        val tooMany = buildString {
+            append("<svg>")
+            repeat(MAX_WATCH_SVG_PATHS + 10) { append("<path d=\"M0 0\"/>") }
+            append("</svg>")
+        }
+        assertEquals(MAX_WATCH_SVG_PATHS, parseWatchSvgDocument(tooMany)?.paths?.size)
+    }
+
+    @Test
+    fun svgPathsAreMaterializedOnceDuringPreparation() {
+        val document = WatchSvgDocument(
+            viewBox = listOf(0f, 0f, 10f, 20f),
+            width = 10f,
+            height = 20f,
+            paths = listOf(
+                WatchSvgPathData(pathData = "M0 0", fill = "#fff"),
+                WatchSvgPathData(pathData = "invalid", fill = null),
+            ),
+        )
+        var parserCalls = 0
+
+        val prepared = prepareWatchSvgDocument(document) { pathData ->
+            parserCalls++
+            pathData.takeUnless { it == "invalid" }?.let { "parsed:$it" }
+        }
+
+        assertEquals(2, parserCalls)
+        assertEquals(listOf("parsed:M0 0"), prepared?.paths?.map { it.path })
+        assertEquals("#fff", prepared?.paths?.single()?.fill)
+        assertEquals(2, parserCalls)
+    }
+
+    @Test
+    fun seriesBuildsStableValuesAndCurrentOffset() {
+        val now = calendar(2026, Calendar.JULY, 24, 18, 5, 9)
+
+        val hour = WatchSeries.items("dh24z", now, "m")
+        val minute = WatchSeries.items("dmz", now, "f")
+
+        assertEquals("18", hour.single { it.isCurrent }.value)
+        assertEquals(-1, hour.first { it.value == "17" }.offset)
+        assertEquals("05", minute.first().value)
+        assertTrue(minute.all { it.offset >= 0 })
+    }
+
+    @Test
+    fun calendarUsesMondayStartAndHandlesLeapMonth() {
+        val july = calendar(2026, Calendar.JULY, 24, 12, 0, 0)
+        val leapFebruary = calendar(2024, Calendar.FEBRUARY, 29, 12, 0, 0)
+
+        val julyCells = WatchCalendarGrid.cells(july, dowStart = 1)
+        val leapCells = WatchCalendarGrid.cells(leapFebruary, dowStart = 1)
+
+        assertEquals(2, julyCells.first().column)
+        assertEquals(31, julyCells.size)
+        assertTrue(julyCells.single { it.day == 24 }.isToday)
+        assertTrue(julyCells.single { it.day == 23 }.isOutside)
+        assertEquals(29, leapCells.size)
+        assertEquals(7, WatchCalendarGrid.weekdayLabels(1, 1, Locale.ENGLISH).size)
+    }
+
+    @Test
+    fun tapActionsOnlyAllowCalendarAndWeatherFamilies() {
+        assertEquals(WatchTapAction.Calendar, WatchTapActionParser.parse("widget_calendar_month"))
+        assertEquals(WatchTapAction.Weather, WatchTapActionParser.parse("m_update_weather_now"))
+        assertTrue(WatchTapActionParser.parse("script:do_anything()") is WatchTapAction.Unsupported)
+        assertTrue(WatchTapActionParser.parse("w_app:com.example/.MainActivity") is WatchTapAction.Unsupported)
+        assertTrue(WatchTapActionParser.parse("https://example.com") is WatchTapAction.Unsupported)
+    }
+
+    @Test
+    fun weatherSnapshotResolvesSupportedFieldsAndKeepsMissingDataUnavailable() {
+        val now = calendar(2026, Calendar.JULY, 24, 12, 0, 0)
+        val snapshot = WatchDataSnapshot(
+            weatherTemperature = "26",
+            weatherCondition = "Cloudy",
+            weatherIcon = "cloudy",
+            weatherHumidity = 72,
+        )
+
+        assertEquals("26", WatchmakerTagResolver.resolve("wtemp", now, snapshot).renderedValue)
+        assertEquals("cloudy", WatchmakerTagResolver.resolve("wicon", now, snapshot).renderedValue)
+        assertEquals("72", WatchmakerTagResolver.resolve("whum", now, snapshot).renderedValue)
+        assertTrue(WatchmakerTagResolver.resolve("dnnn", now, snapshot) is WatchTagResolution.Resolved)
+        assertTrue(WatchmakerTagResolver.resolve("ddw", now, snapshot) is WatchTagResolution.Resolved)
+        assertTrue(WatchmakerTagResolver.resolve("wloc", now, snapshot) is WatchTagResolution.Unavailable)
+    }
+
+    @Test
+    fun parserReportsOnlyStillUnimplementedLayerFamilies() {
+        val root = Files.createTempDirectory("flue-runtime-primitives").toFile()
+        try {
+            val xml = File(root, "watch.xml").apply {
+                writeText(
+                    """
+                    <Watch name="Runtime primitives">
+                      <Layer type="image_gif" path="a.png`b.png" />
+                      <Layer type="gif" path="animated.gif" />
+                      <Layer type="image_tap" tap_action="widget_calendar" />
+                      <Layer type="series" series="dh24z" />
+                      <Layer type="calendar" />
+                      <Layer type="video" />
+                    </Watch>
+                    """.trimIndent(),
+                )
+            }
+
+            assertEquals(setOf("video"), WatchmakerDefinitionParser().parse(xml).unsupportedLayerTypes)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    private fun calendar(
+        year: Int,
+        month: Int,
+        day: Int,
+        hour: Int,
+        minute: Int,
+        second: Int,
+    ): Calendar = Calendar.getInstance().apply {
+        clear()
+        set(year, month, day, hour, minute, second)
+    }
+}

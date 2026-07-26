@@ -39,7 +39,8 @@ class NativeAppListRowViewBehaviorTest {
     fun nativeHostDisablesFrameworkOverscrollWhenOwningTheEdgeTranslation() {
         val view = NativeAppListView(RuntimeEnvironment.getApplication())
 
-        assertEquals(View.OVER_SCROLL_NEVER, view.overScrollMode)
+        assertEquals(View.OVER_SCROLL_ALWAYS, view.overScrollMode)
+        assertSame(springEdgeEffectsOf(view), view.edgeEffectFactory)
 
         view.release()
     }
@@ -1021,6 +1022,338 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
+    fun discardedVirtualPreviewRestoresAuthoritativeOrderWithoutSubmittingADiff() {
+        val adapter = NativeAppListAdapter(commandSink = {})
+        val initialEntries = listOf(appEntry("a"), appEntry("b"), appEntry("c"))
+        adapter.submitContent(
+            NativeAppListContent(
+                snapshot = AppListSnapshot.create(1L, initialEntries),
+                iconsByKey = emptyMap(),
+            ),
+        )
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertTrue(adapter.beginDragPreview(AppItemKey("a")))
+        assertTrue(adapter.previewMove(AppItemKey("a"), AppItemKey("b")))
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertEquals(listOf("b", "a", "c"), adapter.currentKeysView().map { it.value })
+
+        adapter.discardDragPreviewAwaitingAuthoritative()
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        assertEquals(listOf("a", "b", "c"), adapter.currentKeysView().map { it.value })
+        assertEquals(listOf("a", "b", "c"), adapter.currentList.map { it.stableKey.value })
+    }
+
+    @Test
+    fun dragHoverStaysVirtualAndAcceptedReleaseSubmitsExactlyOnce() {
+        val previewOrders = mutableListOf<List<String>>()
+        val adapter = NativeAppListAdapter(
+            commandSink = {},
+            onDragPreviewOrderChanged = { _, preview ->
+                previewOrders += preview.map { it.value }
+            },
+        )
+        val entries = listOf(appEntry("a"), appEntry("b"), appEntry("c"))
+        adapter.submitContent(
+            NativeAppListContent(
+                snapshot = AppListSnapshot.create(1L, entries),
+                iconsByKey = emptyMap(),
+            ),
+        )
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        assertTrue(adapter.beginDragPreview(AppItemKey("a")))
+        assertTrue(adapter.previewMove(AppItemKey("a"), AppItemKey("b")))
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        assertEquals(listOf("b", "a", "c"), adapter.currentKeysView().map { it.value })
+        assertEquals(listOf("a", "b", "c"), adapter.currentList.map { it.stableKey.value })
+        assertEquals(listOf("b", "a", "c"), previewOrders.last())
+
+        val command = requireNotNull(adapter.finishDragPreview(commit = true))
+        assertEquals(AppItemKey("a"), command.key)
+        adapter.completeDragPreview(accepted = true)
+
+        // The optimistic snapshot changes immediately; the actual ListAdapter
+        // diff is asynchronous by design and is verified by the controller's
+        // single-dispatch tests rather than by a paused Robolectric scheduler.
+        assertEquals(listOf("b", "a", "c"), adapter.currentKeysView().map { it.value })
+    }
+
+    @Test
+    fun acceptedFolderPreviewCleanupTransfersAcrossAuthoritativeGenerationsExactlyOnce() {
+        val finished = mutableListOf<Boolean>()
+        val adapter = NativeAppListAdapter(
+            commandSink = {},
+            onDragPreviewFinished = { committed -> finished += committed },
+        )
+        val entries = listOf(appEntry("a"), appEntry("b"), appEntry("c"))
+        val authoritativeEntries = listOf(entries[1], entries[2])
+        adapter.submitContent(
+            NativeAppListContent(
+                snapshot = AppListSnapshot.create(1L, entries),
+                iconsByKey = emptyMap(),
+            ),
+        )
+        assertTrue(adapter.beginDragPreview(AppItemKey("a")))
+        assertTrue(adapter.previewFolderCommit(AppItemKey("a"), AppItemKey("b")))
+        adapter.discardDragPreviewAwaitingAuthoritative()
+
+        adapter.submitContent(
+            NativeAppListContent(
+                snapshot = AppListSnapshot.create(2L, authoritativeEntries),
+                iconsByKey = emptyMap(),
+            ),
+        )
+        var finalAuthorityCommitted = false
+        adapter.submitContent(
+            NativeAppListContent(
+                snapshot = AppListSnapshot.create(3L, authoritativeEntries),
+                iconsByKey = emptyMap(),
+            ),
+        ) {
+            finalAuthorityCommitted = true
+        }
+
+        assertTrue(
+            "latest authoritative differ generation did not commit",
+            idleMainLooperUntil { finalAuthorityCommitted },
+        )
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertEquals(listOf(true), finished)
+    }
+
+    @Test
+    fun rejectedPreviewClearsImmediatelyAndAuthorityCannotRelabelItCommitted() {
+        val finished = mutableListOf<Boolean>()
+        val adapter = NativeAppListAdapter(
+            commandSink = {},
+            onDragPreviewFinished = { committed -> finished += committed },
+        )
+        val entries = listOf(appEntry("a"), appEntry("b"), appEntry("c"))
+        adapter.submitContent(
+            NativeAppListContent(
+                snapshot = AppListSnapshot.create(1L, entries),
+                iconsByKey = emptyMap(),
+            ),
+        )
+        assertTrue(adapter.beginDragPreview(AppItemKey("a")))
+        assertTrue(adapter.previewMove(AppItemKey("a"), AppItemKey("b")))
+        requireNotNull(adapter.finishDragPreview(commit = true))
+
+        adapter.completeDragPreview(accepted = false)
+
+        assertEquals(listOf(false), finished)
+        var authorityCommitted = false
+        adapter.submitContent(
+            NativeAppListContent(
+                snapshot = AppListSnapshot.create(2L, entries),
+                iconsByKey = emptyMap(),
+            ),
+        ) {
+            authorityCommitted = true
+        }
+        assertTrue(
+            "authoritative differ generation did not commit",
+            idleMainLooperUntil { authorityCommitted },
+        )
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertEquals(listOf(false), finished)
+    }
+
+    @Test
+    fun authoritativeSubmitSupersedingAcceptedPreviewClearsHostOrderBeforeChildReattach() {
+        val entries = (0 until 12).map { appEntry("component:preview-race-$it") }
+        val authoritativeEntries = entries.toMutableList().apply {
+            add(0, removeAt(1))
+        }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            itemAnimator = null
+            setConfig(
+                drawingConfig().copy(
+                    rowHeightPx = 40,
+                    fisheyeEnabled = false,
+                    centerEdgeItems = false,
+                    entryMotionEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 80)
+        val adapter = view.adapter as NativeAppListAdapter
+        val source = entries[0].key
+        val target = entries[1].key
+
+        assertTrue(adapter.beginDragPreview(source))
+        assertTrue(adapter.previewMove(source, target))
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(180L))
+        val virtuallyMovedSource = requireNotNull(
+            view.layoutManager?.findViewByPosition(0),
+        ) as NativeAppListRowView
+        assertTrue(virtuallyMovedSource.previewTranslationY() != 0f)
+
+        requireNotNull(adapter.finishDragPreview(commit = true))
+        adapter.completeDragPreview(accepted = true)
+        var authoritativeCommitted = false
+        // Do not idle the optimistic diff. This authoritative generation must
+        // inherit responsibility for clearing the host's virtual preview.
+        adapter.submitContent(
+            NativeAppListContent(
+                snapshot = AppListSnapshot.create(2L, authoritativeEntries),
+                iconsByKey = emptyMap(),
+            ),
+        ) {
+            authoritativeCommitted = true
+        }
+
+        assertTrue(
+            "authoritative differ generation did not commit",
+            idleMainLooperUntil { authoritativeCommitted },
+        )
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(32L))
+        assertTrue(dragPreviewOrderOf(view).isEmpty())
+        assertTrue(
+            (0 until view.childCount).all { index ->
+                val row = view.getChildAt(index) as NativeAppListRowView
+                row.previewTranslationX() == 0f && row.previewTranslationY() == 0f
+            },
+        )
+
+        // Robolectric keeps RecyclerView's overscan children attached even at
+        // the scroll boundary. Explicitly remount the same adapter so this
+        // test exercises the intended child-reattach contract deterministically.
+        view.adapter = null
+        assertEquals(0, view.childCount)
+        view.adapter = adapter
+        measureAndLayout(view, width = 100, height = 80)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(32L))
+
+        val reattachedFirst = requireNotNull(
+            view.layoutManager?.findViewByPosition(0),
+        ) as NativeAppListRowView
+        assertEquals(0f, reattachedFirst.previewTranslationX(), 0f)
+        assertEquals(0f, reattachedFirst.previewTranslationY(), 0f)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun acceptedFolderCommitKeepsTargetAsMigrationProxyUntilFolderSnapshotArrives() {
+        val adapter = NativeAppListAdapter(commandSink = {})
+        val entries = listOf(appEntry("a"), appEntry("b"), appEntry("c"))
+        adapter.submitContent(
+            NativeAppListContent(
+                snapshot = AppListSnapshot.create(1L, entries),
+                iconsByKey = emptyMap(),
+            ),
+        )
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        assertTrue(adapter.beginDragPreview(AppItemKey("a")))
+        assertTrue(adapter.previewFolderCommit(AppItemKey("a"), AppItemKey("b")))
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        assertEquals(listOf("b", "c"), adapter.currentKeysView().map { it.value })
+    }
+
+    @Test
+    fun acceptedFolderCommitKeepsAnExistingTargetFolderVisible() {
+        val adapter = NativeAppListAdapter(commandSink = {})
+        val entries = listOf(
+            appEntry("app"),
+            appEntry("folder").copy(type = AppItemType.FOLDER, launchTarget = null),
+            appEntry("tail"),
+        )
+        adapter.submitContent(
+            NativeAppListContent(
+                snapshot = AppListSnapshot.create(1L, entries),
+                iconsByKey = emptyMap(),
+            ),
+        )
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        assertTrue(adapter.beginDragPreview(AppItemKey("app")))
+        assertTrue(adapter.previewFolderCommit(AppItemKey("app"), AppItemKey("folder")))
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        assertEquals(listOf("folder", "tail"), adapter.currentKeysView().map { it.value })
+    }
+
+    @Test
+    fun acceptedFolderCommitKeepsASourceFolderThatAbsorbsAnAppVisible() {
+        val adapter = NativeAppListAdapter(commandSink = {})
+        val entries = listOf(
+            appEntry("folder").copy(type = AppItemType.FOLDER, launchTarget = null),
+            appEntry("app"),
+            appEntry("tail"),
+        )
+        adapter.submitContent(
+            NativeAppListContent(
+                snapshot = AppListSnapshot.create(1L, entries),
+                iconsByKey = emptyMap(),
+            ),
+        )
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        assertTrue(adapter.beginDragPreview(AppItemKey("folder")))
+        assertTrue(adapter.previewFolderCommit(AppItemKey("folder"), AppItemKey("app")))
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        assertEquals(listOf("folder", "tail"), adapter.currentKeysView().map { it.value })
+    }
+
+    @Test
+    fun acceptedFolderCommitMergesTwoFoldersIntoTheTargetFolder() {
+        val adapter = NativeAppListAdapter(commandSink = {})
+        val entries = listOf(
+            appEntry("source-folder").copy(type = AppItemType.FOLDER, launchTarget = null),
+            appEntry("target-folder").copy(type = AppItemType.FOLDER, launchTarget = null),
+            appEntry("tail"),
+        )
+        adapter.submitContent(
+            NativeAppListContent(
+                snapshot = AppListSnapshot.create(1L, entries),
+                iconsByKey = emptyMap(),
+            ),
+        )
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        assertTrue(adapter.beginDragPreview(AppItemKey("source-folder")))
+        assertTrue(
+            adapter.previewFolderCommit(
+                AppItemKey("source-folder"),
+                AppItemKey("target-folder"),
+            ),
+        )
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        assertEquals(listOf("target-folder", "tail"), adapter.currentKeysView().map { it.value })
+    }
+
+    @Test
+    fun folderTargetPolicyAcceptsAppsAndExistingFoldersButRejectsShortcuts() {
+        val source = boundEntryRow(appEntry("source"))
+        val appTarget = boundEntryRow(appEntry("target"))
+        val folderTarget = boundEntryRow(
+            appEntry("folder").copy(type = AppItemType.FOLDER, launchTarget = null),
+        )
+        val shortcutTarget = boundEntryRow(
+            appEntry("shortcut").copy(type = AppItemType.SHORTCUT),
+        )
+
+        assertTrue(nativeFolderTargetAllowed(source, appTarget))
+        assertTrue(nativeFolderTargetAllowed(source, folderTarget))
+        assertFalse(nativeFolderTargetAllowed(source, shortcutTarget))
+    }
+
+    @Test
     fun cachedNativeRowUsesLatestGeometryWhenItReattachesWithoutAFullRebind() {
         val entries = (0 until 10).map { appEntry("component:cache-$it") }
         val initialConfig = drawingConfig().copy(
@@ -1043,7 +1376,10 @@ class NativeAppListRowViewBehaviorTest {
             View.MeasureSpec.makeMeasureSpec(80, View.MeasureSpec.EXACTLY),
         )
         view.layout(0, 0, 100, 80)
-        view.scrollBy(0, 50)
+        // Linear mode deliberately retains one full row of transformed
+        // overscan to prevent edge flashes. Move beyond that buffer so this
+        // test exercises a real recycle/reattach instead of an attached row.
+        view.scrollBy(0, 100)
         assertNull(view.layoutManager?.findViewByPosition(0))
 
         view.setConfig(initialConfig.copy(rowHeightPx = 52, iconSizePx = 30))
@@ -1252,6 +1588,53 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
+    fun applePressOverlayUsesTheCircularIconPathInsteadOfTheWholeRow() {
+        val view = NativeAppListRowView(RuntimeEnvironment.getApplication())
+        val output = Bitmap.createBitmap(100, 40, Bitmap.Config.ARGB_8888)
+        view.bind(
+            row = boundRow(solidBitmap(Color.TRANSPARENT)),
+            config = NativeAppListResolvedConfig.from(
+                drawingConfig().copy(
+                    iconShape = NativeAppListIconShape.CIRCLE,
+                    iconShadowEnabled = false,
+                    palette = drawingConfig().palette.copy(
+                        labelColorArgb = 0L,
+                        pressedOverlayColorArgb = 0xffff0000L,
+                    ),
+                ),
+            ),
+        )
+        measureAndLayout(view)
+        view.isPressed = true
+
+        view.draw(Canvas(output))
+
+        assertTrue(Color.alpha(output.getPixel(14, 20)) > 0)
+        assertEquals(Color.TRANSPARENT, output.getPixel(80, 5))
+    }
+
+    @Test
+    fun enabledIconShadowIsDrawnOutsideTheCircularIconWithoutSoftwareBlur() {
+        val view = NativeAppListRowView(RuntimeEnvironment.getApplication())
+        val output = Bitmap.createBitmap(100, 40, Bitmap.Config.ARGB_8888)
+        view.bind(
+            row = boundRow(solidBitmap(REAL_ICON_COLOR)),
+            config = NativeAppListResolvedConfig.from(
+                drawingConfig().copy(
+                    iconShape = NativeAppListIconShape.CIRCLE,
+                    iconShadowEnabled = true,
+                ),
+            ),
+        )
+        measureAndLayout(view)
+
+        view.draw(Canvas(output))
+
+        assertTrue(Color.alpha(output.getPixel(14, 31)) > 0)
+        assertTrue(Color.alpha(output.getPixel(14, 31)) < 255)
+    }
+
+    @Test
     fun recyclerDrawsStableTopAndBottomFadeMasksInItsOwnCanvasLayer() {
         val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
             setConfig(
@@ -1337,7 +1720,7 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
-    fun pullingPastLegacyThresholdAtTheTopRequestsTheWatchFaceOnce() {
+    fun terminalActionUpConfirmsTheTopEdgeThresholdOnce() {
         var requests = 0
         val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
             onScrollToTop = { requests++ }
@@ -1361,10 +1744,161 @@ class NativeAppListRowViewBehaviorTest {
         view.layout(0, 0, 100, 120)
 
         dispatch(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
-        dispatch(view, MotionEvent.ACTION_MOVE, y = 93f, eventTime = 100L)
+        repeat(3) {
+            springEdgeEffectsOf(view).pull(FlueEdgePhysics.Edge.TOP, distance = 1f)
+        }
         dispatch(view, MotionEvent.ACTION_UP, y = 93f, eventTime = 101L)
 
         assertEquals(1, requests)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun intermediateEdgeReleasePreservesRealUpAndCancelCannotRequestTheWatchFace() {
+        var requests = 0
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onScrollToTop = { requests++ }
+            setConfig(drawingConfig().copy(fisheyeEnabled = false, centerEdgeItems = false))
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        dispatch(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
+        repeat(3) {
+            springEdgeEffectsOf(view).pull(FlueEdgePhysics.Edge.TOP, distance = 1f)
+        }
+        springEdgeEffectsOf(view).release(FlueEdgePhysics.Edge.TOP)
+        dispatch(view, MotionEvent.ACTION_UP, y = 40f, eventTime = 101L)
+
+        assertEquals(1, requests)
+
+        dispatch(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 200L)
+        repeat(3) {
+            springEdgeEffectsOf(view).pull(FlueEdgePhysics.Edge.TOP, distance = 1f)
+        }
+        dispatch(view, MotionEvent.ACTION_CANCEL, y = 80f, eventTime = 301L)
+
+        assertEquals(1, requests)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun frameworkEdgeReleaseWaitsForTheRealGestureTerminalBeforeRebounding() {
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(drawingConfig().copy(fisheyeEnabled = false, centerEdgeItems = false))
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+        val effects = springEdgeEffectsOf(view)
+
+        effects.beginGesture()
+        effects.pull(FlueEdgePhysics.Edge.TOP, distance = 0.5f)
+        val heldOffset = pullOffsetOf(view)
+        effects.release(FlueEdgePhysics.Edge.TOP)
+
+        assertFalse("RecyclerView may release an edge during MOVE", effects.isAnimating)
+        assertEquals(heldOffset, pullOffsetOf(view), 0f)
+
+        effects.confirmTopRelease(terminalUp = false)
+
+        assertTrue(effects.isAnimating)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun scrollingGlidePressFollowsThePointerAndClearsOnCancelAndRealUp() {
+        val entries = (0 until 8).map { appEntry("component:glide-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    fisheyeEnabled = false,
+                    centerEdgeItems = false,
+                    entryMotionEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+        val secondRow = requireNotNull(
+            view.layoutManager?.findViewByPosition(1),
+        ) as NativeAppListRowView
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 60f, eventTime = 16L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(180L))
+
+        assertEquals(0.992f, interactionScaleOf(secondRow), 0.001f)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 60f, eventTime = 17L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(180L))
+
+        assertEquals(1f, interactionScaleOf(secondRow), 0.001f)
+        springEdgeEffectsOf(view).finish()
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 200L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 60f, eventTime = 216L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(180L))
+
+        assertEquals(0.992f, interactionScaleOf(secondRow), 0.001f)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 60f, eventTime = 397L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(180L))
+
+        assertEquals(1f, interactionScaleOf(secondRow), 0.001f)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun dragHandoffUsesTheRealTerminalEventWithoutStartingARecyclerFling() {
+        var flingCount = 0
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(drawingConfig().copy(centerEdgeItems = false))
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(
+                        1L,
+                        listOf(appEntry("handoff-a"), appEntry("handoff-b"), appEntry("handoff-c")),
+                    ),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+            onFlingListener = object : RecyclerView.OnFlingListener() {
+                override fun onFling(velocityX: Int, velocityY: Int): Boolean {
+                    flingCount++
+                    return true
+                }
+            }
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 45f, eventTime = 621L)
+        assertTrue(dragOverlayViewOf(view) != null)
+        assertTrue(recyclerTerminalPendingOf(view))
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 100f, eventTime = 630L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(140L))
+
+        assertFalse(recyclerTerminalPendingOf(view))
+        assertNull(dragOverlayViewOf(view))
+        assertEquals(RecyclerView.SCROLL_STATE_IDLE, view.scrollState)
+        assertEquals(0, flingCount)
         view.release()
         activity.finish()
     }
@@ -1379,7 +1913,6 @@ class NativeAppListRowViewBehaviorTest {
                 drawingConfig().copy(
                     fisheyeEnabled = false,
                     centerEdgeItems = false,
-                    fastFlowAnimationEnabled = false,
                 ),
             )
             submit(
@@ -1398,10 +1931,12 @@ class NativeAppListRowViewBehaviorTest {
         val baselineOrigin = (commands.single() as AppListCommand.Open).origin
         commands.clear()
 
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 40f, eventTime = 16L)
+        springEdgeEffectsOf(view).pull(
+            FlueEdgePhysics.Edge.TOP,
+            20f / view.height,
+        )
         val visiblePullOffset = pullOffsetOf(view)
-        assertEquals(20f, visiblePullOffset, 0.01f)
+        assertTrue(visiblePullOffset > 0f)
         assertEquals(visiblePullOffset, firstRow.translationY, 0.01f)
         firstRow.performClick()
         val pulledOrigin = (commands.single() as AppListCommand.Open).origin
@@ -1411,7 +1946,7 @@ class NativeAppListRowViewBehaviorTest {
             pulledOrigin.y,
             0.0001f,
         )
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 40f, eventTime = 17L)
+        springEdgeEffectsOf(view).finish(FlueEdgePhysics.Edge.TOP)
         view.release()
         activity.finish()
     }
@@ -1462,7 +1997,6 @@ class NativeAppListRowViewBehaviorTest {
                 drawingConfig().copy(
                     fisheyeEnabled = false,
                     centerEdgeItems = false,
-                    fastFlowAnimationEnabled = false,
                 ),
             )
             submit(
@@ -1476,14 +2010,25 @@ class NativeAppListRowViewBehaviorTest {
         activity.setContentView(view)
         measureAndLayout(view, width = 100, height = 120)
 
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 70f, eventTime = 16L)
-        assertEquals(50f, pullOffsetOf(view), 0.01f)
+        val firstRow = requireNotNull(
+            view.layoutManager?.findViewByPosition(0),
+        ) as NativeAppListRowView
+        val originalCenterX = firstRow.iconCenterXInParentWithoutFlow()
+        val originalCenterY = firstRow.iconCenterYInParentWithoutFlow()
+        springEdgeEffectsOf(view).pull(
+            FlueEdgePhysics.Edge.TOP,
+            50f / view.height,
+        )
+        val visiblePullOffset = pullOffsetOf(view)
+        assertTrue(visiblePullOffset > 0f)
 
-        assertEquals(firstKey, folderKeyAtOf(view, x = 30f, y = 70f))
-        assertNull(folderKeyAtOf(view, x = 30f, y = 20f))
+        assertEquals(
+            firstKey,
+            folderKeyAtOf(view, x = originalCenterX, y = originalCenterY + visiblePullOffset),
+        )
+        assertNull(folderKeyAtOf(view, x = originalCenterX, y = originalCenterY))
 
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 70f, eventTime = 17L)
+        springEdgeEffectsOf(view).finish(FlueEdgePhysics.Edge.TOP)
         view.release()
         activity.finish()
     }
@@ -1677,7 +2222,6 @@ class NativeAppListRowViewBehaviorTest {
                 drawingConfig().copy(
                     fisheyeEnabled = false,
                     centerEdgeItems = false,
-                    fastFlowAnimationEnabled = false,
                 ),
             )
             submit(
@@ -1700,14 +2244,14 @@ class NativeAppListRowViewBehaviorTest {
         dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 40f, eventTime = 32L)
 
         assertEquals(bottomOffset, view.computeVerticalScrollOffset())
-        assertEquals(-30f, pullOffsetOf(view), 1f)
+        assertTrue(pullOffsetOf(view) < 0f)
         dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 40f, eventTime = 33L)
         view.release()
         activity.finish()
     }
 
     @Test
-    fun honeycombCrossEdgeRemainderUsesTheFrozenTwentyEightPercentDamping() {
+    fun honeycombCrossEdgeRemainderUsesTheCloxEighteenPercentDamping() {
         val entries = (0 until 40).map { appEntry("component:honey-cross-bottom-$it") }
         val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
             setConfig(
@@ -1719,7 +2263,6 @@ class NativeAppListRowViewBehaviorTest {
                     honeycombNarrowColumns = 3,
                     centerEdgeItems = false,
                     fisheyeEnabled = false,
-                    fastFlowAnimationEnabled = false,
                 ),
             )
             setLayoutStrategy(HoneycombNativeAppListLayoutStrategy)
@@ -1743,7 +2286,7 @@ class NativeAppListRowViewBehaviorTest {
         dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 140f, eventTime = 32L)
 
         assertEquals(bottomOffset, view.computeVerticalScrollOffset())
-        assertEquals(-8.4f, pullOffsetOf(view), 1f)
+        assertEquals(-5.4f, pullOffsetOf(view), 1f)
         dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 140f, eventTime = 33L)
         view.release()
         activity.finish()
@@ -1757,7 +2300,6 @@ class NativeAppListRowViewBehaviorTest {
                 drawingConfig().copy(
                     fisheyeEnabled = false,
                     centerEdgeItems = false,
-                    fastFlowAnimationEnabled = false,
                 ),
             )
             submit(
@@ -1771,14 +2313,15 @@ class NativeAppListRowViewBehaviorTest {
         activity.setContentView(view)
         measureAndLayout(view, width = 100, height = 120)
 
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 40f, eventTime = 0L)
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 100f, eventTime = 16L)
-        assertEquals(60f, pullOffsetOf(view), 0f)
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 20f, eventTime = 32L)
+        val effects = springEdgeEffectsOf(view)
+        effects.pull(FlueEdgePhysics.Edge.TOP, 60f / view.height)
+        val stretched = pullOffsetOf(view)
+        assertTrue(stretched > 0f)
 
-        assertEquals(0f, pullOffsetOf(view), 0f)
-        assertEquals(20, view.computeVerticalScrollOffset())
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 20f, eventTime = 33L)
+        val consumed = effects.pull(FlueEdgePhysics.Edge.TOP, -80f / view.height) * view.height
+        assertEquals(-stretched, consumed, 0.01f)
+        assertEquals(0f, pullOffsetOf(view), 0.01f)
+        effects.finish(FlueEdgePhysics.Edge.TOP)
         view.release()
         activity.finish()
     }
@@ -1791,7 +2334,6 @@ class NativeAppListRowViewBehaviorTest {
                 drawingConfig().copy(
                     fisheyeEnabled = false,
                     centerEdgeItems = false,
-                    fastFlowAnimationEnabled = false,
                 ),
             )
             submit(
@@ -1805,14 +2347,15 @@ class NativeAppListRowViewBehaviorTest {
         activity.setContentView(view)
         measureAndLayout(view, width = 100, height = 120)
 
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 40f, eventTime = 0L)
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 45f, eventTime = 16L)
-        assertEquals(5f, pullOffsetOf(view), 0f)
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 20f, eventTime = 32L)
+        val effects = springEdgeEffectsOf(view)
+        effects.pull(FlueEdgePhysics.Edge.TOP, 5f / view.height)
+        val stretched = pullOffsetOf(view)
+        assertTrue(stretched > 0f)
 
-        assertEquals(0f, pullOffsetOf(view), 0f)
-        assertEquals(20, view.computeVerticalScrollOffset())
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 20f, eventTime = 33L)
+        val consumed = effects.pull(FlueEdgePhysics.Edge.TOP, -5f / view.height) * view.height
+        assertEquals(-stretched, consumed, 0.01f)
+        assertEquals(0f, pullOffsetOf(view), 0.01f)
+        effects.finish(FlueEdgePhysics.Edge.TOP)
         view.release()
         activity.finish()
     }
@@ -1825,7 +2368,6 @@ class NativeAppListRowViewBehaviorTest {
                 drawingConfig().copy(
                     fisheyeEnabled = false,
                     centerEdgeItems = false,
-                    fastFlowAnimationEnabled = false,
                 ),
             )
             submit(
@@ -1839,17 +2381,17 @@ class NativeAppListRowViewBehaviorTest {
         activity.setContentView(view)
         measureAndLayout(view, width = 100, height = 120)
 
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 40f, eventTime = 0L)
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 100f, eventTime = 16L)
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 100f, eventTime = 17L)
+        val effects = springEdgeEffectsOf(view)
+        effects.pull(FlueEdgePhysics.Edge.TOP, 60f / view.height)
+        effects.release(FlueEdgePhysics.Edge.TOP)
         val interruptedOffset = pullOffsetOf(view)
-        assertTrue(interruptedOffset > 10f)
+        assertTrue(interruptedOffset > 0f)
 
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 100f, eventTime = 18L)
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 90f, eventTime = 34L)
+        effects.beginGesture()
+        effects.pull(FlueEdgePhysics.Edge.TOP, -10f / view.height)
 
-        assertEquals(interruptedOffset - 10f, pullOffsetOf(view), 0.01f)
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 90f, eventTime = 35L)
+        assertEquals(maxOf(0f, interruptedOffset - 10f), pullOffsetOf(view), 0.01f)
+        effects.finish(FlueEdgePhysics.Edge.TOP)
         view.release()
         activity.finish()
     }
@@ -1862,7 +2404,6 @@ class NativeAppListRowViewBehaviorTest {
                 drawingConfig().copy(
                     fisheyeEnabled = false,
                     centerEdgeItems = false,
-                    fastFlowAnimationEnabled = false,
                 ),
             )
             submit(
@@ -1876,29 +2417,21 @@ class NativeAppListRowViewBehaviorTest {
         activity.setContentView(view)
         measureAndLayout(view, width = 100, height = 120)
 
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 40f, eventTime = 0L)
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 100f, eventTime = 16L)
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 100f, eventTime = 17L)
+        val effects = springEdgeEffectsOf(view)
+        effects.pull(FlueEdgePhysics.Edge.TOP, 60f / view.height)
+        effects.release(FlueEdgePhysics.Edge.TOP)
         val interruptedOffset = pullOffsetOf(view)
-        assertTrue(interruptedOffset > 20f)
+        assertTrue(interruptedOffset > 0f)
 
-        val visibleFirstCenter = 20f + interruptedOffset
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = visibleFirstCenter, eventTime = 18L)
-        dispatchThroughHierarchy(
-            view,
-            MotionEvent.ACTION_MOVE,
-            y = visibleFirstCenter - interruptedOffset - 20f,
-            eventTime = 34L,
-        )
+        effects.beginGesture()
+        val consumed = effects.pull(
+            FlueEdgePhysics.Edge.TOP,
+            -(interruptedOffset + 20f) / view.height,
+        ) * view.height
 
         assertEquals(0f, pullOffsetOf(view), 0.01f)
-        assertEquals(20, view.computeVerticalScrollOffset())
-        dispatchThroughHierarchy(
-            view,
-            MotionEvent.ACTION_CANCEL,
-            y = visibleFirstCenter - interruptedOffset - 20f,
-            eventTime = 35L,
-        )
+        assertEquals(-interruptedOffset, consumed, 0.01f)
+        effects.finish(FlueEdgePhysics.Edge.TOP)
         view.release()
         activity.finish()
     }
@@ -1913,7 +2446,6 @@ class NativeAppListRowViewBehaviorTest {
                 drawingConfig().copy(
                     fisheyeEnabled = false,
                     centerEdgeItems = false,
-                    fastFlowAnimationEnabled = false,
                 ),
             )
             submit(
@@ -1927,13 +2459,13 @@ class NativeAppListRowViewBehaviorTest {
         activity.setContentView(view)
         measureAndLayout(view, width = 100, height = 120)
 
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 40f, eventTime = 0L)
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 100f, eventTime = 16L)
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 100f, eventTime = 17L)
+        val effects = springEdgeEffectsOf(view)
+        effects.pull(FlueEdgePhysics.Edge.TOP, 60f / view.height)
         val interruptedOffset = pullOffsetOf(view)
-        assertTrue(interruptedOffset > 10f)
+        assertTrue(interruptedOffset > 0f)
 
-        val visibleFirstCenter = 20f + interruptedOffset
+        val firstRow = requireNotNull(view.layoutManager?.findViewByPosition(0))
+        val visibleFirstCenter = firstRow.top + firstRow.height / 2f + interruptedOffset
         dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = visibleFirstCenter, eventTime = 18L)
         shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
         dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = visibleFirstCenter + 22f, eventTime = 639L)
@@ -1956,7 +2488,6 @@ class NativeAppListRowViewBehaviorTest {
                 drawingConfig().copy(
                     fisheyeEnabled = false,
                     centerEdgeItems = false,
-                    fastFlowAnimationEnabled = false,
                 ),
             )
             submit(
@@ -1970,13 +2501,12 @@ class NativeAppListRowViewBehaviorTest {
         activity.setContentView(view)
         measureAndLayout(view, width = 100, height = 120)
 
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 40f, eventTime = 0L)
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 100f, eventTime = 16L)
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 100f, eventTime = 17L)
-        assertTrue(pullOffsetOf(view) > 10f)
+        val effects = springEdgeEffectsOf(view)
+        effects.pull(FlueEdgePhysics.Edge.TOP, 60f / view.height)
+        assertTrue(pullOffsetOf(view) > 0f)
 
         val firstRow = requireNotNull(view.layoutManager?.findViewByPosition(0))
-        val visibleFirstCenter = 20f + pullOffsetOf(view)
+        val visibleFirstCenter = firstRow.top + firstRow.height / 2f + pullOffsetOf(view)
         dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = visibleFirstCenter, eventTime = 18L)
         shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
         assertTrue(commands.any { it is AppListCommand.ShowActions })
@@ -1985,6 +2515,7 @@ class NativeAppListRowViewBehaviorTest {
         dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = visibleFirstCenter, eventTime = 639L)
 
         assertTrue(firstRow.isLongClickable)
+        effects.finish(FlueEdgePhysics.Edge.TOP)
         view.release()
         activity.finish()
     }
@@ -1997,7 +2528,6 @@ class NativeAppListRowViewBehaviorTest {
                 drawingConfig().copy(
                     fisheyeEnabled = false,
                     centerEdgeItems = false,
-                    fastFlowAnimationEnabled = false,
                 ),
             )
             submit(
@@ -2010,32 +2540,22 @@ class NativeAppListRowViewBehaviorTest {
         val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
         activity.setContentView(view)
         val compactHeight = 100
-        val compactMaximum = maxOf(
-            compactHeight / 2f,
-            72f * view.resources.displayMetrics.density,
+        val compactMaximum = minOf(
+            48f * view.resources.displayMetrics.density,
+            compactHeight * 0.14f,
         )
-        val pullDistance = compactMaximum + 20f
+        val pullDistance = compactMaximum / 0.18f + 20f
         val expandedHeight = (pullDistance * 2f + 40f).toInt()
         measureAndLayout(view, width = 100, height = expandedHeight)
 
-        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
-        dispatchThroughHierarchy(
-            view,
-            MotionEvent.ACTION_MOVE,
-            y = 20f + pullDistance,
-            eventTime = 16L,
-        )
-        assertEquals(pullDistance, pullOffsetOf(view), 0.01f)
+        val effects = springEdgeEffectsOf(view)
+        effects.pull(FlueEdgePhysics.Edge.TOP, pullDistance / view.height)
+        assertTrue(pullOffsetOf(view) > compactMaximum)
 
         measureAndLayout(view, width = 100, height = compactHeight)
 
         assertEquals(compactMaximum, pullOffsetOf(view), 0.01f)
-        dispatchThroughHierarchy(
-            view,
-            MotionEvent.ACTION_CANCEL,
-            y = 20f + pullDistance,
-            eventTime = 17L,
-        )
+        effects.finish(FlueEdgePhysics.Edge.TOP)
         view.release()
         activity.finish()
     }
@@ -2313,6 +2833,23 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
+    fun folderHitRegionTracksTheRenderedIconCenterAndTransforms() {
+        val row = NativeAppListRowView(RuntimeEnvironment.getApplication())
+        row.bind(boundRow(null), resolvedDrawingConfig())
+        row.measure(
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(40, View.MeasureSpec.EXACTLY),
+        )
+        row.layout(30, 50, 130, 90)
+        row.setMoveTranslation(10f, 20f)
+        row.setVisualScale(0.5f)
+
+        assertTrue(row.containsTransformedIconPoint(72f, 90f, centerFraction = 0.64f))
+        assertFalse(row.containsTransformedIconPoint(76f, 90f, centerFraction = 0.64f))
+        assertFalse(row.containsTransformedIconPoint(Float.NaN, 90f, centerFraction = 0.64f))
+    }
+
+    @Test
     fun globalSafeInsetIsNotAppliedInsideSpatialGridCells() {
         listOf(
             NativeAppListPresentation.HONEYCOMB,
@@ -2438,6 +2975,14 @@ class NativeAppListRowViewBehaviorTest {
         )
     }
 
+    private fun boundEntryRow(entry: AppListEntry): NativeAppListBoundRow<Bitmap> =
+        NativeAppListBoundRow(
+            snapshotGeneration = 1L,
+            stableKey = entry.key,
+            entry = entry,
+            icon = null,
+        )
+
     private fun appEntry(
         key: String = "component:com.example/.MainActivity",
     ): AppListEntry = AppListEntry(
@@ -2478,6 +3023,13 @@ class NativeAppListRowViewBehaviorTest {
     private fun pullOffsetOf(view: NativeAppListView): Float {
         val field = NativeAppListView::class.java
             .getDeclaredField("pullOffsetPx")
+            .apply { isAccessible = true }
+        return field.getFloat(view)
+    }
+
+    private fun interactionScaleOf(view: NativeAppListRowView): Float {
+        val field = NativeAppListRowView::class.java
+            .getDeclaredField("interactionScale")
             .apply { isAccessible = true }
         return field.getFloat(view)
     }
@@ -2576,6 +3128,42 @@ class NativeAppListRowViewBehaviorTest {
             .getDeclaredField("dragOverlayView")
             .apply { isAccessible = true }
         return field.get(view) as? NativeAppListRowView
+    }
+
+    private fun springEdgeEffectsOf(view: NativeAppListView): FlueSpringEdgeEffectFactory {
+        val field = NativeAppListView::class.java
+            .getDeclaredField("springEdgeEffects")
+            .apply { isAccessible = true }
+        return field.get(view) as FlueSpringEdgeEffectFactory
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun dragPreviewOrderOf(view: NativeAppListView): List<AppItemKey> {
+        val field = NativeAppListView::class.java
+            .getDeclaredField("dragPreviewOrder")
+            .apply { isAccessible = true }
+        return field.get(view) as List<AppItemKey>
+    }
+
+    private fun idleMainLooperUntil(
+        timeoutMillis: Long = 2_000L,
+        condition: () -> Boolean,
+    ): Boolean {
+        val deadlineNanos = System.nanoTime() + timeoutMillis * 1_000_000L
+        do {
+            shadowOf(android.os.Looper.getMainLooper()).idle()
+            if (condition()) return true
+            Thread.yield()
+        } while (System.nanoTime() < deadlineNanos)
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        return condition()
+    }
+
+    private fun recyclerTerminalPendingOf(view: NativeAppListView): Boolean {
+        val field = NativeAppListView::class.java
+            .getDeclaredField("recyclerGestureNeedsTerminal")
+            .apply { isAccessible = true }
+        return field.getBoolean(view)
     }
 
     private fun closestChildToViewportCenter(view: NativeAppListView): View {

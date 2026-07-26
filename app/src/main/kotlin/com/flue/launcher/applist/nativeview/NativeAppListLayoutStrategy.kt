@@ -4,36 +4,6 @@ import android.content.Context
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
-internal interface NativeTouchScrollConsumptionReporter {
-    fun beginTouchScrollCapture()
-
-    fun takeUnconsumedTouchScrollDeltaPx(): Int
-}
-
-internal class NativeTouchScrollConsumptionTracker {
-    private var capturing = false
-    private var requestedDeltaPx = 0
-    private var consumedDeltaPx = 0
-
-    fun begin() {
-        requestedDeltaPx = 0
-        consumedDeltaPx = 0
-        capturing = true
-    }
-
-    fun record(requestedDeltaPx: Int, consumedDeltaPx: Int) {
-        if (!capturing) return
-        this.requestedDeltaPx += requestedDeltaPx
-        this.consumedDeltaPx += consumedDeltaPx
-    }
-
-    fun takeUnconsumed(): Int {
-        if (!capturing) return 0
-        capturing = false
-        return requestedDeltaPx - consumedDeltaPx
-    }
-}
-
 interface NativeAppListLayoutStrategy {
     val semanticKey: Any
 
@@ -53,23 +23,25 @@ object LinearNativeAppListLayoutStrategy : NativeAppListLayoutStrategy {
         context: Context,
         configProvider: () -> NativeAppListConfig,
     ): RecyclerView.LayoutManager =
-        NativeLinearLayoutManager(context)
+        NativeLinearLayoutManager(context, configProvider)
 }
 
 private class NativeLinearLayoutManager(
     context: Context,
-) : LinearLayoutManager(context, RecyclerView.VERTICAL, false),
-    NativeTouchScrollConsumptionReporter {
-    private val touchScrollConsumption = NativeTouchScrollConsumptionTracker()
+    private val configProvider: () -> NativeAppListConfig,
+) : LinearLayoutManager(context, RecyclerView.VERTICAL, false) {
 
-    override fun scrollVerticallyBy(
-        dy: Int,
-        recycler: RecyclerView.Recycler,
+    override fun calculateExtraLayoutSpace(
         state: RecyclerView.State,
-    ): Int {
-        val consumed = super.scrollVerticallyBy(dy, recycler, state)
-        touchScrollConsumption.record(dy, consumed)
-        return consumed
+        extraLayoutSpace: IntArray,
+    ) {
+        super.calculateExtraLayoutSpace(state, extraLayoutSpace)
+        // Transformed rows remain visible beyond their layout bounds during
+        // fisheye, blur and entry motion. Retain one full row on both edges so
+        // RecyclerView cannot recycle a still-visible icon for one frame.
+        val oneRow = configProvider().rowHeightPx.coerceAtLeast(1)
+        extraLayoutSpace[0] = maxOf(extraLayoutSpace[0], oneRow)
+        extraLayoutSpace[1] = maxOf(extraLayoutSpace[1], oneRow)
     }
 
     /**
@@ -104,10 +76,6 @@ private class NativeLinearLayoutManager(
             ).coerceAtLeast(height)
     }
 
-    override fun beginTouchScrollCapture() = touchScrollConsumption.begin()
-
-    override fun takeUnconsumedTouchScrollDeltaPx(): Int =
-        touchScrollConsumption.takeUnconsumed()
 }
 
 object HoneycombNativeAppListLayoutStrategy : NativeAppListLayoutStrategy {

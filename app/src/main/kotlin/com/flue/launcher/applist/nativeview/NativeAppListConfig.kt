@@ -1,5 +1,7 @@
 package com.flue.launcher.applist.nativeview
 
+import com.flue.launcher.motion.FlueMotionProfile
+import com.flue.launcher.motion.FlueMotionProfiles
 import kotlin.math.abs
 import kotlin.math.hypot
 
@@ -76,7 +78,6 @@ data class NativeAppListConfig(
     val centerEdgeItems: Boolean = true,
     val allowFolderCreation: Boolean = true,
     val iconShadowEnabled: Boolean = true,
-    val fastFlowAnimationEnabled: Boolean = false,
     val edgeSpacingCompressionEnabled: Boolean = true,
     /** Classic (Beta 1.2) keeps content stable; Next animates entry progress. */
     val entryMotionEnabled: Boolean = true,
@@ -108,6 +109,8 @@ data class NativeAppListConfig(
     val rotaryHapticsEnabled: Boolean = true,
     val theme: NativeAppListTheme = NativeAppListTheme.DARK,
     val rowBorder: NativeAppListRowBorder = NativeAppListRowBorder(),
+    /** Selected profile snapshot; native clocks consume it without Compose frames. */
+    val motionProfile: FlueMotionProfile = FlueMotionProfiles.Gentle,
 ){
     /**
      * Frame-local entry progress owned by [NativeAppListView]. It deliberately
@@ -152,6 +155,7 @@ internal fun hasDifferentNativeRowRendering(
         current.iconLabelGapPx != next.iconLabelGapPx ||
         current.iconShape != next.iconShape ||
         current.iconCornerRadiusPx != next.iconCornerRadiusPx ||
+        current.iconShadowEnabled != next.iconShadowEnabled ||
         current.honeycombCellSizePx != next.honeycombCellSizePx ||
         current.denseGridIconInnerPaddingPx != next.denseGridIconInnerPaddingPx ||
         current.palette != next.palette ||
@@ -228,10 +232,6 @@ internal fun NativeAppListConfig.legalized(): NativeAppListConfig {
         fisheyeStrength = fisheyeStrength
             .finiteOr(0f)
             .coerceIn(0f, 2f),
-        // The former fast-flow compensation was removed from the production
-        // native path. Keep the field for persisted-settings compatibility,
-        // but never enable it again for a new resolved snapshot.
-        fastFlowAnimationEnabled = false,
         topFadeRangePx = topFadeRangePx.nonNegativeFiniteMetric(),
         bottomFadeRangePx = bottomFadeRangePx.nonNegativeFiniteMetric(),
         drawEdgeFadeMask = drawEdgeFadeMask,
@@ -241,6 +241,7 @@ internal fun NativeAppListConfig.legalized(): NativeAppListConfig {
         topSafeInsetPx = topSafeInsetPx.nonNegativeMetric(),
         rightSafeInsetPx = rightSafeInsetPx.nonNegativeMetric(),
         bottomSafeInsetPx = bottomSafeInsetPx.nonNegativeMetric(),
+        motionProfile = motionProfile.nativeSafeProfile(),
         rowBorder = rowBorder.copy(
             colorArgb = rowBorder.colorArgb.sanitizedArgb(),
             widthPx = rowBorder.widthPx
@@ -300,6 +301,7 @@ internal data class NativeLinearChildVisual(
     var alpha: Float,
     var blurRadiusPx: Float = 0f,
     var translationY: Float = 0f,
+    var saturation: Float = 1f,
 )
 
 internal fun nativeLinearChildVisual(
@@ -310,15 +312,12 @@ internal fun nativeLinearChildVisual(
     edgeCenterY: Float = childCenterY,
 ): NativeLinearChildVisual {
     val baseScale = config.appScale.takeIf(Float::isFinite)?.coerceAtLeast(0f) ?: 1f
-    if (
-        !config.active ||
-        !childCenterY.isFinite() ||
-        viewportHeight <= 0
-    ) {
+    if (!childCenterY.isFinite() || viewportHeight <= 0) {
         output.scale = baseScale
         output.alpha = 1f
         output.blurRadiusPx = 0f
         output.translationY = 0f
+        output.saturation = 1f
         return output
     }
 
@@ -356,7 +355,7 @@ internal fun nativeLinearChildVisual(
     val fisheyeAlpha = (1f - edgeAlphaCoefficient * effectProgress).coerceIn(0.10f, 1f)
     output.scale = baseScale * fisheyeScale * entryScale
     val compatibilityFade = if (config.blurTier == NativeBlurTier.LITE) {
-        1f - fadeProgress
+        nativeLiteEdgeAlpha(fadeProgress)
     } else {
         1f
     }
@@ -370,6 +369,7 @@ internal fun nativeLinearChildVisual(
         0f
     }
     output.translationY = entryOffset
+    output.saturation = nativeLiteEdgeSaturation(fadeProgress, config.blurTier)
     return output
 }
 
@@ -404,35 +404,14 @@ internal fun nativeEntryTranslationY(
         0.08f * viewportHeight
 }
 
-internal fun nativeFastFlowOffset(
-    rowCenterY: Float,
-    viewportHeight: Float,
-    enabled: Boolean,
-    presentation: NativeAppListPresentation = NativeAppListPresentation.LINEAR,
-): Float {
-    if (!enabled || !rowCenterY.isFinite() || !viewportHeight.isFinite() || viewportHeight <= 0f) {
-        return 0f
-    }
-    val centerY = viewportHeight * 0.5f
-    val isHoneycomb = presentation == NativeAppListPresentation.HONEYCOMB
-    val slowTopY = viewportHeight * if (isHoneycomb) 0.24f else 0.30f
-    val slowBottomY = viewportHeight * if (isHoneycomb) 0.76f else 0.70f
-    val transformedY = when {
-        rowCenterY < slowTopY ->
-            centerY + (slowTopY - centerY) * 0.56f + (rowCenterY - slowTopY) * 1.85f
-        rowCenterY > slowBottomY ->
-            centerY + (slowBottomY - centerY) * 0.56f + (rowCenterY - slowBottomY) * 1.85f
-        else -> centerY + (rowCenterY - centerY) * 0.56f
-    }
-    return (transformedY - rowCenterY).coerceIn(-260f, 260f)
-}
-
 internal fun nativeInteractionScale(
     pressed: Boolean,
     dragged: Boolean,
     folderHover: Boolean,
+    glidePressed: Boolean = false,
 ): Float = when {
     dragged -> 0.965f
+    glidePressed -> 0.992f
     folderHover -> 0.90f
     pressed -> 0.97f
     else -> 1f
@@ -453,6 +432,7 @@ internal class NativeSpatialChildVisual(
     var translationX: Float = 0f,
     var translationY: Float = 0f,
     var blurRadiusPx: Float = 0f,
+    var saturation: Float = 1f,
 ) {
     fun set(
         scale: Float,
@@ -460,12 +440,14 @@ internal class NativeSpatialChildVisual(
         translationX: Float,
         translationY: Float,
         blurRadiusPx: Float,
+        saturation: Float = 1f,
     ): NativeSpatialChildVisual {
         this.scale = scale
         this.alpha = alpha
         this.translationX = translationX
         this.translationY = translationY
         this.blurRadiusPx = blurRadiusPx
+        this.saturation = saturation
         return this
     }
 }
@@ -482,7 +464,7 @@ internal fun nativeHoneycombChildVisual(
         viewportWidth <= 0f || viewportHeight <= 0f ||
         !centerX.isFinite() || !centerY.isFinite()
     ) {
-        return output.set(1f, 1f, 0f, 0f, 0f)
+        return output.set(1f, 1f, 0f, 0f, 0f, 1f)
     }
     val screenCenterX = config.leftSafeInsetPx +
         (viewportWidth - config.leftSafeInsetPx) / 2f
@@ -517,12 +499,7 @@ internal fun nativeHoneycombChildVisual(
     } else {
         1f
     }
-    val translationY = nativeFastFlowOffset(
-        rowCenterY = centerY,
-        viewportHeight = viewportHeight,
-        enabled = config.fastFlowAnimationEnabled,
-        presentation = config.presentation,
-    ) + (1f - entryProgress) * 0.08f * viewportHeight
+    val translationY = (1f - entryProgress) * 0.08f * viewportHeight
     val topProgress = edgeProgress(centerY + translationY, config.topFadeRangePx)
     val bottomProgress = edgeProgress(
         viewportHeight - centerY - translationY,
@@ -536,8 +513,9 @@ internal fun nativeHoneycombChildVisual(
     } else {
         0f
     }
+    val fadeProgress = maxOf(topProgress, bottomProgress)
     val compatibilityFade = if (config.blurTier == NativeBlurTier.LITE) {
-        1f - maxOf(topProgress, bottomProgress)
+        nativeLiteEdgeAlpha(fadeProgress)
     } else {
         1f
     }
@@ -548,6 +526,7 @@ internal fun nativeHoneycombChildVisual(
         translationX = translationX,
         translationY = translationY,
         blurRadiusPx = blur,
+        saturation = nativeLiteEdgeSaturation(fadeProgress, config.blurTier),
     )
 }
 
@@ -563,7 +542,7 @@ internal fun nativeDenseGridChildVisual(
         viewportWidth <= 0f || viewportHeight <= 0f ||
         !centerX.isFinite() || !centerY.isFinite()
     ) {
-        return output.set(1f, 1f, 0f, 0f, 0f)
+        return output.set(1f, 1f, 0f, 0f, 0f, 1f)
     }
 
     val safeLeft = config.leftSafeInsetPx.coerceAtLeast(0).toFloat()
@@ -615,8 +594,9 @@ internal fun nativeDenseGridChildVisual(
     } else {
         0f
     }
+    val fadeProgress = maxOf(topProgress, bottomProgress)
     val compatibilityFade = if (config.blurTier == NativeBlurTier.LITE) {
-        1f - maxOf(topProgress, bottomProgress)
+        nativeLiteEdgeAlpha(fadeProgress)
     } else {
         1f
     }
@@ -627,8 +607,21 @@ internal fun nativeDenseGridChildVisual(
         translationX = translationX,
         translationY = translationY,
         blurRadiusPx = blur,
+        saturation = nativeLiteEdgeSaturation(fadeProgress, config.blurTier),
     )
 }
+
+internal fun nativeLiteEdgeAlpha(progress: Float): Float =
+    1f - 0.38f * progress.takeIf(Float::isFinite)?.coerceIn(0f, 1f).orZero()
+
+internal fun nativeLiteEdgeSaturation(progress: Float, tier: NativeBlurTier): Float =
+    if (tier == NativeBlurTier.LITE) {
+        1f - 0.55f * progress.takeIf(Float::isFinite)?.coerceIn(0f, 1f).orZero()
+    } else {
+        1f
+    }
+
+private fun Float?.orZero(): Float = this ?: 0f
 
 private fun edgeProgress(coordinate: Float, edgeRange: Float): Float {
     if (!coordinate.isFinite() || !edgeRange.isFinite() || edgeRange <= 0f) return 0f

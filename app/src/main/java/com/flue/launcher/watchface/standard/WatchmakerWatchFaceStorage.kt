@@ -6,13 +6,24 @@ import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceType
 import java.io.File
 import java.io.FileOutputStream
-import java.util.Locale
 
 const val WATCHMAKER_ID_PREFIX = "watchmaker:"
 
+data class WatchmakerWatchFaceScanFailure(
+    val directoryName: String,
+    val message: String,
+)
+
+data class WatchmakerWatchFaceScanResult(
+    val descriptors: List<LunchWatchFaceDescriptor>,
+    val failures: List<WatchmakerWatchFaceScanFailure>,
+) {
+    val isComplete: Boolean get() = failures.isEmpty()
+}
+
 object WatchmakerWatchFaceStorage {
     private const val ROOT_DIRECTORY = "watchmaker_faces"
-    private const val MAXIMUM_IMPORT_BYTES = 32L * 1024L * 1024L
+    private const val MAXIMUM_IMPORT_BYTES = 96L * 1024L * 1024L
 
     fun rootDirectory(context: Context): File =
         File(context.filesDir, ROOT_DIRECTORY).apply {
@@ -38,7 +49,7 @@ object WatchmakerWatchFaceStorage {
                         if (copied > MAXIMUM_IMPORT_BYTES) {
                             throw WatchArchiveException(
                                 WatchArchiveFailureReason.ARCHIVE_TOO_LARGE,
-                                ".watch 表盘包超过 32MB 限制",
+                                ".watch 表盘包超过 96MB 限制",
                             )
                         }
                         output.write(buffer, 0, count)
@@ -59,30 +70,55 @@ object WatchmakerWatchFaceStorage {
         return installed.toDescriptor()
     }
 
-    fun scan(context: Context): List<LunchWatchFaceDescriptor> {
+    fun scan(context: Context): List<LunchWatchFaceDescriptor> =
+        scanWithDiagnostics(context).descriptors
+
+    fun scanWithDiagnostics(context: Context): WatchmakerWatchFaceScanResult {
         val parser = WatchmakerDefinitionParser()
-        return rootDirectory(context)
+        val installer = WatchArchiveInstaller()
+        val ordered = ArrayList<WatchInstallOrder<LunchWatchFaceDescriptor>>()
+        val failures = ArrayList<WatchmakerWatchFaceScanFailure>()
+        rootDirectory(context)
             .listFiles()
             .orEmpty()
             .asSequence()
             .filter { it.isDirectory && !it.name.startsWith(".") }
-            .mapNotNull { directory ->
-                runCatching {
-                    val watchXml = File(directory, "watch.xml").takeIf(File::isFile)
-                        ?: directory.walkTopDown().firstOrNull {
-                            it.isFile && it.name.equals("watch.xml", ignoreCase = true)
-                        }
-                        ?: return@runCatching null
+            .forEach { directory ->
+                try {
+                    val legacyInstalledAt = directory.lastModified()
+                        .takeIf { it > 0L }
+                        ?: System.currentTimeMillis()
+                    // Persist before repair creates decoded files so migration
+                    // cannot move a legacy face to the top of the list.
+                    val installedAt = WatchInstallMetadata.readOrCreate(directory, legacyInstalledAt)
+                    val watchXml = installer.repairInstalledPackage(directory)
                     val definition = parser.parse(watchXml)
-                    definition.toDescriptor(
+                    val descriptor = definition.toDescriptor(
                         stableId = directory.name,
                         rootDirectory = directory,
                         preferredPreview = previewNextTo(watchXml),
                     )
-                }.getOrNull()
+                    ordered += WatchInstallOrder(
+                        value = descriptor,
+                        installedAtEpochMs = installedAt,
+                        displayName = descriptor.displayName,
+                        stableId = descriptor.id,
+                    )
+                } catch (error: Exception) {
+                    failures += WatchmakerWatchFaceScanFailure(
+                        directoryName = directory.name.take(128),
+                        message = error.message
+                            ?.trim()
+                            ?.take(512)
+                            ?.takeIf(String::isNotEmpty)
+                            ?: error.javaClass.simpleName,
+                    )
+                }
             }
-            .sortedBy { it.displayName.lowercase(Locale.ROOT) }
-            .toList()
+        return WatchmakerWatchFaceScanResult(
+            descriptors = orderWatchInstalls(ordered),
+            failures = failures,
+        )
     }
 
     fun delete(context: Context, descriptor: LunchWatchFaceDescriptor): Boolean {
@@ -122,6 +158,7 @@ private fun WatchmakerDefinition.toDescriptor(
         sourceDirPath = rootDirectory.absolutePath,
         watchFaceName = stableId,
         author = rootAttributes["author"]?.takeIf(String::isNotBlank),
+        supportsSettings = true,
     )
 }
 

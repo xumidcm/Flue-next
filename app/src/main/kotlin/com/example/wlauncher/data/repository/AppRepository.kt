@@ -507,28 +507,28 @@ class AppRepository(private val context: Context) {
         return keys
     }
 
-    fun moveItemOutOfFolder(folderKey: String, itemKey: String): List<String> {
-        val remainingKeys = itemStorage.moveItemOutOfFolder(folderKey, itemKey)
-        refreshAsync()
-        return remainingKeys
+    fun moveItemOutOfFolder(folderKey: String, itemKey: String): FolderMutationResult {
+        val result = itemStorage.moveItemOutOfFolder(folderKey, itemKey)
+        if (result.succeeded) refreshAsync()
+        return result
     }
 
-    fun addItemsToFolder(folderKey: String, itemKeys: List<String>): List<String> {
-        val nextKeys = itemStorage.addItemsToFolder(folderKey, itemKeys)
-        if (nextKeys.isNotEmpty()) refreshAsync()
-        return nextKeys
+    fun addItemsToFolder(folderKey: String, itemKeys: List<String>): FolderMutationResult {
+        val result = itemStorage.addItemsToFolder(folderKey, itemKeys)
+        if (result.succeeded && result.itemKeys.isNotEmpty()) refreshAsync()
+        return result
     }
 
-    fun setFolderItems(folderKey: String, itemKeys: List<String>): List<String> {
-        val nextKeys = itemStorage.setFolderItems(folderKey, itemKeys)
-        refreshAsync()
-        return nextKeys
+    fun setFolderItems(folderKey: String, itemKeys: List<String>): FolderMutationResult {
+        val result = itemStorage.setFolderItems(folderKey, itemKeys)
+        if (result.succeeded) refreshAsync()
+        return result
     }
 
-    fun reorderFolderItems(folderKey: String, orderedKeys: List<String>): List<String> {
-        val nextKeys = itemStorage.reorderFolderItems(folderKey, orderedKeys)
-        if (nextKeys.isNotEmpty()) refreshAsync()
-        return nextKeys
+    fun reorderFolderItems(folderKey: String, orderedKeys: List<String>): FolderMutationResult {
+        val result = itemStorage.reorderFolderItems(folderKey, orderedKeys)
+        if (result.succeeded && result.itemKeys.isNotEmpty()) refreshAsync()
+        return result
     }
 
     fun loadDisplayIconForPackage(

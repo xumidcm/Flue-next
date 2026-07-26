@@ -114,7 +114,6 @@ fun NativeListDrawerScreen(
     fisheyeRangeRows: Int = 4,
     fisheyeStrengthPercent: Int = 100,
     edgeSpacingCompressionEnabled: Boolean = true,
-    fastFlowAnimationEnabled: Boolean = false,
     twoToneIconsEnabled: Boolean = false,
     iconShadowEnabled: Boolean = true,
     themeColor: Color = Color(0xFF7BE8FF),
@@ -141,8 +140,8 @@ fun NativeListDrawerScreen(
     honeycombNarrowColumns: Int = 4,
     onAppClick: (AppInfo, Offset) -> Unit,
     onLongClick: (AppInfo) -> Unit = {},
-    onReorder: (AppListCommand.Move) -> Unit = {},
-    onCreateFolder: (AppListCommand.CreateFolder) -> Unit = {},
+    onReorder: (AppListCommand.Move) -> Boolean = { false },
+    onCreateFolder: (AppListCommand.CreateFolder) -> Boolean = { false },
     onExcludeApp: (AppInfo) -> Unit = {},
     onRemoveShortcut: (AppInfo) -> Unit = {},
     onRenameFolder: (AppInfo, String) -> Unit = { _, _ -> },
@@ -191,7 +190,6 @@ fun NativeListDrawerScreen(
                 fisheyeRangeRows = fisheyeRangeRows,
                 fisheyeStrengthPercent = fisheyeStrengthPercent,
                 edgeSpacingCompressionEnabled = edgeSpacingCompressionEnabled,
-                fastFlowAnimationEnabled = fastFlowAnimationEnabled,
                 topFadeRangeDp = topFadeRangeDp,
                 bottomFadeRangeDp = bottomFadeRangeDp,
                 topBlurRadiusDp = topBlurRadiusDp,
@@ -221,20 +219,37 @@ fun NativeListDrawerScreen(
             onCommand = { command ->
                 val app = projection.appsByKey[command.keyOrNull()]
                 when (command) {
-                    is AppListCommand.Open -> if (app != null) {
-                        onAppClick(app, Offset(command.origin.x, command.origin.y))
-                    }
-                    is AppListCommand.ShowActions -> if (app != null) {
+                    is AppListCommand.Open -> app?.let {
+                        onAppClick(it, Offset(command.origin.x, command.origin.y))
+                        true
+                    } ?: false
+                    is AppListCommand.ShowActions -> app?.let {
                         actionAppKey = command.key.value
-                        onLongClick(app)
+                        onLongClick(it)
+                        true
+                    } ?: false
+                    AppListCommand.DismissActions -> {
+                        actionAppKey = null
+                        true
                     }
-                    AppListCommand.DismissActions -> actionAppKey = null
                     is AppListCommand.Move -> onReorder(command)
                     is AppListCommand.CreateFolder -> onCreateFolder(command)
-                    is AppListCommand.Hide -> if (app != null) onExcludeApp(app)
-                    is AppListCommand.RemoveShortcut -> if (app != null) onRemoveShortcut(app)
-                    is AppListCommand.RenameFolder -> if (app != null) onRenameFolder(app, command.name)
-                    is AppListCommand.DissolveFolder -> if (app != null) onDissolveFolder(app)
+                    is AppListCommand.Hide -> app?.let {
+                        onExcludeApp(it)
+                        true
+                    } ?: false
+                    is AppListCommand.RemoveShortcut -> app?.let {
+                        onRemoveShortcut(it)
+                        true
+                    } ?: false
+                    is AppListCommand.RenameFolder -> app?.let {
+                        onRenameFolder(it, command.name)
+                        true
+                    } ?: false
+                    is AppListCommand.DissolveFolder -> app?.let {
+                        onDissolveFolder(it)
+                        true
+                    } ?: false
                 }
             },
             onScrollToTop = onScrollToTop,
@@ -299,7 +314,6 @@ internal data class NativeListDrawerConfigRequest(
     val fisheyeRangeRows: Int,
     val fisheyeStrengthPercent: Int,
     val edgeSpacingCompressionEnabled: Boolean,
-    val fastFlowAnimationEnabled: Boolean,
     val topFadeRangeDp: Int,
     val bottomFadeRangeDp: Int,
     val topBlurRadiusDp: Float,
@@ -421,8 +435,6 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         centerEdgeItems = request.presentation == NativeAppListPresentation.LINEAR,
         allowFolderCreation = request.allowFolderCreation,
         iconShadowEnabled = request.iconShadowEnabled,
-        fastFlowAnimationEnabled = request.fastFlowAnimationEnabled &&
-            request.presentation != NativeAppListPresentation.DENSE_GRID,
         edgeSpacingCompressionEnabled = request.edgeSpacingCompressionEnabled,
         entryMotionEnabled = !request.appleWatchIconShape,
         entryProgress = request.entryProgress,

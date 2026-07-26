@@ -12,7 +12,6 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
 import android.view.HapticFeedbackConstants
-import android.view.VelocityTracker
 import android.view.ViewConfiguration
 import android.view.animation.PathInterpolator
 import android.os.Build
@@ -23,8 +22,22 @@ import com.flue.launcher.applist.model.AppItemKey
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-private const val NATIVE_ENTRY_ANIMATION_DURATION_MS = 400L
-private val NATIVE_ENTRY_INTERPOLATOR = PathInterpolator(0.4f, 0f, 0.2f, 1f)
+private const val NATIVE_DRAG_SETTLE_DURATION_MS = 130L
+private const val NATIVE_DRAG_PREVIEW_DURATION_MS = 150L
+private val NATIVE_DRAG_SETTLE_INTERPOLATOR = PathInterpolator(0.2f, 0f, 0f, 1f)
+
+private data class NativeDragPreviewMove(
+    val row: NativeAppListRowView,
+    val startX: Float,
+    val startY: Float,
+    val targetX: Float,
+    val targetY: Float,
+)
+
+private data class NativeDragPreviewSlot(
+    val centerX: Float,
+    val centerY: Float,
+)
 
 class NativeAppListView @JvmOverloads constructor(
     context: Context,
@@ -38,6 +51,8 @@ class NativeAppListView @JvmOverloads constructor(
         commandSink = ::dispatchCommand,
         initialConfig = currentConfig,
         onListCommitted = ::onNativeAdapterListCommitted,
+        onDragPreviewOrderChanged = ::onDragPreviewOrderChanged,
+        onDragPreviewFinished = ::onDragPreviewFinished,
     )
     private val scrollController = NativeAppListScrollController(this) {
         currentConfig.value
@@ -73,6 +88,7 @@ class NativeAppListView @JvmOverloads constructor(
 
         override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
             removeCallbacks(restoreMotionBlur)
+            if (newState != SCROLL_STATE_DRAGGING) clearGlidePressed()
             if (newState == SCROLL_STATE_IDLE) {
                 // Avoid reattaching multiple RenderEffects on the exact frame
                 // a fling settles; let the final composite frame land first.
@@ -90,28 +106,40 @@ class NativeAppListView @JvmOverloads constructor(
             val key = (getChildViewHolder(view) as?
                 NativeAppListAdapter.AppItemViewHolder)?.boundKeyOrNull()
             (view as? NativeAppListRowView)?.setFolderHoverState(key == folderHoverKey)
+            (view as? NativeAppListRowView)?.setGlidePressedState(key == glidePressedKey)
             if (key == draggedSourceKey) view.alpha = 0f
+            if (dragPreviewOrder.isNotEmpty()) {
+                postOnAnimation { applyDragPreviewTargets(animate = false) }
+            }
         }
 
         override fun onChildViewDetachedFromWindow(view: View) {
             (view as? NativeAppListRowView)?.setFolderHoverState(false)
+            (view as? NativeAppListRowView)?.setGlidePressedState(false)
         }
     }
     private var released = false
     private var dragTouchOwned = false
     private var interceptedAction = -1
     private var interceptedEventTime = Long.MIN_VALUE
-    private var interceptedEndsGesture = false
-    /**
-     * True when a DOWN interrupts the pull settle animation.
-     *
-     * Intercepting that DOWN makes this ViewGroup the owner of the complete
-     * stream, so later MOVE/UP/CANCEL events are delivered straight to
-     * [onTouchEvent] instead of passing through [onInterceptTouchEvent]. Keep
-     * this bit until the terminal event so drag, scroll and pull all continue
-     * to see the same gesture.
-     */
-    private var settleTouchOwned = false
+    /** True until RecyclerView sees the real UP/CANCEL after a drag handoff. */
+    private var recyclerGestureNeedsTerminal = false
+    private var edgeTerminalAction = -1
+    private var edgeTerminalEventTime = Long.MIN_VALUE
+    private var gesturePointerId = MotionEvent.INVALID_POINTER_ID
+    private val legacyEdgeHandoffEnabled = Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+    private val legacyEdgePointer = NativeLegacyEdgePointerState()
+    private val viewConfiguration = ViewConfiguration.get(context)
+    private var legacyPreparedAction = -1
+    private var legacyPreparedEventTime = Long.MIN_VALUE
+    private var legacyPreparedPointerId = MotionEvent.INVALID_POINTER_ID
+    private var legacyPreparedPhysicalY = Float.NaN
+    private var legacyPreparedOffsetY = 0f
+    private var legacyEdgeHandoffOccurred = false
+    private var legacyEdgeRemainderForwarded = false
+    private val legacyPointerVelocity = NativeLegacyPointerVelocityState()
+    private var legacyPendingFlingVelocityY: Int? = null
+    private var legacyFlingObserved = false
     private var draggedSourceKey: AppItemKey? = null
     private var dragOverlayView: NativeAppListRowView? = null
     private var draggedViewTouchOffsetY = 0f
@@ -119,55 +147,27 @@ class NativeAppListView @JvmOverloads constructor(
     private var draggedPointerY = 0f
     private var draggedPointerX = 0f
     private var folderHoverKey: AppItemKey? = null
+    private var glidePressedKey: AppItemKey? = null
     private var autoScrollRemainder = 0f
+    private var folderSettleCenterX = Float.NaN
+    private var folderSettleCenterY = Float.NaN
+    private var dragSettleGeneration = 0L
+    private var dragPreviewAnimator: ValueAnimator? = null
+    private var dragPreviewAnimationGeneration = 0L
+    private var dragPreviewOriginalOrder: List<AppItemKey> = emptyList()
+    private var dragPreviewOrder: List<AppItemKey> = emptyList()
     private val topFadePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val bottomFadePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private var topFadeHeight = 0f
     private var bottomFadeHeight = 0f
-    private val pullToFaceState = NativePullToFaceState(
-        triggerThresholdPx = 72f * resources.displayMetrics.density,
-        maxOffsetPx = resources.displayMetrics.heightPixels.coerceAtLeast(1) / 2f,
-    )
     private var pullOffsetPx = 0f
-    private var pullTouchOwned = false
-    private var pullOutwardDragMultiplier = 1f
-    private var pullSettleAnimator: ValueAnimator? = null
-    private var pullPhysicalPointerY = 0f
-    private var pullForwardedPointerY = 0f
-    /** Pointer owning pull/drag tracking; RecyclerView still receives the full event. */
-    private var pullActivePointerId = MotionEvent.INVALID_POINTER_ID
-    private var preparedPullAction = -1
-    private var preparedPullEventTime = Long.MIN_VALUE
-    private var preparedPullRawY = Float.NaN
-    private var preparedPullPointerId = MotionEvent.INVALID_POINTER_ID
-    private var preparedFinalAction = -1
-    private var preparedFinalEventTime = Long.MIN_VALUE
-    private var preparedFinalPointerId = MotionEvent.INVALID_POINTER_ID
-    private var preparedRecyclerPointerDelta = 0f
-    private var preparedRecyclerMovePrimed = false
-    private var recyclerScrollRemainder = 0f
-    /**
-     * RecyclerView normally sees the DOWN in [onInterceptTouchEvent] while a
-     * child row still owns the stream.  When pull takes over, replay this
-     * untouched sample into RecyclerView.onTouchEvent so its velocity tracker
-     * receives one coherent DOWN -> MOVE/UP history.
-     */
-    private var recyclerDownEvent: MotionEvent? = null
-    private var recyclerTouchPrimed = false
-    private var pullVelocityTracker: VelocityTracker? = null
-    private var pullFlingIssued = false
-    private var velocitySampleAction = -1
-    private var velocitySampleEventTime = Long.MIN_VALUE
-    private var velocitySamplePointerId = MotionEvent.INVALID_POINTER_ID
-    // RecyclerView's internal tracker can legitimately lose the MOVE history
-    // when pull ownership is handed over mid-stream (notably on API 27
-    // implementations). Keep a tiny allocation-free terminal sample as a
-    // deterministic fallback; it is only consumed for a pull-owned release.
-    private var manualVelocityLastY = Float.NaN
-    private var manualVelocityLastTime = Long.MIN_VALUE
-    private var manualVelocityY = 0f
+    private val springEdgeEffects = FlueSpringEdgeEffectFactory(
+        owner = this,
+        onOffsetChanged = ::setPullOffset,
+    )
 
-    var onCommand: ((AppListCommand) -> Unit)? = null
+    /** Returns true when the command owner accepted the request. */
+    var onCommand: ((AppListCommand) -> Boolean)? = null
     var onScrollToTop: (() -> Unit)? = null
 
     private fun onNativeAdapterListCommitted(itemCount: Int) {
@@ -175,9 +175,38 @@ class NativeAppListView @JvmOverloads constructor(
             ?.onAdapterItemCountCommitted(itemCount)
     }
 
+    private fun onDragPreviewOrderChanged(
+        originalOrder: List<AppItemKey>,
+        previewOrder: List<AppItemKey>,
+    ) {
+        if (released) return
+        dragPreviewOriginalOrder = originalOrder.toList()
+        dragPreviewOrder = previewOrder.toList()
+        applyDragPreviewTargets(animate = true)
+    }
+
+    private fun onDragPreviewFinished(committed: Boolean) {
+        if (released) return
+        dragPreviewOriginalOrder = emptyList()
+        dragPreviewOrder = emptyList()
+        if (committed) {
+            // Diff dispatch and layout share the upcoming frame. Clearing the
+            // virtual offsets there lets the real stable-key slots take over
+            // without drawing an intermediate reverse jump.
+            postOnAnimation { clearDragPreviewTranslations(animate = false) }
+        } else {
+            clearDragPreviewTranslations(animate = true)
+        }
+    }
+
     init {
         setHasFixedSize(true)
-        overScrollMode = View.OVER_SCROLL_NEVER
+        // RecyclerView owns scroll, velocity and boundary consumption.  Its
+        // unconsumed distance/velocity is handed to our EdgeEffect in the same
+        // frame instead of being replayed through a second gesture state
+        // machine.
+        overScrollMode = View.OVER_SCROLL_ALWAYS
+        edgeEffectFactory = springEdgeEffects
         isNestedScrollingEnabled = false
         layoutManager = activeLayoutStrategy.createLayoutManager(context) { currentConfig.value }
         itemAnimator = NativeStableKeyItemAnimator(
@@ -195,20 +224,12 @@ class NativeAppListView @JvmOverloads constructor(
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        val pullOffsetClamped = pullToFaceState.updateMaximumOffset(
-            maxOf(
-                nativeOverscrollLimitPx(
-                    presentation = currentConfig.value.presentation,
-                    viewportHeightPx = bottom - top,
-                    density = resources.displayMetrics.density,
-                ),
-                72f * resources.displayMetrics.density,
-            ),
-        )
-        if (pullOffsetClamped) setPullOffset(pullToFaceState.offsetPx)
+        springEdgeEffects.updateViewport(bottom - top)
         updateViewportPadding(bottom - top)
         super.onLayout(changed, left, top, right, bottom)
-        if (dragOverlayView != null) dragHost.updateDrag(draggedPointerX, draggedPointerY)
+        if (dragOverlayView != null && dragController.isDragging) {
+            dragHost.updateDrag(draggedPointerX, draggedPointerY)
+        }
         applyAttachedChildVisuals()
     }
 
@@ -243,179 +264,147 @@ class NativeAppListView @JvmOverloads constructor(
             super.onGenericMotionEvent(event)
     }
 
+    override fun fling(velocityX: Int, velocityY: Int): Boolean {
+        val legacyVelocityY = legacyPendingFlingVelocityY
+        if (legacyVelocityY != null) {
+            legacyFlingObserved = true
+            return super.fling(velocityX, legacyVelocityY)
+        }
+        return super.fling(velocityX, velocityY)
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        updateGesturePointer(event)
+        prepareLegacyEdgePointer(event)
+        if (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
+            // A pointer-down can be delivered to the currently touched row
+            // without another parent interception pass. Cancel at the outer
+            // boundary so the delayed long-press callback cannot fire later.
+            dragController.onAdditionalPointer()
+        }
+        val handled = super.dispatchTouchEvent(event)
+        if (
+            event.actionMasked == MotionEvent.ACTION_UP ||
+            event.actionMasked == MotionEvent.ACTION_CANCEL
+        ) {
+            dragController.finishAdditionalPointer()
+            resetLegacyEdgeGesture()
+        }
+        return handled
+    }
+
     override fun onDetachedFromWindow() {
         cancelActiveDrag()
-        cancelPull()
-        finishOwnedTouch()
+        cancelDragSettle(removeOverlay = true)
+        springEdgeEffects.finish()
+        finishOwnedTouch(scheduleMotionBlurRestore = false)
+        removeCallbacks(restoreMotionBlur)
         cancelEntryAnimation(resetProgress = true)
         super.onDetachedFromWindow()
     }
 
     override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
         if (released || !currentConfig.value.active) return false
-        captureRecyclerDown(event)
-        preparePointerTransition(event)
-        if (event.actionMasked == MotionEvent.ACTION_UP) {
-            prepareFinalRecyclerPointerSample(event)
-        }
-        if (dragTouchOwned) {
-            if (event.actionMasked == MotionEvent.ACTION_POINTER_UP) {
-                rebasePullPointerAfterPointerUp(event)
-            }
-            return true
-        }
-        val consume = when (event.actionMasked) {
+        updateGesturePointer(event)
+        prepareLegacyEdgePointer(event)
+        observeEdgeGesture(event)
+        if (dragTouchOwned) return true
+
+        val dragConsumed = when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                cancelPullSettle()
-                pullToFaceState.onDown(
-                    activePointerY(event),
-                    initialOffsetPx = pullOffsetPx,
-                )
-                beginPullPointer(event)
-                clearPreparedPullEvent()
-                resetPullVelocityTracker(event)
-                pullOutwardDragMultiplier = nativeOverscrollOutwardMultiplier(
-                    currentConfig.value.presentation,
-                )
+                // Interrupt a running rebound at its current visual position.
+                // RecyclerView still receives this original DOWN and remains
+                // the sole owner of touch-slop and velocity tracking.
+                recyclerGestureNeedsTerminal = true
+                clearGlidePressed()
                 dragController.onDown(activePointerX(event), activePointerY(event), event.eventTime)
-                if (pullOffsetPx != 0f) {
-                    // A settling pull is rendered on the child transform. Own
-                    // the new stream from DOWN so ViewGroup cannot dispatch it
-                    // to the stale layout slot underneath the visible row.
-                    interceptedAction = event.actionMasked
-                    interceptedEventTime = event.eventTime
-                    interceptedEndsGesture = false
-                    settleTouchOwned = true
-                    parent?.requestDisallowInterceptTouchEvent(true)
-                    true
-                } else {
-                    false
-                }
+                false
             }
             MotionEvent.ACTION_MOVE -> {
-                val dragConsumed = dragController.onMove(
+                dragController.onMove(
                     activePointerX(event),
                     activePointerY(event),
                     event.eventTime,
                 )
-                if (dragConsumed) {
-                    // From this frame onward the native stable-key drag owns
-                    // the gesture. End RecyclerView's stream exactly once so
-                    // it cannot retain pressed/velocity state behind the drag.
-                    dispatchRecyclerCancel(event)
-                    pullToFaceState.cancel()
-                    setPullOffset(0f)
-                    true
-                } else {
-                    val consumedPointerDelta = preparePullMove(event)
-                    if (consumedPointerDelta != 0f || pullToFaceState.offsetPx != 0f) {
-                        if (!pullTouchOwned) {
-                            primeRecyclerTouchForPull(event)
-                        }
-                        dragController.onCancel()
-                        pullTouchOwned = true
-                        setPullOffset(pullToFaceState.offsetPx)
-                        true
-                    } else {
-                        false
-                    }
-                }
             }
-            MotionEvent.ACTION_UP -> {
-                val dragConsumed = dragController.onUp(
+            MotionEvent.ACTION_UP -> dragController.onUp(
                     activePointerX(event),
                     activePointerY(event),
                     event.eventTime,
                 )
-                if (pullToFaceState.isPulling) {
-                    releasePull()
-                    true
-                } else {
-                    dragConsumed
-                }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                // A watch drag never hands ownership to a second finger.
+                dragController.onAdditionalPointer()
+                false
             }
-            MotionEvent.ACTION_CANCEL -> {
-                val dragConsumed = dragController.onCancel()
-                if (pullToFaceState.isPulling) {
-                    cancelPull()
-                    true
-                } else {
-                    dragConsumed
-                }
-            }
+            MotionEvent.ACTION_CANCEL -> dragController.onCancel()
             else -> false
         }
-        if (consume) {
+
+        if (dragConsumed) {
+            stopScroll()
+            clearGlidePressed()
             dragTouchOwned = true
             interceptedAction = event.actionMasked
             interceptedEventTime = event.eventTime
-            interceptedEndsGesture =
-                event.actionMasked == MotionEvent.ACTION_UP ||
-                    event.actionMasked == MotionEvent.ACTION_CANCEL
             parent?.requestDisallowInterceptTouchEvent(true)
             return true
         }
-        val forwarded = withForwardedPullPointer(event) {
+
+        val forwarded = withLegacyForwardedPointer(event) {
             super.onInterceptTouchEvent(event)
+        }
+        if (forwarded && event.actionMasked == MotionEvent.ACTION_MOVE) {
+            updateGlidePressed(activePointerX(event), activePointerY(event))
         }
         if (
             forwarded &&
-            !dragTouchOwned &&
             dragController.isActive
         ) {
-            // RecyclerView has taken ownership after touch-slop. Cancel the
-            // pending long-press recognizer on the exact hand-off frame so its
-            // delayed callback cannot open actions during a scroll.
+            // RecyclerView won touch-slop, so the delayed long-press recognizer
+            // must be cancelled on the exact hand-off frame.
             dragController.onCancel()
         }
-        if (event.actionMasked == MotionEvent.ACTION_POINTER_UP) {
-            rebasePullPointerAfterPointerUp(event)
+        if (
+            event.actionMasked == MotionEvent.ACTION_UP ||
+            event.actionMasked == MotionEvent.ACTION_CANCEL
+        ) {
+            clearGlidePressed()
+            recyclerGestureNeedsTerminal = false
+            clearGesturePointer()
         }
         return forwarded
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        captureRecyclerDown(event)
-        preparePointerTransition(event)
-        if (event.actionMasked == MotionEvent.ACTION_UP) {
-            prepareFinalRecyclerPointerSample(event)
-        }
+        prepareLegacyEdgePointer(event)
+        observeEdgeGesture(event)
         val alreadyHandled =
             event.actionMasked == interceptedAction &&
                 event.eventTime == interceptedEventTime
         if (alreadyHandled) {
             interceptedAction = -1
             interceptedEventTime = Long.MIN_VALUE
-            if (settleTouchOwned) {
-                return true
+            if (
+                event.actionMasked == MotionEvent.ACTION_UP ||
+                event.actionMasked == MotionEvent.ACTION_CANCEL
+            ) {
+                finishRecyclerGesture(event)
+                finishOwnedTouch()
             }
-            if (pullTouchOwned && preparedRecyclerMovePrimed) {
-                // The intercept phase already replayed this exact MOVE into
-                // RecyclerView after priming its synthetic DOWN.  ViewGroup
-                // delivers the same object to us once more as the handoff
-                // event; do not add a duplicate velocity sample.
-                preparedRecyclerMovePrimed = false
-                return true
-            }
-            if (!pullTouchOwned) {
-                if (interceptedEndsGesture) finishOwnedTouch()
-                return true
-            }
+            return true
         }
 
-        if (settleTouchOwned) {
-            return handleSettleOwnedTouch(event)
-        }
-
-        if (dragTouchOwned && !pullTouchOwned) {
+        if (dragTouchOwned) {
+            clearGlidePressed()
             when (event.actionMasked) {
-                MotionEvent.ACTION_POINTER_DOWN,
-                MotionEvent.ACTION_POINTER_UP -> {
-                    // RecyclerView already received CANCEL on native-drag
-                    // takeover. Do not send it an orphaned multi-pointer tail.
-                    if (event.actionMasked == MotionEvent.ACTION_POINTER_UP) {
-                        rebasePullPointerAfterPointerUp(event)
-                    }
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    // Once this ViewGroup has intercepted the stream,
+                    // subsequent pointer-down events are delivered directly
+                    // here rather than through onInterceptTouchEvent. Cancel
+                    // the stable-key drag but keep owning the stream until
+                    // its real UP/CANCEL closes RecyclerView's touch state.
+                    dragController.onAdditionalPointer()
                 }
                 MotionEvent.ACTION_MOVE ->
                     dragController.onMove(
@@ -430,315 +419,231 @@ class NativeAppListView @JvmOverloads constructor(
                         activePointerY(event),
                         event.eventTime,
                     )
+                    finishRecyclerGesture(event)
+                    dragController.finishAdditionalPointer()
                     finishOwnedTouch()
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     dragController.onCancel()
+                    finishRecyclerGesture(event)
+                    dragController.finishAdditionalPointer()
                     finishOwnedTouch()
                 }
+                MotionEvent.ACTION_POINTER_UP -> updateGesturePointer(event)
             }
             return true
         }
 
-        return when (event.actionMasked) {
-            MotionEvent.ACTION_MOVE -> handleRecyclerMove(event)
-            MotionEvent.ACTION_UP -> {
-                if (pullTouchOwned) {
-                    val shouldFling = pullToFaceState.offsetPx == 0f
-                    val handled = if (shouldFling) {
-                        // The list remainder was consumed directly in layout
-                        // space, so RecyclerView must not receive a second UP
-                        // and discover a different velocity from its slop
-                        // state.  The host tracker owns this release.
-                        if (recyclerTouchPrimed) {
-                            dispatchRecyclerCancel(event)
-                            recyclerTouchPrimed = false
-                        }
-                        flingFromPullVelocity()
-                        true
-                    } else {
-                        // Releasing while the face is still displaced must
-                        // not turn the pull gesture into a list fling.
-                        dispatchRecyclerCancel(event)
-                        true
-                    }
-                    releasePull()
-                    finishOwnedTouch()
-                    handled
-                } else {
-                    val handled = withForwardedPullPointer(event) {
-                        super.onTouchEvent(event)
-                    }
-                    pullToFaceState.onUp()
-                    clearPullPointerTracking()
-                    clearPullVelocityTracker()
-                    clearRecyclerTouchStream()
-                    handled
-                }
-            }
-            MotionEvent.ACTION_CANCEL -> {
-                val handled = if (pullTouchOwned) {
-                    dispatchRecyclerCancel(event)
-                    true
-                } else {
-                    withForwardedPullPointer(event) {
-                        super.onTouchEvent(event)
-                    }
-                }
-                pullToFaceState.cancel()
-                if (pullTouchOwned) {
-                    animatePullToRest(pullOffsetPx)
-                    finishOwnedTouch()
-                } else {
-                    clearPullPointerTracking()
-                    clearPullVelocityTracker()
-                    clearRecyclerTouchStream()
-                }
-                handled
-            }
-            else -> {
-                val handled = withForwardedPullPointer(event) { super.onTouchEvent(event) }
-                if (event.actionMasked == MotionEvent.ACTION_POINTER_UP) {
-                    rebasePullPointerAfterPointerUp(event)
-                }
-                handled
-            }
-        }
-    }
-
-    /** Handles the stream whose DOWN interrupted an in-flight pull settle. */
-    private fun handleSettleOwnedTouch(event: MotionEvent): Boolean {
-        when (event.actionMasked) {
-            MotionEvent.ACTION_MOVE -> {
-                val dragConsumed = dragController.onMove(
-                    activePointerX(event),
-                    activePointerY(event),
-                    event.eventTime,
-                )
-                if (dragConsumed) {
-                    // Long-press/drag now owns the gesture. Drop both the
-                    // RecyclerView stream and the displaced pull transform so
-                    // the overlay starts from the actual visible item.
-                    dispatchRecyclerCancel(event)
-                    pullToFaceState.cancel()
-                    pullTouchOwned = false
-                    setPullOffset(0f)
-                } else {
-                    // A DOWN which interrupted settling is already owned by
-                    // this View.  Treat the first MOVE as a pull handoff so
-                    // RecyclerView gets the same synthetic DOWN/history as a
-                    // pull that starts from rest.
-                    pullTouchOwned = true
-                    handleRecyclerMove(event)
-                }
-            }
-
-            MotionEvent.ACTION_UP -> {
-                val dragConsumed = dragController.onUp(
-                    activePointerX(event),
-                    activePointerY(event),
-                    event.eventTime,
-                )
-                val shouldFling = !dragConsumed && pullToFaceState.offsetPx == 0f
-                val handled = if (shouldFling) {
-                    if (recyclerTouchPrimed) {
-                        dispatchRecyclerCancel(event)
-                        recyclerTouchPrimed = false
-                    }
-                    flingFromPullVelocity()
-                    true
-                } else {
-                    dispatchRecyclerCancel(event)
-                    true
-                }
-                releasePull()
-                finishOwnedTouch()
-                return handled
-            }
-
-            MotionEvent.ACTION_CANCEL -> {
-                dragController.onCancel()
-                dispatchRecyclerCancel(event)
-                val releaseOffset = pullOffsetPx
-                pullToFaceState.cancel()
-                animatePullToRest(releaseOffset)
-                finishOwnedTouch()
-            }
-
-            MotionEvent.ACTION_POINTER_UP -> rebasePullPointerAfterPointerUp(event)
-            MotionEvent.ACTION_POINTER_DOWN -> Unit
-        }
-        return true
-    }
-
-    private fun handleRecyclerMove(event: MotionEvent): Boolean {
-        preparePullMove(event)
-        val reporter = layoutManager as? NativeTouchScrollConsumptionReporter
-
-        if (pullTouchOwned || recyclerTouchPrimed || settleTouchOwned) {
-            // Once pull owns the stream, do not ask RecyclerView to discover
-            // touch-slop a second time.  Its first MOVE would subtract the
-            // platform slop from the exact remainder that crossed pull offset
-            // zero (20px became 4px on API 27).  Consume the remainder in
-            // layout space and keep the velocity tracker owned by this host.
-            if (preparedRecyclerPointerDelta != 0f && recyclerTouchPrimed) {
-                dispatchRecyclerCancel(event)
-                recyclerTouchPrimed = false
-            }
-            scrollPreparedRecyclerPointerDeltaDirectly(reporter)
-            preparedRecyclerPointerDelta = 0f
-            preparedRecyclerMovePrimed = false
-            return pullTouchOwned || settleTouchOwned
-        }
-
-        val directHandoff = preparedRecyclerMovePrimed ||
-            scrollState != SCROLL_STATE_DRAGGING
-        if (directHandoff && !preparedRecyclerMovePrimed) {
-            withForwardedPullPointer(event) {
-                super.onInterceptTouchEvent(event)
-            }
-            preparedRecyclerMovePrimed = true
-        }
-        val handled = if (directHandoff) {
-            scrollPreparedRecyclerPointerDeltaDirectly(reporter)
-            true
-        } else {
-            reporter?.beginTouchScrollCapture()
-            withForwardedPullPointer(event) {
-                super.onTouchEvent(event)
-            }
-        }
-        if (!directHandoff) {
-            val unconsumedScrollDeltaPx =
-                reporter?.takeUnconsumedTouchScrollDeltaPx() ?: 0
-            consumeUnconsumedTouchScroll(unconsumedScrollDeltaPx)
-        }
-        preparedRecyclerMovePrimed = false
-        return handled || pullTouchOwned
-    }
-
-    private fun scrollPreparedRecyclerPointerDeltaDirectly(
-        reporter: NativeTouchScrollConsumptionReporter?,
-    ) {
-        val requestedScroll = -preparedRecyclerPointerDelta + recyclerScrollRemainder
-        val requestedScrollDelta = requestedScroll.roundToInt()
-        recyclerScrollRemainder = requestedScroll - requestedScrollDelta
-        preparedRecyclerPointerDelta = 0f
-        if (requestedScrollDelta == 0) return
-        reporter?.beginTouchScrollCapture()
-        scrollBy(0, requestedScrollDelta)
-        val unconsumedScrollDeltaPx =
-            reporter?.takeUnconsumedTouchScrollDeltaPx() ?: 0
-        consumeUnconsumedTouchScroll(unconsumedScrollDeltaPx)
-    }
-
-    private fun consumeUnconsumedTouchScroll(unconsumedScrollDeltaPx: Int) {
-        if (unconsumedScrollDeltaPx == 0) return
-        val consumedPointerDelta = pullToFaceState.consumePointerDelta(
-            pointerDeltaPx = -unconsumedScrollDeltaPx.toFloat(),
-            atTop = !canScrollVertically(-1),
-            atBottom = !canScrollVertically(1),
-            blocked = false,
-            outwardDragMultiplier = pullOutwardDragMultiplier,
-        )
-        if (consumedPointerDelta == 0f) return
-        dragController.onCancel()
-        pullTouchOwned = true
-        dragTouchOwned = true
-        setPullOffset(pullToFaceState.offsetPx)
-        parent?.requestDisallowInterceptTouchEvent(true)
-    }
-
-    private fun preparePullMove(event: MotionEvent): Float {
-        val pointerY = activePointerY(event)
-        val pointerId = pullActivePointerId
-        if (
-            preparedPullAction == event.actionMasked &&
-            preparedPullEventTime == event.eventTime &&
-            preparedPullRawY == pointerY &&
-            preparedPullPointerId == pointerId
-        ) {
-            return 0f
-        }
-        val pointerDelta = pointerY - pullPhysicalPointerY
-        if (pointerDelta != 0f) setMotionBlurSuppressed(true)
-        pullPhysicalPointerY = pointerY
-        val consumedPointerDelta = pullToFaceState.consumePointerDelta(
-            pointerDeltaPx = pointerDelta,
-            atTop = !canScrollVertically(-1),
-            atBottom = !canScrollVertically(1),
-            blocked = dragController.isDragging,
-            outwardDragMultiplier = pullOutwardDragMultiplier,
-        )
-        preparedRecyclerPointerDelta = pointerDelta - consumedPointerDelta
-        pullForwardedPointerY += preparedRecyclerPointerDelta
-        preparedPullAction = event.actionMasked
-        preparedPullEventTime = event.eventTime
-        preparedPullRawY = pointerY
-        preparedPullPointerId = pointerId
-        recordPullVelocitySample(event)
-        if (consumedPointerDelta != 0f) {
-            setPullOffset(pullToFaceState.offsetPx)
-        }
-        return consumedPointerDelta
-    }
-
-    private fun primeRecyclerTouchForPull(event: MotionEvent): Boolean {
-        if (!recyclerTouchPrimed) {
-            recyclerDownEvent?.let { down ->
-                withForwardedPullPointer(down) {
-                    super.onTouchEvent(down)
-                }
-            }
-            recyclerTouchPrimed = recyclerDownEvent != null
-        }
-        val handled = withForwardedPullPointer(event) {
+        val handled = withLegacyForwardedPointer(event) {
             super.onTouchEvent(event)
         }
-        preparedRecyclerMovePrimed = true
+        finishLegacyTerminalFling(event)
+        if (
+            event.actionMasked == MotionEvent.ACTION_MOVE &&
+            scrollState == SCROLL_STATE_DRAGGING
+        ) {
+            updateGlidePressed(activePointerX(event), activePointerY(event))
+        }
+        if (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
+            // RecyclerView may keep the stream after its child has received a
+            // second pointer. Cancel the pending long-press recognizer here as
+            // well as in onInterceptTouchEvent so a two-finger touch can never
+            // open the actions menu on a later looper tick.
+            dragController.onCancel()
+        }
+        if (
+            event.actionMasked == MotionEvent.ACTION_UP ||
+            event.actionMasked == MotionEvent.ACTION_CANCEL
+        ) {
+            clearGlidePressed()
+            dragController.finishAdditionalPointer()
+            recyclerGestureNeedsTerminal = false
+            dragController.onCancel()
+            clearGesturePointer()
+        }
         return handled
     }
 
-    private fun forwardRecyclerTerminal(event: MotionEvent): Boolean {
-        if (!recyclerTouchPrimed) {
-            // This can happen when a settling pull receives UP before its first
-            // MOVE. Replaying DOWN here still gives RecyclerView a complete,
-            // valid stream and avoids an orphan terminal event.
-            recyclerDownEvent?.let { down ->
-                withForwardedPullPointer(down) {
-                    super.onTouchEvent(down)
+    private fun updateGesturePointer(event: MotionEvent) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> gesturePointerId = event.getPointerId(0)
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                val index = event.actionIndex
+                if (index in 0 until event.pointerCount) {
+                    gesturePointerId = event.getPointerId(index)
                 }
             }
-            recyclerTouchPrimed = recyclerDownEvent != null
+            MotionEvent.ACTION_POINTER_UP -> {
+                val lifted = event.getPointerId(event.actionIndex)
+                if (lifted == gesturePointerId) {
+                    gesturePointerId = (0 until event.pointerCount)
+                        .firstOrNull { it != event.actionIndex }
+                        ?.let(event::getPointerId)
+                        ?: MotionEvent.INVALID_POINTER_ID
+                }
+            }
         }
-        return withForwardedPullPointer(event) {
-            super.onTouchEvent(event)
+    }
+
+    private fun clearGesturePointer() {
+        gesturePointerId = MotionEvent.INVALID_POINTER_ID
+        interceptedAction = -1
+        interceptedEventTime = Long.MIN_VALUE
+    }
+
+    /**
+     * Keeps RecyclerView's own touch state coherent without synthesizing or
+     * mutating MotionEvents. The real terminal sample is handed to the parent
+     * interceptor exactly once after a native drag takes ownership.
+     */
+    private fun finishRecyclerGesture(event: MotionEvent) {
+        if (!recyclerGestureNeedsTerminal) return
+        if (
+            event.actionMasked != MotionEvent.ACTION_UP &&
+            event.actionMasked != MotionEvent.ACTION_CANCEL
+        ) {
+            return
+        }
+        withLegacyForwardedPointer(event) {
+            super.onInterceptTouchEvent(event)
+        }
+        recyclerGestureNeedsTerminal = false
+    }
+
+    private fun observeEdgeGesture(event: MotionEvent) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                edgeTerminalAction = -1
+                edgeTerminalEventTime = Long.MIN_VALUE
+                springEdgeEffects.beginGesture()
+            }
+            MotionEvent.ACTION_UP,
+            MotionEvent.ACTION_CANCEL,
+            -> {
+                if (
+                    edgeTerminalAction == event.actionMasked &&
+                    edgeTerminalEventTime == event.eventTime
+                ) {
+                    return
+                }
+                edgeTerminalAction = event.actionMasked
+                edgeTerminalEventTime = event.eventTime
+                val canCommitFace =
+                    event.actionMasked == MotionEvent.ACTION_UP &&
+                        !dragTouchOwned &&
+                        !dragController.isDragging
+                if (springEdgeEffects.confirmTopRelease(canCommitFace)) {
+                    onScrollToTop?.invoke()
+                }
+            }
         }
     }
 
-    private fun captureRecyclerDown(event: MotionEvent) {
-        if (event.actionMasked != MotionEvent.ACTION_DOWN) return
-        recyclerDownEvent?.recycle()
-        recyclerDownEvent = MotionEvent.obtain(event)
-        recyclerTouchPrimed = false
+    private fun activePointerIndex(event: MotionEvent): Int {
+        if (event.pointerCount <= 0) return 0
+        val tracked = gesturePointerId
+        val index = if (tracked != MotionEvent.INVALID_POINTER_ID) event.findPointerIndex(tracked) else -1
+        return if (index >= 0) index else 0
     }
 
-    private fun clearRecyclerTouchStream() {
-        recyclerDownEvent?.recycle()
-        recyclerDownEvent = null
-        recyclerTouchPrimed = false
+    private fun activePointerX(event: MotionEvent): Float = event.getX(activePointerIndex(event))
+
+    private fun activePointerY(event: MotionEvent): Float = event.getY(activePointerIndex(event))
+
+    private fun prepareLegacyEdgePointer(event: MotionEvent) {
+        if (!legacyEdgeHandoffEnabled || event.pointerCount <= 0) return
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            resetLegacyEdgeGesture()
+        }
+        val pointerIndex = activePointerIndex(event)
+        val pointerId = event.getPointerId(pointerIndex)
+        val pointerY = event.getY(pointerIndex)
+        if (
+            legacyPreparedAction == event.actionMasked &&
+            legacyPreparedEventTime == event.eventTime &&
+            legacyPreparedPointerId == pointerId &&
+            legacyPreparedPhysicalY == pointerY
+        ) {
+            return
+        }
+        legacyPreparedAction = event.actionMasked
+        legacyPreparedEventTime = event.eventTime
+        legacyPreparedPointerId = pointerId
+        legacyPreparedPhysicalY = pointerY
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                legacyEdgePointer.begin(pointerY)
+                legacyPointerVelocity.begin(pointerY, event.eventTime)
+                legacyPreparedOffsetY = 0f
+            }
+
+            MotionEvent.ACTION_POINTER_DOWN,
+            MotionEvent.ACTION_POINTER_UP,
+            -> {
+                legacyEdgePointer.rebase(pointerY)
+                legacyPointerVelocity.begin(pointerY, event.eventTime)
+                legacyPreparedOffsetY = legacyEdgePointer.currentOffset()
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                legacyPointerVelocity.record(
+                    pointerY = pointerY,
+                    eventTime = event.eventTime,
+                    preserveWhenStationary = false,
+                )
+                val physicalDelta = legacyEdgePointer.physicalDeltaTo(pointerY)
+                val consumed = springEdgeEffects.consumeLegacyInwardPointerDelta(physicalDelta)
+                legacyPreparedOffsetY = legacyEdgePointer.advanceTo(pointerY, consumed)
+                if (consumed != 0f) legacyEdgeHandoffOccurred = true
+                val forwardedDelta = physicalDelta - consumed
+                if (
+                    legacyEdgeHandoffOccurred &&
+                    abs(forwardedDelta) > 0.001f &&
+                    !springEdgeEffects.hasActiveEdge
+                ) {
+                    legacyEdgeRemainderForwarded = true
+                }
+            }
+
+            MotionEvent.ACTION_UP -> {
+                legacyPointerVelocity.record(
+                    pointerY = pointerY,
+                    eventTime = event.eventTime,
+                    preserveWhenStationary = true,
+                )
+                legacyPreparedOffsetY = legacyEdgePointer.advanceTo(pointerY, 0f)
+                val terminalVelocityY = (-legacyPointerVelocity.pointerVelocityY)
+                    .roundToInt()
+                    .coerceIn(
+                        -viewConfiguration.scaledMaximumFlingVelocity,
+                        viewConfiguration.scaledMaximumFlingVelocity,
+                    )
+                legacyPendingFlingVelocityY = if (
+                    legacyEdgeHandoffOccurred &&
+                    abs(terminalVelocityY) >= viewConfiguration.scaledMinimumFlingVelocity
+                ) {
+                    terminalVelocityY
+                } else {
+                    null
+                }
+                legacyFlingObserved = false
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                legacyPreparedOffsetY = legacyEdgePointer.advanceTo(pointerY, 0f)
+                legacyPendingFlingVelocityY = null
+                legacyFlingObserved = false
+            }
+
+            else -> legacyPreparedOffsetY = legacyEdgePointer.currentOffset()
+        }
     }
 
-    private inline fun <T> withForwardedPullPointer(
+    private inline fun <T> withLegacyForwardedPointer(
         event: MotionEvent,
         block: () -> T,
     ): T {
-        val sourceY = activePointerY(event)
-        val targetY = when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> sourceY
-            else -> pullForwardedPointerY
-        }
-        val offsetY = targetY - sourceY
+        val offsetY = if (legacyEdgeHandoffEnabled) legacyPreparedOffsetY else 0f
         if (offsetY == 0f) return block()
         event.offsetLocation(0f, offsetY)
         return try {
@@ -748,252 +653,40 @@ class NativeAppListView @JvmOverloads constructor(
         }
     }
 
-    private fun dispatchRecyclerCancel(event: MotionEvent) {
-        val originalAction = event.action
-        event.action = MotionEvent.ACTION_CANCEL
-        try {
-            withForwardedPullPointer(event) {
-                super.onTouchEvent(event)
-            }
-        } finally {
-            event.action = originalAction
-        }
-    }
-
-    private fun preparePointerTransition(event: MotionEvent) {
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> beginPullPointer(event)
-            MotionEvent.ACTION_POINTER_DOWN -> {
-                val index = event.actionIndex
-                if (index in 0 until event.pointerCount) {
-                    // Watches do not need multi-finger drag hand-off. Cancelling
-                    // is deterministic and prevents a second finger from
-                    // triggering a pending long press or jumping the overlay.
-                    val customGestureWasActive = dragController.isActive
-                    dragController.onCancel()
-                    if (customGestureWasActive && !pullTouchOwned) {
-                        // Intercept this pointer-down as the terminal owner of
-                        // the custom gesture. ViewGroup will send the child a
-                        // CANCEL, so its own framework long-click timer cannot
-                        // resurrect the menu after our controller cancelled.
-                        dragTouchOwned = true
-                    }
-                    // Match RecyclerView: the newly pressed pointer becomes
-                    // the active scroll pointer for subsequent MOVE samples.
-                    rebasePullPointerTo(event, index)
-                }
-            }
-        }
-    }
-
-    private fun beginPullPointer(event: MotionEvent) {
-        if (event.pointerCount <= 0) {
-            pullActivePointerId = MotionEvent.INVALID_POINTER_ID
-            pullPhysicalPointerY = 0f
-            pullForwardedPointerY = 0f
+    private fun finishLegacyTerminalFling(event: MotionEvent) {
+        if (!legacyEdgeHandoffEnabled) return
+        if (event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            legacyPendingFlingVelocityY = null
+            legacyFlingObserved = false
             return
         }
-        val index = if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-            0
-        } else {
-            activePointerIndex(event).coerceIn(0, event.pointerCount - 1)
-        }
-        pullActivePointerId = event.getPointerId(index)
-        pullPhysicalPointerY = event.getY(index)
-        pullForwardedPointerY = pullPhysicalPointerY
-    }
-
-    private fun rebasePullPointerAfterPointerUp(event: MotionEvent) {
-        if (event.pointerCount <= 1) {
-            pullActivePointerId = MotionEvent.INVALID_POINTER_ID
-            return
-        }
-        val actionIndex = event.actionIndex
-        if (actionIndex !in 0 until event.pointerCount) return
-        val liftedId = event.getPointerId(actionIndex)
-        if (liftedId != pullActivePointerId) return
-        val nextIndex = (0 until event.pointerCount).firstOrNull { it != actionIndex }
-            ?: run {
-                pullActivePointerId = MotionEvent.INVALID_POINTER_ID
-                return
-            }
-        val forwardedOffset = pullForwardedPointerY - pullPhysicalPointerY
-        rebasePullPointerTo(event, nextIndex, forwardedOffset)
-    }
-
-    private fun rebasePullPointerTo(
-        event: MotionEvent,
-        index: Int,
-        forwardedOffset: Float = pullForwardedPointerY - pullPhysicalPointerY,
-    ) {
-        if (index !in 0 until event.pointerCount) return
-        val nextY = event.getY(index)
-        pullActivePointerId = event.getPointerId(index)
-        pullPhysicalPointerY = nextY
-        pullForwardedPointerY = nextY + forwardedOffset
-        clearPreparedPullEvent()
-    }
-
-    private fun activePointerIndex(event: MotionEvent): Int {
-        if (event.pointerCount <= 0) return 0
-        val tracked = pullActivePointerId
-        if (tracked != MotionEvent.INVALID_POINTER_ID) {
-            val index = event.findPointerIndex(tracked)
-            if (index >= 0) return index
-        }
-        return 0
-    }
-
-    private fun activePointerX(event: MotionEvent): Float =
-        event.getX(activePointerIndex(event))
-
-    private fun activePointerY(event: MotionEvent): Float =
-        event.getY(activePointerIndex(event))
-
-    /** Adds the terminal physical delta to the logical gesture before fling. */
-    private fun prepareFinalRecyclerPointerSample(event: MotionEvent) {
-        if (event.pointerCount <= 0) return
-        if (!pullTouchOwned && !settleTouchOwned && !recyclerTouchPrimed) return
-        val pointerId = pullActivePointerId
+        if (event.actionMasked != MotionEvent.ACTION_UP) return
+        val velocityY = legacyPendingFlingVelocityY
         if (
-            preparedFinalAction == event.actionMasked &&
-            preparedFinalEventTime == event.eventTime &&
-            preparedFinalPointerId == pointerId
+            velocityY != null &&
+            !legacyFlingObserved &&
+            legacyEdgeRemainderForwarded &&
+            !springEdgeEffects.hasActiveEdge &&
+            abs(velocityY) >= viewConfiguration.scaledMinimumFlingVelocity
         ) {
-            return
+            super.fling(0, velocityY)
         }
-        val pointerY = activePointerY(event)
-        val pointerDelta = pointerY - pullPhysicalPointerY
-        pullPhysicalPointerY = pointerY
-        pullForwardedPointerY += pointerDelta
-        preparedFinalAction = event.actionMasked
-        preparedFinalEventTime = event.eventTime
-        preparedFinalPointerId = pointerId
-        recordPullVelocitySample(event)
+        legacyPendingFlingVelocityY = null
+        legacyFlingObserved = false
     }
 
-    private fun clearPullPointerTracking() {
-        pullActivePointerId = MotionEvent.INVALID_POINTER_ID
-        pullPhysicalPointerY = 0f
-        pullForwardedPointerY = 0f
-    }
-
-    private fun resetPullVelocityTracker(event: MotionEvent) {
-        clearPullVelocityTracker()
-        recyclerScrollRemainder = 0f
-        pullVelocityTracker = VelocityTracker.obtain()
-        pullFlingIssued = false
-        recordPullVelocitySample(event)
-    }
-
-    private fun recordPullVelocitySample(event: MotionEvent) {
-        val tracker = pullVelocityTracker ?: return
-        val pointerId = pullActivePointerId
-        if (
-            velocitySampleAction == event.actionMasked &&
-            velocitySampleEventTime == event.eventTime &&
-            velocitySamplePointerId == pointerId
-        ) {
-            return
-        }
-        val sourceY = activePointerY(event)
-        val targetY = if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-            sourceY
-        } else {
-            pullForwardedPointerY
-        }
-        val previousY = manualVelocityLastY
-        val previousTime = manualVelocityLastTime
-        if (
-            previousY.isFinite() &&
-            previousTime != Long.MIN_VALUE &&
-            event.eventTime > previousTime &&
-            targetY.isFinite()
-        ) {
-            manualVelocityY = ((targetY - previousY) * 1000f /
-                (event.eventTime - previousTime).toFloat())
-                .takeIf(Float::isFinite)
-                ?: manualVelocityY
-        }
-        if (targetY.isFinite()) {
-            manualVelocityLastY = targetY
-            manualVelocityLastTime = event.eventTime
-        }
-        val offsetY = targetY - sourceY
-        val originalAction = event.action
-        if (offsetY != 0f) event.offsetLocation(0f, offsetY)
-        if (event.actionMasked == MotionEvent.ACTION_UP) {
-            // VelocityTracker implementations may ignore terminal UP samples.
-            // Feed the same terminal coordinate as a tracker-only MOVE while
-            // leaving the event delivered to RecyclerView unchanged.
-            event.action = MotionEvent.ACTION_MOVE
-        }
-        try {
-            tracker.addMovement(event)
-        } finally {
-            event.action = originalAction
-            if (offsetY != 0f) event.offsetLocation(0f, -offsetY)
-        }
-        velocitySampleAction = event.actionMasked
-        velocitySampleEventTime = event.eventTime
-        velocitySamplePointerId = pointerId
-    }
-
-    private fun flingFromPullVelocity(): Boolean {
-        if (pullFlingIssued) return false
-        val pointerId = pullActivePointerId
-        if (pointerId == MotionEvent.INVALID_POINTER_ID) return false
-        val viewConfiguration = ViewConfiguration.get(context)
-        val trackerVelocityY = pullVelocityTracker?.let { tracker ->
-            tracker.computeCurrentVelocity(
-                1000,
-                viewConfiguration.scaledMaximumFlingVelocity.toFloat(),
-            )
-            tracker.getYVelocity(pointerId)
-        } ?: 0f
-        val velocityYSource = if (
-            trackerVelocityY.isFinite() &&
-            abs(trackerVelocityY) >= viewConfiguration.scaledMinimumFlingVelocity
-        ) {
-            trackerVelocityY
-        } else {
-            manualVelocityY
-        }
-        val velocityY = (-velocityYSource).roundToInt()
-        if (abs(velocityY) < viewConfiguration.scaledMinimumFlingVelocity) return false
-        val started = fling(
-            0,
-            velocityY.coerceIn(
-                -viewConfiguration.scaledMaximumFlingVelocity,
-                viewConfiguration.scaledMaximumFlingVelocity,
-            ),
-        )
-        if (started) pullFlingIssued = true
-        return started
-    }
-
-    private fun clearPullVelocityTracker() {
-        pullVelocityTracker?.recycle()
-        pullVelocityTracker = null
-        velocitySampleAction = -1
-        velocitySampleEventTime = Long.MIN_VALUE
-        velocitySamplePointerId = MotionEvent.INVALID_POINTER_ID
-        manualVelocityLastY = Float.NaN
-        manualVelocityLastTime = Long.MIN_VALUE
-        manualVelocityY = 0f
-        pullFlingIssued = false
-    }
-
-    private fun clearPreparedPullEvent() {
-        preparedPullAction = -1
-        preparedPullEventTime = Long.MIN_VALUE
-        preparedPullRawY = Float.NaN
-        preparedPullPointerId = MotionEvent.INVALID_POINTER_ID
-        preparedFinalAction = -1
-        preparedFinalEventTime = Long.MIN_VALUE
-        preparedFinalPointerId = MotionEvent.INVALID_POINTER_ID
-        preparedRecyclerPointerDelta = 0f
-        preparedRecyclerMovePrimed = false
+    private fun resetLegacyEdgeGesture() {
+        legacyEdgePointer.reset()
+        legacyPreparedAction = -1
+        legacyPreparedEventTime = Long.MIN_VALUE
+        legacyPreparedPointerId = MotionEvent.INVALID_POINTER_ID
+        legacyPreparedPhysicalY = Float.NaN
+        legacyPreparedOffsetY = 0f
+        legacyEdgeHandoffOccurred = false
+        legacyEdgeRemainderForwarded = false
+        legacyPointerVelocity.reset()
+        legacyPendingFlingVelocityY = null
+        legacyFlingObserved = false
     }
 
     fun submit(content: NativeAppListContent): Boolean {
@@ -1028,6 +721,7 @@ class NativeAppListView @JvmOverloads constructor(
         val edgeFadeChanged = hasDifferentNativeEdgeFade(previous, next.value)
         val contentOverlayEffectChanged =
             hasDifferentNativeContentOverlayEffect(previous, next.value)
+        val motionProfileChanged = previous.motionProfile != next.value.motionProfile
         val resetInitialScroll =
             previous.initialResetToken != next.value.initialResetToken
         if ((geometryChanged || resetInitialScroll) && dragController.isActive) {
@@ -1038,6 +732,9 @@ class NativeAppListView @JvmOverloads constructor(
         }
         currentConfig = next
         next.value.runtimeBlurSuppressed = motionBlurSuppressed
+        if (motionProfileChanged) {
+            springEdgeEffects.updateMotionProfile(next.value.motionProfile)
+        }
         when {
             shouldStartEntryAnimation -> {
                 cancelEntryAnimation(resetProgress = false)
@@ -1056,8 +753,13 @@ class NativeAppListView @JvmOverloads constructor(
             else -> next.value.runtimeEntryProgress = next.value.entryProgress
         }
         if (!next.value.active) {
+            // A screen transition can remove the list before the terminal
+            // pointer sample arrives.  Drop a pending pull-to-face candidate
+            // here; a later UP from the old stream must never navigate.
+            springEdgeEffects.confirmTopRelease(terminalUp = false)
+            resetLegacyEdgeGesture()
+            clearGlidePressed()
             cancelActiveDrag()
-            cancelPull()
         }
         nativeAdapter.setConfig(next)
         if (rowRenderingChanged) {
@@ -1109,10 +811,19 @@ class NativeAppListView @JvmOverloads constructor(
     fun release() {
         if (released) return
         cancelActiveDrag()
-        cancelPull()
+        cancelDragSettle(removeOverlay = true)
+        dragPreviewAnimationGeneration++
+        dragPreviewAnimator?.cancel()
+        dragPreviewAnimator = null
+        dragPreviewOriginalOrder = emptyList()
+        dragPreviewOrder = emptyList()
+        springEdgeEffects.releaseOwner()
         finishOwnedTouch()
         cancelEntryAnimation(resetProgress = true)
         dragController.release()
+        dragPreviewAnimationGeneration++
+        dragPreviewAnimator?.cancel()
+        dragPreviewAnimator = null
         released = true
         removeCallbacks(restoreMotionBlur)
         stopScroll()
@@ -1132,61 +843,28 @@ class NativeAppListView @JvmOverloads constructor(
     }
 
     private fun dispatchCommand(command: AppListCommand) {
-        if (!released) {
-            onCommand?.invoke(command)
-        }
+        dispatchCommandResult(command)
     }
 
-    private fun finishOwnedTouch() {
+    private fun dispatchCommandResult(command: AppListCommand): Boolean {
+        if (released) return false
+        return onCommand?.invoke(command) ?: false
+    }
+
+    private fun finishOwnedTouch(scheduleMotionBlurRestore: Boolean = true) {
         dragTouchOwned = false
-        pullTouchOwned = false
-        interceptedAction = -1
-        interceptedEventTime = Long.MIN_VALUE
-        interceptedEndsGesture = false
-        settleTouchOwned = false
-        clearPreparedPullEvent()
-        clearPullPointerTracking()
-        clearPullVelocityTracker()
-        clearRecyclerTouchStream()
-        recyclerScrollRemainder = 0f
+        clearGlidePressed()
+        recyclerGestureNeedsTerminal = false
+        clearGesturePointer()
+        resetLegacyEdgeGesture()
         removeCallbacks(restoreMotionBlur)
-        postDelayed(restoreMotionBlur, 72L)
+        if (scheduleMotionBlurRestore) postDelayed(restoreMotionBlur, 72L)
         parent?.requestDisallowInterceptTouchEvent(false)
     }
 
     private fun cancelActiveDrag() {
         dragController.onCancel()
         if (dragTouchOwned) finishOwnedTouch()
-    }
-
-    private fun releasePull() {
-        val release = pullToFaceState.onUp()
-        if (release.triggerFace) onScrollToTop?.invoke()
-        animatePullToRest(release.releaseOffsetPx)
-    }
-
-    private fun cancelPull() {
-        pullToFaceState.cancel()
-        pullTouchOwned = false
-        cancelPullSettle()
-        setPullOffset(0f)
-        if (!dragTouchOwned) {
-            clearPullPointerTracking()
-            clearPullVelocityTracker()
-        }
-    }
-
-    private fun animatePullToRest(startOffset: Float) {
-        cancelPullSettle()
-        if (startOffset == 0f || released) {
-            setPullOffset(0f)
-            return
-        }
-        pullSettleAnimator = ValueAnimator.ofFloat(startOffset, 0f).apply {
-            duration = 220L
-            addUpdateListener { animator -> setPullOffset(animator.animatedValue as Float) }
-            start()
-        }
     }
 
     /**
@@ -1200,8 +878,9 @@ class NativeAppListView @JvmOverloads constructor(
         }
         val generation = ++entryAnimationGeneration
         val animator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = NATIVE_ENTRY_ANIMATION_DURATION_MS
-            interpolator = NATIVE_ENTRY_INTERPOLATOR
+            val phase = currentConfig.value.motionProfile.appListEnter
+            duration = phase.durationMillis.toLong()
+            interpolator = phase.easing.asNativeTimeInterpolator()
             addUpdateListener { update ->
                 if (released || generation != entryAnimationGeneration) return@addUpdateListener
                 currentConfig.value.runtimeEntryProgress =
@@ -1236,11 +915,6 @@ class NativeAppListView @JvmOverloads constructor(
         }
     }
 
-    private fun cancelPullSettle() {
-        pullSettleAnimator?.cancel()
-        pullSettleAnimator = null
-    }
-
     private fun setPullOffset(offset: Float) {
         val next = offset.takeIf(Float::isFinite) ?: 0f
         if (pullOffsetPx == next) return
@@ -1253,6 +927,143 @@ class NativeAppListView @JvmOverloads constructor(
         invalidate()
     }
 
+    private fun applyDragPreviewTargets(animate: Boolean) {
+        val original = dragPreviewOriginalOrder
+        val preview = dragPreviewOrder
+        if (original.isEmpty() || preview.size != original.size) {
+            clearDragPreviewTranslations(animate)
+            return
+        }
+        val originalPositions = HashMap<AppItemKey, Int>(original.size)
+        val previewPositions = HashMap<AppItemKey, Int>(preview.size)
+        original.forEachIndexed { index, key -> originalPositions[key] = index }
+        preview.forEachIndexed { index, key -> previewPositions[key] = index }
+
+        val slots = HashMap<Int, NativeDragPreviewSlot>(childCount)
+        for (index in 0 until childCount) {
+            val child = getChildAt(index) as? NativeAppListRowView ?: continue
+            val holder = getChildViewHolder(child) as?
+                NativeAppListAdapter.AppItemViewHolder ?: continue
+            val adapterPosition = holder.bindingAdapterPosition
+            if (adapterPosition == RecyclerView.NO_POSITION) continue
+            slots[adapterPosition] = NativeDragPreviewSlot(
+                centerX = child.iconCenterXInParentWithoutPreviewOrFlow(),
+                centerY = child.iconCenterYInParentWithoutPreviewOrFlow(),
+            )
+        }
+
+        val moves = ArrayList<NativeDragPreviewMove>(childCount)
+        for (index in 0 until childCount) {
+            val row = getChildAt(index) as? NativeAppListRowView ?: continue
+            val holder = getChildViewHolder(row) as?
+                NativeAppListAdapter.AppItemViewHolder ?: continue
+            val key = holder.boundKeyOrNull() ?: continue
+            val originalPosition = originalPositions[key] ?: continue
+            val previewPosition = previewPositions[key] ?: continue
+            val origin = slots[originalPosition] ?: NativeDragPreviewSlot(
+                row.iconCenterXInParentWithoutPreviewOrFlow(),
+                row.iconCenterYInParentWithoutPreviewOrFlow(),
+            )
+            val destination = slots[previewPosition] ?: fallbackDragPreviewSlot(
+                origin = origin,
+                positionDelta = previewPosition - originalPosition,
+            )
+            moves += NativeDragPreviewMove(
+                row = row,
+                startX = row.previewTranslationX(),
+                startY = row.previewTranslationY(),
+                targetX = destination.centerX - origin.centerX,
+                targetY = destination.centerY - origin.centerY,
+            )
+        }
+        runDragPreviewAnimation(moves, animate)
+    }
+
+    private fun fallbackDragPreviewSlot(
+        origin: NativeDragPreviewSlot,
+        positionDelta: Int,
+    ): NativeDragPreviewSlot {
+        val distance = when (currentConfig.value.presentation) {
+            NativeAppListPresentation.LINEAR -> currentConfig.value.rowHeightPx.toFloat()
+            NativeAppListPresentation.HONEYCOMB ->
+                currentConfig.value.honeycombCellSizePx.takeIf { it > 0f }
+                    ?: currentConfig.value.iconSizePx.toFloat()
+            NativeAppListPresentation.DENSE_GRID ->
+                currentConfig.value.denseGridMinimumItemHeightPx
+                    .coerceAtLeast(currentConfig.value.iconSizePx.toFloat())
+        }
+        return NativeDragPreviewSlot(
+            centerX = origin.centerX,
+            centerY = origin.centerY + positionDelta * distance,
+        )
+    }
+
+    private fun clearDragPreviewTranslations(animate: Boolean) {
+        val moves = ArrayList<NativeDragPreviewMove>(childCount)
+        for (index in 0 until childCount) {
+            val row = getChildAt(index) as? NativeAppListRowView ?: continue
+            moves += NativeDragPreviewMove(
+                row = row,
+                startX = row.previewTranslationX(),
+                startY = row.previewTranslationY(),
+                targetX = 0f,
+                targetY = 0f,
+            )
+        }
+        runDragPreviewAnimation(moves, animate)
+    }
+
+    private fun runDragPreviewAnimation(
+        moves: List<NativeDragPreviewMove>,
+        animate: Boolean,
+    ) {
+        val generation = ++dragPreviewAnimationGeneration
+        dragPreviewAnimator?.cancel()
+        dragPreviewAnimator = null
+        if (moves.isEmpty()) return
+        if (
+            !animate ||
+            moves.none { move ->
+                abs(move.targetX - move.startX) > 0.01f ||
+                    abs(move.targetY - move.startY) > 0.01f
+            }
+        ) {
+            moves.forEach { move ->
+                move.row.setPreviewTranslation(move.targetX, move.targetY)
+            }
+            applyMoveFrameVisuals()
+            return
+        }
+        dragPreviewAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = NATIVE_DRAG_PREVIEW_DURATION_MS
+            interpolator = NATIVE_DRAG_SETTLE_INTERPOLATOR
+            addUpdateListener { animator ->
+                if (released || generation != dragPreviewAnimationGeneration) {
+                    return@addUpdateListener
+                }
+                val progress = animator.animatedFraction
+                moves.forEach { move ->
+                    move.row.setPreviewTranslation(
+                        move.startX + (move.targetX - move.startX) * progress,
+                        move.startY + (move.targetY - move.startY) * progress,
+                    )
+                }
+                applyMoveFrameVisuals()
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    if (generation != dragPreviewAnimationGeneration) return
+                    dragPreviewAnimator = null
+                    moves.forEach { move ->
+                        move.row.setPreviewTranslation(move.targetX, move.targetY)
+                    }
+                    applyMoveFrameVisuals()
+                }
+            })
+            start()
+        }
+    }
+
     private fun holderForKey(key: AppItemKey): NativeAppListAdapter.AppItemViewHolder? {
         for (index in 0 until childCount) {
             val holder = getChildViewHolder(getChildAt(index)) as?
@@ -1260,6 +1071,27 @@ class NativeAppListView @JvmOverloads constructor(
             if (holder.boundKeyOrNull() == key) return holder
         }
         return null
+    }
+
+    private fun updateGlidePressed(x: Float, y: Float) {
+        setGlidePressedKey(keyAtPoint(x, y))
+    }
+
+    private fun clearGlidePressed() {
+        setGlidePressedKey(null)
+    }
+
+    private fun setGlidePressedKey(key: AppItemKey?) {
+        if (glidePressedKey == key) return
+        glidePressedKey?.let { previous ->
+            (holderForKey(previous)?.itemView as? NativeAppListRowView)
+                ?.setGlidePressedState(false)
+        }
+        glidePressedKey = key
+        key?.let { next ->
+            (holderForKey(next)?.itemView as? NativeAppListRowView)
+                ?.setGlidePressedState(true)
+        }
     }
 
     private fun keyAtPoint(x: Float, y: Float): AppItemKey? {
@@ -1315,12 +1147,26 @@ class NativeAppListView @JvmOverloads constructor(
             return nativeAdapter.keyAtPositionOrNull(position)
         }
 
-        override fun folderKeyAt(x: Float, y: Float): AppItemKey? =
-            keyAtPoint(
-                x = x,
-                y = y,
-                centerFraction = if (layoutManager is NativeSpatialAppListLayoutManager) 0.42f else 1f,
-            )
+        override fun folderKeyAt(x: Float, y: Float): AppItemKey? {
+            for (index in childCount - 1 downTo 0) {
+                val child = getChildAt(index) as? NativeAppListRowView ?: continue
+                val holder = getChildViewHolder(child) as?
+                    NativeAppListAdapter.AppItemViewHolder ?: continue
+                val key = holder.boundKeyOrNull() ?: continue
+                if (key == draggedSourceKey) continue
+                val targetRow = holder.boundRowOrNull() ?: continue
+                val sourceRow = draggedSourceKey
+                    ?.let(nativeAdapter::rowForKey)
+                    ?: dragOverlayView?.boundRowForOverlay()
+                val targetAllowed = sourceRow?.let { nativeFolderTargetAllowed(it, targetRow) }
+                    ?: (targetRow.entry.type != com.flue.launcher.applist.model.AppItemType.SHORTCUT)
+                if (!targetAllowed) continue
+                if (child.containsTransformedIconPoint(x, y, centerFraction = 0.42f)) {
+                    return key
+                }
+            }
+            return null
+        }
 
         override fun currentKeys(): List<AppItemKey> = nativeAdapter.currentKeysView()
 
@@ -1343,14 +1189,42 @@ class NativeAppListView @JvmOverloads constructor(
         override fun finishDragPreview(commit: Boolean): AppListCommand.Move? =
             nativeAdapter.finishDragPreview(commit)
 
-        override fun dispatch(command: AppListCommand) = dispatchCommand(command)
+        override fun completeDragPreview(accepted: Boolean) =
+            nativeAdapter.completeDragPreview(accepted)
+
+        override fun previewFolderCommit(
+            source: AppItemKey,
+            target: AppItemKey,
+        ): Boolean {
+            val targetRow = holderForKey(target)?.itemView as? NativeAppListRowView
+            folderSettleCenterX = targetRow?.iconCenterXInParentWithoutFlow() ?: Float.NaN
+            folderSettleCenterY = targetRow?.iconCenterYInParentWithoutFlow() ?: Float.NaN
+            return nativeAdapter.previewFolderCommit(source, target).also { accepted ->
+                if (!accepted) {
+                    folderSettleCenterX = Float.NaN
+                    folderSettleCenterY = Float.NaN
+                }
+            }
+        }
+
+        override fun discardDragPreviewAwaitingAuthoritative() =
+            nativeAdapter.discardDragPreviewAwaitingAuthoritative()
+
+        override fun dispatch(command: AppListCommand): Boolean =
+            dispatchCommandResult(command)
 
         override fun suppressLongClick(key: AppItemKey, suppress: Boolean) {
             holderForKey(key)?.itemView?.isLongClickable = !suppress
         }
 
         override fun beginDrag(key: AppItemKey, pointerX: Float, pointerY: Float) {
+            cancelDragSettle(removeOverlay = true)
+            clearGlidePressed()
             val holder = holderForKey(key) ?: return
+            // A drag overlay must start from the item's settled list geometry.
+            // Keeping an interrupted edge translation here offsets both the
+            // overlay and its hit region, then snaps when the edge completes.
+            springEdgeEffects.finish()
             itemAnimator?.endAnimation(holder)
             val source = holder.itemView as? NativeAppListRowView ?: return
             val row = holder.boundRowOrNull() ?: return
@@ -1409,22 +1283,57 @@ class NativeAppListView @JvmOverloads constructor(
             dragOverlay.setDragTranslation(offsetX, offsetY)
         }
 
-        override fun endDrag() {
+        override fun endDrag(committed: Boolean) {
             val sourceKey = draggedSourceKey
-            dragOverlayView?.let { dragOverlay ->
-                this@NativeAppListView.overlay.remove(dragOverlay)
-                dragOverlay.clearBinding()
+            val dragOverlay = dragOverlayView
+            val generation = ++dragSettleGeneration
+            if (committed && sourceKey != null && dragOverlay != null) {
+                dragOverlay.setDragVisualState(false)
+                postOnAnimation {
+                    if (
+                        released ||
+                        generation != dragSettleGeneration ||
+                        dragOverlayView !== dragOverlay
+                    ) {
+                        return@postOnAnimation
+                    }
+                    val destination = holderForKey(sourceKey)?.itemView as? NativeAppListRowView
+                    val destinationCenterX = when {
+                        folderSettleCenterX.isFinite() -> folderSettleCenterX
+                        destination != null -> destination.iconCenterXInParentWithoutFlow()
+                        else -> Float.NaN
+                    }
+                    val destinationCenterY = when {
+                        folderSettleCenterY.isFinite() -> folderSettleCenterY
+                        destination != null -> destination.iconCenterYInParentWithoutFlow()
+                        else -> Float.NaN
+                    }
+                    if (!destinationCenterX.isFinite() || !destinationCenterY.isFinite()) {
+                        removeDragOverlay(generation, sourceKey, dragOverlay)
+                        return@postOnAnimation
+                    }
+                    val currentCenterX = dragOverlay.iconCenterXInParentWithoutFlow()
+                    val currentCenterY = dragOverlay.iconCenterYInParentWithoutFlow()
+                    dragOverlay.animate()
+                        .translationX(dragOverlay.translationX + destinationCenterX - currentCenterX)
+                        .translationY(dragOverlay.translationY + destinationCenterY - currentCenterY)
+                        .setDuration(NATIVE_DRAG_SETTLE_DURATION_MS)
+                        .setInterpolator(NATIVE_DRAG_SETTLE_INTERPOLATOR)
+                        .withEndAction {
+                            removeDragOverlay(generation, sourceKey, dragOverlay)
+                        }
+                        .start()
+                }
+            } else if (dragOverlay != null) {
+                removeDragOverlay(generation, sourceKey, dragOverlay)
+            } else {
+                finishDragVisualState(sourceKey)
             }
-            dragOverlayView = null
-            draggedSourceKey = null
             draggedViewTouchOffsetY = 0f
             draggedViewTouchOffsetX = 0f
             draggedPointerY = 0f
             draggedPointerX = 0f
             autoScrollRemainder = 0f
-            sourceKey?.let(::holderForKey)?.itemView?.isPressed = false
-            (layoutManager as? NativeSpatialAppListLayoutManager)?.reapplyChildVisuals()
-            applyAttachedChildVisuals()
         }
 
         override fun setFolderHover(key: AppItemKey?) {
@@ -1451,6 +1360,41 @@ class NativeAppListView @JvmOverloads constructor(
         override fun performDragHaptic() {
             performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         }
+    }
+
+    private fun removeDragOverlay(
+        generation: Long,
+        sourceKey: AppItemKey?,
+        dragOverlay: NativeAppListRowView,
+    ) {
+        if (generation != dragSettleGeneration || dragOverlayView !== dragOverlay) return
+        dragOverlay.animate().cancel()
+        overlay.remove(dragOverlay)
+        dragOverlay.clearBinding()
+        dragOverlayView = null
+        finishDragVisualState(sourceKey)
+    }
+
+    private fun cancelDragSettle(removeOverlay: Boolean) {
+        dragSettleGeneration++
+        val dragOverlay = dragOverlayView ?: return
+        dragOverlay.animate().cancel()
+        if (removeOverlay) {
+            val sourceKey = draggedSourceKey
+            overlay.remove(dragOverlay)
+            dragOverlay.clearBinding()
+            dragOverlayView = null
+            finishDragVisualState(sourceKey)
+        }
+    }
+
+    private fun finishDragVisualState(sourceKey: AppItemKey?) {
+        draggedSourceKey = null
+        folderSettleCenterX = Float.NaN
+        folderSettleCenterY = Float.NaN
+        sourceKey?.let(::holderForKey)?.itemView?.isPressed = false
+        (layoutManager as? NativeSpatialAppListLayoutManager)?.reapplyChildVisuals()
+        applyAttachedChildVisuals()
     }
 
     private fun applyAttachedChildVisuals() {
@@ -1483,16 +1427,12 @@ class NativeAppListView @JvmOverloads constructor(
         val positionTranslationY =
             rowView?.positionTranslationYWithoutFlow() ?: child.translationY
         val baseCenterY = child.top + child.height / 2f + positionTranslationY
-        // Fast-flow compensation was intentionally removed: it changed item
-        // positions during a fling and was a major source of jank on legacy
-        // watches. Keep the visual pass single-owner and position-stable.
-        val flowOffset = 0f
         val visual = nativeLinearChildVisual(
             childCenterY = baseCenterY,
             viewportHeight = height,
             config = currentConfig.value,
             output = childVisualScratch,
-            edgeCenterY = baseCenterY + flowOffset,
+            edgeCenterY = baseCenterY,
         )
         if (rowView != null && currentConfig.value.deviceShape == NativeDeviceShape.ROUND) {
             val safe = roundGeometryAdapter.resolve(
@@ -1507,10 +1447,10 @@ class NativeAppListView @JvmOverloads constructor(
             )
             rowView.setFlowTranslation(
                 x = safe.translationX,
-                y = safe.translationY + flowOffset + visual.translationY,
+                y = safe.translationY + visual.translationY,
             )
         } else {
-            rowView?.setFlowTranslationY(flowOffset + visual.translationY)
+            rowView?.setFlowTranslationY(visual.translationY)
         }
         val centerPivotX = child.width / 2f
         val centerPivotY = child.height / 2f
@@ -1530,6 +1470,7 @@ class NativeAppListView @JvmOverloads constructor(
             radiusPx = visual.blurRadiusPx,
             tier = effectiveIconBlurTier(),
         )
+        rowView?.setIconSaturation(visual.saturation)
     }
 
     private fun effectiveIconBlurTier(): NativeBlurTier =
@@ -1562,6 +1503,7 @@ class NativeAppListView @JvmOverloads constructor(
             setFlowTranslation(0f, 0f)
             setContentTranslationY(pullOffsetPx)
             setIconBlurRadiusPx(0f, NativeBlurTier.OFF)
+            setIconSaturation(1f)
         }
     }
 

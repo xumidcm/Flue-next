@@ -1,5 +1,7 @@
 package com.flue.launcher.ui.anim
 
+import com.flue.launcher.launchsession.ReturnKind
+
 internal enum class AppListScaleMotion {
     BETA_12_SPRING,
     STANDARD_SPRING,
@@ -65,12 +67,51 @@ internal data class LaunchMaskMotionPolicy(
     val opaqueBlack: Boolean,
 )
 
+/**
+ * A single scalar clock is shared by the launch backdrop and its source icon.
+ *
+ * The old implementation used two AnimatedVisibility instances plus delayed
+ * booleans.  When a return was interrupted those clocks restarted from their
+ * target values, which is why the icon vanished before the mask and why a
+ * black seam could be seen.  Keeping the value and velocity together lets the
+ * caller reverse the same motion without inventing a second transition.
+ */
+internal data class LaunchMotionSnapshot(
+    val progress: Float,
+    val velocity: Float,
+) {
+    init {
+        require(progress.isFinite()) { "Launch progress must be finite" }
+        require(velocity.isFinite()) { "Launch velocity must be finite" }
+    }
+
+    val clampedProgress: Float
+        get() = progress.coerceIn(0f, 1f)
+}
+
+internal fun reverseLaunchMotion(snapshot: LaunchMotionSnapshot): LaunchMotionSnapshot =
+    LaunchMotionSnapshot(
+        progress = 1f - snapshot.clampedProgress,
+        velocity = -snapshot.velocity,
+    )
+
+/**
+ * Only a return that was verified against the package we launched may reuse
+ * the icon's source point.  Foreign, home and unverified returns must use a
+ * neutral pivot so an unrelated app is never animated from the old icon.
+ */
+internal fun returnUsesLaunchOrigin(kind: ReturnKind?): Boolean =
+    kind == ReturnKind.TargetReturn
+
 private val Beta12LaunchMaskMotionPolicy = LaunchMaskMotionPolicy(
     enterDurationMillis = 140,
     exitDurationMillis = 180,
     exitSlideDurationMillis = 220,
     exitSlideFraction = 1f / 6f,
-    opaqueBlack = true,
+    // The launch backdrop is already sourced from the current app-list
+    // palette. Forcing black here produced a visible seam and a black flash in
+    // light mode, especially while a return transition was interrupted.
+    opaqueBlack = false,
 )
 private val MaterialLaunchMaskMotionPolicy = LaunchMaskMotionPolicy(
     enterDurationMillis = 220,

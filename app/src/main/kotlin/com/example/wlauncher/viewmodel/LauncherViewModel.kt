@@ -41,6 +41,11 @@ import com.flue.launcher.launchsession.ExternalLaunchSessionTracker
 import com.flue.launcher.launchsession.ExternalLaunchState
 import com.flue.launcher.launchsession.ReturnKind
 import com.flue.launcher.launchsession.retainsLaunchIcon
+import com.flue.launcher.motion.FlueMotionProfile
+import com.flue.launcher.motion.FlueMotionProfileJson
+import com.flue.launcher.motion.FlueMotionProfiles
+import com.flue.launcher.motion.MotionEasing
+import com.flue.launcher.motion.MotionPhaseKey
 import com.flue.launcher.service.FlueAccessibilityService
 import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
@@ -50,6 +55,8 @@ import com.flue.launcher.ui.notification.NotificationActionUi
 import com.flue.launcher.ui.notification.NotificationEntryUi
 import com.flue.launcher.ui.notification.NotificationGroupUi
 import com.flue.launcher.ui.notification.NotificationRevealTarget
+import com.flue.launcher.ui.notification.alignNotificationPreviewOrder
+import com.flue.launcher.ui.notification.stabilizeNotificationGroupOrder
 import com.flue.launcher.service.NotifData
 import com.flue.launcher.service.WLauncherNotificationListener
 import com.flue.launcher.ui.controlcenter.MusicTextSwitchAnimations
@@ -134,11 +141,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_APP_LIST_WATCHFACE_COLORS = booleanPreferencesKey("app_list_watchface_colors")
         val KEY_APP_LIST_ROW_BORDER = booleanPreferencesKey("app_list_row_border_enabled")
         val KEY_APP_LIST_FOLDERS_ENABLED = booleanPreferencesKey("app_list_folders_enabled")
-        val KEY_FAST_FLOW_ANIMATION = booleanPreferencesKey("fast_flow_animation_enabled")
+        private val KEY_REMOVED_FAST_FLOW_ANIMATION = booleanPreferencesKey("fast_flow_animation_enabled")
         val KEY_MUSIC_TEXT_SWITCH_ANIMATION = stringPreferencesKey("music_text_switch_animation")
         val KEY_TWO_TONE_ICONS = booleanPreferencesKey("two_tone_icons_enabled")
         val KEY_ICON_SHADOW = booleanPreferencesKey("app_icon_shadow_enabled")
         val KEY_CLASSIC_RETURN_ANIMATION = booleanPreferencesKey("classic_return_animation_enabled")
+        val KEY_MOTION_PROFILE_ID = stringPreferencesKey("motion_profile_id")
+        val KEY_CUSTOM_MOTION_PROFILES = stringPreferencesKey("custom_motion_profiles")
         val KEY_SHOW_STEP_COUNT = booleanPreferencesKey("show_step_count")
         val KEY_SHOW_NOTIFICATION = booleanPreferencesKey("show_notification")
         val KEY_SHOW_ONGOING_NOTIFICATIONS = booleanPreferencesKey("show_ongoing_notifications")
@@ -154,6 +163,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_WATCHFACE_CHARGING_POWER_TEXT = booleanPreferencesKey("watchface_charging_power_text")
         val KEY_WATCHFACE_STATUS_INDICATORS = booleanPreferencesKey("watchface_status_indicators")
         val KEY_WATCHFACE_BOTTOM_FADE = booleanPreferencesKey("watchface_bottom_fade_enabled")
+        val KEY_WATCHMAKER_FORCE_FILL = booleanPreferencesKey("watchmaker_force_fill")
         val KEY_DINGDINGCAT_FILL_SCREEN = booleanPreferencesKey("dingdingcat_fill_screen")
         val KEY_DINGDINGCAT_PLAYBACK_SPEED_PERCENT = intPreferencesKey("dingdingcat_playback_speed_percent")
         val KEY_DINGDINGCAT_IMPORT_UNLOCKED = booleanPreferencesKey("dingdingcat_import_unlocked")
@@ -398,10 +408,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val appListWatchFaceColors: StateFlow<Boolean> = _appListWatchFaceColors.asStateFlow()
     private val _appListRowBorderEnabled = MutableStateFlow(false)
     val appListRowBorderEnabled: StateFlow<Boolean> = _appListRowBorderEnabled.asStateFlow()
-    private val _appListFoldersEnabled = MutableStateFlow(false)
+    private val _appListFoldersEnabled = MutableStateFlow(true)
     val appListFoldersEnabled: StateFlow<Boolean> = _appListFoldersEnabled.asStateFlow()
-    private val _fastFlowAnimationEnabled = MutableStateFlow(false)
-    val fastFlowAnimationEnabled: StateFlow<Boolean> = _fastFlowAnimationEnabled.asStateFlow()
     private val _musicTextSwitchAnimation = MutableStateFlow(MusicTextSwitchAnimations.DEFAULT_ID)
     val musicTextSwitchAnimation: StateFlow<String> = _musicTextSwitchAnimation.asStateFlow()
     private val _twoToneIconsEnabled = MutableStateFlow(false)
@@ -410,6 +418,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val iconShadowEnabled: StateFlow<Boolean> = _iconShadowEnabled.asStateFlow()
     private val _classicReturnAnimationEnabled = MutableStateFlow(false)
     val classicReturnAnimationEnabled: StateFlow<Boolean> = _classicReturnAnimationEnabled.asStateFlow()
+    private val _motionProfiles = MutableStateFlow(FlueMotionProfiles.builtIns)
+    val motionProfiles: StateFlow<List<FlueMotionProfile>> = _motionProfiles.asStateFlow()
+    private val _activeMotionProfile = MutableStateFlow(FlueMotionProfiles.Gentle)
+    val activeMotionProfile: StateFlow<FlueMotionProfile> = _activeMotionProfile.asStateFlow()
     private val _showStepCount = MutableStateFlow(true)
     val showStepCount: StateFlow<Boolean> = _showStepCount.asStateFlow()
 
@@ -442,6 +454,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val watchFaceStatusIndicators: StateFlow<Boolean> = _watchFaceStatusIndicators.asStateFlow()
     private val _watchFaceBottomFadeEnabled = MutableStateFlow(true)
     val watchFaceBottomFadeEnabled: StateFlow<Boolean> = _watchFaceBottomFadeEnabled.asStateFlow()
+    private val _watchmakerForceFill = MutableStateFlow(false)
+    val watchmakerForceFill: StateFlow<Boolean> = _watchmakerForceFill.asStateFlow()
     private val _dingDingCatFillScreen = MutableStateFlow(false)
     val dingDingCatFillScreen: StateFlow<Boolean> = _dingDingCatFillScreen.asStateFlow()
     private val _dingDingCatPlaybackSpeedPercent = MutableStateFlow(100)
@@ -855,17 +869,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListRowBorderEnabled.value = loadedAppListRowBorder
                 }
 
-                val loadedAppListFoldersEnabled = prefs[KEY_APP_LIST_FOLDERS_ENABLED] ?: false
+                // Native folder creation is a supported baseline capability.
+                // A stored false remains authoritative for existing users;
+                // only installs without the legacy key receive the new default.
+                val loadedAppListFoldersEnabled = prefs[KEY_APP_LIST_FOLDERS_ENABLED] ?: true
                 if (_appListFoldersEnabled.value != loadedAppListFoldersEnabled) {
                     _appListFoldersEnabled.value = loadedAppListFoldersEnabled
                 }
 
-                // Fast-flow displacement was removed from the native list: it
-                // changed child positions during fling and regressed legacy
-                // watches. Retain the preference key only for downgrade/data
-                // compatibility, but never revive the production behavior.
-                if (_fastFlowAnimationEnabled.value) {
-                    _fastFlowAnimationEnabled.value = false
+                // One-way migration: old builds may have persisted this key,
+                // but fast-flow no longer has a runtime state or UI surface.
+                if (prefs[KEY_REMOVED_FAST_FLOW_ANIMATION] != null) {
+                    persist { store.edit { it.remove(KEY_REMOVED_FAST_FLOW_ANIMATION) } }
                 }
 
                 val loadedMusicTextSwitchAnimation = MusicTextSwitchAnimations.normalizeId(
@@ -891,6 +906,25 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _classicReturnAnimationEnabled.value = loadedClassicReturnAnimation
                 }
 
+                val customMotionProfiles = prefs[KEY_CUSTOM_MOTION_PROFILES]
+                    ?.let { payload ->
+                        runCatching { FlueMotionProfileJson.decodeLibrary(payload) }
+                            .getOrDefault(emptyList())
+                    }
+                    .orEmpty()
+                    .filterNot { FlueMotionProfiles.isBuiltIn(it.id) }
+                val loadedMotionProfiles = FlueMotionProfiles.builtIns + customMotionProfiles
+                if (_motionProfiles.value != loadedMotionProfiles) {
+                    _motionProfiles.value = loadedMotionProfiles
+                }
+                val loadedMotionProfile = FlueMotionProfiles.resolve(
+                    id = prefs[KEY_MOTION_PROFILE_ID],
+                    customProfiles = customMotionProfiles,
+                )
+                if (_activeMotionProfile.value != loadedMotionProfile) {
+                    _activeMotionProfile.value = loadedMotionProfile
+                }
+
                 val loadedShowStepCount = prefs[KEY_SHOW_STEP_COUNT] ?: true
                 if (_showStepCount.value != loadedShowStepCount) {
                     _showStepCount.value = loadedShowStepCount
@@ -909,6 +943,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedWatchFaceBottomFade = prefs[KEY_WATCHFACE_BOTTOM_FADE] ?: true
                 if (_watchFaceBottomFadeEnabled.value != loadedWatchFaceBottomFade) {
                     _watchFaceBottomFadeEnabled.value = loadedWatchFaceBottomFade
+                }
+
+                val loadedWatchmakerForceFill = prefs[KEY_WATCHMAKER_FORCE_FILL] ?: false
+                if (_watchmakerForceFill.value != loadedWatchmakerForceFill) {
+                    _watchmakerForceFill.value = loadedWatchmakerForceFill
                 }
 
                 val loadedDingDingCatFillScreen = prefs[KEY_DINGDINGCAT_FILL_SCREEN] ?: false
@@ -1659,16 +1698,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _openFolderItems.value = emptyList()
     }
 
-    fun createFolder(command: AppListCommand.CreateFolder) {
-        if (command.source == command.target) return
+    fun createFolder(command: AppListCommand.CreateFolder): Boolean {
+        if (command.source == command.target) return false
         val current = apps.value
-        if (current.map(AppInfo::componentKey).distinct().size != current.size) return
+        if (current.map(AppInfo::componentKey).distinct().size != current.size) return false
         val sourceIndex = current.indexOfFirst { it.componentKey == command.source.value }
         val targetIndex = current.indexOfFirst { it.componentKey == command.target.value }
-        if (sourceIndex == -1 || targetIndex == -1 || sourceIndex == targetIndex) return
+        if (sourceIndex == -1 || targetIndex == -1 || sourceIndex == targetIndex) return false
         val source = current[sourceIndex]
         val target = current[targetIndex]
-        val folderKey = appRepository.createFolder(source.componentKey, target.componentKey) ?: return
+        val folderKey = appRepository.createFolder(source.componentKey, target.componentKey) ?: return false
         val insertIndex = minOf(sourceIndex, targetIndex)
         val nextOrder = current
             .filterIndexed { index, _ -> index != sourceIndex && index != targetIndex }
@@ -1676,6 +1715,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             .toMutableList()
         nextOrder.add(insertIndex.coerceIn(0, nextOrder.size), folderKey)
         setAppOrder(nextOrder)
+        return true
     }
 
     fun removeAppListShortcut(shortcut: AppInfo) {
@@ -1696,12 +1736,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun reorderFolderItems(folder: AppInfo, orderedItems: List<AppInfo>) {
         if (!folder.isFolder) return
-        val nextKeys = appRepository.reorderFolderItems(
+        val mutation = appRepository.reorderFolderItems(
             folder.componentKey,
             orderedItems.map { it.componentKey }
         )
-        if (nextKeys.isNotEmpty()) {
-            _openFolderItems.value = appRepository.itemsForKeys(nextKeys)
+        if (mutation.succeeded) {
+            _openFolderItems.value = appRepository.itemsForKeys(mutation.itemKeys)
         }
     }
 
@@ -1719,7 +1759,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun moveItemOutOfFolder(folder: AppInfo, item: AppInfo) {
         if (!folder.isFolder) return
-        val remainingKeys = appRepository.moveItemOutOfFolder(folder.componentKey, item.componentKey)
+        val mutation = appRepository.moveItemOutOfFolder(folder.componentKey, item.componentKey)
+        if (!mutation.succeeded) return
+        val remainingKeys = mutation.itemKeys
         val remainingItems = appRepository.itemsForKeys(remainingKeys)
         val dissolvesFolder = remainingKeys.size <= 1
         val currentOrder = apps.value.map { it.componentKey }.toMutableList()
@@ -1756,12 +1798,25 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             .distinct()
             .toList()
         if (addedKeys.isEmpty()) return
-        val nextKeys = appRepository.addItemsToFolder(folder.componentKey, addedKeys)
-        if (nextKeys.isEmpty()) return
+        val mutation = appRepository.addItemsToFolder(folder.componentKey, addedKeys)
+        if (!mutation.succeeded) return
+        val nextKeys = mutation.itemKeys
         val addedKeySet = addedKeys.toSet()
-        val currentOrder = apps.value
-            .map { it.componentKey }
-            .filterNot { it in addedKeySet }
+        val currentOrder = apps.value.map { it.componentKey }.toMutableList()
+        // A source folder with one remaining item is dissolved atomically by the
+        // storage layer. Restore its surviving child at the old folder position
+        // before removing the newly transferred keys from top-level order.
+        mutation.dissolvedFolders.forEach { (dissolvedFolderKey, keptKeys) ->
+            val folderIndex = currentOrder.indexOf(dissolvedFolderKey)
+            if (folderIndex < 0) return@forEach
+            currentOrder.removeAt(folderIndex)
+            keptKeys.filterNot { it in addedKeySet }.forEachIndexed { offset, key ->
+                if (key !in currentOrder) {
+                    currentOrder.add((folderIndex + offset).coerceIn(0, currentOrder.size), key)
+                }
+            }
+        }
+        currentOrder.removeAll(addedKeySet)
         setAppOrder(currentOrder)
         _openFolderItems.value = appRepository.itemsForKeys(nextKeys)
     }
@@ -1788,7 +1843,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     null
                 }
             }
-        val nextKeys = appRepository.setFolderItems(folder.componentKey, selectedKeys)
+        val mutation = appRepository.setFolderItems(folder.componentKey, selectedKeys)
+        if (!mutation.succeeded) return
+        val nextKeys = mutation.itemKeys
         val currentTopLevelKeys = apps.value.map { it.componentKey }.toMutableList()
         val folderIndex = currentTopLevelKeys.indexOf(folder.componentKey).takeIf { it >= 0 }
         val removedKeys = originalKeys
@@ -1939,11 +1996,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_APP_LIST_FOLDERS_ENABLED] = enabled } }
     }
 
-    fun setFastFlowAnimationEnabled(@Suppress("UNUSED_PARAMETER") enabled: Boolean) {
-        _fastFlowAnimationEnabled.value = false
-        persist { store.edit { it[KEY_FAST_FLOW_ANIMATION] = false } }
-    }
-
     fun setMusicTextSwitchAnimation(id: String) {
         val normalized = MusicTextSwitchAnimations.normalizeId(id)
         _musicTextSwitchAnimation.value = normalized
@@ -1967,6 +2019,133 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_CLASSIC_RETURN_ANIMATION] = enabled } }
     }
 
+    fun setActiveMotionProfile(id: String): Boolean {
+        val profile = _motionProfiles.value.firstOrNull { it.id == id } ?: return false
+        _activeMotionProfile.value = profile
+        persist { store.edit { it[KEY_MOTION_PROFILE_ID] = profile.id } }
+        return true
+    }
+
+    fun copyMotionProfile(
+        sourceId: String = _activeMotionProfile.value.id,
+        name: String = "${_activeMotionProfile.value.name} 副本",
+    ): FlueMotionProfile? {
+        val source = _motionProfiles.value.firstOrNull { it.id == sourceId } ?: return null
+        val copy = runCatching { source.customCopy(customName = name) }.getOrNull() ?: return null
+        val next = _motionProfiles.value + copy
+        _motionProfiles.value = next
+        _activeMotionProfile.value = copy
+        persistMotionProfiles(next, copy.id)
+        return copy
+    }
+
+    fun renameActiveMotionProfile(name: String): Boolean =
+        updateActiveMotionProfile { it.copy(name = name.trim().take(48)) }
+
+    fun setMotionBounceEnabled(enabled: Boolean): Boolean =
+        updateActiveMotionProfile { it.copy(bounceEnabled = enabled) }
+
+    fun setMotionEdgeStrength(value: Int): Boolean =
+        updateActiveMotionProfile { it.copy(edgeStrength = value) }
+
+    fun setMotionPhaseDuration(key: MotionPhaseKey, durationMillis: Int): Boolean =
+        updateActiveMotionProfile { profile ->
+            profile.withPhase(
+                key,
+                profile.phase(key).copy(durationMillis = durationMillis),
+            )
+        }
+
+    fun setMotionPhaseHandoff(key: MotionPhaseKey, handoffMillis: Int): Boolean =
+        updateActiveMotionProfile { profile ->
+            profile.withPhase(
+                key,
+                profile.phase(key).copy(handoffMillis = handoffMillis),
+            )
+        }
+
+    fun setMotionPhaseEasing(key: MotionPhaseKey, easing: MotionEasing): Boolean =
+        updateActiveMotionProfile { profile ->
+            profile.withPhase(key, profile.phase(key).copy(easing = easing))
+        }
+
+    fun deleteMotionProfile(id: String): Boolean {
+        if (FlueMotionProfiles.isBuiltIn(id)) return false
+        val current = _motionProfiles.value
+        if (current.none { it.id == id }) return false
+        val next = current.filterNot { it.id == id }
+        val nextActive = if (_activeMotionProfile.value.id == id) {
+            FlueMotionProfiles.Gentle
+        } else {
+            _activeMotionProfile.value
+        }
+        _motionProfiles.value = next
+        _activeMotionProfile.value = nextActive
+        persistMotionProfiles(next, nextActive.id)
+        return true
+    }
+
+    fun exportMotionProfileJson(id: String = _activeMotionProfile.value.id): Result<String> =
+        runCatching {
+            val profile = _motionProfiles.value.firstOrNull { it.id == id }
+                ?: error("找不到动画配置")
+            FlueMotionProfileJson.encodeProfile(profile)
+        }
+
+    fun exportMotionProfileLibraryJson(): Result<String> = runCatching {
+        FlueMotionProfileJson.encodeLibrary(
+            _motionProfiles.value.filterNot { FlueMotionProfiles.isBuiltIn(it.id) },
+        )
+    }
+
+    fun importMotionProfileJson(payload: String): Result<List<FlueMotionProfile>> = runCatching {
+        val decoded = runCatching { FlueMotionProfileJson.decodeLibrary(payload) }
+            .getOrElse { listOf(FlueMotionProfileJson.decodeProfile(payload)) }
+        require(decoded.isNotEmpty()) { "配置文件中没有动画曲线" }
+        val imported = decoded.map { profile ->
+            profile.customCopy(
+                customName = profile.name,
+            )
+        }
+        val next = _motionProfiles.value + imported
+        val nextActive = imported.last()
+        _motionProfiles.value = next
+        _activeMotionProfile.value = nextActive
+        persistMotionProfiles(next, nextActive.id)
+        imported
+    }
+
+    private fun updateActiveMotionProfile(
+        transform: (FlueMotionProfile) -> FlueMotionProfile,
+    ): Boolean {
+        val current = _activeMotionProfile.value
+        if (FlueMotionProfiles.isBuiltIn(current.id)) return false
+        val updated = runCatching { transform(current).requireValid() }.getOrNull() ?: return false
+        val next = _motionProfiles.value.map { profile ->
+            if (profile.id == current.id) updated else profile
+        }
+        if (next.none { it.id == updated.id }) return false
+        _motionProfiles.value = next
+        _activeMotionProfile.value = updated
+        persistMotionProfiles(next, updated.id)
+        return true
+    }
+
+    private fun persistMotionProfiles(
+        profiles: List<FlueMotionProfile>,
+        activeId: String,
+    ) {
+        val customPayload = FlueMotionProfileJson.encodeLibrary(
+            profiles.filterNot { FlueMotionProfiles.isBuiltIn(it.id) },
+        )
+        persist {
+            store.edit {
+                it[KEY_CUSTOM_MOTION_PROFILES] = customPayload
+                it[KEY_MOTION_PROFILE_ID] = activeId
+            }
+        }
+    }
+
     fun setShowStepCountEnabled(enabled: Boolean) {
         _showStepCount.value = enabled
         persist { store.edit { it[KEY_SHOW_STEP_COUNT] = enabled } }
@@ -1985,6 +2164,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setWatchFaceBottomFadeEnabled(enabled: Boolean) {
         _watchFaceBottomFadeEnabled.value = enabled
         persist { store.edit { it[KEY_WATCHFACE_BOTTOM_FADE] = enabled } }
+    }
+
+    fun setWatchmakerForceFillEnabled(enabled: Boolean) {
+        _watchmakerForceFill.value = enabled
+        persist { store.edit { it[KEY_WATCHMAKER_FORCE_FILL] = enabled } }
     }
 
     fun setDingDingCatFillScreenEnabled(enabled: Boolean) {
@@ -2289,22 +2473,31 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     suspend fun deleteImportedWatchFace(id: String): Result<Unit> {
+        return deleteImportedWatchFaces(listOf(id))
+    }
+
+    suspend fun deleteImportedWatchFaces(ids: Collection<String>): Result<Unit> {
         return runCatching {
-            val descriptor = _availableWatchFaces.value.firstOrNull {
-                it.id == id && (it.isDingDingCat || it.isJbWatch || it.isWatchmaker)
-            } ?: error("表盘不存在")
-            val deleted = withContext(Dispatchers.IO) {
-                when {
-                    descriptor.isDingDingCat -> DingDingCatWatchFaceStorage.delete(getApplication(), descriptor)
-                    descriptor.isJbWatch -> JbWatchFaceStorage.delete(getApplication(), descriptor)
-                    descriptor.isWatchmaker -> WatchmakerWatchFaceStorage.delete(getApplication(), descriptor)
-                    else -> false
+            val requestedIds = ids.asSequence().filter(String::isNotBlank).toSet()
+            require(requestedIds.isNotEmpty()) { "表盘不存在" }
+            val descriptors = _availableWatchFaces.value.filter {
+                it.id in requestedIds && (it.isDingDingCat || it.isJbWatch || it.isWatchmaker)
+            }
+            if (descriptors.isEmpty()) error("表盘不存在")
+            val failedIds = withContext(Dispatchers.IO) {
+                descriptors.mapNotNull { descriptor ->
+                    val deleted = when {
+                        descriptor.isDingDingCat -> DingDingCatWatchFaceStorage.delete(getApplication(), descriptor)
+                        descriptor.isJbWatch -> JbWatchFaceStorage.delete(getApplication(), descriptor)
+                        descriptor.isWatchmaker -> WatchmakerWatchFaceStorage.delete(getApplication(), descriptor)
+                        else -> false
+                    }
+                    descriptor.id.takeUnless { deleted }
                 }
             }
-            if (!deleted) error("删除失败")
             val scanned = withContext(Dispatchers.IO) { scanAllWatchFaces() }
             publishWatchFaces(scanned)
-            if (_selectedWatchFaceId.value == id) {
+            if (_selectedWatchFaceId.value in requestedIds) {
                 _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
                 _watchFaceLastError.value = null
                 persist {
@@ -2316,6 +2509,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
             syncSelectedWatchFace(freshScanCompleted = true)
             _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
+            if (failedIds.isNotEmpty()) {
+                error("部分表盘删除失败：${failedIds.joinToString()}")
+            }
         }
     }
 
@@ -2755,16 +2951,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _pendingDismissedNotificationKeys.value = _pendingDismissedNotificationKeys.value + keys
     }
 
-    fun moveApp(command: AppListCommand.Move) {
+    fun moveApp(command: AppListCommand.Move): Boolean {
         val snapshot = runCatching {
             AppListSnapshot.create(
                 generation = SystemClock.elapsedRealtime(),
                 entries = apps.value.map { it.toNativeAppListEntry() },
             )
-        }.getOrNull() ?: return
+        }.getOrNull() ?: return false
         val reordered = AppListReducer.reduce(snapshot.entries, command)
-        if (reordered === snapshot.entries) return
+        if (reordered === snapshot.entries) return false
         setAppOrder(reordered.map { it.key.value })
+        return true
     }
 
     fun resetSettings() {
@@ -2799,12 +2996,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _globalUiScalePercent.value = 100
         _appListWatchFaceColors.value = false
         _appListRowBorderEnabled.value = false
-        _appListFoldersEnabled.value = false
-        _fastFlowAnimationEnabled.value = false
+        _appListFoldersEnabled.value = true
         _musicTextSwitchAnimation.value = MusicTextSwitchAnimations.DEFAULT_ID
         _twoToneIconsEnabled.value = false
         _iconShadowEnabled.value = true
         _classicReturnAnimationEnabled.value = false
+        _motionProfiles.value = FlueMotionProfiles.builtIns
+        _activeMotionProfile.value = FlueMotionProfiles.Gentle
         _showStepCount.value = true
         _showNotification.value = true
         _showOngoingNotifications.value = false
@@ -2819,6 +3017,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _watchFaceChargingPowerText.value = true
         _watchFaceStatusIndicators.value = true
         _watchFaceBottomFadeEnabled.value = true
+        _watchmakerForceFill.value = false
         _dingDingCatFillScreen.value = false
         _dingDingCatPlaybackSpeedPercent.value = 100
         _dingDingCatImportUnlocked.value = false
@@ -2900,12 +3099,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_GLOBAL_UI_SCALE_PERCENT] = 100
                 it[KEY_APP_LIST_WATCHFACE_COLORS] = false
                 it[KEY_APP_LIST_ROW_BORDER] = false
-                it[KEY_APP_LIST_FOLDERS_ENABLED] = false
-                it[KEY_FAST_FLOW_ANIMATION] = false
+                it[KEY_APP_LIST_FOLDERS_ENABLED] = true
+                it.remove(KEY_REMOVED_FAST_FLOW_ANIMATION)
                 it[KEY_MUSIC_TEXT_SWITCH_ANIMATION] = MusicTextSwitchAnimations.DEFAULT_ID
                 it[KEY_TWO_TONE_ICONS] = false
                 it[KEY_ICON_SHADOW] = true
                 it[KEY_CLASSIC_RETURN_ANIMATION] = false
+                it[KEY_MOTION_PROFILE_ID] = FlueMotionProfiles.GENTLE_ID
+                it[KEY_CUSTOM_MOTION_PROFILES] = FlueMotionProfileJson.encodeLibrary(emptyList())
                 it[KEY_SHOW_STEP_COUNT] = true
                 it[KEY_LEGACY_CIRCULAR_ICONS] = true
                 it[KEY_SHOW_NOTIFICATION] = true
@@ -2921,6 +3122,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_WATCHFACE_CHARGING_POWER_TEXT] = true
                 it[KEY_WATCHFACE_STATUS_INDICATORS] = true
                 it[KEY_WATCHFACE_BOTTOM_FADE] = true
+                it[KEY_WATCHMAKER_FORCE_FILL] = false
                 it[KEY_DINGDINGCAT_FILL_SCREEN] = false
                 it[KEY_DINGDINGCAT_PLAYBACK_SPEED_PERCENT] = 100
                 it[KEY_DINGDINGCAT_IMPORT_UNLOCKED] = false
@@ -3161,8 +3363,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (previewGroups.isNotEmpty() || groups.isNotEmpty()) {
             pendingNotificationClearJob?.cancel()
             pendingNotificationClearJob = null
-            _sideScreenPreviewGroups.value = previewGroups
-            _notificationGroups.value = groups
+            val orderedGroups = stabilizeNotificationGroupOrder(
+                previous = _notificationGroups.value,
+                incoming = groups
+            )
+            _sideScreenPreviewGroups.value = alignNotificationPreviewOrder(
+                orderedGroups = orderedGroups,
+                previews = previewGroups
+            )
+            _notificationGroups.value = orderedGroups
             return
         }
         if (_sideScreenPreviewGroups.value.isEmpty() && _notificationGroups.value.isEmpty()) {

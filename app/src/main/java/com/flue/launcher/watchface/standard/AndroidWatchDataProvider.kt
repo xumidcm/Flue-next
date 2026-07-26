@@ -1,0 +1,301 @@
+package com.flue.launcher.watchface.standard
+
+import android.Manifest
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.os.BatteryManager
+import android.os.Build
+import android.net.wifi.WifiManager
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
+import java.util.Calendar
+import kotlin.math.roundToInt
+
+internal class AndroidWatchDataProvider(
+    context: Context,
+    private val weatherSource: WatchWeatherSource? = null,
+) : WatchDataProvider, SensorEventListener {
+    private val appContext = context.applicationContext
+    private val batteryManager = appContext.getSystemService(BatteryManager::class.java)
+    private val sensorManager = appContext.getSystemService(SensorManager::class.java)
+    private val wifiManager = appContext.getSystemService(WifiManager::class.java)
+    private val bluetoothManager = appContext.getSystemService(BluetoothManager::class.java)
+    private val stepPreferences = appContext.getSharedPreferences(STEP_PREFERENCES, Context.MODE_PRIVATE)
+    private val stepLock = Any()
+    private var started = false
+    private var batteryReceiverRegistered = false
+    private var connectivityReceiverRegistered = false
+
+    @Volatile
+    private var batteryPercent: Int? = null
+
+    @Volatile
+    private var charging: Boolean? = null
+
+    @Volatile
+    private var steps: Int? = null
+
+    @Volatile
+    private var heartRate: Int? = null
+
+    @Volatile
+    private var gyroscope: Triple<Float, Float, Float>? = null
+
+    @Volatile
+    private var wifiSignalFraction: Float? = null
+
+    @Volatile
+    private var bluetoothEnabled: Boolean? = null
+
+    private val batteryReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            intent?.let(::updateBattery)
+        }
+    }
+
+    private val connectivityReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                WifiManager.RSSI_CHANGED_ACTION -> refreshWifiSignal()
+                BluetoothAdapter.ACTION_STATE_CHANGED -> refreshBluetoothState()
+            }
+        }
+    }
+
+    fun start() {
+        if (started) return
+        started = true
+        refreshBatteryFallback()
+        refreshWifiSignal()
+        refreshBluetoothState()
+        runCatching {
+            ContextCompat.registerReceiver(
+                appContext,
+                batteryReceiver,
+                IntentFilter(Intent.ACTION_BATTERY_CHANGED),
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+        }.onSuccess { stickyIntent ->
+            batteryReceiverRegistered = true
+            stickyIntent?.let(::updateBattery)
+        }
+        runCatching {
+            ContextCompat.registerReceiver(
+                appContext,
+                connectivityReceiver,
+                IntentFilter().apply {
+                    addAction(WifiManager.RSSI_CHANGED_ACTION)
+                    addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+                },
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+        }.onSuccess {
+            connectivityReceiverRegistered = true
+        }
+
+        if (
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+            hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
+        ) {
+            restoreDailySteps()
+            registerSensor(Sensor.TYPE_STEP_COUNTER)
+        } else {
+            steps = null
+        }
+        if (hasPermission(Manifest.permission.BODY_SENSORS)) {
+            registerSensor(Sensor.TYPE_HEART_RATE)
+        }
+        registerSensor(Sensor.TYPE_GYROSCOPE)
+    }
+
+    fun stop() {
+        if (!started) return
+        started = false
+        sensorManager?.unregisterListener(this)
+        if (batteryReceiverRegistered) {
+            runCatching { appContext.unregisterReceiver(batteryReceiver) }
+            batteryReceiverRegistered = false
+        }
+        if (connectivityReceiverRegistered) {
+            runCatching { appContext.unregisterReceiver(connectivityReceiver) }
+            connectivityReceiverRegistered = false
+        }
+    }
+
+    override fun snapshot(nowEpochMs: Long): WatchDataSnapshot {
+        val weather = runCatching { weatherSource?.snapshot(nowEpochMs) }.getOrNull()
+        val gyro = gyroscope
+        return WatchDataSnapshot(
+            batteryPercent = batteryPercent,
+            isCharging = charging,
+            steps = steps,
+            heartRateBpm = heartRate,
+            gyroscopeX = gyro?.first,
+            gyroscopeY = gyro?.second,
+            gyroscopeZ = gyro?.third,
+            wifiSignalFraction = wifiSignalFraction,
+            bluetoothEnabled = bluetoothEnabled,
+            weatherTemperature = weather?.temperature,
+            weatherCondition = weather?.condition,
+            weatherIcon = weather?.icon,
+            weatherHigh = weather?.high,
+            weatherLow = weather?.low,
+            weatherTemperatureUnit = weather?.temperatureUnit,
+            weatherHumidity = weather?.humidity,
+            weatherLocation = weather?.location,
+        )
+    }
+
+    override fun onSensorChanged(event: SensorEvent?) {
+        val sensorEvent = event ?: return
+        if (sensorEvent.sensor.type == Sensor.TYPE_GYROSCOPE) {
+            val x = sensorEvent.values.getOrNull(0)?.takeIf(Float::isFinite) ?: return
+            val y = sensorEvent.values.getOrNull(1)?.takeIf(Float::isFinite) ?: return
+            val z = sensorEvent.values.getOrNull(2)?.takeIf(Float::isFinite) ?: return
+            gyroscope = Triple(x, y, z)
+            return
+        }
+        val value = sensorEvent.values.firstOrNull()?.takeIf(Float::isFinite) ?: return
+        when (sensorEvent.sensor.type) {
+            Sensor.TYPE_STEP_COUNTER -> updateDailySteps(value.roundToInt().coerceAtLeast(0))
+            Sensor.TYPE_HEART_RATE -> heartRate = value.roundToInt().takeIf { it > 0 }
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+
+    @Suppress("DEPRECATION")
+    private fun refreshWifiSignal() {
+        wifiSignalFraction = runCatching {
+            val rssi = wifiManager?.connectionInfo?.rssi ?: return@runCatching null
+            if (rssi <= -127) return@runCatching null
+            (WifiManager.calculateSignalLevel(rssi, 5) / 4f).coerceIn(0f, 1f)
+        }.getOrNull()
+    }
+
+    @Suppress("MissingPermission")
+    private fun refreshBluetoothState() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            !hasPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        ) {
+            bluetoothEnabled = null
+            return
+        }
+        bluetoothEnabled = runCatching { bluetoothManager?.adapter?.isEnabled }.getOrNull()
+    }
+
+    private fun registerSensor(type: Int) {
+        val sensor = sensorManager?.getDefaultSensor(type) ?: return
+        runCatching {
+            sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_NORMAL)
+        }
+    }
+
+    private fun refreshBatteryFallback() {
+        val capacity = runCatching {
+            batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        }.getOrNull()
+        batteryPercent = capacity?.takeIf { it in 0..100 } ?: batteryPercent
+    }
+
+    private fun restoreDailySteps(nowEpochMs: Long = System.currentTimeMillis()) {
+        synchronized(stepLock) {
+            val dayKey = dayKey(nowEpochMs)
+            if (
+                stepPreferences.getLong(KEY_STEP_DAY, Long.MIN_VALUE) == dayKey &&
+                stepPreferences.contains(KEY_STEP_TOTAL)
+            ) {
+                steps = stepPreferences.getInt(KEY_STEP_TOTAL, 0).coerceAtLeast(0)
+            } else {
+                steps = null
+            }
+        }
+    }
+
+    private fun updateDailySteps(rawCounter: Int, nowEpochMs: Long = System.currentTimeMillis()) {
+        synchronized(stepLock) {
+            val storedDay = stepPreferences.getLong(KEY_STEP_DAY, Long.MIN_VALUE)
+            val previous = if (
+                storedDay != Long.MIN_VALUE &&
+                stepPreferences.contains(KEY_STEP_RAW) &&
+                stepPreferences.contains(KEY_STEP_TOTAL)
+            ) {
+                DailyStepState(
+                    dayKey = storedDay,
+                    rawCounter = stepPreferences.getInt(KEY_STEP_RAW, 0).coerceAtLeast(0),
+                    steps = stepPreferences.getInt(KEY_STEP_TOTAL, 0).coerceAtLeast(0),
+                )
+            } else {
+                null
+            }
+            val next = accumulateDailySteps(previous, dayKey(nowEpochMs), rawCounter)
+            stepPreferences.edit()
+                .putLong(KEY_STEP_DAY, next.dayKey)
+                .putInt(KEY_STEP_RAW, next.rawCounter)
+                .putInt(KEY_STEP_TOTAL, next.steps)
+                .apply()
+            steps = next.steps
+        }
+    }
+
+    private fun updateBattery(intent: Intent) {
+        val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+        batteryPercent = if (level >= 0 && scale > 0) {
+            (level * 100f / scale).roundToInt().coerceIn(0, 100)
+        } else {
+            batteryPercent
+        }
+        charging = when (intent.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)) {
+            BatteryManager.BATTERY_STATUS_CHARGING,
+            BatteryManager.BATTERY_STATUS_FULL,
+            -> true
+            BatteryManager.BATTERY_STATUS_DISCHARGING,
+            BatteryManager.BATTERY_STATUS_NOT_CHARGING,
+            -> false
+            else -> charging
+        }
+    }
+
+    private fun hasPermission(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(appContext, permission) == PackageManager.PERMISSION_GRANTED
+
+    private fun dayKey(nowEpochMs: Long): Long = Calendar.getInstance().run {
+        timeInMillis = nowEpochMs
+        get(Calendar.YEAR).toLong() * 1_000L + get(Calendar.DAY_OF_YEAR)
+    }
+
+    private companion object {
+        const val STEP_PREFERENCES = "watchmaker_daily_steps"
+        const val KEY_STEP_DAY = "day"
+        const val KEY_STEP_RAW = "raw_counter"
+        const val KEY_STEP_TOTAL = "daily_total"
+    }
+}
+
+@Composable
+fun rememberWatchmakerWatchDataProvider(
+    active: Boolean,
+    weatherSource: WatchWeatherSource? = null,
+    permissionRevision: Any? = null,
+): WatchDataProvider {
+    val context = LocalContext.current.applicationContext
+    val provider = remember(context, weatherSource) { AndroidWatchDataProvider(context, weatherSource) }
+    DisposableEffect(provider, active, permissionRevision) {
+        if (active) provider.start() else provider.stop()
+        onDispose(provider::stop)
+    }
+    return provider
+}

@@ -20,6 +20,17 @@ interface WatchStoreApi {
 
     /** Streams the final `.watch` archive into [destination], enforcing the archive limit. */
     fun downloadWatchFace(id: String, destination: File): File
+
+    /**
+     * Progress-aware variant. Existing integrations may keep implementing the
+     * original method; the default delegates to it. Callbacks are invoked from
+     * the transport thread and must be cheap/non-blocking.
+     */
+    fun downloadWatchFace(
+        id: String,
+        destination: File,
+        onProgress: (bytes: Long, totalBytes: Long?) -> Unit,
+    ): File = downloadWatchFace(id, destination)
 }
 
 open class WatchStoreException(

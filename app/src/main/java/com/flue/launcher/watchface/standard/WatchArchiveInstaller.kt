@@ -14,13 +14,46 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
 data class WatchArchiveLimits(
-    val maximumArchiveBytes: Long = 32L * 1024L * 1024L,
+    val maximumArchiveBytes: Long = 96L * 1024L * 1024L,
     val maximumEntryCount: Int = 2_048,
     val maximumEntryNameLength: Int = 240,
-    val maximumSingleFileBytes: Long = 24L * 1024L * 1024L,
-    val maximumExpandedBytes: Long = 96L * 1024L * 1024L,
+    val maximumXmlOrScriptBytes: Long = 4L * 1024L * 1024L,
+    val maximumFontBytes: Long = 64L * 1024L * 1024L,
+    val maximumImageBytes: Long = 64L * 1024L * 1024L,
+    val maximumMediaBytes: Long = 128L * 1024L * 1024L,
+    val maximumOtherFileBytes: Long = 64L * 1024L * 1024L,
+    val maximumExpandedBytes: Long = 256L * 1024L * 1024L,
     val maximumCompressionRatio: Double = 250.0,
-)
+) {
+    init {
+        require(maximumArchiveBytes > 0L)
+        require(maximumEntryCount > 0)
+        require(maximumEntryNameLength > 0)
+        require(maximumXmlOrScriptBytes > 0L)
+        require(maximumFontBytes > 0L)
+        require(maximumImageBytes > 0L)
+        require(maximumMediaBytes > 0L)
+        require(maximumOtherFileBytes > 0L)
+        require(maximumExpandedBytes > 0L)
+        require(maximumCompressionRatio > 0.0 && maximumCompressionRatio.isFinite())
+    }
+
+    fun maximumBytesFor(kind: WatchArchiveEntryKind): Long = when (kind) {
+        WatchArchiveEntryKind.XML_OR_SCRIPT -> maximumXmlOrScriptBytes
+        WatchArchiveEntryKind.FONT -> maximumFontBytes
+        WatchArchiveEntryKind.IMAGE -> maximumImageBytes
+        WatchArchiveEntryKind.MEDIA -> maximumMediaBytes
+        WatchArchiveEntryKind.OTHER -> maximumOtherFileBytes
+    }
+}
+
+enum class WatchArchiveEntryKind {
+    XML_OR_SCRIPT,
+    FONT,
+    IMAGE,
+    MEDIA,
+    OTHER,
+}
 
 enum class WatchArchiveFailureReason {
     ARCHIVE_NOT_FOUND,
@@ -34,7 +67,9 @@ enum class WatchArchiveFailureReason {
     SUSPICIOUS_COMPRESSION_RATIO,
     MISSING_WATCH_XML,
     AMBIGUOUS_WATCH_XML,
+    MISSING_PROTECTED_DEFINITION,
     INVALID_WATCH_XML,
+    INVALID_PROTECTED_ASSET,
     INSTALL_COLLISION,
     INSTALL_FAILED,
 }
@@ -51,12 +86,15 @@ data class WatchArchiveEntry(
     val directory: Boolean,
     val declaredSizeBytes: Long,
     val compressedSizeBytes: Long,
+    val kind: WatchArchiveEntryKind,
 )
 
 data class WatchArchiveManifest(
     val archiveSha256: String,
     val entries: List<WatchArchiveEntry>,
     val watchXmlEntry: WatchArchiveEntry,
+    val protectedDefinitionEntry: WatchArchiveEntry?,
+    val protected: Boolean,
     val previewEntry: WatchArchiveEntry?,
 )
 
@@ -67,7 +105,13 @@ data class InstalledWatchArchive(
     val watchXml: File,
     val preview: File?,
     val definition: WatchmakerDefinition,
+    val installedAtEpochMs: Long,
 )
+
+interface WatchPackageLoader {
+    fun inspect(source: File): WatchArchiveManifest
+    fun prepare(source: File, installRoot: File): InstalledWatchArchive
+}
 
 /**
  * Fail-closed validation for user- and store-supplied WatchMaker archives.
@@ -77,6 +121,7 @@ data class InstalledWatchArchive(
  */
 class WatchArchiveValidator(
     private val limits: WatchArchiveLimits = WatchArchiveLimits(),
+    private val parser: WatchmakerDefinitionParser = WatchmakerDefinitionParser(),
 ) {
     fun inspect(archive: File): WatchArchiveManifest {
         if (!archive.isFile) {
@@ -107,6 +152,12 @@ class WatchArchiveValidator(
                         )
                     }
                     val normalized = normalizeEntryName(entry.name, limits.maximumEntryNameLength)
+                    if (WatchInstallMetadata.isReservedArchivePath(normalized)) {
+                        throw WatchArchiveException(
+                            WatchArchiveFailureReason.INVALID_ENTRY_NAME,
+                            "Watch archive entry uses a reserved Flue metadata path",
+                        )
+                    }
                     // A directory entry and a file entry with the same logical
                     // path ("images/" versus "images") must collide as well.
                     // Letting them through makes extraction order-dependent.
@@ -133,7 +184,8 @@ class WatchArchiveValidator(
                         }
                         impliedDirectories += ancestor
                     }
-                    if (!entry.isDirectory) {
+                    val directory = entry.isDirectory || normalized.endsWith('/')
+                    if (!directory) {
                         if (collisionKey in impliedDirectories) {
                             throw WatchArchiveException(
                                 WatchArchiveFailureReason.DUPLICATE_ENTRY,
@@ -142,8 +194,9 @@ class WatchArchiveValidator(
                         }
                         fileEntries += collisionKey
                     }
-                    validateDeclaredSize(entry, normalized)
-                    if (!entry.isDirectory && entry.size >= 0L) {
+                    val kind = classifyEntry(normalized)
+                    validateDeclaredSize(entry, normalized, kind)
+                    if (!directory && entry.size >= 0L) {
                         declaredExpandedBytes = checkedAdd(declaredExpandedBytes, entry.size)
                         if (declaredExpandedBytes > limits.maximumExpandedBytes) {
                             throw WatchArchiveException(
@@ -155,9 +208,10 @@ class WatchArchiveValidator(
                     WatchArchiveEntry(
                         zipName = entry.name,
                         normalizedName = normalized,
-                        directory = entry.isDirectory,
+                        directory = directory,
                         declaredSizeBytes = entry.size,
                         compressedSizeBytes = entry.compressedSize,
+                        kind = kind,
                     )
                 }.toList()
             }
@@ -193,6 +247,7 @@ class WatchArchiveValidator(
             )
         }
         val watchParent = watchXml.normalizedName.substringBeforeLast('/', "")
+        val definitionInspection = inspectDefinition(archive, entries, watchXml, watchParent)
         val preview = entries.firstOrNull { entry ->
             if (entry.directory) return@firstOrNull false
             val parent = entry.normalizedName.substringBeforeLast('/', "")
@@ -204,16 +259,100 @@ class WatchArchiveValidator(
             archiveSha256 = sha256(archive),
             entries = entries,
             watchXmlEntry = watchXml,
+            protectedDefinitionEntry = definitionInspection.protectedDefinition,
+            protected = definitionInspection.protected,
             previewEntry = preview,
         )
     }
 
-    private fun validateDeclaredSize(entry: ZipEntry, normalizedName: String) {
+    private fun inspectDefinition(
+        archive: File,
+        entries: List<WatchArchiveEntry>,
+        watchXml: WatchArchiveEntry,
+        watchParent: String,
+    ): DefinitionInspection {
+        return try {
+            ZipFile(archive).use { zip ->
+                val shellEntry = zip.getEntry(watchXml.zipName)
+                    ?: throw WatchArchiveException(
+                        WatchArchiveFailureReason.INVALID_ZIP,
+                        "watch.xml disappeared while the archive was inspected",
+                    )
+                val shellDefinition = zip.getInputStream(shellEntry).use { input ->
+                    parser.parse(input, limits.maximumXmlOrScriptBytes)
+                }
+                val protected = shellDefinition.rootAttributes.valueForIgnoreCase("protection")
+                    .isWatchmakerProtectionEnabled()
+                if (!protected) return DefinitionInspection(false, null)
+
+                val localProtectedDefinitions = entries.filter { entry ->
+                    !entry.directory &&
+                        entry.normalizedName.substringBeforeLast('/', "") == watchParent &&
+                        entry.normalizedName.substringAfterLast('/')
+                            .equals(PROTECTED_XML_FILE_NAME, ignoreCase = true)
+                }
+                val allProtectedDefinitions = entries.filter { entry ->
+                        !entry.directory &&
+                            entry.normalizedName.substringAfterLast('/')
+                                .equals(PROTECTED_XML_FILE_NAME, ignoreCase = true)
+                    }
+                val protectedDefinition = when {
+                    localProtectedDefinitions.size == 1 -> localProtectedDefinitions.single()
+                    localProtectedDefinitions.size > 1 -> throw WatchArchiveException(
+                        WatchArchiveFailureReason.MISSING_PROTECTED_DEFINITION,
+                        "Protected .watch archive contains multiple watch.pxml files",
+                    )
+                    allProtectedDefinitions.size == 1 -> allProtectedDefinitions.single()
+                    allProtectedDefinitions.size > 1 -> throw WatchArchiveException(
+                        WatchArchiveFailureReason.MISSING_PROTECTED_DEFINITION,
+                        "Protected .watch archive contains multiple watch.pxml files",
+                    )
+                    shellDefinition.layers.isNotEmpty() -> return DefinitionInspection(false, null)
+                    else -> throw WatchArchiveException(
+                        WatchArchiveFailureReason.MISSING_PROTECTED_DEFINITION,
+                        "Protected .watch archive is missing watch.pxml",
+                    )
+                }
+                val zipEntry = zip.getEntry(protectedDefinition.zipName)
+                    ?: throw WatchArchiveException(
+                        WatchArchiveFailureReason.INVALID_ZIP,
+                        "watch.pxml disappeared while the archive was inspected",
+                    )
+                zip.getInputStream(zipEntry).use { input ->
+                    WatchmakerProtection.openDecodedXml(input).use { decoded ->
+                        parser.parse(decoded, limits.maximumXmlOrScriptBytes)
+                    }
+                }
+                DefinitionInspection(true, protectedDefinition)
+            }
+        } catch (error: WatchArchiveException) {
+            throw error
+        } catch (error: Exception) {
+            throw WatchArchiveException(
+                WatchArchiveFailureReason.INVALID_WATCH_XML,
+                "watch.xml could not be parsed: ${error.message ?: error.javaClass.simpleName}",
+                error,
+            )
+        }
+    }
+
+    private fun validateDeclaredSize(
+        entry: ZipEntry,
+        normalizedName: String,
+        kind: WatchArchiveEntryKind,
+    ) {
         if (entry.isDirectory) return
-        if (entry.size > limits.maximumSingleFileBytes) {
+        if (entry.size < -1L || entry.compressedSize < -1L) {
+            throw WatchArchiveException(
+                WatchArchiveFailureReason.INVALID_ZIP,
+                "Watch archive entry has an invalid size: $normalizedName",
+            )
+        }
+        val maximumBytes = limits.maximumBytesFor(kind)
+        if (entry.size > maximumBytes) {
             throw WatchArchiveException(
                 WatchArchiveFailureReason.ENTRY_TOO_LARGE,
-                "Watch archive entry is too large: $normalizedName",
+                "Watch archive ${kind.name.lowercase(Locale.ROOT)} entry is too large: $normalizedName",
             )
         }
         if (entry.size > 0L && entry.compressedSize == 0L) {
@@ -232,6 +371,11 @@ class WatchArchiveValidator(
             }
         }
     }
+
+    private data class DefinitionInspection(
+        val protected: Boolean,
+        val protectedDefinition: WatchArchiveEntry?,
+    )
 }
 
 /** Installs a validated archive into a content-addressed, immutable directory. */
@@ -239,10 +383,19 @@ class WatchArchiveInstaller(
     private val limits: WatchArchiveLimits = WatchArchiveLimits(),
     private val validator: WatchArchiveValidator = WatchArchiveValidator(limits),
     private val parser: WatchmakerDefinitionParser = WatchmakerDefinitionParser(),
-) {
+    private val nowEpochMillis: () -> Long = System::currentTimeMillis,
+) : WatchPackageLoader {
+    override fun inspect(source: File): WatchArchiveManifest = validator.inspect(source)
+
+    override fun prepare(source: File, installRoot: File): InstalledWatchArchive =
+        install(source, installRoot)
+
     fun install(archive: File, installRoot: File): InstalledWatchArchive {
         val manifest = validator.inspect(archive)
-        if (!installRoot.exists() && !installRoot.mkdirs()) {
+        // mkdirs() returns false when another installer won the race and
+        // created the root between exists() and mkdirs(). Only reject when
+        // the path still is not a directory after the race.
+        if (!installRoot.exists() && !installRoot.mkdirs() && !installRoot.isDirectory) {
             throw WatchArchiveException(
                 WatchArchiveFailureReason.INSTALL_FAILED,
                 "Unable to create the watch archive install directory",
@@ -256,76 +409,106 @@ class WatchArchiveInstaller(
         }
         val stableId = "watch_${manifest.archiveSha256.take(32)}"
         val target = File(installRoot, stableId)
-        if (target.exists()) return loadExisting(target, stableId, manifest.archiveSha256)
+        return WatchPackageTransactionMutex.withTarget(target) {
+            if (target.exists()) return@withTarget loadExisting(target, stableId, manifest.archiveSha256)
 
-        val staging = File(installRoot, ".install-${UUID.randomUUID()}")
-        if (!staging.mkdirs()) {
-            throw WatchArchiveException(
-                WatchArchiveFailureReason.INSTALL_FAILED,
-                "Unable to create watch archive staging directory",
-            )
-        }
-        try {
-            // The import URI is normally copied to an app-private temp file,
-            // but install(File, ...) is also a public seam. Recheck the
-            // content-address hash before and after extraction so a caller
-            // cannot swap the archive beneath the validator and install a
-            // payload under the wrong stable id.
-            if (sha256(archive) != manifest.archiveSha256) {
+            val staging = File(installRoot, ".install-${UUID.randomUUID()}")
+            if (!staging.mkdirs()) {
                 throw WatchArchiveException(
-                    WatchArchiveFailureReason.INVALID_ZIP,
-                    "Watch archive changed after validation",
+                    WatchArchiveFailureReason.INSTALL_FAILED,
+                    "Unable to create watch archive staging directory",
                 )
             }
-            extractValidated(archive, manifest, staging)
-            if (sha256(archive) != manifest.archiveSha256) {
-                throw WatchArchiveException(
-                    WatchArchiveFailureReason.INVALID_ZIP,
-                    "Watch archive changed during installation",
+            try {
+                // The import URI is normally copied to an app-private temp file,
+                // but install(File, ...) is also a public seam. Recheck the
+                // content-address hash before and after extraction so a caller
+                // cannot swap the archive beneath the validator and install a
+                // payload under the wrong stable id.
+                if (sha256(archive) != manifest.archiveSha256) {
+                    throw WatchArchiveException(
+                        WatchArchiveFailureReason.INVALID_ZIP,
+                        "Watch archive changed after validation",
+                    )
+                }
+                extractValidated(archive, manifest, staging)
+                if (sha256(archive) != manifest.archiveSha256) {
+                    throw WatchArchiveException(
+                        WatchArchiveFailureReason.INVALID_ZIP,
+                        "Watch archive changed during installation",
+                    )
+                }
+                val stagedWatchXml = prepareExtractedPackage(
+                    root = staging,
+                    watchXml = File(staging, manifest.watchXmlEntry.normalizedName),
+                    protectedDefinition = manifest.protectedDefinitionEntry?.let { entry ->
+                        File(staging, entry.normalizedName)
+                    },
+                    protected = manifest.protected,
                 )
-            }
-            val stagedWatchXml = File(staging, manifest.watchXmlEntry.normalizedName)
-            val definition = try {
-                parser.parse(stagedWatchXml)
+                val definition = try {
+                    parser.parse(stagedWatchXml)
+                } catch (error: Exception) {
+                    throw WatchArchiveException(
+                        WatchArchiveFailureReason.INVALID_WATCH_XML,
+                        "watch.xml could not be parsed: ${error.message ?: error.javaClass.simpleName}",
+                        error,
+                    )
+                }
+                val installedAtEpochMs = WatchInstallMetadata.readOrCreate(staging, nowEpochMillis())
+                // This is the durable commit point. A scan will only trust a
+                // marker written after every asset and the definition parsed.
+                WatchPreparedMarker.write(staging, stagedWatchXml)
+                // The mutex closes the normal check/move race. Keep the
+                // collision fallback for a package created by another process.
+                try {
+                    // Move the complete validated archive tree. Moving only the
+                    // watch.xml parent silently discarded shared assets when a
+                    // valid archive used a wrapper directory plus root-level resources.
+                    moveDirectory(staging, target)
+                } catch (error: java.nio.file.FileAlreadyExistsException) {
+                    if (target.isDirectory) {
+                        return@withTarget loadExisting(target, stableId, manifest.archiveSha256)
+                    }
+                    throw error
+                }
+                val installedWatchXml = File(target, manifest.watchXmlEntry.normalizedName)
+                    .takeIf(File::isFile)
+                    ?: throw WatchArchiveException(
+                        WatchArchiveFailureReason.INSTALL_FAILED,
+                        "Installed watch.xml is missing",
+                    )
+                val installedPreview = manifest.previewEntry?.let {
+                    File(target, it.normalizedName).takeIf(File::isFile)
+                }
+                return@withTarget InstalledWatchArchive(
+                    stableId = stableId,
+                    archiveSha256 = manifest.archiveSha256,
+                    rootDirectory = target,
+                    watchXml = installedWatchXml,
+                    preview = installedPreview,
+                    definition = definition,
+                    installedAtEpochMs = installedAtEpochMs,
+                )
+            } catch (error: WatchArchiveException) {
+                throw error
             } catch (error: Exception) {
                 throw WatchArchiveException(
-                    WatchArchiveFailureReason.INVALID_WATCH_XML,
-                    "watch.xml could not be parsed: ${error.message ?: error.javaClass.simpleName}",
+                    WatchArchiveFailureReason.INSTALL_FAILED,
+                    "Unable to install .watch archive",
                     error,
                 )
+            } finally {
+                if (staging.exists()) staging.deleteRecursively()
             }
-            if (target.exists()) return loadExisting(target, stableId, manifest.archiveSha256)
-            // Move the complete validated archive tree. Moving only the
-            // watch.xml parent silently discarded shared assets when a valid
-            // archive used a wrapper directory plus root-level resources.
-            moveDirectory(staging, target)
-            val installedWatchXml = File(target, manifest.watchXmlEntry.normalizedName)
-                .takeIf(File::isFile)
-                ?: throw WatchArchiveException(
-                    WatchArchiveFailureReason.INSTALL_FAILED,
-                    "Installed watch.xml is missing",
-                )
-            val installedPreview = manifest.previewEntry?.let {
-                File(target, it.normalizedName).takeIf(File::isFile)
-            }
-            return InstalledWatchArchive(
-                stableId = stableId,
-                archiveSha256 = manifest.archiveSha256,
-                rootDirectory = target,
-                watchXml = installedWatchXml,
-                preview = installedPreview,
-                definition = definition,
-            )
-        } catch (error: WatchArchiveException) {
-            throw error
-        } catch (error: Exception) {
-            throw WatchArchiveException(
-                WatchArchiveFailureReason.INSTALL_FAILED,
-                "Unable to install .watch archive",
-                error,
-            )
-        } finally {
-            if (staging.exists()) staging.deleteRecursively()
+        }
+    }
+
+    /** Repairs a package installed by a previous parser version and returns its real watch.xml. */
+    fun repairInstalledPackage(root: File): File {
+        require(root.isDirectory) { "Watch package directory does not exist" }
+        return WatchPackageTransactionMutex.withTarget(root) {
+            prepareExistingPackage(root)
         }
     }
 
@@ -334,14 +517,19 @@ class WatchArchiveInstaller(
         stableId: String,
         archiveSha256: String,
     ): InstalledWatchArchive {
-        val watchXml = target.walkTopDown().firstOrNull {
-            it.isFile && it.name.equals(WATCH_XML_FILE_NAME, ignoreCase = true)
-        } ?: throw WatchArchiveException(
-            WatchArchiveFailureReason.INSTALL_COLLISION,
-            "The content-addressed watch directory is incomplete",
-        )
+        val legacyInstalledAt = target.lastModified().takeIf { it > 0L } ?: nowEpochMillis()
+        val installedAtEpochMs = WatchInstallMetadata.readOrCreate(target, legacyInstalledAt)
+        val preparedWatchXml = try {
+            prepareExistingPackage(target)
+        } catch (error: Exception) {
+            throw WatchArchiveException(
+                WatchArchiveFailureReason.INSTALL_COLLISION,
+                "The existing protected watch package could not be repaired",
+                error,
+            )
+        }
         val definition = try {
-            parser.parse(watchXml)
+            parser.parse(preparedWatchXml)
         } catch (error: Exception) {
             throw WatchArchiveException(
                 WatchArchiveFailureReason.INSTALL_COLLISION,
@@ -349,14 +537,15 @@ class WatchArchiveInstaller(
                 error,
             )
         }
-        val preview = File(watchXml.parentFile, PREVIEW_FILE_NAME).takeIf(File::isFile)
+        val preview = File(preparedWatchXml.parentFile, PREVIEW_FILE_NAME).takeIf(File::isFile)
         return InstalledWatchArchive(
             stableId = stableId,
             archiveSha256 = archiveSha256,
             rootDirectory = target,
-            watchXml = watchXml,
+            watchXml = preparedWatchXml,
             preview = preview,
             definition = definition,
+            installedAtEpochMs = installedAtEpochMs,
         )
     }
 
@@ -420,10 +609,10 @@ class WatchArchiveInstaller(
                                 if (count < 0) break
                                 fileBytes = checkedAdd(fileBytes, count.toLong())
                                 expandedBytes = checkedAdd(expandedBytes, count.toLong())
-                                if (fileBytes > limits.maximumSingleFileBytes) {
+                                if (fileBytes > limits.maximumBytesFor(validated.kind)) {
                                     throw WatchArchiveException(
                                         WatchArchiveFailureReason.ENTRY_TOO_LARGE,
-                                        "Expanded archive entry exceeds the file budget",
+                                        "Expanded ${validated.kind.name.lowercase(Locale.ROOT)} entry exceeds its file budget",
                                     )
                                 }
                                 if (expandedBytes > limits.maximumExpandedBytes) {
@@ -444,6 +633,159 @@ class WatchArchiveInstaller(
                 WatchArchiveFailureReason.INVALID_ZIP,
                 "Archive entries changed while it was being installed",
             )
+        }
+    }
+
+    /**
+     * Converts a protected package in the staging tree before it becomes
+     * visible under its content-addressed install id. Every decoded XML is
+     * parsed through the same secure parser before the shell is replaced.
+     */
+    private fun prepareExtractedPackage(
+        root: File,
+        watchXml: File,
+        protectedDefinition: File?,
+        protected: Boolean,
+    ): File {
+        require(watchXml.isFile) { "Extracted watch.xml is missing" }
+        if (protected) {
+            val pxml = protectedDefinition
+                ?: throw WatchArchiveException(
+                    WatchArchiveFailureReason.MISSING_PROTECTED_DEFINITION,
+                    "Protected .watch archive is missing watch.pxml",
+                )
+            if (!pxml.isFile) {
+                throw WatchArchiveException(
+                    WatchArchiveFailureReason.MISSING_PROTECTED_DEFINITION,
+                    "Extracted watch.pxml is missing",
+                )
+            }
+            val decoded = File(watchXml.parentFile, ".watch.xml.decoded-${UUID.randomUUID()}")
+            try {
+                WatchmakerProtection.decodeXmlToFile(
+                    source = pxml,
+                    destination = decoded,
+                    maximumDecodedBytes = limits.maximumXmlOrScriptBytes,
+                )
+                try {
+                    parser.parse(decoded)
+                } catch (error: Exception) {
+                    throw WatchArchiveException(
+                        WatchArchiveFailureReason.INVALID_WATCH_XML,
+                        "Decoded watch.pxml could not be parsed: ${error.message ?: error.javaClass.simpleName}",
+                        error,
+                    )
+                }
+                replaceFile(decoded, watchXml)
+            } finally {
+                if (decoded.exists()) decoded.delete()
+            }
+        }
+        decodeProtectedAssets(root)
+        return watchXml
+    }
+
+    /** Repairs packages installed by the old parser (shell watch.xml + pxml). */
+    private fun prepareExistingPackage(root: File): File {
+        // A current marker is the only hot-path lookup. Do not walk the
+        // package or inspect every protected image on each launcher scan.
+        WatchPreparedMarker.read(root)?.let { return it }
+
+        val watchXmlCandidates = root.walkTopDown()
+            .filter { it.isFile && it.name.equals(WATCH_XML_FILE_NAME, ignoreCase = true) }
+            .toList()
+        val watchXml = when (watchXmlCandidates.size) {
+            0 -> throw WatchArchiveException(
+                WatchArchiveFailureReason.MISSING_WATCH_XML,
+                "Installed watch package is missing watch.xml",
+            )
+            1 -> watchXmlCandidates.single()
+            else -> throw WatchArchiveException(
+                WatchArchiveFailureReason.AMBIGUOUS_WATCH_XML,
+                "Installed watch package contains multiple watch.xml files",
+            )
+        }
+        val shell = runCatching { parser.parse(watchXml) }.getOrElse { error ->
+            throw error
+        }
+        // A current package has a marker and returned above. A unique pxml is
+        // authoritative even when the shell contains placeholder layers. Some
+        // already-decoded legacy definitions retain protection="y" after the
+        // pxml was removed, so populated XML without pxml remains valid.
+        val protectionDeclared = shell.rootAttributes.valueForIgnoreCase("protection")
+            .isWatchmakerProtectionEnabled()
+        val pxml = if (protectionDeclared) {
+            val local = watchXml.parentFile?.listFiles().orEmpty()
+                .filter { it.isFile && it.name.equals(PROTECTED_XML_FILE_NAME, true) }
+            val all = root.walkTopDown()
+                    .filter { it.isFile && it.name.equals(PROTECTED_XML_FILE_NAME, true) }
+                    .toList()
+            when {
+                local.size == 1 -> local.single()
+                local.size > 1 -> throw WatchArchiveException(
+                    WatchArchiveFailureReason.MISSING_PROTECTED_DEFINITION,
+                    "Installed protected package contains multiple watch.pxml files",
+                )
+                all.size == 1 -> all.single()
+                all.size > 1 -> throw WatchArchiveException(
+                    WatchArchiveFailureReason.MISSING_PROTECTED_DEFINITION,
+                    "Installed protected package contains multiple watch.pxml files",
+                )
+                shell.layers.isNotEmpty() -> null
+                else -> throw WatchArchiveException(
+                    WatchArchiveFailureReason.MISSING_PROTECTED_DEFINITION,
+                    "Installed protected package is missing watch.pxml",
+                )
+            }
+        } else {
+            null
+        }
+        val protected = pxml != null
+        val prepared = prepareExtractedPackage(root, watchXml, pxml, protected)
+        // Parse once more after replacement and only then publish the marker;
+        // a crash before this point leaves a repairable legacy package.
+        try {
+            parser.parse(prepared)
+        } catch (error: Exception) {
+            throw WatchArchiveException(
+                WatchArchiveFailureReason.INVALID_WATCH_XML,
+                "Prepared watch.xml could not be parsed: ${error.message ?: error.javaClass.simpleName}",
+                error,
+            )
+        }
+        WatchPreparedMarker.write(root, prepared)
+        return prepared
+    }
+
+    private fun decodeProtectedAssets(root: File) {
+        root.walkTopDown().filter(File::isFile).forEach { file ->
+            val extension = file.extension.lowercase(Locale.ROOT)
+            if (extension != "ppng" && extension != "pjpg" && extension != "pjpeg") return@forEach
+            try {
+                WatchmakerProtection.decodeProtectedAssetInPlace(
+                    file,
+                    limits.maximumBytesFor(WatchArchiveEntryKind.IMAGE),
+                )
+            } catch (error: Exception) {
+                throw WatchArchiveException(
+                    WatchArchiveFailureReason.INVALID_PROTECTED_ASSET,
+                    "Protected image could not be decoded: ${file.name}",
+                    error,
+                )
+            }
+        }
+    }
+
+    private fun replaceFile(source: File, target: File) {
+        try {
+            Files.move(
+                source.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(source.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
         }
     }
 
@@ -499,6 +841,33 @@ private fun checkedAdd(left: Long, right: Long): Long {
     return left + right
 }
 
+private fun classifyEntry(normalizedName: String): WatchArchiveEntryKind {
+    val path = normalizedName.trimEnd('/').lowercase(Locale.ROOT)
+    val extension = path.substringAfterLast('.', "")
+    return when {
+        path.startsWith("scripts/") ||
+            extension in setOf("xml", "pxml", "lua", "js", "json") ->
+            WatchArchiveEntryKind.XML_OR_SCRIPT
+        path.startsWith("fonts/") || extension in setOf("ttf", "otf", "ttc") ->
+            WatchArchiveEntryKind.FONT
+        path.startsWith("images/") ||
+            extension in setOf("png", "ppng", "jpg", "jpeg", "pjpg", "pjpeg", "gif", "webp", "bmp", "svg") ->
+            WatchArchiveEntryKind.IMAGE
+        path.startsWith("sfx/") || path.startsWith("media/") || path.startsWith("video/") ||
+            extension in setOf("mp3", "wav", "ogg", "m4a", "aac", "flac", "mp4", "webm") ->
+            WatchArchiveEntryKind.MEDIA
+        else -> WatchArchiveEntryKind.OTHER
+    }
+}
+
+private fun String?.isWatchmakerProtectionEnabled(): Boolean = when (this?.trim()?.lowercase(Locale.ROOT)) {
+    "y", "yes", "true", "1" -> true
+    else -> false
+}
+
+private fun Map<String, String>.valueForIgnoreCase(name: String): String? =
+    entries.firstOrNull { (key, _) -> key.equals(name, ignoreCase = true) }?.value
+
 private fun sha256(file: File): String {
     val digest = MessageDigest.getInstance("SHA-256")
     file.inputStream().buffered().use { input ->
@@ -514,4 +883,5 @@ private fun sha256(file: File): String {
 
 private val DRIVE_PREFIX = Regex("^[A-Za-z]:.*")
 private const val WATCH_XML_FILE_NAME = "watch.xml"
+private const val PROTECTED_XML_FILE_NAME = "watch.pxml"
 private const val PREVIEW_FILE_NAME = "preview.jpg"

@@ -27,6 +27,16 @@ data class StoredAppListFolder(
     val componentKey: String = "folder:$id"
 }
 
+data class FolderMutationResult(
+    val succeeded: Boolean,
+    val itemKeys: List<String> = emptyList(),
+    val dissolvedFolders: Map<String, List<String>> = emptyMap(),
+) {
+    companion object {
+        val Failure = FolderMutationResult(succeeded = false)
+    }
+}
+
 class AppListItemStorage(private val context: Context) {
     private val prefs = context.getSharedPreferences("app_list_items", Context.MODE_PRIVATE)
     private val iconDir = File(context.filesDir, "app_list_shortcut_icons").apply { mkdirs() }
@@ -125,30 +135,36 @@ class AppListItemStorage(private val context: Context) {
         return shortcut
     }
 
-    @Synchronized
     fun removeShortcut(componentKey: String): Boolean {
-        val id = componentKey.removePrefix("shortcut:")
-        val shortcuts = loadShortcuts().toMutableList()
-        val removed = shortcuts.removeAll { it.id == id }
-        if (removed) {
-            saveShortcuts(shortcuts)
-            File(iconDir, "$id.png").delete()
-            val folders = loadFolders().mapNotNull { folder ->
-                val nextKeys = folder.itemKeys.filterNot { it == componentKey }
-                when {
-                    nextKeys.isEmpty() -> null
-                    nextKeys == folder.itemKeys -> folder
-                    else -> folder.copy(itemKeys = nextKeys)
+        return synchronized(folderMutationLock) {
+            val id = componentKey.removePrefix("shortcut:")
+            val shortcuts = loadShortcuts().toMutableList()
+            val removed = shortcuts.removeAll { it.id == id }
+            if (removed) {
+                saveShortcuts(shortcuts)
+                File(iconDir, "$id.png").delete()
+                val folders = loadFolders().mapNotNull { folder ->
+                    val nextKeys = folder.itemKeys.filterNot { it == componentKey }
+                    when {
+                        nextKeys.isEmpty() -> null
+                        nextKeys == folder.itemKeys -> folder
+                        else -> folder.copy(itemKeys = nextKeys)
+                    }
                 }
+                saveFolders(folders)
             }
-            saveFolders(folders)
+            removed
         }
-        return removed
     }
 
-    @Synchronized
-    fun createFolder(sourceKey: String, targetKey: String, targetName: String): StoredAppListFolder? {
-        if (sourceKey == targetKey) return null
+    fun createFolder(
+        sourceKey: String,
+        targetKey: String,
+        targetName: String,
+    ): StoredAppListFolder? = synchronized(folderMutationLock) {
+        if (sourceKey == targetKey || sourceKey.isBlank() || targetKey.isBlank()) {
+            return@synchronized null
+        }
         val folders = loadFolders().toMutableList()
         val sourceFolderIndex = folders.indexOfFirst { it.componentKey == sourceKey }
         val targetFolderIndex = folders.indexOfFirst { it.componentKey == targetKey }
@@ -162,7 +178,7 @@ class AppListItemStorage(private val context: Context) {
                 folders.removeAt(sourceFolderIndex)
             }
             saveFolders(folders)
-            return folders.firstOrNull { it.componentKey == targetFolder.componentKey }
+            return@synchronized folders.firstOrNull { it.componentKey == targetFolder.componentKey }
         }
 
         if (sourceFolderIndex >= 0) {
@@ -171,7 +187,7 @@ class AppListItemStorage(private val context: Context) {
                 itemKeys = (folder.itemKeys + targetKey).distinct()
             )
             saveFolders(folders)
-            return folders[sourceFolderIndex]
+            return@synchronized folders[sourceFolderIndex]
         }
 
         val folder = StoredAppListFolder(
@@ -181,71 +197,105 @@ class AppListItemStorage(private val context: Context) {
         )
         folders += folder
         saveFolders(folders)
-        return folder
+        folder
     }
 
-    @Synchronized
-    fun renameFolder(folderKey: String, name: String): Boolean {
+    fun renameFolder(folderKey: String, name: String): Boolean = synchronized(folderMutationLock) {
         val folders = loadFolders().toMutableList()
         val index = folders.indexOfFirst { it.componentKey == folderKey }
-        if (index < 0) return false
+        if (index < 0) return@synchronized false
         folders[index] = folders[index].copy(name = name.ifBlank { "文件夹" })
         saveFolders(folders)
-        return true
+        true
     }
 
-    @Synchronized
-    fun dissolveFolder(folderKey: String): List<String> {
+    fun dissolveFolder(folderKey: String): List<String> = synchronized(folderMutationLock) {
         val folders = loadFolders().toMutableList()
         val index = folders.indexOfFirst { it.componentKey == folderKey }
-        if (index < 0) return emptyList()
+        if (index < 0) return@synchronized emptyList()
         val keys = folders.removeAt(index).itemKeys
         saveFolders(folders)
-        return keys
+        keys
     }
 
-    @Synchronized
-    fun moveItemOutOfFolder(folderKey: String, itemKey: String): List<String> {
+    fun moveItemOutOfFolder(
+        folderKey: String,
+        itemKey: String,
+    ): FolderMutationResult = synchronized(folderMutationLock) {
         val folders = loadFolders().toMutableList()
         val index = folders.indexOfFirst { it.componentKey == folderKey }
-        if (index < 0) return emptyList()
+        if (index < 0) return@synchronized FolderMutationResult.Failure
         val folder = folders[index]
+        if (itemKey !in folder.itemKeys) return@synchronized FolderMutationResult.Failure
         val nextKeys = folder.itemKeys.filterNot { it == itemKey }
         if (nextKeys.size <= 1) {
             folders.removeAt(index)
             saveFolders(folders)
-            return nextKeys
+            return@synchronized FolderMutationResult(
+                succeeded = true,
+                itemKeys = nextKeys,
+            )
         }
         folders[index] = folder.copy(itemKeys = nextKeys)
         saveFolders(folders)
-        return nextKeys
+        FolderMutationResult(succeeded = true, itemKeys = nextKeys)
     }
 
-    @Synchronized
-    fun addItemsToFolder(folderKey: String, itemKeys: List<String>): List<String> {
+    fun addItemsToFolder(
+        folderKey: String,
+        itemKeys: List<String>,
+    ): FolderMutationResult = synchronized(folderMutationLock) {
         val folders = loadFolders().toMutableList()
         val index = folders.indexOfFirst { it.componentKey == folderKey }
-        if (index < 0) return emptyList()
+        if (index < 0) return@synchronized FolderMutationResult.Failure
         val folder = folders[index]
         val additions = itemKeys
             .filter { key -> key != folderKey && key !in folder.itemKeys }
             .distinct()
-        if (additions.isEmpty()) return folder.itemKeys
+        if (additions.isEmpty()) {
+            return@synchronized FolderMutationResult(
+                succeeded = true,
+                itemKeys = folder.itemKeys,
+            )
+        }
         val nextKeys = folder.itemKeys + additions
-        folders[index] = folder.copy(itemKeys = nextKeys)
-        saveFolders(folders)
-        return nextKeys
+        val additionSet = additions.toSet()
+        val dissolved = linkedMapOf<String, List<String>>()
+        val nextFolders = folders.mapIndexedNotNull { folderIndex, candidate ->
+            if (folderIndex == index) {
+                candidate.copy(itemKeys = nextKeys)
+            } else {
+                val keptKeys = candidate.itemKeys.filterNot(additionSet::contains)
+                when {
+                    keptKeys == candidate.itemKeys -> candidate
+                    keptKeys.size <= 1 -> {
+                        dissolved[candidate.componentKey] = keptKeys
+                        null
+                    }
+                    else -> candidate.copy(itemKeys = keptKeys)
+                }
+            }
+        }
+        saveFolders(nextFolders)
+        FolderMutationResult(
+            succeeded = true,
+            itemKeys = nextKeys,
+            dissolvedFolders = dissolved,
+        )
     }
 
-    @Synchronized
-    fun setFolderItems(folderKey: String, itemKeys: List<String>): List<String> {
+    fun setFolderItems(
+        folderKey: String,
+        itemKeys: List<String>,
+    ): FolderMutationResult = synchronized(folderMutationLock) {
         val folders = loadFolders().toMutableList()
         val index = folders.indexOfFirst { it.componentKey == folderKey }
-        if (index < 0) return emptyList()
+        if (index < 0) return@synchronized FolderMutationResult.Failure
         val nextKeys = itemKeys
             .filter { key -> key != folderKey }
             .distinct()
         val selectedKeySet = nextKeys.toSet()
+        val dissolved = linkedMapOf<String, List<String>>()
         val nextFolders = folders.mapIndexedNotNull { folderIndex, candidate ->
             if (folderIndex == index) {
                 if (nextKeys.size <= 1) null else candidate.copy(itemKeys = nextKeys)
@@ -253,30 +303,44 @@ class AppListItemStorage(private val context: Context) {
                 val keptKeys = candidate.itemKeys.filterNot { it in selectedKeySet }
                 when {
                     keptKeys == candidate.itemKeys -> candidate
-                    keptKeys.size <= 1 -> null
+                    keptKeys.size <= 1 -> {
+                        dissolved[candidate.componentKey] = keptKeys
+                        null
+                    }
                     else -> candidate.copy(itemKeys = keptKeys)
                 }
             }
         }
         saveFolders(nextFolders)
-        return nextKeys
+        FolderMutationResult(
+            succeeded = true,
+            itemKeys = nextKeys,
+            dissolvedFolders = dissolved,
+        )
     }
 
-    @Synchronized
-    fun reorderFolderItems(folderKey: String, orderedKeys: List<String>): List<String> {
+    fun reorderFolderItems(
+        folderKey: String,
+        orderedKeys: List<String>,
+    ): FolderMutationResult = synchronized(folderMutationLock) {
         val folders = loadFolders().toMutableList()
         val index = folders.indexOfFirst { it.componentKey == folderKey }
-        if (index < 0) return emptyList()
+        if (index < 0) return@synchronized FolderMutationResult.Failure
         val folder = folders[index]
         val existing = folder.itemKeys
         val nextKeys = (
             orderedKeys.filter { it in existing } +
                 existing.filterNot { it in orderedKeys }
             ).distinct()
-        if (nextKeys == existing) return existing
+        if (nextKeys == existing) {
+            return@synchronized FolderMutationResult(
+                succeeded = true,
+                itemKeys = existing,
+            )
+        }
         folders[index] = folder.copy(itemKeys = nextKeys)
         saveFolders(folders)
-        return nextKeys
+        FolderMutationResult(succeeded = true, itemKeys = nextKeys)
     }
 
     fun loadShortcutIcon(path: String?): Bitmap? {
@@ -308,11 +372,17 @@ class AppListItemStorage(private val context: Context) {
                 put("itemKeys", JSONArray(folder.itemKeys))
             })
         }
-        prefs.edit().putString(KEY_FOLDERS, array.toString()).apply()
+        // Folder mutations are user-visible structural operations. Commit the
+        // tiny JSON record before returning so a second repository instance (or
+        // an immediate process restart) cannot observe a stale folder graph.
+        check(prefs.edit().putString(KEY_FOLDERS, array.toString()).commit()) {
+            "Unable to persist app-list folders"
+        }
     }
 
     private companion object {
         private const val KEY_SHORTCUTS = "shortcuts"
         private const val KEY_FOLDERS = "folders"
+        private val folderMutationLock = Any()
     }
 }

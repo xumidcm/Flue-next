@@ -63,6 +63,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
+import com.flue.launcher.ui.common.flueElasticNestedScroll
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchColors
@@ -212,7 +213,9 @@ private fun BuiltInFileManagerScreen(
         } else {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .flueElasticNestedScroll(listState),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(mediaList!!, key = { it.uri.toString() }) { item ->

@@ -33,7 +33,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.animateColorAsState
@@ -60,18 +59,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.home.BuiltInWatchFacePreview
 import com.flue.launcher.ui.home.FIXED_PREVIEW_CLOCK
+import com.flue.launcher.ui.common.flueElasticNestedScroll
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.theme.LauncherTheme
@@ -329,43 +324,6 @@ private fun InternalWatchFaceConfigScreen(
     val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
-    val overscroll = remember { Animatable(0f) }
-    val nestedScrollConnection = remember(scrollState) {
-        object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (source != NestedScrollSource.UserInput) return Offset.Zero
-                val atTop = scrollState.value == 0
-                val atBottom = scrollState.maxValue > 0 && scrollState.value >= scrollState.maxValue
-                when {
-                    available.y > 0f && atTop -> {
-                        scope.launch { overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtMost(140f)) }
-                        return Offset(0f, available.y)
-                    }
-                    available.y < 0f && atBottom -> {
-                        scope.launch { overscroll.snapTo((overscroll.value + available.y * 0.35f).coerceAtLeast(-140f)) }
-                        return Offset(0f, available.y)
-                    }
-                    overscroll.value > 0f && available.y < 0f -> {
-                        scope.launch { overscroll.snapTo((overscroll.value + available.y).coerceAtLeast(0f)) }
-                        return Offset(0f, available.y)
-                    }
-                    overscroll.value < 0f && available.y > 0f -> {
-                        scope.launch { overscroll.snapTo((overscroll.value + available.y).coerceAtMost(0f)) }
-                        return Offset(0f, available.y)
-                    }
-                }
-                return Offset.Zero
-            }
-
-            override suspend fun onPreFling(available: Velocity): Velocity {
-                if (overscroll.value != 0f) {
-                    overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-                    return available
-                }
-                return Velocity.Zero
-            }
-        }
-    }
 
     LaunchedEffect(Unit) {
         focusRequester.requestFocusAfterFirstFrame()
@@ -378,8 +336,7 @@ private fun InternalWatchFaceConfigScreen(
                 .flueRotaryScrollable(focusRequester, 0.9f) { rotaryDelta ->
                     scope.launch { scrollState.scrollBy(-rotaryDelta) }
                 }
-                .nestedScroll(nestedScrollConnection)
-                .graphicsLayer { translationY = overscroll.value }
+                .flueElasticNestedScroll(scrollState)
                 .verticalScroll(scrollState)
                 .padding(horizontal = 18.dp, vertical = 22.dp),
             horizontalAlignment = Alignment.CenterHorizontally

@@ -58,11 +58,37 @@ internal object WatchStoreUrlPolicy {
             throw WatchStoreRedirectException("Redirect Location is malformed")
         }
         try {
-            requireSafeHttps(target, "redirect URL")
+            requirePublicHttps(target, label = "redirect URL")
         } catch (error: IllegalArgumentException) {
             throw WatchStoreRedirectException(error.message ?: "Redirect URL is unsafe")
         }
         return target
+    }
+
+    /**
+     * Resolve immediately before opening the socket. Every returned address
+     * must be publicly routable; a mixed public/private DNS response is
+     * rejected instead of giving the connector a chance to choose the private
+     * answer.
+     */
+    internal fun requirePublicHttps(
+        uri: URI,
+        label: String = "request URL",
+        resolver: (String) -> Array<InetAddress> = InetAddress::getAllByName,
+    ) {
+        requireSafeHttps(uri, label)
+        val host = uri.host ?: throw IllegalArgumentException("Watch store $label has no host")
+        val addresses = try {
+            resolver(host)
+        } catch (error: Exception) {
+            throw IllegalArgumentException("Watch store $label host cannot be resolved", error)
+        }
+        if (addresses.isEmpty()) {
+            throw IllegalArgumentException("Watch store $label host cannot be resolved")
+        }
+        if (addresses.any(::isNonPublicAddress)) {
+            throw IllegalArgumentException("Watch store $label cannot target a local or private address")
+        }
     }
 
     fun requireId(id: String): String {
@@ -94,36 +120,59 @@ internal object WatchStoreUrlPolicy {
         if (uri.port == 0 || uri.port > 65_535 || uri.port < -1) {
             throw IllegalArgumentException("Watch store $label has an invalid port")
         }
-        if (isLocalAddress(uri.host)) {
+        if (isForbiddenLiteral(uri.host)) {
             throw IllegalArgumentException("Watch store $label cannot target a local address")
         }
     }
 
-    private fun isLocalAddress(rawHost: String): Boolean {
+    private fun isForbiddenLiteral(rawHost: String): Boolean {
         val host = rawHost.trim('[', ']').lowercase(Locale.ROOT)
         if (host == "localhost" || host.endsWith(".localhost")) return true
-        if (':' in host) {
-            // This also unwraps IPv4-mapped IPv6 literals, preventing private,
-            // loopback, link-local and multicast redirects from using an
-            // alternate textual spelling to bypass the SSRF boundary.
-            return runCatching {
-                val address = InetAddress.getByName(host)
-                address.isAnyLocalAddress ||
-                    address.isLoopbackAddress ||
-                    address.isLinkLocalAddress ||
-                    address.isSiteLocalAddress ||
-                    address.isMulticastAddress
-            }.getOrDefault(true)
+        val looksNumeric = ':' in host ||
+            host.matches(Regex("^(?:0x)?[0-9a-f.]+$", RegexOption.IGNORE_CASE))
+        if (!looksNumeric) return false
+        return runCatching { InetAddress.getByName(host) }
+            .map(::isNonPublicAddress)
+            .getOrDefault(true)
+    }
+
+    private fun isNonPublicAddress(address: InetAddress): Boolean {
+        if (
+            address.isAnyLocalAddress ||
+            address.isLoopbackAddress ||
+            address.isLinkLocalAddress ||
+            address.isSiteLocalAddress ||
+            address.isMulticastAddress
+        ) {
+            return true
         }
-        val octets = host.split('.').map { it.toIntOrNull() }
-        if (octets.size != 4 || octets.any { it == null || it !in 0..255 }) return false
-        val first = octets[0]!!
-        val second = octets[1]!!
-        return first == 0 || first == 10 || first == 127 ||
-            (first == 100 && second in 64..127) ||
-            (first == 169 && second == 254) ||
-            (first == 172 && second in 16..31) ||
-            (first == 192 && second == 168) || first >= 224
+        val bytes = address.address
+        if (bytes.size == 4) {
+            val first = bytes[0].toInt() and 0xff
+            val second = bytes[1].toInt() and 0xff
+            val third = bytes[2].toInt() and 0xff
+            return first == 0 || first == 10 || first == 127 ||
+                (first == 100 && second in 64..127) ||
+                (first == 169 && second == 254) ||
+                (first == 172 && second in 16..31) ||
+                (first == 192 && second == 168) ||
+                (first == 192 && second == 0 && third == 0) ||
+                (first == 192 && second == 0 && third == 2) ||
+                (first == 198 && second in 18..19) ||
+                (first == 198 && second == 51 && third == 100) ||
+                (first == 203 && second == 0 && third == 113) ||
+                first >= 224
+        }
+        if (bytes.size == 16) {
+            val first = bytes[0].toInt() and 0xff
+            val second = bytes[1].toInt() and 0xff
+            // fc00::/7 unique-local and 2001:db8::/32 documentation ranges.
+            return first and 0xfe == 0xfc ||
+                (first == 0x20 && second == 0x01 &&
+                    (bytes[2].toInt() and 0xff) == 0x0d &&
+                    (bytes[3].toInt() and 0xff) == 0xb8)
+        }
+        return true
     }
 
     private fun encode(value: String): String =

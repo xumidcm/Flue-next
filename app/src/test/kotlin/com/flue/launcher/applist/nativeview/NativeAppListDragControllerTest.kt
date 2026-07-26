@@ -45,6 +45,25 @@ class NativeAppListDragControllerTest {
             host.commands.last(),
         )
         assertEquals(1, host.commands.count { it is AppListCommand.Move })
+        assertEquals(listOf(true), host.completePreviewCalls)
+    }
+
+    @Test
+    fun `failed preview acquisition cancels before creating a drag overlay`() {
+        val host = FakeDragHost().apply { previewBeginAllowed = false }
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+
+        controller.onDown(10f, 100f, 0L)
+        scheduler.advanceTo(620L)
+        val consumed = controller.onMove(10f, 121f, 621L)
+
+        assertFalse(consumed)
+        assertFalse(controller.isActive)
+        assertFalse(controller.isDragging)
+        assertEquals(0, host.beginDragCount)
+        assertEquals(null, host.draggingKey)
+        assertEquals(listOf(false), host.finishPreviewCalls)
     }
 
     @Test
@@ -77,16 +96,16 @@ class NativeAppListDragControllerTest {
         startDrag(controller, scheduler)
 
         host.hitKey = key("b")
-        controller.onMove(10f, 150f, 700L)
+        controller.onMove(10f, 150f, 630L)
         host.hitKey = key("d")
-        controller.onMove(10f, 220f, 710L)
+        controller.onMove(10f, 220f, 640L)
         host.hitKey = key("c")
-        controller.onMove(10f, 180f, 720L)
+        controller.onMove(10f, 180f, 650L)
 
         assertEquals(3, host.previewMoveCount)
         assertFalse(host.commands.any { it is AppListCommand.Move })
 
-        controller.onUp(10f, 150f, 721L)
+        controller.onUp(10f, 150f, 651L)
 
         assertEquals(
             listOf(AppListCommand.Move(key("a"), beforeKey = key("c"))),
@@ -111,6 +130,28 @@ class NativeAppListDragControllerTest {
         assertFalse(scheduler.hasFrame)
         assertEquals(null, host.draggingKey)
         assertFalse(host.longClickSuppressed)
+    }
+
+    @Test
+    fun `drag auto scroll distance is stable across different frame intervals`() {
+        fun scrollDistance(frameTimes: List<Long>): Float {
+            val host = FakeDragHost().apply { hitKey = key("a") }
+            val scheduler = FakeDragScheduler()
+            val controller = NativeAppListDragController(host, scheduler, policy)
+            startDrag(controller, scheduler)
+            controller.onMove(10f, 398f, 700L)
+            frameTimes.forEach { frameTime ->
+                scheduler.advanceTo(frameTime)
+                scheduler.runFrame()
+            }
+            controller.onCancel()
+            return host.scrollDeltas.sum()
+        }
+
+        val oneSixtyHertzFrame = scrollDistance(listOf(716L))
+        val twoOneTwentyHertzFrames = scrollDistance(listOf(708L, 716L))
+
+        assertEquals(oneSixtyHertzFrame, twoOneTwentyHertzFrames, 0.01f)
     }
 
     @Test
@@ -166,6 +207,179 @@ class NativeAppListDragControllerTest {
         controller.onUp(10f, 151f, 1201L)
         assertFalse(host.commands.any { it is AppListCommand.CreateFolder })
         assertEquals(null, host.folderHoverKey)
+    }
+
+    @Test
+    fun `stationary icon center dwell arms folder without another move event`() {
+        val host = FakeDragHost()
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+        startDrag(controller, scheduler)
+
+        host.hitKey = key("b")
+        controller.onMove(10f, 150f, 700L)
+        scheduler.advanceTo(1_199L)
+        assertEquals(null, host.folderHoverKey)
+
+        scheduler.advanceTo(1_200L)
+        assertEquals(key("b"), host.folderHoverKey)
+        controller.onUp(10f, 150f, 1_201L)
+
+        assertEquals(
+            listOf(AppListCommand.CreateFolder(key("a"), key("b"))),
+            structuralCommands(host),
+        )
+        assertEquals(key("a") to key("b"), host.folderCommitPreview)
+        assertEquals(1, host.discardWithoutRestoreCount)
+        assertTrue(host.finishPreviewCalls.isEmpty())
+    }
+
+    @Test
+    fun `starting folder dwell does not cancel pending long press`() {
+        val host = FakeDragHost()
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+
+        controller.onDown(10f, 100f, 0L)
+        host.hitKey = key("b")
+        controller.onMove(10f, 101f, 100L)
+
+        scheduler.advanceTo(policy.longPressMillis)
+
+        assertTrue(host.commands.any { it is AppListCommand.ShowActions })
+    }
+
+    @Test
+    fun `release before hover callback does not synthesize a folder dwell`() {
+        val host = FakeDragHost()
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+        startDrag(controller, scheduler)
+
+        host.hitKey = key("b")
+        controller.onMove(10f, 150f, 700L)
+        controller.onUp(10f, 150f, 1_200L)
+
+        assertEquals(
+            listOf(AppListCommand.Move(key("a"), beforeKey = key("c"))),
+            structuralCommands(host),
+        )
+        assertFalse(scheduler.hasDelayed)
+    }
+
+    @Test
+    fun `all native presentations create folders with their frozen drag policy`() {
+        val profiles = NativeDragPolicyProfiles(density = 1f)
+        listOf(
+            NativeAppListPresentation.LINEAR,
+            NativeAppListPresentation.HONEYCOMB,
+            NativeAppListPresentation.DENSE_GRID,
+        ).forEach { presentation ->
+            val presentationPolicy = profiles.forPresentation(presentation)
+            val host = FakeDragHost()
+            val scheduler = FakeDragScheduler()
+            val controller = NativeAppListDragController(host, scheduler, presentationPolicy)
+            startDrag(controller, scheduler)
+
+            host.hitKey = key("b")
+            controller.onMove(10f, 150f, 700L)
+            scheduler.advanceTo(700L + presentationPolicy.folderHoverMillis)
+            controller.onUp(10f, 150f, 701L + presentationPolicy.folderHoverMillis)
+
+            assertEquals(
+                presentation.name,
+                listOf(AppListCommand.CreateFolder(key("a"), key("b"))),
+                structuralCommands(host),
+            )
+        }
+    }
+
+    @Test
+    fun `existing folder is a valid stable key folder target`() {
+        val host = FakeDragHost().apply {
+            keys = listOf(key("a"), key("folder"), key("c"))
+        }
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+        startDrag(controller, scheduler)
+
+        host.hitKey = key("folder")
+        controller.onMove(10f, 150f, 700L)
+        scheduler.advanceTo(1_200L)
+        controller.onUp(10f, 150f, 1_201L)
+
+        assertEquals(
+            listOf(AppListCommand.CreateFolder(key("a"), key("folder"))),
+            structuralCommands(host),
+        )
+    }
+
+    @Test
+    fun `folder policy rejection falls back to exactly one stable key move`() {
+        val host = FakeDragHost().apply { folderPlanAllowed = false }
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+        startDrag(controller, scheduler)
+
+        host.hitKey = key("b")
+        controller.onMove(10f, 150f, 700L)
+        scheduler.advanceTo(1_200L)
+        controller.onUp(10f, 150f, 1_201L)
+
+        assertEquals(
+            listOf(AppListCommand.Move(key("a"), beforeKey = key("c"))),
+            structuralCommands(host),
+        )
+    }
+
+    @Test
+    fun `repository rejection of a planned folder restores one move preview`() {
+        val host = FakeDragHost().apply { rejectFolderCommands = true }
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+        startDrag(controller, scheduler)
+
+        host.hitKey = key("b")
+        controller.onMove(10f, 150f, 700L)
+        scheduler.advanceTo(1_200L)
+        controller.onUp(10f, 150f, 1_201L)
+
+        assertEquals(
+            listOf(
+                AppListCommand.CreateFolder(key("a"), key("b")),
+                AppListCommand.Move(key("a"), beforeKey = key("c")),
+            ),
+            host.dispatchAttempts.filter {
+                it is AppListCommand.Move || it is AppListCommand.CreateFolder
+            },
+        )
+        assertEquals(
+            listOf(AppListCommand.Move(key("a"), beforeKey = key("c"))),
+            structuralCommands(host),
+        )
+        assertEquals(0, host.discardWithoutRestoreCount)
+        assertEquals(null, host.folderCommitPreview)
+        assertEquals(listOf(true), host.finishPreviewCalls)
+        assertEquals(listOf(true), host.completePreviewCalls)
+    }
+
+    @Test
+    fun `repository rejection of a normal move rolls back virtual preview without a second command`() {
+        val host = FakeDragHost().apply { rejectMoveCommands = true }
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+        startDrag(controller, scheduler)
+
+        host.hitKey = key("b")
+        controller.onMove(10f, 150f, 700L)
+        controller.onUp(10f, 150f, 701L)
+
+        assertEquals(
+            listOf(AppListCommand.Move(key("a"), beforeKey = key("c"))),
+            host.dispatchAttempts.filterIsInstance<AppListCommand.Move>(),
+        )
+        assertTrue(host.commands.none { it is AppListCommand.Move })
+        assertEquals(listOf(false), host.completePreviewCalls)
     }
 
     @Test
@@ -237,6 +451,31 @@ class NativeAppListDragControllerTest {
 
         assertEquals(null, host.folderHoverKey)
         assertFalse(host.commands.any { it is AppListCommand.CreateFolder })
+        assertEquals(
+            listOf(AppListCommand.Move(key("a"), beforeKey = key("c"))),
+            structuralCommands(host),
+        )
+    }
+
+    @Test
+    fun `a list containing folders remains sortable`() {
+        val host = FakeDragHost().apply {
+            keys = listOf(key("folder"), key("a"), key("b"), key("c"))
+            hitKey = key("folder")
+        }
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+        startDrag(controller, scheduler)
+
+        host.strictHitKey = null
+        host.reorderHitKey = key("b")
+        controller.onMove(10f, 180f, 700L)
+        controller.onUp(10f, 180f, 701L)
+
+        assertEquals(
+            listOf(AppListCommand.Move(key("folder"), beforeKey = key("c"))),
+            structuralCommands(host),
+        )
     }
 
     @Test
@@ -268,6 +507,11 @@ class NativeAppListDragControllerTest {
 
     private fun key(value: String) = AppItemKey(value)
 
+    private fun structuralCommands(host: FakeDragHost): List<AppListCommand> =
+        host.commands.filter {
+            it is AppListCommand.Move || it is AppListCommand.CreateFolder
+        }
+
     private class FakeDragHost : NativeAppListDragHost {
         var keys = listOf(AppItemKey("a"), AppItemKey("b"), AppItemKey("c"))
         var strictHitKey: AppItemKey? = AppItemKey("a")
@@ -279,6 +523,7 @@ class NativeAppListDragControllerTest {
                 reorderHitKey = value
             }
         val commands = mutableListOf<AppListCommand>()
+        val dispatchAttempts = mutableListOf<AppListCommand>()
         val scrollDeltas = mutableListOf<Float>()
         var draggingKey: AppItemKey? = null
         var dragPointerX = 0f
@@ -288,6 +533,15 @@ class NativeAppListDragControllerTest {
         var hapticCount = 0
         var currentKeysReadCount = 0
         var previewMoveCount = 0
+        var folderPlanAllowed = true
+        var previewBeginAllowed = true
+        var beginDragCount = 0
+        var discardWithoutRestoreCount = 0
+        var rejectFolderCommands = false
+        var rejectMoveCommands = false
+        var folderCommitPreview: Pair<AppItemKey, AppItemKey>? = null
+        val finishPreviewCalls = mutableListOf<Boolean>()
+        val completePreviewCalls = mutableListOf<Boolean>()
         private val dragPreview = NativeStableKeyDragPreview()
 
         override val viewportHeightPx: Float = 400f
@@ -305,25 +559,53 @@ class NativeAppListDragControllerTest {
         override fun planFolder(
             source: AppItemKey,
             target: AppItemKey,
-        ): AppListCommand.CreateFolder? = AppListMovePlanner.folderFromKeys(keys, source, target)
+        ): AppListCommand.CreateFolder? = if (folderPlanAllowed) {
+            AppListMovePlanner.folderFromKeys(keys, source, target)
+        } else {
+            null
+        }
         override fun beginDragPreview(source: AppItemKey): Boolean =
-            dragPreview.begin(source, keys)
+            previewBeginAllowed && dragPreview.begin(source, keys)
         override fun previewMove(source: AppItemKey, target: AppItemKey): Boolean {
             previewMoveCount++
             return dragPreview.moveTo(target) != null
         }
-        override fun finishDragPreview(commit: Boolean): AppListCommand.Move? =
-            dragPreview.finish(commit)
-        override fun dispatch(command: AppListCommand) { commands += command }
+        override fun finishDragPreview(commit: Boolean): AppListCommand.Move? {
+            finishPreviewCalls += commit
+            return dragPreview.finish(commit)
+        }
+        override fun completeDragPreview(accepted: Boolean) {
+            completePreviewCalls += accepted
+        }
+
+        override fun previewFolderCommit(source: AppItemKey, target: AppItemKey): Boolean {
+            folderCommitPreview = source to target
+            return true
+        }
+        override fun discardDragPreviewAwaitingAuthoritative() {
+            discardWithoutRestoreCount++
+            dragPreview.reset()
+        }
+        override fun dispatch(command: AppListCommand): Boolean {
+            dispatchAttempts += command
+            val accepted = when (command) {
+                is AppListCommand.CreateFolder -> !rejectFolderCommands
+                is AppListCommand.Move -> !rejectMoveCommands
+                else -> true
+            }
+            if (accepted) commands += command
+            return accepted
+        }
         override fun suppressLongClick(key: AppItemKey, suppress: Boolean) {
             longClickSuppressed = suppress
         }
         override fun beginDrag(key: AppItemKey, pointerX: Float, pointerY: Float) {
+            beginDragCount++
             draggingKey = key
             dragPointerX = pointerX
         }
         override fun updateDrag(pointerX: Float, pointerY: Float) { dragPointerX = pointerX }
-        override fun endDrag() { draggingKey = null; endDragCount++ }
+        override fun endDrag(committed: Boolean) { draggingKey = null; endDragCount++ }
         override fun setFolderHover(key: AppItemKey?) { folderHoverKey = key }
         override fun scrollBy(deltaPx: Float) { scrollDeltas += deltaPx }
         override fun performDragHaptic() { hapticCount++ }
@@ -331,25 +613,33 @@ class NativeAppListDragControllerTest {
 
     private class FakeDragScheduler : NativeDragScheduler {
         private var now = 0L
-        private var delayed: (() -> Unit)? = null
-        private var delayedAt = 0L
+        private var longPress: (() -> Unit)? = null
+        private var longPressAt = 0L
+        private var folderHover: (() -> Unit)? = null
+        private var folderHoverAt = 0L
         private var frame: (() -> Unit)? = null
 
         override val nowMillis: Long get() = now
-        val hasDelayed: Boolean get() = delayed != null
+        val hasDelayed: Boolean get() = longPress != null || folderHover != null
         val hasFrame: Boolean get() = frame != null
 
-        override fun postDelayed(delayMillis: Long, action: () -> Unit) {
-            delayed = action
-            delayedAt = now + delayMillis
+        override fun postLongPress(delayMillis: Long, action: () -> Unit) {
+            longPress = action
+            longPressAt = now + delayMillis
         }
-        override fun cancelDelayed() { delayed = null }
+        override fun cancelLongPress() { longPress = null }
+        override fun postFolderHover(delayMillis: Long, action: () -> Unit) {
+            folderHover = action
+            folderHoverAt = now + delayMillis
+        }
+        override fun cancelFolderHover() { folderHover = null }
         override fun postFrame(action: () -> Unit) { frame = action }
         override fun cancelFrame() { frame = null }
 
         fun advanceTo(value: Long) {
             now = value
-            if (value >= delayedAt) delayed.also { delayed = null }?.invoke()
+            if (value >= longPressAt) longPress.also { longPress = null }?.invoke()
+            if (value >= folderHoverAt) folderHover.also { folderHover = null }?.invoke()
         }
         fun runFrame() {
             frame.also { frame = null }?.invoke()

@@ -9,6 +9,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.togetherWith
@@ -35,18 +36,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,6 +69,7 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Velocity
@@ -73,6 +77,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.rememberPressedState
+import com.flue.launcher.ui.common.FlueElasticOffsetController
+import com.flue.launcher.R
+import com.flue.launcher.motion.LocalFlueMotionProfile
+import com.flue.launcher.motion.asFloatAnimationSpec
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.launch
@@ -85,7 +93,7 @@ private const val NOTIFICATION_CARD_WIDTH_RATIO = 0.88f
 private const val NOTIFICATION_TOP_SAFE_PADDING_DP = 22
 private const val NOTIFICATION_TOP_OVERSCROLL_LIMIT = 72f
 private const val NOTIFICATION_BOTTOM_OVERSCROLL_LIMIT = -96f
-private const val NOTIFICATION_OVERSCROLL_RESISTANCE = 0.35f
+private const val NOTIFICATION_OVERSCROLL_RESISTANCE = 0.18f
 private const val NOTIFICATION_DISMISS_DRAG_RANGE_RATIO = 0.78f
 private const val NOTIFICATION_DISMISS_DRAG_RANGE_MIN = 300f
 private const val NOTIFICATION_DISMISS_RELEASE_PROGRESS = 0.6f
@@ -120,6 +128,7 @@ fun NotificationLayer(
     val context = LocalContext.current
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
+    val motionProfile = LocalFlueMotionProfile.current
     val listState = rememberLazyListState()
     val dismissDragRangePx = remember(configuration.screenHeightDp, density) {
         maxOf(
@@ -128,19 +137,30 @@ fun NotificationLayer(
         )
     }
     val dismissThresholdPx = dismissDragRangePx * NOTIFICATION_DISMISS_RELEASE_PROGRESS
-    val overscroll = remember { androidx.compose.animation.core.Animatable(0f) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val overscroll = remember(scope) { FlueElasticOffsetController(scope) }
+    val latestMotionProfile = rememberUpdatedState(motionProfile)
     val launcherStyle = LauncherTheme.style
-    var bottomOverlayHeightPx by remember { mutableIntStateOf(0) }
     val hasClearableNotifications = notificationGroups.any { group ->
         group.entries.any(NotificationEntryUi::isClearable)
     }
+    val groupEntryTracker = remember { NotificationGroupEntryTracker() }
+    val currentGroupKeys = notificationGroups.asSequence()
+        .map(NotificationGroupUi::packageName)
+        .toSet()
+    val enteringGroupKeys = groupEntryTracker.entering(currentGroupKeys)
+    SideEffect { groupEntryTracker.commit(currentGroupKeys) }
     var dismissTransitionInFlight by remember { mutableStateOf(false) }
     var dismissDragDistance by remember { mutableFloatStateOf(0f) }
     var dismissDragVelocityY by remember { mutableFloatStateOf(0f) }
     var lastDismissDragEventUptime by remember { mutableStateOf(0L) }
 
     fun applyOverscroll(delta: Float): Float {
+        val profile = latestMotionProfile.value
+        if (!profile.bounceEnabled || profile.edgeStrength <= 0) {
+            if (overscroll.value != 0f) overscroll.reset()
+            return 0f
+        }
         val next = when {
             overscroll.value > 0f && delta < 0f -> (overscroll.value + delta).coerceAtLeast(0f)
             overscroll.value < 0f && delta > 0f -> (overscroll.value + delta).coerceAtMost(0f)
@@ -150,15 +170,17 @@ fun NotificationLayer(
                 .coerceIn(NOTIFICATION_BOTTOM_OVERSCROLL_LIMIT, 0f)
             else -> overscroll.value
         }
-        scope.launch { overscroll.snapTo(next) }
+        overscroll.setImmediate(next)
         return next
     }
 
     fun releaseOverscroll() {
-        scope.launch {
-            if (overscroll.value != 0f) {
-                overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-            }
+        val profile = latestMotionProfile.value
+        if (overscroll.value == 0f) return
+        if (profile.bounceEnabled && profile.edgeStrength > 0) {
+            overscroll.settle(profile.edgeBounce.asFloatAnimationSpec())
+        } else {
+            overscroll.reset()
         }
     }
 
@@ -168,10 +190,11 @@ fun NotificationLayer(
             dismissDragDistance = 0f
             dismissDragVelocityY = 0f
             lastDismissDragEventUptime = 0L
-            overscroll.snapTo(0f)
+            overscroll.reset()
         }
     }
-    val listAtTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+    fun listIsAtTop(): Boolean =
+        listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
     val updateDismissDrag: (Float) -> Unit = { delta ->
         dismissDragDistance = (dismissDragDistance + delta).coerceIn(0f, dismissDragRangePx)
         onTransitionProgressChange(
@@ -216,7 +239,7 @@ fun NotificationLayer(
                     }
                 }
                 lastDismissDragEventUptime = change.uptimeMillis
-                if ((dragAmount > 0f && listAtTop) || dismissDragDistance > 0f) {
+                if ((dragAmount > 0f && listIsAtTop()) || dismissDragDistance > 0f) {
                     change.consume()
                     if (dismissDragDistance > 0f) {
                         val currentDrag = dismissDragDistance
@@ -256,6 +279,9 @@ fun NotificationLayer(
             override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: NestedScrollSource): androidx.compose.ui.geometry.Offset {
                 if (dismissTransitionInFlight) return androidx.compose.ui.geometry.Offset.Zero
                 if (source != NestedScrollSource.UserInput) return androidx.compose.ui.geometry.Offset.Zero
+                val profile = latestMotionProfile.value
+                val bounceEnabled = profile.bounceEnabled && profile.edgeStrength > 0
+                if (!bounceEnabled && overscroll.value != 0f) overscroll.reset()
                 val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
                 val layoutInfo = listState.layoutInfo
                 val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
@@ -273,27 +299,24 @@ fun NotificationLayer(
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 if (available.y < 0f && atBottom) {
+                    if (!bounceEnabled) return androidx.compose.ui.geometry.Offset.Zero
                     applyOverscroll(available.y)
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 if (dismissDragDistance > 0f && available.y < 0f) {
                     val currentDrag = dismissDragDistance
-                    updateDismissDrag(available.y)
-                    if (available.y.absoluteValue > currentDrag) {
-                        applyOverscroll(available.y + currentDrag)
-                    }
-                    return androidx.compose.ui.geometry.Offset(0f, available.y)
+                    val consumedY = available.y.coerceAtLeast(-currentDrag)
+                    updateDismissDrag(consumedY)
+                    return androidx.compose.ui.geometry.Offset(0f, consumedY)
                 }
                 if (overscroll.value != 0f && ((overscroll.value > 0f && available.y < 0f) || (overscroll.value < 0f && available.y > 0f))) {
-                    scope.launch {
-                        overscroll.snapTo(
-                            when {
-                                overscroll.value > 0f -> (overscroll.value + available.y).coerceAtLeast(0f)
-                                else -> (overscroll.value + available.y).coerceAtMost(0f)
-                            }
-                        )
+                    val current = overscroll.value
+                    val next = when {
+                        current > 0f -> (current + available.y).coerceAtLeast(0f)
+                        else -> (current + available.y).coerceAtMost(0f)
                     }
-                    return androidx.compose.ui.geometry.Offset(0f, available.y)
+                    overscroll.setImmediate(next)
+                    return androidx.compose.ui.geometry.Offset(0f, next - current)
                 }
                 return androidx.compose.ui.geometry.Offset.Zero
             }
@@ -326,10 +349,38 @@ fun NotificationLayer(
                     return Velocity.Zero
                 }
                 if (overscroll.value != 0f) {
-                    overscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                    releaseOverscroll()
                     return available
                 }
                 return Velocity.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                val profile = latestMotionProfile.value
+                if (!profile.bounceEnabled || profile.edgeStrength <= 0) {
+                    if (overscroll.value != 0f) overscroll.reset()
+                    return Velocity.Zero
+                }
+                val layoutInfo = listState.layoutInfo
+                val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+                val atBottom = layoutInfo.totalItemsCount > 0 &&
+                    lastVisibleItem != null &&
+                    lastVisibleItem.index >= layoutInfo.totalItemsCount - 1 &&
+                    lastVisibleItem.offset + lastVisibleItem.size <= layoutInfo.viewportEndOffset
+                val atBoundary = (available.y > 0f && listIsAtTop()) ||
+                    (available.y < 0f && atBottom)
+                if (!atBoundary && overscroll.value == 0f) return Velocity.Zero
+                if (available.y != 0f) {
+                    val kick = (available.y * 0.008f).coerceIn(-40f, 40f)
+                    overscroll.setImmediate(
+                        (overscroll.value + kick).coerceIn(
+                            NOTIFICATION_BOTTOM_OVERSCROLL_LIMIT,
+                            NOTIFICATION_TOP_OVERSCROLL_LIMIT,
+                        ),
+                    )
+                }
+                releaseOverscroll()
+                return available
             }
         }
     }
@@ -342,9 +393,6 @@ fun NotificationLayer(
             .nestedScroll(nestedScroll)
     ) {
         val contentWidth = maxWidth * NOTIFICATION_CARD_WIDTH_RATIO
-        val bottomOverlayHeight = with(density) { bottomOverlayHeightPx.toDp() }
-        val bottomScrollPadding = (bottomOverlayHeight + 24.dp).coerceAtLeast(96.dp)
-        val bottomSpacerHeight = (maxHeight / 2).coerceAtLeast(124.dp)
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -381,131 +429,232 @@ fun NotificationLayer(
                         .weight(1f)
                         .fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(top = 10.dp, bottom = bottomScrollPadding)
+                    contentPadding = PaddingValues(top = 10.dp, bottom = 24.dp)
                 ) {
                     notificationGroups.forEach { group ->
+                        val isEnteringGroup = group.packageName in enteringGroupKeys
                         item(
                             key = "header_${group.packageName}",
                             contentType = "group_header"
                         ) {
-                            NotificationRowContainer {
-                                Box(Modifier.width(contentWidth)) {
-                                    GroupHeader(
-                                        title = group.headerTitle,
-                                        count = group.entries.size,
-                                        showMeta = group.entries.size > 1,
-                                        expanded = group.expanded,
-                                        onClick = { onToggleGroup(group.packageName) }
-                                    )
+                            NotificationRowContainer(
+                                modifier = Modifier.animateItem(
+                                    fadeInSpec = tween(190),
+                                    placementSpec = spring(stiffness = 500f, dampingRatio = 0.86f),
+                                    fadeOutSpec = tween(130)
+                                )
+                            ) {
+                                NewNotificationGroupEntrance(
+                                    groupKey = group.packageName,
+                                    entering = isEnteringGroup
+                                ) {
+                                    Box(Modifier.width(contentWidth)) {
+                                        GroupHeader(
+                                            title = group.headerTitle,
+                                            count = group.entries.size,
+                                            showMeta = group.entries.size > 1,
+                                            expanded = group.expanded,
+                                            onClick = { onToggleGroup(group.packageName) }
+                                        )
+                                    }
                                 }
                             }
                         }
-                        if (group.entries.size > 1) {
-                            item(
-                                key = "body_${group.packageName}",
-                                contentType = "group_body"
+                        item(
+                            key = "body_${group.packageName}",
+                            contentType = "group_body"
+                        ) {
+                            NotificationRowContainer(
+                                modifier = Modifier.animateItem(
+                                    fadeInSpec = tween(190),
+                                    placementSpec = spring(stiffness = 500f, dampingRatio = 0.86f),
+                                    fadeOutSpec = tween(130)
+                                )
                             ) {
-                                NotificationRowContainer {
+                                NewNotificationGroupEntrance(
+                                    groupKey = group.packageName,
+                                    entering = isEnteringGroup
+                                ) {
                                     AnimatedContent(
-                                        targetState = group.expanded,
+                                        targetState = group.entries.size > 1,
                                         transitionSpec = {
-                                            fadeIn(tween(durationMillis = 160)) togetherWith
-                                                fadeOut(tween(durationMillis = 120))
+                                            fadeIn(tween(durationMillis = 180)) togetherWith
+                                                fadeOut(tween(durationMillis = 140))
                                         },
-                                        label = "notification_group_body"
-                                    ) { expanded ->
-                                        if (expanded) {
-                                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                                group.entries.forEach { entry ->
+                                        label = "notification_group_cardinality"
+                                    ) { hasMultipleEntries ->
+                                        if (hasMultipleEntries) {
+                                            AnimatedContent(
+                                                targetState = group.expanded,
+                                                transitionSpec = {
+                                                    fadeIn(tween(durationMillis = 160)) togetherWith
+                                                        fadeOut(tween(durationMillis = 120))
+                                                },
+                                                label = "notification_group_body"
+                                            ) { expanded ->
+                                                if (expanded) {
+                                                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                                        group.entries.forEach { entry ->
+                                                            key(entry.key) {
+                                                                SwipeRevealDeleteContainer(
+                                                                    target = NotificationRevealTarget.Entry(entry.key),
+                                                                    revealedTarget = revealedNotificationTarget,
+                                                                    onRevealTargetChange = onRevealTargetChange,
+                                                                    enabled = entry.isClearable,
+                                                                    onDelete = { onDismissNotification(entry.key) },
+                                                                    modifier = Modifier.width(contentWidth)
+                                                                ) {
+                                                                    NotificationCardReplacement(
+                                                                        width = contentWidth,
+                                                                        entry = entry,
+                                                                        onOpenNotification = onOpenNotification,
+                                                                        onRunNotificationAction = onRunNotificationAction
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                } else {
                                                     SwipeRevealDeleteContainer(
-                                                        target = NotificationRevealTarget.Entry(entry.key),
+                                                        target = NotificationRevealTarget.Group(group.packageName),
                                                         revealedTarget = revealedNotificationTarget,
                                                         onRevealTargetChange = onRevealTargetChange,
-                                                        enabled = entry.isClearable,
-                                                        onDelete = { onDismissNotification(entry.key) },
-                                                        modifier = Modifier.width(contentWidth)
+                                                        enabled = group.entries.any(NotificationEntryUi::isClearable),
+                                                        onDelete = { onDismissGroup(group.packageName) },
+                                                        modifier = Modifier.width(contentWidth),
+                                                        actionHeight = 72.dp
                                                     ) {
-                                                        NotificationCard(
-                                                            width = contentWidth,
-                                                            entry = entry,
-                                                            subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
-                                                            trailing = formatNotificationTime(entry.time),
-                                                            onClick = { origin -> onOpenNotification(entry.key, origin) },
-                                                            onRunNotificationAction = onRunNotificationAction
-                                                        )
+                                                        AnimatedContent(
+                                                            targetState = group.entries.first(),
+                                                            transitionSpec = {
+                                                                fadeIn(tween(180)) togetherWith fadeOut(tween(140))
+                                                            },
+                                                            label = "notification_group_replacement"
+                                                        ) { leadEntry ->
+                                                            CollapsedStackCard(
+                                                                width = contentWidth,
+                                                                leadEntry = leadEntry,
+                                                                hiddenCount = group.entries.size - 1,
+                                                                stackCardColor = stackCardColor,
+                                                                onClick = { onToggleGroup(group.packageName) }
+                                                            )
+                                                        }
                                                     }
                                                 }
                                             }
                                         } else {
+                                            val entry = group.entries.first()
                                             SwipeRevealDeleteContainer(
-                                                target = NotificationRevealTarget.Group(group.packageName),
+                                                target = NotificationRevealTarget.Entry(entry.key),
                                                 revealedTarget = revealedNotificationTarget,
                                                 onRevealTargetChange = onRevealTargetChange,
-                                                enabled = group.entries.any(NotificationEntryUi::isClearable),
-                                                onDelete = { onDismissGroup(group.packageName) },
-                                                modifier = Modifier.width(contentWidth),
-                                                actionHeight = 72.dp
+                                                enabled = entry.isClearable,
+                                                onDelete = { onDismissNotification(entry.key) },
+                                                modifier = Modifier.width(contentWidth)
                                             ) {
-                                                CollapsedStackCard(
+                                                NotificationCardReplacement(
                                                     width = contentWidth,
-                                                    leadEntry = group.entries.first(),
-                                                    hiddenCount = group.entries.size - 1,
-                                                    stackCardColor = stackCardColor,
-                                                    onClick = { onToggleGroup(group.packageName) }
+                                                    entry = entry,
+                                                    onOpenNotification = onOpenNotification,
+                                                    onRunNotificationAction = onRunNotificationAction
                                                 )
                                             }
                                         }
                                     }
                                 }
                             }
-                        } else {
-                            val entry = group.entries.first()
-                            item(
-                                key = "entry_${entry.key}",
-                                contentType = "entry"
+                        }
+                    }
+                    if (hasClearableNotifications) {
+                        item(
+                            key = "notifications_clear_all",
+                            contentType = "clear_all"
+                        ) {
+                            NotificationRowContainer(
+                                modifier = Modifier.animateItem(
+                                    fadeInSpec = tween(180),
+                                    placementSpec = spring(stiffness = 520f, dampingRatio = 0.86f),
+                                    fadeOutSpec = tween(140)
+                                )
                             ) {
-                                NotificationRowContainer {
-                                    SwipeRevealDeleteContainer(
-                                        target = NotificationRevealTarget.Entry(entry.key),
-                                        revealedTarget = revealedNotificationTarget,
-                                        onRevealTargetChange = onRevealTargetChange,
-                                        enabled = entry.isClearable,
-                                        onDelete = { onDismissNotification(entry.key) },
-                                        modifier = Modifier.width(contentWidth)
-                                    ) {
-                                        NotificationCard(
-                                            width = contentWidth,
-                                            entry = entry,
-                                            subtitle = entry.text.ifBlank { entry.title.ifBlank { entry.appLabel } },
-                                            trailing = formatNotificationTime(entry.time),
-                                            onClick = { origin -> onOpenNotification(entry.key, origin) },
-                                            onRunNotificationAction = onRunNotificationAction
-                                        )
-                                    }
+                                ActionDock {
+                                    DockActionButton(
+                                        text = "全部清除",
+                                        onClick = onDismissAllNotifications
+                                    )
                                 }
                             }
                         }
                     }
-                    item("notifications_bottom_spacer") {
-                        Spacer(modifier = Modifier.height(bottomSpacerHeight))
-                    }
                 }
             }
         }
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .onGloballyPositioned { bottomOverlayHeightPx = it.size.height }
-                .padding(bottom = 22.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            if (hasClearableNotifications) {
-                ActionDock {
-                    DockActionButton(text = "全部清除", onClick = onDismissAllNotifications)
-                }
-            }
+    }
+}
+
+private class NotificationGroupEntryTracker {
+    private var initialized = false
+    private var previousKeys: Set<String> = emptySet()
+
+    fun entering(currentKeys: Set<String>): Set<String> {
+        return if (initialized) currentKeys - previousKeys else emptySet()
+    }
+
+    fun commit(currentKeys: Set<String>) {
+        initialized = true
+        previousKeys = currentKeys
+    }
+}
+
+@Composable
+private fun NewNotificationGroupEntrance(
+    groupKey: String,
+    entering: Boolean,
+    content: @Composable () -> Unit
+) {
+    val density = LocalDensity.current
+    val offsetPx = with(density) { 24.dp.toPx() }
+    val progress = remember(groupKey) { Animatable(if (entering) 0f else 1f) }
+    LaunchedEffect(groupKey) {
+        if (entering) {
+            progress.animateTo(1f, tween(durationMillis = 220))
         }
+    }
+    Box(
+        modifier = Modifier.graphicsLayer {
+            alpha = progress.value
+            translationY = (1f - progress.value) * offsetPx
+        }
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun NotificationCardReplacement(
+    width: androidx.compose.ui.unit.Dp,
+    entry: NotificationEntryUi,
+    onOpenNotification: (String, Offset) -> Boolean,
+    onRunNotificationAction: (String) -> Boolean
+) {
+    AnimatedContent(
+        targetState = entry,
+        transitionSpec = {
+            fadeIn(tween(durationMillis = 180)) togetherWith
+                fadeOut(tween(durationMillis = 140))
+        },
+        label = "notification_content_replacement"
+    ) { visibleEntry ->
+        NotificationCard(
+            width = width,
+            entry = visibleEntry,
+            subtitle = visibleEntry.text.ifBlank {
+                visibleEntry.title.ifBlank { visibleEntry.appLabel }
+            },
+            trailing = formatNotificationTime(visibleEntry.time),
+            onClick = { origin -> onOpenNotification(visibleEntry.key, origin) },
+            onRunNotificationAction = onRunNotificationAction
+        )
     }
 }
 
@@ -533,9 +682,12 @@ private fun ActionDock(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun NotificationRowContainer(content: @Composable () -> Unit) {
+private fun NotificationRowContainer(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth(),
         contentAlignment = Alignment.Center
     ) {
@@ -788,7 +940,12 @@ private fun DockActionButton(
 private fun NotificationIcon(icon: ImageBitmap?) {
     Box(Modifier.size(46.dp).clip(CircleShape).background(Color(0xFFD9D9D9)), contentAlignment = Alignment.Center) {
         if (icon != null) Image(icon, null, modifier = Modifier.fillMaxSize().clip(CircleShape), filterQuality = FilterQuality.Low, contentScale = ContentScale.Crop)
-        else Icon(Icons.Filled.Notifications, null, tint = Color(0xFF2B2B2B), modifier = Modifier.size(24.dp))
+        else Icon(
+            painter = painterResource(R.drawable.ic_flue_notification_round),
+            contentDescription = null,
+            tint = Color(0xFF2B2B2B),
+            modifier = Modifier.size(24.dp),
+        )
     }
 }
 

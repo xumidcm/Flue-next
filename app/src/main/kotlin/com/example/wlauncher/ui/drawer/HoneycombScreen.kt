@@ -101,11 +101,6 @@ private const val HONEYCOMB_FOLDER_HOVER_MAX_SPEED_DP_PER_MS = 0.55f
 private const val HONEYCOMB_PRESS_DURATION_MS = 200
 private const val HONEYCOMB_AUTO_SCROLL_EDGE_DP = 96f
 private const val HONEYCOMB_AUTO_SCROLL_MAX_PX = 26f
-private const val FAST_FLOW_SLOW_TOP_FRACTION = 0.24f
-private const val FAST_FLOW_SLOW_BOTTOM_FRACTION = 0.76f
-private const val FAST_FLOW_SLOW_SCALE = 0.56f
-private const val FAST_FLOW_FAST_SCALE = 1.85f
-private const val FAST_FLOW_MAX_OFFSET_PX = 260f
 
 @Composable
 fun HoneycombScreen(
@@ -117,7 +112,6 @@ fun HoneycombScreen(
     fisheyeRangeRows: Int = 4,
     fisheyeStrengthPercent: Int = 100,
     edgeSpacingCompressionEnabled: Boolean = true,
-    fastFlowAnimationEnabled: Boolean = false,
     twoToneIconsEnabled: Boolean = false,
     iconShadowEnabled: Boolean = true,
     themeColor: Color = Color(0xFF7BE8FF),
@@ -429,8 +423,6 @@ fun HoneycombScreen(
 
         val currentScroll = currentScrollOffsetValue()
         val entryOffsetY = entryVisuals.verticalOffsetFraction * screenHeightPx
-        val fastFlowSlowTopY = screenHeightPx * FAST_FLOW_SLOW_TOP_FRACTION
-        val fastFlowSlowBottomY = screenHeightPx * FAST_FLOW_SLOW_BOTTOM_FRACTION
 
         Box(
             modifier = Modifier
@@ -988,13 +980,6 @@ fun HoneycombScreen(
                         shape = launcherStyle.bubbleShape,
                         onClick = {
                             if (longPressedApp == null && dragFromIndex == null) {
-                                val flowOffset = honeycombFlowOffset(
-                                    enabled = fastFlowAnimationEnabled,
-                                    rowCenterY = screenCenterY + slotY + currentScroll,
-                                    screenCenterY = screenCenterY,
-                                    slowTopY = fastFlowSlowTopY,
-                                    slowBottomY = fastFlowSlowBottomY
-                                )
                                 val clickCenterX = screenCenterX + slotX
                                 val clickCenterY = screenCenterY + slotY + currentScroll
                                 val clickEdgeOffsetX = edgeSpacingCompressionHorizontalOffset(
@@ -1008,7 +993,7 @@ fun HoneycombScreen(
                                     enabled = fisheyeEnabled && edgeSpacingCompressionEnabled
                                 )
                                 val sx = clickCenterX + clickEdgeOffsetX
-                                val syPos = clickCenterY + flowOffset + entryOffsetY
+                                val syPos = clickCenterY + entryOffsetY
                                 onAppClick(
                                     app,
                                     Offset(
@@ -1029,15 +1014,8 @@ fun HoneycombScreen(
                             .graphicsLayer {
                                 val baseX = slotX
                                 val baseY = slotY
-                                val flowOffset = honeycombFlowOffset(
-                                    enabled = fastFlowAnimationEnabled,
-                                    rowCenterY = screenCenterY + baseY + currentScroll,
-                                    screenCenterY = screenCenterY,
-                                    slowTopY = fastFlowSlowTopY,
-                                    slowBottomY = fastFlowSlowBottomY
-                                )
                                 val posX = screenCenterX + baseX + edgeSpacingOffsetX
-                                val pY = screenCenterY + baseY + currentScroll + flowOffset + entryOffsetY
+                                val pY = screenCenterY + baseY + currentScroll + entryOffsetY
                                 var actualCenterX = posX
                                 var actualCenterY = pY
                                 translationX = posX - iconSizePx / 2f
@@ -2274,28 +2252,6 @@ private fun resolveHoneycombScrollOffset(
     directScrollOffset: Float,
     animatedScrollOffset: Float
 ): Float = if (directScrollOffset.isNaN()) animatedScrollOffset else directScrollOffset
-
-private fun honeycombFlowOffset(
-    enabled: Boolean,
-    rowCenterY: Float,
-    screenCenterY: Float,
-    slowTopY: Float,
-    slowBottomY: Float
-): Float {
-    if (!enabled) return 0f
-    val transformedY = when {
-        rowCenterY < slowTopY -> {
-            screenCenterY + (slowTopY - screenCenterY) * FAST_FLOW_SLOW_SCALE +
-                (rowCenterY - slowTopY) * FAST_FLOW_FAST_SCALE
-        }
-        rowCenterY > slowBottomY -> {
-            screenCenterY + (slowBottomY - screenCenterY) * FAST_FLOW_SLOW_SCALE +
-                (rowCenterY - slowBottomY) * FAST_FLOW_FAST_SCALE
-        }
-        else -> screenCenterY + (rowCenterY - screenCenterY) * FAST_FLOW_SLOW_SCALE
-    }
-    return (transformedY - rowCenterY).coerceIn(-FAST_FLOW_MAX_OFFSET_PX, FAST_FLOW_MAX_OFFSET_PX)
-}
 
 private suspend fun androidx.compose.ui.input.pointer.AwaitPointerEventScope.awaitLongPressByTimeoutOrCancel(
     pointerId: androidx.compose.ui.input.pointer.PointerId,

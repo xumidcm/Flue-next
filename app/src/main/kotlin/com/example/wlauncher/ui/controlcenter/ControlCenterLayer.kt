@@ -67,15 +67,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.DoNotDisturbOn
-import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.NetworkCell
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.outlined.Settings as SettingsIcon
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Icon
@@ -115,6 +110,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
@@ -125,8 +121,10 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import androidx.mediarouter.app.SystemOutputSwitcherDialogController
 import com.flue.launcher.FlueApplication
+import com.flue.launcher.R
 import com.flue.launcher.service.WLauncherNotificationListener
 import com.flue.launcher.ui.common.WatchBatteryPill
+import com.flue.launcher.ui.common.rememberFlueElasticScrollState
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.notification.NotificationGroupUi
 import com.flue.launcher.ui.theme.LauncherTheme
@@ -154,7 +152,9 @@ private const val CONTROL_NOTIFICATION_STACK_HORIZONTAL_INSET_DP = 8f
 private const val MUSIC_TEXT_FADE_EDGE_DP = 18f
 private const val MUSIC_TEXT_FADE_TRANSITION_MS = 80
 private const val MUSIC_TEXT_MARQUEE_SIDE_PADDING_DP = 8f
-private const val CONTROL_CENTER_DISMISS_DRAG_THRESHOLD_DP = 54f
+// Keep the close threshold below the shared 48dp spring cap so a single
+// high-velocity pull can actually reach it on mdpi/low-density watches.
+private const val CONTROL_CENTER_DISMISS_DRAG_THRESHOLD_DP = 40f
 
 private data class ControlCenterMediaState(
     val controller: MediaController? = null,
@@ -225,7 +225,11 @@ fun ControlCenterLayer(
     val verticalOverscroll = remember { Animatable(0f) }
     val toggleOverscroll = remember { Animatable(0f) }
     val overscrollScope = androidx.compose.runtime.rememberCoroutineScope()
-    var bottomDismissArmed by remember { mutableStateOf(false) }
+    // Scrollable content uses the shared CloX-style edge controller. The
+    // separate Animatable remains for the full-screen (non-scrollable)
+    // dismiss gesture, where there is no child ScrollState to report
+    // unconsumed deltas.
+    val sharedVerticalElasticState = rememberFlueElasticScrollState(verticalScrollState)
     var fullScreenDismissTriggered by remember { mutableStateOf(false) }
     var controlCenterGestureLocked by remember { mutableStateOf(false) }
     val dismissDragThresholdPx = with(density) { CONTROL_CENTER_DISMISS_DRAG_THRESHOLD_DP.dp.toPx() }
@@ -233,92 +237,94 @@ fun ControlCenterLayer(
         { locked ->
             controlCenterGestureLocked = locked
             if (locked) {
-                bottomDismissArmed = false
                 fullScreenDismissTriggered = false
             }
         }
     }
-    val verticalElasticScroll = remember(verticalScrollState, controlCenterGestureLocked) {
+    val verticalElasticScroll = remember(
+        verticalScrollState,
+        sharedVerticalElasticState,
+        controlCenterGestureLocked,
+        dismissDragThresholdPx,
+    ) {
         object : NestedScrollConnection {
+            fun dismissThresholdReached(): Boolean {
+                val maximum = sharedVerticalElasticState.maximumOffsetPx
+                if (maximum <= 0f) return false
+                val threshold = dismissDragThresholdPx.coerceAtMost(maximum * 0.82f)
+                return sharedVerticalElasticState.offsetPx <= -threshold
+            }
+
             override fun onPreScroll(
                 available: androidx.compose.ui.geometry.Offset,
-                source: NestedScrollSource
+                source: NestedScrollSource,
             ): androidx.compose.ui.geometry.Offset {
-                if (source != NestedScrollSource.UserInput) return androidx.compose.ui.geometry.Offset.Zero
-                if (controlCenterGestureLocked) return androidx.compose.ui.geometry.Offset(0f, available.y)
-                val atTop = verticalScrollState.value <= 0
-                val atBottom = verticalScrollState.maxValue > 0 &&
-                    verticalScrollState.value >= verticalScrollState.maxValue
-                if (available.y > 0f && atTop) {
-                    overscrollScope.launch {
-                        verticalOverscroll.snapTo(
-                            (verticalOverscroll.value + available.y * CONTROL_CENTER_OVERSCROLL_RESISTANCE)
-                                .coerceAtMost(CONTROL_CENTER_OVERSCROLL_LIMIT)
-                        )
-                    }
+                if (source != NestedScrollSource.UserInput) {
+                    return androidx.compose.ui.geometry.Offset.Zero
+                }
+                if (controlCenterGestureLocked) {
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
-                if (available.y < 0f && atBottom) {
-                    if (bottomDismissArmed || verticalOverscroll.value <= -dismissDragThresholdPx) {
-                        onDismissToFace()
-                    } else {
-                        overscrollScope.launch {
-                            verticalOverscroll.snapTo(
-                                (verticalOverscroll.value + available.y * CONTROL_CENTER_OVERSCROLL_RESISTANCE)
-                                    .coerceAtLeast(-CONTROL_CENTER_OVERSCROLL_LIMIT)
-                            )
-                        }
-                    }
-                    return androidx.compose.ui.geometry.Offset(0f, available.y)
+                // Let the shared controller first consume a previously
+                // stretched edge. This keeps a reversal continuous instead
+                // of jumping back to the ScrollState position.
+                return sharedVerticalElasticState.connection.onPreScroll(available, source)
+            }
+
+            override fun onPostScroll(
+                consumed: androidx.compose.ui.geometry.Offset,
+                available: androidx.compose.ui.geometry.Offset,
+                source: NestedScrollSource,
+            ): androidx.compose.ui.geometry.Offset {
+                if (controlCenterGestureLocked) {
+                    return androidx.compose.ui.geometry.Offset.Zero
                 }
-                if (verticalOverscroll.value > 0f && available.y < 0f) {
-                    overscrollScope.launch {
-                        verticalOverscroll.snapTo((verticalOverscroll.value + available.y).coerceAtLeast(0f))
-                    }
-                    return androidx.compose.ui.geometry.Offset(0f, available.y)
+                val sharedConsumed = sharedVerticalElasticState.connection.onPostScroll(
+                    consumed = consumed,
+                    available = available,
+                    source = source,
+                )
+                // Closing the control center is a pull-to-face action, not a
+                // second gesture. It starts only once the shared spring has
+                // reached the configured threshold.
+                if (
+                    source == NestedScrollSource.UserInput &&
+                    dismissThresholdReached() &&
+                    !fullScreenDismissTriggered
+                ) {
+                    fullScreenDismissTriggered = true
+                    onDismissToFace()
                 }
-                if (verticalOverscroll.value < 0f && available.y > 0f) {
-                    overscrollScope.launch {
-                        verticalOverscroll.snapTo((verticalOverscroll.value + available.y).coerceAtMost(0f))
-                    }
-                    return androidx.compose.ui.geometry.Offset(0f, available.y)
-                }
-                return androidx.compose.ui.geometry.Offset.Zero
+                return sharedConsumed
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (controlCenterGestureLocked) return available
-                if (verticalOverscroll.value != 0f) {
-                    if (verticalOverscroll.value <= -dismissDragThresholdPx) {
+                if (sharedVerticalElasticState.offsetPx != 0f) {
+                    if (
+                        dismissThresholdReached() &&
+                        !fullScreenDismissTriggered
+                    ) {
+                        fullScreenDismissTriggered = true
                         onDismissToFace()
-                        verticalOverscroll.snapTo(0f)
                         return available
                     }
-                    verticalOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-                    return available
+                    return sharedVerticalElasticState.connection.onPreFling(available)
                 }
                 return Velocity.Zero
             }
-        }
-    }
-    val trackDismissPointer = Modifier.pointerInput(verticalScrollState, controlCenterGestureLocked) {
-        awaitPointerEventScope {
-            var pressed = false
-            while (true) {
-                val event = awaitPointerEvent()
-                if (controlCenterGestureLocked) {
-                    bottomDismissArmed = false
-                    pressed = event.changes.any { it.pressed }
-                    continue
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                if (controlCenterGestureLocked) return available
+                val sharedConsumed = sharedVerticalElasticState.connection.onPostFling(consumed, available)
+                if (
+                    dismissThresholdReached() &&
+                    !fullScreenDismissTriggered
+                ) {
+                    fullScreenDismissTriggered = true
+                    onDismissToFace()
                 }
-                val isPressed = event.changes.any { it.pressed }
-                if (!pressed && isPressed) {
-                    bottomDismissArmed = verticalScrollState.maxValue > 0 &&
-                        verticalScrollState.value >= verticalScrollState.maxValue
-                } else if (pressed && !isPressed) {
-                    bottomDismissArmed = false
-                }
-                pressed = isPressed
+                return sharedConsumed
             }
         }
     }
@@ -451,16 +457,26 @@ fun ControlCenterLayer(
         LaunchedEffect(verticalScrollEnabled, toggleRowFits) {
             verticalOverscroll.snapTo(0f)
             toggleOverscroll.snapTo(0f)
+            sharedVerticalElasticState.reset()
             fullScreenDismissTriggered = false
-            bottomDismissArmed = false
         }
         val verticalElasticModifier = Modifier
             .fillMaxSize()
-            .graphicsLayer { translationY = verticalOverscroll.value }
+            .onSizeChanged { size ->
+                if (verticalScrollEnabled) {
+                    sharedVerticalElasticState.setViewportHeight(size.height)
+                }
+            }
+            .graphicsLayer {
+                translationY = if (verticalScrollEnabled) {
+                    sharedVerticalElasticState.offsetPx
+                } else {
+                    verticalOverscroll.value
+                }
+            }
             .padding(start = leftSafeInset)
         val contentModifier = if (verticalScrollEnabled) {
             verticalElasticModifier
-                .then(trackDismissPointer)
                 .nestedScroll(verticalElasticScroll)
                 .verticalScroll(verticalScrollState)
         } else {
@@ -1182,7 +1198,12 @@ private fun MediaControlCard(
                             contentScale = ContentScale.Crop
                         )
                     } else {
-                        Icon(Icons.Filled.MusicNote, null, tint = Color.White, modifier = Modifier.size(34.dp))
+                        Icon(
+                            painter = painterResource(R.drawable.ic_flue_music_round),
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(34.dp),
+                        )
                     }
                 }
                 Spacer(Modifier.width(artworkGap))
@@ -1262,7 +1283,12 @@ private fun MediaNotificationAccessPrompt() {
                 .background(Color.Black.copy(alpha = 0.22f)),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Filled.MusicNote, null, tint = Color.White, modifier = Modifier.size(34.dp))
+            Icon(
+                painter = painterResource(R.drawable.ic_flue_music_round),
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(34.dp),
+            )
         }
         Spacer(Modifier.width(12.dp))
         Column(
@@ -1389,7 +1415,7 @@ private fun MediaControlsRow(
                 }
             }
             MediaButton(
-                Icons.Filled.SkipPrevious,
+                iconRes = R.drawable.ic_flue_media_previous_round,
                 size = buttonSize,
                 iconSize = iconSize,
                 onGestureLockChange = onGestureLockChange
@@ -1397,7 +1423,11 @@ private fun MediaControlsRow(
                 mediaState.controller?.transportControls?.skipToPrevious()
             }
             MediaButton(
-                icon = if (mediaState.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                iconRes = if (mediaState.playing) {
+                    R.drawable.ic_flue_media_pause_round
+                } else {
+                    R.drawable.ic_flue_media_play_round
+                },
                 size = buttonSize,
                 iconSize = iconSize,
                 onGestureLockChange = onGestureLockChange
@@ -1406,7 +1436,7 @@ private fun MediaControlsRow(
                 if (mediaState.playing) controls?.pause() else controls?.play()
             }
             MediaButton(
-                Icons.Filled.SkipNext,
+                iconRes = R.drawable.ic_flue_media_next_round,
                 size = buttonSize,
                 iconSize = iconSize,
                 onGestureLockChange = onGestureLockChange
@@ -1792,7 +1822,7 @@ private fun MediaProgressSection(
 
 @Composable
 private fun MediaButton(
-    icon: ImageVector,
+    iconRes: Int,
     size: androidx.compose.ui.unit.Dp = 36.dp,
     iconSize: androidx.compose.ui.unit.Dp = 20.dp,
     onGestureLockChange: (Boolean) -> Unit = {},
@@ -1818,7 +1848,12 @@ private fun MediaButton(
             ),
         contentAlignment = Alignment.Center
     ) {
-        Icon(icon, null, tint = Color.White, modifier = Modifier.size(iconSize))
+        Icon(
+            painter = painterResource(iconRes),
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(iconSize),
+        )
     }
 }
 

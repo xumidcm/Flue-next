@@ -1,6 +1,7 @@
 package com.flue.launcher.applist.nativeview
 
 import com.flue.launcher.applist.model.AppItemKey
+import kotlin.math.abs
 import kotlin.math.hypot
 
 internal sealed interface NativeDragEffect {
@@ -39,6 +40,8 @@ internal class NativeDragGestureMachine(
         private set
     val hasLongPressed: Boolean
         get() = longPressDispatched
+    val folderHoverTarget: AppItemKey?
+        get() = armedFolderTarget
 
     fun onDown(
         sourceKey: AppItemKey,
@@ -93,6 +96,14 @@ internal class NativeDragGestureMachine(
             if (distance <= policy.startThresholdPx) return emptyList()
             isDragging = true
             lastMoveTarget = source
+            // Seed the dwell clock on the same sample that starts a drag. The
+            // controller may then arm it from a delayed callback even when the
+            // finger remains perfectly still over the target.
+            folderHoverGate?.update(
+                candidateKey = folderCandidateKey?.takeUnless { it == source }?.value,
+                speedPxPerMs = speedPxPerMs,
+                nowMillis = nowMillis,
+            )
             return listOf(
                 NativeDragEffect.DismissActions,
                 NativeDragEffect.StartDrag(source),
@@ -100,7 +111,12 @@ internal class NativeDragGestureMachine(
         }
 
         val effects = mutableListOf<NativeDragEffect>()
-        val folderCandidate = folderCandidateKey?.takeUnless { it == source }
+        val folderCandidate = folderCandidateKey
+            ?.takeUnless { it == source }
+            ?.takeIf {
+                speedPxPerMs.isFinite() &&
+                    abs(speedPxPerMs) <= policy.folderHoverMaxSpeedPxPerMs
+            }
         val nextArmedTarget = folderHoverGate?.update(
             candidateKey = folderCandidate?.value,
             speedPxPerMs = speedPxPerMs,
@@ -110,23 +126,37 @@ internal class NativeDragGestureMachine(
             armedFolderTarget = nextArmedTarget
             effects += NativeDragEffect.FolderHoverChanged(nextArmedTarget)
         }
-        if (targetKey != null && targetKey != source && targetKey != lastMoveTarget) {
+        if (
+            targetKey != null &&
+            targetKey != source &&
+            targetKey != lastMoveTarget
+        ) {
             lastMoveTarget = targetKey
             effects += NativeDragEffect.Move(source, targetKey)
         }
         return effects
     }
 
-    fun onUp(currentTargetKey: AppItemKey?): List<NativeDragEffect> {
+    fun onUp(
+        currentFolderTargetKey: AppItemKey?,
+        currentReorderTargetKey: AppItemKey? = currentFolderTargetKey,
+    ): List<NativeDragEffect> {
         if (!isTracking) return emptyList()
         val source = sourceKey
         val wasDragging = isDragging
-        val folderTarget = armedFolderTarget?.takeIf { it == currentTargetKey && it != source }
+        val folderTarget = armedFolderTarget?.takeIf {
+            it == currentFolderTargetKey && it != source
+        }
         val effects = mutableListOf<NativeDragEffect>()
         if (source != null && folderTarget != null) {
             effects += NativeDragEffect.CreateFolder(source, folderTarget)
         }
         if (armedFolderTarget != null) effects += NativeDragEffect.FolderHoverChanged(null)
+        if (source != null && wasDragging && folderTarget == null) {
+            currentReorderTargetKey
+                ?.takeIf { it != source && it != lastMoveTarget }
+                ?.let { effects += NativeDragEffect.Move(source, it) }
+        }
         if (wasDragging) effects += NativeDragEffect.CommitDrag
         resetState()
         return effects
