@@ -20,7 +20,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -40,6 +39,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import com.flue.launcher.ui.home.BuiltInWatchFacePreview
+import com.flue.launcher.ui.settings.miuix.MiuixIcons
+import com.flue.launcher.ui.settings.miuix.SettingsIcon
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.WatchColors
@@ -74,7 +75,7 @@ fun WatchFaceSettingCard(
 
     Row(
         modifier = Modifier
-            .fillMaxWidth()
+            .roundScreenChordWidth()
             .graphicsLayer {
                 scaleX = scale * pressScale
                 scaleY = scale * pressScale
@@ -176,7 +177,11 @@ fun WatchFaceSettingCard(
                             .padding(8.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Filled.Delete, contentDescription = null, tint = Color(0xFFFF6B6B))
+                        SettingsIcon(
+                            material = Icons.Filled.Delete,
+                            miuix = MiuixIcons.Delete,
+                            tint = Color(0xFFFF6B6B)
+                        )
                     }
                 } else if (onOpenSettings != null && descriptor.supportsSettings) {
                     Box(
@@ -187,11 +192,19 @@ fun WatchFaceSettingCard(
                             .padding(8.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Filled.Settings, contentDescription = null, tint = launcherStyle.accentColor)
+                        SettingsIcon(
+                            material = Icons.Filled.Settings,
+                            miuix = MiuixIcons.Settings,
+                            tint = launcherStyle.accentColor
+                        )
                     }
                 }
                 if (selected) {
-                    Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = launcherStyle.accentColor)
+                    SettingsIcon(
+                        material = Icons.Filled.CheckCircle,
+                        miuix = MiuixIcons.CheckCircle,
+                        tint = launcherStyle.accentColor
+                    )
                 }
             }
         }

@@ -4,10 +4,8 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +22,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -35,7 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
@@ -54,6 +55,38 @@ import com.flue.launcher.ui.theme.UiStyle
 
 /** MIUIX 拖影弹簧：dampingRatio 0.9 / stiffness 600。 */
 private fun <T> miuixSpring() = spring<T>(dampingRatio = 0.9f, stiffness = 600f)
+
+/**
+ * 图标按风格取值：MIUIX 风格下用 [MiuixIcons] 里的线性图标，其它风格保持
+ * 原来的 Material 图标。所有设置页图标使用点都必须走这里，不要再直接写
+ * `Icons.Filled.*`，否则 MIUIX 风格下就会漏掉一个 Material 实心图标。
+ */
+@Composable
+fun settingsIcon(material: ImageVector, miuix: ImageVector): ImageVector =
+    if (LauncherTheme.style.uiStyle == UiStyle.MIUIX) miuix else material
+
+/**
+ * 设置页统一图标：自动按风格换资产、按风格换默认尺寸。
+ * MIUIX 是 1.5 线宽的线性图标，画到 22dp 时的视觉重量刚好对得上
+ * Material 24dp 的实心图标；[size] 传值可覆盖。
+ */
+@Composable
+fun SettingsIcon(
+    material: ImageVector,
+    miuix: ImageVector,
+    tint: Color,
+    modifier: Modifier = Modifier,
+    size: Dp? = null,
+    contentDescription: String? = null,
+) {
+    val isMiuix = LauncherTheme.style.uiStyle == UiStyle.MIUIX
+    Icon(
+        imageVector = if (isMiuix) miuix else material,
+        contentDescription = contentDescription,
+        tint = tint,
+        modifier = modifier.size(size ?: (if (isMiuix) 22.dp else 24.dp)),
+    )
+}
 
 /**
  * 组容器：大圆角卡片，可选组标题（左对齐加粗小号灰字）。
@@ -173,8 +206,11 @@ fun MiuixSettingsRow(
 }
 
 /**
- * 胶囊开关：26x15dp 视觉，拖影动画 spring(0.9, 600)。
- * 按压时滑块横向拉伸，模拟 HyperOS 的「拖影」质感。
+ * 胶囊开关：44x26dp 视觉（HyperOS 实际比例），滑块 22dp，
+ * 拖影动画 spring(0.9, 600)。按压时滑块横向拉伸，模拟 HyperOS 的「拖影」质感。
+ *
+ * 注意：这里**故意不做任何触感反馈** —— 不调 `performHapticFeedback`，
+ * `clickable` 也传 `indication = null`，点开关不应该震手表。
  */
 @Composable
 fun MiuixSwitch(
@@ -182,8 +218,8 @@ fun MiuixSwitch(
     onCheckedChange: ((Boolean) -> Unit)?,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    trackWidth: Dp = 26.dp,
-    trackHeight: Dp = 15.dp
+    trackWidth: Dp = 44.dp,
+    trackHeight: Dp = 26.dp
 ) {
     val style = LauncherTheme.style
     val interactionSource = remember { MutableInteractionSource() }
@@ -193,7 +229,7 @@ fun MiuixSwitch(
     val thumbSize = trackHeight - thumbPadding * 2
     // 拖影：按压时滑块拉长
     val thumbWidth by animateDpAsState(
-        if (pressed && enabled) thumbSize + 4.dp else thumbSize,
+        if (pressed && enabled) thumbSize + 5.dp else thumbSize,
         animationSpec = miuixSpring(),
         label = "miuix_switch_thumb_width"
     )
@@ -204,9 +240,10 @@ fun MiuixSwitch(
     )
     val trackColor by animateColorAsState(
         when {
-            !enabled -> style.secondaryTextColor.copy(alpha = 0.20f)
+            !enabled && checked -> style.accentColor.copy(alpha = 0.38f)
+            !enabled -> style.switchTrackOffColor.copy(alpha = style.switchTrackOffColor.alpha * 0.6f)
             checked -> style.accentColor
-            else -> style.secondaryTextColor.copy(alpha = 0.36f)
+            else -> style.switchTrackOffColor
         },
         label = "miuix_switch_track"
     )
@@ -247,84 +284,79 @@ fun MiuixSwitch(
 }
 
 /**
- * HyperOS 风格滑块：24dp 高的粗胶囊轨道、无 thumb，填充即值。
- * 支持点按和拖动改值。
+ * HyperOS 风格滑块：24dp 高的粗胶囊轨道、无独立 thumb，填充即值。
+ *
+ * 实现上**直接用 Material3 的 [Slider]**，只通过 `track` / `thumb` 两个 slot
+ * 换掉外观 —— 拖动手感、点按定位、steps 吸附、无障碍语义、RTL 全部由 M3 保证，
+ * 这里不再手写 `pointerInput`（之前那版自搓的没有 steps 也没有语义）。
+ * `thumb` 传空 composable，于是轨道能占满整宽。
+ *
+ * 带 `track` / `thumb` slot 的那个 [Slider] 重载在 material3 1.4.0 上仍标着
+ * `@ExperimentalMaterial3Api`，所以这里必须显式 OptIn。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MiuixSlider(
     value: Float,
     onValueChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
     valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
+    steps: Int = 0,
     enabled: Boolean = true,
     onValueChangeFinished: (() -> Unit)? = null,
     trackHeight: Dp = 24.dp
 ) {
     val style = LauncherTheme.style
-    var dragging by remember { mutableStateOf(false) }
+    val interactionSource = remember { MutableInteractionSource() }
+    val dragged by interactionSource.collectIsDraggedAsState()
+    val pressed by interactionSource.collectIsPressedAsState()
+    val active = dragged || pressed
     val span = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
     val fraction = ((value - valueRange.start) / span).coerceIn(0f, 1f)
     val fillColor by animateColorAsState(
         when {
             !enabled -> style.secondaryTextColor.copy(alpha = 0.30f)
-            dragging -> style.accentColor
+            active -> style.accentColor
             else -> style.accentColor.copy(alpha = 0.92f)
         },
         label = "miuix_slider_fill"
     )
+    val trackShape = RoundedCornerShape(999.dp)
 
-    Box(
+    Slider(
+        value = value,
+        onValueChange = onValueChange,
         modifier = modifier
             .fillMaxWidth()
-            .height(trackHeight)
-            .clip(RoundedCornerShape(999.dp))
-            .background(style.pressedCardColor)
-            .then(
-                if (enabled) {
-                    Modifier.pointerInputSlider(
-                        valueRange = valueRange,
-                        onValueChange = onValueChange,
-                        onDragStateChange = { dragging = it },
-                        onValueChangeFinished = onValueChangeFinished
-                    )
-                } else {
-                    Modifier
-                }
-            ),
-        contentAlignment = Alignment.CenterStart
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(fraction)
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(999.dp))
-                .background(fillColor)
-        )
-    }
-}
-
-private fun Modifier.pointerInputSlider(
-    valueRange: ClosedFloatingPointRange<Float>,
-    onValueChange: (Float) -> Unit,
-    onDragStateChange: (Boolean) -> Unit,
-    onValueChangeFinished: (() -> Unit)?
-): Modifier = pointerInput(valueRange) {
-    fun positionToValue(x: Float): Float {
-        val f = (x / size.width.toFloat()).coerceIn(0f, 1f)
-        return valueRange.start + f * (valueRange.endInclusive - valueRange.start)
-    }
-    awaitEachGesture {
-        val down = awaitFirstDown()
-        down.consume()
-        onDragStateChange(true)
-        onValueChange(positionToValue(down.position.x))
-        drag(down.id) { change ->
-            change.consume()
-            onValueChange(positionToValue(change.position.x))
+            .height(trackHeight),
+        enabled = enabled,
+        valueRange = valueRange,
+        steps = steps,
+        onValueChangeFinished = onValueChangeFinished,
+        interactionSource = interactionSource,
+        // HyperOS 的滑块没有可见把手，填充边缘就是把手
+        thumb = { },
+        track = { _ ->
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(trackHeight)
+                    .clip(trackShape)
+                    .background(
+                        if (enabled) style.switchTrackOffColor else style.switchTrackOffColor.copy(alpha = 0.5f)
+                    ),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(fraction)
+                        .fillMaxHeight()
+                        .clip(trackShape)
+                        .background(fillColor)
+                )
+            }
         }
-        onDragStateChange(false)
-        onValueChangeFinished?.invoke()
-    }
+    )
 }
 
 // ------------------------------------------------------------------ Preview

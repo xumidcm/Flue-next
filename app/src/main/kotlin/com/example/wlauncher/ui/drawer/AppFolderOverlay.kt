@@ -84,6 +84,7 @@ import androidx.compose.foundation.gestures.scrollBy
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.iconForDisplay
 import com.flue.launcher.ui.common.flueElasticNestedScroll
+import com.flue.launcher.ui.common.isFlueScreenRound
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -339,12 +340,13 @@ fun AppFolderOverlay(
 
     val alpha by animateFloatAsState(
         targetValue = if (showing) 1f else 0f,
+        // 180ms 与 requestDismiss() 的 190ms 收尾等待配套：淡出结束后浮层才被移除。
         animationSpec = tween(180),
         label = "folder_overlay_alpha"
     )
     val scale by animateFloatAsState(
-        targetValue = if (showing) 1f else 0.92f,
-        animationSpec = spring(dampingRatio = 0.78f, stiffness = 520f),
+        targetValue = if (showing) 1f else 0.86f,
+        animationSpec = spring(dampingRatio = 0.9f, stiffness = 400f),
         label = "folder_overlay_scale"
     )
 
@@ -493,7 +495,12 @@ fun AppFolderOverlay(
         contentAlignment = Alignment.Center
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val panelMaxHeight = (maxHeight * 0.76f).coerceAtLeast(210.dp)
+            // 圆屏上一块 90% 宽 / 76% 高的矩形面板，四角会被表盘边缘切掉，
+            // 「管理应用」按钮和网格最外圈首当其冲。收窄到内接矩形附近。
+            val roundScreen = isFlueScreenRound()
+            val panelWidthFraction = if (roundScreen) 0.82f else 0.9f
+            val panelHeightFraction = if (roundScreen) 0.70f else 0.76f
+            val panelMaxHeight = (maxHeight * panelHeightFraction).coerceAtLeast(210.dp)
             val gridMaxHeight = (panelMaxHeight - 76.dp).coerceAtLeast(150.dp)
             val panelColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
             val panelTextColor = MaterialTheme.colorScheme.onSurface
@@ -501,7 +508,7 @@ fun AppFolderOverlay(
             val manageButtonBackground = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
             Column(
                 modifier = Modifier
-                    .fillMaxWidth(0.9f)
+                    .fillMaxWidth(panelWidthFraction)
                     .heightIn(max = panelMaxHeight)
                     .graphicsLayer {
                         scaleX = scale

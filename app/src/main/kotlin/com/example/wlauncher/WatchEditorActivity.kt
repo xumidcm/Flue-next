@@ -42,7 +42,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -96,6 +95,15 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.zIndex
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.ContentScale
@@ -161,6 +169,7 @@ import com.flue.launcher.watchface.editor.conversion.WatchFormatConverter
 import com.flue.launcher.watchface.standard.WATCHMAKER_ID_PREFIX
 import com.flue.launcher.watchface.standard.WatchFaceShape
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStorage
+import com.flue.launcher.watchface.standard.WatchLiveLayerTransform
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceView
 import com.flue.launcher.watchface.standard.rememberWatchmakerWatchDataProvider
 import com.flue.launcher.watchface.standard.watchFaceShape
@@ -917,18 +926,13 @@ private fun WatchEditorScreen(
     onConvertWatch: () -> Unit,
 ) {
     var panel by rememberSaveable { mutableStateOf(WatchEditorPanel.LAYERS) }
-    var previewFullscreen by rememberSaveable { mutableStateOf(false) }
+    var stage by rememberSaveable { mutableStateOf(WatchEditorStage.NORMAL) }
     // Each editor level keeps its own position. Re-creating one state whenever
     // the tab changes made returning from Properties jump the layer list back
     // to the top, which is especially disorienting on a small watch viewport.
     val layerListState = rememberLazyListState()
     val propertiesListState = rememberLazyListState()
     val watchListState = rememberLazyListState()
-    val panelListState: LazyListState = when (panel) {
-        WatchEditorPanel.LAYERS -> layerListState
-        WatchEditorPanel.PROPERTIES -> propertiesListState
-        WatchEditorPanel.WATCH -> watchListState
-    }
     var collapsedLayerKeys by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
     var scrollToLayerRequest by remember { mutableStateOf<Pair<Int, String>?>(null) }
     val context = LocalContext.current
@@ -952,7 +956,7 @@ private fun WatchEditorScreen(
             runCatching { layerListState.animateScrollToItem(itemsBeforeRows + rowIndex) }
         }
     }
-    BackHandler(enabled = previewFullscreen) { previewFullscreen = false }
+    BackHandler(enabled = stage != WatchEditorStage.NORMAL) { stage = WatchEditorStage.NORMAL }
 
     val previewContent: @Composable (Modifier) -> Unit = { previewModifier ->
         WatchEditorPreview(
@@ -967,14 +971,14 @@ private fun WatchEditorScreen(
             onSelectFromCanvas = { key -> onSelectLayer(key) },
             onCanvasTap = { key ->
                 if (key != null) {
-                    if (previewFullscreen) {
-                        previewFullscreen = false
+                    if (stage == WatchEditorStage.PREVIEW_FULLSCREEN) {
+                        stage = WatchEditorStage.NORMAL
                         panel = WatchEditorPanel.PROPERTIES
                     } else if (panel == WatchEditorPanel.LAYERS) {
                         scrollToLayerRequest =
                             (scrollToLayerRequest?.first ?: 0) + 1 to key.value
                     }
-                } else if (!previewFullscreen) {
+                } else if (stage != WatchEditorStage.PREVIEW_FULLSCREEN) {
                     onSelectLayer(null)
                 }
             },
@@ -985,351 +989,425 @@ private fun WatchEditorScreen(
         )
     }
 
-    if (previewFullscreen) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black),
-        ) {
-            previewContent(
-                Modifier
-                    .fillMaxSize()
-                    .aspectRatio(1f)
-                    .align(Alignment.Center),
-            )
-            // Keep the exit control inside the round safe area.
-            IconButton(
-                onClick = { previewFullscreen = false },
-                modifier = if (isRound) {
-                    Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 16.dp)
-                } else {
-                    Modifier
-                        .align(Alignment.TopStart)
-                        .padding(6.dp)
-                },
+    val horizontalListPadding = if (isRound) 24.dp else 10.dp
+    val bottomListPadding = if (isRound) 28.dp else 10.dp
+    val listContentPadding = PaddingValues(
+        start = horizontalListPadding,
+        end = horizontalListPadding,
+        top = 10.dp,
+        bottom = bottomListPadding,
+    )
+    // 属性面板在普通形态和全屏形态下必须是同一份内容：点「下」箭头不再只是
+    // 滚动到属性那一栏，而是真的把属性铺满整块表盘（与「上」的全屏预览对称）。
+    val propertiesPanel: @Composable (Modifier, PaddingValues) -> Unit =
+        { panelModifier, panelPadding ->
+            LazyColumn(
+                state = propertiesListState,
+                modifier = panelModifier
+                    .fillMaxWidth()
+                    // 弹性回弹靠 graphicsLayer{translationY} 实现，默认 clip=false，
+                    // 回弹时滚动内容会画到上面的固定区（预览 / 标题）上面去。
+                    // 在滚动视口边界上裁一刀，位移就永远留在自己的区域里。
+                    .clipToBounds()
+                    .flueElasticNestedScroll(propertiesListState),
+                contentPadding = panelPadding,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Icon(
-                    Icons.Default.KeyboardArrowDown,
-                    contentDescription = "退出全屏预览",
-                    tint = Color.White,
-                )
+                editorStatusItems(busyMessage, errorMessage)
+                if (selectedLayer == null) {
+                    item("no_selection") {
+                        Text(
+                            "请先选择一个图层",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    item("properties") {
+                        LayerPropertiesEditor(
+                            layer = selectedLayer,
+                            draftResetKey = propertyDraftRevision,
+                            enabled = busyMessage == null,
+                            onLiveChange = { changes ->
+                                onLiveAttributeChange(selectedLayer.key, changes)
+                            },
+                            onImportImage = onImportImage,
+                        )
+                    }
+                }
             }
         }
-        return
-    }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val previewSize = watchEditorPreviewSizeDp(maxWidth.value, maxHeight.value).dp
-        val horizontalListPadding = if (isRound) 24.dp else 10.dp
-        val bottomListPadding = if (isRound) 28.dp else 10.dp
-        val listContentPadding = PaddingValues(
-            start = horizontalListPadding,
-            end = horizontalListPadding,
-            top = 10.dp,
-            bottom = bottomListPadding,
-        )
-        Column(modifier = Modifier.fillMaxSize()) {
-            Row(
+    AnimatedContent(
+        targetState = stage,
+        transitionSpec = { watchEditorContentTransition() },
+        label = "watch_editor_stage",
+        modifier = Modifier.fillMaxSize(),
+    ) { currentStage ->
+        when (currentStage) {
+            WatchEditorStage.PREVIEW_FULLSCREEN -> Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(
-                        horizontal = if (isRound) 20.dp else 4.dp,
-                        vertical = if (isRound) 6.dp else 2.dp,
-                    ),
-                verticalAlignment = Alignment.CenterVertically,
+                    .fillMaxSize()
+                    .background(Color.Black),
             ) {
-                IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                }
-                Column(
-                    modifier = Modifier.weight(1f),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(
-                        snapshot.rootAttributes["name"].orEmpty().ifBlank { ".watch 编辑器" },
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                    )
-                    Text(
-                        if (snapshot.dirty) "草稿有修改" else "草稿已同步",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                previewContent(
+                    Modifier
+                        .fillMaxSize()
+                        .aspectRatio(1f)
+                        .align(Alignment.Center),
+                )
+                // Keep the exit control inside the round safe area.
                 IconButton(
-                    onClick = { previewFullscreen = true },
-                    modifier = Modifier.size(40.dp),
+                    onClick = { stage = WatchEditorStage.NORMAL },
+                    modifier = if (isRound) {
+                        Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 16.dp)
+                    } else {
+                        Modifier
+                            .align(Alignment.TopStart)
+                            .padding(6.dp)
+                    },
                 ) {
-                    Icon(Icons.Default.KeyboardArrowUp, contentDescription = "预览全屏（上）")
-                }
-                IconButton(
-                    onClick = { panel = WatchEditorPanel.PROPERTIES },
-                    modifier = Modifier.size(40.dp),
-                ) {
-                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = "跳到图层属性（下）")
-                }
-                IconButton(
-                    onClick = onUndo,
-                    enabled = snapshot.canUndo && busyMessage == null,
-                    modifier = Modifier.size(40.dp),
-                ) {
-                    Icon(Icons.Default.Undo, contentDescription = "撤销")
-                }
-                IconButton(
-                    onClick = onRedo,
-                    enabled = snapshot.canRedo && busyMessage == null,
-                    modifier = Modifier.size(40.dp),
-                ) {
-                    Icon(Icons.Default.Redo, contentDescription = "重做")
-                }
-            }
-            previewContent(
-                Modifier
-                    .size(previewSize)
-                    .aspectRatio(1f)
-                    .align(Alignment.CenterHorizontally),
-            )
-            TabRow(selectedTabIndex = panel.ordinal) {
-                WatchEditorPanel.entries.forEach { candidate ->
-                    Tab(
-                        selected = panel == candidate,
-                        onClick = { panel = candidate },
-                        text = { Text(candidate.label, maxLines = 1) },
+                    Icon(
+                        Icons.Default.KeyboardArrowDown,
+                        contentDescription = "退出全屏预览",
+                        tint = Color.White,
                     )
                 }
             }
-            when (panel) {
-                WatchEditorPanel.LAYERS -> LazyColumn(
-                    state = panelListState,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .flueElasticNestedScroll(panelListState),
-                    contentPadding = listContentPadding,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+
+            WatchEditorStage.PROPERTIES_FULLSCREEN -> Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background),
+            ) {
+                propertiesPanel(
+                    Modifier.fillMaxSize(),
+                    PaddingValues(
+                        start = horizontalListPadding,
+                        end = horizontalListPadding,
+                        // 顶部让出退出按钮，圆屏再多留一点安全区。
+                        top = if (isRound) 52.dp else 44.dp,
+                        bottom = bottomListPadding,
+                    ),
+                )
+                IconButton(
+                    onClick = { stage = WatchEditorStage.NORMAL },
+                    modifier = if (isRound) {
+                        Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 8.dp)
+                    } else {
+                        Modifier
+                            .align(Alignment.TopStart)
+                            .padding(6.dp)
+                    },
                 ) {
-                    editorStatusItems(busyMessage, errorMessage)
-                    item("add_actions") {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    Icon(
+                        Icons.Default.KeyboardArrowUp,
+                        contentDescription = "退出全屏属性",
+                    )
+                }
+            }
+
+            WatchEditorStage.NORMAL -> BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val previewSize = watchEditorPreviewSizeDp(maxWidth.value, maxHeight.value).dp
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            // 不透明背景 + zIndex：下面的滚动区带着弹性位移，回弹时不能
+                            // 让它的内容透过来或者压在标题栏上面。
+                            .zIndex(2f)
+                            .background(MaterialTheme.colorScheme.background)
+                            .padding(
+                                horizontal = if (isRound) 20.dp else 4.dp,
+                                vertical = if (isRound) 6.dp else 2.dp,
+                            ),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        }
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            BASIC_LAYER_TYPES.forEach { (type, label) ->
-                                OutlinedButton(
-                                    onClick = { onAddLayer(type) },
-                                    enabled = busyMessage == null,
+                            Text(
+                                snapshot.rootAttributes["name"].orEmpty().ifBlank { ".watch 编辑器" },
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                            )
+                            Text(
+                                if (snapshot.dirty) "草稿有修改" else "草稿已同步",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        IconButton(
+                            onClick = { stage = WatchEditorStage.PREVIEW_FULLSCREEN },
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "预览全屏（上）")
+                        }
+                        IconButton(
+                            onClick = {
+                                panel = WatchEditorPanel.PROPERTIES
+                                stage = WatchEditorStage.PROPERTIES_FULLSCREEN
+                            },
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "属性全屏（下）")
+                        }
+                        IconButton(
+                            onClick = onUndo,
+                            enabled = snapshot.canUndo && busyMessage == null,
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(Icons.Default.Undo, contentDescription = "撤销")
+                        }
+                        IconButton(
+                            onClick = onRedo,
+                            enabled = snapshot.canRedo && busyMessage == null,
+                            modifier = Modifier.size(40.dp),
+                        ) {
+                            Icon(Icons.Default.Redo, contentDescription = "重做")
+                        }
+                    }
+                    previewContent(
+                        Modifier
+                            .size(previewSize)
+                            .aspectRatio(1f)
+                            .zIndex(2f)
+                            .align(Alignment.CenterHorizontally),
+                    )
+                    TabRow(
+                        selectedTabIndex = panel.ordinal,
+                        modifier = Modifier
+                            .zIndex(2f)
+                            .background(MaterialTheme.colorScheme.surface),
+                    ) {
+                        WatchEditorPanel.entries.forEach { candidate ->
+                            Tab(
+                                selected = panel == candidate,
+                                onClick = { panel = candidate },
+                                text = { Text(candidate.label, maxLines = 1) },
+                            )
+                        }
+                    }
+                    AnimatedContent(
+                        targetState = panel,
+                        transitionSpec = { watchEditorContentTransition() },
+                        label = "watch_editor_panel",
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                    ) { currentPanel ->
+                        when (currentPanel) {
+                        WatchEditorPanel.LAYERS -> LazyColumn(
+                            state = layerListState,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                // 见 propertiesPanel 的注释：弹性位移必须裁在视口内。
+                                .clipToBounds()
+                                .flueElasticNestedScroll(layerListState),
+                            contentPadding = listContentPadding,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            editorStatusItems(busyMessage, errorMessage)
+                            item("add_actions") {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
-                                    Icon(Icons.Default.Add, contentDescription = null, Modifier.size(16.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text(label)
+                                    BASIC_LAYER_TYPES.forEach { (type, label) ->
+                                        OutlinedButton(
+                                            onClick = { onAddLayer(type) },
+                                            enabled = busyMessage == null,
+                                        ) {
+                                            Icon(Icons.Default.Add, contentDescription = null, Modifier.size(16.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text(label)
+                                        }
+                                    }
+                                }
+                            }
+                            if (snapshot.layers.isEmpty()) {
+                                item("layers_empty") {
+                                    Text(
+                                        "当前没有图层",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                            } else {
+                                items(treeRows, key = { it.layer.key.value }) { row ->
+                                    val layer = row.layer
+                                    EditorLayerRow(
+                                        layer = layer,
+                                        selected = layer.key == selectedLayer?.key,
+                                        layerCount = snapshot.layers.size,
+                                        depth = row.depth,
+                                        hasChildren = row.hasChildren,
+                                        expanded = row.expanded,
+                                        enabled = busyMessage == null,
+                                        onSelect = {
+                                            onSelectLayer(layer.key)
+                                            panel = WatchEditorPanel.PROPERTIES
+                                        },
+                                        onToggleExpanded = {
+                                            val key = layer.key.value
+                                            collapsedLayerKeys = if (key in collapsedLayerKeys) {
+                                                collapsedLayerKeys - key
+                                            } else {
+                                                collapsedLayerKeys + key
+                                            }
+                                        },
+                                        onMove = { onMoveLayer(layer.key, it) },
+                                        onDuplicate = { onDuplicateLayer(layer.key) },
+                                        onDelete = { onDeleteLayer(layer.key) },
+                                    )
                                 }
                             }
                         }
-                    }
-                    if (snapshot.layers.isEmpty()) {
-                        item("layers_empty") {
-                            Text(
-                                "当前没有图层",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                    } else {
-                        items(treeRows, key = { it.layer.key.value }) { row ->
-                            val layer = row.layer
-                            EditorLayerRow(
-                                layer = layer,
-                                selected = layer.key == selectedLayer?.key,
-                                layerCount = snapshot.layers.size,
-                                depth = row.depth,
-                                hasChildren = row.hasChildren,
-                                expanded = row.expanded,
-                                enabled = busyMessage == null,
-                                onSelect = {
-                                    onSelectLayer(layer.key)
-                                    panel = WatchEditorPanel.PROPERTIES
-                                },
-                                onToggleExpanded = {
-                                    val key = layer.key.value
-                                    collapsedLayerKeys = if (key in collapsedLayerKeys) {
-                                        collapsedLayerKeys - key
-                                    } else {
-                                        collapsedLayerKeys + key
-                                    }
-                                },
-                                onMove = { onMoveLayer(layer.key, it) },
-                                onDuplicate = { onDuplicateLayer(layer.key) },
-                                onDelete = { onDeleteLayer(layer.key) },
-                            )
-                        }
-                    }
-                }
 
-                WatchEditorPanel.PROPERTIES -> LazyColumn(
-                    state = panelListState,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .flueElasticNestedScroll(panelListState),
-                    contentPadding = listContentPadding,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    editorStatusItems(busyMessage, errorMessage)
-                    if (selectedLayer == null) {
-                        item("no_selection") {
-                            Text(
-                                "请先选择一个图层",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    } else {
-                        item("properties") {
-                            LayerPropertiesEditor(
-                                layer = selectedLayer,
-                                draftResetKey = propertyDraftRevision,
-                                enabled = busyMessage == null,
-                                onLiveChange = { changes ->
-                                    onLiveAttributeChange(selectedLayer.key, changes)
-                                },
-                                onImportImage = onImportImage,
-                            )
-                        }
-                    }
-                }
+                        WatchEditorPanel.PROPERTIES ->
+                            propertiesPanel(Modifier.fillMaxSize(), listContentPadding)
 
-                WatchEditorPanel.WATCH -> LazyColumn(
-                    state = panelListState,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .flueElasticNestedScroll(panelListState),
-                    contentPadding = listContentPadding,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    editorStatusItems(busyMessage, errorMessage)
-                    item("watch_summary") {
-                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text(
-                                snapshot.rootAttributes["name"].orEmpty().ifBlank { "未命名表盘" },
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Text(
-                                "${snapshot.layers.size} 个图层 · ${snapshot.resourcePaths.size} 个资源",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    item("watch_shape") {
-                        EditorWatchShapeCard(
-                            rawShape = snapshot.rootAttributes["shape"],
-                            enabled = busyMessage == null,
-                            onUpdateShape = onUpdateShape,
-                        )
-                    }
-                    item("watch_data_permission") {
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = RoundedCornerShape(14.dp),
+                        WatchEditorPanel.WATCH -> LazyColumn(
+                            state = watchListState,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clipToBounds()
+                                .flueElasticNestedScroll(watchListState),
+                            contentPadding = listContentPadding,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Text("实时表盘数据", fontWeight = FontWeight.SemiBold)
-                                Text(
-                                    if (bodySensorsPermissionGranted) {
-                                        "身体传感器已授权，预览可读取设备提供的心率数据。"
-                                    } else {
-                                        "心率默认保持不可用；只有点击下方按钮后才会向系统申请权限。"
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            editorStatusItems(busyMessage, errorMessage)
+                            item("watch_summary") {
+                                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    Text(
+                                        snapshot.rootAttributes["name"].orEmpty().ifBlank { "未命名表盘" },
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    Text(
+                                        "${snapshot.layers.size} 个图层 · ${snapshot.resourcePaths.size} 个资源",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            item("watch_shape") {
+                                EditorWatchShapeCard(
+                                    rawShape = snapshot.rootAttributes["shape"],
+                                    enabled = busyMessage == null,
+                                    onUpdateShape = onUpdateShape,
                                 )
-                                if (!bodySensorsPermissionGranted) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            bodySensorsPermissionLauncher.launch(
-                                                Manifest.permission.BODY_SENSORS,
-                                            )
-                                        },
+                            }
+                            item("watch_data_permission") {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    shape = RoundedCornerShape(14.dp),
+                                ) {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Text("实时表盘数据", fontWeight = FontWeight.SemiBold)
+                                        Text(
+                                            if (bodySensorsPermissionGranted) {
+                                                "身体传感器已授权，预览可读取设备提供的心率数据。"
+                                            } else {
+                                                "心率默认保持不可用；只有点击下方按钮后才会向系统申请权限。"
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        if (!bodySensorsPermissionGranted) {
+                                            OutlinedButton(
+                                                onClick = {
+                                                    bodySensorsPermissionLauncher.launch(
+                                                        Manifest.permission.BODY_SENSORS,
+                                                    )
+                                                },
+                                                modifier = Modifier.fillMaxWidth(),
+                                            ) {
+                                                Text("授权身体传感器")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            item("watch_actions") {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(
+                                        onClick = onSaveAsNew,
+                                        enabled = busyMessage == null,
                                         modifier = Modifier.fillMaxWidth(),
                                     ) {
-                                        Text("授权身体传感器")
+                                        Icon(Icons.Default.Save, contentDescription = null)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("另存为新表盘")
+                                    }
+                                    OutlinedButton(
+                                        onClick = onSave,
+                                        enabled = busyMessage == null,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Icon(Icons.Default.Save, contentDescription = null)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("保存当前表盘")
+                                    }
+                                    OutlinedButton(
+                                        onClick = onRename,
+                                        enabled = busyMessage == null,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text("重命名")
+                                    }
+                                    OutlinedButton(
+                                        onClick = onImportWatch,
+                                        enabled = busyMessage == null,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Icon(Icons.Default.FileOpen, contentDescription = null)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("导入 .watch")
+                                    }
+                                    OutlinedButton(
+                                        onClick = onConvertWatch,
+                                        enabled = busyMessage == null,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Icon(Icons.Default.FileOpen, contentDescription = null)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("导入并转换 HSC / WFF")
+                                    }
+                                    OutlinedButton(
+                                        onClick = onExport,
+                                        enabled = busyMessage == null,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) { Text("导出 .watch") }
+                                    OutlinedButton(
+                                        onClick = onUploadToStore,
+                                        enabled = busyMessage == null,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Icon(Icons.Default.CloudUpload, contentDescription = null)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("上传到商店")
                                     }
                                 }
                             }
-                        }
-                    }
-                    item("watch_actions") {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = onSaveAsNew,
-                                enabled = busyMessage == null,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Icon(Icons.Default.Save, contentDescription = null)
-                                Spacer(Modifier.width(6.dp))
-                                Text("另存为新表盘")
-                            }
-                            OutlinedButton(
-                                onClick = onSave,
-                                enabled = busyMessage == null,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Icon(Icons.Default.Save, contentDescription = null)
-                                Spacer(Modifier.width(6.dp))
-                                Text("保存当前表盘")
-                            }
-                            OutlinedButton(
-                                onClick = onRename,
-                                enabled = busyMessage == null,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text("重命名")
-                            }
-                            OutlinedButton(
-                                onClick = onImportWatch,
-                                enabled = busyMessage == null,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Icon(Icons.Default.FileOpen, contentDescription = null)
-                                Spacer(Modifier.width(6.dp))
-                                Text("导入 .watch")
-                            }
-                            OutlinedButton(
-                                onClick = onConvertWatch,
-                                enabled = busyMessage == null,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Icon(Icons.Default.FileOpen, contentDescription = null)
-                                Spacer(Modifier.width(6.dp))
-                                Text("导入并转换 HSC / WFF")
-                            }
-                            OutlinedButton(
-                                onClick = onExport,
-                                enabled = busyMessage == null,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) { Text("导出 .watch") }
-                            OutlinedButton(
-                                onClick = onUploadToStore,
-                                enabled = busyMessage == null,
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Icon(Icons.Default.CloudUpload, contentDescription = null)
-                                Spacer(Modifier.width(6.dp))
-                                Text("上传到商店")
+                            item("safety_note") {
+                                Text(
+                                    "未知 XML 属性和节点会原样保留。",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
                             }
                         }
-                    }
-                    item("safety_note") {
-                        Text(
-                            "未知 XML 属性和节点会原样保留。",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.labelSmall,
-                        )
+                        }
                     }
                 }
             }
@@ -1341,6 +1419,30 @@ private enum class WatchEditorPanel(val label: String) {
     LAYERS("图层"),
     PROPERTIES("属性"),
     WATCH("表盘"),
+}
+
+/**
+ * 编辑器的三种整屏形态。全屏预览（「上」）和全屏属性（「下」）是对称的：
+ * 后者不是滚动到属性那一栏，而是把属性真正铺满整块表盘。
+ */
+private enum class WatchEditorStage {
+    NORMAL,
+    PREVIEW_FULLSCREEN,
+    PROPERTIES_FULLSCREEN,
+}
+
+/**
+ * 编辑器里所有形态/面板切换共用的过渡：淡入淡出叠一点缩放，弹簧参数固定为
+ * `spring(dampingRatio = 0.9f, stiffness = 400f)`。`sizeTransform = null` 是
+ * 故意的——容器尺寸由外层布局决定，让它再动一次只会抖。
+ */
+private fun watchEditorContentTransition(): ContentTransform {
+    val spec = spring<Float>(dampingRatio = 0.9f, stiffness = 400f)
+    return ContentTransform(
+        targetContentEnter = fadeIn(spec) + scaleIn(animationSpec = spec, initialScale = 0.94f),
+        initialContentExit = fadeOut(spec) + scaleOut(animationSpec = spec, targetScale = 1.04f),
+        sizeTransform = null,
+    )
 }
 
 internal fun shouldHandleWatchEditorTransformEnd(cancelled: Boolean, busy: Boolean): Boolean =
@@ -1482,10 +1584,31 @@ private fun WatchEditorPreview(
         active = true,
         permissionRevision = bodySensorsPermissionGranted,
     )
+    // 手势期间 watch.xml 只在内存 DOM 里被改写，草稿不会重新落盘，渲染视图也
+    // 就不会重新解析。把同一份变换直接推给渲染器，画出来的元素才会和选择框
+    // 一起跟着手指走，而不是松手提交后才「跳」过去。
+    val liveTransform = remember(transformPreview, layers) {
+        val preview = transformPreview ?: return@remember null
+        val layer = layers.firstOrNull { it.key == preview.key } ?: return@remember null
+        WatchLiveLayerTransform(
+            layerIndex = layer.order,
+            layerId = layer.id,
+            layerType = layer.type,
+            x = preview.transform.x,
+            y = preview.transform.y,
+            scaleX = preview.transform.scaleX,
+            scaleY = preview.transform.scaleY,
+            rotation = preview.transform.rotation,
+        )
+    }
     Box(
         modifier = modifier
             .aspectRatio(1f)
             .background(Color.Black)
+            // 选择框是画布的子节点，但 Compose 的 Canvas 绘制默认不裁剪：
+            // 贴边图层的角点句柄会画到表盘画布外面去，看起来像层级错乱。
+            // 在画布边界上裁一刀，框和句柄就永远留在表盘里。
+            .clipToBounds()
             .onSizeChanged { canvasSize = it },
         contentAlignment = Alignment.Center,
     ) {
@@ -1494,6 +1617,7 @@ private fun WatchEditorPreview(
             factory = { context -> WatchmakerWatchFaceView(context) },
             update = { view ->
                 view.setWatchDataProvider(dataProvider)
+                view.setLiveLayerTransform(liveTransform)
                 view.bind(
                     descriptor = descriptor,
                     refreshToken = refreshToken,

@@ -727,7 +727,16 @@ class NativeAppListRowViewBehaviorTest {
         val centerX = target.left + target.width / 2f
         val centerY = target.top + target.height / 2f
 
+        // folderKeyAt 现在只在拖拽真正进行中才作答（没有被拖的图标时，问
+        // 「折叠目标是谁」没有意义），并且探针是**被拖图标自身的中心**而不是
+        // 裸手指坐标 —— LINEAR 下浮层被钉在图标列，抓着标签拖的手指永远不会
+        // 压在任何图标上，这正是文件夹一直建不出来的原因。
+        setDraggedSourceKey(view, entries[0].key)
+
+        // 停在目标图标核心区内：命中。
         assertEquals(entries[1].key, folderKeyAtOf(view, centerX, centerY))
+
+        // 核心区之外只算普通重排，扫过去不该武装折叠。
         assertNull(
             folderKeyAtOf(
                 view,
@@ -735,6 +744,8 @@ class NativeAppListRowViewBehaviorTest {
                 centerY,
             ),
         )
+
+        setDraggedSourceKey(view, null)
         view.release()
     }
 
@@ -1797,14 +1808,15 @@ class NativeAppListRowViewBehaviorTest {
 
         effects.beginGesture()
         effects.pull(FlueEdgePhysics.Edge.TOP, distance = 0.5f)
-        val heldOffset = pullOffsetOf(view)
         effects.release(FlueEdgePhysics.Edge.TOP)
 
-        assertFalse("RecyclerView may release an edge during MOVE", effects.isAnimating)
-        assertEquals(heldOffset, pullOffsetOf(view), 0f)
+        // 契约反转：RecyclerView 只在拉伸已经站不住脚时才请求 release（列表
+        // 已滚离边界 / 距离归零 / 反向滚动），拒绝它反而会把 offsetPx 锁一整个
+        // 手势 —— 「往上滑越多、就要往下滑越多才动」的来源。现在无条件受理。
+        assertTrue("release() 必须立即交还回弹时钟", effects.isAnimating)
 
-        effects.confirmTopRelease(terminalUp = false)
-
+        // 真实的终结样本只负责关掉指针窗口，不该再二次触发回弹。
+        effects.endGesture(terminalUp = false)
         assertTrue(effects.isAnimating)
         view.release()
         activity.finish()
@@ -2022,11 +2034,14 @@ class NativeAppListRowViewBehaviorTest {
         val visiblePullOffset = pullOffsetOf(view)
         assertTrue(visiblePullOffset > 0f)
 
+        // 命中坐标必须跟随橡皮筋的可见位移。这里走 reorderKeyAt：folderKeyAt
+        // 现在要求拖拽真正进行中（没有被拖的图标时，问「折叠目标是谁」没有
+        // 意义），而本用例验证的是坐标映射，与拖拽态无关。
         assertEquals(
             firstKey,
-            folderKeyAtOf(view, x = originalCenterX, y = originalCenterY + visiblePullOffset),
+            reorderKeyAtOf(view, x = originalCenterX, y = originalCenterY + visiblePullOffset),
         )
-        assertNull(folderKeyAtOf(view, x = originalCenterX, y = originalCenterY))
+        assertNull(reorderKeyAtOf(view, x = originalCenterX, y = originalCenterY - visiblePullOffset * 4f))
 
         springEdgeEffectsOf(view).finish(FlueEdgePhysics.Edge.TOP)
         view.release()
@@ -3103,11 +3118,11 @@ class NativeAppListRowViewBehaviorTest {
         x: Float = 30f,
     ) {
         MotionEvent.obtain(0L, eventTime, action, x, y, 0).also { event ->
-            if (view is NativeAppListView) {
-                if (view.onInterceptTouchEvent(event)) view.onTouchEvent(event)
-            } else {
-                view.dispatchTouchEvent(event)
-            }
+            // 一律走 dispatchTouchEvent：边缘手势的指针窗口现在只在这里开合
+            // （它是唯一看得到全部 DOWN/UP/CANCEL 的漏斗，不受 active 状态或
+            // 子 View 抢走事件流的影响）。之前手动调 intercept/onTouchEvent
+            // 会绕过它，测出来的行为与真机不符。
+            view.dispatchTouchEvent(event)
             event.recycle()
         }
     }
@@ -3171,6 +3186,24 @@ class NativeAppListRowViewBehaviorTest {
         return (0 until view.childCount)
             .map(view::getChildAt)
             .minBy { child -> kotlin.math.abs(child.top + child.height / 2f - centerY) }
+    }
+
+    /**
+     * AppItemKey 是 value class，运行时被擦成它的底层 String，所以反射写入
+     * 必须传拆箱后的值，直接塞 AppItemKey 会抛 IllegalArgumentException。
+     */
+    private fun setDraggedSourceKey(view: NativeAppListView, key: AppItemKey?) {
+        NativeAppListView::class.java
+            .getDeclaredField("draggedSourceKey")
+            .apply { isAccessible = true }
+            .set(view, key?.value)
+    }
+
+    private fun reorderKeyAtOf(view: NativeAppListView, x: Float, y: Float): AppItemKey? {
+        val field = NativeAppListView::class.java
+            .getDeclaredField("dragHost")
+            .apply { isAccessible = true }
+        return (field.get(view) as NativeAppListDragHost).reorderKeyAt(x, y)
     }
 
     private fun folderKeyAtOf(view: NativeAppListView, x: Float, y: Float): AppItemKey? {

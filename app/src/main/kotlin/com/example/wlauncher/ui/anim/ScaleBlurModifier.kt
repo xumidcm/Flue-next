@@ -89,6 +89,28 @@ internal fun Modifier.scaleBlurAlpha(
      * the last frame" artifact.
      */
     onSettled: (() -> Unit)? = null,
+    /**
+     * When non-null this layer gives up its own animation clock and reads these
+     * values every frame instead.
+     *
+     * A launch/return puts three things on screen at once — the launch backdrop
+     * (its own `Animatable`), this layer (its own springs) and the edge mask
+     * (a third set of springs) — on three different z-levels. Nothing made them
+     * agree, and the backdrop is removed outright the frame its progress hits
+     * ~0, so whatever the layer underneath happened to be doing became visible
+     * mid-flight: leave early and you watch the list still shrinking, leave
+     * late and it has already settled. That is the long-standing "jumps
+     * straight to the finished state" artifact, and no amount of spec tuning
+     * can fix it because the defect is structural.
+     *
+     * Handing every participant the *same* progress source removes the class of
+     * bug. Read inside the `graphicsLayer` draw lambda, so driving it per frame
+     * costs no recomposition. The internal animatables keep tracking
+     * [targetValues] underneath, so when the driver is withdrawn they are
+     * already at the resting values and the hand-off is exact — provided the
+     * driver's value at rest equals those resting values.
+     */
+    valuesProvider: (() -> LayerAnimValues)? = null,
 ): Modifier {
     val animScale = remember { Animatable(targetValues.scale) }
     val animAlpha = remember { Animatable(targetValues.alpha) }
@@ -99,6 +121,7 @@ internal fun Modifier.scaleBlurAlpha(
     val resolvedOrigin = originLatch.resolve(origin)
     val density = LocalDensity.current
     val latestOnSettled = rememberUpdatedState(onSettled)
+    val latestValuesProvider = rememberUpdatedState(valuesProvider)
 
     // Specs are part of the key: swapping the motion phase mid-transition used
     // to be silently ignored because only targetValues restarted the effect.
@@ -126,13 +149,19 @@ internal fun Modifier.scaleBlurAlpha(
 
     return this
         .graphicsLayer {
-            scaleX = animScale.value
-            scaleY = animScale.value
-            alpha = animAlpha.value
-            translationX = animTransX.value * screenWidth
-            translationY = animTransY.value * screenHeight
+            // 外部时钟优先：驱动存在时这一层完全跟随它，内部 spring 仍在
+            // 后台收敛到 targetValues，驱动撤走时正好接得上。
+            val driven = latestValuesProvider.value?.invoke()
+            val scaleValue = driven?.scale ?: animScale.value
+            val alphaValue = driven?.alpha ?: animAlpha.value
+            val blurValue = driven?.blur ?: animBlur.value
+            scaleX = scaleValue
+            scaleY = scaleValue
+            alpha = alphaValue
+            translationX = (driven?.translationX ?: animTransX.value) * screenWidth
+            translationY = (driven?.translationY ?: animTransY.value) * screenHeight
             transformOrigin = TransformOrigin(resolvedOrigin.x, resolvedOrigin.y)
-            val radiusDp = quantizeSystemBlurRadiusDp(animBlur.value)
+            val radiusDp = quantizeSystemBlurRadiusDp(blurValue)
             val radiusPx = with(density) { radiusDp.dp.toPx() }
                 .roundToInt()
                 .coerceAtLeast(0)
@@ -140,7 +169,7 @@ internal fun Modifier.scaleBlurAlpha(
                 shouldRenderLayerBlur(
                     sdkInt = Build.VERSION.SDK_INT,
                     blurEnabled = blurEnabled,
-                    alpha = animAlpha.value,
+                    alpha = alphaValue,
                     radiusPx = radiusPx,
                 )
             ) {

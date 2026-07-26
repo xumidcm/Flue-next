@@ -13,6 +13,7 @@ import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -54,6 +55,13 @@ import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.launchsession.ExternalLaunchState
 import com.flue.launcher.launchsession.ReturnKind
 import com.flue.launcher.service.FlueAccessibilityService
+import com.flue.launcher.ui.common.LocalOverlayBackdrop
+import com.flue.launcher.ui.common.OverlayBackdropHost
+import com.flue.launcher.ui.common.OverlayBackdropSource
+import com.flue.launcher.ui.common.rememberOverlayBackdropController
+import androidx.compose.runtime.SideEffect
+import com.flue.launcher.ui.anim.LayerAnimValues
+import com.flue.launcher.ui.anim.appListLaunchValues
 import com.flue.launcher.ui.anim.appListLayerValues
 import com.flue.launcher.ui.anim.faceLayerValues
 import com.flue.launcher.ui.anim.returnUsesLaunchOrigin
@@ -101,6 +109,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private const val SIDE_SCREEN_TRANSITION_MS = 260
 private const val NOTIFICATION_TRANSITION_MS = 240
@@ -253,6 +262,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val rawFaceReturnShrinkEnabled by vm.faceReturnShrinkEnabled.collectAsStateWithLifecycle()
     val reduceDynamicEffects by vm.reduceDynamicEffects.collectAsStateWithLifecycle()
     val appListStaggerEnabled by vm.appListStaggerEnabled.collectAsStateWithLifecycle()
+    val legacyAppListTransition by vm.legacyAppListTransition.collectAsStateWithLifecycle()
+    val appListReturnIconFloatEnabled by vm.appListReturnIconFloatEnabled.collectAsStateWithLifecycle()
     // 减弱动态效果开启时表盘收缩强制开启：去掉回弹后需要收缩行程承载转场层次。
     val faceReturnShrinkEnabled = rawFaceReturnShrinkEnabled || reduceDynamicEffects
     val activeMotionProfile by vm.activeMotionProfile.collectAsStateWithLifecycle()
@@ -600,12 +611,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
     }
     LaunchedEffect(screenState) {
-        if (screenState == ScreenState.Apps) {
-            appListEntryAnimationToken = if (appListEntryAnimationToken == Long.MAX_VALUE) {
-                0L
-            } else {
-                appListEntryAnimationToken + 1L
-            }
+        if (screenState != ScreenState.Apps) return@LaunchedEffect
+        // 「图标上浮」就是原生列表的逐行入场动画。关掉整体收缩动画之后，
+        // 从应用返回时它会裸露出来（本来被收缩盖住），观感像进入表盘那套。
+        // 这个开关只抑制「从应用返回」这一种来源；从表盘进入应用列表照常播。
+        val returningFromApp = prevState == ScreenState.App
+        if (returningFromApp && !appListReturnIconFloatEnabled) return@LaunchedEffect
+        appListEntryAnimationToken = if (appListEntryAnimationToken == Long.MAX_VALUE) {
+            0L
+        } else {
+            appListEntryAnimationToken + 1L
         }
     }
     LaunchedEffect(screenState, iconShadowEnabled) {
@@ -707,11 +722,19 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appListMotionSpec = remember(appListMotionPhase, reduceDynamicEffects) {
         appListMotionPhase.asFloatAnimationSpec(allowOvershoot = !reduceDynamicEffects)
     }
+    // alpha / blur 比位移慢一档，让「表盘先暗下让位、列表再模糊浮现」有先后
+    // 而不是所有量一起冲完 —— 之前三者共用同一条 spec，观感就是又快又硬。
     val appListAlphaSpec = remember(appListMotionPhase, reduceDynamicEffects) {
-        appListMotionPhase.asFloatAnimationSpec(allowOvershoot = !reduceDynamicEffects)
+        tween<Float>(
+            durationMillis = (appListMotionPhase.durationMillis * 1.35f).roundToInt(),
+            easing = FastOutSlowInEasing,
+        )
     }
     val appListBlurSpec = remember(appListMotionPhase, reduceDynamicEffects) {
-        appListMotionPhase.asFloatAnimationSpec(allowOvershoot = !reduceDynamicEffects)
+        tween<Float>(
+            durationMillis = (appListMotionPhase.durationMillis * 1.5f).roundToInt(),
+            easing = FastOutSlowInEasing,
+        )
     }
     // The launch mask now has one scalar clock.  Keeping it independent from
     // AnimatedVisibility means a return can be cancelled without snapping the
@@ -726,10 +749,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
     // Keep logical blur animation clocks alive, but skip expensive RenderEffect
     // attachment while a native list is moving. A static edge mask/scrim still
     // supplies the visual depth and avoids GPU stalls on older watches.
+    // 转场期间曾把两层的模糊一律关掉（给老手表省 GPU），代价是「进出应用
+    // 列表完全没有模糊动画」——恰恰是转场最需要模糊的时候。API 31+ 的
+    // RenderEffect 是硬件加速的，这台 SDK 36 的表完全扛得住；只在 S 以下
+    // 保留这条省电让路。
+    val suppressTransitionBlur =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S && nativeListTransitionInMotion
     val faceLayerBlurEnabled =
-        layerBlurEnabled && !launchTransitionUnderlying && !nativeListTransitionInMotion
+        layerBlurEnabled && !launchTransitionUnderlying && !suppressTransitionBlur
     val appListLayerBlurEnabled =
-        layerBlurEnabled && !launchTransitionUnderlying && !nativeListTransitionInMotion
+        layerBlurEnabled && !launchTransitionUnderlying && !suppressTransitionBlur
     val effectiveIconShadowEnabled = iconShadowEnabled && appListShadowsReady
     val fadeLaunch = launchSourceState == ScreenState.Stack || launchSourceState == ScreenState.Notifications
     val iconLaunchAvailable = currentLaunchIcon != null || retainedLaunchIcon != null
@@ -908,6 +937,18 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val widgetPageVisible = widgetPageProgress > 0.001f || screenState == ScreenState.Widgets
         val controlCenterVisible = controlCenterProgress > 0.001f || screenState == ScreenState.ControlCenter
         val sideSceneOverlayActive = sideScreenVisible || widgetPageVisible || controlCenterVisible
+        // 启动/返回期间，应用列表层与边缘罩改由启动遮罩那条唯一的进度驱动。
+        // 三个图层曾各跑各的时钟（遮罩 Animatable / 列表 spring / 边缘罩 spring），
+        // 而遮罩是硬删除不是淡出，底下的动画进行到哪一步就被曝光到哪一步 ——
+        // 「返回时直接跳到缩放完成」的结构性根因。
+        val appListLaunchDriven =
+            launchSourceState == ScreenState.Apps && showLaunchBackdrop
+        val appListLaunchProvider: (() -> LayerAnimValues)? =
+            if (appListLaunchDriven) {
+                { appListLaunchValues(launchMotionProgress.value) }
+            } else {
+                null
+            }
         val appListLayerRaised = screenState == ScreenState.Apps ||
             isOpeningAppList ||
             isClosingAppListToFace ||
@@ -923,6 +964,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 appListReturnOriginActive ||
                 appListLayerReleaseHold
 
+        val overlayBackdrop = rememberOverlayBackdropController()
+        // 主线逐帧喂真实进度，让「表盘下压」与侧滑严格 1:1；覆层在跟手期间
+        // 会用更高优先级的通道覆盖它。
+        SideEffect {
+            overlayBackdrop.report(OverlayBackdropSource.SmartStack, sidePageProgress)
+            overlayBackdrop.report(OverlayBackdropSource.WidgetPage, widgetPageProgress)
+            overlayBackdrop.report(OverlayBackdropSource.ControlCenter, controlCenterProgress)
+            overlayBackdrop.report(OverlayBackdropSource.Notification, notificationProgress)
+        }
+        CompositionLocalProvider(LocalOverlayBackdrop provides overlayBackdrop) {
         GestureHost(
             screenState = screenState,
             onStateChange = { vm.setState(it) },
@@ -991,12 +1042,18 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             faceAnimState,
                             uiStyle,
                             shrinkOnFaceReturn = faceReturnShrinkEnabled,
+                            legacy = legacyAppListTransition,
                         ),
                         screenHeight = screenHeightPx,
                         blurEnabled = faceLayerBlurEnabled,
                         origin = LayerPivot.Center
                     )
             ) {
+                // 侧屏四态（负一屏/小组件/通知/控制中心）的「表盘下压 + 模糊 +
+                // 镜像外扩 + 压暗」统一由 OverlayBackdropController 一条链驱动。
+                // 表盘内容必须活在这个 host 里，覆层才有东西可模糊 —— 不接的话
+                // 覆层只能退化成压暗，就是用户说的「背景还是黑的、不是模糊」。
+                OverlayBackdropHost(blurEnabled = blurEnabled) {
                 AnimatedContent(
                     targetState = if (
                         watchFaceSelectionReady ||
@@ -1163,6 +1220,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         }
                     }
                 }
+                }
             }
 
             Box(
@@ -1209,6 +1267,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         alphaSpec = appListAlphaSpec,
                         blurSpec = appListBlurSpec,
                         translationSpec = appListMotionSpec,
+                        // 底板不跟随缩放，但要跟随同一条 alpha 时钟。
+                        valuesProvider = appListLaunchProvider?.let { provider ->
+                            { provider().copy(scale = 1f, blur = 0f, translationX = 0f, translationY = 0f) }
+                        },
                     )
                     .background(appListColors.background),
             )
@@ -1233,6 +1295,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         blurSpec = appListBlurSpec,
                         translationSpec = appListMotionSpec,
                         onSettled = { appListLayerSettleCount += 1 },
+                        valuesProvider = appListLaunchProvider,
                     )
             ) {
                 when (val backend = activeAppListBackend) {
@@ -1293,14 +1356,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
             // RenderEffect blur the mask and caused a flash during launch and
             // return. Keep the host mounted and animate only its alpha so a
             // state switch cannot remove it one frame too early.
-            val nativeEdgeFadeVisible =
-                screenState == ScreenState.Apps ||
-                    isOpeningAppList ||
-                    isClosingAppListToFace ||
-                    appListLayerReleaseHold ||
-                    (screenState == ScreenState.App &&
-                        launchSourceState == ScreenState.Apps &&
-                        showLaunchBackdrop)
+            // 只要列表层还在台上，边缘罩就必须在。它此前是一个会在转场中途
+            // 翻转的布尔，一翻转整张遮罩瞬间消失，被它压住的顶/底几排模糊图标
+            // 就「凭空不见」——用户报的正是这个。现在与列表层同生共死。
+            val nativeEdgeFadeVisible = appListLayerRaised || appListLaunchDriven
             NativeAppListEdgeFadeOverlay(
                 visible = nativeEdgeFadeVisible,
                 topFadeRangeDp = honeycombTopFade,
@@ -1324,6 +1383,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         alphaSpec = appListAlphaSpec,
                         blurSpec = appListBlurSpec,
                         translationSpec = appListMotionSpec,
+                        valuesProvider = appListLaunchProvider,
                     ),
             )
 
@@ -1549,6 +1609,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     }
                 }
             }
+        }
         }
     }
 }

@@ -109,6 +109,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -125,7 +126,15 @@ import com.flue.launcher.FlueApplication
 import com.flue.launcher.R
 import com.flue.launcher.service.WLauncherNotificationListener
 import com.flue.launcher.ui.common.FrostedHeader
+import com.flue.launcher.ui.common.LocalOverlayBackdrop
+import com.flue.launcher.ui.common.OverlayBackdropReporter
+import com.flue.launcher.ui.common.OverlayBackdropSource
+import com.flue.launcher.ui.common.OverlaySettleSpec
 import com.flue.launcher.ui.common.WatchBatteryPill
+import com.flue.launcher.ui.common.overlayClipShape
+import com.flue.launcher.ui.common.overlayGlassSurface
+import com.flue.launcher.ui.common.overlayReleaseTarget
+import com.flue.launcher.ui.common.overlayVelocityToProgress
 import com.flue.launcher.ui.common.rememberFlueElasticScrollState
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.notification.NotificationGroupUi
@@ -157,6 +166,10 @@ private const val MUSIC_TEXT_MARQUEE_SIDE_PADDING_DP = 8f
 // Keep the close threshold below the shared 48dp spring cap so a single
 // high-velocity pull can actually reach it on mdpi/low-density watches.
 private const val CONTROL_CENTER_DISMISS_DRAG_THRESHOLD_DP = 40f
+
+/** 「上滑收回控制中心」跑满 1→0 所需的位移，占屏高比例。跟手进度按这个 1:1 换算。 */
+private const val CONTROL_CENTER_DISMISS_RANGE_RATIO = 0.42f
+private const val CONTROL_CENTER_DISMISS_RANGE_MIN = 180f
 
 private data class ControlCenterMediaState(
     val controller: MediaController? = null,
@@ -235,6 +248,20 @@ fun ControlCenterLayer(
     var fullScreenDismissTriggered by remember { mutableStateOf(false) }
     var controlCenterGestureLocked by remember { mutableStateOf(false) }
     val dismissDragThresholdPx = with(density) { CONTROL_CENTER_DISMISS_DRAG_THRESHOLD_DP.dp.toPx() }
+    val configuration = LocalConfiguration.current
+    // 上滑收回控制中心跑满 0→1 的位移。手势 1:1 写进度，抬手靠速度外推定向。
+    val dismissDragRangePx = remember(configuration.screenHeightDp, density) {
+        maxOf(
+            with(density) { configuration.screenHeightDp.dp.toPx() } * CONTROL_CENTER_DISMISS_RANGE_RATIO,
+            CONTROL_CENTER_DISMISS_RANGE_MIN
+        )
+    }
+    // 控制中心自身的「跟手退出」位移（px，向上为正）。收尾由 OverlaySettleSpec 统一。
+    val closeDrag = remember { Animatable(0f) }
+    var closeDragVelocity by remember { mutableFloatStateOf(0f) }
+    var lastCloseDragUptime by remember { mutableStateOf(0L) }
+    val backdrop = LocalOverlayBackdrop.current
+    OverlayBackdropReporter(OverlayBackdropSource.ControlCenter)
     val lockControlCenterGesture: (Boolean) -> Unit = remember {
         { locked ->
             controlCenterGestureLocked = locked
@@ -248,14 +275,30 @@ fun ControlCenterLayer(
         sharedVerticalElasticState,
         controlCenterGestureLocked,
         dismissDragThresholdPx,
+        dismissDragRangePx,
+        backdrop,
     ) {
         object : NestedScrollConnection {
+            /** 上滑量换算成 1..0 的「控制中心还剩多少」，1:1 跟手，不加阻尼。 */
+            fun openProgress(): Float =
+                (1f + sharedVerticalElasticState.offsetPx / dismissDragRangePx).coerceIn(0f, 1f)
+
+            fun publishGestureProgress() {
+                backdrop.reportGesture(OverlayBackdropSource.ControlCenter, openProgress())
+            }
+
             fun dismissThresholdReached(): Boolean {
                 val maximum = sharedVerticalElasticState.maximumOffsetPx
                 if (maximum <= 0f) return false
                 val threshold = dismissDragThresholdPx.coerceAtMost(maximum * 0.82f)
                 return sharedVerticalElasticState.offsetPx <= -threshold
             }
+
+            /** 抬手定向：位置 + 初速度外推，`velocityY` 向上为负。 */
+            fun shouldDismiss(velocityY: Float): Boolean = overlayReleaseTarget(
+                progress = openProgress(),
+                velocity = overlayVelocityToProgress(velocityY, dismissDragRangePx),
+            ) < 0.5f
 
             override fun onPreScroll(
                 available: androidx.compose.ui.geometry.Offset,
@@ -286,16 +329,9 @@ fun ControlCenterLayer(
                     available = available,
                     source = source,
                 )
-                // Closing the control center is a pull-to-face action, not a
-                // second gesture. It starts only once the shared spring has
-                // reached the configured threshold.
-                if (
-                    source == NestedScrollSource.UserInput &&
-                    dismissThresholdReached() &&
-                    !fullScreenDismissTriggered
-                ) {
-                    fullScreenDismissTriggered = true
-                    onDismissToFace()
+                // 跟手阶段只写进度，不做任何判定 —— 表盘随手指抬起 / 下压。
+                if (source == NestedScrollSource.UserInput) {
+                    publishGestureProgress()
                 }
                 return sharedConsumed
             }
@@ -303,29 +339,29 @@ fun ControlCenterLayer(
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (controlCenterGestureLocked) return available
                 if (sharedVerticalElasticState.offsetPx != 0f) {
-                    if (
-                        dismissThresholdReached() &&
-                        !fullScreenDismissTriggered
-                    ) {
+                    if (shouldDismiss(available.y) && !fullScreenDismissTriggered) {
                         fullScreenDismissTriggered = true
+                        backdrop.reportGesture(OverlayBackdropSource.ControlCenter, 0f)
+                        backdrop.endGesture(OverlayBackdropSource.ControlCenter)
                         onDismissToFace()
                         return available
                     }
+                    backdrop.endGesture(OverlayBackdropSource.ControlCenter)
                     return sharedVerticalElasticState.connection.onPreFling(available)
                 }
+                backdrop.endGesture(OverlayBackdropSource.ControlCenter)
                 return Velocity.Zero
             }
 
             override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
                 if (controlCenterGestureLocked) return available
                 val sharedConsumed = sharedVerticalElasticState.connection.onPostFling(consumed, available)
-                if (
-                    dismissThresholdReached() &&
-                    !fullScreenDismissTriggered
-                ) {
+                if (shouldDismiss(available.y) && !fullScreenDismissTriggered) {
                     fullScreenDismissTriggered = true
+                    backdrop.reportGesture(OverlayBackdropSource.ControlCenter, 0f)
                     onDismissToFace()
                 }
+                backdrop.endGesture(OverlayBackdropSource.ControlCenter)
                 return sharedConsumed
             }
         }
@@ -421,8 +457,10 @@ fun ControlCenterLayer(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(40.dp))
-            .background(launcherStyle.screenBackground)
+            // 覆层不再画不透明底：毛玻璃背衬由表盘层的 OverlayBackdropHost 提供，
+            // 这里只叠一层半透明玻璃 + （主线未接线时的）兜底压暗。
+            .clip(overlayClipShape())
+            .overlayGlassSurface(backdrop)
     ) {
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val verticalPadding = 16.dp
@@ -471,11 +509,14 @@ fun ControlCenterLayer(
                 }
             }
             .graphicsLayer {
-                translationY = if (verticalScrollEnabled) {
-                    sharedVerticalElasticState.offsetPx
-                } else {
-                    verticalOverscroll.value
-                }
+                // 位移 = 弹性回弹 + 跟手退出量，两者同向叠加；**没有 scale 分量**。
+                translationY = (
+                    if (verticalScrollEnabled) {
+                        sharedVerticalElasticState.offsetPx
+                    } else {
+                        verticalOverscroll.value
+                    }
+                    ) - closeDrag.value
             }
             .padding(start = leftSafeInset)
         val contentModifier = if (verticalScrollEnabled) {
@@ -483,10 +524,13 @@ fun ControlCenterLayer(
                 .nestedScroll(verticalElasticScroll)
                 .verticalScroll(verticalScrollState)
         } else {
-            verticalElasticModifier.pointerInput(controlCenterGestureLocked) {
+            verticalElasticModifier.pointerInput(controlCenterGestureLocked, dismissDragRangePx) {
                 detectDragGestures(
                     onDragStart = {
                         fullScreenDismissTriggered = false
+                        closeDragVelocity = 0f
+                        lastCloseDragUptime = 0L
+                        backdrop.beginGesture(OverlayBackdropSource.ControlCenter, 1f)
                     },
                     onDrag = { change, dragAmount ->
                         if (controlCenterGestureLocked) {
@@ -495,39 +539,91 @@ fun ControlCenterLayer(
                         }
                         if (abs(dragAmount.y) >= abs(dragAmount.x)) {
                             change.consume()
-                            overscrollScope.launch {
-                                val next = when {
-                                    verticalOverscroll.value > 0f && dragAmount.y < 0f ->
-                                        (verticalOverscroll.value + dragAmount.y).coerceAtLeast(0f)
-                                    dragAmount.y > 0f ->
-                                        (verticalOverscroll.value + dragAmount.y * CONTROL_CENTER_OVERSCROLL_RESISTANCE)
-                                            .coerceAtMost(CONTROL_CENTER_OVERSCROLL_LIMIT)
-                                    dragAmount.y < 0f -> if (!fullScreenDismissTriggered) {
-                                        fullScreenDismissTriggered = true
-                                        onDismissToFace()
-                                        verticalOverscroll.value
-                                    } else {
-                                        verticalOverscroll.value
-                                    }
-                                    else -> verticalOverscroll.value
+                            if (lastCloseDragUptime != 0L) {
+                                val deltaMs = (change.uptimeMillis - lastCloseDragUptime).coerceAtLeast(1L)
+                                val instant = dragAmount.y / deltaMs * 1000f
+                                closeDragVelocity = if (closeDragVelocity == 0f) {
+                                    instant
+                                } else {
+                                    closeDragVelocity * 0.35f + instant * 0.65f
                                 }
-                                verticalOverscroll.snapTo(next)
+                            }
+                            lastCloseDragUptime = change.uptimeMillis
+                            overscrollScope.launch {
+                                // 上滑 = 1:1 跟手退出（不加阻尼）；下滑 = 越界回弹（才加阻尼）。
+                                if (dragAmount.y < 0f || closeDrag.value > 0f) {
+                                    closeDrag.stop()
+                                    closeDrag.snapTo(
+                                        (closeDrag.value - dragAmount.y).coerceIn(0f, dismissDragRangePx)
+                                    )
+                                    backdrop.reportGesture(
+                                        OverlayBackdropSource.ControlCenter,
+                                        1f - (closeDrag.value / dismissDragRangePx).coerceIn(0f, 1f),
+                                    )
+                                } else {
+                                    val next = when {
+                                        verticalOverscroll.value > 0f && dragAmount.y < 0f ->
+                                            (verticalOverscroll.value + dragAmount.y).coerceAtLeast(0f)
+                                        dragAmount.y > 0f ->
+                                            (verticalOverscroll.value + dragAmount.y * CONTROL_CENTER_OVERSCROLL_RESISTANCE)
+                                                .coerceAtMost(CONTROL_CENTER_OVERSCROLL_LIMIT)
+                                        else -> verticalOverscroll.value
+                                    }
+                                    verticalOverscroll.snapTo(next)
+                                }
                             }
                         }
                     },
                     onDragEnd = {
-                        fullScreenDismissTriggered = false
+                        val openProgress =
+                            1f - (closeDrag.value / dismissDragRangePx).coerceIn(0f, 1f)
+                        // velocity 向上为负 → 进度速度也为负，正好对上 overlayReleaseTarget。
+                        val progressVelocity = overlayVelocityToProgress(
+                            velocityPxPerSecond = closeDragVelocity,
+                            rangePx = dismissDragRangePx,
+                        )
+                        val dismiss = closeDrag.value > 0f &&
+                            overlayReleaseTarget(openProgress, progressVelocity) < 0.5f
+                        // 先存下来再清零：收尾弹簧的 initialVelocity 还要用它。
+                        val releaseVelocityPx = closeDragVelocity
+                        closeDragVelocity = 0f
+                        lastCloseDragUptime = 0L
                         overscrollScope.launch {
                             if (verticalOverscroll.value != 0f) {
                                 verticalOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                            }
+                        }
+                        if (dismiss) {
+                            fullScreenDismissTriggered = true
+                            backdrop.reportGesture(OverlayBackdropSource.ControlCenter, 0f)
+                            backdrop.endGesture(OverlayBackdropSource.ControlCenter)
+                            onDismissToFace()
+                        } else {
+                            fullScreenDismissTriggered = false
+                            backdrop.endGesture(OverlayBackdropSource.ControlCenter)
+                            overscrollScope.launch {
+                                // 收尾统一走 OverlaySettleSpec + 初速度，不再用固定 tween。
+                                closeDrag.animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = OverlaySettleSpec,
+                                    initialVelocity = -releaseVelocityPx,
+                                )
                             }
                         }
                     },
                     onDragCancel = {
                         fullScreenDismissTriggered = false
+                        closeDragVelocity = 0f
+                        lastCloseDragUptime = 0L
+                        backdrop.endGesture(OverlayBackdropSource.ControlCenter)
                         overscrollScope.launch {
                             if (verticalOverscroll.value != 0f) {
                                 verticalOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
+                            }
+                        }
+                        overscrollScope.launch {
+                            if (closeDrag.value != 0f) {
+                                closeDrag.animateTo(0f, OverlaySettleSpec)
                             }
                         }
                     }
@@ -667,7 +763,7 @@ fun ControlCenterLayer(
                                 size = toggleSize,
                                 iconSize = toggleIconSize,
                                 labelGap = toggleLabelGap,
-                                activeColor = Color(0xFFBF5AF2),
+                                activeColor = WatchColors.AppPurple,
                                 onGestureLockChange = lockControlCenterGesture,
                                 onClick = {
                                     dndEnabled = !dndEnabled
@@ -753,7 +849,7 @@ fun ControlCenterLayer(
                                     size = toggleSize,
                                     iconSize = toggleIconSize,
                                     labelGap = toggleLabelGap,
-                                    activeColor = Color(0xFFBF5AF2),
+                                    activeColor = WatchColors.AppPurple,
                                     onGestureLockChange = lockControlCenterGesture,
                                     onClick = {
                                         dndEnabled = !dndEnabled
@@ -870,7 +966,7 @@ private fun ControlCenterNotificationPreviewCard(
     val pressedState = rememberPressedState()
     val pressed by pressedState
     val cardColor = if (launcherStyle.cardColor.alpha < 0.35f) {
-        if (launcherStyle.titleColor == Color.White) Color(0xFF353535) else Color(0xFFE8E8ED)
+        launcherStyle.pressedCardColor
     } else {
         launcherStyle.cardColor
     }
@@ -917,8 +1013,14 @@ private fun ControlCenterNotificationPreviewCard(
                         alpha = 0.54f - index * 0.16f
                     }
                     .padding(horizontal = (CONTROL_NOTIFICATION_STACK_HORIZONTAL_INSET_DP * (index + 1)).dp)
-                    .clip(RoundedCornerShape(28.dp))
-                    .background(notificationPreviewStackBackColor(launcherStyle.cardColor, index))
+                    .clip(LauncherTheme.style.panelShape)
+                    .background(
+                        notificationPreviewStackBackColor(
+                            base = launcherStyle.cardColor,
+                            index = index,
+                            fallback = launcherStyle.titleColor,
+                        )
+                    )
             )
         }
         Row(
@@ -929,7 +1031,7 @@ private fun ControlCenterNotificationPreviewCard(
                     scaleX = cardScale
                     scaleY = cardScale
                 }
-                .clip(RoundedCornerShape(28.dp))
+                .clip(LauncherTheme.style.panelShape)
                 .background(cardColor)
                 .controlCenterPressGesture(
                     pressedState = pressedState,
@@ -983,7 +1085,7 @@ private fun ControlCenterNotificationPreviewCard(
             if (count > 1) {
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(999.dp))
+                        .clip(LauncherTheme.style.chipShape)
                         .background(launcherStyle.accentColor.copy(alpha = 0.18f))
                         .padding(horizontal = 9.dp, vertical = 4.dp)
                 ) {
@@ -999,12 +1101,12 @@ private fun ControlCenterNotificationPreviewCard(
     }
 }
 
-private fun notificationPreviewStackBackColor(base: Color, index: Int): Color {
+private fun notificationPreviewStackBackColor(base: Color, index: Int, fallback: Color): Color {
     return when {
-        base == Color.Unspecified -> Color(0xFF2E2E2E)
+        base == Color.Unspecified -> fallback.copy(alpha = 0.30f)
         base.alpha > 0.35f -> base.copy(alpha = ((base.alpha * 0.58f) - index * 0.08f).coerceIn(0.20f, 0.48f))
-        index == 0 -> Color(0xFF404040)
-        else -> Color(0xFF303030)
+        index == 0 -> fallback.copy(alpha = 0.26f)
+        else -> fallback.copy(alpha = 0.20f)
     }
 }
 
@@ -1061,7 +1163,7 @@ private fun ControlToggle(
     iconSize: androidx.compose.ui.unit.Dp,
     labelGap: androidx.compose.ui.unit.Dp,
     // watchOS 语义：连接类开关亮蓝，勿扰亮紫 —— 而不是四个开关同一个纯白。
-    activeColor: Color = Color(0xFF0A84FF),
+    activeColor: Color = WatchColors.ActiveBlue,
     onGestureLockChange: (Boolean) -> Unit = {},
     onClick: () -> Unit,
     onLongClick: () -> Unit
@@ -1089,7 +1191,7 @@ private fun ControlToggle(
         targetValue = when {
             active -> Color.White
             darkMode -> Color.White
-            else -> Color(0xFF16181D)
+            else -> LauncherTheme.style.titleColor
         },
         animationSpec = spring(dampingRatio = 0.92f, stiffness = 700f),
         label = "control_toggle_tint"
@@ -1139,7 +1241,7 @@ private fun ControlSliderCard(
         modifier = Modifier
             .fillMaxWidth()
             .height(height)
-            .clip(RoundedCornerShape(28.dp))
+            .clip(LauncherTheme.style.panelShape)
             .background(launcherStyle.cardColor)
             .padding(horizontal = horizontalPadding),
         verticalAlignment = Alignment.CenterVertically
@@ -1220,7 +1322,7 @@ private fun MediaControlCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // 18dp = panel 30dp − padding 12dp（同心圆角）。
-                val artworkShape = RoundedCornerShape(18.dp)
+                val artworkShape = LauncherTheme.style.compactShape
                 Box(
                     modifier = Modifier
                         .size(artworkSize)
@@ -1319,7 +1421,7 @@ private fun MediaNotificationAccessPrompt() {
         Box(
             modifier = Modifier
                 .size(132.dp)
-                .clip(RoundedCornerShape(24.dp))
+                .clip(LauncherTheme.style.cardShape)
                 .background(Color.Black.copy(alpha = 0.22f)),
             contentAlignment = Alignment.Center
         ) {
@@ -1351,7 +1453,7 @@ private fun MediaNotificationAccessPrompt() {
             Spacer(Modifier.height(12.dp))
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
+                    .clip(LauncherTheme.style.chipShape)
                     .background(Color.White.copy(alpha = 0.18f))
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
@@ -1377,7 +1479,7 @@ private fun MediaAppIconButton(
     val pressed by pressedState
     val scale by animateFloatAsState(if (pressed) 0.88f else 1f, label = "media_app_icon_scale")
     val iconAlpha by animateFloatAsState(if (pressed) 0.72f else 1f, label = "media_app_icon_alpha")
-    val iconShape = RoundedCornerShape(9.dp)
+    val iconShape = RoundedCornerShape(28)
     Box(
         modifier = modifier
             .graphicsLayer {
@@ -1831,14 +1933,14 @@ private fun MediaProgressSection(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(trackHeight.dp)
-                    .clip(RoundedCornerShape(999.dp))
+                    .clip(LauncherTheme.style.chipShape)
                     .background(Color.White.copy(alpha = 0.22f))
             )
             Box(
                 modifier = Modifier
                     .fillMaxWidth(localProgress.coerceIn(0f, 1f))
                     .height(trackHeight.dp)
-                    .clip(RoundedCornerShape(999.dp))
+                    .clip(LauncherTheme.style.chipShape)
                     .background(Color.White)
             )
         }
