@@ -17,7 +17,9 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
+import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
 import android.graphics.PorterDuffXfermode
@@ -30,7 +32,6 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.content.ContextCompat
-import androidx.core.graphics.drawable.toBitmap
 import com.flue.launcher.R
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.AppListItemType
@@ -68,7 +69,18 @@ class AppRepository(private val context: Context) {
         private const val APP_LIST_CACHE_DIR = "app_list_cache"
         private const val APP_LIST_CACHE_ICON_DIR = "icons"
         private const val APP_LIST_CACHE_FILE = "snapshot.json"
-        private const val APP_LIST_CACHE_VERSION = 3
+
+        // 版本 4：自适应图标改为自绘抗锯齿裁剪，旧缓存位图带黑色锯齿边，必须整体重建。
+        private const val APP_LIST_CACHE_VERSION = 4
+
+        /** 自适应图标图层与可见区域的比例（108/72）。 */
+        private const val ADAPTIVE_ICON_LAYER_SCALE = 108f / 72f
+
+        /**
+         * 裁形时向内收缩的比例。列表侧还会用不抗锯齿的 clipPath 复裁一次，
+         * 轻微内缩可让抗锯齿边完整落在裁剪路径内部，不被再次切出锯齿。
+         */
+        private const val ICON_MASK_EDGE_INSET_FRACTION = 0.005f
     }
 
     private val _allApps = MutableStateFlow<List<AppInfo>>(emptyList())
@@ -462,7 +474,7 @@ class AppRepository(private val context: Context) {
         val iconBitmap = runCatching {
             val launcherApps = context.getSystemService(LauncherApps::class.java)
             launcherApps?.getShortcutIconDrawable(shortcutInfo, context.resources.displayMetrics.densityDpi)
-                ?.toBitmap(currentIconSize, currentIconSize, Bitmap.Config.ARGB_8888)
+                ?.let { renderIconBitmap(it, currentIconSize) }
         }.getOrNull()
         itemStorage.addShortcut(
             label = label,
@@ -832,17 +844,23 @@ class AppRepository(private val context: Context) {
             null
         }
         val baseBitmap = when {
-            packedIcon != null -> stripEdgeBlackMatte(
-                packedIcon.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
-            )
+            packedIcon != null -> renderIconBitmap(packedIcon, iconSize)
             fallbackBitmap != null -> stripEdgeBlackMatte(fallbackBitmap)
-            useLegacyCircularIcons -> createCircularBitmap(
-                stripEdgeBlackMatte(drawableToBitmap(sourceDrawable, iconSize)),
-                edgeInsetPx = iconSize * 0.005f
-            )
-            else -> stripEdgeBlackMatte(
-                sourceDrawable.toBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888)
-            )
+            useLegacyCircularIcons -> if (sourceDrawable is AdaptiveIconDrawable) {
+                // 自适应图标直接用圆形遮罩自绘，避免“框架渲染成方图再裁圆”的二次采样。
+                createAdaptiveIconBitmap(
+                    drawable = sourceDrawable,
+                    size = iconSize,
+                    forceCircularMask = true,
+                    edgeInsetPx = iconSize * ICON_MASK_EDGE_INSET_FRACTION
+                )
+            } else {
+                createCircularBitmap(
+                    stripEdgeBlackMatte(drawableToBitmap(sourceDrawable, iconSize)),
+                    edgeInsetPx = iconSize * ICON_MASK_EDGE_INSET_FRACTION
+                )
+            }
+            else -> renderIconBitmap(sourceDrawable, iconSize)
         }
         val twoToneSource = when {
             packedIcon != null -> packedIcon
@@ -879,7 +897,24 @@ class AppRepository(private val context: Context) {
         val iconCanvas = Canvas(iconLayer)
         val scaledSize = (iconSize * template.scale).roundToInt().coerceIn(1, iconSize * 2)
         val inset = ((iconSize - scaledSize) / 2f).roundToInt()
-        drawDrawable(sourceDrawable, iconCanvas, inset, inset, inset + scaledSize, inset + scaledSize)
+        if (sourceDrawable is AdaptiveIconDrawable) {
+            // 先自绘出干净的自适应图标，再交给图标包模板遮罩，防止黑边混进模板合成。
+            val adaptiveBitmap = createAdaptiveIconBitmap(sourceDrawable, scaledSize)
+            val adaptivePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            iconCanvas.drawBitmap(
+                adaptiveBitmap,
+                null,
+                RectF(
+                    inset.toFloat(),
+                    inset.toFloat(),
+                    (inset + scaledSize).toFloat(),
+                    (inset + scaledSize).toFloat()
+                ),
+                adaptivePaint
+            )
+        } else {
+            drawDrawable(sourceDrawable, iconCanvas, inset, inset, inset + scaledSize, inset + scaledSize)
+        }
         template.iconMask?.let { maskDrawable ->
             val maskBitmap = drawableToBitmap(maskDrawable, iconSize)
             val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
@@ -922,6 +957,100 @@ class AppRepository(private val context: Context) {
         drawable.setBounds(0, 0, size, size)
         drawable.draw(canvas)
         return bitmap
+    }
+
+    /**
+     * 统一入口：自适应图标走自绘抗锯齿裁剪，普通图标沿用位图化 + 黑边清理。
+     *
+     * 自适应图标绝不能过 [stripEdgeBlackMatte]——深色背景图标的抗锯齿边像素
+     * （半透明深色）会被泛洪误删，重新切出锯齿。
+     */
+    private fun renderIconBitmap(drawable: Drawable, size: Int): Bitmap =
+        if (drawable is AdaptiveIconDrawable) {
+            createAdaptiveIconBitmap(
+                drawable = drawable,
+                size = size,
+                edgeInsetPx = size * ICON_MASK_EDGE_INSET_FRACTION
+            )
+        } else {
+            stripEdgeBlackMatte(drawableToBitmap(drawable, size))
+        }
+
+    /**
+     * 自绘渲染自适应图标。
+     *
+     * 不使用 AdaptiveIconDrawable#draw：框架实现会先把图层位图整体填黑
+     * （AOSP AdaptiveIconDrawable.draw 里的 mCanvas.drawColor(BLACK)），再用
+     * 按目标尺寸栅格化的 ALPHA_8 遮罩位图裁剪。背景层一旦有透明区域，黑色
+     * 底就会漏出，低分辨率遮罩再把它切成黑色锯齿边。
+     *
+     * 这里改为：把 background/foreground 图层按 108/72 的官方比例放大居中，
+     * 画在完全透明的画布上，再用 BitmapShader + 抗锯齿 Paint 的 drawPath /
+     * drawCircle 自行裁形。
+     */
+    private fun createAdaptiveIconBitmap(
+        drawable: AdaptiveIconDrawable,
+        size: Int,
+        forceCircularMask: Boolean = false,
+        edgeInsetPx: Float = 0f
+    ): Bitmap {
+        val layerBitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val layerCanvas = Canvas(layerBitmap)
+        val overdrawPx = size * (ADAPTIVE_ICON_LAYER_SCALE - 1f) / 2f
+        val layerStart = (-overdrawPx).roundToInt()
+        val layerEnd = size + overdrawPx.roundToInt()
+        drawable.background?.let { background ->
+            drawDrawable(background, layerCanvas, layerStart, layerStart, layerEnd, layerEnd)
+        }
+        drawable.foreground?.let { foreground ->
+            drawDrawable(foreground, layerCanvas, layerStart, layerStart, layerEnd, layerEnd)
+        }
+
+        val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        val paint = Paint(
+            Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG
+        ).apply {
+            shader = BitmapShader(layerBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+        }
+        if (forceCircularMask) {
+            val radius = (size / 2f - edgeInsetPx).coerceAtLeast(0f)
+            canvas.drawCircle(size / 2f, size / 2f, radius, paint)
+        } else {
+            canvas.drawPath(adaptiveMaskPath(drawable, size, edgeInsetPx), paint)
+        }
+        return output
+    }
+
+    /**
+     * 把设备的自适应图标遮罩路径归一化到 [0, size] 像素空间。
+     *
+     * 不同 ROM 的 getIconMask() 坐标空间不一致（100x100 视口或已随 bounds
+     * 变换），所以用路径自身包围盒做 rect-to-rect 变换，空路径退化为圆形。
+     */
+    private fun adaptiveMaskPath(
+        drawable: AdaptiveIconDrawable,
+        size: Int,
+        edgeInsetPx: Float
+    ): Path {
+        val target = RectF(edgeInsetPx, edgeInsetPx, size - edgeInsetPx, size - edgeInsetPx)
+        val path = runCatching { Path(drawable.iconMask) }.getOrNull() ?: Path()
+        val pathBounds = RectF()
+        path.computeBounds(pathBounds, true)
+        if (pathBounds.width() > 0f && pathBounds.height() > 0f) {
+            val matrix = Matrix()
+            matrix.setRectToRect(pathBounds, target, Matrix.ScaleToFit.FILL)
+            path.transform(matrix)
+            return path
+        }
+        return Path().apply {
+            addCircle(
+                size / 2f,
+                size / 2f,
+                (size / 2f - edgeInsetPx).coerceAtLeast(0f),
+                Path.Direction.CW
+            )
+        }
     }
 
     private fun stripEdgeBlackMatte(source: Bitmap): Bitmap {
@@ -998,7 +1127,7 @@ class AppRepository(private val context: Context) {
         if (adaptiveMono != null) {
             return createAdaptiveMonochromeBitmap(adaptiveMono, size)
         }
-        return createTintedGrayscaleBitmap(drawableToBitmap(drawable, size))
+        return createTintedGrayscaleBitmap(renderIconBitmap(drawable, size))
     }
 
     private fun createAdaptiveMonochromeBitmap(monochrome: Drawable, size: Int): Bitmap {
@@ -1248,7 +1377,7 @@ class AppRepository(private val context: Context) {
         val iconDrawable = ContextCompat.getDrawable(context, R.mipmap.ic_settings_launcher) ?: return null
         val iconCacheKey = "builtin_settings|$iconSize|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
         val cachedIcons = getOrCreateIconSet(iconCacheKey) {
-            val baseBitmap = stripEdgeBlackMatte(drawableToBitmap(iconDrawable, iconSize))
+            val baseBitmap = renderIconBitmap(iconDrawable, iconSize)
             val sharp = baseBitmap.asImageBitmap()
             val softened = createSoftenedBitmap(baseBitmap).asImageBitmap()
             val twoToneBitmap = if (useTwoToneIconsSnapshot) createTwoToneBitmap(iconDrawable, iconSize) else null

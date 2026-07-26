@@ -6,12 +6,14 @@ import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -77,7 +79,16 @@ internal fun Modifier.scaleBlurAlpha(
     scaleSpec: FiniteAnimationSpec<Float> = TransitionSpring,
     alphaSpec: FiniteAnimationSpec<Float> = AlphaSpec,
     blurSpec: FiniteAnimationSpec<Float> = AlphaSpec,
-    translationSpec: FiniteAnimationSpec<Float> = TransitionSpring
+    translationSpec: FiniteAnimationSpec<Float> = TransitionSpring,
+    /**
+     * Invoked once every animatable has physically reached [targetValues] —
+     * i.e. when the spring has actually settled, not when a wall-clock guess
+     * says it should have. Layer release (z-order demotion, effect restoration)
+     * must key off this: releasing on a fixed `delay(durationMillis)` while a
+     * spring is still 10% from its target is exactly the "snaps into place on
+     * the last frame" artifact.
+     */
+    onSettled: (() -> Unit)? = null,
 ): Modifier {
     val animScale = remember { Animatable(targetValues.scale) }
     val animAlpha = remember { Animatable(targetValues.alpha) }
@@ -87,23 +98,30 @@ internal fun Modifier.scaleBlurAlpha(
     val originLatch = remember { LayerPivotLatch() }
     val resolvedOrigin = originLatch.resolve(origin)
     val density = LocalDensity.current
+    val latestOnSettled = rememberUpdatedState(onSettled)
 
-    LaunchedEffect(targetValues) {
-        launch { animScale.animateTo(targetValues.scale, scaleSpec) }
-        launch { animAlpha.animateTo(targetValues.alpha, alphaSpec) }
-        launch {
-            // Keep the logical blur clock running even when rendering is
-            // temporarily suppressed by an opaque launch mask. Snapping the
-            // Animatable to zero there made the return frame lose its blur and
-            // produced a visible sharp flash.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                animBlur.animateTo(targetValues.blur, blurSpec)
-            } else {
-                animBlur.snapTo(0f)
-            }
-        }
-        launch { animTransX.animateTo(targetValues.translationX, translationSpec) }
-        launch { animTransY.animateTo(targetValues.translationY, translationSpec) }
+    // Specs are part of the key: swapping the motion phase mid-transition used
+    // to be silently ignored because only targetValues restarted the effect.
+    LaunchedEffect(targetValues, scaleSpec, alphaSpec, blurSpec, translationSpec) {
+        val jobs = listOf(
+            launch { animScale.animateTo(targetValues.scale, scaleSpec) },
+            launch { animAlpha.animateTo(targetValues.alpha, alphaSpec) },
+            launch {
+                // Keep the logical blur clock running even when rendering is
+                // temporarily suppressed by an opaque launch mask. Snapping the
+                // Animatable to zero there made the return frame lose its blur and
+                // produced a visible sharp flash.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    animBlur.animateTo(targetValues.blur, blurSpec)
+                } else {
+                    animBlur.snapTo(0f)
+                }
+            },
+            launch { animTransX.animateTo(targetValues.translationX, translationSpec) },
+            launch { animTransY.animateTo(targetValues.translationY, translationSpec) },
+        )
+        jobs.joinAll()
+        latestOnSettled.value?.invoke()
     }
 
     return this

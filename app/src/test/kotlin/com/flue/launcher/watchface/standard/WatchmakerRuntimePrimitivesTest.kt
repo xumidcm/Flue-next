@@ -259,9 +259,12 @@ class WatchmakerRuntimePrimitivesTest {
     }
 
     @Test
-    fun tapActionsOnlyAllowCalendarAndWeatherFamilies() {
+    fun tapActionsOnlyAllowCalendarWeatherAndHeartRateFamilies() {
         assertEquals(WatchTapAction.Calendar, WatchTapActionParser.parse("widget_calendar_month"))
         assertEquals(WatchTapAction.Weather, WatchTapActionParser.parse("m_update_weather_now"))
+        assertEquals(WatchTapAction.HeartRate, WatchTapActionParser.parse("w_heart_rate"))
+        assertEquals(WatchTapAction.HeartRate, WatchTapActionParser.parse("widget_health"))
+        assertEquals(WatchTapAction.HeartRate, WatchTapActionParser.parse("w_fit"))
         assertTrue(WatchTapActionParser.parse("script:do_anything()") is WatchTapAction.Unsupported)
         assertTrue(WatchTapActionParser.parse("w_app:com.example/.MainActivity") is WatchTapAction.Unsupported)
         assertTrue(WatchTapActionParser.parse("https://example.com") is WatchTapAction.Unsupported)

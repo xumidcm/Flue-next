@@ -15,6 +15,7 @@ import android.graphics.Typeface
 import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.GestureDetector
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.widget.Toast
@@ -480,7 +481,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             )
             canvas.drawBitmap(nonNullBitmap, bitmapFontSourceRect, dst, imagePaint)
         }
-        if (tapAction) recordTapTarget(canvas, dst, attrs)
+        // WM_FORMAT_1.0.md §3：tap_action 是任意图层的通用属性，不只属于
+        // image_tap 专用图层；带显式 tap_action 的普通 image 也要可点。
+        if (tapAction || !attrs["tap_action"].isNullOrBlank()) recordTapTarget(canvas, dst, attrs)
         imagePaint.colorFilter = null
     }
 
@@ -522,6 +525,18 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             align.startsWith('b') -> -metrics.descent
             else -> -(metrics.ascent + metrics.descent) / 2f
         }
+        if (!attrs["tap_action"].isNullOrBlank()) {
+            // 文字图层（如心率读数）也可以携带 tap_action；用文字包围盒记录
+            // 点按区域，坐标随当前画布矩阵映射回视图空间。
+            val textWidth = textPaint.measureText(text)
+            val left = when (textPaint.textAlign) {
+                Paint.Align.LEFT -> x
+                Paint.Align.RIGHT -> x - textWidth
+                else -> x - textWidth / 2f
+            }
+            rectScratch.set(left, y + metrics.ascent, left + textWidth, y + metrics.descent)
+            recordTapTarget(canvas, rectScratch, attrs)
+        }
         canvas.drawText(text, x, y, textPaint)
     }
 
@@ -549,6 +564,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             align.startsWith('t') -> 0f
             align.startsWith('b') -> -lineHeight
             else -> -lineHeight / 2f
+        }
+        if (!attrs["tap_action"].isNullOrBlank()) {
+            rectScratch.set(cursorX, lineTop, cursorX + width, lineTop + lineHeight)
+            recordTapTarget(canvas, rectScratch, attrs)
         }
         imagePaint.alpha = paintAlpha(alpha)
         imagePaint.colorFilter = tintFilter(resolveColor(attrs["color"], Color.WHITE, source))
@@ -1265,7 +1284,14 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                                 synchronized(cacheLock) {
                                     currentRequest = bitmapLoading[key] == generation
                                     if (currentRequest) bitmapLoading.remove(key)
-                                    if (currentRequest && generation == bindGeneration && !disposed) {
+                                    // 缓存按内容寻址（cacheRevision），旧 generation 解出的
+                                    // 位图对新 generation 一样有效。应用表盘的头一秒里
+                                    // refreshToken / 权限 / 可见性会连着触发好几次 bind，
+                                    // 每次都推进 generation —— 原来的
+                                    // `generation == bindGeneration` 把这些解码结果全部
+                                    // 丢弃重来，GIF/图片层在屏上反复消失又出现，
+                                    // 就是「应用后剧烈闪烁几次」的来源。
+                                    if (currentRequest && !disposed) {
                                         if (result != null) {
                                             val staleKeys = bitmapCache.keys
                                                 .filter { cachedKey ->
@@ -1295,7 +1321,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                                         }
                                     }
                                 }
-                                if (currentRequest && generation == bindGeneration && !disposed) invalidate()
+                                if (currentRequest && !disposed) invalidate()
                             }
                         } finally {
                             // Cancellation can happen after decode but before the main-thread
@@ -1332,7 +1358,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                         withContext(Dispatchers.Main.immediate) {
                             synchronized(cacheLock) {
                                 if (movieLoading[key] == generation) movieLoading.remove(key)
-                                if (generation == bindGeneration && !disposed && loaded != null) {
+                                // 同 requestBitmap：内容寻址缓存不需要 generation 门槛，
+                                // 连续 bind 不再把解码好的 Movie 丢掉重来（GIF 闪烁根因）。
+                                if (!disposed && loaded != null) {
                                     movieCache[key] = loaded
                                     movieFailures.remove(key)
                                     while (movieCache.size > MAX_MOVIE_CACHE_ENTRIES) {
@@ -1659,9 +1687,19 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     }
 
     private fun routeTapAction(action: WatchTapAction) {
+        if (action === WatchTapAction.HeartRate) {
+            // 规范（WM_TAP_ACTIONS.md）里 w_heart_rate/widget_health 是可配置
+            // 命名动作：未映射目标应用时保持静默，但动作本身被识别。Flue 没有
+            // 映射设置，所以最小行为是触觉反馈 + 触发一次新的心率测量并重绘。
+            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+            runCatching { dataProvider.requestRefresh() }
+            invalidate()
+            return
+        }
         val intent = when (action) {
             WatchTapAction.Calendar -> Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CALENDAR)
             WatchTapAction.Weather -> Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_WEATHER)
+            WatchTapAction.HeartRate -> null
             is WatchTapAction.Unsupported -> null
         }
         if (intent == null) {

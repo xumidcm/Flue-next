@@ -255,6 +255,13 @@ data class WatchDataSnapshot(
 
 fun interface WatchDataProvider {
     fun snapshot(nowEpochMs: Long): WatchDataSnapshot
+
+    /**
+     * Best-effort re-read of on-demand data sources. Watch faces call this from
+     * tap actions (e.g. the heart-rate widget) to nudge a fresh sensor
+     * measurement; providers without live sources can ignore it.
+     */
+    fun requestRefresh() {}
 }
 
 /** Optional, application-owned weather source. No location/network permission is requested here. */
@@ -670,7 +677,7 @@ object WatchmakerTagResolver {
         "wsr", "wss", "wisday", "wloc",
         "cal", "calendar", "next_event",
         "phone_battery", "pbl", "pblp", "pbc",
-        "bv", "bi", "btc", "btf", "sscp", "stsc", "sthr", "shrp",
+        "bv", "bi", "btc", "btf", "sscp", "stsc",
         "alat", "alon",
         "sax", "say", "saz", "sprs", "pwc", "nwip", "nc", "ncc", "ncs", "ngc",
     )
@@ -679,11 +686,12 @@ object WatchmakerTagResolver {
         "dh", "dhz", "dh23", "dh24", "dh23z", "dh24z",
         "dm", "dmz", "ds", "dss", "drss", "drs", "drm", "drh",
         "dd", "ddz", "ddw0", "ddw", "ddw1", "ddw2", "ddww",
-        "dnn", "dnnn", "dnnnn", "dy", "dyyyy",
+        "dn", "dnn", "dnnn", "dnnnn", "dy", "dyyyy",
         "bl", "blp", "batt", "battery", "battery_level",
         "pbl", "pblp", "pbr",
         "bc", "charging", "is_charging",
         "ssc", "steps", "step_count", "shr", "heart", "heart_rate", "heart_rate_bpm",
+        "sthr", "shrp",
         "sgx", "sgy", "sgz", "pws", "nbc",
         "wt", "wtemp", "weather_temperature",
         "wcond", "weather_condition", "wct",
@@ -732,6 +740,9 @@ object WatchmakerTagResolver {
             "ddw2" -> now.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, Locale.getDefault())
                 ?.take(2)
             "ddww" -> now.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.LONG, Locale.getDefault())
+            // WM_TAGS.md:538 —— {dn} = Month number (1–12)。此前只实现了
+            // dnn/dnnn/dnnnn，漏掉 dn 本体，用它的表盘月份直接渲染成不可用。
+            "dn" -> (now.get(Calendar.MONTH) + 1).toString()
             "dnn" -> (now.get(Calendar.MONTH) + 1).toString().padStart(2, '0')
             "dnnn" -> now.getDisplayName(Calendar.MONTH, Calendar.SHORT, Locale.getDefault())
             "dnnnn" -> now.getDisplayName(Calendar.MONTH, Calendar.LONG, Locale.getDefault())
@@ -745,6 +756,13 @@ object WatchmakerTagResolver {
             "bc", "charging", "is_charging" -> snapshot.isCharging?.let { if (it) "1" else "0" }
             "ssc", "steps", "step_count" -> snapshot.steps?.toString()
             "shr", "heart", "heart_rate", "heart_rate_bpm" -> snapshot.heartRateBpm?.toString()
+            // WM_TAGS.md: {sthr} = Maximum recorded heart rate（示例 200），
+            // {shrp} = Heart rate as % of maximum。Flue 没有用户健康档案，
+            // 因此按规范示例使用固定的 200 BPM 作为最大心率。
+            "sthr" -> DEFAULT_MAX_HEART_RATE_BPM.toString()
+            "shrp" -> snapshot.heartRateBpm?.let {
+                (it * 100 / DEFAULT_MAX_HEART_RATE_BPM).coerceIn(0, 100).toString()
+            }
             "sgx" -> renderCompactNumber(snapshot.gyroscopeX ?: 0f)
             "sgy" -> renderCompactNumber(snapshot.gyroscopeY ?: 0f)
             "sgz" -> renderCompactNumber(snapshot.gyroscopeZ ?: 0f)
@@ -786,6 +804,9 @@ object WatchmakerTagResolver {
         } else {
             value.toString()
         }
+
+    /** WM_TAGS.md 中 {sthr} 的默认最大心率（BPM）。 */
+    private const val DEFAULT_MAX_HEART_RATE_BPM = 200
 }
 
 /**

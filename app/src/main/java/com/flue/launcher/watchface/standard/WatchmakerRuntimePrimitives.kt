@@ -603,6 +603,14 @@ object WatchCalendarGrid {
 sealed interface WatchTapAction {
     data object Calendar : WatchTapAction
     data object Weather : WatchTapAction
+
+    /**
+     * WM_TAP_ACTIONS.md 里 `w_heart_rate` / `widget_health` / `w_fit` 属于
+     * “可配置命名动作”：正主指向用户映射的心率/健康应用，未映射时保持
+     * 静默但动作仍然“被识别”。Flue 没有 tap action 映射设置，所以运行时
+     * 至少要给出触觉反馈并触发一次新的心率测量。
+     */
+    data object HeartRate : WatchTapAction
     data class Unsupported(val reason: String) : WatchTapAction
 }
 
@@ -612,6 +620,8 @@ object WatchTapActionParser {
         return when {
             value.startsWith("widget_calendar") -> WatchTapAction.Calendar
             value.startsWith("widget_weather") || value.startsWith("m_update_weather") -> WatchTapAction.Weather
+            value.startsWith("w_heart_rate") || value.startsWith("widget_health") || value.startsWith("w_fit") ->
+                WatchTapAction.HeartRate
             value.isBlank() -> WatchTapAction.Unsupported("empty tap action")
             value.startsWith("script:") -> WatchTapAction.Unsupported("scripts are disabled")
             value.startsWith("w_app:") || value.startsWith("m_app:") -> WatchTapAction.Unsupported("app launch actions are disabled")

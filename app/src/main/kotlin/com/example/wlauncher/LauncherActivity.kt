@@ -85,6 +85,7 @@ import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.WatchLauncherTheme
+import com.flue.launcher.ui.theme.isMaterial
 import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
@@ -94,7 +95,10 @@ import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceHost
 import com.flue.launcher.watchface.jbwatch.JbWatchFaceHost
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceHost
 import com.flue.launcher.watchface.standard.rememberWatchmakerWatchDataProvider
+import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -151,7 +155,8 @@ class LauncherActivity : ComponentActivity() {
             val themeMode by vm.themeMode.collectAsStateWithLifecycle()
             val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
             val globalUiScalePercent by vm.globalUiScalePercent.collectAsStateWithLifecycle()
-            WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle) {
+            val screenShape by vm.screenShapeOverride.collectAsStateWithLifecycle()
+            WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle, screenShape = screenShape) {
                 ProvideGlobalUiScale(globalUiScalePercent) {
                     LauncherScreen(vm)
                 }
@@ -245,7 +250,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
     val appListReturnShrinkEnabled by vm.appListReturnShrinkEnabled.collectAsStateWithLifecycle()
-    val faceReturnShrinkEnabled by vm.faceReturnShrinkEnabled.collectAsStateWithLifecycle()
+    val rawFaceReturnShrinkEnabled by vm.faceReturnShrinkEnabled.collectAsStateWithLifecycle()
+    val reduceDynamicEffects by vm.reduceDynamicEffects.collectAsStateWithLifecycle()
+    val appListStaggerEnabled by vm.appListStaggerEnabled.collectAsStateWithLifecycle()
+    // 减弱动态效果开启时表盘收缩强制开启：去掉回弹后需要收缩行程承载转场层次。
+    val faceReturnShrinkEnabled = rawFaceReturnShrinkEnabled || reduceDynamicEffects
     val activeMotionProfile by vm.activeMotionProfile.collectAsStateWithLifecycle()
     val showStepCount by vm.showStepCount.collectAsStateWithLifecycle()
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
@@ -457,6 +466,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
     // updates at animation cadence.
     var appListEntryAnimationToken by remember { mutableStateOf(0L) }
     var appListLayerReleaseHold by remember { mutableStateOf(false) }
+    // Bumped by the app-list layer's scaleBlurAlpha once its springs actually
+    // reach their targets; the release effect below suspends on it.
+    var appListLayerSettleCount by remember { mutableStateOf(0L) }
     var directLaunchAppListConsumed by rememberSaveable { mutableStateOf(false) }
     var directLaunchStartupWindowOpen by rememberSaveable { mutableStateOf(true) }
     var directLaunchInitialScrollResetKey by rememberSaveable { mutableStateOf(0) }
@@ -556,20 +568,31 @@ fun LauncherScreen(vm: LauncherViewModel) {
             directLaunchInitialScrollResetPosted = true
         }
     }
+    // Layer release keys off the *actual* animation settle, not a wall-clock
+    // guess. The old `delay(durationMillis)` release was wrong twice over:
+    // Spring phases ignore durationMillis entirely (a 340ms guess against a
+    // ~650ms spring demoted the layer's z-order while the motion was ~90%
+    // done — the "snaps into place just before it lands" artifact), and the
+    // enter direction had no suspension at all, so isOpeningAppList flipped on
+    // the second frame and forced a full native re-style mid-transition.
     LaunchedEffect(screenState) {
         val previousState = prevState
-        appListLayerReleaseHold = false
+        if (previousState == screenState) return@LaunchedEffect
+        if (previousState != ScreenState.Apps && screenState != ScreenState.Apps) {
+            // The app-list layer is not part of this transition; nothing to hold.
+            appListLayerReleaseHold = false
+            prevState = screenState
+            return@LaunchedEffect
+        }
+        appListLayerReleaseHold =
+            previousState == ScreenState.Apps && screenState != ScreenState.Apps
+        val settlesSeen = appListLayerSettleCount
         try {
-            if (previousState == ScreenState.Apps && screenState != ScreenState.Apps) {
-                appListLayerReleaseHold = true
-                val holdMillis = when (screenState) {
-                    ScreenState.Face -> activeMotionProfile.pullToFace.durationMillis
-                    ScreenState.App -> activeMotionProfile.appLaunch.durationMillis
-                    else -> activeMotionProfile.appListEnter.durationMillis
-                }
-                delay(holdMillis.toLong())
-            } else {
-                appListLayerReleaseHold = false
+            // The 2.5s cap is only a safety net for a settle signal that never
+            // arrives (e.g. the layer being disposed mid-flight); in the normal
+            // case the snapshotFlow completes as soon as the springs land.
+            withTimeoutOrNull(2_500L) {
+                snapshotFlow { appListLayerSettleCount }.first { it != settlesSeen }
             }
         } finally {
             appListLayerReleaseHold = false
@@ -681,14 +704,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
         isClosingAppListToFace -> activeMotionProfile.pullToFace
         else -> activeMotionProfile.appListEnter
     }
-    val appListMotionSpec = remember(appListMotionPhase) {
-        appListMotionPhase.asFloatAnimationSpec()
+    val appListMotionSpec = remember(appListMotionPhase, reduceDynamicEffects) {
+        appListMotionPhase.asFloatAnimationSpec(allowOvershoot = !reduceDynamicEffects)
     }
-    val appListAlphaSpec = remember(appListMotionPhase) {
-        appListMotionPhase.asFloatAnimationSpec()
+    val appListAlphaSpec = remember(appListMotionPhase, reduceDynamicEffects) {
+        appListMotionPhase.asFloatAnimationSpec(allowOvershoot = !reduceDynamicEffects)
     }
-    val appListBlurSpec = remember(appListMotionPhase) {
-        appListMotionPhase.asFloatAnimationSpec()
+    val appListBlurSpec = remember(appListMotionPhase, reduceDynamicEffects) {
+        appListMotionPhase.asFloatAnimationSpec(allowOvershoot = !reduceDynamicEffects)
     }
     // The launch mask now has one scalar clock.  Keeping it independent from
     // AnimatedVisibility means a return can be cancelled without snapping the
@@ -927,10 +950,39 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         )
                 )
             }
+            // watchOS 三段式的 B 段：表盘压暗（A）之后由这层渐变到纯黑，图标
+            // 再从黑底上飞入（C）。它只在应用列表转场期间存在。
+            val appListScrimTarget = if (
+                !uiStyle.isMaterial &&
+                (screenState == ScreenState.Apps ||
+                    (screenState == ScreenState.App && launchSourceState == ScreenState.Apps))
+            ) 1f else 0f
+            val appListScrimAlpha by animateFloatAsState(
+                targetValue = appListScrimTarget,
+                animationSpec = appListAlphaSpec,
+                label = "app_list_scrim",
+            )
+            if (appListScrimAlpha > 0.001f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(2f)
+                        .graphicsLayer { alpha = appListScrimAlpha }
+                        .background(appListColors.background)
+                )
+            }
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .zIndex(if (screenState == ScreenState.Face && !sideSceneOverlayActive) 3f else 1f)
+                    // 转场未收尾（appListLayerRaised）期间表盘必须让位：立刻抢回
+                    // 3f 会把还在收尾的列表层压在身下——「最后一帧闪现」的另一半。
+                    .zIndex(
+                        if (
+                            screenState == ScreenState.Face &&
+                            !sideSceneOverlayActive &&
+                            !appListLayerRaised
+                        ) 3f else 1f
+                    )
                     .graphicsLayer {
                         clip = true
                     }
@@ -1179,7 +1231,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         scaleSpec = appListMotionSpec,
                         alphaSpec = appListAlphaSpec,
                         blurSpec = appListBlurSpec,
-                        translationSpec = appListMotionSpec
+                        translationSpec = appListMotionSpec,
+                        onSettled = { appListLayerSettleCount += 1 },
                     )
             ) {
                 when (val backend = activeAppListBackend) {
@@ -1214,6 +1267,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         uiStyle = uiStyle,
                         darkMode = effectiveDarkMode,
                         entryAnimationToken = appListEntryAnimationToken,
+                        entryStaggerEnabled = appListStaggerEnabled,
                         presentation = when (backend) {
                             AppListBackend.NATIVE_LINEAR -> NativeAppListPresentation.LINEAR
                             AppListBackend.NATIVE_HONEYCOMB -> NativeAppListPresentation.HONEYCOMB

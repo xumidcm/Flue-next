@@ -20,6 +20,7 @@ import androidx.core.view.ViewCompat
 import com.flue.launcher.applist.model.AppListCommand
 import com.flue.launcher.applist.model.AppItemKey
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 private const val NATIVE_DRAG_SETTLE_DURATION_MS = 130L
@@ -1189,6 +1190,16 @@ class NativeAppListView @JvmOverloads constructor(
         }
 
         override fun reorderKeyAt(x: Float, y: Float): AppItemKey? {
+            if (dragPreviewOrder.isNotEmpty()) {
+                // During a drag the hit test must run against the *fixed layout
+                // slots* (preview-exclusive coordinates), then map slot → the
+                // key currently displayed there. Both keyAtPoint and
+                // findNearestVisiblePosition read translation-inclusive view
+                // coordinates, so a reorder's own preview displacement became
+                // the next hit test's input — a frame-rate feedback loop that
+                // read as the whole list convulsing while dragging.
+                return dragPreviewOrder.getOrNull(slotIndexAtPoint(x, y))
+            }
             keyAtPoint(x, y)?.let { return it }
             val manager = layoutManager as? NativeSpatialAppListLayoutManager ?: return null
             val excludedPosition = draggedSourceKey
@@ -1202,6 +1213,32 @@ class NativeAppListView @JvmOverloads constructor(
                 excludedPosition = excludedPosition,
             )
             return nativeAdapter.keyAtPositionOrNull(position)
+        }
+
+        /**
+         * Nearest attached adapter slot by its *layout* centre — deliberately
+         * ignoring preview/flow translations so the answer is stable while the
+         * preview animates. Returns -1 when no adapter child is attached.
+         */
+        private fun slotIndexAtPoint(x: Float, y: Float): Int {
+            var bestPosition = -1
+            var bestDistance = Float.MAX_VALUE
+            for (index in 0 until childCount) {
+                val row = getChildAt(index) as? NativeAppListRowView ?: continue
+                val holder = getChildViewHolder(row) as?
+                    NativeAppListAdapter.AppItemViewHolder ?: continue
+                val position = holder.bindingAdapterPosition
+                if (position == RecyclerView.NO_POSITION) continue
+                val distance = hypot(
+                    x - row.iconCenterXInParentWithoutPreviewOrFlow(),
+                    y - row.iconCenterYInParentWithoutPreviewOrFlow(),
+                )
+                if (distance < bestDistance) {
+                    bestDistance = distance
+                    bestPosition = position
+                }
+            }
+            return bestPosition
         }
 
         override fun folderKeyAt(x: Float, y: Float): AppItemKey? {
@@ -1534,6 +1571,15 @@ class NativeAppListView @JvmOverloads constructor(
         currentConfig.value.effectiveBlurTier()
 
     private fun setMotionBlurSuppressed(suppressed: Boolean) {
+        // On API 31+ the RenderEffect pipeline is fully hardware accelerated
+        // and cheap enough to stay attached during scroll. Toggling it there
+        // bought nothing and produced both reported symptoms at once: "the
+        // edge icons only blur after I stop" (suppression during motion) and
+        // "the icons flicker after scrolling" (the whole pipeline flipping
+        // back on at fling-settle). Suppression stays available for the
+        // legacy capture path below S, where re-blurring per frame is real
+        // work.
+        if (suppressed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) return
         if (motionBlurSuppressed == suppressed) return
         motionBlurSuppressed = suppressed
         currentConfig.value.runtimeBlurSuppressed = suppressed

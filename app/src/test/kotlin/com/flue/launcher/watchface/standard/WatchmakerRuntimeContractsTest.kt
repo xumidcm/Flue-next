@@ -100,6 +100,9 @@ class WatchmakerRuntimeContractsTest {
         assertEquals("1", WatchmakerTagResolver.resolve("bc", calendar, snapshot).renderedValue)
         assertEquals("12345", WatchmakerTagResolver.resolve("ssc", calendar, snapshot).renderedValue)
         assertEquals("76", WatchmakerTagResolver.resolve("shr", calendar, snapshot).renderedValue)
+        // WM_TAGS.md: {sthr} = 最大心率（默认 200），{shrp} = 心率占最大值百分比。
+        assertEquals("200", WatchmakerTagResolver.resolve("sthr", calendar, snapshot).renderedValue)
+        assertEquals("38", WatchmakerTagResolver.resolve("shrp", calendar, snapshot).renderedValue)
 
         val unavailable = WatchmakerTagResolver.resolve("wtemp", calendar, snapshot)
         assertTrue(unavailable is WatchTagResolution.Unavailable)

@@ -990,21 +990,28 @@ class WatchEditorSession private constructor(
             context: Context,
             name: String = "New Watch",
             limits: WatchEditorLimits = WatchEditorLimits.DEFAULT,
-        ): WatchEditorSession = createBlank(File(context.cacheDir, DRAFT_DIRECTORY_NAME), name, limits)
+            roundShape: Boolean = false,
+        ): WatchEditorSession =
+            createBlank(File(context.cacheDir, DRAFT_DIRECTORY_NAME), name, limits, roundShape = roundShape)
 
         fun createBlank(
             cacheDirectory: File,
             name: String = "New Watch",
             limits: WatchEditorLimits = WatchEditorLimits.DEFAULT,
             removeDraftOnClose: Boolean = true,
+            roundShape: Boolean = false,
         ): WatchEditorSession {
             val cache = prepareCacheDirectory(cacheDirectory)
             val draft = createDraftDirectory(cache)
             val watchXml = "watch.xml"
             try {
                 val safeName = name.replace('\u0000', ' ').trim().ifBlank { "New Watch" }
+                // shape 曾硬编码 "R"：编辑器建出的每块表盘都被渲染器按
+                // definition.shape == ROUND 罩上圆形裁剪 —— 方屏表盘删光元素后
+                // 仍有一圈圆形遮罩就是它。现在跟随调用方传入的屏幕形状。
+                val shapeCode = if (roundShape) "R" else "S"
                 val xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
-                    "<Watch name=\"${escapeXmlAttribute(safeName)}\" build_source=\"studio\" shape=\"R\"/>"
+                    "<Watch name=\"${escapeXmlAttribute(safeName)}\" build_source=\"studio\" shape=\"$shapeCode\"/>"
                 writeAtomically(resolveFile(draft, watchXml), xml.toByteArray(StandardCharsets.UTF_8))
                 val document = parseXml(resolveFile(draft, watchXml), limits)
                 return WatchEditorSession(

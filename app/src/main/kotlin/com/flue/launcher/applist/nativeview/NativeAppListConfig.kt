@@ -87,6 +87,8 @@ data class NativeAppListConfig(
      */
     val entryAnimationToken: Long = 0L,
     val entryProgress: Float = 1f,
+    /** 甩尾入场强度：0 = 全部同时到位，1 = 底部行最多晚 42% 行程。 */
+    val entryStaggerStrength: Float = 0f,
     val palette: NativeAppListPalette = NativeAppListPalette(),
     val appScale: Float = 1f,
     val fisheyeEnabled: Boolean = false,
@@ -222,6 +224,7 @@ internal fun NativeAppListConfig.legalized(): NativeAppListConfig {
         denseGridIconInnerPaddingPx = denseGridIconInnerPaddingPx.nonNegativeFiniteMetric(),
         entryAnimationToken = entryAnimationToken.coerceAtLeast(0L),
         entryProgress = entryProgress.finiteOr(1f).coerceIn(0f, 1f),
+        entryStaggerStrength = entryStaggerStrength.finiteOr(0f).coerceIn(0f, 1f),
         palette = palette.legalized(),
         appScale = appScale
             .finiteOr(1f)
@@ -336,11 +339,11 @@ internal fun nativeLinearChildVisual(
         edgeRange = config.bottomFadeRangePx,
     )
     val fadeProgress = maxOf(topEdgeProgress, bottomEdgeProgress)
-    val entryProgress = if (config.entryMotionEnabled) {
-        config.runtimeEntryProgress.coerceIn(0f, 1f)
-    } else {
-        1f
-    }
+    val entryProgress = nativeStaggeredEntryProgress(
+        config = config,
+        childCenterY = childCenterY,
+        viewportHeight = viewportHeight.toFloat(),
+    )
     val entryOffset = (1f - entryProgress) * 0.08f * viewportHeight
     val entryScale = 0.90f + 0.10f * entryProgress
     val edgeScaleCoefficient = when (config.fisheyePreset) {
@@ -393,6 +396,29 @@ private fun nativeLinearFisheyeProgress(
     }
 }
 
+/**
+ * 甩尾入场：按子项的纵向位置给全局入场进度加延迟 —— 第一行先入屏，
+ * 越往下越慢，最后一行也保证在全局进度 1.0 时到位。位置是连续量，
+ * 三种布局（线性 / 蜂窝 / 密集网格）不需要各算行号。
+ */
+internal fun nativeStaggeredEntryProgress(
+    config: NativeAppListConfig,
+    childCenterY: Float,
+    viewportHeight: Float,
+): Float {
+    val global = if (config.entryMotionEnabled) {
+        config.runtimeEntryProgress.coerceIn(0f, 1f)
+    } else {
+        return 1f
+    }
+    val strength = config.entryStaggerStrength
+    if (strength <= 0f || viewportHeight <= 0f || !childCenterY.isFinite()) return global
+    val position = (childCenterY / viewportHeight).coerceIn(0f, 1f)
+    val maxDelay = (0.42f * strength).coerceIn(0f, 0.6f)
+    val delay = maxDelay * position
+    return ((global - delay) / (1f - maxDelay)).coerceIn(0f, 1f)
+}
+
 internal fun nativeEntryTranslationY(
     config: NativeAppListConfig,
     viewportHeight: Float,
@@ -409,11 +435,18 @@ internal fun nativeInteractionScale(
     dragged: Boolean,
     folderHover: Boolean,
     glidePressed: Boolean = false,
+    presentation: NativeAppListPresentation = NativeAppListPresentation.LINEAR,
 ): Float = when {
     dragged -> 0.965f
     glidePressed -> 0.992f
     folderHover -> 0.90f
-    pressed -> 0.97f
+    // Compose 版的按压分档：蜂窝图标 0.90、密集网格 0.96、列表行 0.97。
+    // 原生化时被压成了一刀切的 0.97，蜂窝图标的按压反馈基本不可见。
+    pressed -> when (presentation) {
+        NativeAppListPresentation.HONEYCOMB -> 0.90f
+        NativeAppListPresentation.DENSE_GRID -> 0.96f
+        NativeAppListPresentation.LINEAR -> 0.97f
+    }
     else -> 1f
 }
 
@@ -501,11 +534,11 @@ internal fun nativeHoneycombChildVisual(
         0f
     }
     val translationX = -(centerX - screenCenterX) * compression
-    val entryProgress = if (config.entryMotionEnabled) {
-        config.runtimeEntryProgress.coerceIn(0f, 1f)
-    } else {
-        1f
-    }
+    val entryProgress = nativeStaggeredEntryProgress(
+        config = config,
+        childCenterY = centerY,
+        viewportHeight = viewportHeight.toFloat(),
+    )
     val translationY = (1f - entryProgress) * 0.08f * viewportHeight
     val topProgress = edgeProgress(centerY + translationY, config.topFadeRangePx)
     val bottomProgress = edgeProgress(
@@ -581,11 +614,11 @@ internal fun nativeDenseGridChildVisual(
     } else {
         0f
     }
-    val entryProgress = if (config.entryMotionEnabled) {
-        config.runtimeEntryProgress.coerceIn(0f, 1f)
-    } else {
-        1f
-    }
+    val entryProgress = nativeStaggeredEntryProgress(
+        config = config,
+        childCenterY = centerY,
+        viewportHeight = viewportHeight,
+    )
     val translationY = (1f - entryProgress) * 0.08f * viewportHeight
     val visualCenterY = centerY + translationY
     val topProgress = edgeProgress(visualCenterY, config.topFadeRangePx)

@@ -5,6 +5,8 @@ import android.app.Activity
 import android.content.Intent
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -16,6 +18,7 @@ import androidx.activity.result.contract.ActivityResultContracts.CreateDocument
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -27,6 +30,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -47,7 +51,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -63,10 +66,13 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Redo
 import androidx.compose.material.icons.filled.Save
@@ -84,14 +90,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.input.pointer.pointerInput
@@ -103,15 +114,44 @@ import androidx.core.content.ContextCompat
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.ui.common.flueElasticNestedScroll
+import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceType
+import com.flue.launcher.watchface.editor.WATCH_EDITOR_EXPRESSION_GROUPS
+import com.flue.launcher.watchface.editor.WatchEditorHandle
+import com.flue.launcher.watchface.editor.WatchEditorImageCropper
 import com.flue.launcher.watchface.editor.WatchEditorLayer
 import com.flue.launcher.watchface.editor.WatchEditorLayerKey
+import com.flue.launcher.watchface.editor.WatchEditorLiveAttributeApplicator
+import com.flue.launcher.watchface.editor.WatchEditorCropAspect
+import com.flue.launcher.watchface.editor.WatchEditorCropHandle
+import com.flue.launcher.watchface.editor.WatchEditorCropRect
+import com.flue.launcher.watchface.editor.WatchEditorSelectionBox
 import com.flue.launcher.watchface.editor.WatchEditorSession
 import com.flue.launcher.watchface.editor.WatchEditorSnapshot
+import com.flue.launcher.watchface.editor.WatchEditorSourceRect
 import com.flue.launcher.watchface.editor.WatchEditorTransform
+import com.flue.launcher.watchface.editor.applyWatchEditorHandleDrag
+import com.flue.launcher.watchface.editor.buildWatchEditorLayerGeometries
 import com.flue.launcher.watchface.editor.buildWatchEditorTreeRows
+import com.flue.launcher.watchface.editor.buildWatchEditorWorldMatrices
+import com.flue.launcher.watchface.editor.constrainWatchEditorCropRect
+import com.flue.launcher.watchface.editor.hitTestWatchEditorLayers
+import com.flue.launcher.watchface.editor.insertWatchEditorExpression
+import com.flue.launcher.watchface.editor.mapWatchEditorCropToSource
+import com.flue.launcher.watchface.editor.moveWatchEditorCropRect
+import com.flue.launcher.watchface.editor.resizeWatchEditorCropRect
+import com.flue.launcher.watchface.editor.resolveWatchEditorCropHandle
+import com.flue.launcher.watchface.editor.resolveWatchEditorHandleHit
+import com.flue.launcher.watchface.editor.scaleWatchEditorCropRect
+import com.flue.launcher.watchface.editor.watchEditorCropAspectRatio
+import com.flue.launcher.watchface.editor.watchEditorDesignFromViewPx
+import com.flue.launcher.watchface.editor.watchEditorDesignLengthFromViewPx
+import com.flue.launcher.watchface.editor.watchEditorDragDeltaInParentFrame
+import com.flue.launcher.watchface.editor.watchEditorFitImageRect
+import com.flue.launcher.watchface.editor.watchEditorSelectionBox
+import com.flue.launcher.watchface.editor.watchEditorViewPxFromDesign
 import com.flue.launcher.watchface.editor.conversion.WatchConversionResult
 import com.flue.launcher.watchface.editor.conversion.WatchFormatConverter
 import com.flue.launcher.watchface.standard.WATCHMAKER_ID_PREFIX
@@ -119,11 +159,12 @@ import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStorage
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceView
 import com.flue.launcher.watchface.standard.rememberWatchmakerWatchDataProvider
 import java.io.File
+import java.io.FileInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.EmptyCoroutineContext
-import kotlin.math.abs
+import kotlin.math.hypot
 
 class WatchEditorActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -179,11 +220,28 @@ private fun WatchEditorRoute(
     var pendingSaveName by remember { mutableStateOf("") }
     var saveAsMode by remember { mutableStateOf(true) }
     var transformPreview by remember { mutableStateOf<WatchEditorTransformPreview?>(null) }
+    // Bumped whenever attributes change from OUTSIDE the live property fields
+    // (undo, canvas drag, image import…) so the drafts reset; live typing keeps
+    // its own in-progress state.
+    var propertyDraftRevision by remember { mutableIntStateOf(0) }
+    var cropRequest by remember { mutableStateOf<Uri?>(null) }
 
-    fun updateSnapshot(next: WatchEditorSnapshot, preferred: WatchEditorLayerKey? = selectedLayerKey) {
+    val liveApplicator = remember(session) {
+        session?.let { WatchEditorLiveAttributeApplicator(it) }
+    }
+    DisposableEffect(liveApplicator) {
+        onDispose { liveApplicator?.cancelPending() }
+    }
+
+    fun updateSnapshot(
+        next: WatchEditorSnapshot,
+        preferred: WatchEditorLayerKey? = selectedLayerKey,
+        resetPropertyDrafts: Boolean = true,
+    ) {
         snapshot = next
         selectedLayerKey = preferred?.takeIf { key -> next.layers.any { it.key == key } }
             ?: next.layers.firstOrNull()?.key
+        if (resetPropertyDrafts) propertyDraftRevision++
     }
 
     fun runSessionOperation(
@@ -199,6 +257,12 @@ private fun WatchEditorRoute(
         busyMessage = status
         errorMessage = null
         scope.launch {
+            // Typed-but-unapplied property edits must land before the
+            // operation so undo/save observe what the user sees.
+            liveApplicator?.flush(
+                onApplied = {},
+                onError = { errorMessage = it.message ?: "属性更新失败" },
+            )
             runCatching {
                 withContext(Dispatchers.IO) {
                     val preferred = operation(active)
@@ -222,6 +286,10 @@ private fun WatchEditorRoute(
             scope.launch {
                 busyMessage = "正在导出 .watch"
                 errorMessage = null
+                liveApplicator?.flush(
+                    onApplied = {},
+                    onError = { errorMessage = it.message ?: "属性更新失败" },
+                )
                 val result = runCatching {
                     withContext(Dispatchers.IO) {
                         val temporary = File.createTempFile("flue_watch_export_", ".watch", context.cacheDir)
@@ -248,27 +316,45 @@ private fun WatchEditorRoute(
     }
 
     val imagePicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
-        val active = session
-        val key = selectedLayerKey
-        if (uri != null && active != null && key != null) {
-            scope.launch {
-                busyMessage = "正在导入图片"
-                errorMessage = null
-                runCatching {
-                    withContext(Dispatchers.IO) {
-                        val resourcePath = active.importImage(context, uri)
-                        active.updateLayerAttribute(key, "path", resourcePath)
-                        active.flushDraftForPreview()
-                        active.snapshot()
+        if (uri != null && session != null && selectedLayerKey != null) {
+            // The import continues in the crop overlay; nothing is written
+            // into the draft until the user confirms the crop.
+            cropRequest = uri
+        }
+    }
+
+    fun performCroppedImport(uri: Uri, sourceRect: WatchEditorSourceRect) {
+        val active = session ?: return
+        val key = selectedLayerKey ?: return
+        cropRequest = null
+        scope.launch {
+            busyMessage = "正在导入图片"
+            errorMessage = null
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val bitmap = WatchEditorImageCropper.cropRegion(context.contentResolver, uri, sourceRect)
+                    val stream = try {
+                        WatchEditorImageCropper.toPngStream(bitmap)
+                    } finally {
+                        bitmap.recycle()
                     }
-                }.onSuccess { next ->
-                    updateSnapshot(next, key)
-                    previewToken++
-                }.onFailure { error ->
-                    errorMessage = error.message ?: "图片导入失败"
+                    val stem = uri.lastPathSegment
+                        ?.substringAfterLast('/')
+                        ?.substringBeforeLast('.')
+                        ?.takeIf(String::isNotBlank)
+                        ?: "image"
+                    val resourcePath = active.importResource(stream, "$stem.png")
+                    active.updateLayerAttribute(key, "path", resourcePath)
+                    active.flushDraftForPreview()
+                    active.snapshot()
                 }
-                busyMessage = null
+            }.onSuccess { next ->
+                updateSnapshot(next, key)
+                previewToken++
+            }.onFailure { error ->
+                errorMessage = error.message ?: "图片导入失败"
             }
+            busyMessage = null
         }
     }
 
@@ -387,13 +473,16 @@ private fun WatchEditorRoute(
         }
     }
 
+    val blankFaceIsRound = isFlueScreenRound()
     LaunchedEffect(watchFaceId) {
         loading = true
         errorMessage = null
         runCatching {
             withContext(Dispatchers.IO) {
                 val opened = if (watchFaceId.isNullOrBlank()) {
-                    WatchEditorSession.createBlank(context)
+                    // 新建表盘的形状跟随当前屏幕（含设置里的手动覆盖），
+                    // 不再无条件写 shape="R" 导致方屏表盘被圆形遮罩裁剪。
+                    WatchEditorSession.createBlank(context, roundShape = blankFaceIsRound)
                 } else {
                     val descriptor = WatchmakerWatchFaceStorage.scan(context)
                         .firstOrNull { it.id == watchFaceId }
@@ -470,6 +559,10 @@ private fun WatchEditorRoute(
                         scope.launch {
                             busyMessage = if (createNewLogicalId) "正在另存为新表盘" else "正在保存当前修订"
                             errorMessage = null
+                            liveApplicator?.flush(
+                                onApplied = {},
+                                onError = { errorMessage = it.message ?: "属性更新失败" },
+                            )
                             val result = runCatching {
                                 withContext(Dispatchers.IO) {
                                     active.updateRootAttribute("name", name)
@@ -511,6 +604,7 @@ private fun WatchEditorRoute(
                                     session = saved.openedSession
                                 }
                                 snapshot = saved.snapshot
+                                propertyDraftRevision++
                                 previewToken++
                                 onInstalled(saved.descriptor)
                                 Toast.makeText(
@@ -547,147 +641,204 @@ private fun WatchEditorRoute(
                 val active = session!!
                 val current = snapshot!!
                 val selected = current.layers.firstOrNull { it.key == selectedLayerKey }
-                WatchEditorScreen(
-                    snapshot = current,
-                    selectedLayer = selected,
-                    previewDescriptor = draftDescriptor(active, current),
-                    previewToken = previewToken,
-                    transformPreview = transformPreview,
-                    busyMessage = busyMessage,
-                    errorMessage = errorMessage,
-                    onBack = ::requestClose,
-                    onSelectLayer = { selectedLayerKey = it },
-                    onBeginTransform = { key ->
-                        val initial = active.beginLayerTransformGesture(key)
-                        transformPreview = WatchEditorTransformPreview(key, initial)
-                        initial
-                    },
-                    onUpdateTransform = { key, transform ->
-                        if (busyMessage == null) {
-                            active.updateLayerTransformPreview(key, transform)
-                            transformPreview = WatchEditorTransformPreview(key, transform.sanitized())
+                val imageSizeCache = remember(active) {
+                    mutableMapOf<String, Pair<Float, Float>?>()
+                }
+                val imageSizeLookup = remember(active) {
+                    { path: String ->
+                        imageSizeCache.getOrPut(path) {
+                            resolveDraftImageSize(active.draftDirectory, path)
                         }
-                    },
-                    onEndTransform = { key, cancelled ->
-                        transformPreview = null
-                        val wasBusy = busyMessage != null
-                        if (shouldHandleWatchEditorTransformEnd(cancelled, wasBusy)) {
-                            if (!wasBusy) {
-                                busyMessage = if (cancelled) {
-                                    "正在撤销画布手势"
-                                } else {
-                                    "正在提交画布手势"
-                                }
-                                errorMessage = null
+                    }
+                }
+                Box(modifier = Modifier.fillMaxSize()) {
+                    WatchEditorScreen(
+                        snapshot = current,
+                        selectedLayer = selected,
+                        previewDescriptor = draftDescriptor(active, current),
+                        previewToken = previewToken,
+                        transformPreview = transformPreview,
+                        propertyDraftRevision = propertyDraftRevision,
+                        busyMessage = busyMessage,
+                        errorMessage = errorMessage,
+                        imageSizeLookup = imageSizeLookup,
+                        onBack = ::requestClose,
+                        onSelectLayer = { selectedLayerKey = it },
+                        onBeginTransform = { key ->
+                            // Un-applied typed edits must not fire mid-gesture:
+                            // apply them synchronously before the transaction.
+                            liveApplicator?.consumePendingChanges()?.let { (pendingKey, changes) ->
+                                runCatching { active.updateLayerAttributes(pendingKey, changes) }
                             }
-                            scope.launch {
+                            val initial = active.beginLayerTransformGesture(key)
+                            transformPreview = WatchEditorTransformPreview(key, initial)
+                            initial
+                        },
+                        onUpdateTransform = { key, transform ->
+                            if (busyMessage == null) {
                                 runCatching {
-                                    withContext(Dispatchers.IO) {
-                                        if (cancelled) {
-                                            active.cancelLayerTransformGesture(key)
-                                        } else {
-                                            active.commitLayerTransformGesture(key)
-                                            active.flushDraftForPreview()
-                                        }
-                                        active.snapshot()
-                                    }
-                                }.onSuccess { next ->
-                                    updateSnapshot(next, key)
-                                    previewToken++
-                                }.onFailure { error ->
-                                    errorMessage = error.message ?: "画布手势提交失败"
+                                    active.updateLayerTransformPreview(key, transform)
+                                    transformPreview = WatchEditorTransformPreview(key, transform.sanitized())
                                 }
-                                if (!wasBusy) busyMessage = null
                             }
-                        }
-                    },
-                    onUndo = {
-                        runSessionOperation("正在撤销", operation = { editor ->
-                            editor.undo()
-                            selectedLayerKey
-                        })
-                    },
-                    onRedo = {
-                        runSessionOperation("正在重做", operation = { editor ->
-                            editor.redo()
-                            selectedLayerKey
-                        })
-                    },
-                    onAddLayer = { type ->
-                        runSessionOperation("正在添加图层", operation = { editor ->
-                            editor.addLayer(type, defaultAttributes(type))
-                        })
-                    },
-                    onMoveLayer = { key, target ->
-                        runSessionOperation("正在调整图层顺序", operation = { editor ->
-                            editor.reorderLayer(key, target)
-                            key
-                        })
-                    },
-                    onDuplicateLayer = { key ->
-                        runSessionOperation("正在复制图层", operation = { editor ->
-                            editor.duplicateLayer(key)
-                        })
-                    },
-                    onDeleteLayer = { key ->
-                        runSessionOperation("正在删除图层", operation = { editor ->
-                            editor.deleteLayer(key)
-                            null
-                        })
-                    },
-                    onApplyLayerAttributes = { key, changes ->
-                        runSessionOperation("正在更新属性", operation = { editor ->
-                            editor.updateLayerAttributes(key, changes)
-                            key
-                        })
-                    },
-                    onImportImage = {
-                        imagePicker.launch(arrayOf("image/*"))
-                    },
-                    onSaveAsNew = {
-                        saveAsMode = true
-                        pendingSaveName = current.rootAttributes["name"].orEmpty()
-                            .ifBlank { "Flue Edited Watch" }
-                        showSaveDialog = true
-                    },
-                    onSave = {
-                        saveAsMode = false
-                        pendingSaveName = current.rootAttributes["name"].orEmpty()
-                            .ifBlank { "Flue Watch" }
-                        showSaveDialog = true
-                    },
-                    onRename = {
-                        saveAsMode = false
-                        pendingSaveName = current.rootAttributes["name"].orEmpty()
-                            .ifBlank { "Flue Watch" }
-                        showSaveDialog = true
-                    },
-                    onExport = {
-                        val name = safeWatchFileName(current.rootAttributes["name"])
-                        exportDocument.launch("$name.watch")
-                    },
-                    onImportWatch = {
-                        watchArchivePicker.launch(
-                            arrayOf(
-                                "application/zip",
-                                "application/octet-stream",
-                                "application/x-zip-compressed",
-                            ),
+                        },
+                        onEndTransform = { key, cancelled ->
+                            transformPreview = null
+                            val wasBusy = busyMessage != null
+                            if (shouldHandleWatchEditorTransformEnd(cancelled, wasBusy)) {
+                                if (!wasBusy) {
+                                    busyMessage = if (cancelled) {
+                                        "正在撤销画布手势"
+                                    } else {
+                                        "正在提交画布手势"
+                                    }
+                                    errorMessage = null
+                                }
+                                scope.launch {
+                                    runCatching {
+                                        withContext(Dispatchers.IO) {
+                                            if (cancelled) {
+                                                active.cancelLayerTransformGesture(key)
+                                            } else {
+                                                active.commitLayerTransformGesture(key)
+                                                active.flushDraftForPreview()
+                                            }
+                                            active.snapshot()
+                                        }
+                                    }.onSuccess { next ->
+                                        updateSnapshot(next, key)
+                                        previewToken++
+                                    }.onFailure { error ->
+                                        errorMessage = error.message ?: "画布手势提交失败"
+                                    }
+                                    if (!wasBusy) busyMessage = null
+                                }
+                            }
+                        },
+                        onUndo = {
+                            runSessionOperation("正在撤销", operation = { editor ->
+                                editor.undo()
+                                selectedLayerKey
+                            })
+                        },
+                        onRedo = {
+                            runSessionOperation("正在重做", operation = { editor ->
+                                editor.redo()
+                                selectedLayerKey
+                            })
+                        },
+                        onAddLayer = { type ->
+                            runSessionOperation("正在添加图层", operation = { editor ->
+                                editor.addLayer(type, defaultAttributes(type))
+                            })
+                        },
+                        onMoveLayer = { key, target ->
+                            runSessionOperation("正在调整图层顺序", operation = { editor ->
+                                editor.reorderLayer(key, target)
+                                key
+                            })
+                        },
+                        onDuplicateLayer = { key ->
+                            runSessionOperation("正在复制图层", operation = { editor ->
+                                editor.duplicateLayer(key)
+                            })
+                        },
+                        onDeleteLayer = { key ->
+                            runSessionOperation("正在删除图层", operation = { editor ->
+                                editor.deleteLayer(key)
+                                null
+                            })
+                        },
+                        onLiveAttributeChange = { key, changes ->
+                            liveApplicator?.submit(
+                                scope = scope,
+                                key = key,
+                                changes = changes,
+                                onApplied = { next ->
+                                    updateSnapshot(next, key, resetPropertyDrafts = false)
+                                    previewToken++
+                                },
+                                onError = { error ->
+                                    errorMessage = error.message ?: "属性更新失败"
+                                },
+                            )
+                        },
+                        onImportImage = {
+                            imagePicker.launch(arrayOf("image/*"))
+                        },
+                        onSaveAsNew = {
+                            saveAsMode = true
+                            pendingSaveName = current.rootAttributes["name"].orEmpty()
+                                .ifBlank { "Flue Edited Watch" }
+                            showSaveDialog = true
+                        },
+                        onSave = {
+                            saveAsMode = false
+                            pendingSaveName = current.rootAttributes["name"].orEmpty()
+                                .ifBlank { "Flue Watch" }
+                            showSaveDialog = true
+                        },
+                        onRename = {
+                            saveAsMode = false
+                            pendingSaveName = current.rootAttributes["name"].orEmpty()
+                                .ifBlank { "Flue Watch" }
+                            showSaveDialog = true
+                        },
+                        onExport = {
+                            val name = safeWatchFileName(current.rootAttributes["name"])
+                            exportDocument.launch("$name.watch")
+                        },
+                        onImportWatch = {
+                            watchArchivePicker.launch(
+                                arrayOf(
+                                    "application/zip",
+                                    "application/octet-stream",
+                                    "application/x-zip-compressed",
+                                ),
+                            )
+                        },
+                        onConvertWatch = {
+                            conversionPicker.launch(
+                                arrayOf(
+                                    "application/zip",
+                                    "application/octet-stream",
+                                    "application/vnd.android.package-archive",
+                                ),
+                            )
+                        },
+                    )
+                    cropRequest?.let { uri ->
+                        EditorImageCropOverlay(
+                            uri = uri,
+                            onCancel = { cropRequest = null },
+                            onConfirm = { sourceRect -> performCroppedImport(uri, sourceRect) },
                         )
-                    },
-                    onConvertWatch = {
-                        conversionPicker.launch(
-                            arrayOf(
-                                "application/zip",
-                                "application/octet-stream",
-                                "application/vnd.android.package-archive",
-                            ),
-                        )
-                    },
-                )
+                    }
+                }
             }
         }
     }
+}
+
+/**
+ * Resolves an image layer's `path` attribute against the draft directory the
+ * same way the runtime does (raw path first, then the conventional `images/`
+ * folder) and reads only the bitmap bounds.
+ */
+private fun resolveDraftImageSize(draftDirectory: File, path: String): Pair<Float, Float>? {
+    val normalized = path.replace('\\', '/')
+    if (normalized.isBlank() || normalized.contains("..") || normalized.startsWith('/')) return null
+    val candidates = listOf(File(draftDirectory, normalized), File(draftDirectory, "images/$normalized"))
+    val file = candidates.firstOrNull(File::isFile) ?: return null
+    return runCatching {
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        FileInputStream(file).use { input -> BitmapFactory.decodeStream(input, null, options) }
+        if (options.outWidth > 0 && options.outHeight > 0) {
+            options.outWidth.toFloat() to options.outHeight.toFloat()
+        } else {
+            null
+        }
+    }.getOrNull()
 }
 
 @Composable
@@ -697,10 +848,12 @@ private fun WatchEditorScreen(
     previewDescriptor: LunchWatchFaceDescriptor,
     previewToken: Int,
     transformPreview: WatchEditorTransformPreview?,
+    propertyDraftRevision: Int,
     busyMessage: String?,
     errorMessage: String?,
+    imageSizeLookup: (String) -> Pair<Float, Float>?,
     onBack: () -> Unit,
-    onSelectLayer: (WatchEditorLayerKey) -> Unit,
+    onSelectLayer: (WatchEditorLayerKey?) -> Unit,
     onBeginTransform: (WatchEditorLayerKey) -> WatchEditorTransform,
     onUpdateTransform: (WatchEditorLayerKey, WatchEditorTransform) -> Unit,
     onEndTransform: (WatchEditorLayerKey, Boolean) -> Unit,
@@ -710,7 +863,7 @@ private fun WatchEditorScreen(
     onMoveLayer: (WatchEditorLayerKey, Int) -> Unit,
     onDuplicateLayer: (WatchEditorLayerKey) -> Unit,
     onDeleteLayer: (WatchEditorLayerKey) -> Unit,
-    onApplyLayerAttributes: (WatchEditorLayerKey, Map<String, String?>) -> Unit,
+    onLiveAttributeChange: (WatchEditorLayerKey, Map<String, String?>) -> Unit,
     onImportImage: () -> Unit,
     onSaveAsNew: () -> Unit,
     onSave: () -> Unit,
@@ -720,6 +873,7 @@ private fun WatchEditorScreen(
     onConvertWatch: () -> Unit,
 ) {
     var panel by rememberSaveable { mutableStateOf(WatchEditorPanel.LAYERS) }
+    var previewFullscreen by rememberSaveable { mutableStateOf(false) }
     // Each editor level keeps its own position. Re-creating one state whenever
     // the tab changes made returning from Properties jump the layer list back
     // to the top, which is especially disorienting on a small watch viewport.
@@ -732,6 +886,7 @@ private fun WatchEditorScreen(
         WatchEditorPanel.WATCH -> watchListState
     }
     var collapsedLayerKeys by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
+    var scrollToLayerRequest by remember { mutableStateOf<Pair<Int, String>?>(null) }
     val context = LocalContext.current
     var bodySensorsPermissionGranted by remember(context) {
         mutableStateOf(hasEditorBodySensorsPermission(context))
@@ -739,16 +894,109 @@ private fun WatchEditorScreen(
     val bodySensorsPermissionLauncher = rememberLauncherForActivityResult(RequestPermission()) {
         bodySensorsPermissionGranted = hasEditorBodySensorsPermission(context)
     }
+    val isRound = isFlueScreenRound()
+    val treeRows = remember(snapshot.layers, collapsedLayerKeys) {
+        buildWatchEditorTreeRows(layers = snapshot.layers, collapsedKeys = collapsedLayerKeys)
+    }
+    LaunchedEffect(scrollToLayerRequest) {
+        val request = scrollToLayerRequest ?: return@LaunchedEffect
+        val rowIndex = treeRows.indexOfFirst { it.layer.key.value == request.second }
+        if (rowIndex >= 0) {
+            val itemsBeforeRows = (if (busyMessage != null) 1 else 0) +
+                (if (errorMessage != null) 1 else 0) +
+                1 // add_actions
+            runCatching { layerListState.animateScrollToItem(itemsBeforeRows + rowIndex) }
+        }
+    }
+    BackHandler(enabled = previewFullscreen) { previewFullscreen = false }
+
+    val previewContent: @Composable (Modifier) -> Unit = { previewModifier ->
+        WatchEditorPreview(
+            descriptor = previewDescriptor,
+            refreshToken = previewToken,
+            bodySensorsPermissionGranted = bodySensorsPermissionGranted,
+            layers = snapshot.layers,
+            selectedLayer = selectedLayer,
+            transformPreview = transformPreview,
+            enabled = busyMessage == null,
+            imageSizeLookup = imageSizeLookup,
+            onSelectFromCanvas = { key -> onSelectLayer(key) },
+            onCanvasTap = { key ->
+                if (key != null) {
+                    if (previewFullscreen) {
+                        previewFullscreen = false
+                        panel = WatchEditorPanel.PROPERTIES
+                    } else if (panel == WatchEditorPanel.LAYERS) {
+                        scrollToLayerRequest =
+                            (scrollToLayerRequest?.first ?: 0) + 1 to key.value
+                    }
+                } else if (!previewFullscreen) {
+                    onSelectLayer(null)
+                }
+            },
+            onBeginTransform = onBeginTransform,
+            onUpdateTransform = onUpdateTransform,
+            onEndTransform = onEndTransform,
+            modifier = previewModifier,
+        )
+    }
+
+    if (previewFullscreen) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+        ) {
+            previewContent(
+                Modifier
+                    .fillMaxSize()
+                    .aspectRatio(1f)
+                    .align(Alignment.Center),
+            )
+            // Keep the exit control inside the round safe area.
+            IconButton(
+                onClick = { previewFullscreen = false },
+                modifier = if (isRound) {
+                    Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 16.dp)
+                } else {
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
+                },
+            ) {
+                Icon(
+                    Icons.Default.KeyboardArrowDown,
+                    contentDescription = "退出全屏预览",
+                    tint = Color.White,
+                )
+            }
+        }
+        return
+    }
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val previewSize = watchEditorPreviewSizeDp(maxWidth.value, maxHeight.value).dp
+        val horizontalListPadding = if (isRound) 24.dp else 10.dp
+        val bottomListPadding = if (isRound) 28.dp else 10.dp
+        val listContentPadding = PaddingValues(
+            start = horizontalListPadding,
+            end = horizontalListPadding,
+            top = 10.dp,
+            bottom = bottomListPadding,
+        )
         Column(modifier = Modifier.fillMaxSize()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                    .padding(
+                        horizontal = if (isRound) 20.dp else 4.dp,
+                        vertical = if (isRound) 6.dp else 2.dp,
+                    ),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = onBack) {
+                IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                 }
                 Column(
@@ -766,24 +1014,35 @@ private fun WatchEditorScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                IconButton(onClick = onUndo, enabled = snapshot.canUndo && busyMessage == null) {
+                IconButton(
+                    onClick = { previewFullscreen = true },
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Icon(Icons.Default.KeyboardArrowUp, contentDescription = "预览全屏（上）")
+                }
+                IconButton(
+                    onClick = { panel = WatchEditorPanel.PROPERTIES },
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = "跳到图层属性（下）")
+                }
+                IconButton(
+                    onClick = onUndo,
+                    enabled = snapshot.canUndo && busyMessage == null,
+                    modifier = Modifier.size(40.dp),
+                ) {
                     Icon(Icons.Default.Undo, contentDescription = "撤销")
                 }
-                IconButton(onClick = onRedo, enabled = snapshot.canRedo && busyMessage == null) {
+                IconButton(
+                    onClick = onRedo,
+                    enabled = snapshot.canRedo && busyMessage == null,
+                    modifier = Modifier.size(40.dp),
+                ) {
                     Icon(Icons.Default.Redo, contentDescription = "重做")
                 }
             }
-            WatchEditorPreview(
-                descriptor = previewDescriptor,
-                refreshToken = previewToken,
-                bodySensorsPermissionGranted = bodySensorsPermissionGranted,
-                selectedLayer = selectedLayer,
-                transformPreview = transformPreview,
-                enabled = busyMessage == null,
-                onBeginTransform = onBeginTransform,
-                onUpdateTransform = onUpdateTransform,
-                onEndTransform = onEndTransform,
-                modifier = Modifier
+            previewContent(
+                Modifier
                     .size(previewSize)
                     .aspectRatio(1f)
                     .align(Alignment.CenterHorizontally),
@@ -804,7 +1063,7 @@ private fun WatchEditorScreen(
                         .weight(1f)
                         .fillMaxWidth()
                         .flueElasticNestedScroll(panelListState),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(10.dp),
+                    contentPadding = listContentPadding,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     editorStatusItems(busyMessage, errorMessage)
@@ -834,10 +1093,6 @@ private fun WatchEditorScreen(
                             )
                         }
                     } else {
-                        val treeRows = buildWatchEditorTreeRows(
-                            layers = snapshot.layers,
-                            collapsedKeys = collapsedLayerKeys,
-                        )
                         items(treeRows, key = { it.layer.key.value }) { row ->
                             val layer = row.layer
                             EditorLayerRow(
@@ -874,7 +1129,7 @@ private fun WatchEditorScreen(
                         .weight(1f)
                         .fillMaxWidth()
                         .flueElasticNestedScroll(panelListState),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(10.dp),
+                    contentPadding = listContentPadding,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     editorStatusItems(busyMessage, errorMessage)
@@ -889,8 +1144,11 @@ private fun WatchEditorScreen(
                         item("properties") {
                             LayerPropertiesEditor(
                                 layer = selectedLayer,
+                                draftResetKey = propertyDraftRevision,
                                 enabled = busyMessage == null,
-                                onApply = { onApplyLayerAttributes(selectedLayer.key, it) },
+                                onLiveChange = { changes ->
+                                    onLiveAttributeChange(selectedLayer.key, changes)
+                                },
                                 onImportImage = onImportImage,
                             )
                         }
@@ -903,7 +1161,7 @@ private fun WatchEditorScreen(
                         .weight(1f)
                         .fillMaxWidth()
                         .flueElasticNestedScroll(panelListState),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(10.dp),
+                    contentPadding = listContentPadding,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     editorStatusItems(busyMessage, errorMessage)
@@ -1110,14 +1368,36 @@ private fun androidx.compose.foundation.lazy.LazyListScope.editorStatusItems(
     }
 }
 
+private enum class EditorCanvasGestureMode { NONE, BODY, HANDLE }
+
+/** Touch radius (view dp) for grabbing a selection-frame handle. */
+private const val EDITOR_HANDLE_TOUCH_DP = 14f
+
+/** Visual radius (view dp) of a selection-frame handle circle (>= 12dp diameter). */
+private const val EDITOR_HANDLE_VISUAL_RADIUS_DP = 7f
+
+/** Distance (view dp) between the top edge and the rotation handle. */
+private const val EDITOR_ROTATION_HANDLE_OFFSET_DP = 26f
+
+/** Extra hit slop (view dp) around layer bounds for stubby watch fingers. */
+private const val EDITOR_LAYER_HIT_SLOP_DP = 6f
+
+private val EDITOR_SELECTION_STROKE_COLOR = Color(0xFF53D6FF)
+private val EDITOR_HANDLE_FILL_COLOR = Color.White
+private val EDITOR_HANDLE_STROKE_COLOR = Color(0xFF20262E)
+
 @Composable
 private fun WatchEditorPreview(
     descriptor: LunchWatchFaceDescriptor,
     refreshToken: Int,
     bodySensorsPermissionGranted: Boolean,
+    layers: List<WatchEditorLayer>,
     selectedLayer: WatchEditorLayer?,
     transformPreview: WatchEditorTransformPreview?,
     enabled: Boolean,
+    imageSizeLookup: (String) -> Pair<Float, Float>?,
+    onSelectFromCanvas: (WatchEditorLayerKey) -> Unit,
+    onCanvasTap: (WatchEditorLayerKey?) -> Unit,
     onBeginTransform: (WatchEditorLayerKey) -> WatchEditorTransform,
     onUpdateTransform: (WatchEditorLayerKey, WatchEditorTransform) -> Unit,
     onEndTransform: (WatchEditorLayerKey, Boolean) -> Unit,
@@ -1125,6 +1405,16 @@ private fun WatchEditorPreview(
 ) {
     var loadError by remember(descriptor.stableKey, refreshToken) { mutableStateOf<String?>(null) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+    val transformOverrides = transformPreview?.let { mapOf(it.key to it.transform) } ?: emptyMap()
+    val geometries = remember(layers, transformOverrides, imageSizeLookup) {
+        buildWatchEditorLayerGeometries(layers, imageSizeLookup, transformOverrides)
+    }
+    val latestGeometries = rememberUpdatedState(geometries)
+    val latestSelectedKey = rememberUpdatedState(selectedLayer?.key)
+    val latestEnabled = rememberUpdatedState(enabled)
+    val latestCanvasSize = rememberUpdatedState(canvasSize)
+    val latestSelect = rememberUpdatedState(onSelectFromCanvas)
+    val latestTap = rememberUpdatedState(onCanvasTap)
     val latestBegin = rememberUpdatedState(onBeginTransform)
     val latestUpdate = rememberUpdatedState(onUpdateTransform)
     val latestEnd = rememberUpdatedState(onEndTransform)
@@ -1155,78 +1445,233 @@ private fun WatchEditorPreview(
             },
             onRelease = WatchmakerWatchFaceView::dispose,
         )
-        transformPreview?.takeIf { it.key == selectedLayer?.key }?.let { preview ->
-            EditorTransformOverlay(
-                transform = preview.transform,
-                canvasSize = canvasSize,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-        if (enabled && selectedLayer != null) {
-            val key = selectedLayer.key
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(key, canvasSize) {
-                        val lifecycle = WatchEditorGestureLifecycle()
-                        awaitEachGesture {
-                            var current: WatchEditorTransform? = null
-                            var completedNormally = false
-                            try {
-                                val down = awaitFirstDown(requireUnconsumed = false)
-                                current = latestBegin.value(key)
-                                lifecycle.begin()
-                                down.consume()
-                                while (true) {
-                                    val event = awaitPointerEvent()
-                                    if (event.changes.any { it.isConsumed }) break
+        // Direct-manipulation surface: hit the layer under the finger, drag it,
+        // grab a selection-frame handle, or tap to select / deselect.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    val lifecycle = WatchEditorGestureLifecycle()
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        if (!latestEnabled.value) return@awaitEachGesture
+                        val viewSize = latestCanvasSize.value.width
+                            .takeIf { it > 0 }
+                            ?.toFloat()
+                            ?: size.width.toFloat().coerceAtLeast(1f)
+                        val currentGeometries = latestGeometries.value
+                        val matrices = buildWatchEditorWorldMatrices(currentGeometries)
+                        val downDesignX = watchEditorDesignFromViewPx(down.position.x, viewSize)
+                        val downDesignY = watchEditorDesignFromViewPx(down.position.y, viewSize)
+                        val handleRadiusDesign = watchEditorDesignLengthFromViewPx(
+                            EDITOR_HANDLE_TOUCH_DP.dp.toPx(),
+                            viewSize,
+                        )
+                        val rotationOffsetDesign = watchEditorDesignLengthFromViewPx(
+                            EDITOR_ROTATION_HANDLE_OFFSET_DP.dp.toPx(),
+                            viewSize,
+                        )
+                        val hitSlopDesign = watchEditorDesignLengthFromViewPx(
+                            EDITOR_LAYER_HIT_SLOP_DP.dp.toPx(),
+                            viewSize,
+                        )
 
-                                    val pan = event.calculatePan()
-                                    val zoom = event.calculateZoom()
-                                    val rotation = event.calculateRotation()
-                                    val base = current
-                                    if (
-                                        base != null &&
-                                        (pan != Offset.Zero || zoom != 1f || rotation != 0f)
-                                    ) {
-                                        val width = canvasSize.width
-                                            .takeIf { it > 0 }
-                                            ?.toFloat()
-                                            ?: 512f
-                                        val height = canvasSize.height
-                                            .takeIf { it > 0 }
-                                            ?.toFloat()
-                                            ?: 512f
-                                        val next = base.copy(
-                                            x = base.x + pan.x / width * 512f,
-                                            y = base.y + pan.y / height * 512f,
-                                            scaleX = base.scaleX * zoom,
-                                            scaleY = base.scaleY * zoom,
-                                            rotation = base.rotation + rotation,
-                                        ).sanitized()
-                                        current = next
-                                        latestUpdate.value(key, next)
-                                    }
-                                    event.changes.forEach { it.consume() }
-                                    if (event.changes.none { it.pressed }) {
-                                        completedNormally = true
-                                        break
-                                    }
-                                }
-                            } finally {
-                                lifecycle.finish(completedNormally)?.let { end ->
-                                    // Recomposition, navigation or a competing
-                                    // gesture cancels this iteration. Roll it
-                                    // back; every ordinary UP commits exactly
-                                    // one independent transaction.
-                                    latestEnd.value(
-                                        key,
-                                        end == WatchEditorGestureEnd.ROLLBACK,
-                                    )
+                        var mode = EditorCanvasGestureMode.NONE
+                        var handle: WatchEditorHandle? = null
+                        var startBox: WatchEditorSelectionBox? = null
+                        var targetKey: WatchEditorLayerKey? = null
+                        var targetIndex = -1
+
+                        val selectedKey = latestSelectedKey.value
+                        val selectedIndex = currentGeometries.indexOfFirst { it.key == selectedKey }
+                        if (selectedIndex >= 0) {
+                            val box = watchEditorSelectionBox(
+                                currentGeometries[selectedIndex],
+                                matrices[selectedIndex],
+                            )
+                            val hitHandle = resolveWatchEditorHandleHit(
+                                box = box,
+                                x = downDesignX,
+                                y = downDesignY,
+                                touchRadiusDesign = handleRadiusDesign,
+                                rotationOffsetDesign = rotationOffsetDesign,
+                            )
+                            if (hitHandle != null) {
+                                mode = EditorCanvasGestureMode.HANDLE
+                                handle = hitHandle
+                                startBox = box
+                                targetKey = currentGeometries[selectedIndex].key
+                                targetIndex = selectedIndex
+                            }
+                        }
+                        if (mode == EditorCanvasGestureMode.NONE) {
+                            val hitIndex = hitTestWatchEditorLayers(
+                                geometries = currentGeometries,
+                                worldMatrices = matrices,
+                                x = downDesignX,
+                                y = downDesignY,
+                                slopDesign = hitSlopDesign,
+                            )
+                            if (hitIndex != null) {
+                                val hitKey = currentGeometries[hitIndex].key
+                                mode = EditorCanvasGestureMode.BODY
+                                targetIndex = hitIndex
+                                targetKey = hitKey
+                                if (hitKey != selectedKey) {
+                                    latestSelect.value(hitKey)
                                 }
                             }
                         }
-                    },
+
+                        val touchSlop = viewConfiguration.touchSlop
+                        var moved = false
+                        var completedNormally = false
+
+                        if (mode == EditorCanvasGestureMode.NONE) {
+                            // Empty canvas: a motionless tap clears selection.
+                            down.consume()
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                if (event.changes.any { it.isConsumed }) return@awaitEachGesture
+                                event.changes.forEach { change ->
+                                    if (
+                                        !moved &&
+                                        hypot(
+                                            change.position.x - down.position.x,
+                                            change.position.y - down.position.y,
+                                        ) > touchSlop
+                                    ) {
+                                        moved = true
+                                    }
+                                    change.consume()
+                                }
+                                if (event.changes.none { it.pressed }) {
+                                    if (!moved) latestTap.value(null)
+                                    return@awaitEachGesture
+                                }
+                            }
+                        }
+
+                        val key = targetKey ?: return@awaitEachGesture
+                        // A stale key (layer deleted in the same frame) must
+                        // not crash the pointer pipeline.
+                        val startTransform = runCatching { latestBegin.value(key) }.getOrNull()
+                            ?: return@awaitEachGesture
+                        var current: WatchEditorTransform? = null
+                        try {
+                            current = startTransform
+                            lifecycle.begin()
+                            down.consume()
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                if (event.changes.any { it.isConsumed }) break
+
+                                val base = current
+                                when (mode) {
+                                    EditorCanvasGestureMode.BODY -> {
+                                        val pan = event.calculatePan()
+                                        val zoom = event.calculateZoom()
+                                        val rotation = event.calculateRotation()
+                                        if (
+                                            base != null &&
+                                            (pan != Offset.Zero || zoom != 1f || rotation != 0f)
+                                        ) {
+                                            val designDeltaX =
+                                                watchEditorDesignLengthFromViewPx(pan.x, viewSize)
+                                            val designDeltaY =
+                                                watchEditorDesignLengthFromViewPx(pan.y, viewSize)
+                                            val parentDelta = watchEditorDragDeltaInParentFrame(
+                                                geometries = currentGeometries,
+                                                worldMatrices = matrices,
+                                                layerIndex = targetIndex,
+                                                deltaX = designDeltaX,
+                                                deltaY = designDeltaY,
+                                            )
+                                            val next = base.copy(
+                                                x = base.x + parentDelta.x,
+                                                y = base.y + parentDelta.y,
+                                                scaleX = base.scaleX * zoom,
+                                                scaleY = base.scaleY * zoom,
+                                                rotation = base.rotation + rotation,
+                                            ).sanitized()
+                                            current = next
+                                            latestUpdate.value(key, next)
+                                        }
+                                    }
+                                    EditorCanvasGestureMode.HANDLE -> {
+                                        val change = event.changes.firstOrNull { it.pressed }
+                                        val frame = startBox
+                                        val grabbed = handle
+                                        if (change != null && frame != null && grabbed != null) {
+                                            val next = applyWatchEditorHandleDrag(
+                                                handle = grabbed,
+                                                box = frame,
+                                                startTransform = startTransform,
+                                                startX = downDesignX,
+                                                startY = downDesignY,
+                                                currentX = watchEditorDesignFromViewPx(
+                                                    change.position.x,
+                                                    viewSize,
+                                                ),
+                                                currentY = watchEditorDesignFromViewPx(
+                                                    change.position.y,
+                                                    viewSize,
+                                                ),
+                                            )
+                                            if (next != base) {
+                                                current = next
+                                                latestUpdate.value(key, next)
+                                            }
+                                        }
+                                    }
+                                    EditorCanvasGestureMode.NONE -> Unit
+                                }
+                                event.changes.forEach { change ->
+                                    if (
+                                        !moved &&
+                                        hypot(
+                                            change.position.x - down.position.x,
+                                            change.position.y - down.position.y,
+                                        ) > touchSlop
+                                    ) {
+                                        moved = true
+                                    }
+                                    change.consume()
+                                }
+                                if (event.changes.none { it.pressed }) {
+                                    completedNormally = true
+                                    break
+                                }
+                            }
+                        } finally {
+                            lifecycle.finish(completedNormally)?.let { end ->
+                                // Recomposition, navigation or a competing
+                                // gesture cancels this iteration. Roll it
+                                // back; every ordinary UP commits exactly
+                                // one independent transaction.
+                                latestEnd.value(
+                                    key,
+                                    end == WatchEditorGestureEnd.ROLLBACK,
+                                )
+                            }
+                            if (completedNormally && !moved) {
+                                // A motionless press is a tap: jump to the
+                                // layer in the list (or leave fullscreen).
+                                latestTap.value(key)
+                            }
+                        }
+                    }
+                },
+        )
+        val selectedGeometryIndex = geometries.indexOfFirst { it.key == selectedLayer?.key }
+        if (enabled && selectedGeometryIndex >= 0 && canvasSize.width > 0) {
+            val matrices = remember(geometries) { buildWatchEditorWorldMatrices(geometries) }
+            EditorSelectionOverlay(
+                box = watchEditorSelectionBox(
+                    geometries[selectedGeometryIndex],
+                    matrices[selectedGeometryIndex],
+                ),
+                modifier = Modifier.fillMaxSize(),
             )
         }
         loadError?.let { message ->
@@ -1255,38 +1700,330 @@ private data class EditorSaveResult(
     val snapshot: WatchEditorSnapshot,
 )
 
+/**
+ * The adjustment frame around the selected layer: a 1dp bright outline whose
+ * corners scale proportionally, edge midpoints scale a single axis, and a
+ * rotation handle floats above the top edge. Handles are white circles with a
+ * dark outline and at least a 12dp visual diameter for watch-sized fingers.
+ */
 @Composable
-private fun EditorTransformOverlay(
-    transform: WatchEditorTransform,
-    canvasSize: IntSize,
+private fun EditorSelectionOverlay(
+    box: WatchEditorSelectionBox,
     modifier: Modifier = Modifier,
 ) {
-    if (canvasSize.width <= 0 || canvasSize.height <= 0) return
-    val x = canvasSize.width / 2f + transform.x / 512f * canvasSize.width
-    val y = canvasSize.height / 2f + transform.y / 512f * canvasSize.height
     Canvas(modifier = modifier) {
-        val radiusX = (28f * abs(transform.scaleX)).coerceIn(18f, 110f)
-        val radiusY = (28f * abs(transform.scaleY)).coerceIn(18f, 110f)
-        drawOval(
-            color = Color.White.copy(alpha = 0.82f),
-            topLeft = Offset(x - radiusX, y - radiusY),
-            size = Size(radiusX * 2f, radiusY * 2f),
-            style = Stroke(width = 2.5f, cap = StrokeCap.Round),
+        val viewSize = size.width.coerceAtLeast(1f)
+        fun toView(point: com.flue.launcher.watchface.editor.WatchEditorPoint): Offset = Offset(
+            watchEditorViewPxFromDesign(point.x, viewSize),
+            watchEditorViewPxFromDesign(point.y, viewSize),
         )
-        drawLine(
-            color = Color.White.copy(alpha = 0.62f),
-            start = Offset(x - radiusX - 8f, y),
-            end = Offset(x + radiusX + 8f, y),
-            strokeWidth = 1.5f,
-            cap = StrokeCap.Round,
+
+        val strokeWidth = 1.dp.toPx()
+        val topLeft = toView(box.topLeft)
+        val topRight = toView(box.topRight)
+        val bottomLeft = toView(box.bottomLeft)
+        val bottomRight = toView(box.bottomRight)
+        drawLine(EDITOR_SELECTION_STROKE_COLOR, topLeft, topRight, strokeWidth)
+        drawLine(EDITOR_SELECTION_STROKE_COLOR, topRight, bottomRight, strokeWidth)
+        drawLine(EDITOR_SELECTION_STROKE_COLOR, bottomRight, bottomLeft, strokeWidth)
+        drawLine(EDITOR_SELECTION_STROKE_COLOR, bottomLeft, topLeft, strokeWidth)
+
+        val rotationOffsetDesign = watchEditorDesignLengthFromViewPx(
+            EDITOR_ROTATION_HANDLE_OFFSET_DP.dp.toPx(),
+            viewSize,
         )
-        drawLine(
-            color = Color.White.copy(alpha = 0.62f),
-            start = Offset(x, y - radiusY - 8f),
-            end = Offset(x, y + radiusY + 8f),
-            strokeWidth = 1.5f,
-            cap = StrokeCap.Round,
+        val rotationHandle = toView(box.rotationHandle(rotationOffsetDesign))
+        val topMid = toView(box.topMid)
+        drawLine(EDITOR_SELECTION_STROKE_COLOR, topMid, rotationHandle, strokeWidth)
+
+        val handleRadius = EDITOR_HANDLE_VISUAL_RADIUS_DP.dp.toPx()
+        val handleStroke = 1.5f.dp.toPx()
+        val handleCenters = listOf(
+            topLeft,
+            topRight,
+            bottomLeft,
+            bottomRight,
+            topMid,
+            toView(box.bottomMid),
+            toView(box.leftMid),
+            toView(box.rightMid),
+            rotationHandle,
         )
+        handleCenters.forEach { center ->
+            drawCircle(EDITOR_HANDLE_FILL_COLOR, handleRadius, center)
+            drawCircle(
+                EDITOR_HANDLE_STROKE_COLOR,
+                handleRadius,
+                center,
+                style = Stroke(width = handleStroke),
+            )
+        }
+    }
+}
+
+/**
+ * Full-screen crop step between picking an image and writing it into the
+ * draft. Free-form by default with 1:1 and physical-screen presets; the frame
+ * can be moved, corner-resized and pinch-scaled. Decoding is downsampled so a
+ * large camera picture never materialises at full resolution.
+ */
+@Composable
+private fun EditorImageCropOverlay(
+    uri: Uri,
+    onCancel: () -> Unit,
+    onConfirm: (WatchEditorSourceRect) -> Unit,
+) {
+    val context = LocalContext.current
+    val isRound = isFlueScreenRound()
+    var preview by remember(uri) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var sourceSize by remember(uri) { mutableStateOf<IntSize?>(null) }
+    var decodeError by remember(uri) { mutableStateOf<String?>(null) }
+    var aspect by remember(uri) { mutableStateOf(WatchEditorCropAspect.FREE) }
+    var areaSize by remember { mutableStateOf(IntSize.Zero) }
+    var cropRect by remember(uri) { mutableStateOf<WatchEditorCropRect?>(null) }
+    val displayMetrics = context.resources.displayMetrics
+    val aspectRatioValue = watchEditorCropAspectRatio(
+        aspect,
+        displayMetrics.widthPixels,
+        displayMetrics.heightPixels,
+    )
+
+    LaunchedEffect(uri) {
+        runCatching {
+            withContext(Dispatchers.IO) {
+                val bounds = WatchEditorImageCropper.readBounds(context.contentResolver, uri)
+                val bitmap = WatchEditorImageCropper.decodePreview(context.contentResolver, uri)
+                bounds to bitmap
+            }
+        }.onSuccess { (bounds, bitmap) ->
+            sourceSize = IntSize(bounds.width, bounds.height)
+            preview = bitmap
+        }.onFailure { error ->
+            decodeError = error.message ?: "图片解码失败"
+        }
+    }
+    // The preview bitmap is intentionally left to the GC: recycling it while a
+    // final frame still references the ImageBitmap would crash the render node.
+    BackHandler(onBack = onCancel)
+
+    val bitmap = preview
+    val fit = if (bitmap != null && areaSize.width > 0 && areaSize.height > 0) {
+        watchEditorFitImageRect(
+            bitmap.width.toFloat(),
+            bitmap.height.toFloat(),
+            areaSize.width.toFloat(),
+            areaSize.height.toFloat(),
+        )
+    } else {
+        null
+    }
+    val minCropSizePx = with(androidx.compose.ui.platform.LocalDensity.current) { 32.dp.toPx() }
+    if (fit != null && cropRect == null) {
+        cropRect = constrainWatchEditorCropRect(fit, fit, minCropSizePx, aspectRatioValue)
+    }
+    LaunchedEffect(aspect) {
+        val bounds = fit ?: return@LaunchedEffect
+        cropRect?.let { existing ->
+            cropRect = constrainWatchEditorCropRect(existing, bounds, minCropSizePx, aspectRatioValue)
+        }
+    }
+
+    val latestCrop = rememberUpdatedState(cropRect)
+    val latestFit = rememberUpdatedState(fit)
+    val latestRatio = rememberUpdatedState(aspectRatioValue)
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            // Swallow everything so the editor beneath cannot be touched.
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.changes.none { it.pressed }) break
+                    }
+                }
+            }
+            .padding(
+                horizontal = if (isRound) 18.dp else 8.dp,
+                vertical = if (isRound) 14.dp else 6.dp,
+            ),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            "裁剪图片",
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+            fontWeight = FontWeight.SemiBold,
+        )
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .background(Color.Black, RoundedCornerShape(8.dp))
+                .onSizeChanged { areaSize = it },
+        ) {
+            when {
+                decodeError != null -> Text(
+                    decodeError.orEmpty(),
+                    modifier = Modifier.align(Alignment.Center).padding(12.dp),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                bitmap == null -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                else -> {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit,
+                    )
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(Unit) {
+                                val handleTouchPx = EDITOR_HANDLE_TOUCH_DP.dp.toPx()
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    val rect = latestCrop.value ?: return@awaitEachGesture
+                                    val bounds = latestFit.value ?: return@awaitEachGesture
+                                    val grabbed = resolveWatchEditorCropHandle(
+                                        rect,
+                                        down.position.x,
+                                        down.position.y,
+                                        handleTouchPx,
+                                    )
+                                    val moveInside = grabbed == null &&
+                                        rect.contains(down.position.x, down.position.y)
+                                    down.consume()
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        if (event.changes.any { it.isConsumed }) break
+                                        val pan = event.calculatePan()
+                                        val zoom = event.calculateZoom()
+                                        val currentRect = latestCrop.value ?: break
+                                        val ratio = latestRatio.value
+                                        var next = currentRect
+                                        if (grabbed != null && pan != Offset.Zero) {
+                                            next = resizeWatchEditorCropRect(
+                                                rect = next,
+                                                handle = grabbed,
+                                                deltaX = pan.x,
+                                                deltaY = pan.y,
+                                                bounds = bounds,
+                                                minSize = minCropSizePx,
+                                                ratio = ratio,
+                                            )
+                                        } else if (moveInside && pan != Offset.Zero) {
+                                            next = moveWatchEditorCropRect(next, pan.x, pan.y, bounds)
+                                        }
+                                        if (zoom != 1f) {
+                                            next = scaleWatchEditorCropRect(
+                                                rect = next,
+                                                factor = zoom,
+                                                bounds = bounds,
+                                                minSize = minCropSizePx,
+                                                ratio = ratio,
+                                            )
+                                        }
+                                        if (next != currentRect) cropRect = next
+                                        event.changes.forEach { it.consume() }
+                                        if (event.changes.none { it.pressed }) break
+                                    }
+                                }
+                            },
+                    ) {
+                        val rect = cropRect ?: return@Canvas
+                        val dim = Color(0x99000000)
+                        // Dim everything outside the crop frame.
+                        drawRect(dim, Offset.Zero, Size(size.width, rect.top.coerceAtLeast(0f)))
+                        drawRect(
+                            dim,
+                            Offset(0f, rect.bottom),
+                            Size(size.width, (size.height - rect.bottom).coerceAtLeast(0f)),
+                        )
+                        drawRect(
+                            dim,
+                            Offset(0f, rect.top),
+                            Size(rect.left.coerceAtLeast(0f), rect.height),
+                        )
+                        drawRect(
+                            dim,
+                            Offset(rect.right, rect.top),
+                            Size((size.width - rect.right).coerceAtLeast(0f), rect.height),
+                        )
+                        drawRect(
+                            EDITOR_SELECTION_STROKE_COLOR,
+                            Offset(rect.left, rect.top),
+                            Size(rect.width, rect.height),
+                            style = Stroke(width = 1.dp.toPx()),
+                        )
+                        val handleRadius = EDITOR_HANDLE_VISUAL_RADIUS_DP.dp.toPx()
+                        val handleStroke = 1.5f.dp.toPx()
+                        listOf(
+                            Offset(rect.left, rect.top),
+                            Offset(rect.right, rect.top),
+                            Offset(rect.left, rect.bottom),
+                            Offset(rect.right, rect.bottom),
+                        ).forEach { corner ->
+                            drawCircle(EDITOR_HANDLE_FILL_COLOR, handleRadius, corner)
+                            drawCircle(
+                                EDITOR_HANDLE_STROKE_COLOR,
+                                handleRadius,
+                                corner,
+                                style = Stroke(width = handleStroke),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            WatchEditorCropAspect.entries.forEach { candidate ->
+                val selected = aspect == candidate
+                if (selected) {
+                    Button(onClick = {}, enabled = true) { Text(candidate.label) }
+                } else {
+                    OutlinedButton(onClick = { aspect = candidate }) { Text(candidate.label) }
+                }
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = if (isRound) 8.dp else 0.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        ) {
+            OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
+                Icon(Icons.Default.Close, contentDescription = null, Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("取消")
+            }
+            Button(
+                onClick = {
+                    val rect = cropRect
+                    val bounds = fit
+                    val source = sourceSize
+                    if (rect != null && bounds != null && source != null) {
+                        onConfirm(
+                            mapWatchEditorCropToSource(rect, bounds, source.width, source.height),
+                        )
+                    }
+                },
+                enabled = cropRect != null && fit != null && sourceSize != null,
+                modifier = Modifier.weight(1f),
+            ) {
+                Icon(Icons.Default.Check, contentDescription = null, Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("裁剪导入")
+            }
+        }
     }
 }
 
@@ -1378,24 +2115,53 @@ private fun EditorLayerRow(
     }
 }
 
+/**
+ * Properties editing with live preview: every keystroke lands in the session
+ * through a debounced applier, so the canvas follows within ~150ms and no
+ * explicit "apply" press is needed.
+ */
 @Composable
 private fun LayerPropertiesEditor(
     layer: WatchEditorLayer,
+    draftResetKey: Int,
     enabled: Boolean,
-    onApply: (Map<String, String?>) -> Unit,
+    onLiveChange: (Map<String, String?>) -> Unit,
     onImportImage: () -> Unit,
 ) {
-    val initial = remember(layer.key, layer.attributes) {
-        EDITABLE_ATTRIBUTES.associateWith { layer.attributes[it].orEmpty() }
+    // Drafts survive live applies (draftResetKey stays put) but reset whenever
+    // the attributes change from the outside: undo, canvas drags, imports.
+    var drafts by remember(layer.key, draftResetKey) {
+        mutableStateOf(
+            EDITABLE_ATTRIBUTES.associateWith { attribute ->
+                val text = layer.attributes[attribute].orEmpty()
+                TextFieldValue(text, TextRange(text.length))
+            },
+        )
     }
-    var drafts by remember(layer.key, layer.attributes) { mutableStateOf(initial) }
+    var lastFocusedAttribute by remember(layer.key) { mutableStateOf<String?>(null) }
+
+    fun liveValue(name: String, value: String): String? =
+        if (value.isEmpty() && name != "text") null else value
+
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("${layer.type} 属性", fontWeight = FontWeight.SemiBold)
         EDITABLE_ATTRIBUTES.forEach { attribute ->
             OutlinedTextField(
-                value = drafts[attribute].orEmpty(),
-                onValueChange = { value -> drafts = drafts + (attribute to value.take(512)) },
-                modifier = Modifier.fillMaxWidth(),
+                value = drafts[attribute] ?: TextFieldValue(""),
+                onValueChange = { value ->
+                    val limited = if (value.text.length > 512) {
+                        value.copy(text = value.text.take(512))
+                    } else {
+                        value
+                    }
+                    drafts = drafts + (attribute to limited)
+                    onLiveChange(mapOf(attribute to liveValue(attribute, limited.text)))
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { state ->
+                        if (state.isFocused) lastFocusedAttribute = attribute
+                    },
                 enabled = enabled,
                 label = { Text(attributeLabel(attribute)) },
                 singleLine = attribute != "text",
@@ -1412,17 +2178,26 @@ private fun LayerPropertiesEditor(
         if (layer.type.equals("image", ignoreCase = true)) {
             OutlinedButton(onClick = onImportImage, enabled = enabled) { Text("导入图片并写入 path") }
         }
-        Button(
-            onClick = {
-                onApply(
-                    drafts.mapValues { (name, value) ->
-                        if (value.isEmpty() && name != "text") null else value
-                    },
-                )
-            },
+        ExpressionReferencePanel(
             enabled = enabled,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("应用属性并刷新预览") }
+            onInsert = { tag ->
+                val target = lastFocusedAttribute ?: "text"
+                val currentValue = drafts[target] ?: TextFieldValue("")
+                val (newText, cursor) = insertWatchEditorExpression(
+                    text = currentValue.text,
+                    selectionStart = currentValue.selection.start,
+                    selectionEnd = currentValue.selection.end,
+                    tag = tag,
+                )
+                val limited = newText.take(512)
+                val newValue = TextFieldValue(
+                    text = limited,
+                    selection = TextRange(cursor.coerceAtMost(limited.length)),
+                )
+                drafts = drafts + (target to newValue)
+                onLiveChange(mapOf(target to liveValue(target, newValue.text)))
+            },
+        )
         if (layer.attributes.keys.any { it !in EDITABLE_ATTRIBUTES && it != "type" }) {
             Text(
                 "其他属性已保留：" + layer.attributes.keys
@@ -1432,6 +2207,103 @@ private fun LayerPropertiesEditor(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
+        }
+    }
+}
+
+/**
+ * Collapsible quick reference of common Watchmaker tags. Tapping an entry
+ * inserts the tag at the cursor of the most recently focused property field.
+ */
+@Composable
+private fun ExpressionReferencePanel(
+    enabled: Boolean,
+    onInsert: (String) -> Unit,
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(10.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "表达式参考",
+                    modifier = Modifier.weight(1f),
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Icon(
+                    if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
+                    contentDescription = if (expanded) "折叠表达式参考" else "展开表达式参考",
+                )
+            }
+            if (expanded) {
+                Text(
+                    "点击任意条目，插入到当前聚焦的属性输入框光标处。",
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    val twoColumns = maxWidth >= 300.dp
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 6.dp, vertical = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        WATCH_EDITOR_EXPRESSION_GROUPS.forEach { group ->
+                            Text(
+                                group.title,
+                                modifier = Modifier.padding(start = 6.dp, top = 6.dp, bottom = 2.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            val columns = if (twoColumns) 2 else 1
+                            group.entries.chunked(columns).forEach { rowEntries ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    rowEntries.forEach { entry ->
+                                        Column(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable(enabled = enabled) { onInsert(entry.tag) }
+                                                .padding(horizontal = 6.dp, vertical = 5.dp),
+                                        ) {
+                                            Text(
+                                                entry.tag,
+                                                fontFamily = FontFamily.Monospace,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.Medium,
+                                            )
+                                            Text(
+                                                entry.description,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                        if (rowEntries.size < columns) {
+                                            repeat(columns - rowEntries.size) {
+                                                Spacer(Modifier.weight(1f))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

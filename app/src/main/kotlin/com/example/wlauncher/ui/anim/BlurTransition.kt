@@ -53,10 +53,15 @@ fun faceLayerValues(
     } else {
         when (state) {
             ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
+            // watchOS 三段式的 A 段：表盘「向下压暗退后」（缩小 + 下沉 + 模糊），
+            // 而不是旧版的 2.5 倍放大冲脸。B 段的渐黑由 LauncherActivity 里的
+            // 独立遮罩层承担，所以这里 alpha 不用一路打到 0 也能全黑。
             ScreenState.Apps, ScreenState.Settings ->
-                LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
+                LayerAnimValues(scale = 0.90f, blur = 14f, alpha = 0f, translationY = 0.07f)
+                    .shrinkGated(shrinkOnFaceReturn)
             ScreenState.App ->
-                LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
+                LayerAnimValues(scale = 0.88f, blur = 15f, alpha = 0f, translationY = 0.07f)
+                    .shrinkGated(shrinkOnFaceReturn)
             ScreenState.Stack -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
             ScreenState.Notifications -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
             ScreenState.Widgets -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
@@ -91,8 +96,11 @@ fun appListLayerValues(
         }
     } else {
         when (state) {
+            // 0.2 的旧目标让列表退场时缩成一个点，spring 收尾差一点没走完就
+            // 被遮住，观感就是「闪现归位」。watchOS 的退场是 0.86 的小幅收缩
+            // + 淡出（图标飞入的逆过程）。
             ScreenState.Face ->
-                LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
+                LayerAnimValues(scale = 0.86f, blur = 8f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
             ScreenState.Apps -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
             ScreenState.Settings -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.3f)
             ScreenState.App ->

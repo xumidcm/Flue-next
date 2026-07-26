@@ -10,6 +10,8 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
+import com.flue.launcher.ui.common.FlueScreenShape
+import com.flue.launcher.ui.common.LocalFlueScreenShapeOverride
 
 // UI 风格
 enum class UiStyle {
@@ -59,6 +61,7 @@ val LocalGlobalUiScale = compositionLocalOf { 1f }
 fun WatchLauncherTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
     uiStyle: UiStyle = UiStyle.APPLE_WATCH,
+    screenShape: FlueScreenShape = FlueScreenShape.AUTO,
     content: @Composable () -> Unit
 ) {
     val isDark = when (themeMode) {
@@ -72,11 +75,13 @@ fun WatchLauncherTheme(
     val colorScheme = if (isDark) DarkColorScheme else LightColorScheme
 
     MaterialTheme(colorScheme = colorScheme) {
-        ProvideLauncherStyle(
-            uiStyle = uiStyle,
-            darkMode = isDark,
-            content = content
-        )
+        CompositionLocalProvider(LocalFlueScreenShapeOverride provides screenShape) {
+            ProvideLauncherStyle(
+                uiStyle = uiStyle,
+                darkMode = isDark,
+                content = content
+            )
+        }
     }
 }
 

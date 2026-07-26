@@ -484,7 +484,24 @@ internal class FlueSpringEdgeEffectFactory(
     internal fun isFinished(edge: FlueEdgePhysics.Edge): Boolean =
         !physics.isActive(edge)
 
-    internal fun distance(edge: FlueEdgePhysics.Edge): Float = physics.distance(edge)
+    /**
+     * What API 31+ RecyclerView sees through `EdgeEffect.getDistance()`.
+     *
+     * The stretch-aware scroll path treats any non-zero distance as "there is
+     * stretch to unwind first": inward MOVE deltas are routed into
+     * `onPullDistance` instead of scrolling, and — worse — a fling started
+     * while distance != 0 is *absorbed into the edge* rather than scrolling the
+     * list. Our rebound runs on its own animator for ~350ms after every
+     * boundary hit, so during that tail every fling was silently swallowed:
+     * the "I stop, then the list refuses to scroll for a moment" report from
+     * Android 16 hardware.
+     *
+     * The distance only matters to RecyclerView while a finger actively owns
+     * the stretch. During the self-driven rebound the visual is ours alone, so
+     * report zero and let RecyclerView scroll/fling normally underneath it.
+     */
+    internal fun distance(edge: FlueEdgePhysics.Edge): Float =
+        if (physics.isAnimating) 0f else physics.distance(edge)
 
     internal fun draw(
         @Suppress("UNUSED_PARAMETER") edge: FlueEdgePhysics.Edge,

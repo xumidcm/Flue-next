@@ -129,6 +129,7 @@ fun NativeListDrawerScreen(
     active: Boolean = true,
     initialScrollResetKey: Int = 0,
     entryAnimationToken: Long = 0L,
+    entryStaggerEnabled: Boolean = false,
     leftSafeInsetPercent: Int = 0,
     appListScalePercent: Int = 100,
     entryProgress: Float = 1f,
@@ -182,6 +183,7 @@ fun NativeListDrawerScreen(
                 active = active,
                 initialResetToken = initialScrollResetKey.toLong().coerceAtLeast(0L),
                 entryAnimationToken = entryAnimationToken,
+                entryStaggerEnabled = entryStaggerEnabled,
                 leftSafeInsetPercent = leftSafeInsetPercent,
                 appListScalePercent = appListScalePercent,
                 iconSizeDp = iconSize.value,
@@ -306,6 +308,7 @@ internal data class NativeListDrawerConfigRequest(
     val active: Boolean,
     val initialResetToken: Long,
     val entryAnimationToken: Long = 0L,
+    val entryStaggerEnabled: Boolean = false,
     val leftSafeInsetPercent: Int,
     val appListScalePercent: Int,
     val iconSizeDp: Float,
@@ -438,6 +441,8 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         edgeSpacingCompressionEnabled = request.edgeSpacingCompressionEnabled,
         entryMotionEnabled = !request.appleWatchIconShape,
         entryProgress = request.entryProgress,
+        // 0.65：底部行晚约 27% 行程，watchOS 式甩尾但不至于拖沓。
+        entryStaggerStrength = if (request.entryStaggerEnabled) 0.65f else 0f,
         palette = NativeAppListPalette(
             rowBackgroundColorArgb = if (
                 request.rowBorderEnabled ||

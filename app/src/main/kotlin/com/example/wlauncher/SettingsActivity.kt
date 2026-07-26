@@ -98,6 +98,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.geometry.Offset
@@ -122,6 +124,7 @@ import com.dudu.wearlauncher.utils.ILog
 import com.flue.launcher.backup.FlueBackupOptions
 import com.flue.launcher.backup.FlueBackupPreview
 import com.flue.launcher.service.FlueAccessibilityService
+import com.flue.launcher.ui.common.FlueScreenShape
 import com.flue.launcher.ui.common.bottomFisheyeScale
 import com.flue.launcher.ui.common.flueElasticNestedScroll
 import com.flue.launcher.motion.LocalFlueMotionProfile
@@ -237,7 +240,8 @@ class SettingsActivity : ComponentActivity() {
             val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
             val uiStyle by viewModel.uiStyle.collectAsStateWithLifecycle()
             val globalUiScalePercent by viewModel.globalUiScalePercent.collectAsStateWithLifecycle()
-            WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle) {
+            val screenShape by viewModel.screenShapeOverride.collectAsStateWithLifecycle()
+            WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle, screenShape = screenShape) {
                 ProvideGlobalUiScale(globalUiScalePercent) {
                     SettingsRootScreen(
                         onFinish = { finish() },
@@ -353,6 +357,9 @@ private fun SettingsRootScreen(
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
     val appListReturnShrinkEnabled by vm.appListReturnShrinkEnabled.collectAsStateWithLifecycle()
+    val reduceDynamicEffects by vm.reduceDynamicEffects.collectAsStateWithLifecycle()
+    val screenShapeOverride by vm.screenShapeOverride.collectAsStateWithLifecycle()
+    val appListStaggerEnabled by vm.appListStaggerEnabled.collectAsStateWithLifecycle()
     val faceReturnShrinkEnabled by vm.faceReturnShrinkEnabled.collectAsStateWithLifecycle()
     val activeMotionProfile by vm.activeMotionProfile.collectAsStateWithLifecycle()
     val motionProfiles by vm.motionProfiles.collectAsStateWithLifecycle()
@@ -1164,7 +1171,7 @@ private fun SettingsRootScreen(
             item("watchface_more") {
                 SettingsCategoryCard(
                     title = "更多表盘选项",
-                    subtitle = "内置表盘字体、底部渐隐与标准/兼容表盘说明",
+                    subtitle = "内置表盘字体与底部渐隐",
                     onClick = { navigateTo(SettingsDestination.WATCH_FACE_MORE) },
                     scale = itemFisheye(listState, "watchface_more", screenCenterY, screenHeightPx)
                 )
@@ -1271,22 +1278,6 @@ private fun SettingsRootScreen(
                                 bodySensorsPermissionLauncher.launch(Manifest.permission.BODY_SENSORS)
                             }
                         },
-                    )
-                }
-                item("watchmaker_info") {
-                    MessageCard(
-                        text = "当前为标准 Watchmaker .watch 表盘，支持 Watchmaker 1.0 / Studio 2.0 定义；未实现的图层效果会按兼容策略跳过。",
-                        background = Color(0x33007AFF),
-                        onClick = {}
-                    )
-                }
-            }
-            if (selectedWatchFace.isJbWatch) {
-                item("jbwatch_info") {
-                    MessageCard(
-                        text = "当前为旧版 jb_watch 表盘（watch.xml + watch.pxml）兼容格式。",
-                        background = Color(0x33007AFF),
-                        onClick = {}
                     )
                 }
             }
@@ -1438,6 +1429,36 @@ private fun SettingsRootScreen(
                     selected = uiStyle == UiStyle.MIUIX,
                     onClick = { vm.setUiStyle(UiStyle.MIUIX) },
                     scale = itemFisheye(listState, "ui_style_miuix", screenCenterY, screenHeightPx)
+                )
+            }
+            item("screen_shape_header") {
+                SectionTitle(if (isZh) "屏幕形状" else "Screen Shape", itemFisheye(listState, "screen_shape_header", screenCenterY, screenHeightPx))
+            }
+            item("screen_shape_auto") {
+                SettingsChoiceRow(
+                    title = if (isZh) "自动" else "Auto",
+                    subtitle = if (isZh) "跟随系统上报的屏幕形状" else "Follow what the system reports",
+                    selected = screenShapeOverride == FlueScreenShape.AUTO,
+                    onClick = { vm.setScreenShapeOverride(FlueScreenShape.AUTO) },
+                    scale = itemFisheye(listState, "screen_shape_auto", screenCenterY, screenHeightPx)
+                )
+            }
+            item("screen_shape_round") {
+                SettingsChoiceRow(
+                    title = if (isZh) "圆屏" else "Round",
+                    subtitle = if (isZh) "部分系统上报错误时手动指定" else "Override when the system reports it wrong",
+                    selected = screenShapeOverride == FlueScreenShape.ROUND,
+                    onClick = { vm.setScreenShapeOverride(FlueScreenShape.ROUND) },
+                    scale = itemFisheye(listState, "screen_shape_round", screenCenterY, screenHeightPx)
+                )
+            }
+            item("screen_shape_square") {
+                SettingsChoiceRow(
+                    title = if (isZh) "方屏" else "Square",
+                    subtitle = if (isZh) "部分系统上报错误时手动指定" else "Override when the system reports it wrong",
+                    selected = screenShapeOverride == FlueScreenShape.SQUARE,
+                    onClick = { vm.setScreenShapeOverride(FlueScreenShape.SQUARE) },
+                    scale = itemFisheye(listState, "screen_shape_square", screenCenterY, screenHeightPx)
                 )
             }
             item("visual_effects_header") {
@@ -1957,16 +1978,49 @@ private fun SettingsRootScreen(
                 )
             }
             item("face_return_shrink") {
+                // 减弱动态效果打开时表盘收缩强制开启且不可修改（回弹被去掉后
+                // 需要收缩行程来承载转场层次）。
                 SettingsSwitchRow(
                     title = if (isZh) "表盘收缩动画" else "Watch Face Shrink Animation",
-                    subtitle = if (isZh) {
-                        "关闭后返回表盘时只做淡入淡出，不再整体缩放"
-                    } else {
-                        "Fade only when returning to the watch face; skip the scale"
+                    subtitle = when {
+                        reduceDynamicEffects && isZh -> "减弱动态效果已开启，收缩动画保持开启"
+                        reduceDynamicEffects -> "Forced on while Reduce Motion is enabled"
+                        isZh -> "关闭后返回表盘时只做淡入淡出，不再整体缩放"
+                        else -> "Fade only when returning to the watch face; skip the scale"
                     },
-                    checked = faceReturnShrinkEnabled,
+                    checked = if (reduceDynamicEffects) true else faceReturnShrinkEnabled,
+                    enabled = !reduceDynamicEffects,
                     onToggle = vm::setFaceReturnShrinkEnabled,
                     scale = itemFisheye(listState, "face_return_shrink", screenCenterY, screenHeightPx)
+                )
+            }
+            item("app_list_stagger") {
+                SettingsSwitchRow(
+                    title = if (isZh) "甩尾入场动画" else "Staggered Entry",
+                    subtitle = if (isZh) {
+                        "进入应用列表时第一行先入屏，下面的行逐行跟进"
+                    } else {
+                        "Rows enter top-first with a cascading delay"
+                    },
+                    checked = appListStaggerEnabled,
+                    onToggle = vm::setAppListStaggerEnabled,
+                    scale = itemFisheye(listState, "app_list_stagger", screenCenterY, screenHeightPx)
+                )
+            }
+            item("reduce_dynamic_effects") {
+                SettingsSwitchRow(
+                    title = if (isZh) "减弱动态效果" else "Reduce Motion",
+                    subtitle = if (isZh) {
+                        "去掉转场收尾的越界回弹：动画到位即停，不再弹一下"
+                    } else {
+                        "Remove the settle overshoot: transitions stop exactly at rest"
+                    },
+                    checked = reduceDynamicEffects,
+                    onToggle = { reduce ->
+                        vm.setReduceDynamicEffects(reduce)
+                        if (reduce) vm.setFaceReturnShrinkEnabled(true)
+                    },
+                    scale = itemFisheye(listState, "reduce_dynamic_effects", screenCenterY, screenHeightPx)
                 )
             }
             item("hide_from_recents") {
@@ -3152,6 +3206,17 @@ private fun AboutCard(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // painterResource 不支持 AdaptiveIconDrawable：启动图标是自适应
+            // 图标时（mipmap-anydpi-v26），进入关于页会直接抛
+            // IllegalArgumentException 闪退。走 PackageManager 拿 Drawable
+            // 再栅格化，任何图标类型都安全。
+            val appIconBitmap = remember {
+                runCatching {
+                    context.packageManager.getApplicationIcon(context.packageName)
+                        .toBitmap(width = 192, height = 192)
+                        .asImageBitmap()
+                }.getOrNull()
+            }
             Box(
                 modifier = Modifier
                     .size(98.dp)
@@ -3159,14 +3224,18 @@ private fun AboutCard(
                     .background(Color.White.copy(alpha = 0.06f)),
                 contentAlignment = Alignment.Center
             ) {
-                Image(
-                    painter = painterResource(id = R.mipmap.ic_launcher_round),
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(76.dp)
-                        .clip(RoundedCornerShape(22.dp)),
-                    contentScale = ContentScale.Crop
-                )
+                if (appIconBitmap != null) {
+                    Image(
+                        bitmap = appIconBitmap,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(76.dp)
+                            .clip(RoundedCornerShape(22.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Text("Flue", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                }
             }
             Spacer(modifier = Modifier.height(14.dp))
             Text("Flue", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
@@ -3412,7 +3481,9 @@ private fun itemFisheye(
     screenCenterY: Float,
     screenHeight: Float
 ): Float {
-    return bottomFisheyeScale(listState, key, screenCenterY, screenHeight)
+    // 设置页不再做鱼眼：全部平铺（用户明确要求）。保留函数签名让 200+ 个
+    // 调用点不用逐个改，后续重构设置页时随新组件一起删除。
+    return 1f
 }
 
 @Composable

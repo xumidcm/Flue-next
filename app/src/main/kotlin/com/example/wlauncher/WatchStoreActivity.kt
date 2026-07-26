@@ -11,11 +11,19 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -32,26 +40,30 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -65,28 +77,34 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.flue.launcher.R
+import com.flue.launcher.ui.common.fluePressScale
+import com.flue.launcher.ui.common.flueElasticNestedScroll
+import com.flue.launcher.ui.common.isFlueScreenRound
+import com.flue.launcher.ui.common.rememberFluePressScale
+import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
-import com.flue.launcher.R
-import com.flue.launcher.ui.common.flueElasticNestedScroll
-import com.flue.launcher.ui.common.fluePressScale
-import com.flue.launcher.ui.common.rememberFluePressScale
 import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
@@ -94,28 +112,30 @@ import com.flue.launcher.watchface.editor.WatchEditorSession
 import com.flue.launcher.watchface.standard.WatchInstallMetadata
 import com.flue.launcher.watchface.store.WatchStoreCategory
 import com.flue.launcher.watchface.store.WatchStoreException
+import com.flue.launcher.watchface.store.WatchStoreInstallState
+import com.flue.launcher.watchface.store.WatchStoreInstallTransactionException
 import com.flue.launcher.watchface.store.WatchStorePagination
 import com.flue.launcher.watchface.store.WatchStoreQuery
 import com.flue.launcher.watchface.store.WatchStoreRepository
 import com.flue.launcher.watchface.store.WatchStoreScreenType
 import com.flue.launcher.watchface.store.WatchStoreSort
+import com.flue.launcher.watchface.store.WatchStoreUiPreferences
+import com.flue.launcher.watchface.store.WatchStoreViewMode
 import com.flue.launcher.watchface.store.WatchStoreWatchFace
 import com.flue.launcher.watchface.store.WatchStoreWatchFaceDetail
-import com.flue.launcher.watchface.store.WatchStoreInstallState
-import com.flue.launcher.watchface.store.WatchStoreInstallTransactionException
-import com.flue.launcher.watchface.store.commitMarketInstallCatalog
 import com.flue.launcher.watchface.store.catalog.WATCHMAKER_COMMUNITY_STORE_ID
 import com.flue.launcher.watchface.store.catalog.WatchFaceCatalogDiagnostic
 import com.flue.launcher.watchface.store.catalog.WatchFaceCatalogSnapshot
 import com.flue.launcher.watchface.store.catalog.WatchFaceInstallSource
 import com.flue.launcher.watchface.store.catalog.WatchFaceRecord
-import kotlinx.coroutines.Dispatchers
+import com.flue.launcher.watchface.store.commitMarketInstallCatalog
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -138,7 +158,7 @@ class WatchStoreActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         RecentsVisibility.apply(this)
         val repository = WatchStoreRepository(this)
-        val isScreenRound = resources.configuration.isScreenRound
+        val uiPreferences = WatchStoreUiPreferences(this)
         setContent {
             val themeMode by launcherViewModel.themeMode.collectAsStateWithLifecycle()
             val uiStyle by launcherViewModel.uiStyle.collectAsStateWithLifecycle()
@@ -173,8 +193,8 @@ class WatchStoreActivity : ComponentActivity() {
                 ProvideGlobalUiScale(uiScale) {
                     WatchStoreScreen(
                         repository = repository,
+                        uiPreferences = uiPreferences,
                         reconcileToken = resumeToken,
-                        isScreenRound = isScreenRound,
                         onBack = ::finish,
                         installArchive = { archive ->
                             launcherViewModel.installWatchStoreArchive(archive).map { descriptor ->
@@ -208,12 +228,6 @@ class WatchStoreActivity : ComponentActivity() {
                             }
                         },
                         deleteInstalled = launcherViewModel::deleteImportedWatchFaces,
-                        openDisplaySettings = {
-                            startActivity(
-                                Intent(this, SettingsActivity::class.java)
-                                    .putExtra(EXTRA_SETTINGS_DESTINATION, SETTINGS_DESTINATION_WATCH_FACES),
-                            )
-                        },
                     )
                 }
             }
@@ -249,18 +263,21 @@ private data class StoreQueryKey(
 @Composable
 private fun WatchStoreScreen(
     repository: WatchStoreRepository,
+    uiPreferences: WatchStoreUiPreferences,
     reconcileToken: Int,
-    isScreenRound: Boolean,
     onBack: () -> Unit,
     installArchive: suspend (java.io.File) -> Result<InstalledStoreWatchFace>,
     useInstalled: (launcherId: String) -> Unit,
     editInstalled: (launcherId: String) -> Unit,
     exportInstalled: (launcherId: String) -> Unit,
     deleteInstalled: suspend (launcherIds: Collection<String>) -> Result<Unit>,
-    openDisplaySettings: () -> Unit,
 ) {
+    val style = LauncherTheme.style
+    val isScreenRound = isFlueScreenRound()
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+    var viewMode by remember { mutableStateOf(uiPreferences.readViewMode()) }
     var sort by remember { mutableStateOf(WatchStoreSort.LATEST) }
     var screenType by remember { mutableStateOf<WatchStoreScreenType?>(null) }
     var selectedCategory by remember { mutableStateOf<WatchStoreCategory?>(null) }
@@ -277,8 +294,13 @@ private fun WatchStoreScreen(
     var listError by remember { mutableStateOf<String?>(null) }
     var reloadToken by remember { mutableIntStateOf(0) }
     var selectedId by remember { mutableStateOf<String?>(null) }
+    var lastDetailId by remember { mutableStateOf<String?>(null) }
+    var selectedDetail by remember { mutableStateOf<WatchStoreWatchFaceDetail?>(null) }
+    var detailLoading by remember { mutableStateOf(false) }
+    var detailError by remember { mutableStateOf<String?>(null) }
+    var detailReloadToken by remember { mutableIntStateOf(0) }
     var catalog by remember { mutableStateOf(WatchFaceCatalogSnapshot()) }
-    var catalogReady by remember { mutableStateOf(false) }
+    var catalogInitialized by remember { mutableStateOf(false) }
     var catalogError by remember { mutableStateOf<String?>(null) }
     var catalogWarning by remember { mutableStateOf<String?>(null) }
     var catalogReloadToken by remember { mutableIntStateOf(0) }
@@ -305,6 +327,20 @@ private fun WatchStoreScreen(
     val pendingCatalogInstalls = remember { mutableStateMapOf<String, PendingMarketCatalogInstall>() }
     var installedActionError by remember { mutableStateOf<String?>(null) }
 
+    /**
+     * Opening a detail must reset the load state *synchronously*: the first
+     * overlay frame otherwise renders with the previous request's error or
+     * with loading=false and flashes "无法加载表盘" before the effect runs.
+     */
+    fun openDetail(id: String) {
+        selectedDetail = null
+        detailError = null
+        detailLoading = true
+        lastDetailId = id
+        selectedId = id
+        installedActionError = null
+    }
+
     suspend fun cleanObsoleteMarketRevisions(
         snapshot: WatchFaceCatalogSnapshot,
         scannedFaces: List<LunchWatchFaceDescriptor>,
@@ -321,10 +357,12 @@ private fun WatchStoreScreen(
             }
     }
 
+    // Catalog reconciliation runs silently once the first snapshot is on
+    // screen: blanking the browse list during every resume/reinstall pass was
+    // the visible "flicker after install" and also clamped the scroll offset
+    // of the emptied LazyColumn back to zero.
     LaunchedEffect(repository, reconcileToken, catalogReloadToken) {
-        catalogReady = false
         catalogError = null
-        catalogWarning = null
         try {
             val restored = repository.restoreCatalogFromInstalledFaces(
                 repairCorruptCatalog = repairCatalogOnNextRestore,
@@ -336,6 +374,7 @@ private fun WatchStoreScreen(
                 restored.snapshot
             }
             if (restored.scanComplete) {
+                catalogWarning = null
                 cleanObsoleteMarketRevisions(catalog, restored.installedFaces)
             } else {
                 val first = restored.scanFailures.firstOrNull()
@@ -356,20 +395,20 @@ private fun WatchStoreScreen(
             error.throwIfCancellation()
             catalogError = error.userFacingMessage()
         } finally {
-            catalogReady = true
+            catalogInitialized = true
         }
     }
 
     LaunchedEffect(
         repository,
-        catalogReady,
+        catalogInitialized,
         catalog.diagnostic,
         installedFaces,
         reconcileToken,
         catalogReloadToken,
     ) {
         if (
-            !catalogReady ||
+            !catalogInitialized ||
             catalogError != null ||
             catalog.diagnostic != null ||
             installedFaces.isEmpty() ||
@@ -439,13 +478,16 @@ private fun WatchStoreScreen(
         }
     }
 
-    // Paging is driven by the lazy list's visible index, not by recomposition
-    // of every card.  The repository performs the actual request off-main.
-    LaunchedEffect(listState, queryKey, reloadToken) {
+    // Paging is driven by the active lazy container's visible index, not by
+    // recomposition of every card.  The repository requests off-main.
+    LaunchedEffect(viewMode, listState, gridState, queryKey, reloadToken) {
+        val prefetchThreshold = if (viewMode == WatchStoreViewMode.GRID) 6 else 3
         snapshotFlow {
-            val visible = listState.layoutInfo.visibleItemsInfo
-            val lastIndex = visible.lastOrNull()?.index ?: -1
-            lastIndex >= (entries.size - 3).coerceAtLeast(0)
+            val lastIndex = when (viewMode) {
+                WatchStoreViewMode.LIST -> listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index
+                WatchStoreViewMode.GRID -> gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index
+            } ?: -1
+            lastIndex >= (entries.size - prefetchThreshold).coerceAtLeast(0)
         }.distinctUntilChanged().collect { nearEnd ->
             val current = pagination ?: return@collect
             if (!nearEnd || listLoading || loadingMore || !current.hasNextPage) return@collect
@@ -484,18 +526,10 @@ private fun WatchStoreScreen(
         }
     }
 
-    var selectedDetail by remember { mutableStateOf<WatchStoreWatchFaceDetail?>(null) }
-    var detailLoading by remember { mutableStateOf(false) }
-    var detailError by remember { mutableStateOf<String?>(null) }
-    var detailReloadToken by remember { mutableIntStateOf(0) }
     LaunchedEffect(selectedId, detailReloadToken) {
-        val id = selectedId ?: run {
-            selectedDetail = null
-            return@LaunchedEffect
-        }
+        val id = selectedId ?: return@LaunchedEffect
         detailLoading = true
         detailError = null
-        selectedDetail = null
         runCatching { repository.getWatchFace(id) }
             .onSuccess { selectedDetail = it }
             .onFailure {
@@ -695,205 +729,310 @@ private fun WatchStoreScreen(
         }
     }
 
-    val selectedRemoteId = selectedId
-    if (selectedRemoteId != null) {
-        val transientState = downloadStates[selectedRemoteId]
-            ?.collectAsStateWithLifecycle()
-            ?.value
-        WatchFaceDetailPage(
-            repository = repository,
-            detail = selectedDetail,
-            summary = entries.firstOrNull { it.id == selectedRemoteId },
-            localDescriptor = (transientState as? WatchStoreInstallState.Installed)?.record
-                ?.activeLauncherIdOrNull()
-                ?.let(installedFacesById::get)
-                ?: installedMarketRecords[selectedRemoteId]
-                    ?.activeLauncherIdOrNull()
-                    ?.let(installedFacesById::get),
-            loading = detailLoading,
-            error = detailError,
-            downloadState = transientState ?: persistentInstallState(selectedRemoteId),
-            actionError = installedActionError,
-            isScreenRound = isScreenRound,
-            onBack = {
-                selectedId = null
-                installedActionError = null
-            },
-            onRetryDetail = { detailReloadToken++ },
-            onDownload = { download(selectedRemoteId) },
-            onCancelDownload = { cancelDownload(selectedRemoteId) },
-            onUse = { record -> record.activeLauncherIdOrNull()?.let(useInstalled) },
-            onEdit = { record -> record.activeLauncherIdOrNull()?.let(editInstalled) },
-            onRename = { record, name -> renameInstalled(selectedRemoteId, record, name) },
-            onDelete = { record -> removeInstalled(selectedRemoteId, record) },
-            onExport = { record -> record.activeLauncherIdOrNull()?.let(exportInstalled) },
-            onDisplaySettings = openDisplaySettings,
-        )
-        return
-    }
-
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(WatchColors.Background)
-            .padding(
-                horizontal = if (isScreenRound) 16.dp else 10.dp,
-                vertical = if (isScreenRound) 10.dp else 6.dp,
-            ),
+            .background(style.screenBackground),
     ) {
-        StoreHeader(onBack = onBack)
-        OutlinedTextField(
-            value = searchText,
-            onValueChange = { searchText = it.take(200) },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            placeholder = { Text("搜索表盘", color = WatchColors.TextTertiary, fontSize = 13.sp) },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "搜索", tint = WatchColors.TextSecondary) },
-            trailingIcon = {
-                if (searchText.isNotEmpty()) {
-                    IconButton(onClick = { searchText = "" }) {
-                        Icon(Icons.Default.Clear, contentDescription = "清空", tint = WatchColors.TextSecondary)
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(
+                    horizontal = if (isScreenRound) 16.dp else 10.dp,
+                    vertical = if (isScreenRound) 10.dp else 6.dp,
+                ),
+        ) {
+            StoreHeader(
+                onBack = onBack,
+                viewMode = viewMode,
+                onToggleViewMode = {
+                    val next = if (viewMode == WatchStoreViewMode.LIST) {
+                        WatchStoreViewMode.GRID
+                    } else {
+                        WatchStoreViewMode.LIST
                     }
+                    viewMode = next
+                    uiPreferences.writeViewMode(next)
+                },
+            )
+            OutlinedTextField(
+                value = searchText,
+                onValueChange = { searchText = it.take(200) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                shape = style.rowShape,
+                placeholder = { Text("搜索表盘", color = style.secondaryTextColor, fontSize = 13.sp) },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "搜索", tint = style.secondaryTextColor) },
+                trailingIcon = {
+                    if (searchText.isNotEmpty()) {
+                        IconButton(onClick = { searchText = "" }) {
+                            Icon(Icons.Default.Clear, contentDescription = "清空", tint = style.secondaryTextColor)
+                        }
+                    }
+                },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = style.accentColor,
+                    unfocusedBorderColor = style.outlineColor,
+                    focusedContainerColor = style.cardColor,
+                    unfocusedContainerColor = style.cardColor,
+                    cursorColor = style.accentColor,
+                    focusedTextColor = style.bodyColor,
+                    unfocusedTextColor = style.bodyColor,
+                ),
+            )
+            Spacer(Modifier.height(7.dp))
+            FilterBar(
+                sort = sort,
+                onSortChange = { sort = it },
+                screenType = screenType,
+                onScreenTypeChange = { screenType = it },
+                selectedCategory = selectedCategory,
+                categories = categories,
+                categoriesLoading = categoriesLoading,
+                categoriesError = categoriesError,
+                categoryMenuExpanded = categoryMenuExpanded,
+                onCategoryMenuExpandedChange = { categoryMenuExpanded = it },
+                onCategoryChange = {
+                    selectedCategory = it
+                    categoryMenuExpanded = false
+                },
+            )
+            Spacer(Modifier.height(4.dp))
+
+            val showEntries = catalogInitialized && catalog.diagnostic == null
+            val visibleEntries = if (showEntries) entries else emptyList()
+            val currentCatalogError = catalogError
+            val currentCatalogWarning = catalogWarning
+            val currentListError = listError
+            val statusRows = buildList<Pair<String, @Composable () -> Unit>> {
+                if (!catalogInitialized) {
+                    add("catalog_loading" to { LoadingStateRow("正在恢复安装状态…") })
                 }
-            },
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = WatchColors.ActiveCyan,
-                unfocusedBorderColor = WatchColors.SurfaceGlass,
-                focusedContainerColor = WatchColors.SurfaceGlass,
-                unfocusedContainerColor = WatchColors.SurfaceGlass,
-                cursorColor = WatchColors.ActiveCyan,
-                focusedTextColor = WatchColors.OnBackground,
-                unfocusedTextColor = WatchColors.OnBackground,
-            ),
-        )
-        Spacer(Modifier.height(7.dp))
-        FilterBar(
-            sort = sort,
-            onSortChange = { sort = it },
-            screenType = screenType,
-            onScreenTypeChange = { screenType = it },
-            selectedCategory = selectedCategory,
-            categories = categories,
-            categoriesLoading = categoriesLoading,
-            categoriesError = categoriesError,
-            categoryMenuExpanded = categoryMenuExpanded,
-            onCategoryMenuExpandedChange = { categoryMenuExpanded = it },
-            onCategoryChange = {
-                selectedCategory = it
-                categoryMenuExpanded = false
-            },
-        )
-        Spacer(Modifier.height(4.dp))
-        BoxWithConstraints(Modifier.fillMaxSize()) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .flueElasticNestedScroll(listState),
-                contentPadding = PaddingValues(top = 4.dp, bottom = 20.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(
-                    if (catalogReady && catalogError == null && catalog.diagnostic == null) entries else emptyList(),
-                    key = { it.id },
-                ) { item ->
-                    val transientState = downloadStates[item.id]
-                        ?.collectAsStateWithLifecycle()
-                        ?.value
-                    WatchFaceCard(
-                        repository = repository,
-                        item = item,
-                        downloadState = transientState ?: persistentInstallState(item.id),
-                        onOpen = { selectedId = item.id },
-                        onDownload = { download(item.id) },
-                        onCancelDownload = { cancelDownload(item.id) },
+                if (catalogInitialized && currentCatalogError != null) {
+                    add(
+                        "catalog_error" to {
+                            ErrorStateRow(message = currentCatalogError, onRetry = { catalogReloadToken++ })
+                        },
                     )
                 }
-                if (!catalogReady) item { LoadingRow("正在恢复安装状态…") }
-                if (catalogReady && catalogError != null) {
-                    item { ErrorRow(message = catalogError!!, onRetry = { catalogReloadToken++ }) }
-                }
-                if (catalogReady && catalogError == null && catalogWarning != null) {
-                    item("catalog_scan_warning") {
-                        ErrorRow(message = catalogWarning!!, onRetry = { catalogReloadToken++ })
-                    }
+                if (catalogInitialized && currentCatalogError == null && currentCatalogWarning != null) {
+                    add(
+                        "catalog_scan_warning" to {
+                            ErrorStateRow(message = currentCatalogWarning, onRetry = { catalogReloadToken++ })
+                        },
+                    )
                 }
                 catalog.diagnostic?.let { diagnostic ->
-                    item("catalog_recovery") {
-                        CatalogRecoveryRow(
-                            diagnostic = diagnostic,
-                            onRescan = {
-                                repairCatalogOnNextRestore = true
-                                catalogReloadToken++
+                    add(
+                        "catalog_recovery" to {
+                            CatalogRecoveryRow(
+                                diagnostic = diagnostic,
+                                onRescan = {
+                                    repairCatalogOnNextRestore = true
+                                    catalogReloadToken++
+                                },
+                            )
+                        },
+                    )
+                }
+                if (
+                    showEntries &&
+                    currentCatalogError == null &&
+                    entries.isEmpty() &&
+                    currentListError != null &&
+                    localMarketRecords.isNotEmpty()
+                ) {
+                    add(
+                        "offline_installed_header" to {
+                            Text(
+                                "已安装表盘",
+                                color = LauncherTheme.style.titleColor,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+                            )
+                        },
+                    )
+                    localMarketRecords.forEach { record ->
+                        val source = record.source as WatchFaceInstallSource.Market
+                        add(
+                            "offline_${record.logicalId}" to {
+                                LocalInstalledWatchFaceCard(
+                                    record = record,
+                                    descriptor = record.activeLauncherIdOrNull()?.let(installedFacesById::get),
+                                    onOpen = { openDetail(source.remoteId) },
+                                )
                             },
                         )
                     }
                 }
-                if (
-                    catalogReady &&
-                    catalogError == null &&
-                    catalog.diagnostic == null &&
-                    entries.isEmpty() &&
-                    listError != null &&
-                    localMarketRecords.isNotEmpty()
-                ) {
-                    item("offline_installed_header") {
-                        Text(
-                            "已安装表盘",
-                            color = WatchColors.OnBackground,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
-                        )
+                if (catalog.diagnostic == null) {
+                    when {
+                        listLoading && entries.isEmpty() ->
+                            add("list_loading" to { LoadingStateRow("正在加载表盘…") })
+                        currentListError != null && entries.isEmpty() ->
+                            add(
+                                "list_error" to {
+                                    ErrorStateRow(message = currentListError, onRetry = { reloadToken++ })
+                                },
+                            )
+                        showEntries && !listLoading && !loadingMore && entries.isEmpty() ->
+                            add("list_empty" to { EmptyStateRow() })
                     }
-                    items(localMarketRecords, key = { "offline_${it.logicalId}" }) { record ->
-                        val source = record.source as WatchFaceInstallSource.Market
-                        LocalInstalledWatchFaceCard(
-                            record = record,
-                            descriptor = record.activeLauncherIdOrNull()?.let(installedFacesById::get),
-                            onOpen = { selectedId = source.remoteId },
-                        )
+                    if (loadingMore) {
+                        add("loading_more" to { LoadingStateRow("加载更多…") })
                     }
-                }
-                if (catalog.diagnostic == null && listLoading && entries.isEmpty()) {
-                    item { LoadingRow("正在加载表盘…") }
-                } else if (catalog.diagnostic == null && listError != null && entries.isEmpty()) {
-                    item {
-                        ErrorRow(
-                            message = listError!!,
-                            onRetry = { reloadToken++ },
-                        )
-                    }
-                } else if (catalog.diagnostic == null && !listLoading && !loadingMore && entries.isEmpty()) {
-                    item { EmptyRow() }
-                }
-                if (catalog.diagnostic == null && loadingMore) item { LoadingRow("加载更多…") }
-                if (catalog.diagnostic == null && listError != null && entries.isNotEmpty()) {
-                    item {
-                        ErrorRow(
-                            message = listError!!,
-                            onRetry = { reloadToken++ },
+                    if (currentListError != null && entries.isNotEmpty()) {
+                        add(
+                            "tail_error" to {
+                                ErrorStateRow(message = currentListError, onRetry = { reloadToken++ })
+                            },
                         )
                     }
                 }
             }
+            // 圆屏：上下 contentPadding 按弦宽加大，避免首尾卡片被表盘圆角裁掉。
+            val browseContentPadding = PaddingValues(
+                top = if (isScreenRound) 14.dp else 4.dp,
+                bottom = if (isScreenRound) 48.dp else 20.dp,
+            )
+            if (viewMode == WatchStoreViewMode.LIST) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .flueElasticNestedScroll(listState),
+                    contentPadding = browseContentPadding,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(visibleEntries, key = { it.id }) { item ->
+                        val transientState = downloadStates[item.id]
+                            ?.collectAsStateWithLifecycle()
+                            ?.value
+                        WatchFaceListCard(
+                            repository = repository,
+                            item = item,
+                            downloadState = transientState ?: persistentInstallState(item.id),
+                            onOpen = { openDetail(item.id) },
+                            onDownload = { download(item.id) },
+                            onCancelDownload = { cancelDownload(item.id) },
+                        )
+                    }
+                    items(statusRows, key = { it.first }) { row -> row.second() }
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    state = gridState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = browseContentPadding,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    gridItems(visibleEntries, key = { it.id }) { item ->
+                        val transientState = downloadStates[item.id]
+                            ?.collectAsStateWithLifecycle()
+                            ?.value
+                        WatchFaceGridCard(
+                            repository = repository,
+                            item = item,
+                            downloadState = transientState ?: persistentInstallState(item.id),
+                            onOpen = { openDetail(item.id) },
+                            onDownload = { download(item.id) },
+                            onCancelDownload = { cancelDownload(item.id) },
+                        )
+                    }
+                    gridItems(
+                        statusRows,
+                        key = { it.first },
+                        span = { GridItemSpan(maxLineSpan) },
+                    ) { row -> row.second() }
+                }
+            }
+        }
+
+        // 详情做成列表之上的覆层：列表始终保持在组合树里，返回时滚动位置
+        // 不会丢；入场/退场用 pageMotionSpec 令牌做 fade + 0.96 scale。
+        AnimatedVisibility(
+            visible = selectedId != null,
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(1f),
+            enter = fadeIn(animationSpec = style.pageMotionSpec) +
+                scaleIn(initialScale = 0.96f, animationSpec = style.pageMotionSpec),
+            exit = fadeOut(animationSpec = style.pageMotionSpec) +
+                scaleOut(targetScale = 0.96f, animationSpec = style.pageMotionSpec),
+        ) {
+            val overlayId = selectedId ?: lastDetailId
+            if (overlayId != null) {
+                val transientState = downloadStates[overlayId]
+                    ?.collectAsStateWithLifecycle()
+                    ?.value
+                WatchFaceDetailPage(
+                    repository = repository,
+                    detail = selectedDetail,
+                    summary = entries.firstOrNull { it.id == overlayId },
+                    localDescriptor = (transientState as? WatchStoreInstallState.Installed)?.record
+                        ?.activeLauncherIdOrNull()
+                        ?.let(installedFacesById::get)
+                        ?: installedMarketRecords[overlayId]
+                            ?.activeLauncherIdOrNull()
+                            ?.let(installedFacesById::get),
+                    loading = detailLoading,
+                    error = detailError,
+                    downloadState = transientState ?: persistentInstallState(overlayId),
+                    actionError = installedActionError,
+                    onBack = {
+                        selectedId = null
+                        installedActionError = null
+                    },
+                    onRetryDetail = {
+                        detailError = null
+                        detailLoading = true
+                        detailReloadToken++
+                    },
+                    onDownload = { download(overlayId) },
+                    onCancelDownload = { cancelDownload(overlayId) },
+                    onUse = { record -> record.activeLauncherIdOrNull()?.let(useInstalled) },
+                    onEdit = { record -> record.activeLauncherIdOrNull()?.let(editInstalled) },
+                    onRename = { record, name -> renameInstalled(overlayId, record, name) },
+                    onDelete = { record -> removeInstalled(overlayId, record) },
+                    onExport = { record -> record.activeLauncherIdOrNull()?.let(exportInstalled) },
+                )
+            }
         }
     }
-
 }
 
 @Composable
-private fun StoreHeader(onBack: () -> Unit) {
+private fun StoreHeader(
+    onBack: () -> Unit,
+    viewMode: WatchStoreViewMode,
+    onToggleViewMode: () -> Unit,
+) {
+    val style = LauncherTheme.style
     Row(
         modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = WatchColors.OnBackground)
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = style.titleColor)
         }
         Column(Modifier.weight(1f)) {
-            Text("表盘市场", color = WatchColors.OnBackground, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            Text("Watchmaker Community", color = WatchColors.TextTertiary, fontSize = 10.sp)
+            Text("表盘市场", color = style.titleColor, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Text("Watchmaker Community", color = style.secondaryTextColor, fontSize = 10.sp)
+        }
+        IconButton(onClick = onToggleViewMode, modifier = Modifier.size(40.dp)) {
+            Icon(
+                imageVector = if (viewMode == WatchStoreViewMode.LIST) {
+                    Icons.Default.GridView
+                } else {
+                    Icons.AutoMirrored.Filled.ViewList
+                },
+                contentDescription = if (viewMode == WatchStoreViewMode.LIST) "切换为宫格视图" else "切换为列表视图",
+                tint = style.titleColor,
+                modifier = Modifier.size(20.dp),
+            )
         }
     }
 }
@@ -956,7 +1095,8 @@ private fun FilterBar(
 
 @Composable
 private fun StorePill(label: String, selected: Boolean, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(50)
+    val style = LauncherTheme.style
+    val shape = style.chipShape
     val interactionSource = remember { MutableInteractionSource() }
     val pressScale = rememberFluePressScale(interactionSource, pressedScale = 0.94f)
     Text(
@@ -964,22 +1104,164 @@ private fun StorePill(label: String, selected: Boolean, onClick: () -> Unit) {
         modifier = Modifier
             .fluePressScale(pressScale)
             .clip(shape)
-            .background(if (selected) WatchColors.ActiveCyan.copy(alpha = 0.22f) else WatchColors.SurfaceGlass)
-            .border(1.dp, if (selected) WatchColors.ActiveCyan.copy(alpha = 0.65f) else Color.Transparent, shape)
+            .background(if (selected) style.accentColor.copy(alpha = 0.22f) else style.cardColor)
+            .border(
+                1.dp,
+                if (selected) style.accentColor.copy(alpha = 0.65f) else style.outlineColor,
+                shape,
+            )
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
                 onClick = onClick,
             )
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        color = if (selected) WatchColors.ActiveCyan else WatchColors.TextSecondary,
+            .padding(horizontal = 11.dp, vertical = 6.dp),
+        color = if (selected) style.accentColor else style.secondaryTextColor,
         fontSize = 11.sp,
         maxLines = 1,
     )
 }
 
+/** Ripple-free chip-sized action; presses use the shared flue press scale. */
 @Composable
-private fun WatchFaceCard(
+private fun StoreMiniAction(
+    label: String,
+    color: Color,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+    onClick: () -> Unit,
+    iconPainterRes: Int? = null,
+    iconSize: androidx.compose.ui.unit.Dp = 13.dp,
+) {
+    val style = LauncherTheme.style
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressScale = rememberFluePressScale(interactionSource, pressedScale = 0.92f)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fluePressScale(pressScale)
+            .clip(style.chipShape)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    ) {
+        if (iconPainterRes != null) {
+            Icon(
+                painter = painterResource(iconPainterRes),
+                contentDescription = null,
+                modifier = Modifier.size(iconSize),
+                tint = color,
+            )
+            Spacer(Modifier.width(3.dp))
+        }
+        Text(
+            label,
+            color = color,
+            fontSize = fontSize,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun InstallStateLine(
+    downloadState: WatchStoreInstallState,
+    compact: Boolean,
+    onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
+    fallbackLine: (@Composable () -> Unit)? = null,
+) {
+    val style = LauncherTheme.style
+    when (downloadState) {
+        is WatchStoreInstallState.Downloading,
+        is WatchStoreInstallState.Validating,
+        is WatchStoreInstallState.Installing -> {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(
+                    Modifier.size(if (compact) 11.dp else 14.dp),
+                    strokeWidth = 2.dp,
+                    color = style.accentColor,
+                )
+                Spacer(Modifier.width(5.dp))
+                val label = when (downloadState) {
+                    is WatchStoreInstallState.Downloading -> {
+                        val total = downloadState.totalBytes
+                        if (total != null && total > 0L) {
+                            "下载 ${downloadState.bytes * 100 / total}%"
+                        } else "下载中"
+                    }
+                    is WatchStoreInstallState.Validating -> "校验中"
+                    is WatchStoreInstallState.Installing -> "安装中"
+                    else -> "处理中"
+                }
+                Text(
+                    label,
+                    color = style.accentColor,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Spacer(Modifier.width(4.dp))
+                StoreMiniAction(
+                    label = "取消",
+                    color = style.secondaryTextColor,
+                    fontSize = if (compact) 9.sp else 10.sp,
+                    onClick = onCancelDownload,
+                )
+            }
+        }
+        is WatchStoreInstallState.Installed -> Text(
+            "已安装",
+            color = style.positiveColor,
+            fontSize = 10.sp,
+            maxLines = 1,
+        )
+        is WatchStoreInstallState.Failed -> {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    downloadState.message,
+                    color = WatchColors.ActiveRed,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                StoreMiniAction(
+                    label = "重试",
+                    color = style.accentColor,
+                    fontSize = 10.sp,
+                    onClick = onDownload,
+                    iconPainterRes = R.drawable.ic_flue_refresh_round,
+                    iconSize = if (compact) 11.dp else 13.dp,
+                )
+            }
+        }
+        WatchStoreInstallState.NotInstalled -> {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (fallbackLine != null) {
+                    Box(Modifier.weight(1f)) { fallbackLine() }
+                } else {
+                    Spacer(Modifier.weight(1f))
+                }
+                StoreMiniAction(
+                    label = "下载",
+                    color = style.accentColor,
+                    fontSize = if (compact) 10.sp else 11.sp,
+                    onClick = onDownload,
+                    iconPainterRes = R.drawable.ic_flue_download_round,
+                    iconSize = if (compact) 12.dp else 14.dp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WatchFaceListCard(
     repository: WatchStoreRepository,
     item: WatchStoreWatchFace,
     downloadState: WatchStoreInstallState,
@@ -987,6 +1269,7 @@ private fun WatchFaceCard(
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
 ) {
+    val style = LauncherTheme.style
     val displayName = (downloadState as? WatchStoreInstallState.Installed)
         ?.record
         ?.resolvedDisplayName(item.name)
@@ -995,104 +1278,135 @@ private fun WatchFaceCard(
         WatchStoreScreenType.ROUND, WatchStoreScreenType.SQUARE, WatchStoreScreenType.UNKNOWN -> 1f
         WatchStoreScreenType.RECTANGULAR -> 0.72f
     }
-    val previewShape = if (item.screenType == WatchStoreScreenType.ROUND) CircleShape else RoundedCornerShape(12.dp)
+    val previewShape = if (item.screenType == WatchStoreScreenType.ROUND) style.chipShape else style.rowShape
     val interactionSource = remember(item.id) { MutableInteractionSource() }
     val pressScale = rememberFluePressScale(interactionSource)
-    Card(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .fluePressScale(pressScale)
+            .clip(style.cardShape)
+            .background(style.cardColor)
+            .border(1.dp, style.outlineColor, style.cardShape)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onOpen,
+            )
+            .padding(9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        WatchPreview(
+            repository = repository,
+            id = item.id,
+            modifier = Modifier
+                .width(76.dp)
+                .aspectRatio(previewRatio)
+                .clip(previewShape),
+            targetSize = 256,
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                displayName,
+                color = style.titleColor,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                "${item.category.name} · ${screenTypeLabel(item.screenType)}",
+                color = style.secondaryTextColor,
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            InstallStateLine(
+                downloadState = downloadState,
+                compact = false,
+                onDownload = onDownload,
+                onCancelDownload = onCancelDownload,
+                fallbackLine = {
+                    Text(
+                        "下载 ${item.downloadCount}",
+                        color = style.secondaryTextColor,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                    )
+                },
+            )
+        }
+    }
+}
+
+/** 宫格卡：预览图占满卡宽，文字压缩为单行。 */
+@Composable
+private fun WatchFaceGridCard(
+    repository: WatchStoreRepository,
+    item: WatchStoreWatchFace,
+    downloadState: WatchStoreInstallState,
+    onOpen: () -> Unit,
+    onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
+) {
+    val style = LauncherTheme.style
+    val displayName = (downloadState as? WatchStoreInstallState.Installed)
+        ?.record
+        ?.resolvedDisplayName(item.name)
+        ?: item.name
+    val interactionSource = remember(item.id) { MutableInteractionSource() }
+    val pressScale = rememberFluePressScale(interactionSource)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .fluePressScale(pressScale)
+            .clip(style.cardShape)
+            .background(style.cardColor)
+            .border(1.dp, style.outlineColor, style.cardShape)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
                 onClick = onOpen,
             ),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = WatchColors.SurfaceGlass),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        WatchPreview(
+            repository = repository,
+            id = item.id,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f),
+            targetSize = 256,
+        )
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 9.dp, vertical = 7.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            WatchPreview(
-                repository = repository,
-                id = item.id,
-                modifier = Modifier.width(78.dp).aspectRatio(previewRatio).clip(previewShape),
-                targetSize = 256,
+            Text(
+                displayName,
+                color = style.titleColor,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(displayName, color = WatchColors.OnBackground, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(
-                    "${item.category.name} · ${screenTypeLabel(item.screenType)}",
-                    color = WatchColors.TextTertiary,
-                    fontSize = 10.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text("下载 ${item.downloadCount}", color = WatchColors.TextTertiary, fontSize = 10.sp)
-                when (downloadState) {
-                    is WatchStoreInstallState.Downloading,
-                    is WatchStoreInstallState.Validating,
-                    is WatchStoreInstallState.Installing -> {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = WatchColors.ActiveCyan)
-                            Spacer(Modifier.width(5.dp))
-                            val label = when (downloadState) {
-                                is WatchStoreInstallState.Downloading -> {
-                                    val total = downloadState.totalBytes
-                                    if (total != null && total > 0L) {
-                                        "下载 ${downloadState.bytes * 100 / total}%"
-                                    } else "下载中"
-                                }
-                                is WatchStoreInstallState.Validating -> "校验中"
-                                is WatchStoreInstallState.Installing -> "安装中"
-                                else -> "处理中"
-                            }
-                            Text(label, color = WatchColors.ActiveCyan, fontSize = 10.sp)
-                            Spacer(Modifier.width(3.dp))
-                            TextButton(
-                                onClick = onCancelDownload,
-                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
-                                modifier = Modifier.height(26.dp),
-                            ) {
-                                Text("取消", color = WatchColors.TextSecondary, fontSize = 9.sp)
-                            }
-                        }
-                    }
-                    is WatchStoreInstallState.Installed -> Text("已安装", color = WatchColors.ActiveGreen, fontSize = 10.sp)
-                    is WatchStoreInstallState.Failed -> {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(downloadState.message, color = WatchColors.ActiveRed, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                            TextButton(onClick = onDownload, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp), modifier = Modifier.height(28.dp)) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_flue_refresh_round),
-                                    contentDescription = "重试",
-                                    modifier = Modifier.size(14.dp),
-                                    tint = WatchColors.ActiveCyan,
-                                )
-                                Text("重试", color = WatchColors.ActiveCyan, fontSize = 10.sp)
-                            }
-                        }
-                    }
-                    WatchStoreInstallState.NotInstalled -> {
-                        TextButton(
-                            onClick = onDownload,
-                            contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp),
-                            modifier = Modifier.height(30.dp),
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_flue_download_round),
-                                contentDescription = null,
-                                modifier = Modifier.size(15.dp),
-                                tint = WatchColors.ActiveCyan,
-                            )
-                            Spacer(Modifier.width(3.dp))
-                            Text("下载", color = WatchColors.ActiveCyan, fontSize = 11.sp)
-                        }
-                    }
-                }
-            }
+            InstallStateLine(
+                downloadState = downloadState,
+                compact = true,
+                onDownload = onDownload,
+                onCancelDownload = onCancelDownload,
+                fallbackLine = {
+                    Text(
+                        "下载 ${item.downloadCount}",
+                        color = style.secondaryTextColor,
+                        fontSize = 10.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+            )
         }
     }
 }
@@ -1107,7 +1421,6 @@ private fun WatchFaceDetailPage(
     error: String?,
     downloadState: WatchStoreInstallState,
     actionError: String?,
-    isScreenRound: Boolean,
     onBack: () -> Unit,
     onRetryDetail: () -> Unit,
     onDownload: () -> Unit,
@@ -1117,8 +1430,9 @@ private fun WatchFaceDetailPage(
     onRename: (WatchFaceRecord, String) -> Unit,
     onDelete: (WatchFaceRecord) -> Unit,
     onExport: (WatchFaceRecord) -> Unit,
-    onDisplaySettings: () -> Unit,
 ) {
+    val style = LauncherTheme.style
+    val isScreenRound = isFlueScreenRound()
     val installedRecord = (downloadState as? WatchStoreInstallState.Installed)?.record
     val fallbackName = detail?.name ?: summary?.name ?: localDescriptor?.displayName
     val displayName = installedRecord?.resolvedDisplayName(fallbackName)
@@ -1130,7 +1444,17 @@ private fun WatchFaceDetailPage(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(WatchColors.Background)
+            .background(style.screenBackground)
+            // 覆层必须吃掉全部指针事件；空白边距的点击/拖动不能落到
+            // 底下仍在组合树里的列表上（否则会偷偷改它的滚动位置）。
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    do {
+                        val event = awaitPointerEvent()
+                        event.changes.forEach { it.consume() }
+                    } while (event.changes.any { it.pressed })
+                }
+            }
             .padding(
                 horizontal = if (isScreenRound) 16.dp else 10.dp,
                 vertical = if (isScreenRound) 10.dp else 6.dp,
@@ -1144,18 +1468,14 @@ private fun WatchFaceDetailPage(
             modifier = Modifier
                 .fillMaxWidth()
                 .zIndex(1f)
-                .background(WatchColors.Background),
+                .background(style.screenBackground),
         ) {
             IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = WatchColors.OnBackground)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = style.titleColor)
             }
-            Text("表盘详情", color = WatchColors.OnBackground, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+            Text("表盘详情", color = style.titleColor, fontWeight = FontWeight.Bold, fontSize = 16.sp)
         }
         when {
-            loading && installedRecord == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = WatchColors.ActiveCyan)
-            }
-            error != null && installedRecord == null -> ErrorRow(message = error, onRetry = onRetryDetail)
             detail != null || installedRecord != null -> {
                 // clipToBounds keeps the elastic-overscroll translation inside
                 // the scroll viewport instead of painting over the header row.
@@ -1172,173 +1492,305 @@ private fun WatchFaceDetailPage(
                         Modifier
                             .fillMaxSize()
                             .flueElasticNestedScroll(detailScrollState)
-                            .verticalScroll(detailScrollState),
-                        verticalArrangement = Arrangement.spacedBy(9.dp),
+                            .verticalScroll(detailScrollState)
+                            // 圆屏：全宽按钮和文字向内收，避开圆角裁切。
+                            .padding(horizontal = if (isScreenRound) 6.dp else 0.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                    if (detail != null) {
-                        val previewRatio = when (detail.screenType) {
-                            WatchStoreScreenType.RECTANGULAR -> 0.72f
-                            else -> 1f
+                        if (detail != null) {
+                            val previewRatio = when (detail.screenType) {
+                                WatchStoreScreenType.RECTANGULAR -> 0.72f
+                                else -> 1f
+                            }
+                            WatchPreview(
+                                repository = repository,
+                                id = detail.id,
+                                modifier = Modifier
+                                    .align(Alignment.CenterHorizontally)
+                                    .height(previewMaxHeight)
+                                    .aspectRatio(previewRatio, matchHeightConstraintsFirst = true)
+                                    .clip(
+                                        if (detail.screenType == WatchStoreScreenType.ROUND) {
+                                            style.chipShape
+                                        } else {
+                                            style.cardShape
+                                        },
+                                    ),
+                                targetSize = 512,
+                            )
+                        } else {
+                            LocalInstalledWatchPreview(
+                                descriptor = localDescriptor,
+                                modifier = Modifier
+                                    .align(Alignment.CenterHorizontally)
+                                    .height(previewMaxHeight.coerceIn(140.dp, 260.dp))
+                                    .aspectRatio(1f, matchHeightConstraintsFirst = true),
+                            )
                         }
-                        WatchPreview(
-                            repository = repository,
-                            id = detail.id,
-                            modifier = Modifier
-                                .align(Alignment.CenterHorizontally)
-                                .height(previewMaxHeight)
-                                .aspectRatio(previewRatio, matchHeightConstraintsFirst = true)
-                                .clip(if (detail.screenType == WatchStoreScreenType.ROUND) CircleShape else RoundedCornerShape(18.dp)),
-                            targetSize = 512,
-                        )
-                    } else {
-                        LocalInstalledWatchPreview(
-                            descriptor = localDescriptor,
-                            modifier = Modifier
-                                .align(Alignment.CenterHorizontally)
-                                .height(previewMaxHeight.coerceIn(140.dp, 260.dp))
-                                .aspectRatio(1f, matchHeightConstraintsFirst = true),
-                        )
-                    }
-                    Text(displayName, color = WatchColors.OnBackground, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                    detail?.let { remoteDetail ->
                         Text(
-                            "${remoteDetail.category.name} · ${screenTypeLabel(remoteDetail.screenType)} · 下载 ${remoteDetail.downloadCount}",
-                            color = WatchColors.TextSecondary,
-                            fontSize = 11.sp,
+                            displayName,
+                            color = style.titleColor,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
                         )
-                        if (remoteDetail.description.isNotBlank()) {
-                            Text(remoteDetail.description, color = WatchColors.TextSecondary, fontSize = 12.sp, lineHeight = 17.sp)
+                        detail?.let { remoteDetail ->
+                            Text(
+                                "${remoteDetail.category.name} · ${screenTypeLabel(remoteDetail.screenType)} · 下载 ${remoteDetail.downloadCount}",
+                                color = style.secondaryTextColor,
+                                fontSize = 11.sp,
+                            )
+                            if (remoteDetail.description.isNotBlank()) {
+                                Text(
+                                    remoteDetail.description,
+                                    color = style.bodyColor.copy(alpha = 0.86f),
+                                    fontSize = 12.sp,
+                                    lineHeight = 17.sp,
+                                )
+                            }
+                            Text(
+                                "作者：${remoteDetail.uploader.username}",
+                                color = style.secondaryTextColor,
+                                fontSize = 11.sp,
+                            )
                         }
-                        Text("作者：${remoteDetail.uploader.username}", color = WatchColors.TextTertiary, fontSize = 11.sp)
-                    }
-                    if (error != null) {
-                        Text("在线详情暂时不可用：$error", color = WatchColors.TextSecondary, fontSize = 11.sp)
-                        TextButton(onClick = onRetryDetail) {
+                        if (error != null) {
+                            Text("在线详情暂时不可用：$error", color = style.secondaryTextColor, fontSize = 11.sp)
+                            TextButton(onClick = onRetryDetail) {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_flue_refresh_round),
                                     contentDescription = null,
                                     modifier = Modifier.size(15.dp),
+                                    tint = style.accentColor,
                                 )
-                            Spacer(Modifier.width(4.dp))
-                            Text("重试在线详情")
-                        }
-                    }
-                    when (downloadState) {
-                        is WatchStoreInstallState.Downloading,
-                        is WatchStoreInstallState.Validating,
-                        is WatchStoreInstallState.Installing -> {
-                            val label = when (downloadState) {
-                                is WatchStoreInstallState.Downloading -> {
-                                    val total = downloadState.totalBytes
-                                    if (total != null && total > 0L) "下载 ${downloadState.bytes * 100 / total}%" else "下载中…"
-                                }
-                                is WatchStoreInstallState.Validating -> "校验中…"
-                                is WatchStoreInstallState.Installing -> "安装中…"
-                                else -> "处理中…"
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = WatchColors.ActiveCyan)
-                                Spacer(Modifier.width(7.dp))
-                                Text(label, color = WatchColors.ActiveCyan, fontSize = 12.sp)
-                                Spacer(Modifier.weight(1f))
-                                TextButton(onClick = onCancelDownload) {
-                                    Text("取消", color = WatchColors.TextSecondary, fontSize = 11.sp)
-                                }
+                                Spacer(Modifier.width(4.dp))
+                                Text("重试在线详情", color = style.accentColor)
                             }
                         }
-                        is WatchStoreInstallState.Installed -> {
-                            val record = downloadState.record
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_flue_check_round),
-                                    contentDescription = null,
-                                    tint = WatchColors.ActiveGreen,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                                Spacer(Modifier.width(5.dp))
-                                Text("已安装", color = WatchColors.ActiveGreen, fontSize = 12.sp)
+                        when (downloadState) {
+                            is WatchStoreInstallState.Downloading,
+                            is WatchStoreInstallState.Validating,
+                            is WatchStoreInstallState.Installing -> {
+                                val label = when (downloadState) {
+                                    is WatchStoreInstallState.Downloading -> {
+                                        val total = downloadState.totalBytes
+                                        if (total != null && total > 0L) "下载 ${downloadState.bytes * 100 / total}%" else "下载中…"
+                                    }
+                                    is WatchStoreInstallState.Validating -> "校验中…"
+                                    is WatchStoreInstallState.Installing -> "安装中…"
+                                    else -> "处理中…"
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(
+                                        Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = style.accentColor,
+                                    )
+                                    Spacer(Modifier.width(7.dp))
+                                    Text(label, color = style.accentColor, fontSize = 12.sp)
+                                    Spacer(Modifier.weight(1f))
+                                    TextButton(onClick = onCancelDownload) {
+                                        Text("取消", color = style.secondaryTextColor, fontSize = 11.sp)
+                                    }
+                                }
                             }
-                            Text("名称：${record.resolvedDisplayName(fallbackName) ?: displayName}", color = WatchColors.TextSecondary, fontSize = 12.sp)
-                            Button(onClick = { onUse(record) }, modifier = Modifier.fillMaxWidth()) { Text("使用此表盘") }
-                            Button(onClick = { onEdit(record) }, modifier = Modifier.fillMaxWidth()) { Text("编辑") }
-                            Button(onClick = { onExport(record) }, modifier = Modifier.fillMaxWidth()) { Text("导出") }
-                            Button(onClick = onDisplaySettings, modifier = Modifier.fillMaxWidth()) { Text("显示设置") }
-                            if (editingName) {
-                                OutlinedTextField(
-                                    value = nameText,
-                                    onValueChange = { nameText = it.take(512) },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    singleLine = true,
-                                    label = { Text("自定义名称") },
+                            is WatchStoreInstallState.Installed -> {
+                                val record = downloadState.record
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_flue_check_round),
+                                        contentDescription = null,
+                                        tint = style.positiveColor,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Spacer(Modifier.width(5.dp))
+                                    Text("已安装", color = style.positiveColor, fontSize = 12.sp)
+                                }
+                                Text(
+                                    "名称：${record.resolvedDisplayName(fallbackName) ?: displayName}",
+                                    color = style.secondaryTextColor,
+                                    fontSize = 11.sp,
+                                )
+                                // 点击后立刻反馈「已应用」并置灰，避免用户反复点。
+                                var appliedThisVisit by remember(record.logicalId) { mutableStateOf(false) }
+                                val storeContext = LocalContext.current
+                                StorePrimaryButton(
+                                    label = if (appliedThisVisit) "已应用" else "使用此表盘",
+                                    enabled = !appliedThisVisit,
+                                    onClick = {
+                                        onUse(record)
+                                        appliedThisVisit = true
+                                        Toast.makeText(storeContext, "已应用该表盘", Toast.LENGTH_SHORT).show()
+                                    },
                                 )
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    TextButton(onClick = { editingName = false }) { Text("取消") }
-                                    TextButton(onClick = { onRename(record, nameText); editingName = false }) { Text("保存") }
+                                    StoreSecondaryButton(
+                                        label = "编辑",
+                                        onClick = { onEdit(record) },
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    StoreSecondaryButton(
+                                        label = "导出",
+                                        onClick = { onExport(record) },
+                                        modifier = Modifier.weight(1f),
+                                    )
                                 }
-                            } else {
-                                TextButton(onClick = { nameText = record.resolvedDisplayName(fallbackName) ?: displayName; editingName = true }) {
-                                    Text("重命名")
+                                if (editingName) {
+                                    OutlinedTextField(
+                                        value = nameText,
+                                        onValueChange = { nameText = it.take(512) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true,
+                                        shape = style.rowShape,
+                                        label = { Text("自定义名称", color = style.secondaryTextColor) },
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = style.accentColor,
+                                            unfocusedBorderColor = style.outlineColor,
+                                            cursorColor = style.accentColor,
+                                            focusedTextColor = style.bodyColor,
+                                            unfocusedTextColor = style.bodyColor,
+                                        ),
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        TextButton(onClick = { editingName = false }) {
+                                            Text("取消", color = style.secondaryTextColor)
+                                        }
+                                        TextButton(onClick = { onRename(record, nameText); editingName = false }) {
+                                            Text("保存", color = style.accentColor)
+                                        }
+                                    }
+                                } else {
+                                    TextButton(
+                                        onClick = {
+                                            nameText = record.resolvedDisplayName(fallbackName) ?: displayName
+                                            editingName = true
+                                        },
+                                    ) {
+                                        Text("重命名", color = style.accentColor)
+                                    }
                                 }
+                                TextButton(onClick = { onDelete(record) }) {
+                                    Text("删除已安装表盘", color = WatchColors.ActiveRed)
+                                }
+                                actionError?.let { Text(it, color = WatchColors.ActiveRed, fontSize = 11.sp) }
                             }
-                            TextButton(onClick = { onDelete(record) }) {
-                                Text("删除已安装表盘", color = WatchColors.ActiveRed)
+                            is WatchStoreInstallState.Failed -> {
+                                Text(downloadState.message, color = WatchColors.ActiveRed, fontSize = 12.sp)
+                                StorePrimaryButton(label = "重试", onClick = onDownload)
                             }
-                            actionError?.let { Text(it, color = WatchColors.ActiveRed, fontSize = 11.sp) }
-                        }
-                        is WatchStoreInstallState.Failed -> {
-                            Text(downloadState.message, color = WatchColors.ActiveRed, fontSize = 12.sp)
-                            Button(onClick = onDownload, modifier = Modifier.fillMaxWidth()) { Text("重试") }
-                        }
-                        WatchStoreInstallState.NotInstalled -> Button(
-                            onClick = onDownload,
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = WatchColors.ActiveCyan, contentColor = Color.Black),
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_flue_download_round),
-                                contentDescription = null,
+                            WatchStoreInstallState.NotInstalled -> StorePrimaryButton(
+                                label = "下载并安装",
+                                onClick = onDownload,
+                                iconPainterRes = R.drawable.ic_flue_download_round,
                             )
-                            Spacer(Modifier.width(7.dp))
-                            Text("下载并安装")
                         }
-                    }
+                        // 圆屏底部弦宽较窄，多留出滚动余量。
+                        Spacer(Modifier.height(if (isScreenRound) 36.dp else 14.dp))
                     }
                 }
             }
-            else -> ErrorRow(message = "无法读取表盘详情", onRetry = onRetryDetail)
+            error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                ErrorStateRow(message = error, onRetry = onRetryDetail)
+            }
+            else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                LoadingStateRow(if (loading) "正在加载表盘详情…" else "正在准备详情…")
+            }
         }
     }
 }
+
+@Composable
+private fun StorePrimaryButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    iconPainterRes: Int? = null,
+    enabled: Boolean = true,
+) {
+    val style = LauncherTheme.style
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.fillMaxWidth().heightIn(min = 42.dp),
+        shape = style.rowShape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = style.accentColor,
+            contentColor = accentContentColor(style.accentColor),
+            disabledContainerColor = style.pressedCardColor,
+            disabledContentColor = style.secondaryTextColor,
+        ),
+    ) {
+        if (iconPainterRes != null) {
+            Icon(
+                painter = painterResource(iconPainterRes),
+                contentDescription = null,
+                modifier = Modifier.size(17.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun StoreSecondaryButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val style = LauncherTheme.style
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier.heightIn(min = 38.dp),
+        shape = style.rowShape,
+        border = BorderStroke(1.dp, style.outlineColor),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = style.accentColor),
+    ) {
+        Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/** Filled-accent buttons need readable content on both bright and deep accents. */
+private fun accentContentColor(accent: Color): Color =
+    if (accent.luminance() > 0.5f) Color.Black else Color.White
 
 @Composable
 private fun CatalogRecoveryRow(
     diagnostic: WatchFaceCatalogDiagnostic,
     onRescan: () -> Unit,
 ) {
+    val style = LauncherTheme.style
     Column(
         modifier = Modifier.fillMaxWidth().padding(18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(7.dp),
     ) {
-        Text("安装目录需要恢复", color = WatchColors.ActiveRed, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        Icon(
+            imageVector = Icons.Default.Warning,
+            contentDescription = null,
+            tint = WatchColors.ActiveRed,
+            modifier = Modifier.size(26.dp),
+        )
+        Text("安装目录需要恢复", color = WatchColors.ActiveRed, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         Text(
             diagnostic.message,
-            color = WatchColors.TextSecondary,
+            color = style.secondaryTextColor,
             fontSize = 11.sp,
+            textAlign = TextAlign.Center,
             maxLines = 3,
             overflow = TextOverflow.Ellipsis,
         )
         diagnostic.preservedCopyPath?.let { path ->
-            Text("损坏副本已保留：${File(path).name}", color = WatchColors.TextTertiary, fontSize = 10.sp)
+            Text("损坏副本已保留：${File(path).name}", color = style.secondaryTextColor, fontSize = 10.sp)
         }
         TextButton(onClick = onRescan) {
             Icon(
                 painter = painterResource(R.drawable.ic_flue_refresh_round),
                 contentDescription = null,
                 modifier = Modifier.size(16.dp),
+                tint = style.accentColor,
             )
             Spacer(Modifier.width(4.dp))
-            Text("重新扫描并恢复")
+            Text("重新扫描并恢复", color = style.accentColor)
         }
     }
 }
@@ -1349,31 +1801,33 @@ private fun LocalInstalledWatchFaceCard(
     descriptor: LunchWatchFaceDescriptor?,
     onOpen: () -> Unit,
 ) {
+    val style = LauncherTheme.style
     val interactionSource = remember(record.logicalId) { MutableInteractionSource() }
     val pressScale = rememberFluePressScale(interactionSource)
-    Card(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .fluePressScale(pressScale)
+            .clip(style.cardShape)
+            .background(style.cardColor)
+            .border(1.dp, style.outlineColor, style.cardShape)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
                 onClick = onOpen,
-            ),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = WatchColors.SurfaceGlass),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(
-                record.resolvedDisplayName(descriptor?.displayName) ?: "已安装表盘",
-                color = WatchColors.OnBackground,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
             )
-            Text("已安装 · 可离线管理", color = WatchColors.ActiveGreen, fontSize = 10.sp)
-        }
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(
+            record.resolvedDisplayName(descriptor?.displayName) ?: "已安装表盘",
+            color = style.titleColor,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text("已安装 · 可离线管理", color = style.positiveColor, fontSize = 11.sp)
     }
 }
 
@@ -1382,16 +1836,18 @@ private fun LocalInstalledWatchPreview(
     descriptor: LunchWatchFaceDescriptor?,
     modifier: Modifier,
 ) {
+    val style = LauncherTheme.style
     Box(
-        modifier = modifier.clip(RoundedCornerShape(18.dp)).background(WatchColors.SurfaceGlass),
+        modifier = modifier.clip(style.cardShape).background(style.cardColor),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             descriptor?.displayName ?: "本地表盘",
-            color = WatchColors.TextSecondary,
+            color = style.secondaryTextColor,
             fontSize = 14.sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
             modifier = Modifier.padding(18.dp),
         )
     }
@@ -1404,6 +1860,7 @@ private fun WatchPreview(
     modifier: Modifier,
     targetSize: Int,
 ) {
+    val style = LauncherTheme.style
     var retryToken by remember(repository, id, targetSize) { mutableIntStateOf(0) }
     var bitmap by remember(repository, id, targetSize) { mutableStateOf<Bitmap?>(null) }
     var loadError by remember(repository, id, targetSize) { mutableStateOf<String?>(null) }
@@ -1419,68 +1876,103 @@ private fun WatchPreview(
         }
     }
     val image = remember(bitmap) { bitmap?.asImageBitmap() }
-    Box(modifier.background(WatchColors.SurfaceGlass), contentAlignment = Alignment.Center) {
+    Box(modifier.background(style.pressedCardColor), contentAlignment = Alignment.Center) {
         if (image != null) {
-            Image(image, contentDescription = "表盘预览", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+            Image(
+                image,
+                contentDescription = "表盘预览",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit,
+            )
         } else if (loadError != null) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier.padding(8.dp),
             ) {
-                Text("预览加载失败", color = WatchColors.TextTertiary, fontSize = 10.sp)
-                TextButton(
+                Text("预览加载失败", color = style.secondaryTextColor, fontSize = 10.sp)
+                StoreMiniAction(
+                    label = "重试",
+                    color = style.accentColor,
+                    fontSize = 10.sp,
                     onClick = { retryToken++ },
-                    contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp),
-                    modifier = Modifier.height(28.dp),
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_flue_refresh_round),
-                        contentDescription = "重试预览",
-                        modifier = Modifier.size(14.dp),
-                        tint = WatchColors.ActiveCyan,
-                    )
-                    Spacer(Modifier.width(3.dp))
-                    Text("重试", color = WatchColors.ActiveCyan, fontSize = 10.sp)
-                }
+                    iconPainterRes = R.drawable.ic_flue_refresh_round,
+                )
             }
         } else {
-            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = WatchColors.TextTertiary)
+            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = style.secondaryTextColor)
         }
     }
 }
 
 @Composable
-private fun LoadingRow(label: String) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = WatchColors.ActiveCyan)
-        Spacer(Modifier.width(8.dp))
-        Text(label, color = WatchColors.TextTertiary, fontSize = 12.sp)
+private fun LoadingStateRow(label: String) {
+    val style = LauncherTheme.style
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 26.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = style.accentColor)
+        Text(label, color = style.secondaryTextColor, fontSize = 12.sp, textAlign = TextAlign.Center)
     }
 }
 
 @Composable
-private fun ErrorRow(message: String, onRetry: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        Text(message, color = WatchColors.ActiveRed, fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+private fun ErrorStateRow(message: String, onRetry: () -> Unit) {
+    val style = LauncherTheme.style
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 22.dp, horizontal = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Default.Warning,
+            contentDescription = null,
+            tint = WatchColors.ActiveRed,
+            modifier = Modifier.size(24.dp),
+        )
+        Text(
+            message,
+            color = style.secondaryTextColor,
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
         TextButton(onClick = onRetry) {
             Icon(
                 painter = painterResource(R.drawable.ic_flue_refresh_round),
                 contentDescription = null,
                 modifier = Modifier.size(16.dp),
-                tint = WatchColors.ActiveCyan,
+                tint = style.accentColor,
             )
             Spacer(Modifier.width(4.dp))
-            Text("重试", color = WatchColors.ActiveCyan)
+            Text("重试", color = style.accentColor)
         }
     }
 }
 
 @Composable
-private fun EmptyRow() {
-    Column(Modifier.fillMaxWidth().padding(30.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("没有找到表盘", color = WatchColors.TextSecondary, fontSize = 14.sp)
-        Text("换个关键词或筛选条件试试", color = WatchColors.TextTertiary, fontSize = 11.sp)
+private fun EmptyStateRow() {
+    val style = LauncherTheme.style
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 30.dp, horizontal = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Default.Search,
+            contentDescription = null,
+            tint = style.secondaryTextColor,
+            modifier = Modifier.size(24.dp),
+        )
+        Text(
+            "没有找到表盘，换个关键词或筛选条件试试",
+            color = style.secondaryTextColor,
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    自适应图标前景层：整图向内收 10%，让齿轮花朵完整落在 66/108 safe zone 内；
+    图稿自带的浅色圆角底在任何遮罩形状下都能盖满 72/108 可见区，
+    暗色四角则始终留在遮罩之外。
+-->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@mipmap/ic_settings_launcher_foreground"
+    android:insetLeft="10%"
+    android:insetTop="10%"
+    android:insetRight="10%"
+    android:insetBottom="10%" />

@@ -3,9 +3,12 @@ package com.flue.launcher.applist.nativeview
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Shader
 import android.graphics.Path
 import android.graphics.RectF
 import android.os.Build
@@ -64,6 +67,10 @@ internal class NativeAppListRowView(
     private val fallbackBackgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
+    private val iconShaderPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val iconShaderMatrix = Matrix()
+    private val iconShaderSourceRect = RectF()
+    private var iconShaderBitmap: Bitmap? = null
     private val fallbackForegroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
@@ -156,6 +163,10 @@ internal class NativeAppListRowView(
         iconRenderOwner.clear()
         boundRow = null
         iconEffectRenderer?.discardContent()
+        // The shader holds the recycled bitmap; a stale reference here would
+        // paint the previous app's icon through the next bind's first frame.
+        iconShaderPaint.shader = null
+        iconShaderBitmap = null
         label = ""
         contentDescription = null
         // A recycled holder can be drawn once before its next bind. Clear all
@@ -317,6 +328,7 @@ internal class NativeAppListRowView(
             dragged = dragVisual,
             folderHover = folderHover,
             glidePressed = glidePressed,
+            presentation = config.presentation,
         )
         if (target == interactionScale) return
         interactionAnimator?.cancel()
@@ -327,6 +339,9 @@ internal class NativeAppListRowView(
         }
         interactionAnimator = ValueAnimator.ofFloat(interactionScale, target).apply {
             duration = 170L
+            // Compose 版走 FastOutSlowIn；ValueAnimator 的默认
+            // AccelerateDecelerate 前段慢半拍，按下去像隔了一层。
+            interpolator = PressInterpolator
             addUpdateListener { animator ->
                 interactionScale = animator.animatedValue as Float
                 applyCompositeScale()
@@ -558,12 +573,35 @@ internal class NativeAppListRowView(
     }
 
     private fun drawIconContent(canvas: Canvas) {
-        val saveCount = canvas.save()
-        canvas.clipPath(iconClipPath)
         val drawableBitmap = iconRenderOwner.bitmapForDraw()
         if (drawableBitmap != null) {
-            canvas.drawBitmap(drawableBitmap, null, iconBounds, iconPaint)
+            // clipPath 没有抗锯齿：圆形/圆角裁剪的边缘是硬台阶，是图标边缘
+            // 锯齿的来源之一。BitmapShader + drawPath 让裁形边缘吃到
+            // ANTI_ALIAS，位图内容不变。
+            if (iconShaderBitmap !== drawableBitmap) {
+                iconShaderPaint.shader = BitmapShader(
+                    drawableBitmap,
+                    Shader.TileMode.CLAMP,
+                    Shader.TileMode.CLAMP,
+                )
+                iconShaderBitmap = drawableBitmap
+            }
+            iconShaderSourceRect.set(
+                0f,
+                0f,
+                drawableBitmap.width.toFloat(),
+                drawableBitmap.height.toFloat(),
+            )
+            iconShaderMatrix.setRectToRect(
+                iconShaderSourceRect,
+                iconBounds,
+                Matrix.ScaleToFit.FILL,
+            )
+            iconShaderPaint.shader?.setLocalMatrix(iconShaderMatrix)
+            canvas.drawPath(iconClipPath, iconShaderPaint)
         } else {
+            val saveCount = canvas.save()
+            canvas.clipPath(iconClipPath)
             canvas.drawRoundRect(
                 iconBounds,
                 iconBounds.width() * 0.25f,
@@ -571,8 +609,8 @@ internal class NativeAppListRowView(
                 fallbackBackgroundPaint,
             )
             canvas.drawPath(fallbackPath, fallbackForegroundPaint)
+            canvas.restoreToCount(saveCount)
         }
-        canvas.restoreToCount(saveCount)
     }
 
     private fun updatePaints() {
@@ -719,3 +757,6 @@ internal class NativeAppListRowView(
         geometryDirty = false
     }
 }
+
+/** Compose 的 FastOutSlowInEasing（0.4, 0, 0.2, 1），按压缩放共用。 */
+private val PressInterpolator = android.view.animation.PathInterpolator(0.4f, 0f, 0.2f, 1f)

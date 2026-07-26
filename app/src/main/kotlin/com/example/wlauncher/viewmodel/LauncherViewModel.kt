@@ -44,6 +44,7 @@ import com.flue.launcher.launchsession.retainsLaunchIcon
 import com.flue.launcher.motion.FlueMotionProfile
 import com.flue.launcher.motion.FlueMotionProfileJson
 import com.flue.launcher.motion.FlueMotionProfiles
+import com.flue.launcher.ui.common.FlueScreenShape
 import com.flue.launcher.motion.MotionEasing
 import com.flue.launcher.motion.MotionPhaseKey
 import com.flue.launcher.service.FlueAccessibilityService
@@ -147,6 +148,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_ICON_SHADOW = booleanPreferencesKey("app_icon_shadow_enabled")
         val KEY_APP_LIST_RETURN_SHRINK = booleanPreferencesKey("app_list_return_shrink_enabled")
         val KEY_FACE_RETURN_SHRINK = booleanPreferencesKey("face_return_shrink_enabled")
+        val KEY_REDUCE_DYNAMIC_EFFECTS = booleanPreferencesKey("reduce_dynamic_effects")
+        val KEY_SCREEN_SHAPE_OVERRIDE = stringPreferencesKey("screen_shape_override")
+        val KEY_APP_LIST_STAGGER = booleanPreferencesKey("app_list_stagger_enabled")
         val KEY_MOTION_PROFILE_ID = stringPreferencesKey("motion_profile_id")
         val KEY_CUSTOM_MOTION_PROFILES = stringPreferencesKey("custom_motion_profiles")
         val KEY_SHOW_STEP_COUNT = booleanPreferencesKey("show_step_count")
@@ -421,6 +425,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val appListReturnShrinkEnabled: StateFlow<Boolean> = _appListReturnShrinkEnabled.asStateFlow()
     private val _faceReturnShrinkEnabled = MutableStateFlow(true)
     val faceReturnShrinkEnabled: StateFlow<Boolean> = _faceReturnShrinkEnabled.asStateFlow()
+    private val _reduceDynamicEffects = MutableStateFlow(false)
+    val reduceDynamicEffects: StateFlow<Boolean> = _reduceDynamicEffects.asStateFlow()
+    private val _screenShapeOverride = MutableStateFlow(FlueScreenShape.AUTO)
+    val screenShapeOverride: StateFlow<FlueScreenShape> = _screenShapeOverride.asStateFlow()
+    private val _appListStaggerEnabled = MutableStateFlow(false)
+    val appListStaggerEnabled: StateFlow<Boolean> = _appListStaggerEnabled.asStateFlow()
     private val _motionProfiles = MutableStateFlow(FlueMotionProfiles.builtIns)
     val motionProfiles: StateFlow<List<FlueMotionProfile>> = _motionProfiles.asStateFlow()
     private val _activeMotionProfile = MutableStateFlow(FlueMotionProfiles.Gentle)
@@ -455,7 +465,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val watchFaceChargingPowerText: StateFlow<Boolean> = _watchFaceChargingPowerText.asStateFlow()
     private val _watchFaceStatusIndicators = MutableStateFlow(true)
     val watchFaceStatusIndicators: StateFlow<Boolean> = _watchFaceStatusIndicators.asStateFlow()
-    private val _watchFaceBottomFadeEnabled = MutableStateFlow(true)
+    // 表盘底部渐隐遮罩默认关闭；用户可在“更多表盘选项”里手动开启。
+    private val _watchFaceBottomFadeEnabled = MutableStateFlow(false)
     val watchFaceBottomFadeEnabled: StateFlow<Boolean> = _watchFaceBottomFadeEnabled.asStateFlow()
     private val _watchmakerForceFill = MutableStateFlow(false)
     val watchmakerForceFill: StateFlow<Boolean> = _watchmakerForceFill.asStateFlow()
@@ -914,6 +925,23 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _faceReturnShrinkEnabled.value = loadedFaceReturnShrink
                 }
 
+                val loadedReduceDynamic = prefs[KEY_REDUCE_DYNAMIC_EFFECTS] ?: false
+                if (_reduceDynamicEffects.value != loadedReduceDynamic) {
+                    _reduceDynamicEffects.value = loadedReduceDynamic
+                }
+
+                val loadedScreenShape = prefs[KEY_SCREEN_SHAPE_OVERRIDE]?.let { raw ->
+                    runCatching { FlueScreenShape.valueOf(raw) }.getOrNull()
+                } ?: FlueScreenShape.AUTO
+                if (_screenShapeOverride.value != loadedScreenShape) {
+                    _screenShapeOverride.value = loadedScreenShape
+                }
+
+                val loadedStagger = prefs[KEY_APP_LIST_STAGGER] ?: false
+                if (_appListStaggerEnabled.value != loadedStagger) {
+                    _appListStaggerEnabled.value = loadedStagger
+                }
+
                 val customMotionProfiles = prefs[KEY_CUSTOM_MOTION_PROFILES]
                     ?.let { payload ->
                         runCatching { FlueMotionProfileJson.decodeLibrary(payload) }
@@ -948,7 +976,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _watchFaceStatusIndicators.value = loadedWatchFaceStatusIndicators
                 }
 
-                val loadedWatchFaceBottomFade = prefs[KEY_WATCHFACE_BOTTOM_FADE] ?: true
+                val loadedWatchFaceBottomFade = prefs[KEY_WATCHFACE_BOTTOM_FADE] ?: false
                 if (_watchFaceBottomFadeEnabled.value != loadedWatchFaceBottomFade) {
                     _watchFaceBottomFadeEnabled.value = loadedWatchFaceBottomFade
                 }
@@ -2032,6 +2060,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_FACE_RETURN_SHRINK] = enabled } }
     }
 
+    fun setReduceDynamicEffects(enabled: Boolean) {
+        _reduceDynamicEffects.value = enabled
+        persist { store.edit { it[KEY_REDUCE_DYNAMIC_EFFECTS] = enabled } }
+    }
+
+    fun setScreenShapeOverride(shape: FlueScreenShape) {
+        _screenShapeOverride.value = shape
+        persist { store.edit { it[KEY_SCREEN_SHAPE_OVERRIDE] = shape.name } }
+    }
+
+    fun setAppListStaggerEnabled(enabled: Boolean) {
+        _appListStaggerEnabled.value = enabled
+        persist { store.edit { it[KEY_APP_LIST_STAGGER] = enabled } }
+    }
+
     fun setActiveMotionProfile(id: String): Boolean {
         val profile = _motionProfiles.value.firstOrNull { it.id == id } ?: return false
         _activeMotionProfile.value = profile
@@ -3015,6 +3058,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _iconShadowEnabled.value = true
         _appListReturnShrinkEnabled.value = true
         _faceReturnShrinkEnabled.value = true
+        _reduceDynamicEffects.value = false
+        _screenShapeOverride.value = FlueScreenShape.AUTO
+        _appListStaggerEnabled.value = false
         _motionProfiles.value = FlueMotionProfiles.builtIns
         _activeMotionProfile.value = FlueMotionProfiles.Gentle
         _showStepCount.value = true
@@ -3030,7 +3076,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _powerMenuButtonEnabled.value = false
         _watchFaceChargingPowerText.value = true
         _watchFaceStatusIndicators.value = true
-        _watchFaceBottomFadeEnabled.value = true
+        _watchFaceBottomFadeEnabled.value = false
         _watchmakerForceFill.value = false
         _dingDingCatFillScreen.value = false
         _dingDingCatPlaybackSpeedPercent.value = 100
@@ -3121,6 +3167,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it.remove(booleanPreferencesKey("classic_return_animation_enabled"))
                 it[KEY_APP_LIST_RETURN_SHRINK] = true
                 it[KEY_FACE_RETURN_SHRINK] = true
+                it[KEY_REDUCE_DYNAMIC_EFFECTS] = false
+                it.remove(KEY_SCREEN_SHAPE_OVERRIDE)
+                it[KEY_APP_LIST_STAGGER] = false
                 it[KEY_MOTION_PROFILE_ID] = FlueMotionProfiles.GENTLE_ID
                 it[KEY_CUSTOM_MOTION_PROFILES] = FlueMotionProfileJson.encodeLibrary(emptyList())
                 it[KEY_SHOW_STEP_COUNT] = true
@@ -3137,7 +3186,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_POWER_MENU_BUTTON] = false
                 it[KEY_WATCHFACE_CHARGING_POWER_TEXT] = true
                 it[KEY_WATCHFACE_STATUS_INDICATORS] = true
-                it[KEY_WATCHFACE_BOTTOM_FADE] = true
+                it[KEY_WATCHFACE_BOTTOM_FADE] = false
                 it[KEY_WATCHMAKER_FORCE_FILL] = false
                 it[KEY_DINGDINGCAT_FILL_SCREEN] = false
                 it[KEY_DINGDINGCAT_PLAYBACK_SPEED_PERCENT] = 100

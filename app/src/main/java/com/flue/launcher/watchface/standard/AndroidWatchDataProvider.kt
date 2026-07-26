@@ -158,6 +158,23 @@ internal class AndroidWatchDataProvider(
         )
     }
 
+    override fun requestRefresh() {
+        if (!started) return
+        refreshBatteryFallback()
+        refreshWifiSignal()
+        refreshBluetoothState()
+        if (hasPermission(Manifest.permission.BODY_SENSORS)) {
+            // 很多手表的心率传感器只在（重新）注册监听时才开始一次新的测量，
+            // 所以点按心率组件时重新武装传感器来触发刷新。这也覆盖了
+            // “先启动、后授权”的场景：授权后的第一次点按会把传感器接上。
+            val sensor = sensorManager?.getDefaultSensor(Sensor.TYPE_HEART_RATE)
+            if (sensor != null) {
+                runCatching { sensorManager.unregisterListener(this, sensor) }
+                registerSensor(Sensor.TYPE_HEART_RATE)
+            }
+        }
+    }
+
     override fun onSensorChanged(event: SensorEvent?) {
         val sensorEvent = event ?: return
         if (sensorEvent.sensor.type == Sensor.TYPE_GYROSCOPE) {
