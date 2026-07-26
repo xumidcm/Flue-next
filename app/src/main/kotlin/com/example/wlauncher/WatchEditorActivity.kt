@@ -48,6 +48,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -68,6 +69,7 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -102,6 +104,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
@@ -111,6 +114,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.content.ContextCompat
+import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.ui.common.flueElasticNestedScroll
@@ -155,11 +159,21 @@ import com.flue.launcher.watchface.editor.watchEditorViewPxFromDesign
 import com.flue.launcher.watchface.editor.conversion.WatchConversionResult
 import com.flue.launcher.watchface.editor.conversion.WatchFormatConverter
 import com.flue.launcher.watchface.standard.WATCHMAKER_ID_PREFIX
+import com.flue.launcher.watchface.standard.WatchFaceShape
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStorage
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceView
 import com.flue.launcher.watchface.standard.rememberWatchmakerWatchDataProvider
+import com.flue.launcher.watchface.standard.watchFaceShape
+import com.flue.launcher.watchface.store.HttpWatchStoreApi
+import com.flue.launcher.watchface.store.WatchStoreAuthSession
+import com.flue.launcher.watchface.store.WatchStoreAuthStore
+import com.flue.launcher.watchface.store.WatchStoreCategory
+import com.flue.launcher.watchface.store.WatchStoreHttpException
+import com.flue.launcher.watchface.store.WatchStorePayloadTooLargeException
+import com.flue.launcher.watchface.store.WatchStoreScreenType
 import java.io.File
 import java.io.FileInputStream
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -217,6 +231,7 @@ private fun WatchEditorRoute(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showDiscardDialog by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf(false) }
+    var showStoreUpload by remember { mutableStateOf(false) }
     var pendingSaveName by remember { mutableStateOf("") }
     var saveAsMode by remember { mutableStateOf(true) }
     var transformPreview by remember { mutableStateOf<WatchEditorTransformPreview?>(null) }
@@ -788,6 +803,25 @@ private fun WatchEditorRoute(
                             val name = safeWatchFileName(current.rootAttributes["name"])
                             exportDocument.launch("$name.watch")
                         },
+                        onUpdateShape = { shapeCode ->
+                            runSessionOperation("正在更新表盘形状", operation = { editor ->
+                                editor.updateRootAttribute("shape", shapeCode)
+                                selectedLayerKey
+                            })
+                        },
+                        onUploadToStore = {
+                            if (busyMessage == null) {
+                                scope.launch {
+                                    // Typed-but-unapplied property edits must land in
+                                    // the draft before it is exported for upload.
+                                    liveApplicator?.flush(
+                                        onApplied = {},
+                                        onError = { errorMessage = it.message ?: "属性更新失败" },
+                                    )
+                                    showStoreUpload = true
+                                }
+                            }
+                        },
                         onImportWatch = {
                             watchArchivePicker.launch(
                                 arrayOf(
@@ -812,6 +846,14 @@ private fun WatchEditorRoute(
                             uri = uri,
                             onCancel = { cropRequest = null },
                             onConfirm = { sourceRect -> performCroppedImport(uri, sourceRect) },
+                        )
+                    }
+                    if (showStoreUpload) {
+                        EditorStoreUploadOverlay(
+                            session = active,
+                            snapshot = current,
+                            onSnapshotRefreshed = { next -> updateSnapshot(next) },
+                            onDismiss = { showStoreUpload = false },
                         )
                     }
                 }
@@ -869,6 +911,8 @@ private fun WatchEditorScreen(
     onSave: () -> Unit,
     onRename: () -> Unit,
     onExport: () -> Unit,
+    onUpdateShape: (String) -> Unit,
+    onUploadToStore: () -> Unit,
     onImportWatch: () -> Unit,
     onConvertWatch: () -> Unit,
 ) {
@@ -1178,6 +1222,13 @@ private fun WatchEditorScreen(
                             )
                         }
                     }
+                    item("watch_shape") {
+                        EditorWatchShapeCard(
+                            rawShape = snapshot.rootAttributes["shape"],
+                            enabled = busyMessage == null,
+                            onUpdateShape = onUpdateShape,
+                        )
+                    }
                     item("watch_data_permission") {
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceVariant,
@@ -1262,6 +1313,15 @@ private fun WatchEditorScreen(
                                 enabled = busyMessage == null,
                                 modifier = Modifier.fillMaxWidth(),
                             ) { Text("导出 .watch") }
+                            OutlinedButton(
+                                onClick = onUploadToStore,
+                                enabled = busyMessage == null,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Icon(Icons.Default.CloudUpload, contentDescription = null)
+                                Spacer(Modifier.width(6.dp))
+                                Text("上传到商店")
+                            }
                         }
                     }
                     item("safety_note") {
@@ -2308,6 +2368,533 @@ private fun ExpressionReferencePanel(
     }
 }
 
+/**
+ * 表盘级形状开关。存量表盘曾被无条件烙上 shape="R"，方屏表盘因此始终带着
+ * 圆形遮罩且没有任何入口可改；这里直接读写根节点的 shape 属性，改完由
+ * runSessionOperation 刷新预览。
+ */
+@Composable
+private fun EditorWatchShapeCard(
+    rawShape: String?,
+    enabled: Boolean,
+    onUpdateShape: (String) -> Unit,
+) {
+    val style = LauncherTheme.style
+    val currentShape = watchFaceShape(rawShape)
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(14.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("表盘形状", fontWeight = FontWeight.SemiBold)
+            Text(
+                "圆形表盘渲染时会按圆形裁剪；方形表盘保留完整方形画布。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                WATCH_SHAPE_OPTIONS.forEach { (code, label) ->
+                    val selected = when (code) {
+                        "R" -> currentShape == WatchFaceShape.ROUND
+                        else -> currentShape == WatchFaceShape.SQUARE
+                    }
+                    if (selected) {
+                        Button(
+                            onClick = {},
+                            enabled = true,
+                            modifier = Modifier.weight(1f),
+                        ) { Text(label) }
+                    } else {
+                        OutlinedButton(
+                            onClick = { onUpdateShape(code) },
+                            enabled = enabled,
+                            modifier = Modifier.weight(1f),
+                        ) { Text(label) }
+                    }
+                }
+            }
+            if (currentShape != WatchFaceShape.ROUND && currentShape != WatchFaceShape.SQUARE) {
+                Text(
+                    "当前 shape=\"${rawShape.orEmpty().ifBlank { "未设置" }}\"，点击上方按钮即可改为圆形或方形。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = style.secondaryTextColor,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 上传到商店 overlay。三个阶段：登录/注册 → 填写元数据（分类从服务动态拉取，
+ * 屏幕形状默认跟随表盘 shape）→ 上传。exportWatch 的产物只在本次上传期间
+ * 存在于 cacheDir；密码只在内存中经手，绝不落盘。
+ */
+@Composable
+private fun EditorStoreUploadOverlay(
+    session: WatchEditorSession,
+    snapshot: WatchEditorSnapshot,
+    onSnapshotRefreshed: (WatchEditorSnapshot) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val isRound = isFlueScreenRound()
+    val style = LauncherTheme.style
+    val authStore = remember { WatchStoreAuthStore(context) }
+    val api = remember { HttpWatchStoreApi() }
+
+    var auth by remember { mutableStateOf<WatchStoreAuthSession?>(null) }
+    var authChecked by remember { mutableStateOf(false) }
+    var username by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf<String?>(null) }
+    var formError by remember { mutableStateOf<String?>(null) }
+    var uploadPercent by remember { mutableStateOf<Int?>(null) }
+    var name by remember {
+        mutableStateOf(snapshot.rootAttributes["name"].orEmpty().ifBlank { "Flue Watch" }.take(100))
+    }
+    var description by remember { mutableStateOf("") }
+    var categories by remember { mutableStateOf<List<WatchStoreCategory>?>(null) }
+    var categoriesError by remember { mutableStateOf<String?>(null) }
+    var categoriesRetryToken by remember { mutableIntStateOf(0) }
+    var selectedCategoryId by remember { mutableStateOf<String?>(null) }
+    var screenType by remember {
+        mutableStateOf(
+            when (watchFaceShape(snapshot.rootAttributes["shape"])) {
+                WatchFaceShape.ROUND -> WatchStoreScreenType.ROUND
+                WatchFaceShape.SQUARE -> WatchStoreScreenType.SQUARE
+                WatchFaceShape.RECTANGULAR -> WatchStoreScreenType.RECTANGULAR
+                WatchFaceShape.UNKNOWN ->
+                    if (isRound) WatchStoreScreenType.ROUND else WatchStoreScreenType.SQUARE
+            },
+        )
+    }
+
+    LaunchedEffect(Unit) {
+        auth = withContext(Dispatchers.IO) { authStore.read() }
+        authChecked = true
+    }
+
+    LaunchedEffect(auth, categoriesRetryToken) {
+        if (auth == null || categories != null) return@LaunchedEffect
+        categoriesError = null
+        runCatching { withContext(Dispatchers.IO) { api.getCategories() } }
+            .onSuccess { list ->
+                categories = list
+                if (selectedCategoryId == null) selectedCategoryId = list.firstOrNull()?.id
+            }
+            .onFailure { error ->
+                if (error is CancellationException) throw error
+                categoriesError = watchStoreUploadErrorMessage(error)
+            }
+    }
+
+    fun authenticate(register: Boolean) {
+        if (busy != null) return
+        val cleanUsername = username.trim()
+        if (!cleanUsername.matches(Regex("^[A-Za-z0-9_]{3,50}$"))) {
+            formError = "用户名需要 3-50 位字母、数字或下划线"
+            return
+        }
+        if (password.length < 6) {
+            formError = "密码至少需要 6 位"
+            return
+        }
+        busy = if (register) "正在注册" else "正在登录"
+        formError = null
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val result = if (register) {
+                        api.register(cleanUsername, password)
+                    } else {
+                        api.login(cleanUsername, password)
+                    }
+                    authStore.write(result.token, result.username)
+                }
+            }.onSuccess { stored ->
+                password = ""
+                auth = stored
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                formError = watchStoreAuthErrorMessage(error, register)
+            }
+            busy = null
+        }
+    }
+
+    fun upload() {
+        if (busy != null) return
+        val activeAuth = auth ?: return
+        val trimmedName = name.trim()
+        if (trimmedName.isEmpty()) {
+            formError = "请填写表盘名称"
+            return
+        }
+        if (description.isBlank()) {
+            formError = "请填写表盘描述"
+            return
+        }
+        val categoryId = selectedCategoryId
+        if (categoryId == null) {
+            formError = "请选择一个分类"
+            return
+        }
+        busy = "正在导出表盘包"
+        formError = null
+        uploadPercent = null
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val archive = File.createTempFile("flue_store_upload_", ".watch", context.cacheDir)
+                    try {
+                        session.exportWatch(archive)
+                        if (archive.length() > HttpWatchStoreApi.MAX_UPLOAD_BYTES) {
+                            throw WatchStorePayloadTooLargeException(HttpWatchStoreApi.MAX_UPLOAD_BYTES)
+                        }
+                        busy = "正在上传"
+                        api.uploadWatchFace(
+                            token = activeAuth.token,
+                            file = archive,
+                            name = trimmedName,
+                            description = description.trim(),
+                            screenType = screenType,
+                            categoryId = categoryId,
+                        ) { sent, total ->
+                            val percent = ((sent * 100L) / total.coerceAtLeast(1L))
+                                .toInt()
+                                .coerceIn(0, 100)
+                            if (uploadPercent != percent) uploadPercent = percent
+                        }
+                        session.snapshot()
+                    } finally {
+                        archive.delete()
+                    }
+                }
+            }.onSuccess { refreshed ->
+                onSnapshotRefreshed(refreshed)
+                Toast.makeText(context, "已上传到表盘商店", Toast.LENGTH_SHORT).show()
+                onDismiss()
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                if (error is WatchStoreHttpException && error.statusCode == 401) {
+                    // 服务器判定令牌失效比本地过期时间更权威：清掉并回到登录页。
+                    authStore.clear()
+                    auth = null
+                    formError = "登录已过期，请重新登录后再上传"
+                } else {
+                    formError = watchStoreUploadErrorMessage(error)
+                }
+            }
+            busy = null
+            uploadPercent = null
+        }
+    }
+
+    // 上传中禁止返回键关闭，避免协程随组合一起被取消而中断传输。
+    BackHandler { if (busy == null) onDismiss() }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            // 吞掉所有触摸，下层编辑器不可再被点到（与裁剪 overlay 一致）。
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.changes.none { it.pressed }) break
+                    }
+                }
+            }
+            .padding(
+                horizontal = if (isRound) 22.dp else 10.dp,
+                vertical = if (isRound) 14.dp else 6.dp,
+            ),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(
+                onClick = { if (busy == null) onDismiss() },
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(Icons.Default.Close, contentDescription = "关闭上传")
+            }
+            Text(
+                "上传到商店",
+                modifier = Modifier.weight(1f),
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+            Spacer(Modifier.size(40.dp))
+        }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            busy?.let { message ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Text(
+                        message + (uploadPercent?.let { " $it%" }.orEmpty()),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            formError?.let { message ->
+                Text(
+                    message,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(8.dp))
+                        .padding(10.dp),
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            val activeAuth = auth
+            when {
+                !authChecked -> Text(
+                    "正在检查登录状态…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = style.secondaryTextColor,
+                )
+                activeAuth == null -> {
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = { username = it.take(50) },
+                        label = { Text("用户名") },
+                        singleLine = true,
+                        enabled = busy == null,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it.take(128) },
+                        label = { Text("密码") },
+                        singleLine = true,
+                        enabled = busy == null,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Button(
+                            onClick = { authenticate(register = false) },
+                            enabled = busy == null,
+                            modifier = Modifier.weight(1f),
+                        ) { Text("登录") }
+                        OutlinedButton(
+                            onClick = { authenticate(register = true) },
+                            enabled = busy == null,
+                            modifier = Modifier.weight(1f),
+                        ) { Text("注册") }
+                    }
+                    Text(
+                        "注册即创建表盘商店账号（用户名 3-50 位字母数字下划线，密码至少 6 位）。" +
+                            "密码只用于本次登录，不会保存在手表上。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = style.secondaryTextColor,
+                    )
+                }
+                else -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "已登录：${activeAuth.username}",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = style.secondaryTextColor,
+                        )
+                        TextButton(
+                            onClick = {
+                                if (busy == null) {
+                                    authStore.clear()
+                                    auth = null
+                                }
+                            },
+                        ) { Text("退出登录", color = style.accentColor) }
+                    }
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it.take(100) },
+                        label = { Text("表盘名称（必填）") },
+                        singleLine = true,
+                        enabled = busy == null,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = description,
+                        onValueChange = { description = it.take(2000) },
+                        label = { Text("描述（必填）") },
+                        minLines = 2,
+                        enabled = busy == null,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text("屏幕形状", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        STORE_SCREEN_TYPE_OPTIONS.forEach { (candidate, label) ->
+                            if (screenType == candidate) {
+                                Button(onClick = {}, enabled = true) { Text(label) }
+                            } else {
+                                OutlinedButton(
+                                    onClick = { screenType = candidate },
+                                    enabled = busy == null,
+                                ) { Text(label) }
+                            }
+                        }
+                    }
+                    Text("分类", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                    when {
+                        categoriesError != null -> {
+                            Text(
+                                categoriesError.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            OutlinedButton(
+                                onClick = { categoriesRetryToken++ },
+                                enabled = busy == null,
+                            ) { Text("重新加载分类") }
+                        }
+                        categories == null -> Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Text(
+                                "正在加载分类…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = style.secondaryTextColor,
+                            )
+                        }
+                        categories.orEmpty().isEmpty() -> Text(
+                            "商店暂时没有可用分类，稍后再试。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = style.secondaryTextColor,
+                        )
+                        else -> categories.orEmpty().forEach { category ->
+                            val selected = category.id == selectedCategoryId
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(
+                                        if (selected) style.selectedCardColor else style.cardColor,
+                                        RoundedCornerShape(10.dp),
+                                    )
+                                    .clickable(enabled = busy == null) {
+                                        selectedCategoryId = category.id
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    category.name,
+                                    modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = style.bodyColor,
+                                )
+                                if (selected) {
+                                    Icon(
+                                        Icons.Default.Check,
+                                        contentDescription = null,
+                                        tint = style.accentColor,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Button(
+                        onClick = { upload() },
+                        enabled = busy == null &&
+                            name.isNotBlank() &&
+                            description.isNotBlank() &&
+                            selectedCategoryId != null,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Default.CloudUpload, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("上传当前表盘")
+                    }
+                    Text(
+                        "上传前会自动导出当前草稿为 .watch（上限 50MB）；预览图由商店从表盘包中自动生成。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = style.secondaryTextColor,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 把商店写接口的失败翻译成给用户看的人话。 */
+private fun watchStoreUploadErrorMessage(error: Throwable): String = when {
+    error is WatchStoreHttpException && error.statusCode == 401 ->
+        "登录已过期，请重新登录"
+    error is WatchStoreHttpException && error.statusCode == 400 ->
+        error.detail?.let { "内容被服务器拒绝：$it" }
+            ?: "内容被服务器拒绝，请检查名称、描述和分类"
+    error is WatchStoreHttpException && error.statusCode == 413 ->
+        "表盘包超过 50MB 上限，请压缩图片资源后再试"
+    error is WatchStoreHttpException && error.statusCode == 429 ->
+        "操作太频繁，请等一分钟后再试"
+    error is WatchStoreHttpException ->
+        "商店服务返回了错误（${error.statusCode}）" +
+            (error.detail?.let { "：$it" } ?: "，请稍后再试")
+    error is WatchStorePayloadTooLargeException ->
+        "表盘包超过 50MB 上限，请压缩图片资源后再试"
+    error is IllegalArgumentException || error is IllegalStateException ->
+        error.message ?: "上传失败"
+    else ->
+        error.message?.takeIf(String::isNotBlank)?.let { "网络请求失败：$it" }
+            ?: "网络请求失败，请检查网络后重试"
+}
+
+private fun watchStoreAuthErrorMessage(error: Throwable, register: Boolean): String = when {
+    error is WatchStoreHttpException && error.statusCode == 401 ->
+        "用户名或密码不正确"
+    error is WatchStoreHttpException && error.statusCode == 400 ->
+        error.detail?.let { "服务器拒绝了提交：$it" }
+            ?: if (register) {
+                "用户名或密码不符合要求（用户名 3-50 位字母数字下划线，密码至少 6 位）"
+            } else {
+                "用户名或密码不正确"
+            }
+    error is WatchStoreHttpException && error.statusCode == 409 ->
+        "该用户名已被注册，换一个试试"
+    error is WatchStoreHttpException && error.statusCode == 429 ->
+        "尝试太频繁，请等一分钟后再试"
+    else -> watchStoreUploadErrorMessage(error)
+}
+
 @Composable
 private fun CenteredStatus(message: String, showProgress: Boolean) {
     Column(
@@ -2417,6 +3004,18 @@ private val BASIC_LAYER_TYPES = listOf(
     "image" to "图片",
     "ring" to "圆环",
     "progress" to "进度",
+)
+
+/** 根节点 shape 属性的两个可写值；解析端把 R/S 归一化为圆形/方形。 */
+private val WATCH_SHAPE_OPTIONS = listOf(
+    "R" to "圆形",
+    "S" to "方形",
+)
+
+private val STORE_SCREEN_TYPE_OPTIONS = listOf(
+    WatchStoreScreenType.ROUND to "圆形",
+    WatchStoreScreenType.SQUARE to "方形",
+    WatchStoreScreenType.RECTANGULAR to "长方形",
 )
 
 private val EDITABLE_ATTRIBUTES = listOf(

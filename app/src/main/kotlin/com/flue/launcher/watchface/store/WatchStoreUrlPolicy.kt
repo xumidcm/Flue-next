@@ -50,6 +50,12 @@ internal object WatchStoreUrlPolicy {
 
     fun download(base: URI, id: String): URI = endpoint(base, "watchfaces/${requireId(id)}/download")
 
+    fun authLogin(base: URI): URI = endpoint(base, "auth/login")
+
+    fun authRegister(base: URI): URI = endpoint(base, "auth/register")
+
+    fun upload(base: URI): URI = endpoint(base, "watchfaces/upload")
+
     fun resolveRedirect(current: URI, location: String): URI {
         if (location.isBlank()) throw WatchStoreRedirectException("Redirect response has no Location")
         val target = try {

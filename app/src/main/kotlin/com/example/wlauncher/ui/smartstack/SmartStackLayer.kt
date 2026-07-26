@@ -105,6 +105,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
@@ -141,6 +142,7 @@ import com.flue.launcher.data.model.iconForDisplay
 import com.flue.launcher.FlueApplication
 import com.flue.launcher.R
 import com.flue.launcher.data.repository.WidgetRepository
+import com.flue.launcher.ui.common.FrostedHeader
 import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.common.WatchBatteryPill
@@ -507,8 +509,8 @@ fun SmartStackLayer(
     val slotCenters = remember { mutableStateMapOf<Int, Offset>() }
     val showNotificationPreview = notificationsEnabled && !showMusicCard
     val canOpenNotificationsFromSide = showNotificationPreview
-    val hasSecondaryComponent = showNotificationPreview || showMusicCard
-    val visibleShortcutCount = if (hasSecondaryComponent) 6 else 9
+    // 快捷启动 dock 固定 2 行 × 4 列（设计蓝本 §9）。
+    val visibleShortcutCount = 8
     val context = LocalContext.current
 
     val shortcutItems = remember(apps, sideScreenShortcuts, visibleShortcutCount) {
@@ -680,11 +682,6 @@ fun SmartStackLayer(
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val availableWidth = maxWidth - leftSafeInset
         val contentWidth = availableWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
-        val quickHeight = when {
-            showMusicCard -> (contentWidth * 0.64f).coerceAtLeast(168.dp)
-            hasSecondaryComponent -> (contentWidth * 0.64f).coerceAtLeast(168.dp)
-            else -> (contentWidth * 0.88f).coerceAtLeast(226.dp)
-        }
         val verticalScrollEnabled = false
         val bottomSafePadding = 18.dp
 
@@ -703,27 +700,37 @@ fun SmartStackLayer(
                 ),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(
-                clock.time,
-                color = launcherStyle.titleColor,
-                fontSize = 31.sp,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                clock.date,
-                color = WatchColors.TextSecondary,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Medium,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(14.dp))
+            // 顶部模糊头（§8）：时钟 + 日期整体包进 FrostedHeader，滚动量来自
+            // contentScrollState（当前副一屏纵向滚动关闭时恒为 0，头部保持全透明）。
+            // 原 14dp 间距由模糊头自带的 16dp 渐隐过渡带承担。
+            FrostedHeader(
+                scrollProvider = { contentScrollState.value.toFloat() },
+                height = 64.dp
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        clock.time,
+                        color = launcherStyle.titleColor,
+                        fontSize = 31.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        clock.date,
+                        color = WatchColors.TextSecondary,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
             QuickPanel(
-                width = contentWidth,
-                height = quickHeight,
                 items = shortcutItems,
                 slotCenters = slotCenters,
                 onAdd = { onRevealTargetChange(null); modalState = SideScreenModalState.ShortcutPicker(it) },
@@ -1658,9 +1665,13 @@ private fun WidgetDragPreviewCard(
     }
 }
 
+/** 快捷启动 dock 的列数（设计蓝本 §9：2 行 × 4 列）。 */
+private const val QUICK_DOCK_COLUMNS = 4
+
+/** dock 图标的 squircle 圆角：52dp 图标 → 约 14.5dp 圆角。 */
+private val QuickDockIconShape = RoundedCornerShape(percent = 28)
+
 @Composable private fun QuickPanel(
-    width: androidx.compose.ui.unit.Dp,
-    height: androidx.compose.ui.unit.Dp,
     items: List<AppInfo?>,
     slotCenters: MutableMap<Int, Offset>,
     onAdd: (Int) -> Unit,
@@ -1674,48 +1685,74 @@ private fun WidgetDragPreviewCard(
     val dragThresholdPx = with(density) { 10.dp.toPx() }
     val dropThresholdPx = with(density) { 68.dp.toPx() }
     val visibleSlots = remember(items.size) { items.indices.toSet() }
-    val bubbleSize = 58.dp
+    val iconSpacing = 10.dp
     var draggingSlot by remember { mutableStateOf<Int?>(null) }
+    var pressedSlot by remember { mutableStateOf<Int?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
     var dragMoved by remember { mutableStateOf(false) }
-    Box(
+    val dockShape = LauncherTheme.style.panelShape
+    BoxWithConstraints(
         Modifier
-            .width(width)
-            .height(height)
-            .clip(RoundedCornerShape(28.dp))
-            .background(Color(0xFF353535))
-            .padding(14.dp)
+            .fillMaxWidth(0.88f)
+            .clip(dockShape)
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.13f),
+                        Color.White.copy(alpha = 0.06f)
+                    )
+                )
+            )
+            .border(
+                0.8.dp,
+                Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.18f),
+                        Color.White.copy(alpha = 0.04f)
+                    )
+                ),
+                dockShape
+            )
+            .padding(12.dp)
     ) {
+        // 窄屏兜底：4 列摆不下 52dp 时按可用宽度收缩，间距保持 10dp。
+        val iconSize = ((maxWidth - iconSpacing * (QUICK_DOCK_COLUMNS - 1)) / QUICK_DOCK_COLUMNS)
+            .coerceAtMost(52.dp)
         Column(
-            Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.SpaceBetween
+            Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(iconSpacing),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            items.chunked(3).forEachIndexed { rowIndex, row ->
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
+            items.chunked(QUICK_DOCK_COLUMNS).forEachIndexed { rowIndex, row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(iconSpacing)) {
                     row.forEachIndexed { colIndex, item ->
-                        val slot = rowIndex * 3 + colIndex
+                        val slot = rowIndex * QUICK_DOCK_COLUMNS + colIndex
                         Box(Modifier.onGloballyPositioned { c -> val p = c.positionInRoot(); slotCenters[slot] = Offset(p.x + c.size.width / 2f, p.y + c.size.height / 2f) }, contentAlignment = Alignment.Center) {
                             when (item) {
                                 null -> {
-                                    AddBubble(size = bubbleSize) { onAdd(slot) }
+                                    AddBubble(size = iconSize, shape = QuickDockIconShape) { onAdd(slot) }
                                 }
                                 else -> {
                                     val dragModifier = Modifier.pointerInput(item.componentKey, slot, slotCenters) {
                                         awaitEachGesture {
                                             val down = awaitPrimaryDown()
+                                            // 按压反馈老 bug 修复：按下即刻标记 pressedSlot，
+                                            // 让图标在整个按住过程都有缩放反馈。
+                                            pressedSlot = slot
                                             when (val hold = awaitLongPressOrRelease(
                                                 pointerId = down.id,
                                                 downPosition = down.position,
                                                 timeoutMillis = SIDE_SCREEN_SHORTCUT_MENU_TRIGGER_MS
                                             )) {
-                                                PressHoldResult.Cancelled -> Unit
+                                                PressHoldResult.Cancelled -> {
+                                                    pressedSlot = null
+                                                }
                                                 PressHoldResult.Released -> {
+                                                    pressedSlot = null
                                                     onClickApp(slot, item)
                                                 }
                                                 is PressHoldResult.LongPress -> {
+                                                    pressedSlot = null
                                                     vibrateHaptic(context)
                                                     hold.change.consume()
                                                     dragOffset = Offset.Zero
@@ -1762,12 +1799,14 @@ private fun WidgetDragPreviewCard(
                                     val itemDragOffset = if (draggingSlot == slot) dragOffset else Offset.Zero
                                     AppBubble(
                                         item.cachedIcon,
-                                        bubbleSize,
+                                        iconSize,
                                         onClick = {},
                                         onLongClick = null,
-                                        forcePressed = draggingSlot == slot,
+                                        forcePressed = draggingSlot == slot || pressedSlot == slot,
+                                        pressScaleTarget = 0.93f,
+                                        pressAnimationDurationMillis = 130,
                                         gesturesEnabled = false,
-                                        shape = CircleShape,
+                                        shape = QuickDockIconShape,
                                         modifier = dragModifier
                                             .zIndex(if (draggingSlot == slot) 6f else 0f)
                                             .graphicsLayer {
@@ -1780,7 +1819,7 @@ private fun WidgetDragPreviewCard(
                             }
                         }
                     }
-                    repeat(3 - row.size) { Spacer(Modifier.size(bubbleSize)) }
+                    repeat(QUICK_DOCK_COLUMNS - row.size) { Spacer(Modifier.size(iconSize)) }
                 }
             }
         }
@@ -1976,11 +2015,11 @@ private fun EmptyWidgetCard(width: Dp) {
     }
 }
 
-@Composable private fun AddBubble(size: Dp = 58.dp, onClick: () -> Unit) {
+@Composable private fun AddBubble(size: Dp = 58.dp, shape: Shape = CircleShape, onClick: () -> Unit) {
     val launcherStyle = LauncherTheme.style
     val pressed = rememberPressedState(); val isPressed by pressed
     val scale by animateFloatAsState(if (isPressed) 0.958f else 1f, spring(stiffness = 860f, dampingRatio = 0.72f), label = "side_add")
-    Box(Modifier.size(size).graphicsLayer { scaleX = scale; scaleY = scale }.clip(CircleShape).background(launcherStyle.topBarChipColor).instantPressGesture(pressed, onClick = onClick), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(size).graphicsLayer { scaleX = scale; scaleY = scale }.clip(shape).background(launcherStyle.topBarChipColor).instantPressGesture(pressed, onClick = onClick), contentAlignment = Alignment.Center) {
         Icon(Icons.Filled.Add, null, tint = launcherStyle.topBarTextColor, modifier = Modifier.size(24.dp))
     }
 }

@@ -46,6 +46,8 @@ class WatchStoreProtocolException(
 class WatchStoreHttpException(
     val statusCode: Int,
     message: String,
+    /** Server-provided rejection detail (validator messages), when the error body carried one. */
+    val detail: String? = null,
 ) : WatchStoreException(message)
 
 class WatchStorePayloadTooLargeException(

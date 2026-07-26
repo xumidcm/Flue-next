@@ -1047,6 +1047,11 @@ private fun parseJbWatchAppAction(action: String): JbWatchAppAction? {
 }
 
 private fun launchJbWatchAppAction(context: Context, appAction: JbWatchAppAction): Boolean {
+    // 产品决策（柚子皮 2026-07-26）：保留组件级启动。表盘点击直达特定
+    // 页面（如音乐播放页、健康数据页）是 jbwatch 表盘的实际功能需求，
+    // 审查报告 P1-22 建议的"仅启动器入口"收敛在这里不适用——不要在
+    // 后续安全清理中把它当作疏漏再次收掉。exported 组件本就允许第三方
+    // 拉起，风险边界与普通启动器快捷方式一致。
     val launchedComponent = runCatching {
         context.startActivity(Intent().apply {
             component = ComponentName(appAction.packageName, appAction.className)

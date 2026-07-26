@@ -3,11 +3,14 @@ package com.flue.launcher.watchface.store
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
 import java.util.Locale
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import org.json.JSONObject
 
 data class WatchStoreHttpConfig(
     val connectTimeoutMs: Int = 10_000,
@@ -65,6 +68,186 @@ class HttpWatchStoreApi(
     ): File {
         val url = WatchStoreUrlPolicy.download(base, id)
         return download(url, destination, MAX_WATCH_BYTES, expectPreview = false, onProgress = onProgress)
+    }
+
+    /** Authenticates against the community store. The password only lives inside this call. */
+    fun login(username: String, password: String): WatchStoreAuthResult =
+        authenticate(WatchStoreUrlPolicy.authLogin(base), username, password)
+
+    /** Registers a new community-store account and returns the fresh session. */
+    fun register(username: String, password: String): WatchStoreAuthResult =
+        authenticate(WatchStoreUrlPolicy.authRegister(base), username, password)
+
+    /**
+     * Uploads a `.watch` archive together with the required metadata fields.
+     * The service derives the preview image from the archive, so no image part
+     * is sent. Progress callbacks run on the transport thread and must stay
+     * cheap/non-blocking.
+     */
+    fun uploadWatchFace(
+        token: String,
+        file: File,
+        name: String,
+        description: String,
+        screenType: WatchStoreScreenType,
+        categoryId: String,
+        onProgress: ((sentBytes: Long, totalBytes: Long) -> Unit)? = null,
+    ) {
+        val safeToken = token.trim()
+        require(safeToken.isNotEmpty() && safeToken.none { it.isWhitespace() || it.isISOControl() }) {
+            "登录令牌无效，请重新登录"
+        }
+        require(file.isFile) { "找不到要上传的 .watch 文件" }
+        val totalFileBytes = file.length()
+        if (totalFileBytes <= 0L) throw WatchStoreProtocolException("要上传的 .watch 文件是空的")
+        if (totalFileBytes > MAX_UPLOAD_BYTES) throw WatchStorePayloadTooLargeException(MAX_UPLOAD_BYTES)
+        val trimmedName = name.trim()
+        require(trimmedName.isNotEmpty() && trimmedName.length <= MAX_UPLOAD_NAME_LENGTH) {
+            "表盘名称需要 1-$MAX_UPLOAD_NAME_LENGTH 个字符"
+        }
+        val trimmedDescription = description.trim()
+        require(trimmedDescription.isNotEmpty()) { "表盘描述不能为空" }
+        require(screenType != WatchStoreScreenType.UNKNOWN) { "屏幕形状无效" }
+        val normalizedCategoryId = categoryId.trim().lowercase(Locale.ROOT)
+        require(UPLOAD_CATEGORY_ID_PATTERN.matches(normalizedCategoryId)) { "分类无效，请重新选择" }
+
+        val boundary = "FlueWatchStore${UUID.randomUUID().toString().replace("-", "")}"
+        val head = buildString {
+            appendFormField(boundary, "name", trimmedName)
+            appendFormField(boundary, "description", trimmedDescription)
+            appendFormField(boundary, "screen_type", screenType.apiValue)
+            appendFormField(boundary, "category_id", normalizedCategoryId)
+            append("--").append(boundary).append("\r\n")
+            append("Content-Disposition: form-data; name=\"file\"; filename=\"upload.watch\"\r\n")
+            append("Content-Type: application/octet-stream\r\n\r\n")
+        }.toByteArray(Charsets.UTF_8)
+        val tail = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
+        post(
+            url = WatchStoreUrlPolicy.upload(base),
+            contentType = "multipart/form-data; boundary=$boundary",
+            contentLength = head.size.toLong() + totalFileBytes + tail.size.toLong(),
+            headers = mapOf("Authorization" to "Bearer $safeToken"),
+            readTimeoutMs = maxOf(config.readTimeoutMs, UPLOAD_READ_TIMEOUT_MS),
+            expectJson = false,
+            writeBody = { output ->
+                output.write(head)
+                file.inputStream().use { input ->
+                    val buffer = ByteArray(32 * 1024)
+                    var sent = 0L
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        sent += count
+                        if (sent > totalFileBytes) {
+                            throw WatchStoreProtocolException("上传期间 .watch 文件发生了变化")
+                        }
+                        output.write(buffer, 0, count)
+                        onProgress?.invoke(sent, totalFileBytes)
+                    }
+                    if (sent != totalFileBytes) {
+                        throw WatchStoreProtocolException("上传期间 .watch 文件发生了变化")
+                    }
+                }
+                output.write(tail)
+            },
+        ) { }
+    }
+
+    private fun authenticate(url: URI, username: String, password: String): WatchStoreAuthResult {
+        val cleanUsername = username.trim()
+        require(USERNAME_PATTERN.matches(cleanUsername)) { "用户名需要 3-50 位字母、数字或下划线" }
+        require(password.length >= MIN_PASSWORD_LENGTH) { "密码至少需要 $MIN_PASSWORD_LENGTH 位" }
+        require(password.length <= MAX_PASSWORD_LENGTH) { "密码过长" }
+        val body = JSONObject()
+            .put("username", cleanUsername)
+            .put("password", password)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        return post(
+            url = url,
+            contentType = "application/json; charset=utf-8",
+            contentLength = body.size.toLong(),
+            writeBody = { output -> output.write(body) },
+        ) { payload -> WatchStoreJsonParser.auth(payload) }
+    }
+
+    private fun StringBuilder.appendFormField(boundary: String, name: String, value: String) {
+        append("--").append(boundary).append("\r\n")
+        append("Content-Disposition: form-data; name=\"").append(name).append("\"\r\n")
+        append("Content-Type: text/plain; charset=UTF-8\r\n\r\n")
+        append(value).append("\r\n")
+    }
+
+    /**
+     * Single-shot POST channel for the write endpoints. Unlike [request], a
+     * redirect is a hard failure here: replaying a request body (or a bearer
+     * token) against a Location chosen by the network is never acceptable.
+     */
+    private fun <T> post(
+        url: URI,
+        contentType: String,
+        contentLength: Long,
+        headers: Map<String, String> = emptyMap(),
+        readTimeoutMs: Int = config.readTimeoutMs,
+        expectJson: Boolean = true,
+        writeBody: (OutputStream) -> Unit,
+        parse: (String) -> T,
+    ): T {
+        try {
+            try {
+                WatchStoreUrlPolicy.requirePublicHttps(url)
+            } catch (error: IllegalArgumentException) {
+                throw WatchStoreRedirectException(
+                    error.message ?: "Watch store connection target is unsafe",
+                )
+            }
+            val connection = connectionFactory(url.toURL())
+            try {
+                connection.requestMethod = "POST"
+                connection.instanceFollowRedirects = false
+                connection.connectTimeout = config.connectTimeoutMs
+                connection.readTimeout = readTimeoutMs
+                connection.useCaches = false
+                connection.doOutput = true
+                connection.setRequestProperty("Accept", "application/json")
+                connection.setRequestProperty("Accept-Encoding", "identity")
+                connection.setRequestProperty("User-Agent", "Flue-Next-WatchStore/1")
+                connection.setRequestProperty("Content-Type", contentType)
+                headers.forEach { (headerName, value) -> connection.setRequestProperty(headerName, value) }
+                connection.setFixedLengthStreamingMode(contentLength)
+                connection.outputStream.use { output ->
+                    writeBody(output)
+                    output.flush()
+                }
+                val status = connection.responseCode
+                if (status in REDIRECT_STATUSES) {
+                    throw WatchStoreProtocolException("Watch store write request was redirected")
+                }
+                if (status !in 200..299) {
+                    throw writeFailure(status, connection)
+                }
+                if (expectJson) validateContentType(connection, expectPreview = false, expectJson = true)
+                val payload = readLimited(connection.inputStream, MAX_JSON_BYTES).toString(Charsets.UTF_8)
+                return parse(payload)
+            } finally {
+                connection.disconnect()
+            }
+        } catch (error: WatchStoreException) {
+            throw error
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            throw WatchStoreException("Watch store request failed", error)
+        }
+    }
+
+    private fun writeFailure(status: Int, connection: HttpURLConnection): WatchStoreHttpException {
+        val body = connection.errorStream?.let { stream ->
+            runCatching { readLimited(stream, MAX_ERROR_BYTES).toString(Charsets.UTF_8) }.getOrNull()
+        }.orEmpty()
+        val detail = WatchStoreJsonParser.errorDetail(body)
+        val suffix = detail?.let { ": $it" }.orEmpty()
+        return WatchStoreHttpException(status, "Watch store request failed ($status)$suffix", detail)
     }
 
     private fun <T> requestJson(
@@ -198,6 +381,18 @@ class HttpWatchStoreApi(
         // Keep transport and installer budgets aligned. A lower HTTP limit
         // would reject valid font/media-heavy packages before validation.
         const val MAX_WATCH_BYTES: Long = 96L * 1024L * 1024L
+
+        /** Server-side cap for one uploaded `.watch` archive. */
+        const val MAX_UPLOAD_BYTES: Long = 50L * 1024L * 1024L
+        private const val MAX_UPLOAD_NAME_LENGTH = 100
+        private const val MIN_PASSWORD_LENGTH = 6
+        private const val MAX_PASSWORD_LENGTH = 128
+
+        /** Preview parsing happens server-side during upload; give it room. */
+        private const val UPLOAD_READ_TIMEOUT_MS = 120_000
+        private val USERNAME_PATTERN = Regex("^[A-Za-z0-9_]{3,50}$")
+        private val UPLOAD_CATEGORY_ID_PATTERN =
+            Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
         private const val MAX_ERROR_BYTES = 16L * 1024L
         private val REDIRECT_STATUSES = setOf(301, 302, 303, 307, 308)
 

@@ -10,6 +10,9 @@ internal object WatchStoreJsonParser {
     private const val MAX_NAME_LENGTH = 512
     private const val MAX_DESCRIPTION_LENGTH = 32_768
     private const val MAX_URL_LENGTH = 4_096
+    private const val MAX_TOKEN_LENGTH = 8_192
+    private const val MAX_ERROR_ITEMS = 3
+    private const val MAX_ERROR_DETAIL_LENGTH = 300
 
     fun categories(payload: String): List<WatchStoreCategory> {
         val root = parseObject(payload)
@@ -60,6 +63,48 @@ internal object WatchStoreJsonParser {
                 username = requiredString(uploaderObject, "username", MAX_NAME_LENGTH),
             ),
         )
+    }
+
+    /** Parses the `{token, user:{id, username}}` body shared by login and register. */
+    fun auth(payload: String): WatchStoreAuthResult {
+        val root = parseObject(payload)
+        val user = requiredObject(root, "user")
+        return WatchStoreAuthResult(
+            token = requiredString(root, "token", MAX_TOKEN_LENGTH),
+            userId = requiredString(user, "id", MAX_URL_LENGTH),
+            username = requiredString(user, "username", MAX_NAME_LENGTH),
+        )
+    }
+
+    /**
+     * Lenient error-body reader for the write endpoints. Understands the
+     * service's express-validator shape `{errors:[{msg, path|param}]}` plus
+     * plain `{error}` / `{message}` bodies; anything else yields null.
+     */
+    fun errorDetail(payload: String): String? {
+        if (payload.isBlank()) return null
+        val root = try {
+            JSONObject(payload)
+        } catch (_: Exception) {
+            return null
+        }
+        root.optJSONArray("errors")?.let { array ->
+            val messages = buildList {
+                for (index in 0 until minOf(array.length(), MAX_ERROR_ITEMS)) {
+                    val entry = array.optJSONObject(index) ?: continue
+                    val message = entry.optString("msg").trim().takeIf(String::isNotEmpty) ?: continue
+                    val field = entry.optString("path").trim().ifEmpty { entry.optString("param").trim() }
+                    add(if (field.isEmpty()) message else "$field: $message")
+                }
+            }
+            if (messages.isNotEmpty()) {
+                return messages.joinToString("；").take(MAX_ERROR_DETAIL_LENGTH)
+            }
+        }
+        return sequenceOf("error", "message")
+            .map { key -> root.optString(key).trim() }
+            .firstOrNull(String::isNotEmpty)
+            ?.take(MAX_ERROR_DETAIL_LENGTH)
     }
 
     private fun parseSummary(root: JSONObject): WatchStoreWatchFace {

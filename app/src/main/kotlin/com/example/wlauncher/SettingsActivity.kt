@@ -48,6 +48,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -97,6 +98,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
@@ -126,6 +128,7 @@ import com.flue.launcher.backup.FlueBackupPreview
 import com.flue.launcher.service.FlueAccessibilityService
 import com.flue.launcher.ui.common.FlueScreenShape
 import com.flue.launcher.ui.common.bottomFisheyeScale
+import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.ui.common.flueElasticNestedScroll
 import com.flue.launcher.motion.LocalFlueMotionProfile
 import com.flue.launcher.motion.FlueMotionProfile
@@ -138,6 +141,11 @@ import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.settings.WatchFaceSettingCard
+import com.flue.launcher.ui.settings.miuix.MiuixIcons
+import com.flue.launcher.ui.settings.miuix.MiuixSettingsCard
+import com.flue.launcher.ui.settings.miuix.MiuixSettingsRow
+import com.flue.launcher.ui.settings.miuix.MiuixSlider
+import com.flue.launcher.ui.settings.miuix.MiuixSwitch
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.ThemeMode
@@ -866,6 +874,32 @@ private fun SettingsRootScreen(
                 initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.ROOT).offset,
                 onScrollChanged = { index, offset -> updateScroll(SettingsDestination.ROOT, index, offset) }
             ) { listState, screenCenterY, screenHeightPx, _ ->
+                // 顶部预览头图：迷你手表屏 + 当前配置摘要，点击进入外观设置。
+                item("settings_preview_header") {
+                    SettingsPreviewHeaderCard(
+                        headerTime = headerTime,
+                        uiStyle = uiStyle,
+                        themeMode = themeMode,
+                        layoutMode = layoutMode,
+                        onClick = { navigateTo(SettingsDestination.APPEARANCE) }
+                    )
+                }
+                // 分组顺序对照 SettingsHierarchy：外观 → 表盘 → 应用列表 →
+                // 动画 → 手势与输入 → 系统与工具 → 关于。
+                item("section_appearance") {
+                    SectionTitle("外观", itemFisheye(listState, "section_appearance", screenCenterY, screenHeightPx))
+                }
+                item("appearance") {
+                    SettingsCategoryCard(
+                        title = "显示与外观",
+                        subtitle = if (uiStyle == UiStyle.MATERIAL_3) "布局、材质层次与 MD3 动效" else "布局、模糊与启动图标",
+                        onClick = { navigateTo(SettingsDestination.APPEARANCE) },
+                        scale = itemFisheye(listState, "appearance", screenCenterY, screenHeightPx)
+                    )
+                }
+                item("section_watchface") {
+                    SectionTitle("表盘", itemFisheye(listState, "section_watchface", screenCenterY, screenHeightPx))
+                }
                 item("watchfaces") {
                     SettingsCategoryCard(
                         title = "表盘",
@@ -874,12 +908,15 @@ private fun SettingsRootScreen(
                         scale = itemFisheye(listState, "watchfaces", screenCenterY, screenHeightPx)
                     )
                 }
-                item("appearance") {
+                item("section_app_list") {
+                    SectionTitle("应用列表", itemFisheye(listState, "section_app_list", screenCenterY, screenHeightPx))
+                }
+                item("icon_packs") {
                     SettingsCategoryCard(
-                        title = "显示与外观",
-                        subtitle = if (uiStyle == UiStyle.MATERIAL_3) "布局、材质层次与 MD3 动效" else "布局、模糊与启动图标",
-                        onClick = { navigateTo(SettingsDestination.APPEARANCE) },
-                        scale = itemFisheye(listState, "appearance", screenCenterY, screenHeightPx)
+                        title = "图标包",
+                        subtitle = selectedIconPackLabel ?: "系统默认图标",
+                        onClick = { navigateTo(SettingsDestination.ICON_PACKS) },
+                        scale = itemFisheye(listState, "icon_packs", screenCenterY, screenHeightPx)
                     )
                 }
                 item("hidden_apps") {
@@ -890,13 +927,8 @@ private fun SettingsRootScreen(
                         scale = itemFisheye(listState, "hidden_apps", screenCenterY, screenHeightPx)
                     )
                 }
-                item("icon_packs") {
-                    SettingsCategoryCard(
-                        title = "图标包",
-                        subtitle = selectedIconPackLabel ?: "系统默认图标",
-                        onClick = { navigateTo(SettingsDestination.ICON_PACKS) },
-                        scale = itemFisheye(listState, "icon_packs", screenCenterY, screenHeightPx)
-                    )
+                item("section_animation") {
+                    SectionTitle("动画", itemFisheye(listState, "section_animation", screenCenterY, screenHeightPx))
                 }
                 item("performance") {
                     SettingsCategoryCard(
@@ -906,6 +938,20 @@ private fun SettingsRootScreen(
                         scale = itemFisheye(listState, "performance", screenCenterY, screenHeightPx)
                     )
                 }
+                item("section_input") {
+                    SectionTitle("手势与输入", itemFisheye(listState, "section_input", screenCenterY, screenHeightPx))
+                }
+                item("feature_toggles") {
+                    SettingsCategoryCard(
+                        title = "功能开关",
+                        subtitle = if (isZh) "副一屏、通知、控制中心和表盘提示" else "Side screen, notifications, Control Center, and watch face indicators",
+                        onClick = { navigateTo(SettingsDestination.FEATURE_TOGGLES) },
+                        scale = itemFisheye(listState, "feature_toggles", screenCenterY, screenHeightPx)
+                    )
+                }
+                item("section_system") {
+                    SectionTitle("系统与工具", itemFisheye(listState, "section_system", screenCenterY, screenHeightPx))
+                }
                 item("tools") {
                     SettingsCategoryCard(
                         title = "工具",
@@ -913,6 +959,9 @@ private fun SettingsRootScreen(
                         onClick = { navigateTo(SettingsDestination.TOOLS) },
                         scale = itemFisheye(listState, "tools", screenCenterY, screenHeightPx)
                     )
+                }
+                item("section_about") {
+                    SectionTitle("关于", itemFisheye(listState, "section_about", screenCenterY, screenHeightPx))
                 }
                 item("about") {
                     SettingsCategoryCard(
@@ -2692,6 +2741,25 @@ private fun HeaderBackButton(onClick: () -> Unit) {
 @Composable
 private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () -> Unit, scale: Float) {
     val launcherStyle = LauncherTheme.style
+    if (launcherStyle.uiStyle == UiStyle.MIUIX) {
+        // MIUIX：成组大圆角卡片包一行设置行 + Forward 箭头。
+        MiuixSettingsCard {
+            MiuixSettingsRow(
+                title = title,
+                subtitle = subtitle.takeIf { it.isNotBlank() },
+                onClick = onClick,
+                trailing = {
+                    Icon(
+                        imageVector = MiuixIcons.Forward,
+                        contentDescription = null,
+                        tint = launcherStyle.secondaryTextColor,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            )
+        }
+        return
+    }
     val pressedState = rememberPressedState()
     val pressed by pressedState
     val pressedScale by animateFloatAsState(
@@ -2739,6 +2807,17 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
 @Composable
 private fun SectionTitle(text: String, scale: Float) {
     val launcherStyle = LauncherTheme.style
+    if (launcherStyle.uiStyle == UiStyle.MIUIX) {
+        // MIUIX：组标题小灰字，对齐 MiuixSettingsCard 的 title 风格。
+        Text(
+            text = text,
+            color = launcherStyle.secondaryTextColor,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(top = 8.dp, start = 14.dp)
+        )
+        return
+    }
     Text(
         text = text,
         color = launcherStyle.secondaryTextColor,
@@ -2752,6 +2831,135 @@ private fun SectionTitle(text: String, scale: Float) {
                 alpha = scale.coerceIn(0.55f, 1f)
             }
     )
+}
+
+/**
+ * 设置根页顶部预览头图：Compose 自绘迷你手表屏（圆 / 方跟随
+ * [isFlueScreenRound]），深色底 + 当前时间 + 两行小图标点缀，外层表框
+ * 描边 + 阴影；下方一行当前配置摘要。点击进入「显示与外观」。
+ */
+@Composable
+private fun SettingsPreviewHeaderCard(
+    headerTime: String,
+    uiStyle: UiStyle,
+    themeMode: ThemeMode,
+    layoutMode: LayoutMode,
+    onClick: () -> Unit
+) {
+    val launcherStyle = LauncherTheme.style
+    val isRound = isFlueScreenRound()
+    val pressedState = rememberPressedState()
+    val pressed by pressedState
+    val pressedScale by animateFloatAsState(
+        if (pressed) 0.97f else 1f,
+        animationSpec = launcherStyle.pressScaleSpec,
+        label = "settings_preview_header_scale"
+    )
+    val watchShape = if (isRound) CircleShape else RoundedCornerShape(22.dp)
+    val watchScreenShape = if (isRound) CircleShape else RoundedCornerShape(16.dp)
+    val styleLabel = when (uiStyle) {
+        UiStyle.APPLE_WATCH -> "Apple Watch 风格"
+        UiStyle.MATERIAL_3 -> "Material 3 风格"
+        UiStyle.MIUIX -> "MIUIX 风格"
+    }
+    val themeLabel = when (themeMode) {
+        ThemeMode.SYSTEM -> "跟随系统"
+        ThemeMode.DARK -> "深色"
+        ThemeMode.LIGHT -> "浅色"
+    }
+    val layoutLabel = when (layoutMode) {
+        LayoutMode.Honeycomb -> "蜂窝布局"
+        LayoutMode.List -> "列表布局"
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = pressedScale
+                scaleY = pressedScale
+            }
+            .clip(launcherStyle.cardShape)
+            .background(if (pressed) launcherStyle.pressedCardColor else launcherStyle.cardColor)
+            .border(1.dp, launcherStyle.outlineColor, launcherStyle.cardShape)
+            .instantPressGesture(pressedState, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(104.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            // 表框：描边 + 阴影，内部承载迷你屏幕。
+            Box(
+                modifier = Modifier
+                    .size(96.dp)
+                    .shadow(elevation = 8.dp, shape = watchShape)
+                    .clip(watchShape)
+                    .background(Color(0xFF23252B))
+                    .border(2.dp, Color.White.copy(alpha = 0.14f), watchShape)
+                    .padding(5.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(watchScreenShape)
+                        .background(Color(0xFF07080C)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = headerTime,
+                            color = Color.White,
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        MiniPreviewIconRow(
+                            listOf(
+                                launcherStyle.accentColor,
+                                launcherStyle.positiveColor,
+                                Color(0xFFF2B84B),
+                                Color(0xFFE06C75)
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        MiniPreviewIconRow(
+                            listOf(
+                                Color(0xFF9C7BFF),
+                                launcherStyle.accentColor.copy(alpha = 0.75f),
+                                Color(0xFF5AC8FA)
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "$styleLabel · $themeLabel · $layoutLabel",
+            color = launcherStyle.secondaryTextColor,
+            fontSize = 12.sp
+        )
+    }
+}
+
+/** 预览头图里的一行小图标点缀（圆点模拟应用图标）。 */
+@Composable
+// Color 是 value class，Kotlin 禁止它作为 vararg 参数类型。
+private fun MiniPreviewIconRow(colors: List<Color>) {
+    Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        colors.forEach { dotColor ->
+            Box(
+                modifier = Modifier
+                    .size(9.dp)
+                    .clip(CircleShape)
+                    .background(dotColor)
+            )
+        }
+    }
 }
 
 @Composable
@@ -2891,6 +3099,28 @@ private fun SettingsChoiceRow(
     enabled: Boolean = true,
 ) {
     val launcherStyle = LauncherTheme.style
+    if (launcherStyle.uiStyle == UiStyle.MIUIX) {
+        // MIUIX：56dp 设置行，选中态在右侧显示 Check 图标。
+        MiuixSettingsCard {
+            MiuixSettingsRow(
+                title = title,
+                subtitle = subtitle.takeIf { it.isNotBlank() },
+                enabled = enabled,
+                onClick = onClick,
+                trailing = {
+                    if (selected) {
+                        Icon(
+                            imageVector = MiuixIcons.Check,
+                            contentDescription = null,
+                            tint = launcherStyle.accentColor,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            )
+        }
+        return
+    }
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     val pressedScale by animateFloatAsState(
@@ -2957,6 +3187,52 @@ private fun SettingsSwitchRow(
     reserveLeadingIconSpace: Boolean = false
 ) {
     val launcherStyle = LauncherTheme.style
+    if (launcherStyle.uiStyle == UiStyle.MIUIX) {
+        // MIUIX：56dp 设置行 + 胶囊 MiuixSwitch。
+        val leading: (@Composable () -> Unit)? = if (leadingIcon != null || reserveLeadingIconSpace) {
+            {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (leadingIcon != null) Color.Transparent
+                            else launcherStyle.pressedCardColor.copy(alpha = 0.6f)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (leadingIcon != null) {
+                        Image(
+                            bitmap = leadingIcon,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(CircleShape)
+                        )
+                    }
+                }
+            }
+        } else {
+            null
+        }
+        MiuixSettingsCard {
+            MiuixSettingsRow(
+                title = title,
+                subtitle = subtitle.takeIf { it.isNotBlank() },
+                enabled = enabled,
+                onClick = { onToggle(!checked) },
+                leading = leading,
+                trailing = {
+                    MiuixSwitch(
+                        checked = checked,
+                        onCheckedChange = { onToggle(it) },
+                        enabled = enabled
+                    )
+                }
+            )
+        }
+        return
+    }
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     val pressedScale by animateFloatAsState(
@@ -3069,6 +3345,37 @@ private fun SettingsSliderRow(
     val launcherStyle = LauncherTheme.style
     var localValue by remember(title) { mutableFloatStateOf(value) }
     LaunchedEffect(value) { localValue = value }
+    if (launcherStyle.uiStyle == UiStyle.MIUIX) {
+        // MIUIX：设置行显示标题与当前值，下面接胶囊 MiuixSlider。
+        MiuixSettingsCard {
+            MiuixSettingsRow(
+                title = title,
+                subtitle = localValueText?.invoke(localValue) ?: valueText,
+                enabled = enabled
+            )
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 14.dp)
+            ) {
+                MiuixSlider(
+                    value = localValue,
+                    onValueChange = {
+                        localValue = it
+                        if (onValueChangeFinished == null) {
+                            onValueChange(it)
+                        }
+                    },
+                    valueRange = range,
+                    enabled = enabled,
+                    onValueChangeFinished = {
+                        onValueChangeFinished?.invoke(localValue)
+                    }
+                )
+            }
+        }
+        return
+    }
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -3123,6 +3430,40 @@ private fun ActionCard(
     val launcherStyle = LauncherTheme.style
     val pressedState = rememberPressedState()
     val pressed by pressedState
+    if (launcherStyle.uiStyle == UiStyle.MIUIX) {
+        // MIUIX：动作行走强调色标题；保留长按支持（导入表盘彩蛋）。
+        MiuixSettingsCard {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = 56.dp)
+                    .background(if (pressed) launcherStyle.pressedCardColor else Color.Transparent)
+                    .instantPressGesture(
+                        pressedState,
+                        onLongPress = onLongPress,
+                        longPressDurationMs = longPressDurationMs,
+                        onClick = onClick
+                    )
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 12.dp)
+                ) {
+                    Text(title, color = launcherStyle.accentColor, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    if (!subtitle.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(subtitle, color = launcherStyle.secondaryTextColor, fontSize = 12.sp)
+                    }
+                }
+                icon?.invoke()
+            }
+        }
+        return
+    }
     val pressedScale by animateFloatAsState(
         if (pressed) 0.96f else 1f,
         animationSpec = launcherStyle.pressScaleSpec,

@@ -104,8 +104,8 @@ fun MiuixCardDivider(startIndent: Dp = 16.dp) {
 }
 
 /**
- * 设置行：标题 15sp + 可选 subtitle 12sp 灰色，右侧任意 slot。
- * 行高不低于 56dp。
+ * 设置行：标题 15sp + 可选 subtitle 12sp 灰色，左侧可选 leading slot
+ * （应用图标等），右侧任意 slot。行高不低于 56dp。
  */
 @Composable
 fun MiuixSettingsRow(
@@ -114,6 +114,7 @@ fun MiuixSettingsRow(
     subtitle: String? = null,
     enabled: Boolean = true,
     onClick: (() -> Unit)? = null,
+    leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null
 ) {
     val style = LauncherTheme.style
@@ -144,6 +145,9 @@ fun MiuixSettingsRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
+        if (leading != null) {
+            Box(modifier = Modifier.padding(end = 12.dp)) { leading() }
+        }
         Column(
             modifier = Modifier
                 .weight(1f)

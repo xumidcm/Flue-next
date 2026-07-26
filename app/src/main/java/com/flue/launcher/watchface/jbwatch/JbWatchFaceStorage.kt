@@ -24,6 +24,14 @@ data class JbWatchMetadata(
 object JbWatchFaceStorage {
     private const val ROOT_FOLDER = "jbwatch_faces"
 
+    // 与 standard 侧 WatchArchiveValidator 对齐的导入防护。此前这条导入
+    // 通道对归档大小 / 条目数 / 展开总量没有任何限制，一个高压缩比的
+    // zip 炸弹就能写满 /data 让整机异常（审查报告 P1-23）。
+    private const val MAX_ARCHIVE_BYTES = 96L * 1024L * 1024L
+    private const val MAX_ENTRY_COUNT = 2_048
+    private const val MAX_SINGLE_ENTRY_BYTES = 64L * 1024L * 1024L
+    private const val MAX_TOTAL_EXTRACTED_BYTES = 256L * 1024L * 1024L
+
     fun rootDir(context: Context): File {
         return File(context.filesDir, ROOT_FOLDER).apply { mkdirs() }
     }
@@ -32,11 +40,32 @@ object JbWatchFaceStorage {
         val tempZip = File.createTempFile("jbwatch_import_", ".watch", context.cacheDir)
         try {
             context.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(tempZip).use { output -> input.copyTo(output) }
+                FileOutputStream(tempZip).use { output ->
+                    copyWithLimit(input, output, MAX_ARCHIVE_BYTES, "表盘归档")
+                }
             } ?: error("无法读取 .watch 表盘归档")
             return importArchiveFile(context, tempZip)
         } finally {
             tempZip.delete()
+        }
+    }
+
+    private fun copyWithLimit(
+        input: java.io.InputStream,
+        output: java.io.OutputStream,
+        limitBytes: Long,
+        what: String,
+    ): Long {
+        val buffer = ByteArray(64 * 1024)
+        var total = 0L
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) return total
+            total += read
+            require(total <= limitBytes) {
+                "$what 超过大小上限（${limitBytes / (1024 * 1024)}MB）"
+            }
+            output.write(buffer, 0, read)
         }
     }
 
@@ -141,9 +170,21 @@ object JbWatchFaceStorage {
     }
 
     private fun extractArchive(zipFile: File, targetRoot: File) {
+        require(zipFile.length() <= MAX_ARCHIVE_BYTES) {
+            "表盘归档超过大小上限（${MAX_ARCHIVE_BYTES / (1024 * 1024)}MB）"
+        }
         ZipFile(zipFile).use { zip ->
+            var entryCount = 0
+            var totalExtracted = 0L
             zip.entries().asSequence().forEach { entry ->
-                copyEntry(zip, entry, targetRoot)
+                entryCount += 1
+                require(entryCount <= MAX_ENTRY_COUNT) {
+                    "表盘归档条目过多（上限 $MAX_ENTRY_COUNT）"
+                }
+                totalExtracted += copyEntry(zip, entry, targetRoot)
+                require(totalExtracted <= MAX_TOTAL_EXTRACTED_BYTES) {
+                    "表盘归档展开总量超限（上限 ${MAX_TOTAL_EXTRACTED_BYTES / (1024 * 1024)}MB）"
+                }
             }
         }
     }
@@ -158,7 +199,8 @@ object JbWatchFaceStorage {
             }
     }
 
-    private fun copyEntry(zip: ZipFile, entry: ZipEntry, targetRoot: File) {
+    /** 返回该条目实际展开的字节数（目录为 0）。 */
+    private fun copyEntry(zip: ZipFile, entry: ZipEntry, targetRoot: File): Long {
         val normalized = entry.name.replace('\\', '/')
         val outFile = File(targetRoot, normalized)
         val canonicalTarget = outFile.canonicalFile
@@ -168,11 +210,15 @@ object JbWatchFaceStorage {
         require(insideRoot) { "归档路径越界: ${entry.name}" }
         if (entry.isDirectory) {
             canonicalTarget.mkdirs()
-            return
+            return 0L
         }
         canonicalTarget.parentFile?.mkdirs()
+        // 逐条目限流：entry.size 是归档自报的值，zip 炸弹会谎报，
+        // 必须按实际写出的字节数计数。
         zip.getInputStream(entry).use { input ->
-            FileOutputStream(canonicalTarget).use { output -> input.copyTo(output) }
+            FileOutputStream(canonicalTarget).use { output ->
+                return copyWithLimit(input, output, MAX_SINGLE_ENTRY_BYTES, "归档条目 ${entry.name}")
+            }
         }
     }
 }

@@ -68,6 +68,13 @@ data class WatchStoreUploader(
     val username: String,
 )
 
+/** Result of a successful login/registration. The service issues 7-day JWTs. */
+data class WatchStoreAuthResult(
+    val token: String,
+    val userId: String,
+    val username: String,
+)
+
 data class WatchStoreWatchFaceDetail(
     val id: String,
     val name: String,

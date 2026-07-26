@@ -77,6 +77,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.flue.launcher.ui.common.FrostedHeader
 import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.common.FlueElasticOffsetController
@@ -591,6 +592,20 @@ fun NotificationLayer(
                 }
             }
         }
+        // 顶部模糊头（§8）：通知列表顶部行的模糊背衬。作为覆层叠在列表上方，
+        // 不参与布局与手势（无 pointerInput，命中测试直接穿透到列表）；
+        // 滚动量取自 listState —— 列表离开顶部后，滚过的卡片在头部区域被
+        // 模糊 + 渐隐「压下去」。
+        FrostedHeader(
+            scrollProvider = {
+                if (listState.firstVisibleItemIndex > 0) {
+                    Float.MAX_VALUE
+                } else {
+                    listState.firstVisibleItemScrollOffset.toFloat()
+                }
+            },
+            modifier = Modifier.align(Alignment.TopCenter)
+        ) {}
     }
 }
 

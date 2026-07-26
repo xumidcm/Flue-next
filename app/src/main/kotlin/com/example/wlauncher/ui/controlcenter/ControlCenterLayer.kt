@@ -124,6 +124,7 @@ import androidx.mediarouter.app.SystemOutputSwitcherDialogController
 import com.flue.launcher.FlueApplication
 import com.flue.launcher.R
 import com.flue.launcher.service.WLauncherNotificationListener
+import com.flue.launcher.ui.common.FrostedHeader
 import com.flue.launcher.ui.common.WatchBatteryPill
 import com.flue.launcher.ui.common.rememberFlueElasticScrollState
 import com.flue.launcher.ui.common.rememberPressedState
@@ -448,8 +449,9 @@ fun ControlCenterLayer(
             sliderHeight +
             (if (showMusicControls) controlsSpacing + 156.dp else 0.dp) +
             (if (showNotificationCard) controlsSpacing + 108.dp else 0.dp)
+        // 顶部状态行 = FrostedHeader 32dp 内容区 + 16dp 渐隐过渡带。
         val estimatedContentHeight = verticalPadding * 2f +
-            32.dp +
+            48.dp +
             outerSpacing +
             estimatedControlsHeight +
             20.dp +
@@ -538,47 +540,55 @@ fun ControlCenterLayer(
                 .padding(horizontal = contentHorizontalPadding, vertical = verticalPadding),
             verticalArrangement = Arrangement.spacedBy(outerSpacing)
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = topStatusHorizontalInset)
+            // 顶部模糊头（§8）：电池 + 时间状态行的模糊背衬。原行布局与手势原样
+            // 保留在 content 里；滚动量取自 verticalScrollState（内容不足一屏、
+            // 滚动关闭时恒为 0，头部保持全透明）。
+            FrostedHeader(
+                scrollProvider = { verticalScrollState.value.toFloat() },
+                height = 32.dp
             ) {
-                WatchBatteryPill(
-                    level = batteryStatus.level,
-                    charging = batteryStatus.charging,
-                    width = 32.dp,
-                    height = 16.dp,
-                    modifier = Modifier.align(Alignment.CenterStart)
-                )
-                Row(
-                    modifier = Modifier.align(Alignment.CenterEnd),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = topStatusHorizontalInset)
                 ) {
-                    if (showPowerButton) {
+                    WatchBatteryPill(
+                        level = batteryStatus.level,
+                        charging = batteryStatus.charging,
+                        width = 32.dp,
+                        height = 16.dp,
+                        modifier = Modifier.align(Alignment.CenterStart)
+                    )
+                    Row(
+                        modifier = Modifier.align(Alignment.CenterEnd),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        if (showPowerButton) {
+                            SystemSettingsButton(
+                                icon = Icons.Filled.PowerSettingsNew,
+                                contentDescription = "电源选项",
+                                size = 28.dp,
+                                iconSize = 17.dp,
+                                onGestureLockChange = lockControlCenterGesture,
+                                onClick = onPowerClick
+                            )
+                        }
                         SystemSettingsButton(
-                            icon = Icons.Filled.PowerSettingsNew,
-                            contentDescription = "电源选项",
+                            icon = Icons.Outlined.SettingsIcon,
+                            contentDescription = "系统设置",
                             size = 28.dp,
                             iconSize = 17.dp,
                             onGestureLockChange = lockControlCenterGesture,
-                            onClick = onPowerClick
+                            onClick = { openSettings(context, Settings.ACTION_SETTINGS) }
+                        )
+                        Text(
+                            timeText,
+                            color = launcherStyle.titleColor,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
-                    SystemSettingsButton(
-                        icon = Icons.Outlined.SettingsIcon,
-                        contentDescription = "系统设置",
-                        size = 28.dp,
-                        iconSize = 17.dp,
-                        onGestureLockChange = lockControlCenterGesture,
-                        onClick = { openSettings(context, Settings.ACTION_SETTINGS) }
-                    )
-                    Text(
-                        timeText,
-                        color = launcherStyle.titleColor,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
                 }
             }
 
