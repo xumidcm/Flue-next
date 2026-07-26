@@ -34,6 +34,7 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -545,7 +546,8 @@ fun ControlCenterLayer(
                 WatchBatteryPill(
                     level = batteryStatus.level,
                     charging = batteryStatus.charging,
-                    sizeScale = 1.15f,
+                    width = 32.dp,
+                    height = 16.dp,
                     modifier = Modifier.align(Alignment.CenterStart)
                 )
                 Row(
@@ -655,6 +657,7 @@ fun ControlCenterLayer(
                                 size = toggleSize,
                                 iconSize = toggleIconSize,
                                 labelGap = toggleLabelGap,
+                                activeColor = Color(0xFFBF5AF2),
                                 onGestureLockChange = lockControlCenterGesture,
                                 onClick = {
                                     dndEnabled = !dndEnabled
@@ -740,6 +743,7 @@ fun ControlCenterLayer(
                                     size = toggleSize,
                                     iconSize = toggleIconSize,
                                     labelGap = toggleLabelGap,
+                                    activeColor = Color(0xFFBF5AF2),
                                     onGestureLockChange = lockControlCenterGesture,
                                     onClick = {
                                         dndEnabled = !dndEnabled
@@ -1046,6 +1050,8 @@ private fun ControlToggle(
     size: androidx.compose.ui.unit.Dp,
     iconSize: androidx.compose.ui.unit.Dp,
     labelGap: androidx.compose.ui.unit.Dp,
+    // watchOS 语义：连接类开关亮蓝，勿扰亮紫 —— 而不是四个开关同一个纯白。
+    activeColor: Color = Color(0xFF0A84FF),
     onGestureLockChange: (Boolean) -> Unit = {},
     onClick: () -> Unit,
     onLongClick: () -> Unit
@@ -1053,28 +1059,31 @@ private fun ControlToggle(
     val pressedState = rememberPressedState()
     val pressed by pressedState
     val darkMode = WatchColors.isDark
+    // 旧实现里未激活态带一个 0.96f 的静态缩放，四个按钮永远大小不齐。
     val targetScale by animateFloatAsState(
-        when {
-            pressed -> 0.88f
-            active -> 1f
-            else -> 0.96f
-        },
+        targetValue = if (pressed) 0.90f else 1f,
+        animationSpec = spring(dampingRatio = 0.62f, stiffness = 900f),
         label = "control_toggle_scale"
     )
-    val activeButtonColor = if (darkMode) Color.White else Color.Black
-    val inactiveButtonColor = if (darkMode) Color(0xFF2C2C2E) else Color.White
-    val activePressedButtonColor = if (darkMode) Color(0xFFE4E4E4) else Color(0xFF1C1C1E)
-    val inactivePressedButtonColor = if (darkMode) Color(0xFF424242) else Color(0xFFE4E4E4)
-    val buttonColor = when {
-        pressed -> if (active) activePressedButtonColor else inactivePressedButtonColor
-        active -> activeButtonColor
-        else -> inactiveButtonColor
-    }
-    val contentColor = if (active) {
-        if (darkMode) Color.Black else Color.White
-    } else {
-        if (darkMode) Color.White else Color.Black
-    }
+    // 未激活态与 cardColor 同源（半透明白/黑），不再是不透明的 #2C2C2E ——
+    // 那块色和旁边玻璃卡不同源，质感断层。
+    val inactiveColor = if (darkMode) Color.White.copy(alpha = 0.12f) else Color.Black.copy(alpha = 0.08f)
+    val pressedOverlay = if (darkMode) Color.White.copy(alpha = 0.06f) else Color.Black.copy(alpha = 0.05f)
+    // 状态色渐变过去而不是瞬间反转 —— 这里曾是全页最生硬的跳变。
+    val buttonColor by animateColorAsState(
+        targetValue = if (active) activeColor else inactiveColor,
+        animationSpec = spring(dampingRatio = 0.92f, stiffness = 700f),
+        label = "control_toggle_bg"
+    )
+    val contentColor by animateColorAsState(
+        targetValue = when {
+            active -> Color.White
+            darkMode -> Color.White
+            else -> Color(0xFF16181D)
+        },
+        animationSpec = spring(dampingRatio = 0.92f, stiffness = 700f),
+        label = "control_toggle_tint"
+    )
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier
@@ -1085,6 +1094,7 @@ private fun ControlToggle(
                 }
                 .clip(CircleShape)
                 .background(buttonColor)
+                .then(if (pressed) Modifier.background(pressedOverlay) else Modifier)
                 .controlCenterPressGesture(
                     pressedState = pressedState,
                     onGestureLockChange = onGestureLockChange,
@@ -1153,13 +1163,31 @@ private fun MediaControlCard(
     onOpenOutputSwitcherOrApp: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val bg = if (notificationAccessGranted) mediaState.artworkColor else Color(0xFF2F3B45)
+    val bgTarget = if (notificationAccessGranted) mediaState.artworkColor else Color(0xFF2F3B45)
+    // 切歌时底色渐变过去，而不是硬跳 —— 让它的 420ms 盖住文字动画的中段，
+    // 视觉上就是「同一件事」。
+    val bg by animateColorAsState(
+        targetValue = bgTarget,
+        animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing),
+        label = "media_card_bg",
+    )
     Box(
         modifier = modifier
             .fillMaxWidth()
             .height(156.dp)
-            .clip(RoundedCornerShape(32.dp))
-            .background(bg.copy(alpha = 0.88f))
+            // panelShape(30dp)：媒体卡是大块表面。内层封面 18dp = 30 − 12 padding，
+            // 同心圆角关系（内 = 外 − 间距）；旧的 32/24 组合会让封面的角
+            // 「胀」出外壳弧线约 4dp。
+            .clip(LauncherTheme.style.panelShape)
+            .background(
+                // 135° 渐变代替纯色平铺：大色块立刻有质感。
+                Brush.linearGradient(
+                    listOf(
+                        bg.copy(alpha = 0.94f),
+                        Color(bg.red * 0.86f, bg.green * 0.86f, bg.blue * 0.86f, 0.96f),
+                    )
+                )
+            )
             .clickable(onClick = if (notificationAccessGranted) onOpenApp else onOpenNotificationAccess)
             .padding(12.dp)
     ) {
@@ -1181,10 +1209,12 @@ private fun MediaControlCard(
                 modifier = Modifier.fillMaxSize(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // 18dp = panel 30dp − padding 12dp（同心圆角）。
+                val artworkShape = RoundedCornerShape(18.dp)
                 Box(
                     modifier = Modifier
                         .size(artworkSize)
-                        .clip(RoundedCornerShape(24.dp))
+                        .clip(artworkShape)
                         .background(Color.Black.copy(alpha = 0.22f)),
                     contentAlignment = Alignment.Center
                 ) {
@@ -1194,7 +1224,7 @@ private fun MediaControlCard(
                             contentDescription = null,
                             modifier = Modifier
                                 .fillMaxSize()
-                                .clip(RoundedCornerShape(24.dp)),
+                                .clip(artworkShape),
                             contentScale = ContentScale.Crop
                         )
                     } else {

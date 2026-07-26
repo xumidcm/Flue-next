@@ -41,6 +41,11 @@ data class LauncherStyle(
     val cardShape: Shape,
     val compactShape: Shape,
     val bubbleShape: Shape,
+    // 五档形状语言（chip < row < card < panel）。cardShape/compactShape 保留是
+    // 兼容旧调用点；新代码一律走这四档，禁止再写 RoundedCornerShape(数字) 字面量。
+    val chipShape: Shape = CircleShape,
+    val rowShape: Shape = RoundedCornerShape(18.dp),
+    val panelShape: Shape = RoundedCornerShape(30.dp),
     val watchFaceOverlayStrength: Float,
     val faceSwitchEnterSpec: FiniteAnimationSpec<Float>,
     val faceSwitchExitSpec: FiniteAnimationSpec<Float>,
@@ -55,6 +60,9 @@ private val LocalLauncherStyle = compositionLocalOf { appleWatchLauncherStyle(da
 
 val UiStyle.isMaterial: Boolean
     get() = this == UiStyle.MATERIAL_3
+
+val UiStyle.isMiuix: Boolean
+    get() = this == UiStyle.MIUIX
 
 fun appleWatchLauncherStyle(darkMode: Boolean): LauncherStyle {
     val card = if (darkMode) Color(0x1FFFFFFF) else Color(0x16000000)
@@ -82,9 +90,13 @@ fun appleWatchLauncherStyle(darkMode: Boolean): LauncherStyle {
         appListBaseColor = card,
         appListFadeColor = Color.Black.copy(alpha = if (darkMode) 0.72f else 0.08f),
         appListPressedOverlay = Color.White.copy(alpha = if (darkMode) 0.08f else 0.04f),
-        cardShape = RoundedCornerShape(24.dp),
+        // 26dp 与通知卡对齐（原 24dp），panel 30dp 用于媒体卡等大块表面。
+        cardShape = RoundedCornerShape(26.dp),
         compactShape = RoundedCornerShape(18.dp),
         bubbleShape = CircleShape,
+        chipShape = CircleShape,
+        rowShape = RoundedCornerShape(18.dp),
+        panelShape = RoundedCornerShape(30.dp),
         watchFaceOverlayStrength = 1f,
         faceSwitchEnterSpec = tween(durationMillis = 220, delayMillis = 70),
         faceSwitchExitSpec = tween(durationMillis = 180),
@@ -129,6 +141,9 @@ fun materialLauncherStyle(darkMode: Boolean): LauncherStyle {
         cardShape = RoundedCornerShape(32.dp),
         compactShape = RoundedCornerShape(24.dp),
         bubbleShape = RoundedCornerShape(30.dp),
+        chipShape = CircleShape,
+        rowShape = RoundedCornerShape(24.dp),
+        panelShape = RoundedCornerShape(36.dp),
         watchFaceOverlayStrength = 1.25f,
         faceSwitchEnterSpec = tween(durationMillis = 300, delayMillis = 20),
         faceSwitchExitSpec = tween(durationMillis = 220),
@@ -143,6 +158,60 @@ fun materialLauncherStyle(darkMode: Boolean): LauncherStyle {
     )
 }
 
+/**
+ * MIUIX（HyperOS 视觉语言）风格令牌：
+ * 大圆角成组卡片（18dp）、行高较高、辅助文字灰色小号、
+ * 强调色默认蓝（#3482FF）、浅色底 #F7F7F7 / 深色底 #000000、卡片 #1B1B1B。
+ */
+fun miuixLauncherStyle(darkMode: Boolean): LauncherStyle {
+    val bg = if (darkMode) Color(0xFF000000) else Color(0xFFF7F7F7)
+    val card = if (darkMode) Color(0xFF1B1B1B) else Color(0xFFFFFFFF)
+    val cardPressed = if (darkMode) Color(0xFF2A2A2A) else Color(0xFFEDEDED)
+    val accent = Color(0xFF3482FF)
+    val text = if (darkMode) Color(0xFFF2F2F2) else Color(0xFF1A1A1A)
+    val secondary = if (darkMode) Color(0xFF8C8C8C) else Color(0xFF999999)
+    return LauncherStyle(
+        uiStyle = UiStyle.MIUIX,
+        screenBackground = bg,
+        screenScrim = Brush.verticalGradient(
+            listOf(
+                Color.Transparent,
+                Color.Transparent,
+                Color.Black.copy(alpha = if (darkMode) 0.18f else 0.04f)
+            )
+        ),
+        cardColor = card,
+        pressedCardColor = cardPressed,
+        selectedCardColor = accent.copy(alpha = if (darkMode) 0.24f else 0.14f),
+        outlineColor = if (darkMode) Color.White.copy(alpha = 0.06f) else Color.Black.copy(alpha = 0.05f),
+        titleColor = text,
+        bodyColor = text,
+        secondaryTextColor = secondary,
+        accentColor = accent,
+        // MIUIX 的开关 / 选中态统一使用蓝色强调色，而不是绿色
+        positiveColor = accent,
+        topBarChipColor = card,
+        topBarTextColor = text,
+        appListBaseColor = card,
+        appListFadeColor = bg.copy(alpha = if (darkMode) 0.86f else 0.92f),
+        appListPressedOverlay = if (darkMode) Color.White.copy(alpha = 0.06f) else Color.Black.copy(alpha = 0.05f),
+        cardShape = RoundedCornerShape(18.dp),
+        compactShape = RoundedCornerShape(14.dp),
+        bubbleShape = RoundedCornerShape(999.dp),
+        chipShape = CircleShape,
+        rowShape = RoundedCornerShape(14.dp),
+        panelShape = RoundedCornerShape(22.dp),
+        watchFaceOverlayStrength = 1f,
+        faceSwitchEnterSpec = tween(durationMillis = 260, delayMillis = 40),
+        faceSwitchExitSpec = tween(durationMillis = 200),
+        pageMotionSpec = spring(dampingRatio = 0.9f, stiffness = 600f),
+        launchMaskEnterSpec = tween(durationMillis = 180),
+        launchMaskExitSpec = tween(durationMillis = 200),
+        pressScaleSpec = spring(stiffness = 600f, dampingRatio = 0.9f),
+        switchThumbTravel = 22f
+    )
+}
+
 @Composable
 fun ProvideLauncherStyle(
     uiStyle: UiStyle,
@@ -150,7 +219,11 @@ fun ProvideLauncherStyle(
     content: @Composable () -> Unit
 ) {
     val style = remember(uiStyle, darkMode) {
-        if (uiStyle.isMaterial) materialLauncherStyle(darkMode) else appleWatchLauncherStyle(darkMode)
+        when (uiStyle) {
+            UiStyle.APPLE_WATCH -> appleWatchLauncherStyle(darkMode)
+            UiStyle.MATERIAL_3 -> materialLauncherStyle(darkMode)
+            UiStyle.MIUIX -> miuixLauncherStyle(darkMode)
+        }
     }
     CompositionLocalProvider(LocalLauncherStyle provides style, content = content)
 }

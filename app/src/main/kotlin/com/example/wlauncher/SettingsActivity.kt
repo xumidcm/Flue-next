@@ -1431,6 +1431,15 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "ui_style_material_3", screenCenterY, screenHeightPx)
                 )
             }
+            item("ui_style_miuix") {
+                SettingsChoiceRow(
+                    title = if (isZh) "MIUIX 风格" else "MIUIX",
+                    subtitle = if (isZh) "HyperOS 视觉语言：成组大圆角卡片与蓝色强调" else "HyperOS visual language: grouped rounded cards with blue accents",
+                    selected = uiStyle == UiStyle.MIUIX,
+                    onClick = { vm.setUiStyle(UiStyle.MIUIX) },
+                    scale = itemFisheye(listState, "ui_style_miuix", screenCenterY, screenHeightPx)
+                )
+            }
             item("visual_effects_header") {
                 SectionTitle(if (isZh) "视觉效果" else "Visual Effects", itemFisheye(listState, "visual_effects_header", screenCenterY, screenHeightPx))
             }

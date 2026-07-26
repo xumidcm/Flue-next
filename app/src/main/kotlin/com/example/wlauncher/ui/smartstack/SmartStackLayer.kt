@@ -2661,10 +2661,13 @@ private fun WatchBatteryAndStepsPill(
         WatchBatteryPill(
             level = level,
             charging = charging,
-            sizeScale = 1.3f
+            width = 34.dp,
+            height = 17.dp,
         )
         if (showSteps) {
-            Spacer(Modifier.width(24.dp))
+            // 24dp 间距 + graphicsLayer 放大曾让整条 pill 在圆屏上溢出约 28dp；
+            // 真实尺寸 + 收紧间距后两端可留出安全弦宽。
+            Spacer(Modifier.width(12.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)

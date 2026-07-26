@@ -14,7 +14,8 @@ import androidx.compose.ui.unit.Density
 // UI 风格
 enum class UiStyle {
     APPLE_WATCH,
-    MATERIAL_3
+    MATERIAL_3,
+    MIUIX
 }
 
 // 深色 Material3 颜色方案

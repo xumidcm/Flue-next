@@ -17,6 +17,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -55,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
@@ -737,8 +739,14 @@ private fun GroupHeader(
             Spacer(Modifier.weight(1f))
             Text("${count}条通知", color = launcherStyle.titleColor, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.width(10.dp))
+            // 箭头跟着容器高度动画一起转，不再抢跑瞬翻。
+            val arrowRotation by animateFloatAsState(
+                targetValue = if (expanded) 180f else 0f,
+                animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
+                label = "notification_group_arrow",
+            )
             Box(Modifier.size(28.dp).clip(CircleShape).background(launcherStyle.topBarChipColor), contentAlignment = Alignment.Center) {
-                Icon(Icons.Filled.KeyboardArrowDown, null, tint = launcherStyle.topBarTextColor, modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = if (expanded) 180f else 0f })
+                Icon(Icons.Filled.KeyboardArrowDown, null, tint = launcherStyle.topBarTextColor, modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = arrowRotation })
             }
         }
     }
@@ -813,11 +821,22 @@ private fun NotificationCard(
     val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }.coerceAtLeast(1f)
     val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }.coerceAtLeast(1f)
     var launchOrigin by remember { mutableStateOf(Offset(0.5f, 0.5f)) }
+    val darkCard = launcherStyle.titleColor == Color.White
     val cardColor = if (launcherStyle.cardColor.alpha < 0.35f) {
-        if (launcherStyle.titleColor == Color.White) Color(0xFF353535) else Color(0xFFE8E8ED)
+        if (darkCard) Color(0xFF353535) else Color(0xFFE8E8ED)
     } else {
         launcherStyle.cardColor
     }
+    // watchOS 的玻璃感三件套之二：顶亮底暗的渐变 + 极淡描边。纯色贴纯黑时
+    // 边界只有 12% 亮度差，28dp 转角处会因抗锯齿发虚。
+    val cardBrush = remember(cardColor, darkCard) {
+        if (darkCard) {
+            Brush.verticalGradient(listOf(Color(0xFF3A3A3C), Color(0xFF2C2C2E)))
+        } else {
+            Brush.verticalGradient(listOf(cardColor, cardColor))
+        }
+    }
+    val cardBorder = if (darkCard) Color.White.copy(alpha = 0.07f) else Color.Black.copy(alpha = 0.06f)
     val scale by animateFloatAsState(if (isPressed) 0.968f else 1f, spring(stiffness = 860f, dampingRatio = 0.72f), label = "notif_card")
     Box(
         Modifier
@@ -831,8 +850,9 @@ private fun NotificationCard(
                 )
             }
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(RoundedCornerShape(28.dp))
-            .background(cardColor)
+            .clip(launcherStyle.cardShape)
+            .background(cardBrush)
+            .border(0.8.dp, cardBorder, launcherStyle.cardShape)
             .instantPressGesture(
                 pressed,
                 enabled = entry.key == "perm" || entry.key == "empty" || entry.contentIntentAvailable,
