@@ -352,7 +352,8 @@ private fun SettingsRootScreen(
     val musicTextSwitchAnimation by vm.musicTextSwitchAnimation.collectAsStateWithLifecycle()
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
-    val classicReturnAnimationEnabled by vm.classicReturnAnimationEnabled.collectAsStateWithLifecycle()
+    val appListReturnShrinkEnabled by vm.appListReturnShrinkEnabled.collectAsStateWithLifecycle()
+    val faceReturnShrinkEnabled by vm.faceReturnShrinkEnabled.collectAsStateWithLifecycle()
     val activeMotionProfile by vm.activeMotionProfile.collectAsStateWithLifecycle()
     val motionProfiles by vm.motionProfiles.collectAsStateWithLifecycle()
     val showStepCount by vm.showStepCount.collectAsStateWithLifecycle()
@@ -1933,17 +1934,30 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "anim_override", screenCenterY, screenHeightPx)
                 )
             }
-            item("classic_return_animation") {
+            item("app_list_return_shrink") {
                 SettingsSwitchRow(
-                    title = if (isZh) "经典返回动画" else "Classic Return Animation",
-                    subtitle = if (classicReturnAnimationEnabled) {
-                        if (isZh) "返回应用列表时从屏幕中间缩放" else "Return to the app list from the screen center"
+                    title = if (isZh) "应用列表收缩动画" else "App List Shrink Animation",
+                    subtitle = if (isZh) {
+                        "关闭后从应用返回列表时只做淡入淡出，不再整体缩放"
                     } else {
-                        if (isZh) "返回应用列表时跟随应用图标位置缩放" else "Return to the app list from the launched app icon"
+                        "Fade only when returning from an app; skip the list-wide scale"
                     },
-                    checked = classicReturnAnimationEnabled,
-                    onToggle = vm::setClassicReturnAnimationEnabled,
-                    scale = itemFisheye(listState, "classic_return_animation", screenCenterY, screenHeightPx)
+                    checked = appListReturnShrinkEnabled,
+                    onToggle = vm::setAppListReturnShrinkEnabled,
+                    scale = itemFisheye(listState, "app_list_return_shrink", screenCenterY, screenHeightPx)
+                )
+            }
+            item("face_return_shrink") {
+                SettingsSwitchRow(
+                    title = if (isZh) "表盘收缩动画" else "Watch Face Shrink Animation",
+                    subtitle = if (isZh) {
+                        "关闭后返回表盘时只做淡入淡出，不再整体缩放"
+                    } else {
+                        "Fade only when returning to the watch face; skip the scale"
+                    },
+                    checked = faceReturnShrinkEnabled,
+                    onToggle = vm::setFaceReturnShrinkEnabled,
+                    scale = itemFisheye(listState, "face_return_shrink", screenCenterY, screenHeightPx)
                 )
             }
             item("hide_from_recents") {

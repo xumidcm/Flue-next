@@ -45,16 +45,27 @@ internal fun nativeAutoScrollDelta(
     pointerY: Float,
     viewportHeight: Float,
     policy: NativeDragPolicy,
-): Float = when {
-    viewportHeight <= 0f || policy.autoScrollEdgePx <= 0f -> 0f
-    pointerY < policy.autoScrollEdgePx ->
-        -policy.maxAutoScrollPxPerFrame *
-            ((policy.autoScrollEdgePx - pointerY) / policy.autoScrollEdgePx).coerceIn(0f, 1f)
-    pointerY > viewportHeight - policy.autoScrollEdgePx ->
-        policy.maxAutoScrollPxPerFrame *
-            ((pointerY - (viewportHeight - policy.autoScrollEdgePx)) /
-                policy.autoScrollEdgePx).coerceIn(0f, 1f)
-    else -> 0f
+): Float {
+    if (viewportHeight <= 0f || policy.autoScrollEdgePx <= 0f) return 0f
+    // The raw 84/96dp bands were sized for a phone. On a watch viewport
+    // (454px at density 2, or worse on 320px hardware) they covered most or
+    // all of the screen — on the smallest watches the two bands overlapped and
+    // the top branch won everywhere, so *any* drag position auto-scrolled and
+    // the reorder loop ran at frame rate. Clamping keeps a neutral middle of
+    // at least ~68% of the viewport on every device.
+    val edge = policy.autoScrollEdgePx.coerceAtMost(viewportHeight * 0.16f)
+    // Decide by proximity first so a (theoretical) overlap can never let the
+    // top branch swallow the bottom half of the screen.
+    val nearTop = pointerY < viewportHeight - pointerY
+    return when {
+        nearTop && pointerY < edge ->
+            -policy.maxAutoScrollPxPerFrame *
+                ((edge - pointerY) / edge).coerceIn(0f, 1f)
+        !nearTop && pointerY > viewportHeight - edge ->
+            policy.maxAutoScrollPxPerFrame *
+                ((pointerY - (viewportHeight - edge)) / edge).coerceIn(0f, 1f)
+        else -> 0f
+    }
 }
 
 internal class NativeFolderHoverGate(

@@ -417,6 +417,13 @@ internal fun nativeInteractionScale(
     else -> 1f
 }
 
+// The unbounded fallback radius is deliberate for the non-honeycomb layouts:
+// nearest-neighbour distances are measured against translation-inclusive child
+// centres, so after a preview move the latched target sits directly under the
+// pointer and the machine's de-dupe keeps it quiet — a parked pointer is
+// stable. Bounding the radius instead regressed legitimate drops whose pointer
+// sat between cells (or whose layout shifted mid-gesture) by making
+// reorderKeyAt return null on release.
 internal fun nativeSpatialReorderRadiusPx(config: NativeAppListConfig): Float =
     if (config.presentation == NativeAppListPresentation.HONEYCOMB) {
         config.honeycombCellSizePx.takeIf { it.isFinite() && it > 0f }

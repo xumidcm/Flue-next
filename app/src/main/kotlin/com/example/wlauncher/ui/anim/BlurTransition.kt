@@ -19,14 +19,32 @@ data class LayerAnimValues(
 )
 
 /**
- * 表盘层状态映射。
+ * 去掉缩放与位移行程，只保留 alpha / blur 过渡。
  */
-fun faceLayerValues(state: ScreenState, uiStyle: UiStyle): LayerAnimValues =
+private fun LayerAnimValues.withoutShrink(): LayerAnimValues =
+    copy(scale = 1f, translationX = 0f, translationY = 0f)
+
+private fun LayerAnimValues.shrinkGated(enabled: Boolean): LayerAnimValues =
+    if (enabled) this else withoutShrink()
+
+/**
+ * 表盘层状态映射。
+ *
+ * [shrinkOnFaceReturn] 关闭后，表盘层在打开应用列表 / 应用时不再放大位移，
+ * 只做淡入淡出与模糊，避免收缩动画被抽帧后直接闪现归位。
+ */
+fun faceLayerValues(
+    state: ScreenState,
+    uiStyle: UiStyle,
+    shrinkOnFaceReturn: Boolean = true,
+): LayerAnimValues =
     if (uiStyle.isMaterial) {
         when (state) {
             ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
-            ScreenState.Apps, ScreenState.Settings -> LayerAnimValues(scale = 1.22f, blur = 7f, alpha = 0.22f)
-            ScreenState.App -> LayerAnimValues(scale = 1.28f, blur = 9f, alpha = 0.14f)
+            ScreenState.Apps, ScreenState.Settings ->
+                LayerAnimValues(scale = 1.22f, blur = 7f, alpha = 0.22f).shrinkGated(shrinkOnFaceReturn)
+            ScreenState.App ->
+                LayerAnimValues(scale = 1.28f, blur = 9f, alpha = 0.14f).shrinkGated(shrinkOnFaceReturn)
             ScreenState.Stack -> LayerAnimValues(scale = 0.93f, blur = 3f, alpha = 0.58f)
             ScreenState.Notifications -> LayerAnimValues(scale = 0.92f, blur = 4f, alpha = 0.52f)
             ScreenState.Widgets -> LayerAnimValues(scale = 0.93f, blur = 3f, alpha = 0.58f)
@@ -35,8 +53,10 @@ fun faceLayerValues(state: ScreenState, uiStyle: UiStyle): LayerAnimValues =
     } else {
         when (state) {
             ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
-            ScreenState.Apps, ScreenState.Settings -> LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f)
-            ScreenState.App -> LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f)
+            ScreenState.Apps, ScreenState.Settings ->
+                LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
+            ScreenState.App ->
+                LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
             ScreenState.Stack -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
             ScreenState.Notifications -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
             ScreenState.Widgets -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
@@ -46,23 +66,39 @@ fun faceLayerValues(state: ScreenState, uiStyle: UiStyle): LayerAnimValues =
 
 /**
  * 应用列表层状态映射。
+ *
+ * [shrinkOnAppReturn] 控制「从应用返回应用列表」这一档的整体缩放，
+ * [shrinkOnFaceReturn] 控制「返回表盘」这一档（含兜底档）的整体收缩。
+ * 关闭后只保留 alpha / blur 过渡。
  */
-fun appListLayerValues(state: ScreenState, uiStyle: UiStyle): LayerAnimValues =
+fun appListLayerValues(
+    state: ScreenState,
+    uiStyle: UiStyle,
+    shrinkOnAppReturn: Boolean = true,
+    shrinkOnFaceReturn: Boolean = true,
+): LayerAnimValues =
     if (uiStyle.isMaterial) {
         when (state) {
-            ScreenState.Face -> LayerAnimValues(scale = 0.88f, blur = 8f, alpha = 0f)
+            ScreenState.Face ->
+                LayerAnimValues(scale = 0.88f, blur = 8f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
             ScreenState.Apps -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
             ScreenState.Settings -> LayerAnimValues(scale = 0.96f, blur = 4f, alpha = 0.42f)
-            ScreenState.App -> LayerAnimValues(scale = 1f, blur = 4f, alpha = 0f, translationX = -1f)
-            else -> LayerAnimValues(scale = 0.88f, blur = 8f, alpha = 0f)
+            ScreenState.App ->
+                LayerAnimValues(scale = 1f, blur = 4f, alpha = 0f, translationX = -1f)
+                    .shrinkGated(shrinkOnAppReturn)
+            else ->
+                LayerAnimValues(scale = 0.88f, blur = 8f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
         }
     } else {
         when (state) {
-            ScreenState.Face -> LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f)
+            ScreenState.Face ->
+                LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
             ScreenState.Apps -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
             ScreenState.Settings -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.3f)
-            ScreenState.App -> LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f)
-            else -> LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f)
+            ScreenState.App ->
+                LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f).shrinkGated(shrinkOnAppReturn)
+            else ->
+                LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
         }
     }
 

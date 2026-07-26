@@ -244,7 +244,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appListFoldersEnabled by vm.appListFoldersEnabled.collectAsStateWithLifecycle()
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
-    val classicReturnAnimationEnabled by vm.classicReturnAnimationEnabled.collectAsStateWithLifecycle()
+    val appListReturnShrinkEnabled by vm.appListReturnShrinkEnabled.collectAsStateWithLifecycle()
+    val faceReturnShrinkEnabled by vm.faceReturnShrinkEnabled.collectAsStateWithLifecycle()
     val activeMotionProfile by vm.activeMotionProfile.collectAsStateWithLifecycle()
     val showStepCount by vm.showStepCount.collectAsStateWithLifecycle()
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
@@ -658,7 +659,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         launchSourceState != ScreenState.Apps -> LayerPivot.Center
         screenState == ScreenState.App && activeLaunchUsesOrigin ->
             LayerPivot.LaunchIcon(effectiveLaunchOrigin)
-        targetReturn && appListReturnOriginActive && !classicReturnAnimationEnabled ->
+        targetReturn && appListReturnOriginActive ->
             LayerPivot.LaunchIcon(effectiveLaunchOrigin)
         else -> LayerPivot.Center
     }
@@ -666,7 +667,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
         targetReturn &&
         launchSourceState == ScreenState.Apps &&
             screenState == ScreenState.Apps &&
-            !classicReturnAnimationEnabled &&
             (isReturningFromApp || appListReturnOriginActive)
     val appListLayerOrigin = if (isOpeningAppList || isClosingAppListToFace) {
         LayerPivot.Center
@@ -935,7 +935,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         clip = true
                     }
                     .scaleBlurAlpha(
-                        targetValues = faceLayerValues(faceAnimState, uiStyle),
+                        targetValues = faceLayerValues(
+                            faceAnimState,
+                            uiStyle,
+                            shrinkOnFaceReturn = faceReturnShrinkEnabled,
+                        ),
                         screenHeight = screenHeightPx,
                         blurEnabled = faceLayerBlurEnabled,
                         origin = LayerPivot.Center
@@ -1141,8 +1145,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .fillMaxSize()
                     .zIndex(if (appListLayerRaised) 2.9f else -0.1f)
                     .scaleBlurAlpha(
-                        targetValues = appListLayerValues(screenState, uiStyle)
-                            .copy(scale = 1f, blur = 0f, translationX = 0f, translationY = 0f),
+                        targetValues = appListLayerValues(
+                            screenState,
+                            uiStyle,
+                            shrinkOnAppReturn = appListReturnShrinkEnabled,
+                            shrinkOnFaceReturn = faceReturnShrinkEnabled,
+                        ).copy(scale = 1f, blur = 0f, translationX = 0f, translationY = 0f),
                         blurEnabled = false,
                         origin = LayerPivot.Center,
                         scaleSpec = appListMotionSpec,
@@ -1158,7 +1166,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .fillMaxSize()
                     .zIndex(if (appListLayerRaised) 3f else 0f)
                     .scaleBlurAlpha(
-                        targetValues = appListLayerValues(screenState, uiStyle),
+                        targetValues = appListLayerValues(
+                            screenState,
+                            uiStyle,
+                            shrinkOnAppReturn = appListReturnShrinkEnabled,
+                            shrinkOnFaceReturn = faceReturnShrinkEnabled,
+                        ),
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = appListLayerBlurEnabled,
@@ -1243,7 +1256,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .fillMaxSize()
                     .zIndex(3.1f)
                     .scaleBlurAlpha(
-                        targetValues = appListLayerValues(screenState, uiStyle),
+                        targetValues = appListLayerValues(
+                            screenState,
+                            uiStyle,
+                            shrinkOnAppReturn = appListReturnShrinkEnabled,
+                            shrinkOnFaceReturn = faceReturnShrinkEnabled,
+                        ),
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
                         blurEnabled = false,

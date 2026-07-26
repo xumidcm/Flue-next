@@ -92,7 +92,7 @@ class NativeAppListView @JvmOverloads constructor(
             if (newState == SCROLL_STATE_IDLE) {
                 // Avoid reattaching multiple RenderEffects on the exact frame
                 // a fling settles; let the final composite frame land first.
-                postDelayed(restoreMotionBlur, 72L)
+                postDelayed(restoreMotionBlur, MOTION_BLUR_RESTORE_DELAY_MS)
             } else {
                 setMotionBlurSuppressed(true)
             }
@@ -109,7 +109,14 @@ class NativeAppListView @JvmOverloads constructor(
             (view as? NativeAppListRowView)?.setGlidePressedState(key == glidePressedKey)
             if (key == draggedSourceKey) view.alpha = 0f
             if (dragPreviewOrder.isNotEmpty()) {
-                postOnAnimation { applyDragPreviewTargets(animate = false) }
+                // Only place the row that just attached. Re-running the full
+                // applyDragPreviewTargets(animate = false) here bumped the
+                // animation generation and cancelled the in-flight 150ms
+                // settle for every visible row — during auto-scroll children
+                // attach every couple of frames, so all the reorder motion
+                // degraded into 60Hz hard snaps. That was the main visible
+                // "whole list convulses" driver.
+                postOnAnimation { applyDragPreviewTargetForChild(view) }
             }
         }
 
@@ -858,7 +865,7 @@ class NativeAppListView @JvmOverloads constructor(
         clearGesturePointer()
         resetLegacyEdgeGesture()
         removeCallbacks(restoreMotionBlur)
-        if (scheduleMotionBlurRestore) postDelayed(restoreMotionBlur, 72L)
+        if (scheduleMotionBlurRestore) postDelayed(restoreMotionBlur, MOTION_BLUR_RESTORE_DELAY_MS)
         parent?.requestDisallowInterceptTouchEvent(false)
     }
 
@@ -977,6 +984,56 @@ class NativeAppListView @JvmOverloads constructor(
             )
         }
         runDragPreviewAnimation(moves, animate)
+    }
+
+    /**
+     * Snap-places one newly attached row into its preview slot without
+     * touching the shared animator or its generation counter, so the settle
+     * animation of every other row keeps running.
+     */
+    private fun applyDragPreviewTargetForChild(view: View) {
+        if (released) return
+        val original = dragPreviewOriginalOrder
+        val preview = dragPreviewOrder
+        if (original.isEmpty() || preview.size != original.size) return
+        val row = view as? NativeAppListRowView ?: return
+        if (row.parent !== this) return
+        val holder = getChildViewHolder(row) as?
+            NativeAppListAdapter.AppItemViewHolder ?: return
+        val key = holder.boundKeyOrNull() ?: return
+        val originalPosition = original.indexOf(key)
+        val previewPosition = preview.indexOf(key)
+        if (originalPosition < 0 || previewPosition < 0) return
+        if (originalPosition == previewPosition) {
+            row.setPreviewTranslation(0f, 0f)
+            return
+        }
+        val origin = NativeDragPreviewSlot(
+            row.iconCenterXInParentWithoutPreviewOrFlow(),
+            row.iconCenterYInParentWithoutPreviewOrFlow(),
+        )
+        var destination: NativeDragPreviewSlot? = null
+        for (index in 0 until childCount) {
+            val other = getChildAt(index) as? NativeAppListRowView ?: continue
+            val otherHolder = getChildViewHolder(other) as?
+                NativeAppListAdapter.AppItemViewHolder ?: continue
+            if (otherHolder.bindingAdapterPosition == previewPosition) {
+                destination = NativeDragPreviewSlot(
+                    other.iconCenterXInParentWithoutPreviewOrFlow(),
+                    other.iconCenterYInParentWithoutPreviewOrFlow(),
+                )
+                break
+            }
+        }
+        val target = destination ?: fallbackDragPreviewSlot(
+            origin = origin,
+            positionDelta = previewPosition - originalPosition,
+        )
+        row.setPreviewTranslation(
+            target.centerX - origin.centerX,
+            target.centerY - origin.centerY,
+        )
+        applyChildVisual(row)
     }
 
     private fun fallbackDragPreviewSlot(
@@ -1480,12 +1537,30 @@ class NativeAppListView @JvmOverloads constructor(
         if (motionBlurSuppressed == suppressed) return
         motionBlurSuppressed = suppressed
         currentConfig.value.runtimeBlurSuppressed = suppressed
-        // The RecyclerView itself may carry the large content-overlay effect.
-        // Update it in the same state transition as the per-row effects so no
-        // blurred parent layer survives into a drag/fling frame.
-        applyContentOverlayBlur()
-        (layoutManager as? NativeSpatialAppListLayoutManager)?.reapplyChildVisuals()
-        applyAttachedChildVisuals()
+        if (suppressed) {
+            // Dropping the effects has to be immediate: a stale blurred parent
+            // layer surviving into a fling frame is the whole reason motion
+            // suppression exists.
+            applyContentOverlayBlur()
+            (layoutManager as? NativeSpatialAppListLayoutManager)?.reapplyChildVisuals()
+            applyAttachedChildVisuals()
+            return
+        }
+        // Restoring is not urgent, and doing all three in one frame rebuilt the
+        // full-screen offscreen layer *and* every per-row RenderEffect at once.
+        // On a watch that single frame ran long enough to swallow the next
+        // touch stream, which reads as "the edge icons only blur once I stop,
+        // and then it won't scroll". Spread the work over two frames and bail
+        // out if a new scroll re-suppressed it in the meantime.
+        postOnAnimation {
+            if (released || motionBlurSuppressed) return@postOnAnimation
+            applyContentOverlayBlur()
+            postOnAnimation {
+                if (released || motionBlurSuppressed) return@postOnAnimation
+                (layoutManager as? NativeSpatialAppListLayoutManager)?.reapplyChildVisuals()
+                applyAttachedChildVisuals()
+            }
+        }
     }
 
     private fun resetAttachedChildVisuals() {
@@ -1591,3 +1666,14 @@ private fun hasDifferentLayoutGeometry(
 
 private fun Int.withAlphaFraction(alpha: Float): Int =
     (this and 0x00ffffff) or ((alpha.coerceIn(0f, 1f) * 255f).roundToInt() shl 24)
+
+/**
+ * How long the list must stay idle before the motion blur comes back.
+ *
+ * 72ms was short enough that a sequence of short flicks toggled the whole
+ * blur pipeline on and off between them, which is what made the icons appear
+ * to flicker after scrolling. Restoration is purely cosmetic, so waiting a
+ * little longer costs nothing and keeps quick successive flicks on one
+ * uninterrupted unblurred pass.
+ */
+private const val MOTION_BLUR_RESTORE_DELAY_MS = 160L

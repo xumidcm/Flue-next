@@ -145,7 +145,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_MUSIC_TEXT_SWITCH_ANIMATION = stringPreferencesKey("music_text_switch_animation")
         val KEY_TWO_TONE_ICONS = booleanPreferencesKey("two_tone_icons_enabled")
         val KEY_ICON_SHADOW = booleanPreferencesKey("app_icon_shadow_enabled")
-        val KEY_CLASSIC_RETURN_ANIMATION = booleanPreferencesKey("classic_return_animation_enabled")
+        val KEY_APP_LIST_RETURN_SHRINK = booleanPreferencesKey("app_list_return_shrink_enabled")
+        val KEY_FACE_RETURN_SHRINK = booleanPreferencesKey("face_return_shrink_enabled")
         val KEY_MOTION_PROFILE_ID = stringPreferencesKey("motion_profile_id")
         val KEY_CUSTOM_MOTION_PROFILES = stringPreferencesKey("custom_motion_profiles")
         val KEY_SHOW_STEP_COUNT = booleanPreferencesKey("show_step_count")
@@ -416,8 +417,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val twoToneIconsEnabled: StateFlow<Boolean> = _twoToneIconsEnabled.asStateFlow()
     private val _iconShadowEnabled = MutableStateFlow(true)
     val iconShadowEnabled: StateFlow<Boolean> = _iconShadowEnabled.asStateFlow()
-    private val _classicReturnAnimationEnabled = MutableStateFlow(false)
-    val classicReturnAnimationEnabled: StateFlow<Boolean> = _classicReturnAnimationEnabled.asStateFlow()
+    private val _appListReturnShrinkEnabled = MutableStateFlow(true)
+    val appListReturnShrinkEnabled: StateFlow<Boolean> = _appListReturnShrinkEnabled.asStateFlow()
+    private val _faceReturnShrinkEnabled = MutableStateFlow(true)
+    val faceReturnShrinkEnabled: StateFlow<Boolean> = _faceReturnShrinkEnabled.asStateFlow()
     private val _motionProfiles = MutableStateFlow(FlueMotionProfiles.builtIns)
     val motionProfiles: StateFlow<List<FlueMotionProfile>> = _motionProfiles.asStateFlow()
     private val _activeMotionProfile = MutableStateFlow(FlueMotionProfiles.Gentle)
@@ -901,9 +904,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _iconShadowEnabled.value = loadedIconShadow
                 }
 
-                val loadedClassicReturnAnimation = prefs[KEY_CLASSIC_RETURN_ANIMATION] ?: false
-                if (_classicReturnAnimationEnabled.value != loadedClassicReturnAnimation) {
-                    _classicReturnAnimationEnabled.value = loadedClassicReturnAnimation
+                val loadedAppListReturnShrink = prefs[KEY_APP_LIST_RETURN_SHRINK] ?: true
+                if (_appListReturnShrinkEnabled.value != loadedAppListReturnShrink) {
+                    _appListReturnShrinkEnabled.value = loadedAppListReturnShrink
+                }
+
+                val loadedFaceReturnShrink = prefs[KEY_FACE_RETURN_SHRINK] ?: true
+                if (_faceReturnShrinkEnabled.value != loadedFaceReturnShrink) {
+                    _faceReturnShrinkEnabled.value = loadedFaceReturnShrink
                 }
 
                 val customMotionProfiles = prefs[KEY_CUSTOM_MOTION_PROFILES]
@@ -2014,9 +2022,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_ICON_SHADOW] = enabled } }
     }
 
-    fun setClassicReturnAnimationEnabled(enabled: Boolean) {
-        _classicReturnAnimationEnabled.value = enabled
-        persist { store.edit { it[KEY_CLASSIC_RETURN_ANIMATION] = enabled } }
+    fun setAppListReturnShrinkEnabled(enabled: Boolean) {
+        _appListReturnShrinkEnabled.value = enabled
+        persist { store.edit { it[KEY_APP_LIST_RETURN_SHRINK] = enabled } }
+    }
+
+    fun setFaceReturnShrinkEnabled(enabled: Boolean) {
+        _faceReturnShrinkEnabled.value = enabled
+        persist { store.edit { it[KEY_FACE_RETURN_SHRINK] = enabled } }
     }
 
     fun setActiveMotionProfile(id: String): Boolean {
@@ -3000,7 +3013,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _musicTextSwitchAnimation.value = MusicTextSwitchAnimations.DEFAULT_ID
         _twoToneIconsEnabled.value = false
         _iconShadowEnabled.value = true
-        _classicReturnAnimationEnabled.value = false
+        _appListReturnShrinkEnabled.value = true
+        _faceReturnShrinkEnabled.value = true
         _motionProfiles.value = FlueMotionProfiles.builtIns
         _activeMotionProfile.value = FlueMotionProfiles.Gentle
         _showStepCount.value = true
@@ -3104,7 +3118,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_MUSIC_TEXT_SWITCH_ANIMATION] = MusicTextSwitchAnimations.DEFAULT_ID
                 it[KEY_TWO_TONE_ICONS] = false
                 it[KEY_ICON_SHADOW] = true
-                it[KEY_CLASSIC_RETURN_ANIMATION] = false
+                it.remove(booleanPreferencesKey("classic_return_animation_enabled"))
+                it[KEY_APP_LIST_RETURN_SHRINK] = true
+                it[KEY_FACE_RETURN_SHRINK] = true
                 it[KEY_MOTION_PROFILE_ID] = FlueMotionProfiles.GENTLE_ID
                 it[KEY_CUSTOM_MOTION_PROFILES] = FlueMotionProfileJson.encodeLibrary(emptyList())
                 it[KEY_SHOW_STEP_COUNT] = true

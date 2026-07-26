@@ -68,6 +68,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -1134,7 +1136,16 @@ private fun WatchFaceDetailPage(
                 vertical = if (isScreenRound) 10.dp else 6.dp,
             ),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // Opaque background + explicit zIndex: the scroll column below carries
+        // flueElasticNestedScroll's graphicsLayer translation, and during the
+        // top overscroll bounce it was drawn straight over this header.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .zIndex(1f)
+                .background(WatchColors.Background),
+        ) {
             IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = WatchColors.OnBackground)
             }
@@ -1146,29 +1157,46 @@ private fun WatchFaceDetailPage(
             }
             error != null && installedRecord == null -> ErrorRow(message = error, onRetry = onRetryDetail)
             detail != null || installedRecord != null -> {
-                Column(
-                    Modifier
-                        .fillMaxSize()
-                        .flueElasticNestedScroll(detailScrollState)
-                        .verticalScroll(detailScrollState),
-                    verticalArrangement = Arrangement.spacedBy(9.dp),
-                ) {
+                // clipToBounds keeps the elastic-overscroll translation inside
+                // the scroll viewport instead of painting over the header row.
+                BoxWithConstraints(Modifier.fillMaxSize().clipToBounds()) {
+                    // The preview must be sized against the *viewport*, not the
+                    // width: width-derived heights (1:1 round, width/0.72
+                    // rectangular) always exceeded the visible height on a
+                    // watch, so the first screen of the page was nothing but
+                    // the preview image, with the name/description/download
+                    // button pushed below the fold and reading as "the image
+                    // covers the text".
+                    val previewMaxHeight = maxHeight * 0.62f
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .flueElasticNestedScroll(detailScrollState)
+                            .verticalScroll(detailScrollState),
+                        verticalArrangement = Arrangement.spacedBy(9.dp),
+                    ) {
                     if (detail != null) {
+                        val previewRatio = when (detail.screenType) {
+                            WatchStoreScreenType.RECTANGULAR -> 0.72f
+                            else -> 1f
+                        }
                         WatchPreview(
                             repository = repository,
                             id = detail.id,
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).aspectRatio(
-                                when (detail.screenType) {
-                                    WatchStoreScreenType.RECTANGULAR -> 0.72f
-                                    else -> 1f
-                                },
-                            ).clip(if (detail.screenType == WatchStoreScreenType.ROUND) CircleShape else RoundedCornerShape(18.dp)),
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .height(previewMaxHeight)
+                                .aspectRatio(previewRatio, matchHeightConstraintsFirst = true)
+                                .clip(if (detail.screenType == WatchStoreScreenType.ROUND) CircleShape else RoundedCornerShape(18.dp)),
                             targetSize = 512,
                         )
                     } else {
                         LocalInstalledWatchPreview(
                             descriptor = localDescriptor,
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 140.dp, max = 260.dp).aspectRatio(1f),
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .height(previewMaxHeight.coerceIn(140.dp, 260.dp))
+                                .aspectRatio(1f, matchHeightConstraintsFirst = true),
                         )
                     }
                     Text(displayName, color = WatchColors.OnBackground, fontSize = 19.sp, fontWeight = FontWeight.Bold)
@@ -1273,6 +1301,7 @@ private fun WatchFaceDetailPage(
                             Spacer(Modifier.width(7.dp))
                             Text("下载并安装")
                         }
+                    }
                     }
                 }
             }

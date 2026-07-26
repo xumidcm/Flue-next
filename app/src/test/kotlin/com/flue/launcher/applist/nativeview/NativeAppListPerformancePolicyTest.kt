@@ -227,6 +227,9 @@ class NativeAppListPerformancePolicyTest {
         )
 
         assertEquals(68.4f, nativeSpatialReorderRadiusPx(honeycomb), 0.001f)
+        // Unbounded on purpose: distances are translation-inclusive, so the
+        // latched target follows the pointer and stays de-duped. A bounded
+        // radius regressed drops whose pointer sat between cells.
         assertEquals(Float.MAX_VALUE, nativeSpatialReorderRadiusPx(dense), 0f)
     }
 
