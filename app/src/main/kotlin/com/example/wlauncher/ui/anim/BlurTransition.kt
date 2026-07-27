@@ -32,13 +32,28 @@ private fun LayerAnimValues.shrinkGated(enabled: Boolean): LayerAnimValues =
  *
  * [shrinkOnFaceReturn] 关闭后，表盘层在打开应用列表 / 应用时不再放大位移，
  * 只做淡入淡出与模糊，避免收缩动画被抽帧后直接闪现归位。
+ * [legacyTransition] 开启时（仅非 Material 风格）还原 watchOS 三段式之前的
+ * 老动画：表盘 2.5 倍放大冲脸，而不是压暗下沉让位。
  */
 fun faceLayerValues(
     state: ScreenState,
     uiStyle: UiStyle,
     shrinkOnFaceReturn: Boolean = true,
+    legacyTransition: Boolean = false,
 ): LayerAnimValues =
-    if (uiStyle.isMaterial) {
+    if (!uiStyle.isMaterial && legacyTransition) {
+        when (state) {
+            ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
+            ScreenState.Apps, ScreenState.Settings ->
+                LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
+            ScreenState.App ->
+                LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
+            ScreenState.Stack -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
+            ScreenState.Notifications -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
+            ScreenState.Widgets -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
+            ScreenState.ControlCenter -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.5f)
+        }
+    } else if (uiStyle.isMaterial) {
         when (state) {
             ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
             ScreenState.Apps, ScreenState.Settings ->
@@ -81,8 +96,21 @@ fun appListLayerValues(
     uiStyle: UiStyle,
     shrinkOnAppReturn: Boolean = true,
     shrinkOnFaceReturn: Boolean = true,
+    legacyTransition: Boolean = false,
 ): LayerAnimValues =
-    if (uiStyle.isMaterial) {
+    if (!uiStyle.isMaterial && legacyTransition) {
+        when (state) {
+            // 老动画：列表退回表盘时缩成一个点（0.2），配合表盘 2.5 倍冲脸。
+            ScreenState.Face ->
+                LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
+            ScreenState.Apps -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
+            ScreenState.Settings -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.3f)
+            ScreenState.App ->
+                LayerAnimValues(scale = 4f, blur = 10f, alpha = 0f).shrinkGated(shrinkOnAppReturn)
+            else ->
+                LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
+        }
+    } else if (uiStyle.isMaterial) {
         when (state) {
             ScreenState.Face ->
                 LayerAnimValues(scale = 0.88f, blur = 8f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
@@ -109,6 +137,47 @@ fun appListLayerValues(
                 LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
         }
     }
+
+/**
+ * 应用启动/返回转场中应用列表层的逐帧值：由 launchMotionProgress 单一进度
+ * 驱动（p=0 完全等于 Apps 静止态，p=1 等于 App 态终点）。
+ *
+ * 不变量：p=0 必须精确回到静止态（scale 1 / blur 0 / alpha 1 / 位移 0），
+ * 外部时钟撤走时 ScaleBlurModifier 直接以此为种子接管，端点零跳变。
+ *
+ * alpha 用 1.8 倍斜率提前淡完：p≈0.55 之后列表已不可见，启动遮罩的
+ * 渐显（1.6 倍斜率）在它上面接管画面——两条曲线同源，返回方向反演时
+ * 不再出现「遮罩半透明时露出 4 倍巨图标然后闪现归位」。
+ */
+fun appListLaunchValues(
+    progress: Float,
+    uiStyle: UiStyle,
+    shrinkOnAppReturn: Boolean = true,
+): LayerAnimValues {
+    val p = progress.coerceIn(0f, 1f)
+    val end = appListLayerValues(
+        state = ScreenState.App,
+        uiStyle = uiStyle,
+        shrinkOnAppReturn = shrinkOnAppReturn,
+    )
+    return LayerAnimValues(
+        scale = 1f + (end.scale - 1f) * p,
+        // 模糊 2.2 倍斜率抢跑：图标还看得见的前半程（p<0.45）就已接近
+        // 满模糊——「打开应用时背景图标要有模糊」（Compose 版行为）。
+        blur = end.blur * (p * 2.2f).coerceAtMost(1f),
+        alpha = (1f - 1.8f * p).coerceIn(0f, 1f),
+        translationX = end.translationX * p,
+        translationY = end.translationY * p,
+    )
+}
+
+/** [appListLaunchValues] 的底色板变体：只跟 alpha，不缩放不位移。 */
+fun appListLaunchPlateValues(progress: Float): LayerAnimValues =
+    LayerAnimValues(
+        scale = 1f,
+        blur = 0f,
+        alpha = (1f - 1.8f * progress.coerceIn(0f, 1f)).coerceIn(0f, 1f),
+    )
 
 /**
  * 应用视图层状态映射。

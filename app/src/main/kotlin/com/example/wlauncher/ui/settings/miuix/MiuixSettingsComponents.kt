@@ -56,6 +56,28 @@ import com.flue.launcher.ui.theme.UiStyle
 private fun <T> miuixSpring() = spring<T>(dampingRatio = 0.9f, stiffness = 600f)
 
 /**
+ * 风格分发图标：MIUIX 风格用 HyperOS 线性图标（MiuixIcons），其余风格用
+ * 调用方给的 Material 图标。tint 默认 accent（MIUIX 下即 #3482FF），不再
+ * 让每个 ActionCard 各自硬编码 Material 实心图标 + 青色。
+ */
+@Composable
+fun SettingsIcon(
+    material: androidx.compose.ui.graphics.vector.ImageVector,
+    miuix: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    contentDescription: String? = null,
+    tint: Color = LauncherTheme.style.accentColor,
+    modifier: Modifier = Modifier,
+) {
+    val style = LauncherTheme.style
+    androidx.compose.material3.Icon(
+        imageVector = if (style.uiStyle == UiStyle.MIUIX && miuix != null) miuix else material,
+        contentDescription = contentDescription,
+        tint = tint,
+        modifier = modifier,
+    )
+}
+
+/**
  * 组容器：大圆角卡片，可选组标题（左对齐加粗小号灰字）。
  * 组内行之间用 [MiuixCardDivider] 画细分隔线；组与组之间留 12dp 空隙
  * （由调用方通过 `Arrangement.spacedBy(12.dp)` 或 [MiuixGroupSpacing] 控制）。
@@ -173,8 +195,9 @@ fun MiuixSettingsRow(
 }
 
 /**
- * 胶囊开关：26x15dp 视觉，拖影动画 spring(0.9, 600)。
- * 按压时滑块横向拉伸，模拟 HyperOS 的「拖影」质感。
+ * 胶囊开关：44x26dp 视觉（HyperOS 实机尺寸；旧 26x15 在手表上小到难点），
+ * 拖影动画 spring(0.9, 600)，按压时滑块横向拉伸模拟 HyperOS 的「拖影」。
+ * 点按经系统触觉 ToggleOn/ToggleOff 给确认震动。
  */
 @Composable
 fun MiuixSwitch(
@@ -182,14 +205,15 @@ fun MiuixSwitch(
     onCheckedChange: ((Boolean) -> Unit)?,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    trackWidth: Dp = 26.dp,
-    trackHeight: Dp = 15.dp
+    trackWidth: Dp = 44.dp,
+    trackHeight: Dp = 26.dp
 ) {
     val style = LauncherTheme.style
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
 
-    val thumbPadding = 2.dp
+    val thumbPadding = 2.5.dp
     val thumbSize = trackHeight - thumbPadding * 2
     // 拖影：按压时滑块拉长
     val thumbWidth by animateDpAsState(
@@ -227,7 +251,16 @@ fun MiuixSwitch(
                         interactionSource = interactionSource,
                         indication = null,
                         enabled = enabled,
-                        onClick = { onCheckedChange(!checked) }
+                        onClick = {
+                            haptics.performHapticFeedback(
+                                if (checked) {
+                                    androidx.compose.ui.hapticfeedback.HapticFeedbackType.ToggleOff
+                                } else {
+                                    androidx.compose.ui.hapticfeedback.HapticFeedbackType.ToggleOn
+                                },
+                            )
+                            onCheckedChange(!checked)
+                        }
                     )
                 } else {
                     Modifier
@@ -248,8 +281,12 @@ fun MiuixSwitch(
 
 /**
  * HyperOS 风格滑块：24dp 高的粗胶囊轨道、无 thumb，填充即值。
- * 支持点按和拖动改值。
+ *
+ * 骨架用官方 M3 [androidx.compose.material3.Slider]（track/thumb slot 换皮）
+ * 而不是手搓 pointerInput：steps 吸附、无障碍语义、RTL、键盘/表冠支持
+ * 全部白拿——「不要自己搓、用预设」。
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun MiuixSlider(
     value: Float,
@@ -258,73 +295,55 @@ fun MiuixSlider(
     valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
     enabled: Boolean = true,
     onValueChangeFinished: (() -> Unit)? = null,
-    trackHeight: Dp = 24.dp
+    trackHeight: Dp = 24.dp,
+    steps: Int = 0
 ) {
     val style = LauncherTheme.style
-    var dragging by remember { mutableStateOf(false) }
-    val span = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
-    val fraction = ((value - valueRange.start) / span).coerceIn(0f, 1f)
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
     val fillColor by animateColorAsState(
         when {
             !enabled -> style.secondaryTextColor.copy(alpha = 0.30f)
-            dragging -> style.accentColor
+            pressed -> style.accentColor
             else -> style.accentColor.copy(alpha = 0.92f)
         },
         label = "miuix_slider_fill"
     )
+    val span = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
 
-    Box(
+    androidx.compose.material3.Slider(
+        value = value,
+        onValueChange = onValueChange,
         modifier = modifier
             .fillMaxWidth()
-            .height(trackHeight)
-            .clip(RoundedCornerShape(999.dp))
-            .background(style.pressedCardColor)
-            .then(
-                if (enabled) {
-                    Modifier.pointerInputSlider(
-                        valueRange = valueRange,
-                        onValueChange = onValueChange,
-                        onDragStateChange = { dragging = it },
-                        onValueChangeFinished = onValueChangeFinished
-                    )
-                } else {
-                    Modifier
-                }
-            ),
-        contentAlignment = Alignment.CenterStart
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(fraction)
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(999.dp))
-                .background(fillColor)
-        )
-    }
-}
-
-private fun Modifier.pointerInputSlider(
-    valueRange: ClosedFloatingPointRange<Float>,
-    onValueChange: (Float) -> Unit,
-    onDragStateChange: (Boolean) -> Unit,
-    onValueChangeFinished: (() -> Unit)?
-): Modifier = pointerInput(valueRange) {
-    fun positionToValue(x: Float): Float {
-        val f = (x / size.width.toFloat()).coerceIn(0f, 1f)
-        return valueRange.start + f * (valueRange.endInclusive - valueRange.start)
-    }
-    awaitEachGesture {
-        val down = awaitFirstDown()
-        down.consume()
-        onDragStateChange(true)
-        onValueChange(positionToValue(down.position.x))
-        drag(down.id) { change ->
-            change.consume()
-            onValueChange(positionToValue(change.position.x))
+            .height(trackHeight),
+        enabled = enabled,
+        valueRange = valueRange,
+        steps = steps,
+        onValueChangeFinished = onValueChangeFinished,
+        interactionSource = interactionSource,
+        // HyperOS 没有可见 thumb：填充即值。
+        thumb = {},
+        track = { sliderState ->
+            val fraction = ((sliderState.value - valueRange.start) / span).coerceIn(0f, 1f)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(trackHeight)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(style.pressedCardColor),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(fraction)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(fillColor)
+                )
+            }
         }
-        onDragStateChange(false)
-        onValueChangeFinished?.invoke()
-    }
+    )
 }
 
 // ------------------------------------------------------------------ Preview

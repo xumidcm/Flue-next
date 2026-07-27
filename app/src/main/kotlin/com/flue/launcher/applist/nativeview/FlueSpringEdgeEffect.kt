@@ -332,7 +332,36 @@ internal class FlueSpringEdgeEffectFactory(
     private var lastFrameTimeMs = 0L
     private var released = false
     private var topReleaseCandidate = false
-    private var gestureActive = false
+    private var lastDiagnosticState = ""
+
+    /**
+     * 状态跳变诊断（logcat 过滤 `FlueEdge`）。offset 按 8px 桶量化，
+     * 一次手势只落几行；用于定位「偶发滑不动」时状态机停在哪个格子。
+     */
+    private fun logDiagnostic(reason: String) {
+        val state = "owns=$pointerOwnsGesture phase=${physics.currentPhase} " +
+            "offBucket=${(physics.offset / 8f).toInt()} anim=${physics.isAnimating} " +
+            "cand=$topReleaseCandidate"
+        if (state != lastDiagnosticState) {
+            lastDiagnosticState = state
+            android.util.Log.d("FlueEdge", "$reason -> $state")
+        }
+    }
+
+    /**
+     * True strictly between the real ACTION_DOWN and its ACTION_UP/CANCEL as
+     * seen by [NativeAppListView.dispatchTouchEvent] — the only funnel that is
+     * guaranteed to observe every sample of every stream. The old flag was
+     * opened/closed from onInterceptTouchEvent/onTouchEvent, both of which
+     * have blind windows (`!active` early-return, child-owned streams), so a
+     * missed terminal sample left it latched forever and every later
+     * `release()` was rejected: the classic "list refuses to scroll until I
+     * rub it a few times" lock-up.
+     */
+    private var pointerOwnsGesture = false
+
+    internal val ownsPointerGesture: Boolean
+        get() = pointerOwnsGesture
 
     val offsetPx: Float
         get() = physics.offset
@@ -355,13 +384,6 @@ internal class FlueSpringEdgeEffectFactory(
         publish()
     }
 
-    fun cancelWithoutSnap() {
-        animator?.cancel()
-        animator = null
-        physics.takeOver()
-        topReleaseCandidate = false
-    }
-
     /**
      * Starts a new touch gesture.
      *
@@ -369,17 +391,37 @@ internal class FlueSpringEdgeEffectFactory(
      * `absorb()` already call `physics.takeOver()` themselves at the moment the
      * pointer really engages the edge, so freezing the offset here only created
      * dead travel: a touch landing during a 350ms rebound used to pin the offset
-     * at up to `maxOffsetPx` (≈64–90px on a 454px viewport), and because
-     * `release()` refuses to run while `gestureActive`, that offset could only
+     * at up to `maxOffsetPx` (≈64–90px on a 454px viewport) that could only
      * unwind through `pull()`'s inward-consumption path — the finger had to
      * travel the whole stretch plus touch slop before the list scrolled at all.
      * That is the "have to wait a moment before it scrolls again" symptom.
      */
     fun beginGesture() {
-        gestureActive = true
+        pointerOwnsGesture = true
         // A stale candidate from the previous gesture must not leak forward,
         // but the rebound animation itself keeps its own clock.
         topReleaseCandidate = false
+        logDiagnostic("beginGesture")
+    }
+
+    /**
+     * Closes the pointer window at the real terminal sample (or a forced one,
+     * e.g. the scene turning inactive mid-stream) and reports whether the
+     * latched pull-to-face intent should fire.
+     *
+     * The intent is *latched*: once the finger crosses the trigger it stays
+     * armed even if an unconditional [release] rebound decays the offset below
+     * the trigger before the UP arrives ("上滑回表盘时灵时不灵"). It is only
+     * disarmed by the finger itself pulling back inward — [pull] re-evaluates
+     * the candidate on every owned sample.
+     */
+    fun endGesture(terminalUp: Boolean): Boolean {
+        val shouldTrigger = terminalUp && topReleaseCandidate && !released
+        topReleaseCandidate = false
+        pointerOwnsGesture = false
+        settleOwnerlessEdge()
+        logDiagnostic("endGesture(up=$terminalUp)")
+        return shouldTrigger
     }
 
     fun finish() {
@@ -388,7 +430,10 @@ internal class FlueSpringEdgeEffectFactory(
         physics.finish(FlueEdgePhysics.Edge.TOP)
         physics.finish(FlueEdgePhysics.Edge.BOTTOM)
         topReleaseCandidate = false
-        gestureActive = false
+        // The pointer window is owned exclusively by the dispatch funnel.
+        // beginDrag() calls finish() mid-gesture; clearing the window here made
+        // the following terminal sample a no-op and leaked the old window into
+        // the next gesture.
         publish()
     }
 
@@ -409,8 +454,16 @@ internal class FlueSpringEdgeEffectFactory(
         if (released) return 0f
         stopAnimatorForInput()
         val consumed = physics.pull(edge, distance * owner.height.coerceAtLeast(1))
-        topReleaseCandidate = edge == FlueEdgePhysics.Edge.TOP &&
+        topReleaseCandidate = pointerOwnsGesture &&
+            edge == FlueEdgePhysics.Edge.TOP &&
             physics.isBeyondTrigger(FlueEdgePhysics.Edge.TOP)
+        // RecyclerView probes glows with zero-delta pulls (stopGlowAnimations)
+        // even outside any finger window; `physics.pull` parks the phase at
+        // PULL in that case. An ownerless PULL with a non-zero offset would be
+        // invisible to RecyclerView (`distance()` reports 0) yet keep child
+        // rows translated forever — settle it into a rebound immediately.
+        if (!pointerOwnsGesture) settleOwnerlessEdge()
+        logDiagnostic("pull")
         publish()
         return consumed / owner.height.coerceAtLeast(1)
     }
@@ -419,21 +472,31 @@ internal class FlueSpringEdgeEffectFactory(
         if (released) return
         physics.absorb(edge, velocity.toFloat())
         topReleaseCandidate = false
+        logDiagnostic("absorb")
         publish()
         startAnimator()
     }
 
     internal fun release(edge: FlueEdgePhysics.Edge) {
         if (released) return
-        // RecyclerView may release an edge while the same MOVE stream is still
-        // active. Starting the rebound here snaps content under a held finger;
-        // only the real terminal sample may consume the top-release candidate.
-        if (gestureActive) {
+        // Unconditional: RecyclerView's onRelease call sites are all legitimate
+        // (terminal samples, and considerReleasingGlowsOnScroll once the list
+        // really scrolls away from the edge). The old finger guard rejected
+        // those requests, so the offset stayed locked for the whole gesture,
+        // `distance()` stayed non-zero, and every fling in that window was
+        // silently absorbed by the stretch — the "pull too far at the top and
+        // the list dies" symptom. Snap-under-finger cannot happen: while the
+        // finger genuinely holds the stretch, RecyclerView unwinds through
+        // onPullDistance and only releases once the offset is already spent
+        // (physics.release ignores a zero-offset edge).
+        if (physics.isAnimating) {
+            ensureAnimatorMatchesPhase()
             return
         }
-        if (physics.isAnimating) return
         physics.release(edge)
-        if (edge == FlueEdgePhysics.Edge.TOP) topReleaseCandidate = false
+        // The latched pull-to-face candidate deliberately survives the rebound:
+        // intent was expressed at the finger's deepest point, not at UP time.
+        logDiagnostic("release")
         publish()
         if (physics.isAnimating) startAnimator()
     }
@@ -457,7 +520,9 @@ internal class FlueSpringEdgeEffectFactory(
             return 0f
         }
         stopAnimatorForInput()
-        topReleaseCandidate = physics.isBeyondTrigger(FlueEdgePhysics.Edge.TOP)
+        topReleaseCandidate = pointerOwnsGesture &&
+            physics.isBeyondTrigger(FlueEdgePhysics.Edge.TOP)
+        if (!pointerOwnsGesture) settleOwnerlessEdge()
         publish()
         return consumed
     }
@@ -465,20 +530,19 @@ internal class FlueSpringEdgeEffectFactory(
     internal val hasActiveEdge: Boolean
         get() = physics.hasActiveEdge
 
-    /** Returns true at most once, and only for a real ACTION_UP. */
-    internal fun confirmTopRelease(terminalUp: Boolean): Boolean {
-        val shouldTrigger = terminalUp &&
-            topReleaseCandidate &&
-            physics.isBeyondTrigger(FlueEdgePhysics.Edge.TOP)
-        topReleaseCandidate = false
-        gestureActive = false
-        val activeEdge = physics.activeEdgeOrNull
-        if (activeEdge != null && !physics.isAnimating) {
-            physics.release(activeEdge)
-            publish()
-            if (physics.isAnimating) startAnimator()
-        }
-        return shouldTrigger
+    /**
+     * Self-heal for the one forbidden state: `offset != 0` with no animation
+     * and no finger owning the stream. Nothing else would ever unwind it —
+     * `distance()` reports 0 for ownerless edges, so RecyclerView will not
+     * route inward deltas here either. Start the rebound ourselves.
+     */
+    private fun settleOwnerlessEdge() {
+        if (released || pointerOwnsGesture || physics.isAnimating) return
+        if (!physics.hasActiveEdge) return
+        physics.activeEdgeOrNull?.let(physics::release)
+        logDiagnostic("settleOwnerless")
+        publish()
+        if (physics.isAnimating) startAnimator()
     }
 
     internal fun isFinished(edge: FlueEdgePhysics.Edge): Boolean =
@@ -497,11 +561,14 @@ internal class FlueSpringEdgeEffectFactory(
      * Android 16 hardware.
      *
      * The distance only matters to RecyclerView while a finger actively owns
-     * the stretch. During the self-driven rebound the visual is ours alone, so
-     * report zero and let RecyclerView scroll/fling normally underneath it.
+     * the stretch. During the self-driven rebound — and in any ownerless state
+     * — the visual is ours alone, so report zero and let RecyclerView
+     * scroll/fling normally underneath it. `!pointerOwnsGesture → 0` is the
+     * invariant that makes a parked ownerless PULL harmless even if one ever
+     * slips past [settleOwnerlessEdge].
      */
     internal fun distance(edge: FlueEdgePhysics.Edge): Float =
-        if (physics.isAnimating) 0f else physics.distance(edge)
+        if (!pointerOwnsGesture || physics.isAnimating) 0f else physics.distance(edge)
 
     internal fun draw(
         @Suppress("UNUSED_PARAMETER") edge: FlueEdgePhysics.Edge,
@@ -515,7 +582,7 @@ internal class FlueSpringEdgeEffectFactory(
         }
         // Cancelling the animator while `phase` is still EXTENDING/REBOUND
         // leaves `physics.isAnimating == true` with nothing driving it. Both
-        // `release()` and `confirmTopRelease()` guard on `isAnimating`, so that
+        // `release()` and `endGesture()` guard on `isAnimating`, so that
         // state froze the edge offset permanently and every later MOVE was
         // swallowed unwinding it. Handing the offset back to PULL keeps the
         // visible transform but makes the state machine consistent again.
@@ -577,7 +644,7 @@ internal class FlueSpringEdgeEffectFactory(
         physics.finish(FlueEdgePhysics.Edge.TOP)
         physics.finish(FlueEdgePhysics.Edge.BOTTOM)
         topReleaseCandidate = false
-        gestureActive = false
+        pointerOwnsGesture = false
         onOffsetChanged(0f)
     }
 }

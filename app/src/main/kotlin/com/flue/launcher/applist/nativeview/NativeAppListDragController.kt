@@ -54,13 +54,19 @@ internal class NativeAppListDragController(
     private val scheduler: NativeDragScheduler,
     private val policyProvider: () -> NativeDragPolicy,
     private val allowFolderCreation: () -> Boolean = { true },
+    /**
+     * 起拖总闸。覆层（文件夹展开 / 长按菜单）在场时为 false：Compose 覆层
+     * 盖在上面，底下的 RecyclerView 仍然收得到长按并把图标拖走。
+     */
+    private val dragEnabled: () -> Boolean = { true },
 ) {
     constructor(
         host: NativeAppListDragHost,
         scheduler: NativeDragScheduler,
         policy: NativeDragPolicy,
         allowFolderCreation: () -> Boolean = { true },
-    ) : this(host, scheduler, { policy }, allowFolderCreation)
+        dragEnabled: () -> Boolean = { true },
+    ) : this(host, scheduler, { policy }, allowFolderCreation, dragEnabled)
 
     private val machine = NativeDragGestureMachine()
     private var activePolicy: NativeDragPolicy? = null
@@ -83,6 +89,8 @@ internal class NativeAppListDragController(
     fun onDown(x: Float, y: Float, eventTimeMillis: Long): Boolean {
         if (released) return false
         cancelCurrentGesture()
+        // 覆层在场：不登记手势、不排长按，列表这一层彻底不起拖。
+        if (!dragEnabled()) return false
         val source = host.keyAt(x, y) ?: return false
         val policy = policyProvider()
         activePolicy = policy
@@ -161,6 +169,20 @@ internal class NativeAppListDragController(
     }
 
     /**
+     * Cancels the gesture for a reason outside the pointer stream (geometry or
+     * presentation change, scene turning inactive). Unlike [onCancel] it keeps
+     * the source row's long-click suppressed: the finger may still be down and
+     * restoring long-click before the row's CheckForTap arms would let the
+     * row's own long-press fire at stale coordinates. The real terminal sample
+     * restores it through [finishAdditionalPointer] in the dispatch funnel.
+     */
+    fun invalidateForExternalChange() {
+        if (released || !machine.isTracking) return
+        process(machine.cancel())
+        cancelCallbacks()
+    }
+
+    /**
      * Cancels a gesture after a second pointer arrives, but keeps the source
      * row's long-click suppressed until the real terminal event. Otherwise
      * Android's child View can fire its own long-click a few hundred ms later.
@@ -198,6 +220,11 @@ internal class NativeAppListDragController(
                 is NativeDragEffect.ShowActions ->
                     {
                         host.performDragHaptic()
+                        // The result is deliberately ignored: a host that
+                        // suppresses the menu must not kill the gesture — the
+                        // long-press still owns it and a following move starts
+                        // a drag. The cross-gesture lock-up lived in the touch
+                        // funnel (terminal-latched dragTouchOwned), not here.
                         host.dispatch(AppListCommand.ShowActions(effect.key))
                     }
                 NativeDragEffect.DismissActions ->

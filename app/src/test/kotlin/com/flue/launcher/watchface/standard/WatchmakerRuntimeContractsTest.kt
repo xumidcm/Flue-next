@@ -8,6 +8,7 @@ import org.junit.Test
 import java.io.File
 import java.nio.file.Files
 import java.util.Calendar
+import java.util.Locale
 
 class WatchmakerRuntimeContractsTest {
     @Test
@@ -114,6 +115,64 @@ class WatchmakerRuntimeContractsTest {
     }
 
     @Test
+    fun heartRateTagsRenderZeroWithoutDataAndKeepExpressionsAlive() {
+        val calendar = Calendar.getInstance()
+        val empty = WatchDataSnapshot()
+
+        // Watchmaker/clox 惯例：心率无数据渲染 0，而不是 "--"。
+        assertEquals("0", WatchmakerTagResolver.resolve("shr", calendar, empty).renderedValue)
+        assertEquals("0", WatchmakerTagResolver.resolve("shrp", calendar, empty).renderedValue)
+        // {shr_1..9} 历史心率：Flue 不保存历史，固定渲染 0，且必须是已知标签。
+        assertEquals("0", WatchmakerTagResolver.resolve("shr_1", calendar, empty).renderedValue)
+        assertEquals("0", WatchmakerTagResolver.resolve("shr_9", calendar, empty).renderedValue)
+        assertTrue(WatchmakerTagResolver.isKnown("shr_5"))
+
+        // 表达式里 {shr} 是数值 0，不再被替换成 nil 把整个算式打哑。
+        assertEquals(
+            5f,
+            WatchmakerExpressionEvaluator.evaluateNumber("{shr} + 5", -1f) { tag ->
+                WatchmakerTagResolver.resolve(tag, calendar, empty)
+            },
+            0.001f,
+        )
+    }
+
+    @Test
+    fun outlineContractParsesModesAppliesDefaultsAndCapsSize() {
+        // outline 属性只认 "Outline"（硬描边）与 "Glow"（发光），大小写不敏感。
+        assertEquals(WatchOutlineMode.OUTLINE, watchOutlineMode("Outline"))
+        assertEquals(WatchOutlineMode.GLOW, watchOutlineMode("glow"))
+        assertEquals(WatchOutlineMode.NONE, watchOutlineMode(null))
+        assertEquals(WatchOutlineMode.NONE, watchOutlineMode("Shadow"))
+
+        // o_size 缺省：Outline 默认 4、Glow 默认 10。
+        assertEquals(4f, watchOutlineSize(WatchOutlineMode.OUTLINE, null))
+        assertEquals(10f, watchOutlineSize(WatchOutlineMode.GLOW, null))
+        // 显式取值透传；全局封顶 ~120 防恶意表盘拖帧，负数收敛为 0。
+        assertEquals(18f, watchOutlineSize(WatchOutlineMode.OUTLINE, 18f))
+        assertEquals(MAX_WATCH_OUTLINE_SIZE, watchOutlineSize(WatchOutlineMode.GLOW, 9_999f))
+        assertEquals(0f, watchOutlineSize(WatchOutlineMode.OUTLINE, -3f))
+    }
+
+    @Test
+    fun glowRingCountAndAlphaDecayStayBounded() {
+        // 环数 = ceil(o_size / 2)，封顶 MAX_WATCH_GLOW_RINGS（8）。
+        assertEquals(1, watchGlowRingCount(1f))
+        assertEquals(5, watchGlowRingCount(10f))
+        assertEquals(MAX_WATCH_GLOW_RINGS, watchGlowRingCount(MAX_WATCH_OUTLINE_SIZE))
+
+        // 透明度由内向外单调衰减，最外环仍大于 0（不会白画）。
+        val rings = watchGlowRingCount(10f)
+        var previous = Float.MAX_VALUE
+        for (ring in 1..rings) {
+            val fraction = watchGlowRingAlpha(ring, rings)
+            assertTrue(fraction > 0f)
+            assertTrue(fraction < previous)
+            previous = fraction
+        }
+    }
+
+    @Test
     fun canonicalWeatherAliasesUseSnapshotFieldsWithoutLeakingRawTags() {
         val calendar = Calendar.getInstance()
         val snapshot = WatchDataSnapshot(
@@ -169,6 +228,66 @@ class WatchmakerRuntimeContractsTest {
                 "{ddw0} == 4 and 'THU' or 'OTHER'",
             ) { tag -> WatchmakerTagResolver.resolve(tag, calendar, snapshot) },
         )
+    }
+
+    @Test
+    fun weekdayLabelsTrimTrailingAbbreviationPeriodInEveryLocale() {
+        val calendar = Calendar.getInstance().apply {
+            clear()
+            set(2026, Calendar.JULY, 20, 10, 0, 0) // 周一
+        }
+        val snapshot = WatchDataSnapshot()
+
+        // 某些 locale 的缩写数据自带尾句号（es "lun."、de "Mo." 等），
+        // 落到表盘上就是「周一.」式拖尾——所有星期标签统一裁掉。
+        for (locale in listOf(Locale.forLanguageTag("es"), Locale.GERMAN, Locale.getDefault())) {
+            for (tag in listOf("ddw", "ddw1", "ddw2", "ddww")) {
+                val value = WatchmakerTagResolver
+                    .resolve(tag, calendar, snapshot, locale = locale)
+                    .renderedValue
+                assertFalse("$tag@$locale => $value", value.endsWith("."))
+            }
+        }
+    }
+
+    @Test
+    fun weekdayLabelsHonorTheRequestedDateLocale() {
+        val calendar = Calendar.getInstance().apply {
+            clear()
+            set(2026, Calendar.JULY, 20, 10, 0, 0) // 周一
+        }
+        val snapshot = WatchDataSnapshot()
+
+        // zh/en 两档下星期输出必须确定，不再受运行机器的系统语言影响。
+        assertEquals(
+            "周一",
+            WatchmakerTagResolver
+                .resolve("ddw", calendar, snapshot, locale = Locale.SIMPLIFIED_CHINESE)
+                .renderedValue,
+        )
+        assertEquals(
+            "Mon",
+            WatchmakerTagResolver
+                .resolve("ddw", calendar, snapshot, locale = Locale.ENGLISH)
+                .renderedValue,
+        )
+        assertEquals(
+            "Monday",
+            WatchmakerTagResolver
+                .resolve("ddww", calendar, snapshot, locale = Locale.ENGLISH)
+                .renderedValue,
+        )
+    }
+
+    @Test
+    fun dateLocalePreferenceMapsFourValuesAndFallsBackToSystem() {
+        // 四档取值：system/zh/en/ja；system 与未知值都映射为 null（跟随系统）。
+        assertEquals(Locale.SIMPLIFIED_CHINESE, WatchDateLocale.fromPreference("zh"))
+        assertEquals(Locale.ENGLISH, WatchDateLocale.fromPreference("en"))
+        assertEquals(Locale.JAPANESE, WatchDateLocale.fromPreference("ja"))
+        assertNull(WatchDateLocale.fromPreference(WatchDateLocale.PREFERENCE_SYSTEM))
+        assertNull(WatchDateLocale.fromPreference(null))
+        assertNull(WatchDateLocale.fromPreference("weird-value"))
     }
 
     @Test

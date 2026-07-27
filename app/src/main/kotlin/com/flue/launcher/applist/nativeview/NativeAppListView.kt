@@ -21,6 +21,7 @@ import com.flue.launcher.applist.model.AppListCommand
 import com.flue.launcher.applist.model.AppItemKey
 import kotlin.math.abs
 import kotlin.math.hypot
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 private const val NATIVE_DRAG_SETTLE_DURATION_MS = 130L
@@ -68,6 +69,7 @@ class NativeAppListView @JvmOverloads constructor(
             dragPolicyProfiles.forPresentation(currentConfig.value.presentation)
         },
         allowFolderCreation = { currentConfig.value.allowFolderCreation },
+        dragEnabled = { currentConfig.value.dragEnabled },
     )
     private var activeLayoutStrategy: NativeAppListLayoutStrategy =
         LinearNativeAppListLayoutStrategy
@@ -132,8 +134,6 @@ class NativeAppListView @JvmOverloads constructor(
     private var interceptedEventTime = Long.MIN_VALUE
     /** True until RecyclerView sees the real UP/CANCEL after a drag handoff. */
     private var recyclerGestureNeedsTerminal = false
-    private var edgeTerminalAction = -1
-    private var edgeTerminalEventTime = Long.MIN_VALUE
     private var gesturePointerId = MotionEvent.INVALID_POINTER_ID
     private val legacyEdgeHandoffEnabled = Build.VERSION.SDK_INT < Build.VERSION_CODES.S
     private val legacyEdgePointer = NativeLegacyEdgePointerState()
@@ -226,6 +226,9 @@ class NativeAppListView @JvmOverloads constructor(
             onMoveFrame = ::applyMoveFrameVisuals,
         )
         clipToPadding = false
+        // 高程阴影画在子 View 边界之外；父容器默认裁剪会把衰减尾巴切平。
+        // Compose 版的阴影自然是因为 AndroidComposeView 不裁剪子项。
+        clipChildren = false
         adapter = nativeAdapter
         addOnScrollListener(childVisualScrollListener)
         addOnChildAttachStateChangeListener(childVisualAttachListener)
@@ -282,28 +285,92 @@ class NativeAppListView @JvmOverloads constructor(
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (released) return super.dispatchTouchEvent(event)
+        if (event.actionMasked == MotionEvent.ACTION_DOWN ||
+            event.actionMasked == MotionEvent.ACTION_UP ||
+            event.actionMasked == MotionEvent.ACTION_CANCEL
+        ) {
+            android.util.Log.d(
+                "FlueTouch",
+                "dispatch a=${event.actionMasked} active=${currentConfig.value.active} " +
+                    "owned=$dragTouchOwned scrollState=$scrollState",
+            )
+        }
+        if (!currentConfig.value.active) return handleInactiveTouchStream(event)
         updateGesturePointer(event)
         prepareLegacyEdgePointer(event)
-        if (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
-            // A pointer-down can be delivered to the currently touched row
-            // without another parent interception pass. Cancel at the outer
-            // boundary so the delayed long-press callback cannot fire later.
-            dragController.onAdditionalPointer()
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN ->
+                // The pointer window opens here — dispatchTouchEvent is the only
+                // funnel guaranteed to see every sample of every stream.
+                // onInterceptTouchEvent early-returns while inactive and
+                // onTouchEvent only runs for self-owned streams, so both used to
+                // drop terminal samples and leak the window forward.
+                springEdgeEffects.beginGesture()
+            MotionEvent.ACTION_POINTER_DOWN ->
+                // A pointer-down can be delivered to the currently touched row
+                // without another parent interception pass. Cancel at the outer
+                // boundary so the delayed long-press callback cannot fire later.
+                dragController.onAdditionalPointer()
         }
+        // Sampled before super: the terminal dispatch below must judge the
+        // pull-to-face commit against the state the gesture *arrived* with,
+        // not against flags the drag controller just reset while handling it.
+        val ownedBeforeTerminal = dragTouchOwned || dragController.isDragging
         val handled = super.dispatchTouchEvent(event)
         if (
             event.actionMasked == MotionEvent.ACTION_UP ||
             event.actionMasked == MotionEvent.ACTION_CANCEL
         ) {
+            val canCommitFace =
+                event.actionMasked == MotionEvent.ACTION_UP && !ownedBeforeTerminal
+            if (springEdgeEffects.endGesture(terminalUp = canCommitFace)) {
+                onScrollToTop?.invoke()
+            }
             dragController.finishAdditionalPointer()
             resetLegacyEdgeGesture()
         }
         return handled
     }
 
+    /**
+     * Stream handling while the scene is inactive (screen transitions).
+     *
+     * Children must not see any of it — an invisible list that still owns
+     * zIndex during the closing transition was clickable and scrollable for up
+     * to 2.5s ("watch face on screen, finger scrolls the hidden list"). The
+     * events are also left unconsumed so the Compose navigation layer above
+     * can act on them. RecyclerView's interceptor still observes DOWN and the
+     * terminal so its touch anchors (scroll pointer id, last touch Y) stay
+     * fresh: a DOWN landing mid-transition used to leave stale anchors behind,
+     * and the first real gesture after reactivation settled against them —
+     * "interrupt the open animation and the list refuses to scroll".
+     */
+    private fun handleInactiveTouchStream(event: MotionEvent): Boolean {
+        updateGesturePointer(event)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                stopScroll()
+                super.onInterceptTouchEvent(event)
+            }
+            MotionEvent.ACTION_UP,
+            MotionEvent.ACTION_CANCEL,
+            -> {
+                super.onInterceptTouchEvent(event)
+                springEdgeEffects.endGesture(terminalUp = false)
+                dragController.finishAdditionalPointer()
+                resetLegacyEdgeGesture()
+                clearGlidePressed()
+                clearGesturePointer()
+            }
+        }
+        return false
+    }
+
     override fun onDetachedFromWindow() {
         cancelActiveDrag()
         cancelDragSettle(removeOverlay = true)
+        springEdgeEffects.endGesture(terminalUp = false)
         springEdgeEffects.finish()
         finishOwnedTouch(scheduleMotionBlurRestore = false)
         removeCallbacks(restoreMotionBlur)
@@ -315,7 +382,6 @@ class NativeAppListView @JvmOverloads constructor(
         if (released || !currentConfig.value.active) return false
         updateGesturePointer(event)
         prepareLegacyEdgePointer(event)
-        observeEdgeGesture(event)
         if (dragTouchOwned) return true
 
         val dragConsumed = when (event.actionMasked) {
@@ -352,10 +418,29 @@ class NativeAppListView @JvmOverloads constructor(
         if (dragConsumed) {
             stopScroll()
             clearGlidePressed()
+            if (
+                event.actionMasked == MotionEvent.ACTION_UP ||
+                event.actionMasked == MotionEvent.ACTION_CANCEL
+            ) {
+                // A consumed *terminal* sample must never latch dragTouchOwned:
+                // the ViewGroup only sends the child a CANCEL for an intercepted
+                // terminal and never routes it back through onTouchEvent, so
+                // there is no later event to clear the latch — the entire next
+                // gesture used to be swallowed by the owned branch ("long-press
+                // an icon and the list stalls for one full swipe"). Return true
+                // so the child still sees CANCEL instead of a click, but finish
+                // the gesture accounting in place.
+                finishRecyclerGesture(event)
+                dragController.finishAdditionalPointer()
+                finishOwnedTouch()
+                android.util.Log.d("FlueTouch", "terminal consumed in place a=${event.actionMasked}")
+                return true
+            }
             dragTouchOwned = true
             interceptedAction = event.actionMasked
             interceptedEventTime = event.eventTime
             parent?.requestDisallowInterceptTouchEvent(true)
+            android.util.Log.d("FlueTouch", "dragTouchOwned latched a=${event.actionMasked}")
             return true
         }
 
@@ -386,7 +471,6 @@ class NativeAppListView @JvmOverloads constructor(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         prepareLegacyEdgePointer(event)
-        observeEdgeGesture(event)
         val alreadyHandled =
             event.actionMasked == interceptedAction &&
                 event.eventTime == interceptedEventTime
@@ -516,35 +600,6 @@ class NativeAppListView @JvmOverloads constructor(
             super.onInterceptTouchEvent(event)
         }
         recyclerGestureNeedsTerminal = false
-    }
-
-    private fun observeEdgeGesture(event: MotionEvent) {
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                edgeTerminalAction = -1
-                edgeTerminalEventTime = Long.MIN_VALUE
-                springEdgeEffects.beginGesture()
-            }
-            MotionEvent.ACTION_UP,
-            MotionEvent.ACTION_CANCEL,
-            -> {
-                if (
-                    edgeTerminalAction == event.actionMasked &&
-                    edgeTerminalEventTime == event.eventTime
-                ) {
-                    return
-                }
-                edgeTerminalAction = event.actionMasked
-                edgeTerminalEventTime = event.eventTime
-                val canCommitFace =
-                    event.actionMasked == MotionEvent.ACTION_UP &&
-                        !dragTouchOwned &&
-                        !dragController.isDragging
-                if (springEdgeEffects.confirmTopRelease(canCommitFace)) {
-                    onScrollToTop?.invoke()
-                }
-            }
-        }
     }
 
     private fun activePointerIndex(event: MotionEvent): Int {
@@ -732,8 +787,18 @@ class NativeAppListView @JvmOverloads constructor(
         val motionProfileChanged = previous.motionProfile != next.value.motionProfile
         val resetInitialScroll =
             previous.initialResetToken != next.value.initialResetToken
+        // 闸门中途关闭（长按弹出菜单/打开文件夹）时手指往往还没抬起：
+        // 不在这里终止，overlay 底下的拖拽会继续走，图标会粘在背景上。
+        val dragGateClosed = previous.dragEnabled && !next.value.dragEnabled
+        if (dragGateClosed && dragController.isActive) {
+            cancelActiveDrag(externalChange = true)
+        }
         if ((geometryChanged || resetInitialScroll) && dragController.isActive) {
-            cancelActiveDrag()
+            // Geometry or presentation changed under a live gesture. The finger
+            // may still be down: restoring the row's own long-click here would
+            // let its CheckForTap re-arm and pop the actions menu at stale
+            // coordinates, so keep the suppression until the real terminal.
+            cancelActiveDrag(externalChange = true)
         }
         if (geometryChanged) {
             (layoutManager as? NativeSpatialAppListLayoutManager)?.markGeometryDirty()
@@ -763,11 +828,13 @@ class NativeAppListView @JvmOverloads constructor(
         if (!next.value.active) {
             // A screen transition can remove the list before the terminal
             // pointer sample arrives.  Drop a pending pull-to-face candidate
-            // here; a later UP from the old stream must never navigate.
-            springEdgeEffects.confirmTopRelease(terminalUp = false)
+            // here; a later UP from the old stream must never navigate. The
+            // finger may still be down, so keep the source row's long-click
+            // suppressed until the real terminal sample.
+            springEdgeEffects.endGesture(terminalUp = false)
             resetLegacyEdgeGesture()
             clearGlidePressed()
-            cancelActiveDrag()
+            cancelActiveDrag(externalChange = true)
         }
         nativeAdapter.setConfig(next)
         if (rowRenderingChanged) {
@@ -860,6 +927,7 @@ class NativeAppListView @JvmOverloads constructor(
     }
 
     private fun finishOwnedTouch(scheduleMotionBlurRestore: Boolean = true) {
+        if (dragTouchOwned) android.util.Log.d("FlueTouch", "dragTouchOwned released")
         dragTouchOwned = false
         clearGlidePressed()
         recyclerGestureNeedsTerminal = false
@@ -870,8 +938,12 @@ class NativeAppListView @JvmOverloads constructor(
         parent?.requestDisallowInterceptTouchEvent(false)
     }
 
-    private fun cancelActiveDrag() {
-        dragController.onCancel()
+    private fun cancelActiveDrag(externalChange: Boolean = false) {
+        if (externalChange) {
+            dragController.invalidateForExternalChange()
+        } else {
+            dragController.onCancel()
+        }
         if (dragTouchOwned) finishOwnedTouch()
     }
 
@@ -1242,24 +1314,57 @@ class NativeAppListView @JvmOverloads constructor(
         }
 
         override fun folderKeyAt(x: Float, y: Float): AppItemKey? {
+            // 探针取拖拽浮层图标中心而不是裸手指坐标：LINEAR 下浮层 X 被钉在
+            // 图标列，手指若按着行文字拖动，指针整程不与任何图标重叠，dwell
+            // 永远武装不了。浮层中心才是用户眼里"正在拖的图标"所在。
+            val overlay = dragOverlayView
+            val probeX = overlay?.iconCenterXInParentWithoutFlow() ?: x
+            val probeY = overlay?.iconCenterYInParentWithoutFlow() ?: y
+
+            var bestRow: NativeAppListRowView? = null
+            var bestKey: AppItemKey? = null
+            var bestDistance = Float.MAX_VALUE
             for (index in childCount - 1 downTo 0) {
                 val child = getChildAt(index) as? NativeAppListRowView ?: continue
                 val holder = getChildViewHolder(child) as?
                     NativeAppListAdapter.AppItemViewHolder ?: continue
-                val key = holder.boundKeyOrNull() ?: continue
+                // 候选按 preview 前的固定槽位判定并反查原占位键：重排 preview
+                // 是零延迟抢槽的，悬停目标下一帧就被挪走；若按位移后坐标命中
+                // 当前显示键，候选键会被立即拔掉、dwell 计时永远走不完。
+                val position = holder.bindingAdapterPosition
+                val key = (
+                    if (position != RecyclerView.NO_POSITION) {
+                        dragPreviewOriginalOrder.getOrNull(position)
+                    } else {
+                        null
+                    }
+                    ) ?: holder.boundKeyOrNull() ?: continue
                 if (key == draggedSourceKey) continue
-                val targetRow = holder.boundRowOrNull() ?: continue
-                val sourceRow = draggedSourceKey
-                    ?.let(nativeAdapter::rowForKey)
-                    ?: dragOverlayView?.boundRowForOverlay()
-                val targetAllowed = sourceRow?.let { nativeFolderTargetAllowed(it, targetRow) }
-                    ?: (targetRow.entry.type != com.flue.launcher.applist.model.AppItemType.SHORTCUT)
-                if (!targetAllowed) continue
-                if (child.containsTransformedIconPoint(x, y, centerFraction = 0.42f)) {
-                    return key
+                val distance = hypot(
+                    probeX - child.iconCenterXInParentWithoutPreviewOrFlow(),
+                    probeY - child.iconCenterYInParentWithoutPreviewOrFlow(),
+                )
+                if (distance < bestDistance) {
+                    bestDistance = distance
+                    bestRow = child
+                    bestKey = key
                 }
             }
-            return null
+            val row = bestRow ?: return null
+            val key = bestKey ?: return null
+            // 核心半径门槛：扫过即武装会让路过的每个图标都闪一次 hover。
+            val coreRadius = min(
+                row.iconWidthForSafeGeometry(),
+                row.iconHeightForSafeGeometry(),
+            ) * 0.42f
+            if (bestDistance > coreRadius) return null
+            val targetRow = nativeAdapter.rowForKey(key) ?: return null
+            val sourceRow = draggedSourceKey
+                ?.let(nativeAdapter::rowForKey)
+                ?: dragOverlayView?.boundRowForOverlay()
+            val targetAllowed = sourceRow?.let { nativeFolderTargetAllowed(it, targetRow) }
+                ?: (targetRow.entry.type != com.flue.launcher.applist.model.AppItemType.SHORTCUT)
+            return if (targetAllowed) key else null
         }
 
         override fun currentKeys(): List<AppItemKey> = nativeAdapter.currentKeysView()
@@ -1435,6 +1540,10 @@ class NativeAppListView @JvmOverloads constructor(
             folderHoverKey?.let { previous ->
                 (holderForKey(previous)?.itemView as? NativeAppListRowView)
                     ?.setFolderHoverState(false)
+            }
+            if (key != null) {
+                // dwell 武装瞬间给一次触觉确认：用户知道松手会建文件夹。
+                performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
             }
             folderHoverKey = key
             key?.let { next ->

@@ -77,6 +77,62 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private var dataProvider: WatchDataProvider = EmptyWatchDataProvider
     private var frameDataSnapshot = WatchDataSnapshot()
     private var forceFill = false
+    /** 当前手势是否由本视图消费；决策在 DOWN 时定下、整个手势保持一致。 */
+    private var consumeCurrentGesture = false
+
+    // 编辑器画布拖拽的实时变换覆盖（按图层文档序号定位）。
+    private var liveTransformLayerIndex = -1
+    private var liveTransformX = 0f
+    private var liveTransformY = 0f
+    private var liveTransformRotation = 0f
+    private var liveTransformScaleX = 1f
+    private var liveTransformScaleY = 1f
+
+    /**
+     * 编辑器手势期间逐帧调用：被拖图层的表盘像素立即跟随手指渲染，
+     * 不等 XML 落盘。scale 传 1.0 基准（内部即画布 scale 因子）。
+     */
+    fun setLiveLayerTransform(
+        layerIndex: Int,
+        x: Float,
+        y: Float,
+        rotationDegrees: Float,
+        scaleX: Float,
+        scaleY: Float,
+    ) {
+        liveTransformLayerIndex = layerIndex
+        liveTransformX = x
+        liveTransformY = y
+        liveTransformRotation = rotationDegrees
+        liveTransformScaleX = scaleX
+        liveTransformScaleY = scaleY
+        invalidate()
+    }
+
+    /** 手势结束（提交/取消）后清除覆盖，回到以 XML 为准的渲染。 */
+    fun clearLiveLayerTransform() {
+        if (liveTransformLayerIndex == -1) return
+        liveTransformLayerIndex = -1
+        invalidate()
+    }
+
+    /**
+     * 编辑器图层面板缩略图：把单个图层（含其祖先组的变换链）按整表比例
+     * 渲染进 [sizePx]² 位图。完全复用 drawRenderItem 主渲染路径与已就绪的
+     * 资源缓存，不另建一套图元实现（编辑器侧近似渲染会和真实效果偏差）。
+     */
+    fun renderLayerThumbnail(layerIndex: Int, sizePx: Int): Bitmap? {
+        if (disposed || sizePx <= 0) return null
+        val prepared = source ?: return null
+        val item = prepared.renderPlan.firstOrNull { it.layerIndex == layerIndex } ?: return null
+        val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val scale = sizePx / DESIGN_SIZE
+        canvas.scale(scale, scale)
+        canvas.translate(DESIGN_SIZE / 2f, DESIGN_SIZE / 2f)
+        runCatching { drawRenderItem(canvas, item, prepared) }
+        return bitmap
+    }
 
     private val bitmapCache = LinkedHashMap<String, Bitmap>(16, 0.75f, true)
     private val movieCache = LinkedHashMap<String, Movie>(4, 0.75f, true)
@@ -101,6 +157,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG)
     private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    /** 描边通道专用；绝不复用 textPaint/shapePaint，避免污染其 style/strokeWidth。 */
+    private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG)
+    /** 位图字体描边副本专用（带 SRC_IN 滤色把字形染成描边色）。 */
+    private val bitmapOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val pathScratch = Path()
     private val rectScratch = RectF()
     private val bitmapFontSourceRect = Rect()
@@ -265,6 +325,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         doubleTapAction = null
         tapActionHandler = null
         tapTargets.clear()
+        consumeCurrentGesture = false
         source?.clearRuntimeCaches()
         source = null
     }
@@ -281,7 +342,17 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (disposed || !faceVisible) return false
+        // 整手势消费：长按进编辑器、双击、tap_action 都由本视图的
+        // gestureDetector 识别。曾试过"只在命中 tap target 时才消费"，
+        // 结果 DOWN 不消费 → 视图收不到后续事件 → 长按进入表盘编辑直接
+        // 失效（老师实机反馈）。启动器侧的手势由 Compose 父层自行观察，
+        // 不依赖这里放行。
         gestureDetector.onTouchEvent(event)
+        if (event.actionMasked == MotionEvent.ACTION_UP ||
+            event.actionMasked == MotionEvent.ACTION_CANCEL
+        ) {
+            consumeCurrentGesture = false
+        }
         return true
     }
 
@@ -337,38 +408,57 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 alpha *= dynamicNumber(attributes["opacity"], 100f, source)
                     .coerceIn(0f, 100f) / 100f
                 if (alpha <= 0f || !isDisplayed(attributes["display"], source)) return
-                applyTransform(canvas, attributes, source)
+                applyTransform(canvas, attributes, source, ancestorIndex)
             }
             val layer = source.definition.layers[item.layerIndex]
             val attributes = layer.attributes
             alpha *= dynamicNumber(attributes["opacity"], 100f, source)
                 .coerceIn(0f, 100f) / 100f
             if (alpha <= 0f || !isDisplayed(attributes["display"], source)) return
-            applyTransform(canvas, attributes, source)
+            applyTransform(canvas, attributes, source, item.layerIndex)
             drawPrimitive(canvas, layer, alpha, source)
         } finally {
             canvas.restoreToCount(saveCount)
         }
     }
 
-    private fun applyTransform(canvas: Canvas, attrs: Map<String, String>, source: PreparedSource) {
+    private fun applyTransform(
+        canvas: Canvas,
+        attrs: Map<String, String>,
+        source: PreparedSource,
+        layerIndex: Int = -1,
+    ) {
+        // 编辑器画布手势期间的实时覆盖：表盘像素立刻跟手，不等落盘。
+        val live = layerIndex >= 0 && layerIndex == liveTransformLayerIndex
         canvas.translate(
-            dynamicNumber(attrs["x"], 0f, source),
-            dynamicNumber(attrs["y"], 0f, source),
+            if (live) liveTransformX else dynamicNumber(attrs["x"], 0f, source),
+            if (live) liveTransformY else dynamicNumber(attrs["y"], 0f, source),
         )
-        val rotation = dynamicNumber(attrs["rotation"], 0f, source)
+        val rotation = if (live) {
+            liveTransformRotation
+        } else {
+            dynamicNumber(attrs["rotation"], 0f, source)
+        }
         if (rotation != 0f) canvas.rotate(rotation)
         val sharedScale = attrs["anim_scale"] ?: attrs["scale"]
-        val sx = dynamicNumber(
-            attrs["anim_scale_x"] ?: attrs["scale_x"] ?: sharedScale,
-            100f,
-            source,
-        ).coerceIn(-500f, 500f) / 100f
-        val sy = dynamicNumber(
-            attrs["anim_scale_y"] ?: attrs["scale_y"] ?: sharedScale,
-            100f,
-            source,
-        ).coerceIn(-500f, 500f) / 100f
+        val sx = if (live) {
+            liveTransformScaleX
+        } else {
+            dynamicNumber(
+                attrs["anim_scale_x"] ?: attrs["scale_x"] ?: sharedScale,
+                100f,
+                source,
+            ).coerceIn(-500f, 500f) / 100f
+        }
+        val sy = if (live) {
+            liveTransformScaleY
+        } else {
+            dynamicNumber(
+                attrs["anim_scale_y"] ?: attrs["scale_y"] ?: sharedScale,
+                100f,
+                source,
+            ).coerceIn(-500f, 500f) / 100f
+        }
         if (sx != 1f || sy != 1f) canvas.scale(sx, sy)
         val skewX = dynamicNumber(attrs["skew_x"], 0f, source)
         val skewY = dynamicNumber(attrs["skew_y"], 0f, source)
@@ -537,7 +627,66 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             rectScratch.set(left, y + metrics.ascent, left + textWidth, y + metrics.descent)
             recordTapTarget(canvas, rectScratch, attrs)
         }
+        // 描边通道：先 STROKE 后 FILL——Android 描边以字形轮廓为中心线，
+        // 内半会被随后的正文填充盖住，因此外观宽度 = o_size 需要
+        // strokeWidth = 2×o_size。Glow 用多环 STROKE 由外向内递增透明度。
+        resolveOutline(attrs, source)?.let { outline ->
+            drawTextOutline(canvas, text, x, y, outline, alpha)
+        }
         canvas.drawText(text, x, y, textPaint)
+    }
+
+    /**
+     * 求值 outline/o_size/o_color/o_opacity 四个属性。没有描边（含尺寸或
+     * 不透明度为 0）时返回 null，渲染路径零开销。o_size 经全局封顶
+     * [MAX_WATCH_OUTLINE_SIZE] 收口，防恶意表盘拖帧。
+     */
+    private fun resolveOutline(attrs: Map<String, String>, source: PreparedSource): ResolvedOutline? {
+        val mode = watchOutlineMode(attrs["outline"])
+        if (mode == WatchOutlineMode.NONE) return null
+        val size = watchOutlineSize(
+            mode,
+            attrs["o_size"]?.let { raw -> dynamicNumber(raw, watchOutlineDefaultSize(mode), source) },
+        )
+        if (size <= 0f) return null
+        val opacity = dynamicNumber(attrs["o_opacity"], 100f, source).coerceIn(0f, 100f) / 100f
+        if (opacity <= 0f) return null
+        return ResolvedOutline(
+            mode = mode,
+            size = size,
+            color = resolveColor(attrs["o_color"], Color.WHITE, source),
+            opacity = opacity,
+        )
+    }
+
+    /** TTF 文字描边。独立 [outlinePaint]，每次调用重设文字属性与 stroke。 */
+    private fun drawTextOutline(
+        canvas: Canvas,
+        text: String,
+        x: Float,
+        y: Float,
+        outline: ResolvedOutline,
+        alpha: Float,
+    ) {
+        outlinePaint.typeface = textPaint.typeface
+        outlinePaint.textSize = textPaint.textSize
+        outlinePaint.textAlign = textPaint.textAlign
+        outlinePaint.style = Paint.Style.STROKE
+        outlinePaint.strokeJoin = Paint.Join.ROUND
+        outlinePaint.strokeCap = Paint.Cap.ROUND
+        outlinePaint.color = outline.color
+        val rings = if (outline.mode == WatchOutlineMode.GLOW) watchGlowRingCount(outline.size) else 1
+        // 由外向内画：外环最淡、内环最实，后画的内环覆盖重叠区。
+        for (ring in rings downTo 1) {
+            outlinePaint.strokeWidth = outline.size * 2f * ring / rings
+            val ringAlpha = if (outline.mode == WatchOutlineMode.GLOW) {
+                watchGlowRingAlpha(ring, rings)
+            } else {
+                1f
+            }
+            outlinePaint.alpha = paintAlpha(alpha * outline.opacity * ringAlpha)
+            canvas.drawText(text, x, y, outlinePaint)
+        }
     }
 
     private fun drawBitmapText(
@@ -554,7 +703,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val scale = designSize / font.nominalSize.coerceAtLeast(1).toFloat()
         val align = attrs["alignment"].orEmpty().lowercase(Locale.ROOT)
         val width = font.measureAdvance(renderedText) * scale
-        var cursorX = when {
+        val startX = when {
             align.endsWith('l') -> 0f
             align.endsWith('r') -> -width
             else -> -width / 2f
@@ -566,15 +715,83 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             else -> -lineHeight / 2f
         }
         if (!attrs["tap_action"].isNullOrBlank()) {
-            rectScratch.set(cursorX, lineTop, cursorX + width, lineTop + lineHeight)
+            rectScratch.set(startX, lineTop, startX + width, lineTop + lineHeight)
             recordTapTarget(canvas, rectScratch, attrs)
+        }
+        // 描边通道：整串字形按 8 方向偏移重绘成描边色剪影。硬描边 = 一环，
+        // Glow = 多环（环数 ceil(o_size/2)，MAX_WATCH_GLOW_RINGS 封顶）×
+        // 8 方向、透明度随环衰减。每帧成本上限 = 8 环 × 8 方向 = 64 次
+        // 整串重绘，由环数封顶 + o_size 全局封顶（120）双重兜底。
+        resolveOutline(attrs, source)?.let { outline ->
+            bitmapOutlinePaint.colorFilter = android.graphics.PorterDuffColorFilter(
+                outline.color,
+                android.graphics.PorterDuff.Mode.SRC_IN,
+            )
+            val rings = if (outline.mode == WatchOutlineMode.GLOW) watchGlowRingCount(outline.size) else 1
+            for (ring in rings downTo 1) {
+                val radius = outline.size * ring / rings
+                val ringAlpha = if (outline.mode == WatchOutlineMode.GLOW) {
+                    watchGlowRingAlpha(ring, rings)
+                } else {
+                    1f
+                }
+                bitmapOutlinePaint.alpha = paintAlpha(alpha * outline.opacity * ringAlpha)
+                var direction = 0
+                while (direction < BITMAP_OUTLINE_DIRECTIONS.size) {
+                    drawBitmapGlyphRun(
+                        canvas = canvas,
+                        text = renderedText,
+                        preparedFont = preparedFont,
+                        source = source,
+                        scale = scale,
+                        startX = startX,
+                        lineTop = lineTop,
+                        offsetX = BITMAP_OUTLINE_DIRECTIONS[direction] * radius,
+                        offsetY = BITMAP_OUTLINE_DIRECTIONS[direction + 1] * radius,
+                        paint = bitmapOutlinePaint,
+                    )
+                    direction += 2
+                }
+            }
+            bitmapOutlinePaint.colorFilter = null
         }
         imagePaint.alpha = paintAlpha(alpha)
         imagePaint.colorFilter = tintFilter(resolveColor(attrs["color"], Color.WHITE, source))
+        drawBitmapGlyphRun(
+            canvas = canvas,
+            text = renderedText,
+            preparedFont = preparedFont,
+            source = source,
+            scale = scale,
+            startX = startX,
+            lineTop = lineTop,
+            offsetX = 0f,
+            offsetY = 0f,
+            paint = imagePaint,
+        )
+        imagePaint.colorFilter = null
+    }
+
+    /** 用 [paint] 在 (offsetX, offsetY) 偏移处绘制整串位图字形（含字距）。 */
+    private fun drawBitmapGlyphRun(
+        canvas: Canvas,
+        text: String,
+        preparedFont: PreparedBitmapFont,
+        source: PreparedSource,
+        scale: Float,
+        startX: Float,
+        lineTop: Float,
+        offsetX: Float,
+        offsetY: Float,
+        paint: Paint,
+    ) {
+        val font = preparedFont.definition
+        var cursorX = startX + offsetX
+        val top = lineTop + offsetY
         var previous: Int? = null
         var index = 0
-        while (index < renderedText.length) {
-            val codePoint = Character.codePointAt(renderedText, index)
+        while (index < text.length) {
+            val codePoint = Character.codePointAt(text, index)
             val glyph = font.glyphs[codePoint]
             if (glyph != null) {
                 cursorX += (previous?.let { font.kerning(it, codePoint) } ?: 0) * scale
@@ -592,11 +809,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                         bitmapFontSourceRect.set(glyph.x, glyph.y, right, bottom)
                         bitmapFontDestRect.set(
                             cursorX + glyph.xOffset * scale,
-                            lineTop + glyph.yOffset * scale,
+                            top + glyph.yOffset * scale,
                             cursorX + (glyph.xOffset + glyph.width) * scale,
-                            lineTop + (glyph.yOffset + glyph.height) * scale,
+                            top + (glyph.yOffset + glyph.height) * scale,
                         )
-                        canvas.drawBitmap(bitmap, bitmapFontSourceRect, bitmapFontDestRect, imagePaint)
+                        canvas.drawBitmap(bitmap, bitmapFontSourceRect, bitmapFontDestRect, paint)
                     }
                 }
                 cursorX += glyph.xAdvance * scale
@@ -604,7 +821,6 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             }
             index += Character.charCount(codePoint)
         }
-        imagePaint.colorFilter = null
     }
 
     private fun drawSeries(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {
@@ -757,6 +973,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val width = dynamicNumber(attrs["width"] ?: sharedSize, 64f, source).coerceAtLeast(1f)
         val height = dynamicNumber(attrs["height"] ?: sharedSize, width, source).coerceAtLeast(1f)
         val shape = attrs["shape"].orEmpty().lowercase(Locale.ROOT)
+        // 描边通道：与文字同一规格，先 STROKE 环、后 FILL 本体（内半被填充盖住）。
+        resolveOutline(attrs, source)?.let { outline ->
+            drawShapeOutline(canvas, shape, width, height, outline, alpha)
+        }
         shapePaint.color = resolveColor(attrs["color"], Color.WHITE, source)
         shapePaint.alpha = paintAlpha(alpha)
         when {
@@ -770,6 +990,44 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 canvas.drawPath(pathScratch, shapePaint)
             }
             else -> canvas.drawRect(-width / 2f, -height / 2f, width / 2f, height / 2f, shapePaint)
+        }
+    }
+
+    /** shape 描边：硬描边一环 / Glow 多环，几何与本体完全一致。 */
+    private fun drawShapeOutline(
+        canvas: Canvas,
+        shape: String,
+        width: Float,
+        height: Float,
+        outline: ResolvedOutline,
+        alpha: Float,
+    ) {
+        outlinePaint.style = Paint.Style.STROKE
+        outlinePaint.strokeJoin = Paint.Join.ROUND
+        outlinePaint.strokeCap = Paint.Cap.ROUND
+        outlinePaint.color = outline.color
+        val rings = if (outline.mode == WatchOutlineMode.GLOW) watchGlowRingCount(outline.size) else 1
+        for (ring in rings downTo 1) {
+            outlinePaint.strokeWidth = outline.size * 2f * ring / rings
+            val ringAlpha = if (outline.mode == WatchOutlineMode.GLOW) {
+                watchGlowRingAlpha(ring, rings)
+            } else {
+                1f
+            }
+            outlinePaint.alpha = paintAlpha(alpha * outline.opacity * ringAlpha)
+            when {
+                shape.contains("circle") ->
+                    canvas.drawOval(-width / 2f, -height / 2f, width / 2f, height / 2f, outlinePaint)
+                shape.contains("triangle") -> {
+                    pathScratch.reset()
+                    pathScratch.moveTo(0f, -height / 2f)
+                    pathScratch.lineTo(width / 2f, height / 2f)
+                    pathScratch.lineTo(-width / 2f, height / 2f)
+                    pathScratch.close()
+                    canvas.drawPath(pathScratch, outlinePaint)
+                }
+                else -> canvas.drawRect(-width / 2f, -height / 2f, width / 2f, height / 2f, outlinePaint)
+            }
         }
     }
 
@@ -1816,6 +2074,14 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     private data class TapTarget(val bounds: RectF, val action: WatchTapAction)
 
+    /** 已求值的描边参数（mode 一定不是 NONE，size/opacity 一定大于 0）。 */
+    private data class ResolvedOutline(
+        val mode: WatchOutlineMode,
+        val size: Float,
+        val color: Int,
+        val opacity: Float,
+    )
+
     private data class BitmapFailure(val generation: Long, val failedAtUptimeMs: Long)
 
     private enum class AssetLoadKind {
@@ -1857,6 +2123,22 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         private const val BITMAP_FAILURE_RETRY_MS = 30_000L
         private val WINDOWS_ABSOLUTE_PATH = Regex("^[a-zA-Z]:[/\\\\].*")
         private val TEXT_RING_LABELS = (1..12).map(Int::toString)
+
+        /**
+         * 位图字体描边的 8 个方向单位向量（dx, dy 成对）。对角线按 1/√2
+         * 归一化，保证 8 个副本落在同一半径的圆上。
+         */
+        private const val OUTLINE_DIAGONAL = 0.70710678f
+        private val BITMAP_OUTLINE_DIRECTIONS = floatArrayOf(
+            -1f, 0f,
+            1f, 0f,
+            0f, -1f,
+            0f, 1f,
+            -OUTLINE_DIAGONAL, -OUTLINE_DIAGONAL,
+            OUTLINE_DIAGONAL, -OUTLINE_DIAGONAL,
+            -OUTLINE_DIAGONAL, OUTLINE_DIAGONAL,
+            OUTLINE_DIAGONAL, OUTLINE_DIAGONAL,
+        )
         // ICU (Android 14+ 的 java.util.regex 后端) 要求 '}' 必须转义，且字符组内的
         // '{' 会被当成 UnicodeSet 的多字符串起始符。裸写 "\\{[^{}]+}" 在 SDK 34+ 上
         // 抛 PatternSyntaxException，并因为它是 companion object 的字段而升级成

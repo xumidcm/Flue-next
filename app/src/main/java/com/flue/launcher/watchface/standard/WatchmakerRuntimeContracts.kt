@@ -57,6 +57,54 @@ object WatchTextLayout {
         }
 }
 
+/**
+ * WM_FORMAT 文字/形状描边通道的取值契约。`outline` 取 "Outline"（硬描边）
+ * 或 "Glow"（发光）；`o_size` 是描边/发光尺寸（Outline 默认 4、Glow 默认
+ * 10）；`o_color` 默认白；`o_opacity` 0-100。尺寸全局封顶 [MAX_WATCH_OUTLINE_SIZE]
+ * 防恶意表盘拖帧；Glow 的环数与每环透明度也在这里统一定义，渲染器只消费。
+ */
+enum class WatchOutlineMode {
+    NONE,
+    OUTLINE,
+    GLOW,
+}
+
+/** o_size 的全局封顶（设计像素）：再大也只会拖帧，不会更好看。 */
+const val MAX_WATCH_OUTLINE_SIZE = 120f
+
+/** Glow 每帧最多画的环数；8 环 × 8 方向已是位图字体的成本上限。 */
+const val MAX_WATCH_GLOW_RINGS = 8
+
+fun watchOutlineMode(raw: String?): WatchOutlineMode =
+    when (raw.orEmpty().trim().lowercase(Locale.ROOT)) {
+        "outline" -> WatchOutlineMode.OUTLINE
+        "glow" -> WatchOutlineMode.GLOW
+        else -> WatchOutlineMode.NONE
+    }
+
+fun watchOutlineDefaultSize(mode: WatchOutlineMode): Float = when (mode) {
+    WatchOutlineMode.GLOW -> 10f
+    else -> 4f
+}
+
+/** 缺省回落到模式默认值，并按全局封顶收口；负数视为 0（不画）。 */
+fun watchOutlineSize(mode: WatchOutlineMode, raw: Float?): Float =
+    (raw ?: watchOutlineDefaultSize(mode)).coerceIn(0f, MAX_WATCH_OUTLINE_SIZE)
+
+/** Glow 环数 = ceil(o_size / 2)，封顶 [MAX_WATCH_GLOW_RINGS]。 */
+fun watchGlowRingCount(size: Float): Int =
+    ceil(size.coerceIn(0f, MAX_WATCH_OUTLINE_SIZE) / 2f).toInt().coerceIn(1, MAX_WATCH_GLOW_RINGS)
+
+/**
+ * 第 [ring]（1 起、由内向外）环的透明度系数：内环最实、逐环线性衰减，
+ * 最外环仍保底 1/(ringCount+1)，不会衰减到完全不可见。
+ */
+fun watchGlowRingAlpha(ring: Int, ringCount: Int): Float {
+    if (ringCount <= 0) return 0f
+    val clamped = ring.coerceIn(1, ringCount)
+    return (ringCount - clamped + 1).toFloat() / (ringCount + 1).toFloat()
+}
+
 internal data class WatchCanvasTransform(
     val scale: Float,
     val left: Float,
@@ -665,6 +713,36 @@ class WatchExpressionScope private constructor(
 }
 
 /**
+ * 「表盘日期语言」契约：设置项 watchface_date_locale 的四档取值
+ * （system/zh/en/ja）与日期/星期/月份类标签求值 Locale 的映射。
+ * [override] 由 LauncherViewModel 在偏好加载/变更时写入进程级单例，
+ * 渲染热路径（[WatchmakerTagResolver.resolve] 的默认参数）直接读取，
+ * 表盘无需重建即可在下一帧生效。
+ */
+object WatchDateLocale {
+    const val PREFERENCE_SYSTEM = "system"
+    const val PREFERENCE_CHINESE = "zh"
+    const val PREFERENCE_ENGLISH = "en"
+    const val PREFERENCE_JAPANESE = "ja"
+
+    /** null 表示跟随系统语言；@Volatile 保证渲染线程读到最新写入。 */
+    @Volatile
+    var override: Locale? = null
+
+    /** 偏好字符串 → Locale；未知/空值一律按跟随系统处理，绝不抛异常。 */
+    fun fromPreference(value: String?): Locale? =
+        when (value?.trim()?.lowercase(Locale.ROOT)) {
+            PREFERENCE_CHINESE -> Locale.SIMPLIFIED_CHINESE
+            PREFERENCE_ENGLISH -> Locale.ENGLISH
+            PREFERENCE_JAPANESE -> Locale.JAPANESE
+            else -> null
+        }
+
+    /** 当前生效的日期语言：偏好覆盖优先，否则跟随系统。 */
+    fun current(): Locale = override ?: Locale.getDefault()
+}
+
+/**
  * Stable tag vocabulary shared by preview/runtime/editor. Unknown tags are
  * explicitly marked unsupported, never returned as raw `{tag}` text.
  */
@@ -692,6 +770,8 @@ object WatchmakerTagResolver {
         "bc", "charging", "is_charging",
         "ssc", "steps", "step_count", "shr", "heart", "heart_rate", "heart_rate_bpm",
         "sthr", "shrp",
+        // {shr_1..9}：最近 N 分钟的历史心率读数。
+        "shr_1", "shr_2", "shr_3", "shr_4", "shr_5", "shr_6", "shr_7", "shr_8", "shr_9",
         "sgx", "sgy", "sgz", "pws", "nbc",
         "wt", "wtemp", "weather_temperature",
         "wcond", "weather_condition", "wct",
@@ -713,6 +793,9 @@ object WatchmakerTagResolver {
         now: Calendar,
         snapshot: WatchDataSnapshot,
         userColor: String? = null,
+        // 日期/星期/月份类标签的语言：默认读进程级偏好（跟随系统或
+        // settings 里选定的 zh/en/ja），测试可显式传入以保证确定性。
+        locale: Locale = WatchDateLocale.current(),
     ): WatchTagResolution {
         val normalized = tag.trim().lowercase(Locale.ROOT)
         val hour24 = now.get(Calendar.HOUR_OF_DAY)
@@ -735,17 +818,23 @@ object WatchmakerTagResolver {
             "dd" -> now.get(Calendar.DAY_OF_MONTH).toString()
             "ddz" -> now.get(Calendar.DAY_OF_MONTH).toString().padStart(2, '0')
             "ddw0" -> (now.get(Calendar.DAY_OF_WEEK) - Calendar.SUNDAY).toString()
-            "ddw" -> now.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, Locale.getDefault())
-            "ddw1" -> now.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.NARROW_FORMAT, Locale.getDefault())
-            "ddw2" -> now.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, Locale.getDefault())
+            // 星期标签统一 trimEnd('.')：不少 locale 的缩写数据自带尾句号
+            // （es "lun."、de "Mo." 等），落到表盘上就是「周一.」式的拖尾。
+            "ddw" -> now.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, locale)
+                ?.trimEnd('.')
+            "ddw1" -> now.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.NARROW_FORMAT, locale)
+                ?.trimEnd('.')
+            "ddw2" -> now.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, locale)
+                ?.trimEnd('.')
                 ?.take(2)
-            "ddww" -> now.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.LONG, Locale.getDefault())
+            "ddww" -> now.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.LONG, locale)
+                ?.trimEnd('.')
             // WM_TAGS.md:538 —— {dn} = Month number (1–12)。此前只实现了
             // dnn/dnnn/dnnnn，漏掉 dn 本体，用它的表盘月份直接渲染成不可用。
             "dn" -> (now.get(Calendar.MONTH) + 1).toString()
             "dnn" -> (now.get(Calendar.MONTH) + 1).toString().padStart(2, '0')
-            "dnnn" -> now.getDisplayName(Calendar.MONTH, Calendar.SHORT, Locale.getDefault())
-            "dnnnn" -> now.getDisplayName(Calendar.MONTH, Calendar.LONG, Locale.getDefault())
+            "dnnn" -> now.getDisplayName(Calendar.MONTH, Calendar.SHORT, locale)
+            "dnnnn" -> now.getDisplayName(Calendar.MONTH, Calendar.LONG, locale)
             "dy" -> (now.get(Calendar.YEAR) % 100).toString().padStart(2, '0')
             "dyyyy" -> now.get(Calendar.YEAR).toString()
             "bl", "batt", "battery", "battery_level" -> snapshot.batteryPercent?.toString()
@@ -755,14 +844,21 @@ object WatchmakerTagResolver {
             "pbr" -> snapshot.batteryPercent?.let { (it * 3.6f).toString() }
             "bc", "charging", "is_charging" -> snapshot.isCharging?.let { if (it) "1" else "0" }
             "ssc", "steps", "step_count" -> snapshot.steps?.toString()
-            "shr", "heart", "heart_rate", "heart_rate_bpm" -> snapshot.heartRateBpm?.toString()
+            // Watchmaker/clox 生态惯例：心率无数据渲染 0，而不是 "--"。
+            // 返回 nil 会把 `{shr} + 5` 这类表达式整体打哑；0 让算式照常算。
+            // 权限门控完全不动：没权限时 snapshot.heartRateBpm 依旧是 null，
+            // 这里只是把 null 的呈现从 Unavailable 收敛为数值 0。
+            "shr", "heart", "heart_rate", "heart_rate_bpm" ->
+                (snapshot.heartRateBpm ?: 0).toString()
             // WM_TAGS.md: {sthr} = Maximum recorded heart rate（示例 200），
             // {shrp} = Heart rate as % of maximum。Flue 没有用户健康档案，
             // 因此按规范示例使用固定的 200 BPM 作为最大心率。
             "sthr" -> DEFAULT_MAX_HEART_RATE_BPM.toString()
-            "shrp" -> snapshot.heartRateBpm?.let {
-                (it * 100 / DEFAULT_MAX_HEART_RATE_BPM).coerceIn(0, 100).toString()
-            }
+            "shrp" -> ((snapshot.heartRateBpm ?: 0) * 100 / DEFAULT_MAX_HEART_RATE_BPM)
+                .coerceIn(0, 100)
+                .toString()
+            // {shr_1..9}：Flue 不保存心率历史，按无数据惯例渲染 0。
+            "shr_1", "shr_2", "shr_3", "shr_4", "shr_5", "shr_6", "shr_7", "shr_8", "shr_9" -> "0"
             "sgx" -> renderCompactNumber(snapshot.gyroscopeX ?: 0f)
             "sgy" -> renderCompactNumber(snapshot.gyroscopeY ?: 0f)
             "sgz" -> renderCompactNumber(snapshot.gyroscopeZ ?: 0f)

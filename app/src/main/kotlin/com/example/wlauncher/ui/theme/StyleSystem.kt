@@ -164,12 +164,14 @@ fun materialLauncherStyle(darkMode: Boolean): LauncherStyle {
  * 强调色默认蓝（#3482FF）、浅色底 #F7F7F7 / 深色底 #000000、卡片 #1B1B1B。
  */
 fun miuixLauncherStyle(darkMode: Boolean): LauncherStyle {
+    // HyperOS 实测值：卡片深色 #1F1F1F（非 #1B1B1B）、正文 90% 白、
+    // 次要文字 50% 白（浅色 50% 黑），而不是近似的纯灰。
     val bg = if (darkMode) Color(0xFF000000) else Color(0xFFF7F7F7)
-    val card = if (darkMode) Color(0xFF1B1B1B) else Color(0xFFFFFFFF)
-    val cardPressed = if (darkMode) Color(0xFF2A2A2A) else Color(0xFFEDEDED)
+    val card = if (darkMode) Color(0xFF1F1F1F) else Color(0xFFFFFFFF)
+    val cardPressed = if (darkMode) Color(0xFF2C2C2C) else Color(0xFFEDEDED)
     val accent = Color(0xFF3482FF)
-    val text = if (darkMode) Color(0xFFF2F2F2) else Color(0xFF1A1A1A)
-    val secondary = if (darkMode) Color(0xFF8C8C8C) else Color(0xFF999999)
+    val text = if (darkMode) Color(0xE6FFFFFF) else Color(0xFF1A1A1A)
+    val secondary = if (darkMode) Color(0x80FFFFFF) else Color(0x80000000)
     return LauncherStyle(
         uiStyle = UiStyle.MIUIX,
         screenBackground = bg,

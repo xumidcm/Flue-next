@@ -437,6 +437,8 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         denseGridIconInnerPaddingPx = denseGridIconInnerPaddingPx,
         centerEdgeItems = request.presentation == NativeAppListPresentation.LINEAR,
         allowFolderCreation = request.allowFolderCreation,
+        // 文件夹 / 长按菜单开着时列表不接受起拖。
+        dragEnabled = !request.overlayOpen,
         iconShadowEnabled = request.iconShadowEnabled,
         edgeSpacingCompressionEnabled = request.edgeSpacingCompressionEnabled,
         entryMotionEnabled = !request.appleWatchIconShape,
@@ -488,6 +490,7 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
             ?: 0f,
         drawEdgeFadeMask = request.drawEdgeFadeMaskInNativeView,
         contentOverlayBlurRadiusPx = if (request.overlayOpen) 16f * density else 0f,
+        contentOverlayBlurEligible = request.blurEnabled && request.sdkInt >= 31,
         blurTier = blurTier,
         rotaryHapticsEnabled = request.rotaryHapticsEnabled,
         theme = if (request.darkMode) NativeAppListTheme.DARK else NativeAppListTheme.LIGHT,

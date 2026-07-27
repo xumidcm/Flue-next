@@ -112,6 +112,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
@@ -238,8 +239,11 @@ private sealed interface WidgetLayoutSection {
         val right: List<SideScreenWidgetCardItem>
     ) : WidgetLayoutSection {
         override val cards: List<SideScreenWidgetCardItem> = left + right
+        // 只锚定该 section 内最小的 widgetIndex：拼接全部卡片内容会让任何
+        // 重排都变成"key 换血"（删+加），animateItem 的 placement 动画永远
+        // 不触发。同一次分组里各 section 的卡片集互斥，最小槽位天然唯一。
         override val stableKey: String =
-            "cols:${cards.joinToString(separator = "|") { it.stableKey() }}"
+            "cols:${cards.minOfOrNull { it.widgetIndex } ?: 0}"
     }
 }
 
@@ -429,6 +433,28 @@ private fun widgetInsertionIndexFor(
     return (afterTarget.first.widgetIndex + 1).coerceIn(0, maxInsertIndex)
 }
 
+/**
+ * 拖动中的本地预览顺序：把被拖卡从原位摘出、插到 targetIndex 对应的槽位
+ * 前面。插入语义与 LauncherViewModel.swapWidgetSlots 一致（先移除、
+ * toIndex 在 fromIndex 之后时左移一位），保证预览与松手落盘的结果吻合。
+ * 只影响渲染分组，不落盘。
+ */
+private fun buildWidgetDragPreviewOrder(
+    widgetCards: List<SideScreenWidgetCardItem>,
+    draggingKey: String,
+    targetIndex: Int
+): List<SideScreenWidgetCardItem> {
+    val fromPosition = widgetCards.indexOfFirst { it.stableKey() == draggingKey }
+    if (fromPosition < 0) return widgetCards
+    val reordered = widgetCards.toMutableList()
+    val dragged = reordered.removeAt(fromPosition)
+    val insertPosition = reordered
+        .indexOfFirst { it.widgetIndex >= targetIndex }
+        .let { if (it < 0) reordered.size else it }
+    reordered.add(insertPosition, dragged)
+    return reordered
+}
+
 private fun widgetResizeModeAt(
     position: Offset,
     widthPx: Float,
@@ -576,8 +602,16 @@ fun SmartStackLayer(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(40.dp))
-            .background(launcherStyle.screenBackground)
+            // 圆屏整圆裁剪（40dp 圆角矩形在圆屏上会露出底边弧线）；根底改
+            // 半透明玻璃：表盘背衬在下面被压暗模糊，这层透出它就是毛玻璃。
+            .clip(
+                if (com.flue.launcher.ui.common.isFlueScreenRound()) {
+                    androidx.compose.foundation.shape.CircleShape
+                } else {
+                    RoundedCornerShape(40.dp)
+                },
+            )
+            .background(launcherStyle.screenBackground.copy(alpha = 0.62f))
             .pointerInput(notificationAccessGranted, canOpenNotificationsFromSide, modalState, notificationsSceneActive, transitionInFlight) {
                 if (modalState != SideScreenModalState.None || notificationsSceneActive || transitionInFlight) return@pointerInput
                 detectDragGestures(
@@ -907,7 +941,21 @@ fun WidgetPageLayer(
             }
         }
     }
-    val widgetSections = remember(widgetCards) { groupWidgetCardsIntoSections(widgetCards) }
+    // —— 拖动实时避让（只改本地渲染顺序，不落盘）——
+    // 冻结快照：避让重排会让"洞"和其他卡片自己动起来，落点探针与跟手
+    // 补偿都必须以按下瞬间冻结的坐标为基准，实时读会互相追着横跳。
+    var widgetDragPreviewCards by remember { mutableStateOf<List<SideScreenWidgetCardItem>?>(null) }
+    var widgetDragPreviewBase by remember { mutableStateOf<List<SideScreenWidgetCardItem>?>(null) }
+    var dragFrozenCenter by remember { mutableStateOf<Offset?>(null) }
+    var dragFrozenTopLeft by remember { mutableStateOf<Offset?>(null) }
+    var dragFrozenBounds by remember { mutableStateOf<Map<String, Rect>>(emptyMap()) }
+    var dragScrollAccum by remember { mutableFloatStateOf(0f) }
+    val widgetSections = remember(widgetCards, widgetDragPreviewCards) {
+        // 预览只在其构建基准仍是当前数据时生效：落盘后新数据到账，陈旧
+        // 预览自动失效。提交后预览留到数据回流，中间帧才不会先回跳一下。
+        val previewCards = widgetDragPreviewCards?.takeIf { widgetDragPreviewBase === widgetCards }
+        groupWidgetCardsIntoSections(previewCards ?: widgetCards)
+    }
     val widgetCardCenters = remember { mutableStateMapOf<String, Offset>() }
     val widgetCardBounds = remember { mutableStateMapOf<String, Rect>() }
     var editMode by remember { mutableStateOf(false) }
@@ -922,7 +970,9 @@ fun WidgetPageLayer(
     var widgetPageRootOffset by remember { mutableStateOf(Offset.Zero) }
     val removingWidgetKeys = remember { mutableStateListOf<String>() }
     val enteringWidgetKeys = remember { mutableStateListOf<String>() }
-    var previousWidgetKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // null = 首帧尚未记账。以前初值空集把首次组合的全部既有卡判成"新增"，
+    // 每次打开小组件页整页卡片重播入场动画。
+    var previousWidgetKeys by remember { mutableStateOf<Set<String>?>(null) }
     val widgetBorderHotspotPx = with(density) { 26.dp.toPx() }
     val widgetResizeLongPressMs = 420L
     val autoScrollEdgePx = with(density) { 56.dp.toPx() }
@@ -1054,16 +1104,24 @@ fun WidgetPageLayer(
             editMode = false
         }
         val activeKeys = widgetCards.map { it.stableKey() }.toSet()
-        val addedKeys = activeKeys - previousWidgetKeys
+        val primedKeys = previousWidgetKeys
+        // 记账先落地：widgetCards 同帧再变会取消本协程，若 removeAll 只在
+        // yield 之后执行，对应卡片的 AnimatedVisibility 会永远停在 false——
+        // 「打断转场后小组件永久消失」的根因。
+        previousWidgetKeys = activeKeys
         widgetCardCenters.keys.retainAll(activeKeys)
         widgetCardBounds.keys.retainAll(activeKeys)
         removingWidgetKeys.removeAll { key -> key !in activeKeys }
+        if (primedKeys == null) return@LaunchedEffect
+        val addedKeys = activeKeys - primedKeys
         if (addedKeys.isNotEmpty()) {
             enteringWidgetKeys += addedKeys
-            yield()
-            enteringWidgetKeys.removeAll(addedKeys)
+            try {
+                yield()
+            } finally {
+                enteringWidgetKeys.removeAll(addedKeys)
+            }
         }
-        previousWidgetKeys = activeKeys
     }
 
     LaunchedEffect(editMode, showPicker) {
@@ -1074,6 +1132,12 @@ fun WidgetPageLayer(
             activeWidgetResize = null
             widgetDragAutoScrollPx = 0f
             pendingWidgetDropIndex = null
+            widgetDragPreviewCards = null
+            widgetDragPreviewBase = null
+            dragFrozenCenter = null
+            dragFrozenTopLeft = null
+            dragFrozenBounds = emptyMap()
+            dragScrollAccum = 0f
             editGestureLocked = false
         }
     }
@@ -1093,7 +1157,9 @@ fun WidgetPageLayer(
             }
             val consumed = listState.scrollBy(scrollDelta)
             if (consumed != 0f) {
-                draggingWidgetOffset = draggingWidgetOffset.copy(y = draggingWidgetOffset.y + consumed)
+                // 滚动量记入 dragScrollAccum 供落点探针换算"冻结内容坐标"；
+                // 被拖卡的视觉跟手由冻结锚点减实时布局位置的补偿项兜底。
+                dragScrollAccum += consumed
             }
         }
     }
@@ -1104,12 +1170,18 @@ fun WidgetPageLayer(
             .onGloballyPositioned { coordinates ->
                 widgetPageRootOffset = coordinates.positionInRoot()
             }
-            .background(launcherStyle.screenBackground, RoundedCornerShape(40.dp))
+            .background(
+                launcherStyle.screenBackground.copy(alpha = 0.62f),
+                if (com.flue.launcher.ui.common.isFlueScreenRound()) {
+                    androidx.compose.foundation.shape.CircleShape
+                } else {
+                    RoundedCornerShape(40.dp)
+                },
+            )
     ) {
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val availableWidth = maxWidth - leftSafeInset
         val contentWidth = availableWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
-        val screenHeightPx = with(density) { maxHeight.toPx() }
         val widgetColumnGap = 10.dp
         val singleColumnWidth = (contentWidth - widgetColumnGap) / 2f
         val singleColumnWidthDp = with(density) { singleColumnWidth.toPx().toDp().value }
@@ -1148,10 +1220,24 @@ fun WidgetPageLayer(
             key(cardKey) {
                 AnimatedVisibility(
                     visible = cardKey !in removingWidgetKeys && cardKey !in enteringWidgetKeys,
-                    enter = fadeIn(tween(180)) + scaleIn(tween(220), initialScale = 0.88f),
-                    exit = fadeOut(tween(150)) + scaleOut(tween(170), targetScale = 0.86f)
+                    // 负一屏体系无缩放：入出场只做淡入淡出（缩放入场叠加首帧
+                    // 记账 bug 曾让整页卡片"从中间放大"重播）。
+                    enter = fadeIn(tween(180)),
+                    exit = fadeOut(tween(150))
                 ) {
                     val dragging = draggingWidgetKey == cardKey
+                    // 抬起/落位不再三元瞬跳：长按成立的那一帧突然放大+突现
+                    // 22dp 阴影、松手瞬移回原位，是拖拽最生硬的两下。
+                    val liftScale by animateFloatAsState(
+                        targetValue = if (dragging) 1.04f else 1f,
+                        animationSpec = spring(dampingRatio = 0.62f, stiffness = 900f),
+                        label = "widget_lift_scale",
+                    )
+                    val liftElevation by animateDpAsState(
+                        targetValue = if (dragging) 20.dp else 0.dp,
+                        animationSpec = tween(140),
+                        label = "widget_lift_elevation",
+                    )
                     Box(
                         modifier = Modifier
                             .width(animatedCardWidth)
@@ -1181,19 +1267,41 @@ fun WidgetPageLayer(
                             }
                             .zIndex(if (dragging) 50f else 0f)
                             .graphicsLayer {
-                                translationX = if (dragging) draggingWidgetOffset.x else 0f
-                                translationY = if (dragging) draggingWidgetOffset.y else 0f
-                                shadowElevation = if (dragging) 22.dp.toPx() else 0f
+                                // 实时让位会把本卡重排进新槽位（布局基点变了），
+                                // 平移量要加上"冻结锚点 − 实时布局位置"的补偿，
+                                // 视觉上才始终吸在手指下不跳。
+                                val dragCorrection = if (dragging) {
+                                    val frozenTopLeft = dragFrozenTopLeft
+                                    val liveTopLeft = widgetCardBounds[cardKey]?.topLeft
+                                    if (frozenTopLeft != null && liveTopLeft != null) {
+                                        frozenTopLeft - liveTopLeft
+                                    } else {
+                                        Offset.Zero
+                                    }
+                                } else {
+                                    Offset.Zero
+                                }
+                                translationX = if (dragging) draggingWidgetOffset.x + dragCorrection.x else 0f
+                                translationY = if (dragging) draggingWidgetOffset.y + dragCorrection.y else 0f
+                                shadowElevation = liftElevation.toPx()
                                 alpha = 1f
-                                scaleX = if (dragging) 1.035f else 1f
-                                scaleY = if (dragging) 1.035f else 1f
+                                scaleX = liftScale
+                                scaleY = liftScale
                             }
                     ) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(shellShape)
-                                .background(Color.White.copy(alpha = if (editMode) 0.05f else 0.03f))
+                                // 非编辑态外壳完全透明（小组件卡片自带内容
+                                // 背景）；编辑态才显出极淡玻璃壳提示可编辑。
+                                .background(
+                                    if (editMode) {
+                                        Color.White.copy(alpha = 0.05f)
+                                    } else {
+                                        Color.Transparent
+                                    },
+                                )
                                 .padding(4.dp)
                         ) {
                             WidgetCard(
@@ -1260,7 +1368,12 @@ fun WidgetPageLayer(
                                                 draggingWidgetOffset = Offset.Zero
                                                 widgetDragAutoScrollPx = 0f
                                                 pendingWidgetDropIndex = null
+                                                // 拖拽的移动、避让与落点提交全部移交列表级手势环
+                                                //（Initial pass 旁听）：实时让位会把本卡重排进别的
+                                                // section（组合树易主），卡内手势环会被连根取消断手。
+                                                return@awaitEachGesture
                                             }
+                                            // 缩放没有避让重排，卡片节点稳定，留在卡内环里处理。
                                             while (true) {
                                                 val event = awaitPointerEvent()
                                                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
@@ -1271,49 +1384,6 @@ fun WidgetPageLayer(
                                                 val resize = activeWidgetResize
                                                 if (resize?.cardKey == cardKey) {
                                                     activeWidgetResize = resize.copy(delta = resize.delta + dragAmount)
-                                                } else if (draggingWidgetKey == cardKey) {
-                                                    draggingWidgetOffset += dragAmount
-                                                    val cardCenter = widgetCardCenters[cardKey]
-                                                    val pointerScreenY = cardCenter?.y?.let { centerY ->
-                                                        centerY - size.height / 2f +
-                                                            draggingWidgetOffset.y +
-                                                            change.position.y
-                                                    }
-                                                    when {
-                                                        pointerScreenY != null && pointerScreenY < autoScrollEdgePx -> {
-                                                            val progress = ((autoScrollEdgePx - pointerScreenY) / autoScrollEdgePx)
-                                                                .coerceIn(0f, 1.2f)
-                                                            widgetDragAutoScrollPx = -autoScrollMaxVelocityPx * progress
-                                                        }
-                                                        pointerScreenY != null && pointerScreenY > screenHeightPx - autoScrollEdgePx -> {
-                                                            val progress = ((pointerScreenY - (screenHeightPx - autoScrollEdgePx)) / autoScrollEdgePx)
-                                                                .coerceIn(0f, 1.2f)
-                                                            widgetDragAutoScrollPx = autoScrollMaxVelocityPx * progress
-                                                        }
-                                                        else -> {
-                                                            widgetDragAutoScrollPx = 0f
-                                                        }
-                                                    }
-                                                    val sourceCenter = widgetCardCenters[cardKey]
-                                                    pendingWidgetDropIndex = sourceCenter
-                                                        ?.plus(draggingWidgetOffset)
-                                                        ?.let { point ->
-                                                            widgetInsertionIndexFor(
-                                                                point = point,
-                                                                widgetCards = widgetCards,
-                                                                boundsByKey = widgetCardBounds
-                                                            )
-                                                        }
-                                                }
-                                            }
-                                            if (draggingWidgetKey == cardKey) {
-                                                val targetIndex = pendingWidgetDropIndex
-                                                if (
-                                                    targetIndex != null &&
-                                                    targetIndex != card.widgetIndex &&
-                                                    targetIndex != card.widgetIndex + 1
-                                                ) {
-                                                    onSwapWidget(card.widgetIndex, targetIndex)
                                                 }
                                             }
                                             activeWidgetResize?.takeIf { it.cardKey == cardKey }?.let { resize ->
@@ -1329,10 +1399,6 @@ fun WidgetPageLayer(
                                                 )
                                             }
                                             activeWidgetResize = null
-                                            draggingWidgetKey = null
-                                            draggingWidgetOffset = Offset.Zero
-                                            widgetDragAutoScrollPx = 0f
-                                            pendingWidgetDropIndex = null
                                         }
                                     }
                             )
@@ -1373,6 +1439,132 @@ fun WidgetPageLayer(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
+                // 列表级拖拽手势环：卡片长按晋升后从这里接管移动/避让/落点。
+                // 不能留在卡内环——实时让位会把被拖卡重排进别的 section，
+                // 组合树易主时卡内 pointerInput 协程会被连根取消（拖一半断手）。
+                .pointerInput(editGestureLocked, widgetCards) {
+                    if (!editGestureLocked) return@pointerInput
+                    fun resetDragState(clearPreview: Boolean = true) {
+                        draggingWidgetKey = null
+                        draggingWidgetOffset = Offset.Zero
+                        widgetDragAutoScrollPx = 0f
+                        pendingWidgetDropIndex = null
+                        if (clearPreview) {
+                            widgetDragPreviewCards = null
+                            widgetDragPreviewBase = null
+                        }
+                        dragFrozenCenter = null
+                        dragFrozenTopLeft = null
+                        dragFrozenBounds = emptyMap()
+                        dragScrollAccum = 0f
+                    }
+                    try {
+                        awaitEachGesture {
+                            var trackedPointer: PointerId? = null
+                            var dragActive = false
+                            var pointerOrigin = Offset.Zero
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                val change = trackedPointer
+                                    ?.let { id -> event.changes.firstOrNull { it.id == id } }
+                                    ?: event.changes.firstOrNull { it.pressed }?.also { trackedPointer = it.id }
+                                    ?: return@awaitEachGesture
+                                if (!change.pressed) {
+                                    // 抬手：拖拽中则一次性提交落点（整场拖动只落盘这一次）。
+                                    val liftKey = draggingWidgetKey
+                                    if (liftKey != null) {
+                                        val draggedCard = widgetCards.firstOrNull { it.stableKey() == liftKey }
+                                        val targetIndex = pendingWidgetDropIndex
+                                        val commitSwap = dragActive &&
+                                            draggedCard != null &&
+                                            targetIndex != null &&
+                                            targetIndex != draggedCard.widgetIndex &&
+                                            targetIndex != draggedCard.widgetIndex + 1
+                                        if (commitSwap && draggedCard != null && targetIndex != null) {
+                                            onSwapWidget(draggedCard.widgetIndex, targetIndex)
+                                        }
+                                        // 提交过落盘就把预览留到新数据到账（基准失配自动失
+                                        // 效），中间帧不回跳；没提交则立刻恢复原顺序。
+                                        resetDragState(clearPreview = !commitSwap)
+                                    }
+                                    return@awaitEachGesture
+                                }
+                                val dragKey = draggingWidgetKey
+                                if (dragKey == null) {
+                                    // 长按尚未晋升（或被缩放抢占）：只旁听、不消费。
+                                    if (dragActive) {
+                                        resetDragState()
+                                        dragActive = false
+                                    }
+                                    continue
+                                }
+                                if (widgetCards.none { it.stableKey() == dragKey }) {
+                                    // 拖拽途中数据被外力改动（卡片没了）：放弃这场拖拽。
+                                    resetDragState()
+                                    dragActive = false
+                                    continue
+                                }
+                                if (!dragActive) {
+                                    // 晋升后的第一个事件：冻结按下瞬间的几何快照。
+                                    val frozenCenter = widgetCardCenters[dragKey]
+                                    val frozenBounds = widgetCardBounds[dragKey]
+                                    if (frozenCenter == null || frozenBounds == null) {
+                                        resetDragState()
+                                        continue
+                                    }
+                                    dragActive = true
+                                    pointerOrigin = change.position
+                                    dragFrozenCenter = frozenCenter
+                                    dragFrozenTopLeft = frozenBounds.topLeft
+                                    dragFrozenBounds = widgetCardBounds.toMap()
+                                    dragScrollAccum = 0f
+                                }
+                                change.consume()
+                                draggingWidgetOffset = change.position - pointerOrigin
+                                // 边缘自动滚动：手指纵坐标直接取列表本地坐标，
+                                // 本节点不参与重排，无需再经卡片中心换算。
+                                val viewportHeight = size.height.toFloat().coerceAtLeast(1f)
+                                val fingerY = change.position.y
+                                widgetDragAutoScrollPx = when {
+                                    fingerY < autoScrollEdgePx -> {
+                                        val progress = ((autoScrollEdgePx - fingerY) / autoScrollEdgePx)
+                                            .coerceIn(0f, 1.2f)
+                                        -autoScrollMaxVelocityPx * progress
+                                    }
+                                    fingerY > viewportHeight - autoScrollEdgePx -> {
+                                        val progress = ((fingerY - (viewportHeight - autoScrollEdgePx)) / autoScrollEdgePx)
+                                            .coerceIn(0f, 1.2f)
+                                        autoScrollMaxVelocityPx * progress
+                                    }
+                                    else -> 0f
+                                }
+                                // 落点探针：冻结中心 + 手指位移 + 滚动累计，对着
+                                // 冻结边界求洞位——避让重排挪不动这套坐标，不会横跳。
+                                pendingWidgetDropIndex = dragFrozenCenter
+                                    ?.plus(draggingWidgetOffset)
+                                    ?.plus(Offset(0f, dragScrollAccum))
+                                    ?.let { point ->
+                                        widgetInsertionIndexFor(
+                                            point = point,
+                                            widgetCards = widgetCards,
+                                            boundsByKey = dragFrozenBounds
+                                        )
+                                    }
+                                // 实时让位：只改本地渲染顺序，其余卡走 animateItem 位移。
+                                pendingWidgetDropIndex?.let { target ->
+                                    widgetDragPreviewCards =
+                                        buildWidgetDragPreviewOrder(widgetCards, dragKey, target)
+                                    widgetDragPreviewBase = widgetCards
+                                }
+                            }
+                        }
+                    } finally {
+                        // pointerInput 重启/销毁兜底：别让拖拽状态卡死在半场。
+                        if (draggingWidgetKey != null || widgetDragPreviewCards != null) {
+                            resetDragState()
+                        }
+                    }
+                }
                 .nestedScroll(nestedScrollConnection)
                 .onSizeChanged { size -> sharedElasticState.setViewportHeight(size.height) }
                 .graphicsLayer { translationY = sharedElasticState.offsetPx }
@@ -1430,9 +1622,12 @@ fun WidgetPageLayer(
                     val sectionModifier = Modifier
                         .width(contentWidth)
                         .animateItem(
-                            fadeInSpec = tween(160),
+                            // 拖动预览期间重分组会增删 section key：淡出残影会
+                            // 短暂存活并被新建的同 id 宿主视图"挤掉"变白，所以
+                            // 拖动中增删立现立没（null），只保留 placement 位移。
+                            fadeInSpec = if (draggingWidgetKey != null) null else tween(160),
                             placementSpec = spring(stiffness = 520f, dampingRatio = 0.86f),
-                            fadeOutSpec = tween(160)
+                            fadeOutSpec = if (draggingWidgetKey != null) null else tween(160)
                         )
                         .then(
                             if (sectionIsResizing) {
@@ -1867,7 +2062,7 @@ private fun WidgetCard(
                 shape = cardShape
                 clip = true
             }
-            .background(Color(0xFF1F2937))
+            .background(LauncherTheme.style.cardColor)
     ) {
         if (providerInfo != null && widget.widgetId != -1) {
             val widgetBindTag = remember(widget.widgetId, providerInfo) {
@@ -1972,7 +2167,7 @@ private fun WidgetCard(
                         scaleY = scale
                     }
                     .clip(cardShape)
-                    .background(Color(0xFF1F2937))
+                    .background(LauncherTheme.style.cardColor)
                     .combinedClickable(
                         interactionSource = interactionSource,
                         indication = null,

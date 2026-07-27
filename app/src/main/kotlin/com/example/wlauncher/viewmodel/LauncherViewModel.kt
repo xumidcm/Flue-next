@@ -79,6 +79,7 @@ import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceStorage
 import com.flue.launcher.watchface.jbwatch.JBWATCH_ID_PREFIX
 import com.flue.launcher.watchface.jbwatch.JbWatchFaceStorage
 import com.flue.launcher.watchface.standard.WATCHMAKER_ID_PREFIX
+import com.flue.launcher.watchface.standard.WatchDateLocale
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStorage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -148,6 +149,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_ICON_SHADOW = booleanPreferencesKey("app_icon_shadow_enabled")
         val KEY_APP_LIST_RETURN_SHRINK = booleanPreferencesKey("app_list_return_shrink_enabled")
         val KEY_FACE_RETURN_SHRINK = booleanPreferencesKey("face_return_shrink_enabled")
+        val KEY_LEGACY_APP_LIST_TRANSITION = booleanPreferencesKey("legacy_app_list_transition_enabled")
+        val KEY_APP_LIST_RETURN_ICON_FLOAT = booleanPreferencesKey("app_list_return_icon_float_enabled")
         val KEY_REDUCE_DYNAMIC_EFFECTS = booleanPreferencesKey("reduce_dynamic_effects")
         val KEY_SCREEN_SHAPE_OVERRIDE = stringPreferencesKey("screen_shape_override")
         val KEY_APP_LIST_STAGGER = booleanPreferencesKey("app_list_stagger_enabled")
@@ -169,6 +172,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_WATCHFACE_STATUS_INDICATORS = booleanPreferencesKey("watchface_status_indicators")
         val KEY_WATCHFACE_BOTTOM_FADE = booleanPreferencesKey("watchface_bottom_fade_enabled")
         val KEY_WATCHMAKER_FORCE_FILL = booleanPreferencesKey("watchmaker_force_fill")
+        val KEY_WATCHFACE_DATE_LOCALE = stringPreferencesKey("watchface_date_locale")
         val KEY_DINGDINGCAT_FILL_SCREEN = booleanPreferencesKey("dingdingcat_fill_screen")
         val KEY_DINGDINGCAT_PLAYBACK_SPEED_PERCENT = intPreferencesKey("dingdingcat_playback_speed_percent")
         val KEY_DINGDINGCAT_IMPORT_UNLOCKED = booleanPreferencesKey("dingdingcat_import_unlocked")
@@ -425,6 +429,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val appListReturnShrinkEnabled: StateFlow<Boolean> = _appListReturnShrinkEnabled.asStateFlow()
     private val _faceReturnShrinkEnabled = MutableStateFlow(true)
     val faceReturnShrinkEnabled: StateFlow<Boolean> = _faceReturnShrinkEnabled.asStateFlow()
+    // 还原 watchOS 三段式之前的老转场（表盘 2.5 倍冲脸 / 列表缩点退场）。
+    private val _legacyAppListTransitionEnabled = MutableStateFlow(false)
+    val legacyAppListTransitionEnabled: StateFlow<Boolean> = _legacyAppListTransitionEnabled.asStateFlow()
+    // 从应用返回应用列表时重播逐行上浮入场。默认关；仅在关闭
+    // 「应用列表收缩动画」时在设置里展示（老师指定的联动规则）。
+    private val _appListReturnIconFloatEnabled = MutableStateFlow(false)
+    val appListReturnIconFloatEnabled: StateFlow<Boolean> = _appListReturnIconFloatEnabled.asStateFlow()
     private val _reduceDynamicEffects = MutableStateFlow(false)
     val reduceDynamicEffects: StateFlow<Boolean> = _reduceDynamicEffects.asStateFlow()
     private val _screenShapeOverride = MutableStateFlow(FlueScreenShape.AUTO)
@@ -470,6 +481,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val watchFaceBottomFadeEnabled: StateFlow<Boolean> = _watchFaceBottomFadeEnabled.asStateFlow()
     private val _watchmakerForceFill = MutableStateFlow(false)
     val watchmakerForceFill: StateFlow<Boolean> = _watchmakerForceFill.asStateFlow()
+    // 表盘日期语言：system/zh/en/ja 四档，默认跟随系统。
+    private val _watchfaceDateLocale = MutableStateFlow(WatchDateLocale.PREFERENCE_SYSTEM)
+    val watchfaceDateLocale: StateFlow<String> = _watchfaceDateLocale.asStateFlow()
     private val _dingDingCatFillScreen = MutableStateFlow(false)
     val dingDingCatFillScreen: StateFlow<Boolean> = _dingDingCatFillScreen.asStateFlow()
     private val _dingDingCatPlaybackSpeedPercent = MutableStateFlow(100)
@@ -920,6 +934,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListReturnShrinkEnabled.value = loadedAppListReturnShrink
                 }
 
+                val loadedLegacyAppListTransition = prefs[KEY_LEGACY_APP_LIST_TRANSITION] ?: false
+                if (_legacyAppListTransitionEnabled.value != loadedLegacyAppListTransition) {
+                    _legacyAppListTransitionEnabled.value = loadedLegacyAppListTransition
+                }
+
+                val loadedAppListReturnIconFloat = prefs[KEY_APP_LIST_RETURN_ICON_FLOAT] ?: false
+                if (_appListReturnIconFloatEnabled.value != loadedAppListReturnIconFloat) {
+                    _appListReturnIconFloatEnabled.value = loadedAppListReturnIconFloat
+                }
+
                 val loadedFaceReturnShrink = prefs[KEY_FACE_RETURN_SHRINK] ?: true
                 if (_faceReturnShrinkEnabled.value != loadedFaceReturnShrink) {
                     _faceReturnShrinkEnabled.value = loadedFaceReturnShrink
@@ -985,6 +1009,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 if (_watchmakerForceFill.value != loadedWatchmakerForceFill) {
                     _watchmakerForceFill.value = loadedWatchmakerForceFill
                 }
+
+                val loadedWatchfaceDateLocale =
+                    prefs[KEY_WATCHFACE_DATE_LOCALE] ?: WatchDateLocale.PREFERENCE_SYSTEM
+                if (_watchfaceDateLocale.value != loadedWatchfaceDateLocale) {
+                    _watchfaceDateLocale.value = loadedWatchfaceDateLocale
+                }
+                // 渲染热路径读的是进程级 override，偏好每次落地都同步一次。
+                WatchDateLocale.override = WatchDateLocale.fromPreference(loadedWatchfaceDateLocale)
 
                 val loadedDingDingCatFillScreen = prefs[KEY_DINGDINGCAT_FILL_SCREEN] ?: false
                 if (_dingDingCatFillScreen.value != loadedDingDingCatFillScreen) {
@@ -2055,6 +2087,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_APP_LIST_RETURN_SHRINK] = enabled } }
     }
 
+    fun setLegacyAppListTransitionEnabled(enabled: Boolean) {
+        _legacyAppListTransitionEnabled.value = enabled
+        persist { store.edit { it[KEY_LEGACY_APP_LIST_TRANSITION] = enabled } }
+    }
+
+    fun setAppListReturnIconFloatEnabled(enabled: Boolean) {
+        _appListReturnIconFloatEnabled.value = enabled
+        persist { store.edit { it[KEY_APP_LIST_RETURN_ICON_FLOAT] = enabled } }
+    }
+
     fun setFaceReturnShrinkEnabled(enabled: Boolean) {
         _faceReturnShrinkEnabled.value = enabled
         persist { store.edit { it[KEY_FACE_RETURN_SHRINK] = enabled } }
@@ -2225,6 +2267,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setWatchmakerForceFillEnabled(enabled: Boolean) {
         _watchmakerForceFill.value = enabled
         persist { store.edit { it[KEY_WATCHMAKER_FORCE_FILL] = enabled } }
+    }
+
+    /** 表盘日期语言四档：system/zh/en/ja；未知值按跟随系统兜底。 */
+    fun setWatchfaceDateLocale(value: String) {
+        _watchfaceDateLocale.value = value
+        // 立即写进程级 override，表盘下一帧就按新语言渲染，不等 DataStore 回流。
+        WatchDateLocale.override = WatchDateLocale.fromPreference(value)
+        persist { store.edit { it[KEY_WATCHFACE_DATE_LOCALE] = value } }
     }
 
     fun setDingDingCatFillScreenEnabled(enabled: Boolean) {
@@ -3058,6 +3108,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _iconShadowEnabled.value = true
         _appListReturnShrinkEnabled.value = true
         _faceReturnShrinkEnabled.value = true
+        _legacyAppListTransitionEnabled.value = false
+        _appListReturnIconFloatEnabled.value = false
         _reduceDynamicEffects.value = false
         _screenShapeOverride.value = FlueScreenShape.AUTO
         _appListStaggerEnabled.value = false
@@ -3078,6 +3130,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _watchFaceStatusIndicators.value = true
         _watchFaceBottomFadeEnabled.value = false
         _watchmakerForceFill.value = false
+        _watchfaceDateLocale.value = WatchDateLocale.PREFERENCE_SYSTEM
+        WatchDateLocale.override = null
         _dingDingCatFillScreen.value = false
         _dingDingCatPlaybackSpeedPercent.value = 100
         _dingDingCatImportUnlocked.value = false
@@ -3167,6 +3221,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it.remove(booleanPreferencesKey("classic_return_animation_enabled"))
                 it[KEY_APP_LIST_RETURN_SHRINK] = true
                 it[KEY_FACE_RETURN_SHRINK] = true
+                it[KEY_LEGACY_APP_LIST_TRANSITION] = false
+                it[KEY_APP_LIST_RETURN_ICON_FLOAT] = false
                 it[KEY_REDUCE_DYNAMIC_EFFECTS] = false
                 it.remove(KEY_SCREEN_SHAPE_OVERRIDE)
                 it[KEY_APP_LIST_STAGGER] = false
@@ -3188,6 +3244,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_WATCHFACE_STATUS_INDICATORS] = true
                 it[KEY_WATCHFACE_BOTTOM_FADE] = false
                 it[KEY_WATCHMAKER_FORCE_FILL] = false
+                it.remove(KEY_WATCHFACE_DATE_LOCALE)
                 it[KEY_DINGDINGCAT_FILL_SCREEN] = false
                 it[KEY_DINGDINGCAT_PLAYBACK_SPEED_PERCENT] = 100
                 it[KEY_DINGDINGCAT_IMPORT_UNLOCKED] = false

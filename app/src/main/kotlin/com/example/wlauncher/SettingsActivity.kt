@@ -23,12 +23,24 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.spring
+import com.flue.launcher.ui.settings.miuix.MiuixLoadingIndicator
+import com.flue.launcher.ui.settings.miuix.SettingsIcon
+import com.flue.launcher.ui.settings.SettingsSearchEntry
+import com.flue.launcher.ui.settings.SettingsSearchField
+import com.flue.launcher.ui.settings.searchSettingsEntries
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -160,6 +172,7 @@ import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.InternalWatchFaceStorage
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.LunchWatchFaceRuntime
+import com.flue.launcher.watchface.standard.WatchDateLocale
 import com.flue.launcher.watchface.store.WatchStoreRepository
 import java.text.SimpleDateFormat
 import kotlinx.coroutines.Dispatchers
@@ -193,6 +206,11 @@ enum class SettingsDestination {
     APPEARANCE,
     DISPLAY_SIZE,
     FEATURE_TOGGLES,
+    SIDE_SCREEN,
+    NOTIFICATION_SETTINGS,
+    CONTROL_CENTER_SETTINGS,
+    GESTURE_SETTINGS,
+    APP_LIST_BEHAVIOR,
     PERFORMANCE,
     MOTION_PROFILE,
     MUSIC_TEXT_ANIMATION,
@@ -365,6 +383,8 @@ private fun SettingsRootScreen(
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
     val appListReturnShrinkEnabled by vm.appListReturnShrinkEnabled.collectAsStateWithLifecycle()
+    val legacyAppListTransitionEnabled by vm.legacyAppListTransitionEnabled.collectAsStateWithLifecycle()
+    val appListReturnIconFloatEnabled by vm.appListReturnIconFloatEnabled.collectAsStateWithLifecycle()
     val reduceDynamicEffects by vm.reduceDynamicEffects.collectAsStateWithLifecycle()
     val screenShapeOverride by vm.screenShapeOverride.collectAsStateWithLifecycle()
     val appListStaggerEnabled by vm.appListStaggerEnabled.collectAsStateWithLifecycle()
@@ -426,6 +446,7 @@ private fun SettingsRootScreen(
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val watchmakerForceFill by vm.watchmakerForceFill.collectAsStateWithLifecycle()
+    val watchfaceDateLocale by vm.watchfaceDateLocale.collectAsStateWithLifecycle()
     val dingDingCatFillScreen by vm.dingDingCatFillScreen.collectAsStateWithLifecycle()
     val dingDingCatPlaybackSpeedPercent by vm.dingDingCatPlaybackSpeedPercent.collectAsStateWithLifecycle()
     val dingDingCatImportUnlocked by vm.dingDingCatImportUnlocked.collectAsStateWithLifecycle()
@@ -831,6 +852,7 @@ private fun SettingsRootScreen(
 
     BackHandler(enabled = true) { handleBack() }
 
+    var settingsSearchQuery by remember { mutableStateOf("") }
     val selectedIconPackLabel = availableIconPacks.firstOrNull { it.packageName == selectedIconPackPackage }?.label
     val scrollFor: (SettingsDestination) -> SavedScrollPosition = { target ->
         pageScrollPositions[target] ?: SavedScrollPosition()
@@ -848,16 +870,34 @@ private fun SettingsRootScreen(
         AnimatedContent(
             targetState = destination,
             transitionSpec = {
-                (fadeIn(animationSpec = launcherStyle.pageMotionSpec) +
-                    scaleIn(
-                        initialScale = if (uiStyle == UiStyle.MATERIAL_3) 0.98f else 0.985f,
-                        animationSpec = launcherStyle.pageMotionSpec
-                    )) togetherWith
-                    (fadeOut(animationSpec = tween(140)) +
-                        scaleOut(
-                            targetScale = if (uiStyle == UiStyle.MATERIAL_3) 0.995f else 0.985f,
-                            animationSpec = tween(140)
-                        ))
+                if (uiStyle == UiStyle.MIUIX) {
+                    // MIUIX / HyperOS 式层级推拉：进子页新页从右 1/4 滑入 +
+                    // 淡入、旧页左移 1/6 让位；返回反向。方向由层级深度判定，
+                    // 返回键与手势走同一套。
+                    val forward = targetState.depth >= initialState.depth
+                    (
+                        slideInHorizontally(
+                            animationSpec = tween(260, easing = FastOutSlowInEasing),
+                        ) { fullWidth -> if (forward) fullWidth / 4 else -fullWidth / 6 } +
+                            fadeIn(tween(200))
+                        ) togetherWith (
+                        slideOutHorizontally(
+                            animationSpec = tween(240, easing = FastOutSlowInEasing),
+                        ) { fullWidth -> if (forward) -fullWidth / 6 else fullWidth / 4 } +
+                            fadeOut(tween(140))
+                        )
+                } else {
+                    (fadeIn(animationSpec = launcherStyle.pageMotionSpec) +
+                        scaleIn(
+                            initialScale = if (uiStyle == UiStyle.MATERIAL_3) 0.98f else 0.985f,
+                            animationSpec = launcherStyle.pageMotionSpec
+                        )) togetherWith
+                        (fadeOut(animationSpec = tween(140)) +
+                            scaleOut(
+                                targetScale = if (uiStyle == UiStyle.MATERIAL_3) 0.995f else 0.985f,
+                                animationSpec = tween(140)
+                            ))
+                }
             },
             label = "settings_destination"
         ) { currentDestination ->
@@ -874,16 +914,41 @@ private fun SettingsRootScreen(
                 initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.ROOT).offset,
                 onScrollChanged = { index, offset -> updateScroll(SettingsDestination.ROOT, index, offset) }
             ) { listState, screenCenterY, screenHeightPx, _ ->
-                // 顶部预览头图：迷你手表屏 + 当前配置摘要，点击进入外观设置。
-                item("settings_preview_header") {
-                    SettingsPreviewHeaderCard(
-                        headerTime = headerTime,
-                        uiStyle = uiStyle,
-                        themeMode = themeMode,
-                        layoutMode = layoutMode,
-                        onClick = { navigateTo(SettingsDestination.APPEARANCE) }
+                item("settings_search") {
+                    SettingsSearchField(
+                        query = settingsSearchQuery,
+                        onQueryChange = { settingsSearchQuery = it },
+                        modifier = Modifier.padding(bottom = 4.dp),
                     )
                 }
+                if (settingsSearchQuery.isNotBlank()) {
+                    val searchResults = searchSettingsEntries(settingsSearchQuery, settingsSearchIndex)
+                    if (searchResults.isEmpty()) {
+                        item("search_empty") {
+                            Text(
+                                "没有匹配的设置",
+                                color = LauncherTheme.style.secondaryTextColor,
+                                fontSize = 13.sp,
+                            )
+                        }
+                    }
+                    searchResults.forEachIndexed { resultIndex, entry ->
+                        item("search_result_$resultIndex") {
+                            SettingsCategoryCard(
+                                title = entry.title,
+                                subtitle = entry.description,
+                                onClick = {
+                                    settingsSearchQuery = ""
+                                    runCatching { SettingsDestination.valueOf(entry.destinationName) }
+                                        .getOrNull()
+                                        ?.let(navigateTo)
+                                },
+                                scale = 1f
+                            )
+                        }
+                    }
+                } else {
+                // 顶部预览头图已按需求移除，列表直接从「外观」分组开始。
                 // 分组顺序对照 SettingsHierarchy：外观 → 表盘 → 应用列表 →
                 // 动画 → 手势与输入 → 系统与工具 → 关于。
                 item("section_appearance") {
@@ -971,6 +1036,7 @@ private fun SettingsRootScreen(
                         scale = itemFisheye(listState, "about", screenCenterY, screenHeightPx)
                     )
                 }
+                }
             }
 
             SettingsDestination.HIDDEN_APPS -> SettingsPageScaffold(
@@ -1041,12 +1107,12 @@ private fun SettingsRootScreen(
                     ActionCard(
                         title = "刷新图标包",
                         subtitle = "重新扫描已安装的 ADW 图标包",
-                        icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                        icon = { SettingsIcon(material = Icons.Filled.Refresh, miuix = MiuixIcons.Refresh) },
                         onClick = { vm.refreshIconPacks() },
                         scale = itemFisheye(listState, "icon_pack_refresh", screenCenterY, screenHeightPx)
                     )
                 }
-            }
+        }
 
             SettingsDestination.WATCH_FACES -> SettingsPageScaffold(
             title = "表盘",
@@ -1138,7 +1204,7 @@ private fun SettingsRootScreen(
                     title = "重新扫描表盘",
                     subtitle = "扫描标准 .watch、已安装表盘和兼容表盘目录",
                     scale = itemFisheye(listState, "watchface_refresh", screenCenterY, screenHeightPx),
-                    icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                    icon = { SettingsIcon(material = Icons.Filled.Refresh, miuix = MiuixIcons.Refresh) },
                     onClick = { vm.refreshWatchFaces(force = true) }
                 )
             }
@@ -1147,7 +1213,7 @@ private fun SettingsRootScreen(
                     title = "导入表盘",
                     subtitle = "导入标准 Watchmaker .watch 表盘（兼容 jb_watch 包）",
                     scale = itemFisheye(listState, "watchface_import_archive", screenCenterY, screenHeightPx),
-                    icon = { Icon(Icons.Filled.Add, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                    icon = { SettingsIcon(material = Icons.Filled.Add, miuix = MiuixIcons.Add) },
                     onClick = {
                         watchFaceArchiveImportMode = WatchFaceArchiveImportMode.WATCH
                         watchFaceArchivePicker.launch(
@@ -1184,7 +1250,7 @@ private fun SettingsRootScreen(
                     title = "表盘市场",
                     subtitle = "浏览 Watchmaker Community Store，下载后安全安装 .watch 表盘",
                     scale = itemFisheye(listState, "watchface_store", screenCenterY, screenHeightPx),
-                    icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                    icon = { SettingsIcon(material = Icons.Filled.Refresh, miuix = MiuixIcons.Refresh) },
                     onClick = {
                         context.startActivity(Intent(context, WatchStoreActivity::class.java))
                     }
@@ -1195,7 +1261,7 @@ private fun SettingsRootScreen(
                     title = "新建 .watch 表盘",
                     subtitle = "使用内置编辑器创建基础图层并实时预览",
                     scale = itemFisheye(listState, "watchface_editor_new", screenCenterY, screenHeightPx),
-                    icon = { Icon(Icons.Filled.Add, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                    icon = { SettingsIcon(material = Icons.Filled.Add, miuix = MiuixIcons.Add) },
                     onClick = {
                         context.startActivity(Intent(context, WatchEditorActivity::class.java))
                     }
@@ -1207,7 +1273,7 @@ private fun SettingsRootScreen(
                         title = "编辑当前标准表盘",
                         subtitle = "在隔离草稿中编辑 ${selectedWatchFace.displayName}，另存为新表盘",
                         scale = itemFisheye(listState, "watchface_editor_current", screenCenterY, screenHeightPx),
-                        icon = { Icon(Icons.Filled.Settings, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                        icon = { SettingsIcon(material = Icons.Filled.Settings, miuix = MiuixIcons.Settings) },
                         onClick = {
                             context.startActivity(
                                 Intent(context, WatchEditorActivity::class.java)
@@ -1336,7 +1402,7 @@ private fun SettingsRootScreen(
                         title = "表盘字体",
                         subtitle = builtInWatchFaceFontPath?.let { File(it).name } ?: "系统默认字体",
                         scale = itemFisheye(listState, "watchface_font", screenCenterY, screenHeightPx),
-                        icon = { Icon(Icons.Filled.Settings, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                        icon = { SettingsIcon(material = Icons.Filled.Settings, miuix = MiuixIcons.Settings) },
                         onClick = {
                             fontPicker.launch(
                                 arrayOf(
@@ -1356,7 +1422,7 @@ private fun SettingsRootScreen(
                             title = "恢复默认字体",
                             subtitle = "清除已保存的表盘字体",
                             scale = itemFisheye(listState, "watchface_font_clear", screenCenterY, screenHeightPx),
-                            icon = { Icon(Icons.Filled.Refresh, contentDescription = null, tint = WatchColors.ActiveCyan) },
+                            icon = { SettingsIcon(material = Icons.Filled.Refresh, miuix = MiuixIcons.Refresh) },
                             onClick = { vm.setBuiltInWatchFaceFontPath(null) }
                         )
                     }
@@ -1373,6 +1439,66 @@ private fun SettingsRootScreen(
                     checked = watchFaceBottomFadeEnabled,
                     onToggle = vm::setWatchFaceBottomFadeEnabled,
                     scale = itemFisheye(listState, "watchface_bottom_fade", screenCenterY, screenHeightPx)
+                )
+            }
+            item("watchface_date_locale_header") {
+                SectionTitle(
+                    if (isZh) "表盘日期语言" else "Date Language",
+                    itemFisheye(listState, "watchface_date_locale_header", screenCenterY, screenHeightPx)
+                )
+            }
+            item("watchface_date_locale_system") {
+                SettingsChoiceRow(
+                    title = if (isZh) "跟随系统" else "System",
+                    subtitle = if (isZh) "表盘星期与月份跟随系统语言" else "Weekday and month follow the system language",
+                    selected = watchfaceDateLocale == WatchDateLocale.PREFERENCE_SYSTEM,
+                    onClick = { vm.setWatchfaceDateLocale(WatchDateLocale.PREFERENCE_SYSTEM) },
+                    scale = itemFisheye(listState, "watchface_date_locale_system", screenCenterY, screenHeightPx)
+                )
+            }
+            item("watchface_date_locale_zh") {
+                SettingsChoiceRow(
+                    title = "中文",
+                    subtitle = if (isZh) "周一 / 1月 样式" else "Chinese weekday and month names",
+                    selected = watchfaceDateLocale == WatchDateLocale.PREFERENCE_CHINESE,
+                    onClick = { vm.setWatchfaceDateLocale(WatchDateLocale.PREFERENCE_CHINESE) },
+                    scale = itemFisheye(listState, "watchface_date_locale_zh", screenCenterY, screenHeightPx)
+                )
+            }
+            item("watchface_date_locale_en") {
+                SettingsChoiceRow(
+                    title = "English",
+                    subtitle = if (isZh) "Mon / Jan 样式" else "English weekday and month names",
+                    selected = watchfaceDateLocale == WatchDateLocale.PREFERENCE_ENGLISH,
+                    onClick = { vm.setWatchfaceDateLocale(WatchDateLocale.PREFERENCE_ENGLISH) },
+                    scale = itemFisheye(listState, "watchface_date_locale_en", screenCenterY, screenHeightPx)
+                )
+            }
+            item("watchface_date_locale_ja") {
+                SettingsChoiceRow(
+                    title = "日本語",
+                    subtitle = if (isZh) "月 / 1月 样式" else "Japanese weekday and month names",
+                    selected = watchfaceDateLocale == WatchDateLocale.PREFERENCE_JAPANESE,
+                    onClick = { vm.setWatchfaceDateLocale(WatchDateLocale.PREFERENCE_JAPANESE) },
+                    scale = itemFisheye(listState, "watchface_date_locale_ja", screenCenterY, screenHeightPx)
+                )
+            }
+            item("watchface_status_indicators") {
+                SettingsSwitchRow(
+                    title = if (isZh) "表盘状态提示" else "Watch Face Status Indicators",
+                    subtitle = if (isZh) "表盘顶部显示充电闪电和通知红点" else "Show charging and notification indicators at the top of the watch face",
+                    checked = watchFaceStatusIndicators,
+                    onToggle = vm::setWatchFaceStatusIndicatorsEnabled,
+                    scale = itemFisheye(listState, "watchface_status_indicators", screenCenterY, screenHeightPx)
+                )
+            }
+            item("watchface_charging_power_text") {
+                SettingsSwitchRow(
+                    title = if (isZh) "充电功率文字" else "Charging Power Text",
+                    subtitle = if (isZh) "充电时在表盘里显示功率或充电文字" else "Show charging wattage or charging text on the watch face",
+                    checked = watchFaceChargingPowerText,
+                    onToggle = vm::setWatchFaceChargingPowerTextEnabled,
+                    scale = itemFisheye(listState, "watchface_charging_power_text", screenCenterY, screenHeightPx)
                 )
             }
         }
@@ -1536,6 +1662,7 @@ private fun SettingsRootScreen(
                     title = if (isZh) "边缘模糊半径" else "Edge Blur Radius",
                     value = honeycombEdgeBlurRadius,
                     valueText = "%.1f dp".format(java.util.Locale.US, honeycombEdgeBlurRadius),
+                    localValueText = { "%.1f dp".format(java.util.Locale.US, it) },
                     range = 0.5f..5f,
                     steps = 8,
                     onValueChange = vm::setHoneycombEdgeBlurRadius,
@@ -1548,6 +1675,7 @@ private fun SettingsRootScreen(
                     title = "顶部渐隐范围",
                     value = honeycombTopFade.toFloat(),
                     valueText = "$honeycombTopFade dp",
+                    localValueText = { "${it.roundToInt()} dp" },
                     range = 0f..160f,
                     steps = 15,
                     onValueChange = { vm.setHoneycombTopFade(it.toInt()) },
@@ -1559,6 +1687,7 @@ private fun SettingsRootScreen(
                     title = "底部渐隐范围",
                     value = honeycombBottomFade.toFloat(),
                     valueText = "$honeycombBottomFade dp",
+                    localValueText = { "${it.roundToInt()} dp" },
                     range = 0f..160f,
                     steps = 15,
                     onValueChange = { vm.setHoneycombBottomFade(it.toInt()) },
@@ -1594,6 +1723,7 @@ private fun SettingsRootScreen(
                         title = "遮罩时长",
                         value = splashDelay.toFloat(),
                         valueText = "${splashDelay} ms",
+                        localValueText = { "${it.roundToInt()} ms" },
                         range = 300f..1500f,
                         steps = 11,
                         onValueChange = { vm.setSplashDelay(it.toInt()) },
@@ -1629,6 +1759,7 @@ private fun SettingsRootScreen(
                     title = if (isZh) "蜂窝列数" else "Honeycomb Columns",
                     value = honeycombCols.toFloat(),
                     valueText = if (isZh) "$honeycombCols 列" else "$honeycombCols columns",
+                    localValueText = { if (isZh) "${it.roundToInt()} 列" else "${it.roundToInt()} columns" },
                     range = 1f..5f,
                     steps = 3,
                     onValueChange = { vm.setHoneycombCols(it.roundToInt()) },
@@ -1735,6 +1866,7 @@ private fun SettingsRootScreen(
             }
         }
 
+            // 「功能开关」从 16 项杂烩改为路牌页：五个按领域归类的三级页。
             SettingsDestination.FEATURE_TOGGLES -> SettingsPageScaffold(
             title = if (isZh) "功能开关" else "Feature Toggles",
             onBack = { handleBack() },
@@ -1742,6 +1874,56 @@ private fun SettingsRootScreen(
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.FEATURE_TOGGLES).index,
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.FEATURE_TOGGLES).offset,
             onScrollChanged = { index, offset -> updateScroll(SettingsDestination.FEATURE_TOGGLES, index, offset) }
+        ) { listState, screenCenterY, screenHeightPx, _ ->
+            item("cat_side_screen") {
+                SettingsCategoryCard(
+                    title = if (isZh) "负一屏设置" else "Side Screen",
+                    subtitle = if (isZh) "副一屏、小组件页、步数与卡片布局" else "Side screen, widget page, steps and card layout",
+                    onClick = { navigateTo(SettingsDestination.SIDE_SCREEN) },
+                    scale = itemFisheye(listState, "cat_side_screen", screenCenterY, screenHeightPx)
+                )
+            }
+            item("cat_notifications") {
+                SettingsCategoryCard(
+                    title = if (isZh) "通知中心" else "Notifications",
+                    subtitle = if (isZh) "通知显示与常驻通知过滤" else "Notification previews and ongoing filters",
+                    onClick = { navigateTo(SettingsDestination.NOTIFICATION_SETTINGS) },
+                    scale = itemFisheye(listState, "cat_notifications", screenCenterY, screenHeightPx)
+                )
+            }
+            item("cat_control_center") {
+                SettingsCategoryCard(
+                    title = if (isZh) "控制中心" else "Control Center",
+                    subtitle = if (isZh) "下拉面板、音乐卡片与电源按钮" else "Pull-down panel, media card and power button",
+                    onClick = { navigateTo(SettingsDestination.CONTROL_CENTER_SETTINGS) },
+                    scale = itemFisheye(listState, "cat_control_center", screenCenterY, screenHeightPx)
+                )
+            }
+            item("cat_gestures") {
+                SettingsCategoryCard(
+                    title = if (isZh) "手势与按键" else "Gestures",
+                    subtitle = if (isZh) "双击息屏等交互开关" else "Double-tap to lock and other gestures",
+                    onClick = { navigateTo(SettingsDestination.GESTURE_SETTINGS) },
+                    scale = itemFisheye(listState, "cat_gestures", screenCenterY, screenHeightPx)
+                )
+            }
+            item("cat_app_list_behavior") {
+                SettingsCategoryCard(
+                    title = if (isZh) "应用列表行为" else "App List Behavior",
+                    subtitle = if (isZh) "遮罩取色、底色与文件夹" else "Mask colors, row background and folders",
+                    onClick = { navigateTo(SettingsDestination.APP_LIST_BEHAVIOR) },
+                    scale = itemFisheye(listState, "cat_app_list_behavior", screenCenterY, screenHeightPx)
+                )
+            }
+        }
+
+            SettingsDestination.SIDE_SCREEN -> SettingsPageScaffold(
+            title = if (isZh) "负一屏设置" else "Side Screen",
+            onBack = { handleBack() },
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.SIDE_SCREEN).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.SIDE_SCREEN).offset,
+            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.SIDE_SCREEN, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("side_screen_toggle") {
                 SettingsSwitchRow(
@@ -1752,6 +1934,52 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "side_screen_toggle", screenCenterY, screenHeightPx)
                 )
             }
+            item("widget_center_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "显示小组件页" else "Show Widget Page",
+                    subtitle = if (showWidgetPage) {
+                        if (isZh) "从表盘左滑进入独立小组件页面" else "Swipe left from the watch face to open the widget page"
+                    } else {
+                        if (isZh) "关闭左滑小组件页面入口" else "Disable the swipe-left widget page"
+                    },
+                    checked = showWidgetPage,
+                    onToggle = vm::setShowWidgetPage,
+                    scale = itemFisheye(listState, "widget_center_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            item("music_notification_swap_toggle") {
+                SettingsSwitchRow(
+                    title = if (isZh) "互换通知和音乐组件" else "Swap Music and Notifications",
+                    subtitle = if (swapMusicNotificationComponents) {
+                        if (isZh) "副一屏显示音乐卡片，控制中心显示通知卡片" else "Show music on side screen and notifications in Control Center"
+                    } else {
+                        if (isZh) "保持副一屏通知、控制中心音乐的默认位置" else "Keep notifications on side screen and music in Control Center"
+                    },
+                    checked = swapMusicNotificationComponents,
+                    enabled = sideScreenEnabled && showControlCenter,
+                    onToggle = vm::setSwapMusicNotificationComponents,
+                    scale = itemFisheye(listState, "music_notification_swap_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            item("show_step_count") {
+                SettingsSwitchRow(
+                    title = if (isZh) "显示步数" else "Show Step Count",
+                    subtitle = if (isZh) "在侧屏底部电池右侧显示步数" else "Show steps to the right of battery on side screen",
+                    checked = showStepCount,
+                    onToggle = vm::setShowStepCountEnabled,
+                    scale = itemFisheye(listState, "show_step_count", screenCenterY, screenHeightPx)
+                )
+            }
+        }
+
+            SettingsDestination.NOTIFICATION_SETTINGS -> SettingsPageScaffold(
+            title = if (isZh) "通知中心" else "Notifications",
+            onBack = { handleBack() },
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.NOTIFICATION_SETTINGS).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.NOTIFICATION_SETTINGS).offset,
+            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.NOTIFICATION_SETTINGS, index, offset) }
+        ) { listState, screenCenterY, screenHeightPx, _ ->
             item("notification_center_toggle") {
                 SettingsSwitchRow(
                     title = if (isZh) "显示通知" else "Show Notifications",
@@ -1780,19 +2008,16 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "ongoing_notification_toggle", screenCenterY, screenHeightPx)
                 )
             }
-            item("widget_center_toggle") {
-                SettingsSwitchRow(
-                    title = if (isZh) "显示小组件页" else "Show Widget Page",
-                    subtitle = if (showWidgetPage) {
-                        if (isZh) "从表盘左滑进入独立小组件页面" else "Swipe left from the watch face to open the widget page"
-                    } else {
-                        if (isZh) "关闭左滑小组件页面入口" else "Disable the swipe-left widget page"
-                    },
-                    checked = showWidgetPage,
-                    onToggle = vm::setShowWidgetPage,
-                    scale = itemFisheye(listState, "widget_center_toggle", screenCenterY, screenHeightPx)
-                )
-            }
+        }
+
+            SettingsDestination.CONTROL_CENTER_SETTINGS -> SettingsPageScaffold(
+            title = if (isZh) "控制中心" else "Control Center",
+            onBack = { handleBack() },
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.CONTROL_CENTER_SETTINGS).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.CONTROL_CENTER_SETTINGS).offset,
+            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.CONTROL_CENTER_SETTINGS, index, offset) }
+        ) { listState, screenCenterY, screenHeightPx, _ ->
             item("control_center_toggle") {
                 SettingsSwitchRow(
                     title = if (isZh) "显示控制中心" else "Show Control Center",
@@ -1834,39 +2059,6 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "media_custom_actions_toggle", screenCenterY, screenHeightPx)
                 )
             }
-            item("music_notification_swap_toggle") {
-                SettingsSwitchRow(
-                    title = if (isZh) "互换通知和音乐组件" else "Swap Music and Notifications",
-                    subtitle = if (swapMusicNotificationComponents) {
-                        if (isZh) "副一屏显示音乐卡片，控制中心显示通知卡片" else "Show music on side screen and notifications in Control Center"
-                    } else {
-                        if (isZh) "保持副一屏通知、控制中心音乐的默认位置" else "Keep notifications on side screen and music in Control Center"
-                    },
-                    checked = swapMusicNotificationComponents,
-                    enabled = sideScreenEnabled && showControlCenter,
-                    onToggle = vm::setSwapMusicNotificationComponents,
-                    scale = itemFisheye(listState, "music_notification_swap_toggle", screenCenterY, screenHeightPx)
-                )
-            }
-            item("double_tap_lock_screen") {
-                SettingsSwitchRow(
-                    title = if (isZh) "双击表盘息屏" else "Double Tap to Lock",
-                    subtitle = if (accessibilityServiceEnabled) {
-                        if (isZh) "已授权无障碍，双击表盘会立即息屏" else "Accessibility is enabled; double tap the watch face to lock the screen"
-                    } else {
-                        if (isZh) "开启后跳转无障碍授权，仅用于双击息屏" else "Requires Accessibility; used only for double-tap screen lock"
-                    },
-                    checked = doubleTapLockScreenEnabled,
-                    onToggle = { enabled ->
-                        vm.setDoubleTapLockScreenEnabled(enabled)
-                        accessibilityServiceEnabled = FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected
-                        if (enabled && !accessibilityServiceEnabled) {
-                            openAccessibilitySettings()
-                        }
-                    },
-                    scale = itemFisheye(listState, "double_tap_lock_screen", screenCenterY, screenHeightPx)
-                )
-            }
             item("power_menu_button") {
                 SettingsSwitchRow(
                     title = if (isZh) "控制中心电源按钮" else "Control Center Power Button",
@@ -1887,24 +2079,45 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "power_menu_button", screenCenterY, screenHeightPx)
                 )
             }
-            item("watchface_status_indicators") {
+        }
+
+            SettingsDestination.GESTURE_SETTINGS -> SettingsPageScaffold(
+            title = if (isZh) "手势与按键" else "Gestures",
+            onBack = { handleBack() },
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.GESTURE_SETTINGS).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.GESTURE_SETTINGS).offset,
+            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.GESTURE_SETTINGS, index, offset) }
+        ) { listState, screenCenterY, screenHeightPx, _ ->
+            item("double_tap_lock_screen") {
                 SettingsSwitchRow(
-                    title = if (isZh) "表盘状态提示" else "Watch Face Status Indicators",
-                    subtitle = if (isZh) "表盘顶部显示充电闪电和通知红点" else "Show charging and notification indicators at the top of the watch face",
-                    checked = watchFaceStatusIndicators,
-                    onToggle = vm::setWatchFaceStatusIndicatorsEnabled,
-                    scale = itemFisheye(listState, "watchface_status_indicators", screenCenterY, screenHeightPx)
+                    title = if (isZh) "双击表盘息屏" else "Double Tap to Lock",
+                    subtitle = if (accessibilityServiceEnabled) {
+                        if (isZh) "已授权无障碍，双击表盘会立即息屏" else "Accessibility is enabled; double tap the watch face to lock the screen"
+                    } else {
+                        if (isZh) "开启后跳转无障碍授权，仅用于双击息屏" else "Requires Accessibility; used only for double-tap screen lock"
+                    },
+                    checked = doubleTapLockScreenEnabled,
+                    onToggle = { enabled ->
+                        vm.setDoubleTapLockScreenEnabled(enabled)
+                        accessibilityServiceEnabled = FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected
+                        if (enabled && !accessibilityServiceEnabled) {
+                            openAccessibilitySettings()
+                        }
+                    },
+                    scale = itemFisheye(listState, "double_tap_lock_screen", screenCenterY, screenHeightPx)
                 )
             }
-            item("watchface_charging_power_text") {
-                SettingsSwitchRow(
-                    title = if (isZh) "充电功率文字" else "Charging Power Text",
-                    subtitle = if (isZh) "充电时在表盘里显示功率或充电文字" else "Show charging wattage or charging text on the watch face",
-                    checked = watchFaceChargingPowerText,
-                    onToggle = vm::setWatchFaceChargingPowerTextEnabled,
-                    scale = itemFisheye(listState, "watchface_charging_power_text", screenCenterY, screenHeightPx)
-                )
-            }
+        }
+
+            SettingsDestination.APP_LIST_BEHAVIOR -> SettingsPageScaffold(
+            title = if (isZh) "应用列表行为" else "App List Behavior",
+            onBack = { handleBack() },
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.APP_LIST_BEHAVIOR).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.APP_LIST_BEHAVIOR).offset,
+            onScrollChanged = { index, offset -> updateScroll(SettingsDestination.APP_LIST_BEHAVIOR, index, offset) }
+        ) { listState, screenCenterY, screenHeightPx, _ ->
             item("app_list_watchface_colors") {
                 SettingsSwitchRow(
                     title = if (isZh) "应用遮罩表盘取色" else "Watch Face Launch Mask Colors",
@@ -1943,15 +2156,6 @@ private fun SettingsRootScreen(
                     checked = appListFoldersEnabled,
                     onToggle = vm::setAppListFoldersEnabled,
                     scale = itemFisheye(listState, "app_list_folders_enabled", screenCenterY, screenHeightPx)
-                )
-            }
-            item("show_step_count") {
-                SettingsSwitchRow(
-                    title = if (isZh) "显示步数" else "Show Step Count",
-                    subtitle = if (isZh) "在侧屏底部电池右侧显示步数" else "Show steps to the right of battery on side screen",
-                    checked = showStepCount,
-                    onToggle = vm::setShowStepCountEnabled,
-                    scale = itemFisheye(listState, "show_step_count", screenCenterY, screenHeightPx)
                 )
             }
         }
@@ -2026,6 +2230,33 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "app_list_return_shrink", screenCenterY, screenHeightPx)
                 )
             }
+            item("app_list_return_icon_float") {
+                // 子选项：仅在收缩动画关闭时展开。item 常驻挂载、内容用
+                // AnimatedVisibility 做高度动画——展开时向下弹出，LazyColumn
+                // 逐帧重排让下方选项自动让位，而不是瞬间插行。
+                AnimatedVisibility(
+                    visible = !appListReturnShrinkEnabled,
+                    enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                    exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
+                ) {
+                    SettingsSwitchRow(
+                        title = if (isZh) "返回时图标上浮" else "Icon Float on Return",
+                        subtitle = if (isZh) {
+                            "从应用退回列表时重播逐行上浮入场（从表盘进入不受影响）"
+                        } else {
+                            "Replay the row float-in when returning from an app"
+                        },
+                        checked = appListReturnIconFloatEnabled,
+                        onToggle = vm::setAppListReturnIconFloatEnabled,
+                        scale = itemFisheye(
+                            listState,
+                            "app_list_return_icon_float",
+                            screenCenterY,
+                            screenHeightPx,
+                        )
+                    )
+                }
+            }
             item("face_return_shrink") {
                 // 减弱动态效果打开时表盘收缩强制开启且不可修改（回弹被去掉后
                 // 需要收缩行程来承载转场层次）。
@@ -2041,6 +2272,24 @@ private fun SettingsRootScreen(
                     enabled = !reduceDynamicEffects,
                     onToggle = vm::setFaceReturnShrinkEnabled,
                     scale = itemFisheye(listState, "face_return_shrink", screenCenterY, screenHeightPx)
+                )
+            }
+            item("legacy_app_list_transition") {
+                SettingsSwitchRow(
+                    title = if (isZh) "还原老转场动画" else "Legacy Transition",
+                    subtitle = if (isZh) {
+                        "使用 watchOS 三段式之前的老动画：表盘放大冲脸进入应用列表"
+                    } else {
+                        "Use the pre-watchOS transition: the face zooms toward you"
+                    },
+                    checked = legacyAppListTransitionEnabled,
+                    onToggle = vm::setLegacyAppListTransitionEnabled,
+                    scale = itemFisheye(
+                        listState,
+                        "legacy_app_list_transition",
+                        screenCenterY,
+                        screenHeightPx,
+                    )
                 )
             }
             item("app_list_stagger") {
@@ -2144,7 +2393,7 @@ private fun SettingsRootScreen(
             item("motion_bounce") {
                 SettingsSwitchRow(
                     title = "触边回弹",
-                    subtitle = "同一手势跨过边界时立即产生 CloX 风格橡皮筋",
+                    subtitle = "同一手势跨过边界时立即产生边缘回弹",
                     checked = activeMotionProfile.bounceEnabled,
                     enabled = motionProfileEditable,
                     onToggle = { vm.setMotionBounceEnabled(it) },
@@ -2156,6 +2405,7 @@ private fun SettingsRootScreen(
                     title = "边界强度",
                     value = activeMotionProfile.edgeStrength.toFloat(),
                     valueText = "${activeMotionProfile.edgeStrength}/10",
+                    localValueText = { "${it.roundToInt()}/10" },
                     range = 0f..10f,
                     steps = 9,
                     enabled = motionProfileEditable,
@@ -2177,6 +2427,7 @@ private fun SettingsRootScreen(
                         title = "$keyName 时长",
                         value = phase.durationMillis.toFloat(),
                         valueText = "${phase.durationMillis} ms",
+                        localValueText = { "${it.roundToInt()} ms" },
                         range = 80f..1200f,
                         steps = 55,
                         enabled = motionProfileEditable,
@@ -2190,6 +2441,7 @@ private fun SettingsRootScreen(
                         title = "$keyName 衔接",
                         value = phase.handoffMillis.toFloat(),
                         valueText = "${phase.handoffMillis} ms",
+                        localValueText = { "${it.roundToInt()} ms" },
                         range = 0f..500f,
                         steps = 49,
                         enabled = motionProfileEditable,
@@ -2242,6 +2494,7 @@ private fun SettingsRootScreen(
                                     title = "$keyName $parameter",
                                     value = parameterValue,
                                     valueText = "%.2f".format(Locale.US, parameterValue),
+                                    localValueText = { "%.2f".format(Locale.US, it) },
                                     range = if (isX) 0f..1f else -2f..2f,
                                     steps = if (isX) 19 else 39,
                                     enabled = motionProfileEditable,
@@ -2272,6 +2525,7 @@ private fun SettingsRootScreen(
                                 title = "$keyName 阻尼比",
                                 value = easing.dampingRatio,
                                 valueText = "%.2f".format(Locale.US, easing.dampingRatio),
+                                localValueText = { "%.2f".format(Locale.US, it) },
                                 range = 0.05f..2f,
                                 steps = 38,
                                 enabled = motionProfileEditable,
@@ -2295,6 +2549,7 @@ private fun SettingsRootScreen(
                                 title = "$keyName 刚度",
                                 value = easing.stiffness,
                                 valueText = "${easing.stiffness.roundToInt()}",
+                                localValueText = { "${it.roundToInt()}" },
                                 range = 10f..3000f,
                                 steps = 58,
                                 enabled = motionProfileEditable,
@@ -2633,6 +2888,7 @@ private fun SettingsPageScaffold(
 ) {
     val launcherStyle = LauncherTheme.style
     val context = LocalContext.current
+    val settingsRoundScreen = com.flue.launcher.ui.common.isFlueScreenRound()
     val leftSafeInsetPercent = LocalSettingsLeftSafeInsetPercent.current
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = initialFirstVisibleItemIndex,
@@ -2681,34 +2937,32 @@ private fun SettingsPageScaffold(
                     }
                 }
                 .flueElasticNestedScroll(listState)
-                .padding(start = 16.dp + leftSafeInset, top = 18.dp, end = 16.dp, bottom = 18.dp),
-            contentPadding = PaddingValues(bottom = 28.dp),
+                .padding(
+                    // 圆屏适配走"整块统一内缩"：固定内接安全区 padding，
+                    // 块内文字与控件比例不变。绝不做逐行弦宽动态收窄——
+                    // 行在滚动中逐帧变宽会让文字不断重排（"文字抽搐"）。
+                    start = (if (settingsRoundScreen) 26.dp else 16.dp) + leftSafeInset,
+                    top = if (settingsRoundScreen) 30.dp else 18.dp,
+                    end = if (settingsRoundScreen) 26.dp else 16.dp,
+                    bottom = 18.dp,
+                ),
+            contentPadding = PaddingValues(bottom = if (settingsRoundScreen) 56.dp else 28.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    HeaderBackButton(onClick = onBack)
-                    Text(
-                        text = headerTime,
-                        color = launcherStyle.topBarTextColor,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
+            // 顶栏（返回圆钮 + 时间）按老师要求删除：返回交给系统手势与
+            // BackHandler，时间表盘自己会显示。
             item {
                 Text(
                     text = title,
                     color = launcherStyle.accentColor,
                     fontSize = 26.sp,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 8.dp)
+                    textAlign = if (settingsRoundScreen) TextAlign.Center else null,
+                    modifier = Modifier
+                        .then(
+                            if (settingsRoundScreen) Modifier.fillMaxWidth() else Modifier
+                        )
+                        .padding(bottom = 8.dp)
                 )
             }
             content(listState, screenCenterY, screenHeightPx, visibleItemKeys)
@@ -2833,135 +3087,6 @@ private fun SectionTitle(text: String, scale: Float) {
     )
 }
 
-/**
- * 设置根页顶部预览头图：Compose 自绘迷你手表屏（圆 / 方跟随
- * [isFlueScreenRound]），深色底 + 当前时间 + 两行小图标点缀，外层表框
- * 描边 + 阴影；下方一行当前配置摘要。点击进入「显示与外观」。
- */
-@Composable
-private fun SettingsPreviewHeaderCard(
-    headerTime: String,
-    uiStyle: UiStyle,
-    themeMode: ThemeMode,
-    layoutMode: LayoutMode,
-    onClick: () -> Unit
-) {
-    val launcherStyle = LauncherTheme.style
-    val isRound = isFlueScreenRound()
-    val pressedState = rememberPressedState()
-    val pressed by pressedState
-    val pressedScale by animateFloatAsState(
-        if (pressed) 0.97f else 1f,
-        animationSpec = launcherStyle.pressScaleSpec,
-        label = "settings_preview_header_scale"
-    )
-    val watchShape = if (isRound) CircleShape else RoundedCornerShape(22.dp)
-    val watchScreenShape = if (isRound) CircleShape else RoundedCornerShape(16.dp)
-    val styleLabel = when (uiStyle) {
-        UiStyle.APPLE_WATCH -> "Apple Watch 风格"
-        UiStyle.MATERIAL_3 -> "Material 3 风格"
-        UiStyle.MIUIX -> "MIUIX 风格"
-    }
-    val themeLabel = when (themeMode) {
-        ThemeMode.SYSTEM -> "跟随系统"
-        ThemeMode.DARK -> "深色"
-        ThemeMode.LIGHT -> "浅色"
-    }
-    val layoutLabel = when (layoutMode) {
-        LayoutMode.Honeycomb -> "蜂窝布局"
-        LayoutMode.List -> "列表布局"
-    }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .graphicsLayer {
-                scaleX = pressedScale
-                scaleY = pressedScale
-            }
-            .clip(launcherStyle.cardShape)
-            .background(if (pressed) launcherStyle.pressedCardColor else launcherStyle.cardColor)
-            .border(1.dp, launcherStyle.outlineColor, launcherStyle.cardShape)
-            .instantPressGesture(pressedState, onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(104.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            // 表框：描边 + 阴影，内部承载迷你屏幕。
-            Box(
-                modifier = Modifier
-                    .size(96.dp)
-                    .shadow(elevation = 8.dp, shape = watchShape)
-                    .clip(watchShape)
-                    .background(Color(0xFF23252B))
-                    .border(2.dp, Color.White.copy(alpha = 0.14f), watchShape)
-                    .padding(5.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clip(watchScreenShape)
-                        .background(Color(0xFF07080C)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = headerTime,
-                            color = Color.White,
-                            fontSize = 19.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        MiniPreviewIconRow(
-                            listOf(
-                                launcherStyle.accentColor,
-                                launcherStyle.positiveColor,
-                                Color(0xFFF2B84B),
-                                Color(0xFFE06C75)
-                            )
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        MiniPreviewIconRow(
-                            listOf(
-                                Color(0xFF9C7BFF),
-                                launcherStyle.accentColor.copy(alpha = 0.75f),
-                                Color(0xFF5AC8FA)
-                            )
-                        )
-                    }
-                }
-            }
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = "$styleLabel · $themeLabel · $layoutLabel",
-            color = launcherStyle.secondaryTextColor,
-            fontSize = 12.sp
-        )
-    }
-}
-
-/** 预览头图里的一行小图标点缀（圆点模拟应用图标）。 */
-@Composable
-// Color 是 value class，Kotlin 禁止它作为 vararg 参数类型。
-private fun MiniPreviewIconRow(colors: List<Color>) {
-    Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-        colors.forEach { dotColor ->
-            Box(
-                modifier = Modifier
-                    .size(9.dp)
-                    .clip(CircleShape)
-                    .background(dotColor)
-            )
-        }
-    }
-}
-
 @Composable
 private fun rememberPressedState(): MutableState<Boolean> {
     val state = remember { mutableStateOf(false) }
@@ -3025,6 +3150,11 @@ private val SettingsDestination.depth: Int
         SettingsDestination.ROOT -> 0
         SettingsDestination.WATCH_FACE_MORE,
         SettingsDestination.BACKUP,
+        SettingsDestination.SIDE_SCREEN,
+        SettingsDestination.NOTIFICATION_SETTINGS,
+        SettingsDestination.CONTROL_CENTER_SETTINGS,
+        SettingsDestination.GESTURE_SETTINGS,
+        SettingsDestination.APP_LIST_BEHAVIOR,
         SettingsDestination.DONATE -> 2
         SettingsDestination.MUSIC_TEXT_ANIMATION,
         SettingsDestination.MOTION_PROFILE,
@@ -4095,7 +4225,7 @@ private fun BlockingProgressDialog(
                         modifier = Modifier.size(52.dp)
                     )
                 } else {
-                    CircularProgressIndicator(color = WatchColors.ActiveCyan)
+                    MiuixLoadingIndicator(color = WatchColors.ActiveCyan)
                 }
                 Spacer(modifier = Modifier.height(18.dp))
                 Text(state.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
@@ -4203,3 +4333,54 @@ private fun rememberSettingsHeaderTime(): String {
     }
     return time
 }
+
+
+/**
+ * 设置搜索索引：标题 / 描述 / 关键词（含拼音首字母与英文别名）。
+ * destinationName 用字符串与枚举解耦；命中跳转到对应页面。
+ */
+private val settingsSearchIndex: List<SettingsSearchEntry> = listOf(
+    SettingsSearchEntry("APPEARANCE", null, "显示与外观", "布局、主题、界面风格与模糊", listOf("xsywg", "appearance", "theme", "zhuti", "fengge")),
+    SettingsSearchEntry("APPEARANCE", "ui_style", "界面风格", "Apple Watch / MD3 / MIUIX 三选一", listOf("jmfg", "style", "miuix", "md3")),
+    SettingsSearchEntry("APPEARANCE", "screen_shape", "屏幕形状", "圆屏 / 方屏手动指定", listOf("pmxz", "round", "yuanping", "fangping")),
+    SettingsSearchEntry("APPEARANCE", "advanced_material", "高级材质", "模糊与玻璃效果", listOf("gjcz", "blur", "mohu", "boli")),
+    SettingsSearchEntry("APPEARANCE", "edge_blur", "边缘模糊", "应用列表上下边缘的模糊渐隐", listOf("bymh", "edge blur")),
+    SettingsSearchEntry("DISPLAY_SIZE", null, "显示适配", "全局 UI 大小、蜂窝列数、鱼眼", listOf("xssp", "size", "daxiao", "fisheye", "yuyan")),
+    SettingsSearchEntry("DISPLAY_SIZE", "global_ui_scale", "全局 UI 大小", "整体缩放", listOf("qjdx", "scale", "suofang")),
+    SettingsSearchEntry("WATCH_FACES", null, "表盘", "选择与管理表盘", listOf("bp", "watchface", "biaopan")),
+    SettingsSearchEntry("WATCH_FACE_MORE", null, "表盘更多设置", "心率授权、日期语言、状态提示", listOf("bpgd", "xinlv", "riqi", "date")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_date_locale", "表盘日期语言", "跟随系统 / 中文 / English / 日本語", listOf("rqyy", "date locale", "yuyan")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_status_indicators", "表盘状态提示", "充电闪电与通知红点", listOf("ztts", "indicator")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_charging_power_text", "充电功率文字", "充电时显示功率", listOf("cdgl", "charging", "wattage")),
+    SettingsSearchEntry("ICON_PACKS", null, "图标包", "第三方图标包", listOf("tbb", "icon pack")),
+    SettingsSearchEntry("HIDDEN_APPS", null, "隐藏应用", "从列表隐藏应用", listOf("ycyy", "hidden", "yincang")),
+    SettingsSearchEntry("FEATURE_TOGGLES", null, "功能开关", "负一屏、通知、控制中心、手势", listOf("gnkg", "toggles")),
+    SettingsSearchEntry("SIDE_SCREEN", null, "负一屏设置", "副一屏、小组件页、步数", listOf("fyp", "side screen", "fuyiping", "xiaozujian")),
+    SettingsSearchEntry("SIDE_SCREEN", "side_screen_toggle", "副一屏", "右滑进入快捷启动与通知预览", listOf("fyp", "side screen")),
+    SettingsSearchEntry("SIDE_SCREEN", "widget_center_toggle", "小组件页", "左滑进入小组件", listOf("xzjy", "widget")),
+    SettingsSearchEntry("SIDE_SCREEN", "show_step_count", "显示步数", "侧屏底部步数", listOf("xsbs", "steps", "bushu")),
+    SettingsSearchEntry("SIDE_SCREEN", "music_notification_swap_toggle", "互换通知和音乐组件", "负一屏与控制中心卡片对调", listOf("hhzj", "swap")),
+    SettingsSearchEntry("NOTIFICATION_SETTINGS", null, "通知中心", "通知显示与常驻过滤", listOf("tzzx", "notification", "tongzhi")),
+    SettingsSearchEntry("NOTIFICATION_SETTINGS", "notification_center_toggle", "显示通知", "副一屏通知预览", listOf("xstz", "notifications")),
+    SettingsSearchEntry("NOTIFICATION_SETTINGS", "ongoing_notification_toggle", "显示常驻通知", "过滤系统噪音", listOf("czts", "ongoing")),
+    SettingsSearchEntry("CONTROL_CENTER_SETTINGS", null, "控制中心", "下拉面板、音乐卡片、电源按钮", listOf("kzzx", "control center", "kongzhi")),
+    SettingsSearchEntry("CONTROL_CENTER_SETTINGS", "music_controls_toggle", "音乐控制卡片", "控制中心媒体卡", listOf("yykz", "music", "yinyue")),
+    SettingsSearchEntry("CONTROL_CENTER_SETTINGS", "power_menu_button", "控制中心电源按钮", "打开电源选项（需无障碍）", listOf("dyaj", "power")),
+    SettingsSearchEntry("GESTURE_SETTINGS", null, "手势与按键", "双击息屏等", listOf("ssaj", "gesture", "shoushi")),
+    SettingsSearchEntry("GESTURE_SETTINGS", "double_tap_lock_screen", "双击表盘息屏", "需无障碍授权", listOf("sjxp", "double tap", "xiping")),
+    SettingsSearchEntry("APP_LIST_BEHAVIOR", null, "应用列表行为", "遮罩取色、底色、文件夹", listOf("yylb", "app list")),
+    SettingsSearchEntry("APP_LIST_BEHAVIOR", "app_list_folders_enabled", "允许创建文件夹", "拖动合成文件夹", listOf("wjj", "folder", "wenjianjia")),
+    SettingsSearchEntry("APP_LIST_BEHAVIOR", "app_list_watchface_colors", "应用遮罩表盘取色", "启动遮罩跟随表盘颜色", listOf("zzqs", "mask color")),
+    SettingsSearchEntry("PERFORMANCE", null, "性能与动画", "动画开关与图标质量", listOf("xnydh", "performance", "donghua")),
+    SettingsSearchEntry("PERFORMANCE", "app_list_stagger", "甩尾入场动画", "逐行错峰进入", listOf("swrc", "stagger")),
+    SettingsSearchEntry("PERFORMANCE", "legacy_app_list_transition", "还原老转场动画", "watchOS 三段式之前的老动画", listOf("lzcd", "legacy")),
+    SettingsSearchEntry("PERFORMANCE", "app_list_return_shrink", "应用列表收缩动画", "返回时整体缩放", listOf("sswd", "shrink")),
+    SettingsSearchEntry("PERFORMANCE", "app_list_return_icon_float", "返回时图标上浮", "从应用退回重播上浮入场", listOf("tbsf", "icon float")),
+    SettingsSearchEntry("PERFORMANCE", "icon_shadow", "图标阴影", "平台高程阴影", listOf("tbyy", "shadow", "yinying")),
+    SettingsSearchEntry("MOTION_PROFILE", null, "动画曲线配置", "时长、贝塞尔、弹簧参数", listOf("dhqx", "motion", "quxian", "spring")),
+    SettingsSearchEntry("MUSIC_TEXT_ANIMATION", null, "音乐文字动画", "切歌文字过渡", listOf("yywz", "music text")),
+    SettingsSearchEntry("TOOLS", null, "工具", "备份、诊断与文件管理", listOf("gj", "tools", "beifen")),
+    SettingsSearchEntry("BACKUP", null, "备份与恢复", "导出 / 导入配置", listOf("bfyf", "backup")),
+    SettingsSearchEntry("ABOUT", null, "关于", "版本与致谢", listOf("gy", "about", "banben")),
+    SettingsSearchEntry("DONATE", null, "捐赠", "支持开发", listOf("jz", "donate", "juanzeng")),
+)

@@ -493,7 +493,16 @@ fun AppFolderOverlay(
         contentAlignment = Alignment.Center
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val panelMaxHeight = (maxHeight * 0.76f).coerceAtLeast(210.dp)
+            // 圆屏整块收窄到内接安全区：0.9 宽 × 0.76 高的方形面板四角在
+            // 454×454 圆屏上必然被表圈啃掉。收窄的是整个面板（文字与控件
+            // 比例不变），不做逐元素适配。
+            val roundScreen = com.flue.launcher.ui.common.isFlueScreenRound()
+            val panelWidthFraction = if (roundScreen) 0.82f else 0.9f
+            val panelMaxHeight = if (roundScreen) {
+                maxHeight * 0.70f
+            } else {
+                (maxHeight * 0.76f).coerceAtLeast(210.dp)
+            }
             val gridMaxHeight = (panelMaxHeight - 76.dp).coerceAtLeast(150.dp)
             val panelColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
             val panelTextColor = MaterialTheme.colorScheme.onSurface
@@ -501,7 +510,7 @@ fun AppFolderOverlay(
             val manageButtonBackground = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
             Column(
                 modifier = Modifier
-                    .fillMaxWidth(0.9f)
+                    .fillMaxWidth(panelWidthFraction)
                     .heightIn(max = panelMaxHeight)
                     .graphicsLayer {
                         scaleX = scale

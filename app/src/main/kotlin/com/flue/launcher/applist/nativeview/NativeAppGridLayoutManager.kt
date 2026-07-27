@@ -405,7 +405,16 @@ internal abstract class NativeAppGridLayoutManager(
         recycler: RecyclerView.Recycler,
         current: NativeAppGridGeometry,
     ) {
-        val extra = extraLayoutSpacePx(current, configProvider())
+        // Recycle on the *union* of the layout slot and the transformed box,
+        // with half a cell of hysteresis. The fisheye squashes edge rows toward
+        // their pivot, so the transformed box alone can leave the retention
+        // band while the layout slot is still inside `fillMissing`'s fill band.
+        // Such a row was recycled here and re-created on the very next frame —
+        // dropping its RenderNode, edge blur and bitmap shaders every frame,
+        // which reads as "the bottom rows blink out line by line while
+        // scrolling".
+        val extra = extraLayoutSpacePx(current, configProvider()) +
+            current.itemHeightPx * 0.5f
         for (index in childCount - 1 downTo 0) {
             val child = requireNotNull(getChildAt(index))
             val decoratedTop = getDecoratedTop(child).toFloat()
@@ -415,8 +424,8 @@ internal abstract class NativeAppGridLayoutManager(
                 (decoratedTop - pivotY) * child.scaleY
             val transformedBottom = child.translationY + pivotY +
                 (decoratedBottom - pivotY) * child.scaleY
-            val visibleTop = min(transformedTop, transformedBottom)
-            val visibleBottom = max(transformedTop, transformedBottom)
+            val visibleTop = min(min(transformedTop, transformedBottom), decoratedTop)
+            val visibleBottom = max(max(transformedTop, transformedBottom), decoratedBottom)
             if (visibleBottom < -extra || visibleTop > height + extra) {
                 removeAndRecycleView(child, recycler)
             }

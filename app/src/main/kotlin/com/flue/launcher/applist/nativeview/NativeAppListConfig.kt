@@ -77,6 +77,12 @@ data class NativeAppListConfig(
     val denseGridIconInnerPaddingPx: Float = 3f,
     val centerEdgeItems: Boolean = true,
     val allowFolderCreation: Boolean = true,
+    /**
+     * 覆层（长按菜单 / 文件夹展开）在场时关掉列表拖拽。覆层是 Compose 层，
+     * 底下的 RecyclerView 仍然收得到长按并起拖，会出现「文件夹开着，背景
+     * 图标却被拖走」以及拖拽残影粘在背景上。
+     */
+    val dragEnabled: Boolean = true,
     val iconShadowEnabled: Boolean = true,
     val edgeSpacingCompressionEnabled: Boolean = true,
     /** Classic (Beta 1.2) keeps content stable; Next animates entry progress. */
@@ -101,6 +107,11 @@ data class NativeAppListConfig(
     val topBlurRadiusPx: Float = 0f,
     val bottomBlurRadiusPx: Float = 0f,
     val contentOverlayBlurRadiusPx: Float = 0f,
+    /**
+     * 覆层背景模糊（长按菜单 / 文件夹打开）只跟「高级材质」走；以前被
+     * 「边缘模糊」开关经 blurTier 连坐关闭——Compose 版菜单背后一直有模糊。
+     */
+    val contentOverlayBlurEligible: Boolean = false,
     /** Shared DrawerLayoutEngine profile; defaults to the Flue Next curve. */
     val fisheyePreset: NativeFisheyePreset = NativeFisheyePreset.NEXT,
     val deviceShape: NativeDeviceShape = NativeDeviceShape.RECTANGULAR,
@@ -177,7 +188,8 @@ internal fun hasDifferentNativeContentOverlayEffect(
     next: NativeAppListConfig,
 ): Boolean =
     current.blurTier != next.blurTier ||
-        current.contentOverlayBlurRadiusPx != next.contentOverlayBlurRadiusPx
+        current.contentOverlayBlurRadiusPx != next.contentOverlayBlurRadiusPx ||
+        current.contentOverlayBlurEligible != next.contentOverlayBlurEligible
 
 internal fun NativeAppListConfig.legalized(): NativeAppListConfig {
     val safeIconSize = iconSizePx.positiveMetricOr(DEFAULT_ICON_SIZE_PX)

@@ -112,7 +112,10 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.foundation)
-    implementation(libs.compose.material3)
+    // material3 单独提到 1.5 beta：BOM 2026.04 捆绑的 1.4.0 里
+    // MaterialExpressiveTheme / MotionScheme.expressive 仍是 internal，
+    // 真 M3 Expressive 主题需要 1.5 的公开 API。
+    implementation("androidx.compose.material3:material3:1.5.0-alpha14")
     implementation(libs.compose.material.icons)
     implementation(libs.compose.animation)
     implementation(libs.compose.cloudy)

@@ -641,8 +641,10 @@ private fun drawJbShapeLayer(canvas: AndroidCanvas, face: JbWatchFace, layer: Jb
 private fun resolveJbText(raw: String, nowMillis: Long, batteryLevel: Int, is24Hour: Boolean): String {
     val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
     val hour12 = calendar.get(Calendar.HOUR).let { if (it == 0) 12 else it }
-    val weekday = SimpleDateFormat("EEE", Locale.getDefault()).format(nowMillis)
-    val monthName = SimpleDateFormat("MMM", Locale.getDefault()).format(nowMillis)
+    // EEE / MMM 在部分 locale 会带尾句号（es "lun."、de "Mo."），
+    // 统一 trimEnd('.') 避免表盘出现「周一.」式拖尾。
+    val weekday = SimpleDateFormat("EEE", Locale.getDefault()).format(nowMillis).trimEnd('.')
+    val monthName = SimpleDateFormat("MMM", Locale.getDefault()).format(nowMillis).trimEnd('.')
     val dayOfWeekZero = (calendar.get(Calendar.DAY_OF_WEEK) - Calendar.SUNDAY).coerceIn(0, 6)
     val source = resolveJbDayConditionalText(raw, dayOfWeekZero) ?: raw
     return source

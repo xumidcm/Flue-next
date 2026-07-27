@@ -89,6 +89,19 @@ internal fun Modifier.scaleBlurAlpha(
      * the last frame" artifact.
      */
     onSettled: (() -> Unit)? = null,
+    /**
+     * External per-frame clock. While [externallyDriven] is true the values
+     * returned by this lambda replace the internal springs entirely — the
+     * layer is read in the draw phase every frame with zero recomposition.
+     * This is how the launch mask, list layer and edge mask share one
+     * progress source instead of three unsynchronised springs (the root of
+     * the "return shrink jumps straight to the end state" artifact).
+     *
+     * Contract: at progress 0 the provider must return exactly the resting
+     * state of the layer, so the hand-back below is seamless.
+     */
+    valuesProvider: (() -> LayerAnimValues)? = null,
+    externallyDriven: Boolean = false,
 ): Modifier {
     val animScale = remember { Animatable(targetValues.scale) }
     val animAlpha = remember { Animatable(targetValues.alpha) }
@@ -99,10 +112,31 @@ internal fun Modifier.scaleBlurAlpha(
     val resolvedOrigin = originLatch.resolve(origin)
     val density = LocalDensity.current
     val latestOnSettled = rememberUpdatedState(onSettled)
+    val latestProvider = rememberUpdatedState(valuesProvider)
+    val latestDriven = rememberUpdatedState(externallyDriven)
+    val wasExternallyDriven = remember { androidx.compose.runtime.mutableStateOf(false) }
 
     // Specs are part of the key: swapping the motion phase mid-transition used
     // to be silently ignored because only targetValues restarted the effect.
-    LaunchedEffect(targetValues, scaleSpec, alphaSpec, blurSpec, translationSpec) {
+    LaunchedEffect(targetValues, scaleSpec, alphaSpec, blurSpec, translationSpec, externallyDriven) {
+        if (externallyDriven) {
+            // The external clock owns the frame values; the springs stay parked
+            // so the hand-back below starts from the provider's end point.
+            wasExternallyDriven.value = true
+            return@LaunchedEffect
+        }
+        if (wasExternallyDriven.value) {
+            wasExternallyDriven.value = false
+            // Seamless hand-back: seed the springs with the external clock's
+            // final frame before resuming normal target pursuit.
+            latestProvider.value?.invoke()?.let { seed ->
+                animScale.snapTo(seed.scale)
+                animAlpha.snapTo(seed.alpha)
+                animBlur.snapTo(seed.blur)
+                animTransX.snapTo(seed.translationX)
+                animTransY.snapTo(seed.translationY)
+            }
+        }
         val jobs = listOf(
             launch { animScale.animateTo(targetValues.scale, scaleSpec) },
             launch { animAlpha.animateTo(targetValues.alpha, alphaSpec) },
@@ -126,13 +160,17 @@ internal fun Modifier.scaleBlurAlpha(
 
     return this
         .graphicsLayer {
-            scaleX = animScale.value
-            scaleY = animScale.value
-            alpha = animAlpha.value
-            translationX = animTransX.value * screenWidth
-            translationY = animTransY.value * screenHeight
+            val external = if (latestDriven.value) latestProvider.value?.invoke() else null
+            val frameScale = external?.scale ?: animScale.value
+            val frameAlpha = external?.alpha ?: animAlpha.value
+            val frameBlur = external?.blur ?: animBlur.value
+            scaleX = frameScale
+            scaleY = frameScale
+            alpha = frameAlpha
+            translationX = (external?.translationX ?: animTransX.value) * screenWidth
+            translationY = (external?.translationY ?: animTransY.value) * screenHeight
             transformOrigin = TransformOrigin(resolvedOrigin.x, resolvedOrigin.y)
-            val radiusDp = quantizeSystemBlurRadiusDp(animBlur.value)
+            val radiusDp = quantizeSystemBlurRadiusDp(frameBlur)
             val radiusPx = with(density) { radiusDp.dp.toPx() }
                 .roundToInt()
                 .coerceAtLeast(0)
@@ -140,7 +178,7 @@ internal fun Modifier.scaleBlurAlpha(
                 shouldRenderLayerBlur(
                     sdkInt = Build.VERSION.SDK_INT,
                     blurEnabled = blurEnabled,
-                    alpha = animAlpha.value,
+                    alpha = frameAlpha,
                     radiusPx = radiusPx,
                 )
             ) {

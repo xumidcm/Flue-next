@@ -554,11 +554,13 @@ object WatchSeries {
             val calendar = (now.clone() as Calendar).apply {
                 set(Calendar.DAY_OF_WEEK, Calendar.SUNDAY + offset)
             }
+            // 不少 locale 的星期缩写数据自带尾句号（es "lun."、de "Mo."），
+            // 直接落到表盘上就是「周一.」式的拖尾，统一 trimEnd('.')。
             calendar.getDisplayName(
                 Calendar.DAY_OF_WEEK,
                 if (long) Calendar.LONG else Calendar.SHORT,
                 Locale.getDefault(),
-            ).orEmpty()
+            ).orEmpty().trimEnd('.')
         }
 }
 
@@ -593,7 +595,11 @@ object WatchCalendarGrid {
     fun weekdayLabels(dowStart: Int = 1, count: Int = 1, locale: Locale = Locale.getDefault()): List<String> {
         val names = (0..6).map { index ->
             val calendar = Calendar.getInstance().apply { set(Calendar.DAY_OF_WEEK, Calendar.SUNDAY + index) }
-            calendar.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, locale).orEmpty()
+            // trimEnd('.') 必须在 take(count) 之前：否则 "lun." 截两位会留下 "lu"
+            // 之外的尾点变体，且单字符场景会把句号本身当成首字母。
+            calendar.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, locale)
+                .orEmpty()
+                .trimEnd('.')
         }
         val start = dowStart.coerceIn(0, 6)
         return (0..6).map { index -> names[(start + index) % 7].take(count.coerceAtLeast(1)) }

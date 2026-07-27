@@ -1,13 +1,18 @@
 package com.flue.launcher.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.expressiveLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import com.flue.launcher.ui.common.FlueScreenShape
@@ -48,6 +53,40 @@ private val LightColorScheme = lightColorScheme(
     onSurface = WatchColorsDark.Black,
 )
 
+// MIUIX（HyperOS）配色注入 M3 colorScheme：商店 / 编辑器 / 登录等直接读
+// MaterialTheme.* 的界面在 MIUIX 风格下整体换肤（#3482FF 蓝 + HyperOS 灰阶）。
+private val MiuixDarkColorScheme = darkColorScheme(
+    primary = Color(0xFF3482FF),
+    onPrimary = Color.White,
+    secondary = Color(0xFF34C08D),
+    tertiary = Color(0xFF3482FF),
+    background = Color.Black,
+    surface = Color(0xFF111113),
+    surfaceVariant = Color(0xFF1F1F1F),
+    secondaryContainer = Color(0xFF20304A),
+    onSecondaryContainer = Color(0xFFB9D4FF),
+    onBackground = Color(0xE6FFFFFF),
+    onSurface = Color(0xE6FFFFFF),
+    onSurfaceVariant = Color(0x80FFFFFF),
+    outline = Color(0x26FFFFFF),
+)
+
+private val MiuixLightColorScheme = lightColorScheme(
+    primary = Color(0xFF3482FF),
+    onPrimary = Color.White,
+    secondary = Color(0xFF31A56F),
+    tertiary = Color(0xFF3482FF),
+    background = Color(0xFFF7F7FA),
+    surface = Color.White,
+    surfaceVariant = Color(0xFFF2F2F5),
+    secondaryContainer = Color(0xFFE3EDFF),
+    onSecondaryContainer = Color(0xFF1B4C9C),
+    onBackground = Color(0xFF1A1A1A),
+    onSurface = Color(0xFF1A1A1A),
+    onSurfaceVariant = Color(0xFF80838A),
+    outline = Color(0x1F000000),
+)
+
 // 主题模式
 enum class ThemeMode {
     SYSTEM,
@@ -57,6 +96,7 @@ enum class ThemeMode {
 
 val LocalGlobalUiScale = compositionLocalOf { 1f }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun WatchLauncherTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
@@ -72,9 +112,7 @@ fun WatchLauncherTheme(
 
     WatchColors.setDarkMode(isDark)
 
-    val colorScheme = if (isDark) DarkColorScheme else LightColorScheme
-
-    MaterialTheme(colorScheme = colorScheme) {
+    val inner: @Composable () -> Unit = {
         CompositionLocalProvider(LocalFlueScreenShapeOverride provides screenShape) {
             ProvideLauncherStyle(
                 uiStyle = uiStyle,
@@ -82,6 +120,24 @@ fun WatchLauncherTheme(
                 content = content
             )
         }
+    }
+
+    when (uiStyle) {
+        // 真 Material 3 Expressive：官方 expressive 配色基线 + 弹性
+        // motion scheme（组件级 spring 动效），不再是手搓「假 MD3」。
+        UiStyle.MATERIAL_3 -> MaterialExpressiveTheme(
+            colorScheme = if (isDark) darkColorScheme() else expressiveLightColorScheme(),
+            motionScheme = MotionScheme.expressive(),
+            content = inner,
+        )
+        UiStyle.MIUIX -> MaterialTheme(
+            colorScheme = if (isDark) MiuixDarkColorScheme else MiuixLightColorScheme,
+            content = inner,
+        )
+        UiStyle.APPLE_WATCH -> MaterialTheme(
+            colorScheme = if (isDark) DarkColorScheme else LightColorScheme,
+            content = inner,
+        )
     }
 }
 

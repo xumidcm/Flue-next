@@ -391,8 +391,15 @@ fun NotificationLayer(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(40.dp))
-            .background(launcherStyle.screenBackground)
+            // 圆屏整圆裁剪 + 半透明玻璃根底（表盘背衬透出即毛玻璃）。
+            .clip(
+                if (com.flue.launcher.ui.common.isFlueScreenRound()) {
+                    androidx.compose.foundation.shape.CircleShape
+                } else {
+                    RoundedCornerShape(40.dp)
+                },
+            )
+            .background(launcherStyle.screenBackground.copy(alpha = 0.62f))
             .nestedScroll(nestedScroll)
     ) {
         val contentWidth = maxWidth * NOTIFICATION_CARD_WIDTH_RATIO

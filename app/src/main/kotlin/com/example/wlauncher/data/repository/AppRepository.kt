@@ -1342,7 +1342,12 @@ class AppRepository(private val context: Context) {
         val radius = size * 0.24f
         canvas.drawRoundRect(RectF(0f, 0f, size.toFloat(), size.toFloat()), radius, radius, bgPaint)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
-        val childSize = size * 0.36f
+        // 2x2 子图标网格必须落在内切圆里：蜂窝 / Apple Watch 风格会把整张
+        // 文件夹图按圆形裁剪，旧的 0.36+0.08（总宽 0.80·size）四角到中心是
+        // √2·0.40 = 0.566·size > 0.5·size 半径，四个子图标的外角会被切掉，
+        // 看起来就不是个圆文件夹。0.30+0.08（总宽 0.68·size）对角
+        // √2·0.34 = 0.481·size，稳稳在圆内；圆角矩形档只是子图标略小。
+        val childSize = size * 0.30f
         val gap = size * 0.08f
         val start = (size - childSize * 2f - gap) / 2f
         childItems.take(4).forEachIndexed { index, app ->
@@ -1377,7 +1382,19 @@ class AppRepository(private val context: Context) {
         val iconDrawable = ContextCompat.getDrawable(context, R.mipmap.ic_settings_launcher) ?: return null
         val iconCacheKey = "builtin_settings|$iconSize|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
         val cachedIcons = getOrCreateIconSet(iconCacheKey) {
-            val baseBitmap = renderIconBitmap(iconDrawable, iconSize)
+            // 与普通应用同路：自适应图标强制圆形遮罩。以前这里直接走
+            // renderIconBitmap（用设备系统遮罩），全列表只有设置入口被
+            // ROM 的圆角矩形遮罩裁成方的。
+            val baseBitmap = if (iconDrawable is AdaptiveIconDrawable) {
+                createAdaptiveIconBitmap(
+                    drawable = iconDrawable,
+                    size = iconSize,
+                    forceCircularMask = true,
+                    edgeInsetPx = iconSize * ICON_MASK_EDGE_INSET_FRACTION,
+                )
+            } else {
+                renderIconBitmap(iconDrawable, iconSize)
+            }
             val sharp = baseBitmap.asImageBitmap()
             val softened = createSoftenedBitmap(baseBitmap).asImageBitmap()
             val twoToneBitmap = if (useTwoToneIconsSnapshot) createTwoToneBitmap(iconDrawable, iconSize) else null

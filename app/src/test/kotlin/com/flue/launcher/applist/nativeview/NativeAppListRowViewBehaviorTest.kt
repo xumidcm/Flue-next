@@ -1614,9 +1614,11 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
-    fun enabledIconShadowIsDrawnOutsideTheCircularIconWithoutSoftwareBlur() {
+    fun iconShadowUsesPlatformElevationGatedByAlpha() {
+        // 阴影改走真平台高程（与 Compose 版 shadowElevation 同源机制），
+        // 不再在自绘画布里画 BlurMaskFilter 近似（黑环来源）。
         val view = NativeAppListRowView(RuntimeEnvironment.getApplication())
-        val output = Bitmap.createBitmap(100, 40, Bitmap.Config.ARGB_8888)
+        val density = view.resources.displayMetrics.density
         view.bind(
             row = boundRow(solidBitmap(REAL_ICON_COLOR)),
             config = NativeAppListResolvedConfig.from(
@@ -1628,10 +1630,25 @@ class NativeAppListRowViewBehaviorTest {
         )
         measureAndLayout(view)
 
-        view.draw(Canvas(output))
+        assertEquals(8f * density, view.elevation, 0.01f)
 
-        assertTrue(Color.alpha(output.getPixel(14, 31)) > 0)
-        assertTrue(Color.alpha(output.getPixel(14, 31)) < 255)
+        // View.alpha 不作用于高程阴影：行被鱼眼/入场动画隐去时必须清零，
+        // 否则"图标隐了阴影还在"。
+        view.alpha = 0f
+        assertEquals(0f, view.elevation, 0.01f)
+        view.alpha = 1f
+        assertEquals(8f * density, view.elevation, 0.01f)
+
+        // 关闭开关时高程归零。
+        view.applyConfig(
+            NativeAppListResolvedConfig.from(
+                drawingConfig().copy(
+                    iconShape = NativeAppListIconShape.CIRCLE,
+                    iconShadowEnabled = false,
+                ),
+            ),
+        )
+        assertEquals(0f, view.elevation, 0.01f)
     }
 
     @Test
@@ -1786,7 +1803,11 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
-    fun frameworkEdgeReleaseWaitsForTheRealGestureTerminalBeforeRebounding() {
+    fun frameworkEdgeReleaseStartsTheReboundImmediatelyEvenMidGesture() {
+        // Contract inversion over the old finger guard: RecyclerView's
+        // onRelease call sites are all legitimate, and rejecting them locked
+        // the offset for the rest of the gesture while distance() stayed
+        // non-zero — every fling in that window was silently absorbed.
         val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
             setConfig(drawingConfig().copy(fisheyeEnabled = false, centerEdgeItems = false))
         }
@@ -1797,15 +1818,260 @@ class NativeAppListRowViewBehaviorTest {
 
         effects.beginGesture()
         effects.pull(FlueEdgePhysics.Edge.TOP, distance = 0.5f)
-        val heldOffset = pullOffsetOf(view)
+        assertTrue(pullOffsetOf(view) > 0f)
         effects.release(FlueEdgePhysics.Edge.TOP)
 
-        assertFalse("RecyclerView may release an edge during MOVE", effects.isAnimating)
-        assertEquals(heldOffset, pullOffsetOf(view), 0f)
+        assertTrue("release must not wait for the terminal sample", effects.isAnimating)
+        assertEquals(
+            "an animating edge must be invisible to RecyclerView's scroll gate",
+            0f,
+            effects.distance(FlueEdgePhysics.Edge.TOP),
+            0f,
+        )
 
-        effects.confirmTopRelease(terminalUp = false)
+        // The window is still open; the terminal sample just closes it.
+        assertTrue(effects.ownsPointerGesture)
+        effects.endGesture(terminalUp = false)
+        assertFalse(effects.ownsPointerGesture)
+        view.release()
+        activity.finish()
+    }
 
-        assertTrue(effects.isAnimating)
+    @Test
+    fun longPressWithoutMoveDoesNotSwallowTheNextGesture() {
+        val entries = (0 until 8).map { appEntry("component:latch-$it") }
+        val commands = mutableListOf<AppListCommand>()
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onCommand = commands::add
+            setConfig(
+                drawingConfig().copy(
+                    centerEdgeItems = false,
+                    fisheyeEnabled = false,
+                    entryMotionEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        // Long-press without moving: the consumed terminal must not latch the
+        // owned-touch flag across gestures.
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
+        assertTrue(commands.any { it is AppListCommand.ShowActions })
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 20f, eventTime = 640L)
+        // The idle above let the framework re-lay the list at the full window
+        // size, which makes the content fit and disables scrolling. Restore
+        // the small viewport so the second gesture has scroll range again.
+        measureAndLayout(view, width = 100, height = 120)
+
+        // The very next gesture must scroll normally.
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 100f, eventTime = 800L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 60f, eventTime = 816L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 20f, eventTime = 832L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 20f, eventTime = 848L)
+
+        assertTrue(
+            "the gesture after a stationary long-press must scroll the list",
+            view.computeVerticalScrollOffset() > 0,
+        )
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun longPressCancelledByParentDoesNotSwallowTheNextGesture() {
+        val entries = (0 until 8).map { appEntry("component:latch-cancel-$it") }
+        val commands = mutableListOf<AppListCommand>()
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onCommand = commands::add
+            setConfig(
+                drawingConfig().copy(
+                    centerEdgeItems = false,
+                    fisheyeEnabled = false,
+                    entryMotionEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
+        assertTrue(commands.any { it is AppListCommand.ShowActions })
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 20f, eventTime = 640L)
+        // Restore the small viewport after the framework's full-size relayout
+        // during the idle (see longPressWithoutMoveDoesNotSwallowTheNextGesture).
+        measureAndLayout(view, width = 100, height = 120)
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 100f, eventTime = 800L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 60f, eventTime = 816L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 20f, eventTime = 832L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 20f, eventTime = 848L)
+
+        assertTrue(
+            "the gesture after a cancelled long-press must scroll the list",
+            view.computeVerticalScrollOffset() > 0,
+        )
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun downDuringInactiveSceneKeepsRecyclerAnchorsFreshForMidGestureActivation() {
+        val entries = (0 until 8).map { appEntry("component:inactive-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    active = false,
+                    centerEdgeItems = false,
+                    fisheyeEnabled = false,
+                    entryMotionEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        // DOWN lands while the scene is inactive (mid transition)…
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 100f, eventTime = 0L)
+        // …and the scene reactivates while the finger is still down.
+        view.setConfig(
+            drawingConfig().copy(
+                active = true,
+                centerEdgeItems = false,
+                fisheyeEnabled = false,
+                entryMotionEnabled = false,
+            ),
+        )
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 60f, eventTime = 32L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 20f, eventTime = 48L)
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 20f, eventTime = 64L)
+
+        assertTrue(
+            "a gesture straddling reactivation must scroll against fresh anchors",
+            view.computeVerticalScrollOffset() > 0,
+        )
+        assertEquals(
+            "no ownerless edge distance may survive an inactive terminal",
+            0f,
+            springEdgeEffectsOf(view).distance(FlueEdgePhysics.Edge.TOP),
+            0f,
+        )
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun inactiveSceneNeverDeliversTouchToChildRows() {
+        val entries = (0 until 3).map { appEntry("component:blind-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    active = false,
+                    centerEdgeItems = false,
+                    fisheyeEnabled = false,
+                    entryMotionEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+        val firstRow = requireNotNull(
+            view.layoutManager?.findViewByPosition(0),
+        ) as NativeAppListRowView
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(150L))
+
+        assertFalse(
+            "an invisible transitioning list must not press its rows",
+            firstRow.isPressed,
+        )
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 20f, eventTime = 200L)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun externalGeometryChangeKeepsRowLongClickSuppressedWhileFingerIsDown() {
+        val entries = (0 until 3).map { appEntry("component:suppress-$it") }
+        val commands = mutableListOf<AppListCommand>()
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onCommand = commands::add
+            setConfig(
+                drawingConfig().copy(
+                    centerEdgeItems = false,
+                    fisheyeEnabled = false,
+                    entryMotionEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+        val firstRow = requireNotNull(
+            view.layoutManager?.findViewByPosition(0),
+        ) as NativeAppListRowView
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_DOWN, y = 20f, eventTime = 0L)
+        // Geometry changes under the live finger (presentation/scale switch).
+        view.setConfig(
+            drawingConfig().copy(
+                centerEdgeItems = false,
+                fisheyeEnabled = false,
+                entryMotionEnabled = false,
+                rowHeightPx = 48,
+            ),
+        )
+        // Neither the controller's timer nor the row's own long-press may fire
+        // at stale coordinates while the finger is still down.
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(700L))
+        assertFalse(commands.any { it is AppListCommand.ShowActions })
+        assertFalse(
+            "row long-click must stay suppressed until the real terminal",
+            firstRow.isLongClickable,
+        )
+
+        dispatchThroughHierarchy(view, MotionEvent.ACTION_UP, y = 20f, eventTime = 720L)
+        assertTrue(
+            "the real terminal must hand long-click ownership back to the row",
+            firstRow.isLongClickable,
+        )
         view.release()
         activity.finish()
     }
@@ -3103,11 +3369,12 @@ class NativeAppListRowViewBehaviorTest {
         x: Float = 30f,
     ) {
         MotionEvent.obtain(0L, eventTime, action, x, y, 0).also { event ->
-            if (view is NativeAppListView) {
-                if (view.onInterceptTouchEvent(event)) view.onTouchEvent(event)
-            } else {
-                view.dispatchTouchEvent(event)
-            }
+            // Always go through the real entry point. The old helper drove
+            // onInterceptTouchEvent/onTouchEvent by hand, which skipped the
+            // dispatchTouchEvent funnel where the edge pointer window opens and
+            // closes — the tests were exercising a code path real hardware
+            // never takes.
+            view.dispatchTouchEvent(event)
             event.recycle()
         }
     }

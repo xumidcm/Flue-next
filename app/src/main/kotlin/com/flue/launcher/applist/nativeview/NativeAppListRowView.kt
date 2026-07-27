@@ -4,7 +4,6 @@ import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
-import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
@@ -39,31 +38,10 @@ internal class NativeAppListRowView(
     private val glidePressedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
-    /**
-     * The Compose drawer got its icon shadow from a RenderNode
-     * (`graphicsLayer { shadowElevation = 8.dp }`), so the platform drew a real
-     * ambient + spot pair with a Gaussian falloff. The native port replaced that
-     * with a flat `drawPath` of one opaque colour and no mask filter, which is
-     * why it reads as a hard black ring peeking out from behind every icon.
-     *
-     * A [BlurMaskFilter] restores the falloff at a fraction of the cost of a
-     * second RenderNode. HWUI implements blur mask filters for path draws from
-     * API 28; on 27 the filter is ignored and we degrade to the previous look.
-     */
-    private val iconShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-        color = 0x4D000000
-    }
-    private var iconShadowBlurRadiusPx = 0f
-
-    private fun updateIconShadowBlur(iconSizePx: Float) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
-        // ≈8dp of elevation blur on a 50dp icon, and it tracks icon scaling.
-        val radius = (iconSizePx * 0.15f).coerceIn(1.5f, 24f)
-        if (abs(radius - iconShadowBlurRadiusPx) < 0.25f) return
-        iconShadowBlurRadiusPx = radius
-        iconShadowPaint.maskFilter = BlurMaskFilter(radius, BlurMaskFilter.Blur.NORMAL)
-    }
+    // 图标阴影走真平台高程（RenderNode ambient+spot 双层高斯，机制与 Compose
+    // 版 `graphicsLayer { shadowElevation = 8.dp }` 完全同源）。以前的
+    // BlurMaskFilter 平涂近似是"黑环"观感的来源：30% 黑单层、几何外扩 4%、
+    // 无光源方向感。轮廓由下方的 outlineProvider 按 iconBounds 提供。
     private val fallbackBackgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
@@ -79,8 +57,8 @@ internal class NativeAppListRowView(
     private val iconBounds = RectF()
     private val fallbackPath = Path()
     private val iconClipPath = Path()
-    private val iconShadowPath = Path()
-    private val shadowBounds = RectF()
+    private val pressOverlayPath = Path()
+    private var pressOverlayUsesPath = false
     private val labelFontMetrics = Paint.FontMetrics()
 
     private var config = NativeAppListConfig()
@@ -117,7 +95,69 @@ internal class NativeAppListRowView(
         isClickable = false
         isFocusable = true
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        // 高程阴影的轮廓按图标（而非整行）提供：阴影只属于图标本体。
+        // clipToOutline 保持 false，绘制内容不受轮廓裁剪。
+        outlineProvider = object : android.view.ViewOutlineProvider() {
+            override fun getOutline(view: android.view.View, outline: android.graphics.Outline) {
+                ensureGeometry()
+                if (iconBounds.isEmpty) return
+                when (effectiveIconShape()) {
+                    NativeAppListIconShape.CIRCLE -> outline.setOval(
+                        iconBounds.left.toInt(),
+                        iconBounds.top.toInt(),
+                        iconBounds.right.toInt(),
+                        iconBounds.bottom.toInt(),
+                    )
+                    NativeAppListIconShape.ROUNDED_RECT -> outline.setRoundRect(
+                        iconBounds.left.toInt(),
+                        iconBounds.top.toInt(),
+                        iconBounds.right.toInt(),
+                        iconBounds.bottom.toInt(),
+                        config.iconCornerRadiusPx.coerceAtMost(
+                            min(iconBounds.width(), iconBounds.height()) / 2f,
+                        ),
+                    )
+                }
+                outline.alpha = 1f
+            }
+        }
+        clipToOutline = false
         updatePaints()
+    }
+
+    /**
+     * 图标本体的实际形状。蜂窝布局恒为圆形：格子只比圆图标略宽（见
+     * pressOverlay 的同款规则），塞方角图标会顶到邻格，而且阴影轮廓也会
+     * 在圆图标底下露出方角。MD3 / MIUIX 皮肤把 iconShape 设成
+     * ROUNDED_RECT 是给线性 / 密网格用的，蜂窝不跟。
+     */
+    private fun effectiveIconShape(): NativeAppListIconShape =
+        if (config.presentation == NativeAppListPresentation.HONEYCOMB) {
+            NativeAppListIconShape.CIRCLE
+        } else {
+            config.iconShape
+        }
+
+    /**
+     * View.alpha 不作用于高程阴影：行被鱼眼 / 入场动画隐去时阴影会单独留在
+     * 屏上。Compose 版在 HoneycombScreen 用 `itemAlpha > 0.001f` 门控
+     * shadowElevation，这里是同一规则的原生版。拖拽浮层抬到 12/18dp，
+     * 对齐 Compose 版的浮层高程。
+     */
+    private fun syncShadowElevation() {
+        val density = resources.displayMetrics.density
+        val targetDp = when {
+            !config.iconShadowEnabled || alpha <= 0.001f -> 0f
+            dragVisual -> if (config.presentation == NativeAppListPresentation.LINEAR) 18f else 12f
+            else -> 8f
+        }
+        val target = targetDp * density
+        if (elevation != target) elevation = target
+    }
+
+    override fun setAlpha(alpha: Float) {
+        super.setAlpha(alpha)
+        syncShadowElevation()
     }
 
     fun bind(
@@ -145,16 +185,18 @@ internal class NativeAppListRowView(
                 this.config.rowPaddingTopPx != next.rowPaddingTopPx ||
                 this.config.rowPaddingEndPx != next.rowPaddingEndPx ||
                 this.config.rowPaddingBottomPx != next.rowPaddingBottomPx ||
-                this.config.iconLabelGapPx != next.iconLabelGapPx
-                || this.config.iconShape != next.iconShape
-                || this.config.iconCornerRadiusPx != next.iconCornerRadiusPx
-                || this.config.denseGridIconInnerPaddingPx != next.denseGridIconInnerPaddingPx
+                this.config.iconLabelGapPx != next.iconLabelGapPx ||
+                this.config.iconShape != next.iconShape ||
+                this.config.iconCornerRadiusPx != next.iconCornerRadiusPx ||
+                this.config.denseGridIconInnerPaddingPx != next.denseGridIconInnerPaddingPx
         this.config = next
         geometryDirty = true
         iconEffectRenderer?.invalidateContent()
         updatePaints()
+        syncShadowElevation()
         if (drawingMetricsChanged) {
             requestLayout()
+            invalidateOutline()
         }
         invalidate()
     }
@@ -173,7 +215,8 @@ internal class NativeAppListRowView(
         // geometry paths here so a previous icon/shadow never flashes in that
         // hand-off frame.
         iconClipPath.reset()
-        iconShadowPath.reset()
+        pressOverlayPath.reset()
+        pressOverlayUsesPath = false
         fallbackPath.reset()
         geometryDirty = true
         setOnClickListener(null)
@@ -215,6 +258,14 @@ internal class NativeAppListRowView(
             0
         }
         if (nextBucket == iconBlurRadiusBucketPx) return
+        if (iconBlurRadiusBucketPx == 0 && nextBucket > 0) {
+            // 从直绘路径切回 RenderNode 路径的首帧必须重录内容：bucket 为 0
+            // 期间本节点不在视图显示列表里，系统可能已回收其录制内容，沿用
+            // 旧显示列表会画空——正是「滚动尾端图标进入模糊带就直接消失」
+            // 的来源之一。只在 0 → 非 0 的切换帧触发，滚动中 bucket 在非零
+            // 档位间变化不重录，热路径无额外开销。
+            iconEffectRenderer?.invalidateContent()
+        }
         iconBlurRadiusBucketPx = nextBucket
         iconEffectRenderer?.setBlurRadiusBucket(nextBucket)
         invalidate()
@@ -251,6 +302,7 @@ internal class NativeAppListRowView(
         if (dragVisual == enabled) return
         dragVisual = enabled
         updateInteractionScale()
+        syncShadowElevation()
     }
 
     fun setMoveTranslation(x: Float, y: Float) {
@@ -471,6 +523,16 @@ internal class NativeAppListRowView(
         ensureCenteredTransformPivot()
         iconEffectRenderer?.invalidateContent()
         ensureGeometry()
+        invalidateOutline()
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        // RecyclerView 的 itemView 缓存复用（stable-id 命中）不会重新 bind，
+        // 也就不会触发 invalidateContent；而脱窗期间图标效果 RenderNode 的
+        // 显示列表可能已被系统回收，沿用会画空。重新入窗的首帧强制重录，
+        // 保证滚动尾端刚挂回的行第一帧就画出（模糊的）图标。
+        iconEffectRenderer?.invalidateContent()
     }
 
     private fun ensureCenteredTransformPivot() {
@@ -511,10 +573,6 @@ internal class NativeAppListRowView(
             )
         }
 
-        if (config.iconShadowEnabled) {
-            canvas.drawPath(iconShadowPath, iconShadowPaint)
-        }
-
         if (iconBlurRadiusBucketPx > 0 && iconEffectRenderer != null) {
             iconEffectRenderer.draw(canvas, width, height, drawIconContentBlock)
         } else {
@@ -543,8 +601,8 @@ internal class NativeAppListRowView(
             } else {
                 pressedPaint
             }
-            if (config.iconShape == NativeAppListIconShape.CIRCLE) {
-                canvas.drawPath(iconClipPath, overlayPaint)
+            if (pressOverlayUsesPath) {
+                canvas.drawPath(pressOverlayPath, overlayPaint)
             } else {
                 canvas.drawRoundRect(
                     rowBounds,
@@ -676,24 +734,12 @@ internal class NativeAppListRowView(
         )
 
         iconClipPath.reset()
-        iconShadowPath.reset()
-        when (config.iconShape) {
+        when (effectiveIconShape()) {
             NativeAppListIconShape.CIRCLE -> {
                 iconClipPath.addCircle(
                     iconBounds.centerX(),
                     iconBounds.centerY(),
                     min(iconBounds.width(), iconBounds.height()) / 2f,
-                    Path.Direction.CW,
-                )
-                updateIconShadowBlur(min(iconBounds.width(), iconBounds.height()))
-                val shadowOffset = (iconBounds.height() * 0.055f).coerceAtLeast(1f)
-                iconShadowPath.addCircle(
-                    iconBounds.centerX(),
-                    iconBounds.centerY() + shadowOffset,
-                    // Geometry deliberately still extends past the icon: on
-                    // API 27 the mask filter is ignored, and shrinking it there
-                    // would delete the shadow instead of softening it.
-                    min(iconBounds.width(), iconBounds.height()) * 0.52f,
                     Path.Direction.CW,
                 )
             }
@@ -702,22 +748,33 @@ internal class NativeAppListRowView(
                     min(iconBounds.width(), iconBounds.height()) / 2f,
                 )
                 iconClipPath.addRoundRect(iconBounds, radius, radius, Path.Direction.CW)
-                updateIconShadowBlur(min(iconBounds.width(), iconBounds.height()))
-                val shadowOffset = (iconBounds.height() * 0.055f).coerceAtLeast(1f)
-                // Kept outset for the same reason as the circular branch: the
-                // mask filter softens this edge on API 28+, but API 27 falls
-                // back to the plain path and still needs the geometric spread.
-                val shadowSpread = (iconBounds.width() * 0.02f).coerceAtLeast(0.5f)
-                shadowBounds.set(iconBounds)
-                shadowBounds.inset(-shadowSpread, -shadowSpread)
-                shadowBounds.offset(0f, shadowOffset)
-                iconShadowPath.addRoundRect(
-                    shadowBounds,
-                    radius + shadowSpread,
-                    radius + shadowSpread,
+            }
+        }
+
+        // 按压 / folder hover 高亮的形状跟 presentation 走，而不是 iconShape：
+        // UI 风格与布局形态是两个独立设置，MD3/MIUIX 皮配蜂窝时 iconShape 是
+        // 圆角矩形，但蜂窝格子只比圆图标略宽——方形高亮会糊满整格。只有
+        // 密网格应读作圆角矩形整格；线性布局维持 iconShape 判定（Apple Watch
+        // 风格高亮图标圆盘、其余高亮整行）。
+        pressOverlayPath.reset()
+        pressOverlayUsesPath = when (config.presentation) {
+            NativeAppListPresentation.HONEYCOMB -> {
+                pressOverlayPath.addCircle(
+                    iconBounds.centerX(),
+                    iconBounds.centerY(),
+                    min(iconBounds.width(), iconBounds.height()) / 2f,
                     Path.Direction.CW,
                 )
+                true
             }
+            NativeAppListPresentation.DENSE_GRID -> false
+            NativeAppListPresentation.LINEAR ->
+                if (config.iconShape == NativeAppListIconShape.CIRCLE) {
+                    pressOverlayPath.addPath(iconClipPath)
+                    true
+                } else {
+                    false
+                }
         }
 
         val tileSize = iconBounds.width() * 0.16f

@@ -37,7 +37,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
+import com.flue.launcher.ui.settings.miuix.MiuixLoadingIndicator
 import androidx.compose.material3.Text
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -194,7 +194,7 @@ private fun BuiltInFileManagerScreen(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                CircularProgressIndicator(color = WatchColors.ActiveCyan)
+                MiuixLoadingIndicator(color = WatchColors.ActiveCyan)
             }
         } else if (mediaList!!.isEmpty()) {
             Row(

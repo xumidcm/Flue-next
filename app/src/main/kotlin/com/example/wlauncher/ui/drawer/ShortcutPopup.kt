@@ -149,9 +149,11 @@ fun AppShortcutOverlay(
         contentAlignment = Alignment.Center
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val densityDpi = context.resources.displayMetrics.densityDpi.toFloat()
-            val dpiScale = (densityDpi / 320f).coerceIn(0.76f, 1f)
-            val panelWidth = ((maxWidth * 0.76f) * dpiScale).coerceIn(180.dp, 312.dp)
+            // dp 本身就是密度无关单位——以前这里再乘一次 densityDpi/320 并
+            // 用 180dp 下限兜底，高密度表上 0.76×maxWidth 低于 180dp 被强行
+            // 拉宽到近乎满屏，菜单文字贴弦被切。整块只按屏宽比例取，绝不
+            // 超过屏宽。
+            val panelWidth = (maxWidth * 0.78f).coerceAtMost(312.dp)
             val panelMaxHeight = maxHeight * 0.86f
 
             Column(

@@ -1301,7 +1301,10 @@ private fun weekdayShortLabel(calendar: Calendar, locale: Locale): String {
             else -> "\u5468\u65E5"
         }
     }
-    return calendar.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, locale).orEmpty()
+    // locale 缩写数据自带的尾句号统一去掉，避免表盘上出现「Mon.」式拖尾。
+    return calendar.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, locale)
+        .orEmpty()
+        .trimEnd('.')
 }
 
 @Composable

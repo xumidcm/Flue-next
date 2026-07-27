@@ -23,7 +23,7 @@ internal fun quantizeNativeBlurRadiusPx(radiusPx: Float): Int {
 }
 
 internal fun nativeContentOverlayBlurBucketPx(config: NativeAppListConfig): Int =
-    if (config.effectiveBlurTier() == NativeBlurTier.SYSTEM) {
+    if (config.contentOverlayBlurEligible || config.effectiveBlurTier() == NativeBlurTier.SYSTEM) {
         quantizeNativeBlurRadiusPx(config.contentOverlayBlurRadiusPx)
     } else {
         0
@@ -96,8 +96,26 @@ internal class RenderNodeNativeIconEffectRenderer : NativeIconEffectRenderer {
         height: Int,
         drawContent: (Canvas) -> Unit,
     ) {
-        if (width <= 0 || height <= 0) return
-        if (contentDirty || recordedWidth != width || recordedHeight != height) {
+        // 根因（实机「开边缘模糊后，滚动尾端最后一行图标逐个直接消失且无
+        // 模糊」）：这里以前只信任自家 contentDirty 决定是否重录，且
+        // width/height <= 0 时静默返回。但 RenderNode 的显示列表归系统所有：
+        // 行视图被 RecyclerView 缓存复用（stable-id 命中 itemView 缓存时不走
+        // rebind，invalidateContent 不会被调用）、或 bucket 归零期间本节点脱离
+        // 视图显示列表后，录制内容可能已被系统回收——此时 contentDirty 仍是
+        // false、尺寸也没变，drawRenderNode 画出的是「空」。bucket > 0 才走本
+        // 路径，所以症状只在开启边缘模糊时出现，且集中在滚动方向尾端刚重新
+        // 挂接的行上。修复：显示列表失效时强制重录；无法走 RenderNode 时回退
+        // 直绘，宁可这一帧没有模糊也绝不画空。
+        if (width <= 0 || height <= 0 || !target.isHardwareAccelerated) {
+            drawContent(target)
+            return
+        }
+        if (
+            contentDirty ||
+            recordedWidth != width ||
+            recordedHeight != height ||
+            !renderNode.hasDisplayList()
+        ) {
             renderNode.setPosition(0, 0, width, height)
             val recordingCanvas = renderNode.beginRecording(width, height)
             drawContent(recordingCanvas)
@@ -105,6 +123,11 @@ internal class RenderNodeNativeIconEffectRenderer : NativeIconEffectRenderer {
             recordedWidth = width
             recordedHeight = height
             contentDirty = false
+        }
+        if (!renderNode.hasDisplayList()) {
+            // 录制在同帧内又被系统回收的极端情况：首帧回退直绘兜底。
+            drawContent(target)
+            return
         }
         target.drawRenderNode(renderNode)
     }

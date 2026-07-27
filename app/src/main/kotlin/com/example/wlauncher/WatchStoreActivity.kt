@@ -4,6 +4,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -12,6 +13,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -22,6 +25,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -52,13 +56,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ViewList
+import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import com.flue.launcher.ui.settings.miuix.MiuixLoadingIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -110,8 +116,14 @@ import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.LunchWatchFaceDescriptor
 import com.flue.launcher.watchface.editor.WatchEditorSession
 import com.flue.launcher.watchface.standard.WatchInstallMetadata
+import com.flue.launcher.watchface.store.HttpWatchStoreApi
+import com.flue.launcher.watchface.store.WatchStoreAuthSession
+import com.flue.launcher.watchface.store.WatchStoreAuthStore
 import com.flue.launcher.watchface.store.WatchStoreCategory
+import com.flue.launcher.watchface.store.WatchStoreCredentialStore
 import com.flue.launcher.watchface.store.WatchStoreException
+import com.flue.launcher.watchface.store.WatchStoreHttpException
+import com.flue.launcher.watchface.store.WatchStorePayloadTooLargeException
 import com.flue.launcher.watchface.store.WatchStoreInstallState
 import com.flue.launcher.watchface.store.WatchStoreInstallTransactionException
 import com.flue.launcher.watchface.store.WatchStorePagination
@@ -326,6 +338,7 @@ private fun WatchStoreScreen(
     val downloadJobs = remember { mutableMapOf<String, Job>() }
     val pendingCatalogInstalls = remember { mutableStateMapOf<String, PendingMarketCatalogInstall>() }
     var installedActionError by remember { mutableStateOf<String?>(null) }
+    var uploadVisible by remember { mutableStateOf(false) }
 
     /**
      * Opening a detail must reset the load state *synchronously*: the first
@@ -754,6 +767,7 @@ private fun WatchStoreScreen(
                     viewMode = next
                     uiPreferences.writeViewMode(next)
                 },
+                onUpload = { uploadVisible = true },
             )
             OutlinedTextField(
                 value = searchText,
@@ -1001,6 +1015,26 @@ private fun WatchStoreScreen(
                 )
             }
         }
+
+        // 商店内上传入口：覆层挂在详情之上（zIndex 2），来源支持已安装表盘
+        // 与系统文件选择器两路；登录/注册表单与编辑器上传覆层共用同一实现。
+        AnimatedVisibility(
+            visible = uploadVisible,
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(2f),
+            enter = fadeIn(animationSpec = style.pageMotionSpec) +
+                scaleIn(initialScale = 0.96f, animationSpec = style.pageMotionSpec),
+            exit = fadeOut(animationSpec = style.pageMotionSpec) +
+                scaleOut(targetScale = 0.96f, animationSpec = style.pageMotionSpec),
+        ) {
+            StoreUploadOverlay(
+                repository = repository,
+                installedFaces = installedFaces,
+                onUploaded = { reloadToken++ },
+                onDismiss = { uploadVisible = false },
+            )
+        }
     }
 }
 
@@ -1009,6 +1043,7 @@ private fun StoreHeader(
     onBack: () -> Unit,
     viewMode: WatchStoreViewMode,
     onToggleViewMode: () -> Unit,
+    onUpload: () -> Unit,
 ) {
     val style = LauncherTheme.style
     Row(
@@ -1021,6 +1056,14 @@ private fun StoreHeader(
         Column(Modifier.weight(1f)) {
             Text("表盘市场", color = style.titleColor, fontSize = 17.sp, fontWeight = FontWeight.Bold)
             Text("Watchmaker Community", color = style.secondaryTextColor, fontSize = 10.sp)
+        }
+        IconButton(onClick = onUpload, modifier = Modifier.size(40.dp)) {
+            Icon(
+                imageVector = Icons.Default.CloudUpload,
+                contentDescription = "上传表盘",
+                tint = style.titleColor,
+                modifier = Modifier.size(20.dp),
+            )
         }
         IconButton(onClick = onToggleViewMode, modifier = Modifier.size(40.dp)) {
             Icon(
@@ -1174,13 +1217,40 @@ private fun InstallStateLine(
     onCancelDownload: () -> Unit,
     fallbackLine: (@Composable () -> Unit)? = null,
 ) {
+    // 状态区固定尺寸槽位：下载前/下载中/已安装/失败四态内容高度各不相同
+    // （纯文字比带图标的迷你按钮矮几个 dp），任由内容决定高度会让宫格卡片
+    // 在下载完成后向内塌陷。槽位高度取四态中的最大者，卡片尺寸严格恒定。
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(if (compact) 20.dp else 22.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        InstallStateLineContent(
+            downloadState = downloadState,
+            compact = compact,
+            onDownload = onDownload,
+            onCancelDownload = onCancelDownload,
+            fallbackLine = fallbackLine,
+        )
+    }
+}
+
+@Composable
+private fun InstallStateLineContent(
+    downloadState: WatchStoreInstallState,
+    compact: Boolean,
+    onDownload: () -> Unit,
+    onCancelDownload: () -> Unit,
+    fallbackLine: (@Composable () -> Unit)?,
+) {
     val style = LauncherTheme.style
     when (downloadState) {
         is WatchStoreInstallState.Downloading,
         is WatchStoreInstallState.Validating,
         is WatchStoreInstallState.Installing -> {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(
+                MiuixLoadingIndicator(
                     Modifier.size(if (compact) 11.dp else 14.dp),
                     strokeWidth = 2.dp,
                     color = style.accentColor,
@@ -1445,14 +1515,17 @@ private fun WatchFaceDetailPage(
         modifier = Modifier
             .fillMaxSize()
             .background(style.screenBackground)
-            // 覆层必须吃掉全部指针事件；空白边距的点击/拖动不能落到
-            // 底下仍在组合树里的列表上（否则会偷偷改它的滚动位置）。
+            // 覆层只需要「可命中」就能挡住底下仍在组合树里的列表；这里
+            // 绝不能消费事件——父层在 Main pass 里消费 MOVE 会让内层
+            // verticalScroll 在跨过 touch-slop 前被取消，详情页因此滑不动。
+            // 与编辑器上传覆层保持同一写法：只观察指针直到全部抬起。
             .pointerInput(Unit) {
                 awaitEachGesture {
-                    do {
+                    awaitFirstDown(requireUnconsumed = false)
+                    while (true) {
                         val event = awaitPointerEvent()
-                        event.changes.forEach { it.consume() }
-                    } while (event.changes.any { it.pressed })
+                        if (event.changes.none { it.pressed }) break
+                    }
                 }
             }
             .padding(
@@ -1580,7 +1653,7 @@ private fun WatchFaceDetailPage(
                                     else -> "处理中…"
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    CircularProgressIndicator(
+                                    MiuixLoadingIndicator(
                                         Modifier.size(18.dp),
                                         strokeWidth = 2.dp,
                                         color = style.accentColor,
@@ -1697,6 +1770,577 @@ private fun WatchFaceDetailPage(
         }
     }
 }
+
+/**
+ * 商店内上传覆层。与编辑器上传覆层同构：登录/注册 → 选择来源 → 元数据 →
+ * 上传；登录表单、凭据记忆与错误映射复用 WatchStoreUploadCommon 里的共享
+ * 实现。来源有两路：a) 已安装 .watch 表盘（经 WatchEditorSession 导出）；
+ * b) 系统文件选择器选择的本地 .watch 文件。上传中禁用返回与关闭。
+ */
+@Composable
+private fun StoreUploadOverlay(
+    repository: WatchStoreRepository,
+    installedFaces: List<LunchWatchFaceDescriptor>,
+    onUploaded: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val isScreenRound = isFlueScreenRound()
+    val style = LauncherTheme.style
+    val authStore = remember { WatchStoreAuthStore(context) }
+    val credentialStore = remember { WatchStoreCredentialStore(context) }
+    val api = remember { HttpWatchStoreApi() }
+
+    var auth by remember { mutableStateOf<WatchStoreAuthSession?>(null) }
+    var authChecked by remember { mutableStateOf(false) }
+    var username by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var rememberUsername by remember { mutableStateOf(false) }
+    var rememberPassword by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf<String?>(null) }
+    var formError by remember { mutableStateOf<String?>(null) }
+    var uploadPercent by remember { mutableStateOf<Int?>(null) }
+    var selectedDescriptorId by remember { mutableStateOf<String?>(null) }
+    var pickedFileUri by remember { mutableStateOf<Uri?>(null) }
+    var pickedFileName by remember { mutableStateOf<String?>(null) }
+    var name by remember { mutableStateOf("") }
+    var description by remember { mutableStateOf("") }
+    var categories by remember { mutableStateOf<List<WatchStoreCategory>?>(null) }
+    var categoriesError by remember { mutableStateOf<String?>(null) }
+    var categoriesRetryToken by remember { mutableIntStateOf(0) }
+    var selectedCategoryId by remember { mutableStateOf<String?>(null) }
+    var screenType by remember {
+        mutableStateOf(if (isScreenRound) WatchStoreScreenType.ROUND else WatchStoreScreenType.SQUARE)
+    }
+
+    val installedWatchmakerFaces = remember(installedFaces) {
+        installedFaces.filter { it.isWatchmaker && it.sourceDirPath != null }
+    }
+    val selectedDescriptor = selectedDescriptorId
+        ?.let { id -> installedWatchmakerFaces.firstOrNull { it.id == id } }
+    val sourceChosen = selectedDescriptor != null || pickedFileUri != null
+
+    val pickWatchFile = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            pickedFileUri = uri
+            selectedDescriptorId = null
+            val display = queryStoreUploadDisplayName(context, uri) ?: "本地表盘"
+            pickedFileName = display
+            if (name.isBlank()) {
+                name = display.removeSuffix(".watch").ifBlank { "Flue Watch" }.take(100)
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        // 令牌与已记住的凭据都在 IO 上读；打开覆层时自动填充登录表单。
+        val (storedAuth, savedCredentials) = withContext(Dispatchers.IO) {
+            authStore.read() to credentialStore.read()
+        }
+        auth = storedAuth
+        savedCredentials.username?.let { username = it }
+        savedCredentials.password?.let { password = it }
+        rememberUsername = savedCredentials.rememberUsername
+        rememberPassword = savedCredentials.rememberPassword
+        authChecked = true
+    }
+
+    LaunchedEffect(auth, categoriesRetryToken) {
+        if (auth == null || categories != null) return@LaunchedEffect
+        categoriesError = null
+        runCatching { repository.getCategories() }
+            .onSuccess { list ->
+                categories = list
+                if (selectedCategoryId == null) selectedCategoryId = list.firstOrNull()?.id
+            }
+            .onFailure { error ->
+                error.throwIfCancellation()
+                categoriesError = watchStoreUploadErrorMessage(error)
+            }
+    }
+
+    fun authenticate(register: Boolean) {
+        if (busy != null) return
+        val cleanUsername = username.trim()
+        val inputError = watchStoreAuthInputError(cleanUsername, password)
+        if (inputError != null) {
+            formError = inputError
+            return
+        }
+        busy = if (register) "正在注册" else "正在登录"
+        formError = null
+        scope.launch {
+            runCatching {
+                watchStoreLoginOrRegister(
+                    api = api,
+                    authStore = authStore,
+                    credentialStore = credentialStore,
+                    username = cleanUsername,
+                    password = password,
+                    register = register,
+                    rememberUsername = rememberUsername,
+                    rememberPassword = rememberPassword,
+                )
+            }.onSuccess { stored ->
+                password = ""
+                auth = stored
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                formError = watchStoreAuthErrorMessage(error, register)
+            }
+            busy = null
+        }
+    }
+
+    fun upload() {
+        if (busy != null) return
+        val activeAuth = auth ?: return
+        val trimmedName = name.trim()
+        if (trimmedName.isEmpty()) {
+            formError = "请填写表盘名称"
+            return
+        }
+        if (description.isBlank()) {
+            formError = "请填写表盘描述"
+            return
+        }
+        val categoryId = selectedCategoryId
+        if (categoryId == null) {
+            formError = "请选择一个分类"
+            return
+        }
+        val descriptor = selectedDescriptor
+        val fileUri = pickedFileUri
+        if (descriptor == null && fileUri == null) {
+            formError = "请先选择要上传的表盘"
+            return
+        }
+        busy = "正在准备表盘包"
+        formError = null
+        uploadPercent = null
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val archive = File.createTempFile("flue_store_upload_", ".watch", context.cacheDir)
+                    try {
+                        if (descriptor != null) {
+                            WatchEditorSession.open(context, descriptor).use { session ->
+                                session.exportWatch(archive)
+                            }
+                        } else {
+                            copyPickedWatchArchive(context, requireNotNull(fileUri), archive)
+                        }
+                        if (archive.length() > HttpWatchStoreApi.MAX_UPLOAD_BYTES) {
+                            throw WatchStorePayloadTooLargeException(HttpWatchStoreApi.MAX_UPLOAD_BYTES)
+                        }
+                        busy = "正在上传"
+                        api.uploadWatchFace(
+                            token = activeAuth.token,
+                            file = archive,
+                            name = trimmedName,
+                            description = description.trim(),
+                            screenType = screenType,
+                            categoryId = categoryId,
+                        ) { sent, total ->
+                            val percent = ((sent * 100L) / total.coerceAtLeast(1L))
+                                .toInt()
+                                .coerceIn(0, 100)
+                            if (uploadPercent != percent) uploadPercent = percent
+                        }
+                    } finally {
+                        archive.delete()
+                    }
+                }
+            }.onSuccess {
+                Toast.makeText(context, "已上传到表盘商店", Toast.LENGTH_SHORT).show()
+                onUploaded()
+                onDismiss()
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                if (error is WatchStoreHttpException && error.statusCode == 401) {
+                    // 服务器判定令牌失效比本地过期时间更权威：清掉并回到登录页。
+                    authStore.clear()
+                    auth = null
+                    formError = "登录已过期，请重新登录后再上传"
+                } else {
+                    formError = watchStoreUploadErrorMessage(error)
+                }
+            }
+            busy = null
+            uploadPercent = null
+        }
+    }
+
+    // 上传中禁止返回键关闭，避免协程随组合一起被取消而中断传输。
+    BackHandler { if (busy == null) onDismiss() }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(style.screenBackground)
+            // 与详情覆层一致：只挡命中、不消费，覆层内部的 verticalScroll
+            // 才能正常跨过 touch-slop（消费会掐死自己的滚动）。
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.changes.none { it.pressed }) break
+                    }
+                }
+            }
+            .padding(
+                horizontal = if (isScreenRound) 16.dp else 10.dp,
+                vertical = if (isScreenRound) 10.dp else 6.dp,
+            ),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(
+                onClick = { if (busy == null) onDismiss() },
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(Icons.Default.Clear, contentDescription = "关闭上传", tint = style.titleColor)
+            }
+            Text(
+                "上传到商店",
+                modifier = Modifier.weight(1f),
+                color = style.titleColor,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                maxLines = 1,
+            )
+            Spacer(Modifier.size(40.dp))
+        }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = if (isScreenRound) 6.dp else 0.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            busy?.let { message ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    MiuixLoadingIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = style.accentColor)
+                    Text(
+                        message + (uploadPercent?.let { " $it%" }.orEmpty()),
+                        color = style.bodyColor,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+            formError?.let { message ->
+                Text(
+                    message,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(WatchColors.ActiveRed.copy(alpha = 0.16f), style.rowShape)
+                        .padding(10.dp),
+                    color = WatchColors.ActiveRed,
+                    fontSize = 12.sp,
+                )
+            }
+            val activeAuth = auth
+            when {
+                !authChecked -> Text(
+                    "正在检查登录状态…",
+                    color = style.secondaryTextColor,
+                    fontSize = 12.sp,
+                )
+                activeAuth == null -> WatchStoreLoginSection(
+                    username = username,
+                    onUsernameChange = { username = it },
+                    password = password,
+                    onPasswordChange = { password = it },
+                    rememberUsername = rememberUsername,
+                    rememberPassword = rememberPassword,
+                    onRememberChange = { keepUsername, keepPassword ->
+                        rememberUsername = keepUsername
+                        rememberPassword = keepPassword
+                    },
+                    enabled = busy == null,
+                    onLogin = { authenticate(register = false) },
+                    onRegister = { authenticate(register = true) },
+                )
+                else -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "已登录：${activeAuth.username}",
+                            modifier = Modifier.weight(1f),
+                            color = style.secondaryTextColor,
+                            fontSize = 12.sp,
+                        )
+                        TextButton(
+                            onClick = {
+                                if (busy == null) {
+                                    authStore.clear()
+                                    auth = null
+                                    // 登出同步清理已记住的账号/密码（含 Keystore 密文）。
+                                    rememberUsername = false
+                                    rememberPassword = false
+                                    scope.launch(Dispatchers.IO) { credentialStore.clear() }
+                                }
+                            },
+                        ) { Text("退出登录", color = style.accentColor) }
+                    }
+                    Text("上传来源", color = style.titleColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    if (sourceChosen) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                selectedDescriptor?.displayName ?: pickedFileName ?: "已选择表盘",
+                                modifier = Modifier.weight(1f),
+                                color = style.bodyColor,
+                                fontSize = 12.sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            TextButton(
+                                onClick = {
+                                    if (busy == null) {
+                                        selectedDescriptorId = null
+                                        pickedFileUri = null
+                                        pickedFileName = null
+                                    }
+                                },
+                            ) { Text("重新选择", color = style.accentColor) }
+                        }
+                    } else {
+                        StoreSecondaryButton(
+                            label = "选择本地 .watch 文件",
+                            onClick = { if (busy == null) pickWatchFile.launch(arrayOf("*/*")) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        if (installedWatchmakerFaces.isEmpty()) {
+                            Text(
+                                "还没有可上传的已安装 .watch 表盘",
+                                color = style.secondaryTextColor,
+                                fontSize = 11.sp,
+                            )
+                        } else {
+                            Text("或从已安装表盘选择：", color = style.secondaryTextColor, fontSize = 11.sp)
+                            installedWatchmakerFaces.forEach { descriptor ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(style.rowShape)
+                                        .background(style.cardColor)
+                                        .border(1.dp, style.outlineColor, style.rowShape)
+                                        .clickable(enabled = busy == null) {
+                                            selectedDescriptorId = descriptor.id
+                                            pickedFileUri = null
+                                            pickedFileName = null
+                                            if (name.isBlank()) name = descriptor.displayName.take(100)
+                                        }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        descriptor.displayName,
+                                        modifier = Modifier.weight(1f),
+                                        color = style.bodyColor,
+                                        fontSize = 13.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (sourceChosen) {
+                        OutlinedTextField(
+                            value = name,
+                            onValueChange = { name = it.take(100) },
+                            label = { Text("表盘名称（必填）", color = style.secondaryTextColor) },
+                            singleLine = true,
+                            enabled = busy == null,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = style.accentColor,
+                                unfocusedBorderColor = style.outlineColor,
+                                cursorColor = style.accentColor,
+                                focusedTextColor = style.bodyColor,
+                                unfocusedTextColor = style.bodyColor,
+                            ),
+                        )
+                        OutlinedTextField(
+                            value = description,
+                            onValueChange = { description = it.take(2000) },
+                            label = { Text("描述（必填）", color = style.secondaryTextColor) },
+                            minLines = 2,
+                            enabled = busy == null,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = style.accentColor,
+                                unfocusedBorderColor = style.outlineColor,
+                                cursorColor = style.accentColor,
+                                focusedTextColor = style.bodyColor,
+                                unfocusedTextColor = style.bodyColor,
+                            ),
+                        )
+                        Text("屏幕形状", color = style.titleColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            STORE_UPLOAD_SCREEN_TYPE_OPTIONS.forEach { (candidate, label) ->
+                                StorePill(label, screenType == candidate) {
+                                    if (busy == null) screenType = candidate
+                                }
+                            }
+                        }
+                        Text("分类", color = style.titleColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        when {
+                            categoriesError != null -> {
+                                Text(
+                                    categoriesError.orEmpty(),
+                                    color = WatchColors.ActiveRed,
+                                    fontSize = 12.sp,
+                                )
+                                StoreSecondaryButton(
+                                    label = "重新加载分类",
+                                    onClick = { if (busy == null) categoriesRetryToken++ },
+                                )
+                            }
+                            categories == null -> Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                MiuixLoadingIndicator(
+                                    Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = style.accentColor,
+                                )
+                                Text("正在加载分类…", color = style.secondaryTextColor, fontSize = 12.sp)
+                            }
+                            categories.orEmpty().isEmpty() -> Text(
+                                "商店暂时没有可用分类，稍后再试。",
+                                color = style.secondaryTextColor,
+                                fontSize = 12.sp,
+                            )
+                            else -> categories.orEmpty().forEach { category ->
+                                val selected = category.id == selectedCategoryId
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(style.rowShape)
+                                        .background(if (selected) style.selectedCardColor else style.cardColor)
+                                        .clickable(enabled = busy == null) {
+                                            selectedCategoryId = category.id
+                                        }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        category.name,
+                                        modifier = Modifier.weight(1f),
+                                        color = style.bodyColor,
+                                        fontSize = 13.sp,
+                                    )
+                                    if (selected) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.ic_flue_check_round),
+                                            contentDescription = null,
+                                            tint = style.accentColor,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        StorePrimaryButton(
+                            label = "上传此表盘",
+                            onClick = { upload() },
+                            enabled = busy == null &&
+                                name.isNotBlank() &&
+                                description.isNotBlank() &&
+                                selectedCategoryId != null,
+                        )
+                        Text(
+                            "已安装表盘会先导出为 .watch 再上传（上限 50MB）；" +
+                                "预览图由商店从表盘包中自动生成。",
+                            color = style.secondaryTextColor,
+                            fontSize = 10.sp,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(if (isScreenRound) 36.dp else 14.dp))
+        }
+    }
+}
+
+/** SAF 只给 Uri；标题栏与默认名称需要 DISPLAY_NAME，查询失败时返回 null。 */
+private fun queryStoreUploadDisplayName(context: android.content.Context, uri: Uri): String? =
+    runCatching {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    cursor.getString(0)?.takeIf(String::isNotBlank)
+                } else {
+                    null
+                }
+            }
+    }.getOrNull()
+
+/**
+ * 把 SAF 选中的文件复制进 cache 作为上传源：边复制边限制在 50MB 内，
+ * 并校验 zip（PK）文件头，避免把任意文件当作 .watch 传给服务器。
+ */
+private fun copyPickedWatchArchive(
+    context: android.content.Context,
+    uri: Uri,
+    destination: File,
+) {
+    val input = context.contentResolver.openInputStream(uri)
+        ?: throw IllegalArgumentException("无法读取所选文件")
+    input.use { stream ->
+        destination.outputStream().use { output ->
+            val buffer = ByteArray(32 * 1024)
+            var total = 0L
+            while (true) {
+                val count = stream.read(buffer)
+                if (count < 0) break
+                total += count
+                if (total > HttpWatchStoreApi.MAX_UPLOAD_BYTES) {
+                    throw WatchStorePayloadTooLargeException(HttpWatchStoreApi.MAX_UPLOAD_BYTES)
+                }
+                output.write(buffer, 0, count)
+            }
+        }
+    }
+    require(destination.length() > 0L) { "所选文件是空的" }
+    destination.inputStream().use { stream ->
+        val header = ByteArray(2)
+        val read = stream.read(header)
+        require(read == 2 && header[0] == 'P'.code.toByte() && header[1] == 'K'.code.toByte()) {
+            "所选文件不是有效的 .watch 表盘包"
+        }
+    }
+}
+
+private val STORE_UPLOAD_SCREEN_TYPE_OPTIONS = listOf(
+    WatchStoreScreenType.ROUND to "圆形",
+    WatchStoreScreenType.SQUARE to "方形",
+    WatchStoreScreenType.RECTANGULAR to "长方形",
+)
 
 @Composable
 private fun StorePrimaryButton(
@@ -1876,34 +2520,64 @@ private fun WatchPreview(
         }
     }
     val image = remember(bitmap) { bitmap?.asImageBitmap() }
+    // 三态互斥：加载中转圈 / 失败灰色占位 / 就绪显示图片。占位尺寸完全由
+    // 调用方 modifier（height/aspectRatio）决定，态切换只发生在 Box 内部，
+    // 绝不改变外框大小——宫格卡片的尺寸因此保持恒定，不会二次塌陷。
+    val previewState = when {
+        image != null -> WatchPreviewState.READY
+        loadError != null -> WatchPreviewState.FAILED
+        else -> WatchPreviewState.LOADING
+    }
     Box(modifier.background(style.pressedCardColor), contentAlignment = Alignment.Center) {
-        if (image != null) {
-            Image(
-                image,
-                contentDescription = "表盘预览",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Fit,
-            )
-        } else if (loadError != null) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier.padding(8.dp),
-            ) {
-                Text("预览加载失败", color = style.secondaryTextColor, fontSize = 10.sp)
-                StoreMiniAction(
-                    label = "重试",
-                    color = style.accentColor,
-                    fontSize = 10.sp,
-                    onClick = { retryToken++ },
-                    iconPainterRes = R.drawable.ic_flue_refresh_round,
-                )
+        // 220ms 交叉淡入：图片就绪后从加载态柔和过渡进来，替代原先的硬跳。
+        Crossfade(
+            targetState = previewState,
+            animationSpec = tween(durationMillis = 220),
+            label = "watchPreviewFade",
+        ) { state ->
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                when (state) {
+                    WatchPreviewState.READY -> image?.let { readyImage ->
+                        Image(
+                            readyImage,
+                            contentDescription = "表盘预览",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Fit,
+                        )
+                    }
+                    WatchPreviewState.FAILED -> Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(8.dp),
+                    ) {
+                        // 灰色占位图标：失败时不留白，一眼可辨预览没加载出来。
+                        Icon(
+                            imageVector = Icons.Default.BrokenImage,
+                            contentDescription = "预览加载失败",
+                            tint = style.secondaryTextColor,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        StoreMiniAction(
+                            label = "重试",
+                            color = style.accentColor,
+                            fontSize = 10.sp,
+                            onClick = { retryToken++ },
+                            iconPainterRes = R.drawable.ic_flue_refresh_round,
+                        )
+                    }
+                    WatchPreviewState.LOADING -> MiuixLoadingIndicator(
+                        Modifier.size(22.dp),
+                        strokeWidth = 2.dp,
+                        color = style.accentColor,
+                    )
+                }
             }
-        } else {
-            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = style.secondaryTextColor)
         }
     }
 }
+
+/** 预览图三态：Crossfade 的比较键，位图内容本身仍从闭包读取。 */
+private enum class WatchPreviewState { LOADING, FAILED, READY }
 
 @Composable
 private fun LoadingStateRow(label: String) {
@@ -1913,7 +2587,7 @@ private fun LoadingStateRow(label: String) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = style.accentColor)
+        MiuixLoadingIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = style.accentColor)
         Text(label, color = style.secondaryTextColor, fontSize = 12.sp, textAlign = TextAlign.Center)
     }
 }

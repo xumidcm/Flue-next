@@ -384,9 +384,13 @@ class WatchEditorSession private constructor(
      * in a watch.xml image/source attribute.
      */
     @Synchronized
-    fun importResource(input: InputStream, requestedName: String): String {
+    fun importResource(
+        input: InputStream,
+        requestedName: String,
+        directory: String = "images",
+    ): String {
         ensureOpen()
-        val relativePath = uniqueResourcePath(requestedName)
+        val relativePath = uniqueResourcePath(requestedName, directory)
         return mutate {
             val destination = resolveDraftPath(relativePath)
             destination.parentFile?.mkdirs()
@@ -837,9 +841,11 @@ class WatchEditorSession private constructor(
         return candidate
     }
 
-    private fun uniqueResourcePath(requestedName: String): String {
+    private fun uniqueResourcePath(
+        requestedName: String,
+        directory: String = "images",
+    ): String {
         val clean = sanitizeFileName(requestedName)
-        val directory = "images"
         var candidate = "$directory/$clean"
         var suffix = 2
         while (resolveDraftPath(candidate).exists() || candidate in resourceStash) {

@@ -42,18 +42,14 @@ private val BatteryLabelStyle = TextStyle(
 )
 
 /**
- * iOS / MIUIX 读法的电池胶囊：描边外壳 + 实心填充 + 正极凸起，数字在壳外。
+ * 圆角矩形电池图标：描边外壳 + 半透明填充 + 正极凸起，剩余电量数字
+ * **半透明居中在图标内部**（老师指定的形态）。充电时数字让位给闪电。
  *
- * 旧实现的三个问题这里都不允许回归：
- *  * 外壳曾是不透明色块（充电时整块变墨绿），贴纯黑背景上边界靠猜 ——
- *    现在只描边，填充承载全部状态色。
- *  * 填充曾是矩形按比例裁剪，低于 20% 时被裁成畸形尖角 —— 现在填充宽度
- *    永远不小于自身高度，低电量是一颗完整的小胶囊。
- *  * 闪电曾 `offset(x = 10.dp)` 顶出壳外（圆屏上被表框吃掉）—— 现在压在
- *    填充内部用深色 tint。
- *
- * 尺寸通过 [width]/[height] 直接传入。旧的 `sizeScale`（graphicsLayer 缩放）
- * 已删除：缩放渲染会让 11sp 文字落在非整数栅格上发糊。
+ * 旧实现的问题不允许回归：
+ *  * 填充宽度永远不小于自身高度，低电量不是畸形尖角。
+ *  * 闪电压在图标内部，不再顶出壳外被表框吃掉。
+ *  * 不用 graphicsLayer 缩放渲染（文字会落在非整数栅格上发糊），尺寸由
+ *    [width]/[height] 直接决定，数字随高度取字号。
  */
 @Composable
 fun WatchBatteryPill(
@@ -71,7 +67,7 @@ fun WatchBatteryPill(
             charging -> WatchColors.ActiveGreen
             clamped <= 10 -> WatchColors.ActiveRed
             clamped <= 20 -> WatchColors.ActiveOrange
-            else -> style.titleColor
+            else -> style.titleColor.copy(alpha = 0.5f)
         },
         animationSpec = spring(dampingRatio = 0.92f, stiffness = 700f),
         label = "battery_fill_color",
@@ -83,24 +79,15 @@ fun WatchBatteryPill(
         label = "battery_fill_level",
     )
     val shellColor = style.titleColor.copy(alpha = 0.35f)
+    val shellShape = RoundedCornerShape(height * 0.3f)
+    val fillShape = RoundedCornerShape(height * 0.3f - 1.dp)
 
     Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier) {
-        if (showLabel) {
-            Text(
-                text = "$clamped",
-                fontSize = 13.sp,
-                lineHeight = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = style.titleColor,
-                style = BatteryLabelStyle,
-            )
-            Spacer(Modifier.width(4.dp))
-        }
         Box(Modifier.size(width, height), contentAlignment = Alignment.CenterStart) {
             Box(
                 Modifier
                     .matchParentSize()
-                    .border(1.2.dp, shellColor, CircleShape)
+                    .border(1.2.dp, shellColor, shellShape)
             )
             val innerMax = width - 4.dp
             val innerHeight = height - 4.dp
@@ -108,9 +95,9 @@ fun WatchBatteryPill(
                 Modifier
                     .padding(2.dp)
                     .fillMaxHeight()
-                    // 填充宽度不小于自身高度：低电量永远是完整胶囊而不是尖角。
+                    // 填充宽度不小于自身高度：低电量永远是完整圆角块而不是尖角。
                     .width((innerMax * animLevel).coerceAtLeast(innerHeight))
-                    .clip(CircleShape)
+                    .clip(fillShape)
                     .background(fill)
             )
             if (charging) {
@@ -121,6 +108,17 @@ fun WatchBatteryPill(
                     modifier = Modifier
                         .align(Alignment.Center)
                         .size(innerHeight),
+                )
+            } else if (showLabel) {
+                Text(
+                    text = "$clamped",
+                    fontSize = (height.value * 0.58f).sp,
+                    lineHeight = (height.value * 0.58f).sp,
+                    fontWeight = FontWeight.SemiBold,
+                    // 半透明数字居中在图标内（半透明填充垫底，两种主题下都可读）。
+                    color = style.titleColor.copy(alpha = 0.62f),
+                    style = BatteryLabelStyle,
+                    modifier = Modifier.align(Alignment.Center),
                 )
             }
         }

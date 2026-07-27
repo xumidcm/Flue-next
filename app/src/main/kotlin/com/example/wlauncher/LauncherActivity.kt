@@ -13,7 +13,9 @@ import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import kotlin.math.roundToInt
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -54,6 +56,8 @@ import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.launchsession.ExternalLaunchState
 import com.flue.launcher.launchsession.ReturnKind
 import com.flue.launcher.service.FlueAccessibilityService
+import com.flue.launcher.ui.anim.appListLaunchPlateValues
+import com.flue.launcher.ui.anim.appListLaunchValues
 import com.flue.launcher.ui.anim.appListLayerValues
 import com.flue.launcher.ui.anim.faceLayerValues
 import com.flue.launcher.ui.anim.returnUsesLaunchOrigin
@@ -76,7 +80,12 @@ import com.flue.launcher.ui.home.WatchFaceStatusIndicatorOverlay
 import com.flue.launcher.ui.home.rememberAppListSeedColor
 import com.flue.launcher.ui.navigation.GestureHost
 import com.flue.launcher.ui.navigation.LayoutMode
+import com.flue.launcher.ui.navigation.OverlayGestureTarget
 import com.flue.launcher.ui.navigation.ScreenState
+import com.flue.launcher.ui.anim.LayerAnimValues
+import com.flue.launcher.ui.anim.flueBackdropFill
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.animation.core.spring
 import com.flue.launcher.ui.notification.NotificationLayer
 import com.flue.launcher.ui.smartstack.SmartStackLayer
 import com.flue.launcher.ui.smartstack.WidgetPageLayer
@@ -250,6 +259,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
     val appListReturnShrinkEnabled by vm.appListReturnShrinkEnabled.collectAsStateWithLifecycle()
+    val legacyAppListTransitionEnabled by vm.legacyAppListTransitionEnabled.collectAsStateWithLifecycle()
+    val appListReturnIconFloatEnabled by vm.appListReturnIconFloatEnabled.collectAsStateWithLifecycle()
     val rawFaceReturnShrinkEnabled by vm.faceReturnShrinkEnabled.collectAsStateWithLifecycle()
     val reduceDynamicEffects by vm.reduceDynamicEffects.collectAsStateWithLifecycle()
     val appListStaggerEnabled by vm.appListStaggerEnabled.collectAsStateWithLifecycle()
@@ -504,6 +515,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
         )
     }
     var appListShadowsReady by remember { mutableStateOf(screenState == ScreenState.Apps) }
+    // 启动/返回转场的唯一进度时钟。提前声明：pivot 保持与 acknowledge 都要
+    // 等它物理收敛，而不是各自跑一个 380ms 壁钟——壁钟在 ~650ms 的 spring
+    // 中途翻转 transformOrigin / externalLaunchState，就是「缩放中途直接跳到
+    // 完成态」的根因。
+    val launchMotionProgress = remember { Animatable(0f) }
     LaunchedEffect(screenState, launchSourceState, targetReturn, activeLaunchUsesOrigin) {
         if (launchSourceState != ScreenState.Apps) {
             appListReturnOriginActive = false
@@ -514,7 +530,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
             ScreenState.Apps -> {
                 if (targetReturn && (appListReturnOriginActive || isReturningFromApp)) {
                     appListReturnOriginActive = true
-                    delay(activeMotionProfile.appReturn.durationMillis.toLong())
+                    // 等共享进度真正落地再放开 LaunchIcon pivot；兜底超时只为
+                    // 进度信号意外丢失（新启动会取消本协程，不受影响）。
+                    withTimeoutOrNull(2_000L) {
+                        snapshotFlow { launchMotionProgress.value }
+                            .first { it <= 0.001f }
+                    }
                     appListReturnOriginActive = false
                 } else {
                     appListReturnOriginActive = false
@@ -599,13 +620,23 @@ fun LauncherScreen(vm: LauncherViewModel) {
             prevState = screenState
         }
     }
+    // 独立记录上一个状态：prevState 由释放协程在 settle 后才更新，直接读它
+    // 判断入场来源会踩到时序竞态。
+    var entryTokenLastState by remember { mutableStateOf(screenState) }
     LaunchedEffect(screenState) {
-        if (screenState == ScreenState.Apps) {
-            appListEntryAnimationToken = if (appListEntryAnimationToken == Long.MAX_VALUE) {
-                0L
-            } else {
-                appListEntryAnimationToken + 1L
-            }
+        val cameFrom = entryTokenLastState
+        entryTokenLastState = screenState
+        if (screenState != ScreenState.Apps) return@LaunchedEffect
+        // 从应用返回时默认不重播逐行上浮入场——重播会把 runtimeEntryProgress
+        // 打回 0，所有行先整体消失再逐行浮起（「刚退回时上下的图标直接不见」）。
+        // 只有用户显式打开「返回时图标上浮」开关才重播。
+        if (cameFrom == ScreenState.App && !appListReturnIconFloatEnabled) {
+            return@LaunchedEffect
+        }
+        appListEntryAnimationToken = if (appListEntryAnimationToken == Long.MAX_VALUE) {
+            0L
+        } else {
+            appListEntryAnimationToken + 1L
         }
     }
     LaunchedEffect(screenState, iconShadowEnabled) {
@@ -649,22 +680,35 @@ fun LauncherScreen(vm: LauncherViewModel) {
             is ExternalLaunchState.Returning -> returnUsesLaunchOrigin(state.kind)
             // A launch cancelled before dispatch can still be visibly part way
             // through the handoff.  Let the same clock reverse instead of
-            // dropping the icon on the first cancelled frame.
-            is ExternalLaunchState.Cancelled -> state.session.sourceState == ScreenState.Apps
+            // dropping the icon on the first cancelled frame.  Stack-sourced
+            // launches (负一屏 dock) reverse on the same clock — only accepting
+            // Apps here made the icon blink out when a dock launch was
+            // interrupted.
+            is ExternalLaunchState.Cancelled ->
+                state.session.sourceState == ScreenState.Apps ||
+                    state.session.sourceState == ScreenState.Stack
             // A transparent/dialog-style target only pauses us, so the
             // background confirmation times out while the mask is still fully
             // drawn.  Dropping the icon there made it blink out and leave a bare
             // colour plate; reverse the same clock instead.
             is ExternalLaunchState.Invalidated ->
-                state.session?.sourceState == ScreenState.Apps
-            is ExternalLaunchState.Failed -> state.session.sourceState == ScreenState.Apps
+                state.session?.sourceState == ScreenState.Apps ||
+                    state.session?.sourceState == ScreenState.Stack
+            is ExternalLaunchState.Failed ->
+                state.session.sourceState == ScreenState.Apps ||
+                    state.session.sourceState == ScreenState.Stack
             else -> false
         }
         if (!keepIconForReverse) {
             retainedLaunchIcon = null
             retainedLaunchOrigin = null
         } else {
-            delay(activeMotionProfile.appReturn.durationMillis.toLong())
+            // acknowledge 一旦发出，externalLaunchState → Idle 会立刻拔掉
+            // targetReturn / showLaunchBackdrop。必须等共享进度物理归零，
+            // 否则遮罩在 spring 中途被硬删——返回动画「最后一帧抽帧」。
+            withTimeoutOrNull(2_500L) {
+                snapshotFlow { launchMotionProgress.value }.first { it <= 0.001f }
+            }
         }
         vm.acknowledgeExternalLaunch(terminalSessionId)
     }
@@ -701,17 +745,28 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val activeAppListBackend = appListBackend(layoutMode, uiStyle)
     val appListMotionPhase = when {
         isReturningFromApp || appListIconReturnActive -> activeMotionProfile.appReturn
-        isClosingAppListToFace -> activeMotionProfile.pullToFace
+        // 关闭回表盘就是进入动画的倒放：同一条 appListEnter 谱反向跑，
+        // 不再用独立的 pullToFace 档（老师指定，不额外做一套）。
+        isClosingAppListToFace -> activeMotionProfile.appListEnter
         else -> activeMotionProfile.appListEnter
     }
     val appListMotionSpec = remember(appListMotionPhase, reduceDynamicEffects) {
         appListMotionPhase.asFloatAnimationSpec(allowOvershoot = !reduceDynamicEffects)
     }
+    // alpha / blur 比位移慢一档，让「表盘先暗下让位、列表再模糊浮现」有先后
+    // 而不是所有量一起冲完——三者共用同一条 spec 的观感就是又快又硬。
+    // （老师实测点名要这版进场手感。）
     val appListAlphaSpec = remember(appListMotionPhase, reduceDynamicEffects) {
-        appListMotionPhase.asFloatAnimationSpec(allowOvershoot = !reduceDynamicEffects)
+        tween<Float>(
+            durationMillis = (appListMotionPhase.durationMillis * 1.35f).roundToInt(),
+            easing = FastOutSlowInEasing,
+        )
     }
     val appListBlurSpec = remember(appListMotionPhase, reduceDynamicEffects) {
-        appListMotionPhase.asFloatAnimationSpec(allowOvershoot = !reduceDynamicEffects)
+        tween<Float>(
+            durationMillis = (appListMotionPhase.durationMillis * 1.5f).roundToInt(),
+            easing = FastOutSlowInEasing,
+        )
     }
     // The launch mask now has one scalar clock.  Keeping it independent from
     // AnimatedVisibility means a return can be cancelled without snapping the
@@ -723,13 +778,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
             isReturningFromApp ||
             appListIconReturnActive ||
             appListReturnOriginActive
-    // Keep logical blur animation clocks alive, but skip expensive RenderEffect
-    // attachment while a native list is moving. A static edge mask/scrim still
-    // supplies the visual depth and avoids GPU stalls on older watches.
-    val faceLayerBlurEnabled =
-        layerBlurEnabled && !launchTransitionUnderlying && !nativeListTransitionInMotion
-    val appListLayerBlurEnabled =
-        layerBlurEnabled && !launchTransitionUnderlying && !nativeListTransitionInMotion
+    // API 31+ 的 RenderEffect 走硬件混合，转场期间保持模糊正是 watchOS 式
+    // 「表盘压暗模糊让位」的主体；只在老设备上为省 GPU 关闭。以前一刀切
+    // 关闭的结果是：转场里逻辑模糊只剩时钟、画面上完全没有模糊，settle 帧
+    // 又把 RenderEffect 全量装回——「最后一帧集中弹入」的来源之一。
+    val transitionBlurSuppressed =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
+            (launchTransitionUnderlying || nativeListTransitionInMotion)
+    val faceLayerBlurEnabled = layerBlurEnabled && !transitionBlurSuppressed
+    val appListLayerBlurEnabled = layerBlurEnabled && !transitionBlurSuppressed
     val effectiveIconShadowEnabled = iconShadowEnabled && appListShadowsReady
     val fadeLaunch = launchSourceState == ScreenState.Stack || launchSourceState == ScreenState.Notifications
     val iconLaunchAvailable = currentLaunchIcon != null || retainedLaunchIcon != null
@@ -774,12 +831,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 is ExternalLaunchState.Returning ->
                     returnUsesLaunchOrigin(state.kind)
                 is ExternalLaunchState.Cancelled ->
-                    state.session.sourceState == ScreenState.Apps
+                    state.session.sourceState == ScreenState.Apps ||
+                        state.session.sourceState == ScreenState.Stack
                 else -> false
             }
     val launchMotionRequested = launchMotionEntering || launchMotionReturnVisual
     val launchMotionTarget = if (launchMotionEntering) 1f else 0f
-    val launchMotionProgress = remember { Animatable(0f) }
     LaunchedEffect(launchMotionTarget, activeMotionProfile) {
         val current = launchMotionProgress.value
         val currentVelocity = launchMotionProgress.velocity
@@ -793,9 +850,19 @@ fun LauncherScreen(vm: LauncherViewModel) {
         } else {
             activeMotionProfile.appReturn.asFloatAnimationSpec()
         }
+        // spring 默认 1% 可见阈值会在终点直接吸附：列表 App 态 4 倍缩放
+        // 行程下，1% 进度 = 0.03 的 scale 突变——「差最后一点直接跳过去」，
+        // 动画越慢越明显。收紧到 0.02% 让物理真正走完。
+        val preciseSpec = (spec as? androidx.compose.animation.core.SpringSpec<Float>)?.let {
+            spring(
+                dampingRatio = it.dampingRatio,
+                stiffness = it.stiffness,
+                visibilityThreshold = 0.0002f,
+            )
+        } ?: spec
         launchMotionProgress.animateTo(
             targetValue = launchMotionTarget,
-            animationSpec = spec,
+            animationSpec = preciseSpec,
             initialVelocity = directedVelocity,
         )
         if (launchMotionTarget <= 0f && !launchMotionEntering) {
@@ -806,6 +873,23 @@ fun LauncherScreen(vm: LauncherViewModel) {
         }
     }
     val showLaunchBackdrop = launchMotionRequested || launchMotionProgress.value > 0.001f
+    // 启动/返回期间遮罩、列表层、底色板、边缘罩共用 launchMotionProgress 这
+    // 一个时钟（graphicsLayer 逐帧读，零重组）。p=0 时 provider 精确回到
+    // Apps 静止态，外部时钟撤走零跳变。
+    val appListLaunchDriven =
+        showLaunchBackdrop && launchSourceState == ScreenState.Apps
+    val appListLaunchValuesProvider = remember(uiStyle, appListReturnShrinkEnabled) {
+        {
+            appListLaunchValues(
+                progress = launchMotionProgress.value,
+                uiStyle = uiStyle,
+                shrinkOnAppReturn = appListReturnShrinkEnabled,
+            )
+        }
+    }
+    val appListLaunchPlateProvider = remember {
+        { appListLaunchPlateValues(launchMotionProgress.value) }
+    }
     // The launch dispatch delay keeps the splash on screen long enough; it
     // must not also delay the source icon until the last few frames.
     val iconRevealFraction = 0.06f
@@ -830,33 +914,89 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val screenHeightPx = with(density) { maxHeight.toPx() }
         val notificationProgress = notificationTransition.value.coerceIn(0f, 1f)
         val keepNotificationLayer = notificationProgress > 0.001f || notificationSceneActive || notificationGestureActive
-        val sidePageProgress by animateFloatAsState(
-            targetValue = if (
-                sideScreenEnabled &&
-                (screenState == ScreenState.Stack ||
-                    (screenState == ScreenState.Notifications && notificationReturnState != ScreenState.ControlCenter))
-            ) {
-                1f
-            } else {
-                0f
-            },
-            animationSpec = tween(durationMillis = SIDE_SCREEN_TRANSITION_MS),
-            label = "side_page_progress"
-        )
-        val widgetPageProgress by animateFloatAsState(
-            targetValue = if (showWidgetPage && screenState == ScreenState.Widgets) 1f else 0f,
-            animationSpec = tween(durationMillis = SIDE_SCREEN_TRANSITION_MS),
-            label = "widget_page_progress"
-        )
-        val controlCenterProgress by animateFloatAsState(
-            targetValue = if (
-                showControlCenter &&
-                (screenState == ScreenState.ControlCenter ||
-                    (screenState == ScreenState.Notifications && notificationReturnState == ScreenState.ControlCenter))
-            ) 1f else 0f,
-            animationSpec = tween(durationMillis = SIDE_SCREEN_TRANSITION_MS),
-            label = "control_center_progress"
-        )
+        // 覆层进度改 Animatable：打开侧由 GestureHost 逐帧 snapTo（全程跟手），
+        // 抬手按位置+投影速度定向，settle 用带初速度的 spring 收尾。以前的
+        // 「80px 阈值 → 固定 tween」既不跟手、拖一半松手还会弹到底。
+        val sidePageAnim = remember { Animatable(0f) }
+        val widgetPageAnim = remember { Animatable(0f) }
+        val controlCenterAnim = remember { Animatable(0f) }
+        var overlayGestureTarget by remember { mutableStateOf<OverlayGestureTarget?>(null) }
+        var overlayReleaseVelocity by remember { mutableFloatStateOf(0f) }
+        val overlaySettleSpec = remember {
+            spring<Float>(dampingRatio = 0.88f, stiffness = 380f, visibilityThreshold = 0.001f)
+        }
+        val sidePageTarget = if (
+            sideScreenEnabled &&
+            (screenState == ScreenState.Stack ||
+                (screenState == ScreenState.Notifications && notificationReturnState != ScreenState.ControlCenter))
+        ) 1f else 0f
+        val widgetPageTarget = if (showWidgetPage && screenState == ScreenState.Widgets) 1f else 0f
+        val controlCenterTarget = if (
+            showControlCenter &&
+            (screenState == ScreenState.ControlCenter ||
+                (screenState == ScreenState.Notifications && notificationReturnState == ScreenState.ControlCenter))
+        ) 1f else 0f
+        LaunchedEffect(sidePageTarget, overlayGestureTarget) {
+            if (overlayGestureTarget != OverlayGestureTarget.Stack) {
+                val initialVelocity = overlayReleaseVelocity.also { overlayReleaseVelocity = 0f }
+                sidePageAnim.animateTo(sidePageTarget, overlaySettleSpec, initialVelocity)
+            }
+        }
+        LaunchedEffect(widgetPageTarget, overlayGestureTarget) {
+            if (overlayGestureTarget != OverlayGestureTarget.Widgets) {
+                val initialVelocity = overlayReleaseVelocity.also { overlayReleaseVelocity = 0f }
+                widgetPageAnim.animateTo(widgetPageTarget, overlaySettleSpec, initialVelocity)
+            }
+        }
+        LaunchedEffect(controlCenterTarget, overlayGestureTarget) {
+            if (overlayGestureTarget != OverlayGestureTarget.ControlCenter) {
+                val initialVelocity = overlayReleaseVelocity.also { overlayReleaseVelocity = 0f }
+                controlCenterAnim.animateTo(controlCenterTarget, overlaySettleSpec, initialVelocity)
+            }
+        }
+        val sidePageProgress = sidePageAnim.value
+        val widgetPageProgress = widgetPageAnim.value
+        val controlCenterProgress = controlCenterAnim.value
+        // 表盘背衬统一进度：四个覆层里最强的一个驱动表盘下压与镜像外扩。
+        val overlayBackdropProgress = remember {
+            {
+                maxOf(
+                    sidePageAnim.value,
+                    widgetPageAnim.value,
+                    controlCenterAnim.value,
+                    notificationTransition.value,
+                ).coerceIn(0f, 1f)
+            }
+        }
+        val overlayBackdropActive by remember {
+            derivedStateOf {
+                maxOf(
+                    sidePageAnim.value,
+                    widgetPageAnim.value,
+                    controlCenterAnim.value,
+                    notificationTransition.value,
+                ) > 0.001f
+            }
+        }
+        val faceBackdropProvider = remember {
+            {
+                val p = maxOf(
+                    sidePageAnim.value,
+                    widgetPageAnim.value,
+                    controlCenterAnim.value,
+                    notificationTransition.value,
+                ).coerceIn(0f, 1f)
+                // p=0 必须精确等于表盘静止态（外部时钟撤走零跳变）。
+                // alpha 只轻降：表盘变透明会露出纯黑底、还削弱镜像背衬的
+                // 亮度；压暗交给覆层玻璃自己的底色。模糊加深到 24dp。
+                LayerAnimValues(
+                    scale = 1f - 0.16f * p,
+                    blur = 24f * p,
+                    alpha = 1f - 0.15f * p,
+                    translationY = 0.055f * p,
+                )
+            }
+        }
         val faceAnimState = screenState
         val updateNotificationTransitionProgress: (Float) -> Unit = { progress ->
             notificationGestureActive = true
@@ -914,14 +1054,21 @@ fun LauncherScreen(vm: LauncherViewModel) {
             isReturningFromApp ||
             appListLayerReleaseHold ||
             (screenState == ScreenState.App && launchSourceState == ScreenState.Apps && showLaunchBackdrop)
+        // API 31+ 不再在转场期间降档行级模糊：settle 帧把 OFF→SYSTEM 的
+        // RenderEffect 全量装回（applyConfigToAttachedRows 逐行 reapply）正是
+        // 「打开/返回最后一帧图标模糊集中弹入 + 抽帧」的主力。老设备保留降档。
         val suppressAppListHeavyEffects =
             reduceLegacyDrawerEffects ||
-                isOpeningAppList ||
-                isClosingAppListToFace ||
-                isReturningFromApp ||
-                appListIconReturnActive ||
-                appListReturnOriginActive ||
-                appListLayerReleaseHold
+                (
+                    Build.VERSION.SDK_INT < Build.VERSION_CODES.S && (
+                        isOpeningAppList ||
+                            isClosingAppListToFace ||
+                            isReturningFromApp ||
+                            appListIconReturnActive ||
+                            appListReturnOriginActive ||
+                            appListLayerReleaseHold
+                        )
+                    )
 
         GestureHost(
             screenState = screenState,
@@ -931,6 +1078,29 @@ fun LauncherScreen(vm: LauncherViewModel) {
             showWidgetPage = showWidgetPage,
             showControlCenter = showControlCenter,
             widgetsBackGestureLocked = widgetPageEditGestureLocked,
+            onOverlayDrag = { target, progress ->
+                overlayGestureTarget = target
+                launcherScope.launch {
+                    when (target) {
+                        OverlayGestureTarget.Stack -> sidePageAnim.snapTo(progress)
+                        OverlayGestureTarget.Widgets -> widgetPageAnim.snapTo(progress)
+                        OverlayGestureTarget.ControlCenter -> controlCenterAnim.snapTo(progress)
+                    }
+                }
+            },
+            onOverlayRelease = { target, progress, velocity ->
+                // 位置 + 投影速度共同定向：拖过 42% 或快甩都算开。
+                val open = progress > 0.42f || velocity > 1.6f
+                overlayReleaseVelocity = velocity
+                overlayGestureTarget = null
+                if (open) {
+                    when (target) {
+                        OverlayGestureTarget.Stack -> vm.setState(ScreenState.Stack)
+                        OverlayGestureTarget.Widgets -> vm.setState(ScreenState.Widgets)
+                        OverlayGestureTarget.ControlCenter -> vm.setState(ScreenState.ControlCenter)
+                    }
+                }
+            },
             modifier = Modifier.fillMaxSize()
         ) {
             if (directLaunchBackdropVisible) {
@@ -954,6 +1124,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             // 再从黑底上飞入（C）。它只在应用列表转场期间存在。
             val appListScrimTarget = if (
                 !uiStyle.isMaterial &&
+                !legacyAppListTransitionEnabled &&
                 (screenState == ScreenState.Apps ||
                     (screenState == ScreenState.App && launchSourceState == ScreenState.Apps))
             ) 1f else 0f
@@ -986,15 +1157,24 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .graphicsLayer {
                         clip = true
                     }
+                    // clox 式背衬：覆层拉出时表盘下压缩小，让出的边缘用放大
+                    // 模糊副本填充（防黑边）。
+                    .flueBackdropFill(
+                        progress = overlayBackdropProgress,
+                        enabled = layerBlurEnabled,
+                    )
                     .scaleBlurAlpha(
                         targetValues = faceLayerValues(
                             faceAnimState,
                             uiStyle,
                             shrinkOnFaceReturn = faceReturnShrinkEnabled,
+                            legacyTransition = legacyAppListTransitionEnabled,
                         ),
                         screenHeight = screenHeightPx,
                         blurEnabled = faceLayerBlurEnabled,
-                        origin = LayerPivot.Center
+                        origin = LayerPivot.Center,
+                        valuesProvider = faceBackdropProvider,
+                        externallyDriven = overlayBackdropActive,
                     )
             ) {
                 AnimatedContent(
@@ -1202,6 +1382,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             uiStyle,
                             shrinkOnAppReturn = appListReturnShrinkEnabled,
                             shrinkOnFaceReturn = faceReturnShrinkEnabled,
+                            legacyTransition = legacyAppListTransitionEnabled,
                         ).copy(scale = 1f, blur = 0f, translationX = 0f, translationY = 0f),
                         blurEnabled = false,
                         origin = LayerPivot.Center,
@@ -1209,6 +1390,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         alphaSpec = appListAlphaSpec,
                         blurSpec = appListBlurSpec,
                         translationSpec = appListMotionSpec,
+                        valuesProvider = appListLaunchPlateProvider,
+                        externallyDriven = appListLaunchDriven,
                     )
                     .background(appListColors.background),
             )
@@ -1223,6 +1406,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             uiStyle,
                             shrinkOnAppReturn = appListReturnShrinkEnabled,
                             shrinkOnFaceReturn = faceReturnShrinkEnabled,
+                            legacyTransition = legacyAppListTransitionEnabled,
                         ),
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
@@ -1233,6 +1417,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         blurSpec = appListBlurSpec,
                         translationSpec = appListMotionSpec,
                         onSettled = { appListLayerSettleCount += 1 },
+                        valuesProvider = appListLaunchValuesProvider,
+                        externallyDriven = appListLaunchDriven,
                     )
             ) {
                 when (val backend = activeAppListBackend) {
@@ -1315,6 +1501,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             uiStyle,
                             shrinkOnAppReturn = appListReturnShrinkEnabled,
                             shrinkOnFaceReturn = faceReturnShrinkEnabled,
+                            legacyTransition = legacyAppListTransitionEnabled,
                         ),
                         screenWidth = screenWidthPx,
                         screenHeight = screenHeightPx,
@@ -1324,6 +1511,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         alphaSpec = appListAlphaSpec,
                         blurSpec = appListBlurSpec,
                         translationSpec = appListMotionSpec,
+                        valuesProvider = appListLaunchValuesProvider,
+                        externallyDriven = appListLaunchDriven,
                     ),
             )
 
@@ -1393,9 +1582,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         .fillMaxSize()
                         .zIndex(4f)
                         .graphicsLayer {
+                            // 纯位移进场：图层自身永远不透明也不缩放。以前
+                            // alpha 跟进度走，滑入全程能透过负一屏看到表盘
+                            // （通知中心叠上时还被压到 0.42）。
                             translationX = (sidePageProgress - 1f) * screenWidthPx
-                            alpha = sidePageProgress.coerceIn(0f, 1f) *
-                                (1f - 0.58f * notificationProgress)
+                            alpha = if (sidePageProgress > 0.001f) 1f else 0f
                         }
                 ) {
                     SmartStackLayer(
@@ -1457,7 +1648,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         .zIndex(4.2f)
                         .graphicsLayer {
                             translationX = (1f - widgetPageProgress) * screenWidthPx
-                            alpha = widgetPageProgress.coerceIn(0f, 1f)
+                            alpha = if (widgetPageProgress > 0.001f) 1f else 0f
                         }
                 ) {
                     val sideScreenWidgetSlots by vm.sideScreenWidgetSlots.collectAsStateWithLifecycle()
@@ -1480,7 +1671,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         .zIndex(4.4f)
                         .graphicsLayer {
                             translationY = (controlCenterProgress - 1f) * screenHeightPx
-                            alpha = controlCenterProgress.coerceIn(0f, 1f)
+                            alpha = if (controlCenterProgress > 0.001f) 1f else 0f
                         }
                 ) {
                     ControlCenterLayer(
@@ -1588,7 +1779,11 @@ private fun LaunchBackdropContent(
         modifier = modifier
             .fillMaxSize()
             .graphicsLayer {
-                alpha = motionProgress
+                // 1.6 倍斜率：p≈0.62 就完全不透明。列表层的 alpha 用 1.8 倍
+                // 斜率提前淡出（appListLaunchValues），两条曲线共用同一个
+                // progress——返回方向遮罩变薄时，底下列表已按同一时钟就位，
+                // 不再出现「透过半透明遮罩看见 4 倍巨图标收缩然后闪现」。
+                alpha = (motionProgress * 1.6f).coerceIn(0f, 1f)
             }
             .background(backgroundColor.copy(alpha = 1f)),
         contentAlignment = Alignment.Center

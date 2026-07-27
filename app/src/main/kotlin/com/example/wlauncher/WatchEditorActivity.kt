@@ -19,7 +19,11 @@ import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.clickable
+import androidx.compose.material3.Slider
+import androidx.compose.ui.graphics.toArgb
+import java.util.Locale
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -46,12 +50,29 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import com.flue.launcher.ui.settings.miuix.MiuixLoadingIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -95,6 +116,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -104,10 +126,10 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.min
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.viewinterop.AndroidView
@@ -168,6 +190,7 @@ import com.flue.launcher.watchface.store.HttpWatchStoreApi
 import com.flue.launcher.watchface.store.WatchStoreAuthSession
 import com.flue.launcher.watchface.store.WatchStoreAuthStore
 import com.flue.launcher.watchface.store.WatchStoreCategory
+import com.flue.launcher.watchface.store.WatchStoreCredentialStore
 import com.flue.launcher.watchface.store.WatchStoreHttpException
 import com.flue.launcher.watchface.store.WatchStorePayloadTooLargeException
 import com.flue.launcher.watchface.store.WatchStoreScreenType
@@ -189,7 +212,14 @@ class WatchEditorActivity : ComponentActivity() {
             val themeMode by vm.themeMode.collectAsStateWithLifecycle()
             val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
             val globalScale by vm.globalUiScalePercent.collectAsStateWithLifecycle()
-            WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle) {
+            val screenShapeOverride by vm.screenShapeOverride.collectAsStateWithLifecycle()
+            // 不传 screenShape 时编辑器里的 isFlueScreenRound() 会退化成系统
+            // 判定，用户在设置里手动指定的屏幕形状在本页完全失效。
+            WatchLauncherTheme(
+                themeMode = themeMode,
+                uiStyle = uiStyle,
+                screenShape = screenShapeOverride,
+            ) {
                 ProvideGlobalUiScale(globalScale) {
                     WatchEditorRoute(
                         watchFaceId = watchFaceId,
@@ -335,6 +365,39 @@ private fun WatchEditorRoute(
             // The import continues in the crop overlay; nothing is written
             // into the draft until the user confirms the crop.
             cropRequest = uri
+        }
+    }
+
+    val fontPicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+        val active = session
+        val key = selectedLayerKey
+        if (uri == null || active == null || key == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            busyMessage = "正在导入字体"
+            errorMessage = null
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val rawName = uri.lastPathSegment
+                        ?.substringAfterLast('/')
+                        ?.takeIf(String::isNotBlank)
+                        ?: "font.ttf"
+                    val fileName = if (rawName.contains('.')) rawName else "$rawName.ttf"
+                    val stream = context.contentResolver.openInputStream(uri)
+                        ?: throw IllegalStateException("无法读取所选字体")
+                    // 字体归档到 fonts/ 目录（与安装器/字体索引的分类一致），
+                    // 图层 font 属性写 basename，渲染端 WatchFontIndex 会解析。
+                    val resourcePath = active.importResource(stream, fileName, directory = "fonts")
+                    active.updateLayerAttribute(key, "font", resourcePath.substringAfterLast('/'))
+                    active.flushDraftForPreview()
+                    active.snapshot()
+                }
+            }.onSuccess { next ->
+                updateSnapshot(next, key)
+                previewToken++
+            }.onFailure { error ->
+                errorMessage = error.message ?: "字体导入失败"
+            }
+            busyMessage = null
         }
     }
 
@@ -698,17 +761,13 @@ private fun WatchEditorRoute(
                             }
                         },
                         onEndTransform = { key, cancelled ->
-                            transformPreview = null
                             val wasBusy = busyMessage != null
                             if (shouldHandleWatchEditorTransformEnd(cancelled, wasBusy)) {
-                                if (!wasBusy) {
-                                    busyMessage = if (cancelled) {
-                                        "正在撤销画布手势"
-                                    } else {
-                                        "正在提交画布手势"
-                                    }
-                                    errorMessage = null
-                                }
+                                // 关键顺序：UP 帧绝不清 transformPreview——立刻清会让
+                                // 选中框/几何回退到手势前的 snapshot 值，IO 提交完成后
+                                // 才跳到新值（「放手后元素从原位置闪现一遍」的根因）。
+                                // 也不再挂 busyMessage：它会顺带禁用选中框与命中测试，
+                                // 整个面板还会插入状态行跳一下。提交静默进行。
                                 scope.launch {
                                     runCatching {
                                         withContext(Dispatchers.IO) {
@@ -722,12 +781,16 @@ private fun WatchEditorRoute(
                                         }
                                     }.onSuccess { next ->
                                         updateSnapshot(next, key)
+                                        // 新快照已含手势终值：此刻清预览零跳变。
+                                        transformPreview = null
                                         previewToken++
                                     }.onFailure { error ->
+                                        transformPreview = null
                                         errorMessage = error.message ?: "画布手势提交失败"
                                     }
-                                    if (!wasBusy) busyMessage = null
                                 }
+                            } else {
+                                transformPreview = null
                             }
                         },
                         onUndo = {
@@ -780,6 +843,16 @@ private fun WatchEditorRoute(
                         },
                         onImportImage = {
                             imagePicker.launch(arrayOf("image/*"))
+                        },
+                        onImportFont = {
+                            fontPicker.launch(
+                                arrayOf(
+                                    "font/ttf",
+                                    "font/otf",
+                                    "application/x-font-ttf",
+                                    "application/octet-stream",
+                                ),
+                            )
                         },
                         onSaveAsNew = {
                             saveAsMode = true
@@ -907,6 +980,7 @@ private fun WatchEditorScreen(
     onDeleteLayer: (WatchEditorLayerKey) -> Unit,
     onLiveAttributeChange: (WatchEditorLayerKey, Map<String, String?>) -> Unit,
     onImportImage: () -> Unit,
+    onImportFont: () -> Unit,
     onSaveAsNew: () -> Unit,
     onSave: () -> Unit,
     onRename: () -> Unit,
@@ -917,7 +991,12 @@ private fun WatchEditorScreen(
     onConvertWatch: () -> Unit,
 ) {
     var panel by rememberSaveable { mutableStateOf(WatchEditorPanel.LAYERS) }
-    var previewFullscreen by rememberSaveable { mutableStateOf(false) }
+    // 三档布局：上箭头=画布铺满全屏，下箭头=图层/属性/表盘面板铺满全屏，
+    // 中间态为分屏。用一个动画化的高度比例驱动，绝不整树替换——以前
+    // previewFullscreen 的提前 return 会把 AndroidView 销毁重建，进出全屏
+    // 表盘要整个重载一遍。
+    var editorLayout by rememberSaveable { mutableStateOf(WatchEditorLayout.SPLIT) }
+    val previewFullscreen = editorLayout == WatchEditorLayout.CANVAS_FULL
     // Each editor level keeps its own position. Re-creating one state whenever
     // the tab changes made returning from Properties jump the layer list back
     // to the top, which is especially disorienting on a small watch viewport.
@@ -939,6 +1018,8 @@ private fun WatchEditorScreen(
         bodySensorsPermissionGranted = hasEditorBodySensorsPermission(context)
     }
     val isRound = isFlueScreenRound()
+    // 图层缩略图渲染器：直接借预览的 WatchmakerWatchFaceView（同一资源缓存）。
+    var thumbnailRenderer by remember { mutableStateOf<WatchmakerWatchFaceView?>(null) }
     val treeRows = remember(snapshot.layers, collapsedLayerKeys) {
         buildWatchEditorTreeRows(layers = snapshot.layers, collapsedKeys = collapsedLayerKeys)
     }
@@ -952,7 +1033,9 @@ private fun WatchEditorScreen(
             runCatching { layerListState.animateScrollToItem(itemsBeforeRows + rowIndex) }
         }
     }
-    BackHandler(enabled = previewFullscreen) { previewFullscreen = false }
+    BackHandler(enabled = editorLayout != WatchEditorLayout.SPLIT) {
+        editorLayout = WatchEditorLayout.SPLIT
+    }
 
     val previewContent: @Composable (Modifier) -> Unit = { previewModifier ->
         WatchEditorPreview(
@@ -968,7 +1051,7 @@ private fun WatchEditorScreen(
             onCanvasTap = { key ->
                 if (key != null) {
                     if (previewFullscreen) {
-                        previewFullscreen = false
+                        editorLayout = WatchEditorLayout.SPLIT
                         panel = WatchEditorPanel.PROPERTIES
                     } else if (panel == WatchEditorPanel.LAYERS) {
                         scrollToLayerRequest =
@@ -982,131 +1065,185 @@ private fun WatchEditorScreen(
             onUpdateTransform = onUpdateTransform,
             onEndTransform = onEndTransform,
             modifier = previewModifier,
+            onFaceViewChanged = { thumbnailRenderer = it },
         )
     }
 
-    if (previewFullscreen) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black),
-        ) {
-            previewContent(
-                Modifier
-                    .fillMaxSize()
-                    .aspectRatio(1f)
-                    .align(Alignment.Center),
-            )
-            // Keep the exit control inside the round safe area.
-            IconButton(
-                onClick = { previewFullscreen = false },
-                modifier = if (isRound) {
-                    Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 16.dp)
-                } else {
-                    Modifier
-                        .align(Alignment.TopStart)
-                        .padding(6.dp)
-                },
-            ) {
-                Icon(
-                    Icons.Default.KeyboardArrowDown,
-                    contentDescription = "退出全屏预览",
-                    tint = Color.White,
-                )
-            }
-        }
-        return
-    }
-
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val previewSize = watchEditorPreviewSizeDp(maxWidth.value, maxHeight.value).dp
+        val editorMaxHeight = maxHeight
+        // Column 内部拿不到 BoxWithConstraints 作用域，宽度约束要在这里捕获。
+        val editorMaxWidth = maxWidth
+        val splitPreviewSize = watchEditorPreviewSizeDp(maxWidth.value, maxHeight.value)
+        // 三档布局共用一条动画化的高度比例：预览常驻挂载只改高度，
+        // AndroidView（表盘渲染器）全程不销毁、切换全屏不再重载表盘。
+        val splitFraction = (splitPreviewSize / maxHeight.value).coerceIn(0.24f, 0.60f)
+        val targetPreviewFraction = when (editorLayout) {
+            WatchEditorLayout.CANVAS_FULL -> 1f
+            WatchEditorLayout.SPLIT -> splitFraction
+            WatchEditorLayout.PANEL_FULL -> 0f
+        }
+        val previewFraction by animateFloatAsState(
+            targetValue = targetPreviewFraction,
+            animationSpec = spring(dampingRatio = 0.9f, stiffness = 340f),
+            label = "editor_preview_fraction",
+        )
         val horizontalListPadding = if (isRound) 24.dp else 10.dp
-        val bottomListPadding = if (isRound) 28.dp else 10.dp
+        val bottomListPadding = if (isRound) 28.dp else 12.dp
         val listContentPadding = PaddingValues(
             start = horizontalListPadding,
             end = horizontalListPadding,
             top = 10.dp,
             bottom = bottomListPadding,
         )
-        Column(modifier = Modifier.fillMaxSize()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(
-                        horizontal = if (isRound) 20.dp else 4.dp,
-                        vertical = if (isRound) 6.dp else 2.dp,
-                    ),
-                verticalAlignment = Alignment.CenterVertically,
+        // 兜底裁剪：任何一档的子项越界都不会再画到兄弟节点上面。
+        Column(modifier = Modifier.fillMaxSize().clipToBounds()) {
+            // 顶栏在两个全屏档整块滑出让位（高度动画驱动下方内容重排）。
+            AnimatedVisibility(
+                visible = editorLayout == WatchEditorLayout.SPLIT,
+                enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
             ) {
-                IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                }
-                Column(
-                    modifier = Modifier.weight(1f),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(
+                            // 圆屏整块内缩：顶栏位于弦最窄处，两端按钮压弧。
+                            horizontal = if (isRound) 30.dp else 4.dp,
+                            vertical = if (isRound) 6.dp else 2.dp,
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        snapshot.rootAttributes["name"].orEmpty().ifBlank { ".watch 编辑器" },
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                    )
-                    Text(
-                        if (snapshot.dirty) "草稿有修改" else "草稿已同步",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                IconButton(
-                    onClick = { previewFullscreen = true },
-                    modifier = Modifier.size(40.dp),
-                ) {
-                    Icon(Icons.Default.KeyboardArrowUp, contentDescription = "预览全屏（上）")
-                }
-                IconButton(
-                    onClick = { panel = WatchEditorPanel.PROPERTIES },
-                    modifier = Modifier.size(40.dp),
-                ) {
-                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = "跳到图层属性（下）")
-                }
-                IconButton(
-                    onClick = onUndo,
-                    enabled = snapshot.canUndo && busyMessage == null,
-                    modifier = Modifier.size(40.dp),
-                ) {
-                    Icon(Icons.Default.Undo, contentDescription = "撤销")
-                }
-                IconButton(
-                    onClick = onRedo,
-                    enabled = snapshot.canRedo && busyMessage == null,
-                    modifier = Modifier.size(40.dp),
-                ) {
-                    Icon(Icons.Default.Redo, contentDescription = "重做")
+                    IconButton(onClick = onBack, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            snapshot.rootAttributes["name"].orEmpty().ifBlank { ".watch 编辑器" },
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                        )
+                        Text(
+                            if (snapshot.dirty) "草稿有修改" else "草稿已同步",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(
+                        onClick = { editorLayout = WatchEditorLayout.CANVAS_FULL },
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "画布全屏（上）")
+                    }
+                    IconButton(
+                        onClick = { editorLayout = WatchEditorLayout.PANEL_FULL },
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "面板全屏（下）")
+                    }
+                    IconButton(
+                        onClick = onUndo,
+                        enabled = snapshot.canUndo && busyMessage == null,
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(Icons.Default.Undo, contentDescription = "撤销")
+                    }
+                    IconButton(
+                        onClick = onRedo,
+                        enabled = snapshot.canRedo && busyMessage == null,
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(Icons.Default.Redo, contentDescription = "重做")
+                    }
                 }
             }
+            // 画布是正方形：边长必须同时受高度配额和可用宽度约束。
+            // 只给 height + aspectRatio 时，高屏（比如 412x915）在
+            // previewFraction=1f 会把边长推到 915dp，正方形横向溢出到
+            // 屏幕外，并且 Column 不裁剪，画布就盖住了下面的 TabRow /
+            // 添加按钮行——这正是「铺满全屏」后的布局崩坏。
+            val previewSide = min(editorMaxHeight * previewFraction, editorMaxWidth)
             previewContent(
                 Modifier
-                    .size(previewSize)
-                    .aspectRatio(1f)
-                    .align(Alignment.CenterHorizontally),
+                    .size(previewSide)
+                    .align(Alignment.CenterHorizontally)
+                    // 画布全屏且圆屏时按圆形裁剪提示真实表框边界。
+                    .clip(
+                        if (isRound && previewFraction > 0.92f) CircleShape else RectangleShape,
+                    ),
             )
-            TabRow(selectedTabIndex = panel.ordinal) {
-                WatchEditorPanel.entries.forEach { candidate ->
-                    Tab(
-                        selected = panel == candidate,
-                        onClick = { panel = candidate },
-                        text = { Text(candidate.label, maxLines = 1) },
-                    )
+            // 面板全屏态的紧凑返回条：上箭头回到分屏，切换 tab 仍在下面顶部。
+            AnimatedVisibility(
+                visible = editorLayout == WatchEditorLayout.PANEL_FULL,
+                enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = if (isRound) 10.dp else 2.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(
+                        onClick = { editorLayout = WatchEditorLayout.SPLIT },
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "返回分屏")
+                    }
                 }
             }
-            when (panel) {
+            AnimatedVisibility(
+                visible = editorLayout != WatchEditorLayout.CANVAS_FULL,
+                enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
+            ) {
+                TabRow(
+                    selectedTabIndex = panel.ordinal,
+                    modifier = Modifier.padding(horizontal = if (isRound) 26.dp else 0.dp),
+                ) {
+                    WatchEditorPanel.entries.forEach { candidate ->
+                        Tab(
+                            selected = panel == candidate,
+                            onClick = { panel = candidate },
+                            text = { Text(candidate.label, maxLines = 1) },
+                        )
+                    }
+                }
+            }
+            AnimatedContent(
+                targetState = panel,
+                transitionSpec = {
+                    // 按 tab 顺序决定滑动方向：所有面板切换都有动画，不硬切。
+                    val forward = targetState.ordinal >= initialState.ordinal
+                    (
+                        slideInHorizontally(
+                            animationSpec = tween(220, easing = FastOutSlowInEasing),
+                            initialOffsetX = { if (forward) it / 4 else -it / 4 },
+                        ) + fadeIn(tween(180))
+                        ) togetherWith (
+                        slideOutHorizontally(
+                            animationSpec = tween(200, easing = FastOutSlowInEasing),
+                            targetOffsetX = { if (forward) -it / 6 else it / 6 },
+                        ) + fadeOut(tween(110))
+                        )
+                },
+                label = "editor_panel",
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    // 弹性橡皮筋靠 graphicsLayer{translationY} 实现且默认不
+                    // 裁剪——在滚动视口边界裁一刀，面板内容不再飘到表盘上。
+                    .clipToBounds(),
+            ) { activePanel ->
+                when (activePanel) {
                 WatchEditorPanel.LAYERS -> LazyColumn(
-                    state = panelListState,
+                    state = layerListState,
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .flueElasticNestedScroll(panelListState),
+                        .fillMaxSize()
+                        .flueElasticNestedScroll(layerListState),
                     contentPadding = listContentPadding,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -1139,8 +1276,22 @@ private fun WatchEditorScreen(
                     } else {
                         items(treeRows, key = { it.layer.key.value }) { row ->
                             val layer = row.layer
+                            val thumbSizePx = with(LocalDensity.current) { 40.dp.roundToPx() }
+                            // 属性/快照/预览一变就重渲染；渲染走主渲染管线，
+                            // 与真实表盘零偏差。
+                            val thumbnail = remember(
+                                layer.key.value,
+                                layer.attributes,
+                                previewToken,
+                                thumbnailRenderer,
+                            ) {
+                                thumbnailRenderer
+                                    ?.renderLayerThumbnail(layer.order, thumbSizePx)
+                                    ?.asImageBitmap()
+                            }
                             EditorLayerRow(
                                 layer = layer,
+                                thumbnail = thumbnail,
                                 selected = layer.key == selectedLayer?.key,
                                 layerCount = snapshot.layers.size,
                                 depth = row.depth,
@@ -1168,11 +1319,10 @@ private fun WatchEditorScreen(
                 }
 
                 WatchEditorPanel.PROPERTIES -> LazyColumn(
-                    state = panelListState,
+                    state = propertiesListState,
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .flueElasticNestedScroll(panelListState),
+                        .fillMaxSize()
+                        .flueElasticNestedScroll(propertiesListState),
                     contentPadding = listContentPadding,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -1190,21 +1340,27 @@ private fun WatchEditorScreen(
                                 layer = selectedLayer,
                                 draftResetKey = propertyDraftRevision,
                                 enabled = busyMessage == null,
+                                fontOptions = remember(snapshot.resourcePaths) {
+                                    snapshot.resourcePaths.filter { path ->
+                                        path.substringAfterLast('.', "")
+                                            .lowercase(Locale.ROOT) in EDITOR_FONT_EXTENSIONS
+                                    }
+                                },
                                 onLiveChange = { changes ->
                                     onLiveAttributeChange(selectedLayer.key, changes)
                                 },
                                 onImportImage = onImportImage,
+                                onImportFont = onImportFont,
                             )
                         }
                     }
                 }
 
                 WatchEditorPanel.WATCH -> LazyColumn(
-                    state = panelListState,
+                    state = watchListState,
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .flueElasticNestedScroll(panelListState),
+                        .fillMaxSize()
+                        .flueElasticNestedScroll(watchListState),
                     contentPadding = listContentPadding,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -1332,6 +1488,24 @@ private fun WatchEditorScreen(
                         )
                     }
                 }
+                }
+            }
+        }
+        // 画布全屏的退出浮钮（圆屏放顶部中央的弦内安全区）。
+        androidx.compose.animation.AnimatedVisibility(
+            visible = editorLayout == WatchEditorLayout.CANVAS_FULL,
+            enter = fadeIn(tween(200)),
+            exit = fadeOut(tween(140)),
+            modifier = Modifier
+                .align(if (isRound) Alignment.TopCenter else Alignment.TopStart)
+                .padding(top = if (isRound) 14.dp else 6.dp, start = if (isRound) 0.dp else 6.dp),
+        ) {
+            IconButton(onClick = { editorLayout = WatchEditorLayout.SPLIT }) {
+                Icon(
+                    Icons.Default.KeyboardArrowDown,
+                    contentDescription = "退出全屏预览",
+                    tint = Color.White,
+                )
             }
         }
     }
@@ -1341,6 +1515,13 @@ private enum class WatchEditorPanel(val label: String) {
     LAYERS("图层"),
     PROPERTIES("属性"),
     WATCH("表盘"),
+}
+
+/** 编辑器三档布局：画布全屏 / 分屏 / 面板全屏。 */
+private enum class WatchEditorLayout {
+    CANVAS_FULL,
+    SPLIT,
+    PANEL_FULL,
 }
 
 internal fun shouldHandleWatchEditorTransformEnd(cancelled: Boolean, busy: Boolean): Boolean =
@@ -1408,7 +1589,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.editorStatusItems(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                MiuixLoadingIndicator(size = 18.dp)
                 Text(busyMessage, style = MaterialTheme.typography.bodySmall)
             }
         }
@@ -1462,6 +1643,7 @@ private fun WatchEditorPreview(
     onUpdateTransform: (WatchEditorLayerKey, WatchEditorTransform) -> Unit,
     onEndTransform: (WatchEditorLayerKey, Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    onFaceViewChanged: (WatchmakerWatchFaceView?) -> Unit = {},
 ) {
     var loadError by remember(descriptor.stableKey, refreshToken) { mutableStateOf<String?>(null) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
@@ -1486,12 +1668,21 @@ private fun WatchEditorPreview(
         modifier = modifier
             .aspectRatio(1f)
             .background(Color.Black)
+            // Compose 的 DrawScope 默认不裁剪到节点边界：选中框/旋转手柄
+            // 一旦算出画布外坐标就会直接画到 TabRow/面板上。在画布根裁一刀。
+            .clipToBounds()
             .onSizeChanged { canvasSize = it },
         contentAlignment = Alignment.Center,
     ) {
+        var faceView by remember { mutableStateOf<WatchmakerWatchFaceView?>(null) }
         AndroidView(
             modifier = Modifier.fillMaxSize(),
-            factory = { context -> WatchmakerWatchFaceView(context) },
+            factory = { context ->
+                WatchmakerWatchFaceView(context).also {
+                    faceView = it
+                    onFaceViewChanged(it)
+                }
+            },
             update = { view ->
                 view.setWatchDataProvider(dataProvider)
                 view.bind(
@@ -1503,8 +1694,37 @@ private fun WatchEditorPreview(
                     onLoadFailure = { _, error -> loadError = error.message ?: "预览加载失败" },
                 )
             },
-            onRelease = WatchmakerWatchFaceView::dispose,
+            onRelease = { view ->
+                if (faceView === view) faceView = null
+                onFaceViewChanged(null)
+                view.dispose()
+            },
         )
+        // 拖动期间把手势变换逐帧喂给渲染器：元素和选中框一起动，
+        // 不再是「只有框在动、松手后像素才跳过去」。
+        LaunchedEffect(transformPreview, layers, faceView) {
+            val view = faceView ?: return@LaunchedEffect
+            val preview = transformPreview
+            if (preview == null) {
+                view.clearLiveLayerTransform()
+                return@LaunchedEffect
+            }
+            val index = layers.firstOrNull { it.key == preview.key }?.order
+                ?: layers.indexOfFirst { it.key == preview.key }
+            if (index < 0) {
+                view.clearLiveLayerTransform()
+                return@LaunchedEffect
+            }
+            val transform = preview.transform
+            view.setLiveLayerTransform(
+                layerIndex = index,
+                x = transform.x,
+                y = transform.y,
+                rotationDegrees = transform.rotation,
+                scaleX = transform.scaleX,
+                scaleY = transform.scaleY,
+            )
+        }
         // Direct-manipulation surface: hit the layer under the finger, drag it,
         // grab a selection-frame handle, or tap to select / deselect.
         Box(
@@ -1931,7 +2151,7 @@ private fun EditorImageCropOverlay(
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                 )
-                bitmap == null -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                bitmap == null -> MiuixLoadingIndicator(Modifier.align(Alignment.Center))
                 else -> {
                     Image(
                         bitmap = bitmap.asImageBitmap(),
@@ -2092,6 +2312,7 @@ private fun EditorLayerRow(
     layer: WatchEditorLayer,
     selected: Boolean,
     layerCount: Int,
+    thumbnail: androidx.compose.ui.graphics.ImageBitmap? = null,
     depth: Int,
     hasChildren: Boolean,
     expanded: Boolean,
@@ -2125,7 +2346,7 @@ private fun EditorLayerRow(
                 IconButton(
                     onClick = onToggleExpanded,
                     enabled = enabled,
-                    modifier = Modifier.size(48.dp),
+                    modifier = Modifier.size(40.dp),
                 ) {
                     Icon(
                         if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
@@ -2133,7 +2354,23 @@ private fun EditorLayerRow(
                     )
                 }
             } else {
-                Spacer(Modifier.size(48.dp))
+                Spacer(Modifier.size(8.dp))
+            }
+            // 元素预览缩略图：主渲染管线渲出的真实样子（含祖先组变换）。
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.Black.copy(alpha = 0.55f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (thumbnail != null) {
+                    Image(
+                        bitmap = thumbnail,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text("${layer.order + 1}. ${layer.type}", fontWeight = FontWeight.Medium)
@@ -2187,6 +2424,8 @@ private fun LayerPropertiesEditor(
     enabled: Boolean,
     onLiveChange: (Map<String, String?>) -> Unit,
     onImportImage: () -> Unit,
+    fontOptions: List<String> = emptyList(),
+    onImportFont: (() -> Unit)? = null,
 ) {
     // Drafts survive live applies (draftResetKey stays put) but reset whenever
     // the attributes change from the outside: undo, canvas drags, imports.
@@ -2209,13 +2448,14 @@ private fun LayerPropertiesEditor(
             OutlinedTextField(
                 value = drafts[attribute] ?: TextFieldValue(""),
                 onValueChange = { value ->
-                    val limited = if (value.text.length > 512) {
-                        value.copy(text = value.text.take(512))
-                    } else {
-                        value
+                    // 点按只改选区也会触发 onValueChange：以前这里无差别
+                    // take(512) 并立刻回写，超长的 Watchmaker 表达式点一下
+                    // 就被截断毁掉。不再截断；只有文本真变化才上报。
+                    val previous = drafts[attribute] ?: TextFieldValue("")
+                    drafts = drafts + (attribute to value)
+                    if (value.text != previous.text) {
+                        onLiveChange(mapOf(attribute to liveValue(attribute, value.text)))
                     }
-                    drafts = drafts + (attribute to limited)
-                    onLiveChange(mapOf(attribute to liveValue(attribute, limited.text)))
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2238,6 +2478,28 @@ private fun LayerPropertiesEditor(
         if (layer.type.equals("image", ignoreCase = true)) {
             OutlinedButton(onClick = onImportImage, enabled = enabled) { Text("导入图片并写入 path") }
         }
+        // 颜色取色盘：与颜色文本框同源（写回同一个 draft + live 通道）。
+        EditorColorPickerRow(
+            currentHex = drafts["color"]?.text.orEmpty(),
+            enabled = enabled,
+            onPick = { hex ->
+                val newValue = TextFieldValue(hex, TextRange(hex.length))
+                drafts = drafts + ("color" to newValue)
+                onLiveChange(mapOf("color" to liveValue("color", hex)))
+            },
+        )
+        if (layer.type.lowercase(Locale.ROOT) in FONT_CAPABLE_LAYER_TYPES) {
+            EditorFontSelector(
+                current = drafts["font"]?.text
+                    ?: layer.attributes["font"].orEmpty(),
+                options = fontOptions,
+                enabled = enabled,
+                onSelect = { name ->
+                    onLiveChange(mapOf("font" to name.ifBlank { null }))
+                },
+                onImportFont = onImportFont,
+            )
+        }
         ExpressionReferencePanel(
             enabled = enabled,
             onInsert = { tag ->
@@ -2249,10 +2511,9 @@ private fun LayerPropertiesEditor(
                     selectionEnd = currentValue.selection.end,
                     tag = tag,
                 )
-                val limited = newText.take(512)
                 val newValue = TextFieldValue(
-                    text = limited,
-                    selection = TextRange(cursor.coerceAtMost(limited.length)),
+                    text = newText,
+                    selection = TextRange(cursor.coerceAtMost(newText.length)),
                 )
                 drafts = drafts + (target to newValue)
                 onLiveChange(mapOf(target to liveValue(target, newValue.text)))
@@ -2433,7 +2694,8 @@ private fun EditorWatchShapeCard(
 /**
  * 上传到商店 overlay。三个阶段：登录/注册 → 填写元数据（分类从服务动态拉取，
  * 屏幕形状默认跟随表盘 shape）→ 上传。exportWatch 的产物只在本次上传期间
- * 存在于 cacheDir；密码只在内存中经手，绝不落盘。
+ * 存在于 cacheDir。密码默认只在内存中经手；仅当用户勾选「记住密码」时才经
+ * Android Keystore 加密后由 [WatchStoreCredentialStore] 落盘，绝不明文保存。
  */
 @Composable
 private fun EditorStoreUploadOverlay(
@@ -2447,12 +2709,15 @@ private fun EditorStoreUploadOverlay(
     val isRound = isFlueScreenRound()
     val style = LauncherTheme.style
     val authStore = remember { WatchStoreAuthStore(context) }
+    val credentialStore = remember { WatchStoreCredentialStore(context) }
     val api = remember { HttpWatchStoreApi() }
 
     var auth by remember { mutableStateOf<WatchStoreAuthSession?>(null) }
     var authChecked by remember { mutableStateOf(false) }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var rememberUsername by remember { mutableStateOf(false) }
+    var rememberPassword by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf<String?>(null) }
     var formError by remember { mutableStateOf<String?>(null) }
     var uploadPercent by remember { mutableStateOf<Int?>(null) }
@@ -2477,7 +2742,15 @@ private fun EditorStoreUploadOverlay(
     }
 
     LaunchedEffect(Unit) {
-        auth = withContext(Dispatchers.IO) { authStore.read() }
+        // 令牌与已记住的凭据都在 IO 上读；打开覆层时自动填充登录表单。
+        val (storedAuth, savedCredentials) = withContext(Dispatchers.IO) {
+            authStore.read() to credentialStore.read()
+        }
+        auth = storedAuth
+        savedCredentials.username?.let { username = it }
+        savedCredentials.password?.let { password = it }
+        rememberUsername = savedCredentials.rememberUsername
+        rememberPassword = savedCredentials.rememberPassword
         authChecked = true
     }
 
@@ -2498,26 +2771,25 @@ private fun EditorStoreUploadOverlay(
     fun authenticate(register: Boolean) {
         if (busy != null) return
         val cleanUsername = username.trim()
-        if (!cleanUsername.matches(Regex("^[A-Za-z0-9_]{3,50}$"))) {
-            formError = "用户名需要 3-50 位字母、数字或下划线"
-            return
-        }
-        if (password.length < 6) {
-            formError = "密码至少需要 6 位"
+        val inputError = watchStoreAuthInputError(cleanUsername, password)
+        if (inputError != null) {
+            formError = inputError
             return
         }
         busy = if (register) "正在注册" else "正在登录"
         formError = null
         scope.launch {
             runCatching {
-                withContext(Dispatchers.IO) {
-                    val result = if (register) {
-                        api.register(cleanUsername, password)
-                    } else {
-                        api.login(cleanUsername, password)
-                    }
-                    authStore.write(result.token, result.username)
-                }
+                watchStoreLoginOrRegister(
+                    api = api,
+                    authStore = authStore,
+                    credentialStore = credentialStore,
+                    username = cleanUsername,
+                    password = password,
+                    register = register,
+                    rememberUsername = rememberUsername,
+                    rememberPassword = rememberPassword,
+                )
             }.onSuccess { stored ->
                 password = ""
                 auth = stored
@@ -2651,7 +2923,7 @@ private fun EditorStoreUploadOverlay(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    MiuixLoadingIndicator(size = 18.dp)
                     Text(
                         message + (uploadPercent?.let { " $it%" }.orEmpty()),
                         style = MaterialTheme.typography.bodySmall,
@@ -2676,47 +2948,21 @@ private fun EditorStoreUploadOverlay(
                     style = MaterialTheme.typography.bodySmall,
                     color = style.secondaryTextColor,
                 )
-                activeAuth == null -> {
-                    OutlinedTextField(
-                        value = username,
-                        onValueChange = { username = it.take(50) },
-                        label = { Text("用户名") },
-                        singleLine = true,
-                        enabled = busy == null,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it.take(128) },
-                        label = { Text("密码") },
-                        singleLine = true,
-                        enabled = busy == null,
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Button(
-                            onClick = { authenticate(register = false) },
-                            enabled = busy == null,
-                            modifier = Modifier.weight(1f),
-                        ) { Text("登录") }
-                        OutlinedButton(
-                            onClick = { authenticate(register = true) },
-                            enabled = busy == null,
-                            modifier = Modifier.weight(1f),
-                        ) { Text("注册") }
-                    }
-                    Text(
-                        "注册即创建表盘商店账号（用户名 3-50 位字母数字下划线，密码至少 6 位）。" +
-                            "密码只用于本次登录，不会保存在手表上。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = style.secondaryTextColor,
-                    )
-                }
+                activeAuth == null -> WatchStoreLoginSection(
+                    username = username,
+                    onUsernameChange = { username = it },
+                    password = password,
+                    onPasswordChange = { password = it },
+                    rememberUsername = rememberUsername,
+                    rememberPassword = rememberPassword,
+                    onRememberChange = { keepUsername, keepPassword ->
+                        rememberUsername = keepUsername
+                        rememberPassword = keepPassword
+                    },
+                    enabled = busy == null,
+                    onLogin = { authenticate(register = false) },
+                    onRegister = { authenticate(register = true) },
+                )
                 else -> {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -2733,6 +2979,10 @@ private fun EditorStoreUploadOverlay(
                                 if (busy == null) {
                                     authStore.clear()
                                     auth = null
+                                    // 登出同步清理已记住的账号/密码（含 Keystore 密文）。
+                                    rememberUsername = false
+                                    rememberPassword = false
+                                    scope.launch(Dispatchers.IO) { credentialStore.clear() }
                                 }
                             },
                         ) { Text("退出登录", color = style.accentColor) }
@@ -2788,7 +3038,7 @@ private fun EditorStoreUploadOverlay(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                            MiuixLoadingIndicator(size = 16.dp)
                             Text(
                                 "正在加载分类…",
                                 style = MaterialTheme.typography.bodySmall,
@@ -2855,46 +3105,6 @@ private fun EditorStoreUploadOverlay(
     }
 }
 
-/** 把商店写接口的失败翻译成给用户看的人话。 */
-private fun watchStoreUploadErrorMessage(error: Throwable): String = when {
-    error is WatchStoreHttpException && error.statusCode == 401 ->
-        "登录已过期，请重新登录"
-    error is WatchStoreHttpException && error.statusCode == 400 ->
-        error.detail?.let { "内容被服务器拒绝：$it" }
-            ?: "内容被服务器拒绝，请检查名称、描述和分类"
-    error is WatchStoreHttpException && error.statusCode == 413 ->
-        "表盘包超过 50MB 上限，请压缩图片资源后再试"
-    error is WatchStoreHttpException && error.statusCode == 429 ->
-        "操作太频繁，请等一分钟后再试"
-    error is WatchStoreHttpException ->
-        "商店服务返回了错误（${error.statusCode}）" +
-            (error.detail?.let { "：$it" } ?: "，请稍后再试")
-    error is WatchStorePayloadTooLargeException ->
-        "表盘包超过 50MB 上限，请压缩图片资源后再试"
-    error is IllegalArgumentException || error is IllegalStateException ->
-        error.message ?: "上传失败"
-    else ->
-        error.message?.takeIf(String::isNotBlank)?.let { "网络请求失败：$it" }
-            ?: "网络请求失败，请检查网络后重试"
-}
-
-private fun watchStoreAuthErrorMessage(error: Throwable, register: Boolean): String = when {
-    error is WatchStoreHttpException && error.statusCode == 401 ->
-        "用户名或密码不正确"
-    error is WatchStoreHttpException && error.statusCode == 400 ->
-        error.detail?.let { "服务器拒绝了提交：$it" }
-            ?: if (register) {
-                "用户名或密码不符合要求（用户名 3-50 位字母数字下划线，密码至少 6 位）"
-            } else {
-                "用户名或密码不正确"
-            }
-    error is WatchStoreHttpException && error.statusCode == 409 ->
-        "该用户名已被注册，换一个试试"
-    error is WatchStoreHttpException && error.statusCode == 429 ->
-        "尝试太频繁，请等一分钟后再试"
-    else -> watchStoreUploadErrorMessage(error)
-}
-
 @Composable
 private fun CenteredStatus(message: String, showProgress: Boolean) {
     Column(
@@ -2902,7 +3112,7 @@ private fun CenteredStatus(message: String, showProgress: Boolean) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        if (showProgress) CircularProgressIndicator()
+        if (showProgress) MiuixLoadingIndicator()
         Spacer(Modifier.height(12.dp))
         Text(message)
     }
@@ -2979,9 +3189,192 @@ private fun attributeLabel(name: String): String = when (name) {
     "anim_scale_x" -> "横向缩放（%）"
     "anim_scale_y" -> "纵向缩放（%）"
     "text" -> "文字 / Watchmaker 表达式"
+    "text_size" -> "字号"
+    "font" -> "字体"
+    "font2" -> "第二字体"
+    "alignment" -> "对齐"
     "color" -> "颜色"
     "path" -> "资源路径"
     else -> name
+}
+
+/** 颜色行：色板预览 + 打开取色盘。写回与颜色文本框同一个通道。 */
+@Composable
+private fun EditorColorPickerRow(
+    currentHex: String,
+    enabled: Boolean,
+    onPick: (String) -> Unit,
+) {
+    var dialogVisible by remember { mutableStateOf(false) }
+    val parsedColor = remember(currentHex) { parseEditorHexColor(currentHex) }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(30.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(parsedColor ?: Color.DarkGray),
+        )
+        OutlinedButton(onClick = { dialogVisible = true }, enabled = enabled) {
+            Text("取色盘")
+        }
+    }
+    if (dialogVisible) {
+        EditorColorPickerDialog(
+            initial = parsedColor ?: Color.White,
+            onDismiss = { dialogVisible = false },
+            onConfirm = { color ->
+                dialogVisible = false
+                onPick(editorColorToHex(color))
+            },
+        )
+    }
+}
+
+/** HSV 三滑条取色盘（手表小屏取色盘：预览 + 色相/饱和/明度）。 */
+@Composable
+private fun EditorColorPickerDialog(
+    initial: Color,
+    onDismiss: () -> Unit,
+    onConfirm: (Color) -> Unit,
+) {
+    val hsv = remember(initial) {
+        FloatArray(3).also {
+            android.graphics.Color.colorToHSV(initial.toArgb(), it)
+        }
+    }
+    var hue by remember(initial) { mutableStateOf(hsv[0]) }
+    var saturation by remember(initial) { mutableStateOf(hsv[1]) }
+    var value by remember(initial) { mutableStateOf(hsv[2]) }
+    val currentColor = Color(
+        android.graphics.Color.HSVToColor(floatArrayOf(hue, saturation, value)),
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("取色盘") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(34.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(currentColor),
+                )
+                Text(
+                    editorColorToHex(currentColor),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text("色相", style = MaterialTheme.typography.labelSmall)
+                Slider(value = hue, onValueChange = { hue = it }, valueRange = 0f..360f)
+                Text("饱和度", style = MaterialTheme.typography.labelSmall)
+                Slider(value = saturation, onValueChange = { saturation = it }, valueRange = 0f..1f)
+                Text("明度", style = MaterialTheme.typography.labelSmall)
+                Slider(value = value, onValueChange = { value = it }, valueRange = 0f..1f)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(currentColor) }) { Text("使用") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
+}
+
+/** 字体选择：默认 + 表盘包内字体资源横向 chips + 自定义导入。 */
+@Composable
+private fun EditorFontSelector(
+    current: String,
+    options: List<String>,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+    onImportFont: (() -> Unit)?,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("字体", fontWeight = FontWeight.SemiBold)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            val currentName = current.substringAfterLast('/')
+            val defaultSelected = currentName.isBlank() ||
+                currentName.equals("Roboto-Regular", ignoreCase = true)
+            EditorFontChip(
+                label = "默认",
+                selected = defaultSelected,
+                enabled = enabled,
+                onClick = { onSelect("") },
+            )
+            options.forEach { path ->
+                val name = path.substringAfterLast('/')
+                EditorFontChip(
+                    label = name.substringBeforeLast('.'),
+                    selected = !defaultSelected && currentName.equals(name, ignoreCase = true),
+                    enabled = enabled,
+                    onClick = { onSelect(name) },
+                )
+            }
+        }
+        if (onImportFont != null) {
+            OutlinedButton(onClick = onImportFont, enabled = enabled) {
+                Icon(Icons.Default.FileOpen, contentDescription = null, Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("导入字体 (TTF/OTF)")
+            }
+        }
+    }
+}
+
+/** 单一 composable + 动画选中态：不再用「换组件类型」表达选中。 */
+@Composable
+private fun EditorFontChip(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val background by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant
+        },
+        label = "editor_font_chip",
+    )
+    Text(
+        text = label,
+        maxLines = 1,
+        style = MaterialTheme.typography.labelMedium,
+        color = if (selected) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(background)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+    )
+}
+
+/** 解析 Watchmaker 常见的 6/8 位 hex（可带 #）。 */
+private fun parseEditorHexColor(raw: String): Color? {
+    val value = raw.replace("#", "").trim()
+    if (value.length != 6 && value.length != 8) return null
+    return runCatching { Color(android.graphics.Color.parseColor("#$value")) }.getOrNull()
+}
+
+/** 输出 6 位小写 hex（无 #），与 Watchmaker 生态的常见写法一致。 */
+private fun editorColorToHex(color: Color): String {
+    val argb = color.toArgb()
+    return "%06x".format(argb and 0xFFFFFF)
 }
 
 private fun safeWatchFileName(raw: String?): String {
@@ -3026,6 +3419,7 @@ private val EDITABLE_ATTRIBUTES = listOf(
     "anim_scale_x",
     "anim_scale_y",
     "text",
+    "text_size",
     "color",
     "path",
 )
@@ -3037,4 +3431,17 @@ private val NUMERIC_ATTRIBUTES = setOf(
     "opacity",
     "anim_scale_x",
     "anim_scale_y",
+    "text_size",
 )
+
+/** 有文字渲染路径、应展示字体选择器的图层类型。 */
+private val FONT_CAPABLE_LAYER_TYPES = setOf(
+    "text",
+    "text_curved",
+    "text_ring",
+    "series",
+    "calendar",
+)
+
+/** 字体资源扩展名（矢量 + 位图字体索引）。 */
+private val EDITOR_FONT_EXTENSIONS = setOf("ttf", "otf", "ttc")
