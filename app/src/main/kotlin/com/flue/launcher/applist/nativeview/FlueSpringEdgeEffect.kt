@@ -29,7 +29,24 @@ internal class FlueEdgePhysics(
     maxKickDp: Float = 40f,
     extensionDurationMs: Long = 80L,
     reboundDurationMs: Long = 350L,
-    private val triggerFraction: Float = 0.78f,
+    /**
+     * Fraction of [maxOffsetPx] the stretch must reach before the pull-to-face
+     * intent latches.
+     *
+     * Must stay low. The pull gain is `pullResistance * smoothResistance`,
+     * i.e. 0.18 decaying to ~0.05 as the stretch approaches the cap, so the
+     * finger travel needed to reach a given fraction f of a cap that is itself
+     * only min(48dp, 14% of the viewport) grows very fast:
+     *
+     *   f = 0.78 -> ~400px of finger travel on a 450px-tall watch screen
+     *   f = 0.38 -> ~155px
+     *
+     * The old 0.78 was therefore not reachable in one gesture on a square
+     * watch face — the list only closed when leftover offset from a previous
+     * pull happened to survive the rebound, which is exactly the reported
+     * "have to pull down several times at the top before it goes back".
+     */
+    private val triggerFraction: Float = 0.38f,
 ) {
     enum class Edge(val sign: Float) {
         TOP(1f),
@@ -471,7 +488,15 @@ internal class FlueSpringEdgeEffectFactory(
     internal fun absorb(edge: FlueEdgePhysics.Edge, velocity: Int) {
         if (released) return
         physics.absorb(edge, velocity.toFloat())
-        topReleaseCandidate = false
+        // An absorb at the top *inside* a finger window is the boundary hit of a
+        // downward flick — the user scrolled to the top and kept going. Clearing
+        // the candidate unconditionally threw that intent away, so a fast flick
+        // could never close the list no matter how far it travelled; only a slow
+        // deep pull could. Re-evaluate instead: keep the latch if the kick this
+        // absorb just installed already carries the stretch past the trigger.
+        topReleaseCandidate = pointerOwnsGesture &&
+            edge == FlueEdgePhysics.Edge.TOP &&
+            physics.isBeyondTrigger(FlueEdgePhysics.Edge.TOP)
         logDiagnostic("absorb")
         publish()
         startAnimator()
