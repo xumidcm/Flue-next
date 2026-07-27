@@ -125,7 +125,6 @@ fun NotificationLayer(
     onDismissAllNotifications: () -> Unit,
     onRunNotificationAction: (String) -> Boolean,
     onOpenNotification: (String, Offset) -> Boolean,
-    stackCardColor: Color = Color.Unspecified,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -534,18 +533,25 @@ fun NotificationLayer(
                                                         modifier = Modifier.width(contentWidth),
                                                         actionHeight = 72.dp
                                                     ) {
+                                                        // targetState 必须是稳定标量：拿整个 entry 会连
+                                                        // ImageBitmap 一起比较，列表每次重新发射都判定
+                                                        // 「变了」，于是滑掉一条时其余横幅全跑一遍淡入淡出
+                                                        // ——这正是「其他横幅闪烁」。
+                                                        val leadKey = group.entries.first().key
                                                         AnimatedContent(
-                                                            targetState = group.entries.first(),
+                                                            targetState = leadKey,
                                                             transitionSpec = {
                                                                 fadeIn(tween(180)) togetherWith fadeOut(tween(140))
                                                             },
                                                             label = "notification_group_replacement"
-                                                        ) { leadEntry ->
+                                                        ) { animatedKey ->
+                                                            val leadEntry = group.entries
+                                                                .firstOrNull { it.key == animatedKey }
+                                                                ?: group.entries.first()
                                                             CollapsedStackCard(
                                                                 width = contentWidth,
                                                                 leadEntry = leadEntry,
                                                                 hiddenCount = group.entries.size - 1,
-                                                                stackCardColor = stackCardColor,
                                                                 onClick = { onToggleGroup(group.packageName) }
                                                             )
                                                         }
@@ -661,22 +667,28 @@ private fun NotificationCardReplacement(
     onOpenNotification: (String, Offset) -> Boolean,
     onRunNotificationAction: (String) -> Boolean
 ) {
+    // 只比较真正会引起视觉替换的文字字段。直接拿整个 entry 当 targetState
+    // 会把 ImageBitmap 也算进相等性判定，列表任何一次重新发射都会触发
+    // 全体横幅淡入淡出。
+    val contentSignature = remember(entry.key, entry.title, entry.text, entry.time) {
+        "${entry.key}|${entry.title}|${entry.text}|${entry.time}"
+    }
     AnimatedContent(
-        targetState = entry,
+        targetState = contentSignature,
         transitionSpec = {
             fadeIn(tween(durationMillis = 180)) togetherWith
                 fadeOut(tween(durationMillis = 140))
         },
         label = "notification_content_replacement"
-    ) { visibleEntry ->
+    ) { _ ->
         NotificationCard(
             width = width,
-            entry = visibleEntry,
-            subtitle = visibleEntry.text.ifBlank {
-                visibleEntry.title.ifBlank { visibleEntry.appLabel }
+            entry = entry,
+            subtitle = entry.text.ifBlank {
+                entry.title.ifBlank { entry.appLabel }
             },
-            trailing = formatNotificationTime(visibleEntry.time),
-            onClick = { origin -> onOpenNotification(visibleEntry.key, origin) },
+            trailing = formatNotificationTime(entry.time),
+            onClick = { origin -> onOpenNotification(entry.key, origin) },
             onRunNotificationAction = onRunNotificationAction
         )
     }
@@ -779,7 +791,6 @@ private fun CollapsedStackCard(
     width: androidx.compose.ui.unit.Dp,
     leadEntry: NotificationEntryUi,
     hiddenCount: Int,
-    stackCardColor: Color = Color.Unspecified,
     onClick: () -> Unit
 ) {
     val stackStrength by animateFloatAsState(
@@ -789,6 +800,7 @@ private fun CollapsedStackCard(
     )
     var frontCardHeight by remember { mutableIntStateOf(72) }
     val density = LocalDensity.current
+    val stackBaseColor = rememberNotificationStackBaseColor()
     val stackCardHeight: androidx.compose.ui.unit.Dp = with(density) { frontCardHeight.toDp() }
     Box(Modifier.width(width)) {
         repeat(hiddenCount.coerceIn(0, 2)) { index ->
@@ -800,11 +812,12 @@ private fun CollapsedStackCard(
                         translationY = with(density) { (COLLAPSED_STACK_TRANSLATION_DP * (index + 1)).dp.toPx() } * stackStrength
                         scaleX = 1f - (index + 1) * 0.012f * stackStrength
                         scaleY = 1f - (index + 1) * 0.012f * stackStrength
-                        alpha = 0.42f + (0.18f / (index + 1))
+                        // 堆叠要读成顶卡的同一块材质，只留一点点纵深衰减。
+                        alpha = 1f - index * 0.10f
                     }
                     .padding(horizontal = COLLAPSED_STACK_HORIZONTAL_INSET_DP.dp)
                     .clip(RoundedCornerShape(28.dp))
-                    .background(notificationStackBackColor(stackCardColor, index))
+                    .background(notificationStackBackColor(stackBaseColor, index))
             )
         }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 2.dp)) {
@@ -991,12 +1004,40 @@ private fun NotificationIcon(icon: ImageBitmap?) {
     }
 }
 
-private fun notificationStackBackColor(base: Color, index: Int): Color {
-    return when {
-        base != Color.Unspecified && base.alpha > 0f -> base.copy(alpha = (0.40f - index * 0.08f).coerceIn(0.18f, 0.42f))
-        index == 0 -> Color(0xFF404040)
-        else -> Color(0xFF2E2E2E)
+/**
+ * 堆叠卡必须和最顶上那张横幅同源取色：之前它取的是 appListColors.item
+ * （全局列表项色），而顶卡走的是 LauncherTheme.style.cardColor，两者一冲
+ * 突就出现「顶卡纯黑、下面堆叠灰色半透明」。这里复用 NotificationCard 的
+ * 那套判定，保证深浅两套主题下堆叠都是顶卡的同一块材质。
+ */
+@Composable
+internal fun rememberNotificationStackBaseColor(): Color {
+    val launcherStyle = LauncherTheme.style
+    val darkCard = launcherStyle.titleColor == Color.White
+    return if (launcherStyle.cardColor.alpha < 0.35f) {
+        // 顶卡在深色主题下画的是 3A3A3C→2C2C2E 渐变，取渐变底色当堆叠基色。
+        if (darkCard) Color(0xFF2C2C2E) else Color(0xFFE8E8ED)
+    } else {
+        launcherStyle.cardColor
     }
+}
+
+/**
+ * 只按层深做轻微明度位移表达纵深，不再额外压 alpha。调用方的
+ * graphicsLayer 已经有一层 alpha，这里再压一次会叠乘成 0.24 左右，
+ * 堆叠就透出背景变灰了。
+ */
+internal fun notificationStackBackColor(base: Color, index: Int): Color {
+    val shift = (index + 1) * 0.06f
+    val darkBase = base.red + base.green + base.blue < 1.2f
+    val factor = if (darkBase) 1f + shift else 1f - shift
+    return Color(
+        red = (base.red * factor).coerceIn(0f, 1f),
+        green = (base.green * factor).coerceIn(0f, 1f),
+        blue = (base.blue * factor).coerceIn(0f, 1f),
+        alpha = base.alpha,
+        colorSpace = base.colorSpace,
+    )
 }
 
 private data class BatteryStatus(

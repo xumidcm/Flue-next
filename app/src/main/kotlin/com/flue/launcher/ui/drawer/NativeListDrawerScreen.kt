@@ -133,6 +133,12 @@ fun NativeListDrawerScreen(
     leftSafeInsetPercent: Int = 0,
     appListScalePercent: Int = 100,
     entryProgress: Float = 1f,
+    /**
+     * 转场进行中时，列表自己的底色要让位给外层那块「不缩放的背板」。
+     * 这层背景画在会缩放的图层里，关列表时它会跟着图标一起缩小——
+     * 老师要的是「黑底不动、只有图标缩放、深色背景走透明度渐变」。
+     */
+    backgroundHandledByPlate: Boolean = false,
     folderOpen: Boolean = false,
     useWatchFaceColors: Boolean = false,
     rowBorderEnabled: Boolean = false,
@@ -264,10 +270,12 @@ fun NativeListDrawerScreen(
                 .fillMaxSize()
                 .background(
                     palette.background.copy(
-                        alpha = if (uiStyle == UiStyle.APPLE_WATCH) {
-                            1f
-                        } else {
-                            entryProgress.coerceIn(0f, 1f)
+                        alpha = when {
+                            // 背板接管期间层内底色必须为 0：两层同色叠加时
+                            // 缩放的那一层就是「跟着缩的黑底」。
+                            backgroundHandledByPlate -> 0f
+                            uiStyle == UiStyle.APPLE_WATCH -> 1f
+                            else -> entryProgress.coerceIn(0f, 1f)
                         },
                     ),
                 ),

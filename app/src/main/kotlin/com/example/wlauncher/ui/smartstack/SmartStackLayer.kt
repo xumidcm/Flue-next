@@ -160,6 +160,8 @@ import com.flue.launcher.ui.notification.NotificationEntryUi
 import com.flue.launcher.ui.notification.NotificationGroupUi
 import com.flue.launcher.ui.notification.NotificationRevealTarget
 import com.flue.launcher.ui.notification.SwipeRevealDeleteContainer
+import com.flue.launcher.ui.notification.notificationStackBackColor
+import com.flue.launcher.ui.notification.rememberNotificationStackBaseColor
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.Dispatchers
@@ -522,7 +524,6 @@ fun SmartStackLayer(
     onDismissNotification: (String) -> Unit,
     onDismissToFace: () -> Unit,
     showSteps: Boolean,
-    stackCardColor: Color = Color.Unspecified,
     modifier: Modifier = Modifier
 ) {
     val clock = rememberClockSnapshot()
@@ -810,7 +811,6 @@ fun SmartStackLayer(
                                 is PreviewRow.Aggregate -> StackedPreviewCard(
                                     row.leadEntry,
                                     row.hiddenCount,
-                                    stackCardColor,
                                     onOpenNotifications
                                 )
                                 is PreviewRow.Group -> {
@@ -839,7 +839,7 @@ fun SmartStackLayer(
                                             actionHeight = 72.dp
                                         ) {
                                             if (row.hiddenCount > 0) {
-                                                StackedPreviewCard(entry, row.hiddenCount, stackCardColor, onOpenNotifications)
+                                                StackedPreviewCard(entry, row.hiddenCount, onOpenNotifications)
                                             } else {
                                                 PreviewPill(
                                                     entry = entry,
@@ -2268,7 +2268,6 @@ private fun EmptyWidgetCard(width: Dp) {
 @Composable private fun StackedPreviewCard(
     entry: NotificationEntryUi,
     hiddenCount: Int,
-    stackCardColor: Color = Color.Unspecified,
     onClick: () -> Unit
 ) {
     val stackStrength by animateFloatAsState(
@@ -2278,6 +2277,7 @@ private fun EmptyWidgetCard(width: Dp) {
     )
     var frontCardHeight by remember { mutableIntStateOf(72) }
     val density = LocalDensity.current
+    val stackBaseColor = rememberNotificationStackBaseColor()
     val stackCardHeight: Dp = with(density) { frontCardHeight.toDp() }
     Box(Modifier.fillMaxWidth()) {
         repeat(hiddenCount.coerceIn(0, 2)) { index ->
@@ -2288,13 +2288,13 @@ private fun EmptyWidgetCard(width: Dp) {
                         translationY = with(density) { ((STACKED_PREVIEW_TRANSLATION_DP - 6) * (index + 1)).dp.toPx() } * stackStrength
                         scaleX = 1f - (index + 1) * 0.012f * stackStrength
                         scaleY = 1f - (index + 1) * 0.012f * stackStrength
-                        alpha = 0.44f + (0.18f / (index + 1))
+                        alpha = 1f - index * 0.10f
                     }
                     .padding(horizontal = STACKED_PREVIEW_HORIZONTAL_INSET_DP.dp)
                     .fillMaxWidth()
                     .height(stackCardHeight)
                     .clip(RoundedCornerShape(28.dp))
-                    .background(notificationStackBackColor(stackCardColor, index))
+                    .background(notificationStackBackColor(stackBaseColor, index))
             )
         }
         Column(modifier = Modifier.padding(bottom = 2.dp)) {
@@ -2321,14 +2321,6 @@ private fun EmptyWidgetCard(width: Dp) {
             tint = Color(0xFF2B2B2B),
             modifier = Modifier.size(24.dp),
         )
-    }
-}
-
-private fun notificationStackBackColor(base: Color, index: Int): Color {
-    return when {
-        base != Color.Unspecified && base.alpha > 0f -> base.copy(alpha = (0.40f - index * 0.08f).coerceIn(0.18f, 0.42f))
-        index == 0 -> Color(0xFF404040)
-        else -> Color(0xFF2E2E2E)
     }
 }
 

@@ -3419,7 +3419,11 @@ private fun SettingsSwitchRow(
                         modifier = Modifier
                             .size(34.dp)
                             .clip(CircleShape)
-                            .background(Color.White.copy(alpha = if (leadingIcon != null) 0f else 0.05f)),
+                            .background(
+                                launcherStyle.titleColor.copy(
+                                    alpha = if (leadingIcon != null) 0f else 0.05f,
+                                )
+                            ),
                         contentAlignment = Alignment.Center
                     ) {
                         if (leadingIcon != null) {
@@ -3692,7 +3696,7 @@ private fun AboutCard(
                 modifier = Modifier
                     .size(98.dp)
                     .clip(RoundedCornerShape(28.dp))
-                    .background(Color.White.copy(alpha = 0.06f)),
+                    .background(launcherStyle.titleColor.copy(alpha = 0.06f)),
                 contentAlignment = Alignment.Center
             ) {
                 if (appIconBitmap != null) {
@@ -3705,11 +3709,11 @@ private fun AboutCard(
                         contentScale = ContentScale.Crop
                     )
                 } else {
-                    Text("Flue", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text("Flue", color = launcherStyle.titleColor, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 }
             }
             Spacer(modifier = Modifier.height(14.dp))
-            Text("Flue", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Text("Flue", color = launcherStyle.titleColor, fontSize = 24.sp, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 ABOUT_VERSION,
@@ -3738,7 +3742,7 @@ private fun AboutCard(
                 Column {
                     Text(
                         "柚子柚子皮",
-                        color = Color.White,
+                        color = launcherStyle.titleColor,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier
@@ -3764,14 +3768,14 @@ private fun AboutCard(
                     modifier = Modifier
                         .size(30.dp)
                         .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.12f)),
+                        .background(launcherStyle.titleColor.copy(alpha = 0.12f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("C", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text("C", color = launcherStyle.titleColor, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 }
                 Spacer(modifier = Modifier.width(10.dp))
                 Column {
-                    Text("cjryrx", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text("cjryrx", color = launcherStyle.titleColor, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                     Spacer(modifier = Modifier.height(2.dp))
                     Text("QQ：124018406", color = WatchColors.TextTertiary, fontSize = 11.sp)
                 }

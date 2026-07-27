@@ -84,6 +84,7 @@ import com.flue.launcher.ui.navigation.OverlayGestureTarget
 import com.flue.launcher.ui.navigation.ScreenState
 import com.flue.launcher.ui.anim.LayerAnimValues
 import com.flue.launcher.ui.anim.flueBackdropFill
+import com.flue.launcher.ui.anim.flueLegacyBlur
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.animation.core.spring
 import com.flue.launcher.ui.notification.NotificationLayer
@@ -417,7 +418,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
     val notificationsEnabled = showNotification
     val notificationSceneActive = screenState == ScreenState.Notifications
-    val notificationStackTint = appListColors.item
     val openWatchFaceChooser: () -> Unit = remember(context) {
         {
             vibrateHaptic(context)
@@ -989,11 +989,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 // p=0 必须精确等于表盘静止态（外部时钟撤走零跳变）。
                 // alpha 只轻降：表盘变透明会露出纯黑底、还削弱镜像背衬的
                 // 亮度；压暗交给覆层玻璃自己的底色。模糊加深到 24dp。
+                // 缩放收到 0.08：下压幅度太大时表盘明显「缩成一小块」，
+                // 边缘让出的像素全靠背衬副本硬撑。让位靠模糊 + 轻微下压表达，
+                // 让出的那一圈由 flueBackdropFill 向外延展填充。
                 LayerAnimValues(
-                    scale = 1f - 0.16f * p,
+                    scale = 1f - 0.08f * p,
                     blur = 24f * p,
                     alpha = 1f - 0.15f * p,
-                    translationY = 0.055f * p,
+                    translationY = 0.030f * p,
                 )
             }
         }
@@ -1093,12 +1096,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 val open = progress > 0.42f || velocity > 1.6f
                 overlayReleaseVelocity = velocity
                 overlayGestureTarget = null
+                val overlayState = when (target) {
+                    OverlayGestureTarget.Stack -> ScreenState.Stack
+                    OverlayGestureTarget.Widgets -> ScreenState.Widgets
+                    OverlayGestureTarget.ControlCenter -> ScreenState.ControlCenter
+                }
                 if (open) {
-                    when (target) {
-                        OverlayGestureTarget.Stack -> vm.setState(ScreenState.Stack)
-                        OverlayGestureTarget.Widgets -> vm.setState(ScreenState.Widgets)
-                        OverlayGestureTarget.ControlCenter -> vm.setState(ScreenState.ControlCenter)
-                    }
+                    vm.setState(overlayState)
+                } else if (screenState == overlayState) {
+                    // 关闭侧跟手收尾：没过阈值就退回表盘。以前这里什么都不做，
+                    // 覆层已经被拖到接近 0 却仍停在打开状态。
+                    vm.setState(ScreenState.Face)
                 }
             },
             modifier = Modifier.fillMaxSize()
@@ -1159,9 +1167,18 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     }
                     // clox 式背衬：覆层拉出时表盘下压缩小，让出的边缘用放大
                     // 模糊副本填充（防黑边）。
+                    // 防黑边是必需职责而不是装饰效果，所以不挂在「高级材质」
+                    // 开关上，也不因 API < 31 而整体关掉。
                     .flueBackdropFill(
                         progress = overlayBackdropProgress,
-                        enabled = layerBlurEnabled,
+                        enabled = true,
+                    )
+                    // API 31+ 的模糊由 scaleBlurAlpha 的 RenderEffect 负责；
+                    // 27–30 走涂抹近似，进负一屏/小组件/控制中心/通知中心
+                    // 一样能看到毛玻璃，且同样不挂在「高级材质」开关上。
+                    .flueLegacyBlur(
+                        progress = overlayBackdropProgress,
+                        enabled = true,
                     )
                     .scaleBlurAlpha(
                         targetValues = faceLayerValues(
@@ -1439,6 +1456,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         initialScrollResetKey = directLaunchInitialScrollResetKey,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         appListScalePercent = appListScalePercent,
+                        // 转场期间那块不缩放的背板已经在铺同色底，层内底色
+                        // 让位，避免黑底跟着图标一起缩。
+                        backgroundHandledByPlate = appListLayerRaised,
                         folderOpen = openFolder != null,
                         useWatchFaceColors = useAppListWatchFaceColors,
                         rowBorderEnabled = appListRowBorderEnabled,
@@ -1585,7 +1605,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             // 纯位移进场：图层自身永远不透明也不缩放。以前
                             // alpha 跟进度走，滑入全程能透过负一屏看到表盘
                             // （通知中心叠上时还被压到 0.42）。
-                            translationX = (sidePageProgress - 1f) * screenWidthPx
+                            //
+                            // 位移量必须用图层自己的测量宽度：LocalConfiguration
+                            // 的屏宽不含 inset，比实际布局窄一点，收起时就会在
+                            // 屏幕左侧留下一道边——打开控制中心时看到的「负一屏
+                            // 边边」就是它。
+                            val offscreen = size.width.coerceAtLeast(screenWidthPx)
+                            translationX = (sidePageProgress - 1f) * offscreen
                             alpha = if (sidePageProgress > 0.001f) 1f else 0f
                         }
                 ) {
@@ -1636,7 +1662,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onDismissNotification = vm::dismissNotification,
                         onDismissToFace = { vm.setState(ScreenState.Face) },
                         showSteps = showStepCount,
-                        stackCardColor = notificationStackTint
                     )
                 }
             }
@@ -1647,7 +1672,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         .fillMaxSize()
                         .zIndex(4.2f)
                         .graphicsLayer {
-                            translationX = (1f - widgetPageProgress) * screenWidthPx
+                            // 同上：用测量宽度而不是 configuration 屏宽，否则
+                            // 收起态会在屏幕右侧留下一道小组件页的边。
+                            val offscreen = size.width.coerceAtLeast(screenWidthPx)
+                            translationX = (1f - widgetPageProgress) * offscreen
                             alpha = if (widgetPageProgress > 0.001f) 1f else 0f
                         }
                 ) {
@@ -1670,7 +1698,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         .fillMaxSize()
                         .zIndex(4.4f)
                         .graphicsLayer {
-                            translationY = (controlCenterProgress - 1f) * screenHeightPx
+                            val offscreen = size.height.coerceAtLeast(screenHeightPx)
+                            translationY = (controlCenterProgress - 1f) * offscreen
                             alpha = if (controlCenterProgress > 0.001f) 1f else 0f
                         }
                 ) {
@@ -1735,7 +1764,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 }
                             )
                         },
-                        stackCardColor = notificationStackTint
                     )
                     }
                 }

@@ -46,22 +46,36 @@ fun GestureHost(
     // 反馈且卡死 / 偶发滑不动」的第二个独立病灶（诊断日志里成串的 a=3）。
     val hostGestureNeeded = when (screenState) {
         ScreenState.Face, ScreenState.Widgets, ScreenState.Stack -> true
+        // 控制中心以前不在这份名单里：覆层一打开手势宿主就整体卸载，
+        // 于是「拉出跟手、返回不跟手」。它的关闭方向要走同一条跟手链路。
+        ScreenState.ControlCenter -> true
         else -> false
+    }
+    // 覆层已经打开时，这一次拖拽是「往回收」：进度基准是 1，手指反向移动
+    // 让它递减到 0，抬手仍由 onOverlayRelease 带初速度收尾。
+    val closingOverlay: OverlayGestureTarget? = when (screenState) {
+        ScreenState.ControlCenter -> OverlayGestureTarget.ControlCenter
+        else -> null
     }
     Box(
         modifier = modifier
-            .pointerInput(hostGestureNeeded, screenState, sideScreenEnabled, showWidgetPage, showControlCenter, widgetsBackGestureLocked) {
+            .pointerInput(hostGestureNeeded, screenState, sideScreenEnabled, showWidgetPage, showControlCenter, widgetsBackGestureLocked, closingOverlay) {
                 if (!hostGestureNeeded) return@pointerInput
                 val widthPx = size.width.coerceAtLeast(1).toFloat()
                 val heightPx = size.height.coerceAtLeast(1).toFloat()
                 // 轴向判定门槛：只用来确定方向，不再是「动画开始」的门槛。
                 val axisLockPx = 18f
 
-                fun overlayProgress(target: OverlayGestureTarget): Float = when (target) {
-                    OverlayGestureTarget.Stack -> totalDx / (widthPx * 0.8f)
-                    OverlayGestureTarget.Widgets -> -totalDx / (widthPx * 0.8f)
-                    OverlayGestureTarget.ControlCenter -> totalDy / (heightPx * 0.8f)
-                }.coerceIn(0f, 1f)
+                fun overlayProgress(target: OverlayGestureTarget): Float {
+                    val delta = when (target) {
+                        OverlayGestureTarget.Stack -> totalDx / (widthPx * 0.8f)
+                        OverlayGestureTarget.Widgets -> -totalDx / (widthPx * 0.8f)
+                        OverlayGestureTarget.ControlCenter -> totalDy / (heightPx * 0.8f)
+                    }
+                    // 关闭侧从 1 起算：手指反向（上滑）时 delta 为负，进度递减。
+                    val base = if (closingOverlay == target) 1f else 0f
+                    return (base + delta).coerceIn(0f, 1f)
+                }
 
                 fun overlayVelocity(target: OverlayGestureTarget): Float {
                     val velocity = velocityTracker.calculateVelocity()
@@ -88,6 +102,19 @@ fun GestureHost(
                         val activeOverlay = overlayTarget
                         if (activeOverlay != null) {
                             onOverlayDrag?.invoke(activeOverlay, overlayProgress(activeOverlay))
+                            change.consume()
+                            return@detectDragGestures
+                        }
+
+                        // 覆层已打开：认领关闭方向的跟手。控制中心是下拉打开，
+                        // 所以只有向上的位移才算「往回收」。
+                        if (closingOverlay != null && !consumed &&
+                            abs(totalDy) > axisLockPx && abs(totalDy) > abs(totalDx) &&
+                            totalDy < 0f && onOverlayDrag != null
+                        ) {
+                            overlayTarget = closingOverlay
+                            consumed = true
+                            onOverlayDrag.invoke(closingOverlay, overlayProgress(closingOverlay))
                             change.consume()
                             return@detectDragGestures
                         }

@@ -20,7 +20,8 @@ import androidx.compose.ui.unit.toIntSize
  * 先画一份 1.62 倍放大、重模糊、压暗的副本铺底，再原样画一遍真实内容。
  * 录制只发生在绘制阶段，零重组；progress 走 lambda 逐帧读。
  *
- * 仅 API 31+ 且允许模糊时启用；否则边缘由覆层玻璃自身的暗色兜底。
+ * API 31+ 副本带硬件模糊；低版本退化为纯放大副本，防黑边职责不变，
+ * 所以这个修饰符不跟随「高级材质」开关。
  * 注意：GraphicsLayer.record 录不到 SurfaceView / 视频内容——这类表盘的
  * 副本区域是空的，观感退化为普通压暗，不炸不闪。
  */
@@ -29,8 +30,9 @@ fun Modifier.flueBackdropFill(
     progress: () -> Float,
     enabled: Boolean,
 ): Modifier {
-    if (!enabled || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return this
+    if (!enabled) return this
     val backdropLayer = rememberGraphicsLayer()
+    val canHardwareBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     return this.drawWithContent {
         val p = progress().coerceIn(0f, 1f)
         if (p <= 0.001f) {
@@ -40,11 +42,14 @@ fun Modifier.flueBackdropFill(
         backdropLayer.record(this, layoutDirection, size.toIntSize()) {
             this@drawWithContent.drawContent()
         }
-        backdropLayer.renderEffect = BlurEffect(
-            radiusX = 64f * p + 12f,
-            radiusY = 64f * p + 12f,
-            edgeTreatment = TileMode.Clamp,
-        )
+        // API 31+ 加硬件模糊；低版本只放大副本填充边缘，同样能挡住黑边。
+        backdropLayer.renderEffect = if (canHardwareBlur) {
+            BlurEffect(
+                radiusX = 64f * p + 12f,
+                radiusY = 64f * p + 12f,
+                edgeTreatment = TileMode.Clamp,
+            )
+        } else null
         // 副本必须不透明：半透明副本会让黑底透出来——表盘下压后边缘
         // 「露出黑色底边」的直接原因。像素延展全靠这份放大副本。
         backdropLayer.alpha = 1f
