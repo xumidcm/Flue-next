@@ -383,7 +383,7 @@ private fun MiuixPreviewContent() {
         MiuixSettingsCard(title = "系统") {
             MiuixSettingsRow(title = "导出日志", subtitle = "导出诊断信息", onClick = {})
             MiuixCardDivider()
-            MiuixSettingsRow(title = "关于", subtitle = "Flue beta1.5", onClick = {})
+            MiuixSettingsRow(title = "关于", subtitle = "Flue Next 2.0.0 (20)", onClick = {})
         }
     }
 }

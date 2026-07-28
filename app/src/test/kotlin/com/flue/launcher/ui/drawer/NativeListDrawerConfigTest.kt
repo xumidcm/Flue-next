@@ -87,6 +87,55 @@ class NativeListDrawerConfigTest {
     }
 
     @Test
+    fun folderOverlayBlurRadiusTracksReversibleTransitionProgress() {
+        val opening = nativeListDrawerConfig(
+            request(density = 2f, overlayOpen = true, overlayProgress = 0.25f),
+        )
+        val closing = nativeListDrawerConfig(
+            request(density = 2f, overlayOpen = true, overlayProgress = 0.75f),
+        )
+
+        assertEquals(8f, opening.contentOverlayBlurRadiusPx)
+        assertEquals(24f, closing.contentOverlayBlurRadiusPx)
+    }
+
+    @Test
+    fun folderOverlayBlurKeepsConfigStableInsideOneRenderEffectBucket() {
+        val first = nativeListDrawerConfig(
+            request(density = 2f, overlayOpen = true, overlayProgress = 0.26f),
+        )
+        val second = nativeListDrawerConfig(
+            request(density = 2f, overlayOpen = true, overlayProgress = 0.30f),
+        )
+
+        assertEquals(8f, first.contentOverlayBlurRadiusPx)
+        assertEquals(first, second)
+    }
+
+    @Test
+    fun legacyDevicesDoNotReconfigureForUnsupportedOverlayBlurProgress() {
+        val first = nativeListDrawerConfig(
+            request(
+                density = 2f,
+                sdkInt = Build.VERSION_CODES.R,
+                overlayOpen = true,
+                overlayProgress = 0.20f,
+            ),
+        )
+        val second = nativeListDrawerConfig(
+            request(
+                density = 2f,
+                sdkInt = Build.VERSION_CODES.R,
+                overlayOpen = true,
+                overlayProgress = 0.80f,
+            ),
+        )
+
+        assertEquals(0f, first.contentOverlayBlurRadiusPx)
+        assertEquals(first, second)
+    }
+
+    @Test
     fun carriesEveryLegacyBehaviorSwitchIntoTheNativeConfig() {
         val config = nativeListDrawerConfig(
             request(
@@ -185,6 +234,7 @@ class NativeListDrawerConfigTest {
         sdkInt: Int = Build.VERSION_CODES.S,
         suppressHeavyEffects: Boolean = false,
         overlayOpen: Boolean = false,
+        overlayProgress: Float = if (overlayOpen) 1f else 0f,
         rowBorderEnabled: Boolean = false,
         allowFolderCreation: Boolean = true,
         iconShadowEnabled: Boolean = true,
@@ -215,6 +265,7 @@ class NativeListDrawerConfigTest {
         topBlurRadiusDp = 4f,
         bottomBlurRadiusDp = 4f,
         overlayOpen = overlayOpen,
+        overlayProgress = overlayProgress,
         blurEnabled = true,
         edgeBlurEnabled = true,
         suppressHeavyEffects = suppressHeavyEffects,

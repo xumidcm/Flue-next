@@ -451,7 +451,9 @@ internal fun nativeInteractionScale(
 ): Float = when {
     dragged -> 0.965f
     glidePressed -> 0.992f
-    folderHover -> 0.90f
+    // 文件夹候选高亮只保留 pressOverlayPath 上色，不再缩放——
+    // 缩小到 0.90 会被用户感知成「图标在躲避」。
+    folderHover -> 1f
     // Compose 版的按压分档：蜂窝图标 0.90、密集网格 0.96、列表行 0.97。
     // 原生化时被压成了一刀切的 0.97，蜂窝图标的按压反馈基本不可见。
     pressed -> when (presentation) {

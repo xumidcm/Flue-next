@@ -15,6 +15,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 internal sealed interface LayerPivot {
@@ -41,6 +43,57 @@ internal class LayerPivotLatch(
     fun resolve(requested: LayerPivot?): Offset {
         requested?.resolve()?.let { retained = it }
         return retained
+    }
+}
+
+/**
+ * Draw-phase snapshot of the values that are actually installed on a layer.
+ *
+ * This is deliberately plain mutable state rather than Compose state: the
+ * backdrop reads it from its draw modifier and must not recompose the launcher
+ * at animation cadence. It also gives the backdrop the spring's real frame,
+ * instead of trying to reproduce the same motion with a second clock.
+ */
+internal class LayerFrameSnapshot {
+    var scale: Float = 1f
+        private set
+    var blur: Float = 0f
+        private set
+    var alpha: Float = 1f
+        private set
+    var translationX: Float = 0f
+        private set
+    var translationY: Float = 0f
+        private set
+
+    fun update(
+        scale: Float,
+        blur: Float,
+        alpha: Float,
+        translationX: Float,
+        translationY: Float,
+    ) {
+        this.scale = scale
+        this.blur = blur
+        this.alpha = alpha
+        this.translationX = translationX
+        this.translationY = translationY
+    }
+
+    /**
+     * Normalized amount of background that needs edge extension. A zoomed
+     * layer still covers the viewport, so blur/alpha alone must not allocate a
+     * second recorded layer. Shrink or translation activates the fill, while
+     * blur contributes to its visual strength once it is needed.
+     */
+    fun backdropProgress(): Float {
+        val shrink = (1f - scale).coerceAtLeast(0f)
+        val movement = max(abs(translationX), abs(translationY))
+        if (shrink <= 0.001f && movement <= 0.001f) return 0f
+        return max(
+            max(shrink / 0.15f, movement / 0.07f),
+            blur.coerceAtLeast(0f) / 24f,
+        ).coerceIn(0f, 1f)
     }
 }
 
@@ -102,6 +155,8 @@ internal fun Modifier.scaleBlurAlpha(
      */
     valuesProvider: (() -> LayerAnimValues)? = null,
     externallyDriven: Boolean = false,
+    /** Receives the exact draw-frame values without causing recomposition. */
+    frameSnapshot: LayerFrameSnapshot? = null,
 ): Modifier {
     val animScale = remember { Animatable(targetValues.scale) }
     val animAlpha = remember { Animatable(targetValues.alpha) }
@@ -164,11 +219,20 @@ internal fun Modifier.scaleBlurAlpha(
             val frameScale = external?.scale ?: animScale.value
             val frameAlpha = external?.alpha ?: animAlpha.value
             val frameBlur = external?.blur ?: animBlur.value
+            val frameTranslationX = external?.translationX ?: animTransX.value
+            val frameTranslationY = external?.translationY ?: animTransY.value
+            frameSnapshot?.update(
+                scale = frameScale,
+                blur = frameBlur,
+                alpha = frameAlpha,
+                translationX = frameTranslationX,
+                translationY = frameTranslationY,
+            )
             scaleX = frameScale
             scaleY = frameScale
             alpha = frameAlpha
-            translationX = (external?.translationX ?: animTransX.value) * screenWidth
-            translationY = (external?.translationY ?: animTransY.value) * screenHeight
+            translationX = frameTranslationX * screenWidth
+            translationY = frameTranslationY * screenHeight
             transformOrigin = TransformOrigin(resolvedOrigin.x, resolvedOrigin.y)
             val radiusDp = quantizeSystemBlurRadiusDp(frameBlur)
             val radiusPx = with(density) { radiusDp.dp.toPx() }

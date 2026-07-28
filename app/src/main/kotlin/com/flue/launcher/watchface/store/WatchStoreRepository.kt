@@ -3,7 +3,7 @@ package com.flue.launcher.watchface.store
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import com.flue.launcher.watchface.LunchWatchFaceDescriptor
+import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.watchface.standard.WatchInstallMetadata
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceScanFailure
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceScanResult
@@ -42,7 +42,7 @@ class WatchStoreRepository(
     private val api: WatchStoreApi,
     private val cacheRoot: File,
     private val catalog: FileWatchFaceCatalog = FileWatchFaceCatalog(File(cacheRoot, "watch-face-catalog.json")),
-    private val installedWatchFacesProvider: () -> List<LunchWatchFaceDescriptor> = { emptyList() },
+    private val installedWatchFacesProvider: () -> List<WatchFaceDescriptor> = { emptyList() },
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val installJournal: FileWatchFaceInstallJournal =
         FileWatchFaceInstallJournal(File(cacheRoot, "watch-face-install-journal.json")),
@@ -163,7 +163,7 @@ class WatchStoreRepository(
     ): WatchStoreCatalogRestore = withContext(ioDispatcher) {
         val scan = readInstalledScan()
         val installedFaces = scan.descriptors
-        val identities = installedFaces.map(LunchWatchFaceDescriptor::toInstalledIdentity)
+        val identities = installedFaces.map(WatchFaceDescriptor::toInstalledIdentity)
         val initial = catalog.read()
         if (initial.diagnostic != null && repairCorruptCatalog) {
             catalog.reconcileInstalledDescriptors(
@@ -261,9 +261,9 @@ class WatchStoreRepository(
      * global result and its name must match exactly; any ambiguity remains Legacy.
      */
     suspend fun associateLegacyMarketInstalls(
-        installedFaces: List<LunchWatchFaceDescriptor>,
+        installedFaces: List<WatchFaceDescriptor>,
     ): WatchFaceCatalogSnapshot = withContext(ioDispatcher) {
-        val identities = installedFaces.map(LunchWatchFaceDescriptor::toInstalledIdentity)
+        val identities = installedFaces.map(WatchFaceDescriptor::toInstalledIdentity)
         val snapshot = catalog.read()
         if (snapshot.diagnostic != null) return@withContext snapshot
         val uniqueLocalNames = snapshot.records.asSequence()
@@ -331,12 +331,14 @@ class WatchStoreRepository(
         installedDescriptorId: String,
         installedDisplayName: String? = null,
         installedAtEpochMs: Long = System.currentTimeMillis(),
+        compatibilityReport: WatchStoreCompatibilityReport? = null,
     ): WatchFaceRecord = recordMarketInstallationDetailed(
         remoteId = remoteId,
         activeRevisionSha256 = activeRevisionSha256,
         installedDescriptorId = installedDescriptorId,
         installedDisplayName = installedDisplayName,
         installedAtEpochMs = installedAtEpochMs,
+        compatibilityReport = compatibilityReport,
     ).record
 
     suspend fun recordMarketInstallationDetailed(
@@ -345,6 +347,7 @@ class WatchStoreRepository(
         installedDescriptorId: String,
         installedDisplayName: String? = null,
         installedAtEpochMs: Long = System.currentTimeMillis(),
+        compatibilityReport: WatchStoreCompatibilityReport? = null,
     ): WatchFaceCatalogUpsertResult = withContext(ioDispatcher + NonCancellable) {
         val normalizedRemoteId = WatchStoreUrlPolicy.requireId(remoteId)
         val record = WatchFaceRecord(
@@ -359,6 +362,7 @@ class WatchStoreRepository(
             ),
             legacyIds = setOf(installedDescriptorId),
             activeLauncherId = installedDescriptorId,
+            compatibilityReport = compatibilityReport,
         )
         catalog.upsertDetailed(record).also {
             // A stale journal entry is harmless but would be replayed at every
@@ -534,6 +538,12 @@ class WatchStoreRepository(
         installJournal.read().forEach { pending ->
             if (pending.storeId != WATCHMAKER_COMMUNITY_STORE_ID) return@forEach
             val identity = installedById[pending.launcherId.lowercase()] ?: return@forEach
+            val compatibilityReport = identity.sourceDirPath?.let { sourceDirPath ->
+                WatchStoreCompatibilityInspector.inspect(
+                    rootDirectory = File(sourceDirPath),
+                    previewFile = identity.previewFilePath?.let(::File),
+                )
+            }
             catalog.upsertDetailed(
                 WatchFaceRecord(
                     logicalId = WatchFaceLogicalIds.market(pending.storeId, pending.remoteId),
@@ -549,6 +559,7 @@ class WatchStoreRepository(
                     source = WatchFaceInstallSource.Market(pending.storeId, pending.remoteId),
                     legacyIds = setOf(identity.launcherId),
                     activeLauncherId = identity.launcherId,
+                    compatibilityReport = compatibilityReport,
                 ),
             )
             installJournal.remove(pending.storeId, pending.remoteId)
@@ -584,12 +595,12 @@ class WatchStoreRepository(
 
 data class WatchStoreCatalogRestore(
     val snapshot: WatchFaceCatalogSnapshot,
-    val installedFaces: List<LunchWatchFaceDescriptor>,
+    val installedFaces: List<WatchFaceDescriptor>,
     val scanFailures: List<WatchmakerWatchFaceScanFailure> = emptyList(),
     val scanComplete: Boolean = scanFailures.isEmpty(),
 )
 
-private fun LunchWatchFaceDescriptor.toInstalledIdentity(): InstalledWatchFaceIdentity =
+private fun WatchFaceDescriptor.toInstalledIdentity(): InstalledWatchFaceIdentity =
     InstalledWatchFaceIdentity(
         launcherId = id,
         displayName = displayName,
@@ -600,4 +611,6 @@ private fun LunchWatchFaceDescriptor.toInstalledIdentity(): InstalledWatchFaceId
                     ?: directory.lastModified().takeIf { it > 0L }
             }
             ?: 1L,
+        sourceDirPath = sourceDirPath,
+        previewFilePath = previewFilePath,
     )

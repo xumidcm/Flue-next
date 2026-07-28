@@ -199,21 +199,6 @@ object SettingsHierarchy {
                 id = "watchface_charging_power_text",
                 title = "充电功率文字",
                 prefKey = "watchface_charging_power_text"
-            ),
-            SettingsEntry.Toggle(
-                id = "dingdingcat_fill_screen",
-                title = "叮叮猫表盘铺满全屏",
-                prefKey = "dingdingcat_fill_screen",
-                subtitle = "仅当前表盘为叮叮猫 ZIP 时显示"
-            ),
-            SettingsEntry.Slider(
-                id = "dingdingcat_playback_speed",
-                title = "叮叮猫播放速度",
-                prefKey = "dingdingcat_playback_speed_percent",
-                min = 25f,
-                max = 400f,
-                unit = "%",
-                subtitle = "仅当前表盘为叮叮猫 ZIP 时显示"
             )
         )
     )
@@ -568,7 +553,7 @@ object SettingsHierarchy {
                 id = "diagnostic_logging",
                 title = "诊断日志模式",
                 prefKey = null,
-                subtitle = "非 DataStore：ILog 内部状态，5 分钟自动关闭"
+                subtitle = "非 DataStore：FlueLog 内部状态，5 分钟自动关闭"
             ),
             SettingsEntry.Action(
                 id = "reset_defaults",

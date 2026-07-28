@@ -1,5 +1,7 @@
 package com.flue.launcher
 
+import com.flue.launcher.i18n.FlueComponentActivity
+
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
@@ -59,10 +61,13 @@ import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import com.flue.launcher.ui.settings.miuix.MiuixLoadingIndicator
 import androidx.compose.material3.DropdownMenu
@@ -89,6 +94,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
@@ -103,23 +109,31 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.flue.launcher.R
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.graphicsLayer
+import com.flue.launcher.ui.common.FluePullToRefreshState
 import com.flue.launcher.ui.common.fluePressScale
 import com.flue.launcher.ui.common.flueElasticNestedScroll
+import com.flue.launcher.ui.common.fluePullToRefresh
 import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.ui.common.rememberFluePressScale
+import com.flue.launcher.ui.common.rememberFluePullToRefreshState
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.viewmodel.LauncherViewModel
-import com.flue.launcher.watchface.LunchWatchFaceDescriptor
+import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.watchface.editor.WatchEditorSession
 import com.flue.launcher.watchface.standard.WatchInstallMetadata
 import com.flue.launcher.watchface.store.HttpWatchStoreApi
+import com.flue.launcher.watchface.store.MyWatchFaceEntry
 import com.flue.launcher.watchface.store.WatchStoreAuthSession
 import com.flue.launcher.watchface.store.WatchStoreAuthStore
 import com.flue.launcher.watchface.store.WatchStoreCategory
+import com.flue.launcher.watchface.store.WatchStoreCompatibilityInspector
+import com.flue.launcher.watchface.store.WatchStoreCompatibilityReport
 import com.flue.launcher.watchface.store.WatchStoreCredentialStore
 import com.flue.launcher.watchface.store.WatchStoreException
 import com.flue.launcher.watchface.store.WatchStoreHttpException
@@ -157,7 +171,7 @@ import java.io.File
  * coarse screen state; HTTP, archive validation and bitmap decoding stay in
  * [WatchStoreRepository] (which switches to Dispatchers.IO).
  */
-class WatchStoreActivity : ComponentActivity() {
+class WatchStoreActivity : FlueComponentActivity() {
     private val launcherViewModel: LauncherViewModel by viewModels()
     private val resumeGeneration = MutableStateFlow(0)
 
@@ -209,7 +223,20 @@ class WatchStoreActivity : ComponentActivity() {
                         reconcileToken = resumeToken,
                         onBack = ::finish,
                         installArchive = { archive ->
-                            launcherViewModel.installWatchStoreArchive(archive).map { descriptor ->
+                            val installed = launcherViewModel.installWatchStoreArchive(archive)
+                            val failure = installed.exceptionOrNull()
+                            if (failure != null) {
+                                Result.failure(failure)
+                            } else {
+                                val descriptor = installed.getOrThrow()
+                                // 只把 XML 解析结果作为兼容诊断保存。市场身份始终在
+                                // repository 里由 API id 建立，绝不由 name 属性推断。
+                                val compatibilityReport = withContext(Dispatchers.IO) {
+                                    WatchStoreCompatibilityInspector.inspect(
+                                        rootDirectory = descriptor.sourceDirPath?.let(::File),
+                                        previewFile = descriptor.previewFilePath?.let(::File),
+                                    )
+                                }
                                 InstalledStoreWatchFace(
                                     id = descriptor.id,
                                     name = descriptor.displayName,
@@ -220,7 +247,9 @@ class WatchStoreActivity : ComponentActivity() {
                                                 ?: directory.lastModified().takeIf { it > 0L }
                                         }
                                         ?: System.currentTimeMillis(),
+                                    compatibilityReport = compatibilityReport,
                                 )
+                                    .let { Result.success(it) }
                             }
                         },
                         useInstalled = { launcherId -> launcherViewModel.selectWatchFace(launcherId) },
@@ -251,6 +280,7 @@ private data class InstalledStoreWatchFace(
     val id: String,
     val name: String,
     val installedAtEpochMs: Long,
+    val compatibilityReport: WatchStoreCompatibilityReport,
 )
 
 /**
@@ -263,6 +293,7 @@ private data class PendingMarketCatalogInstall(
     val descriptorId: String,
     val displayName: String,
     val installedAtEpochMs: Long,
+    val compatibilityReport: WatchStoreCompatibilityReport,
 )
 
 private data class StoreQueryKey(
@@ -299,6 +330,7 @@ private fun WatchStoreScreen(
     var categories by remember { mutableStateOf<List<WatchStoreCategory>>(emptyList()) }
     var categoriesLoading by remember { mutableStateOf(true) }
     var categoriesError by remember { mutableStateOf<String?>(null) }
+    var categoriesReloadToken by remember { mutableIntStateOf(0) }
     var entries by remember { mutableStateOf<List<WatchStoreWatchFace>>(emptyList()) }
     var pagination by remember { mutableStateOf<WatchStorePagination?>(null) }
     var listLoading by remember { mutableStateOf(false) }
@@ -317,12 +349,12 @@ private fun WatchStoreScreen(
     var catalogWarning by remember { mutableStateOf<String?>(null) }
     var catalogReloadToken by remember { mutableIntStateOf(0) }
     var repairCatalogOnNextRestore by remember { mutableStateOf(false) }
-    var installedFaces by remember { mutableStateOf<List<LunchWatchFaceDescriptor>>(emptyList()) }
+    var installedFaces by remember { mutableStateOf<List<WatchFaceDescriptor>>(emptyList()) }
     var lastLegacyAssociationSignature by remember { mutableStateOf<String?>(null) }
     val installedFacesById = remember(installedFaces) { installedFaces.associateBy { it.id } }
     val legacyAssociationSignature = remember(installedFaces) {
         installedFaces
-            .sortedBy(LunchWatchFaceDescriptor::id)
+            .sortedBy(WatchFaceDescriptor::id)
             .joinToString("\u0000") { "${it.id}\u0001${it.displayName}" }
     }
     val installedMarketRecords = remember(catalog.records) {
@@ -339,6 +371,15 @@ private fun WatchStoreScreen(
     val pendingCatalogInstalls = remember { mutableStateMapOf<String, PendingMarketCatalogInstall>() }
     var installedActionError by remember { mutableStateOf<String?>(null) }
     var uploadVisible by remember { mutableStateOf(false) }
+    var myUploadsVisible by remember { mutableStateOf(false) }
+    // 下拉刷新：用「已完成的 reloadToken」与「本次下拉请求的 token」比较来判定
+    // 请求是否结束，比直接观察 listLoading 稳——LaunchedEffect 的重启和
+    // listLoading 的写入不在同一帧，观察布尔量会在启动缝隙里提前收指示器。
+    var listLoadCompletedToken by remember { mutableIntStateOf(-1) }
+    var pullRefreshRequestedToken by remember { mutableStateOf<Int?>(null) }
+    var pullRefreshHolding by remember { mutableStateOf(false) }
+    val pullRefreshing = pullRefreshHolding ||
+        pullRefreshRequestedToken?.let { it > listLoadCompletedToken } == true
 
     /**
      * Opening a detail must reset the load state *synchronously*: the first
@@ -356,7 +397,7 @@ private fun WatchStoreScreen(
 
     suspend fun cleanObsoleteMarketRevisions(
         snapshot: WatchFaceCatalogSnapshot,
-        scannedFaces: List<LunchWatchFaceDescriptor>,
+        scannedFaces: List<WatchFaceDescriptor>,
     ) {
         val obsoleteIds = snapshot.obsoleteMarketLauncherIds(scannedFaces.mapTo(HashSet()) { it.id })
         if (obsoleteIds.isEmpty()) return
@@ -446,7 +487,7 @@ private fun WatchStoreScreen(
         committedSearch = searchText.trim().take(200)
     }
 
-    LaunchedEffect(repository) {
+    LaunchedEffect(repository, categoriesReloadToken) {
         categoriesLoading = true
         categoriesError = null
         runCatching { repository.getCategories() }
@@ -488,7 +529,17 @@ private fun WatchStoreScreen(
             listError = error.userFacingMessage()
         } finally {
             listLoading = false
+            listLoadCompletedToken = reloadToken
         }
+    }
+
+    // 命中缓存时首页可能在几十毫秒内返回，指示器一闪而过反而像没刷新。
+    // 触发后至少停 420ms 再允许收起。
+    LaunchedEffect(pullRefreshRequestedToken) {
+        if (pullRefreshRequestedToken == null) return@LaunchedEffect
+        pullRefreshHolding = true
+        delay(420)
+        pullRefreshHolding = false
     }
 
     // Paging is driven by the active lazy container's visible index, not by
@@ -576,6 +627,7 @@ private fun WatchStoreScreen(
                         installedDescriptorId = pending.descriptorId,
                         installedDisplayName = pending.displayName,
                         installedAtEpochMs = pending.installedAtEpochMs,
+                        compatibilityReport = pending.compatibilityReport,
                     ).record.also { pendingCatalogInstalls.remove(id) }
                 } else {
                     val archive = repository.downloadWatchFace(id) { bytes, totalBytes ->
@@ -598,6 +650,7 @@ private fun WatchStoreScreen(
                             descriptorId = descriptor.id,
                             displayName = descriptor.name,
                             installedAtEpochMs = descriptor.installedAtEpochMs,
+                            compatibilityReport = descriptor.compatibilityReport,
                         )
                         pendingCatalogInstalls[id] = pendingInstall
                         repository.markMarketInstallPackagePublished(
@@ -615,6 +668,7 @@ private fun WatchStoreScreen(
                                     installedDescriptorId = pendingInstall.descriptorId,
                                     installedDisplayName = pendingInstall.displayName,
                                     installedAtEpochMs = pendingInstall.installedAtEpochMs,
+                                    compatibilityReport = pendingInstall.compatibilityReport,
                                 )
                             },
                             rollback = { deleteInstalled(listOf(pendingInstall.descriptorId)) },
@@ -768,6 +822,7 @@ private fun WatchStoreScreen(
                     uiPreferences.writeViewMode(next)
                 },
                 onUpload = { uploadVisible = true },
+                onMyUploads = { myUploadsVisible = true },
             )
             OutlinedTextField(
                 value = searchText,
@@ -910,57 +965,88 @@ private fun WatchStoreScreen(
                 top = if (isScreenRound) 14.dp else 4.dp,
                 bottom = if (isScreenRound) 48.dp else 20.dp,
             )
-            if (viewMode == WatchStoreViewMode.LIST) {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .flueElasticNestedScroll(listState),
-                    contentPadding = browseContentPadding,
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    items(visibleEntries, key = { it.id }) { item ->
-                        val transientState = downloadStates[item.id]
-                            ?.collectAsStateWithLifecycle()
-                            ?.value
-                        WatchFaceListCard(
-                            repository = repository,
-                            item = item,
-                            downloadState = transientState ?: persistentInstallState(item.id),
-                            onOpen = { openDetail(item.id) },
-                            onDownload = { download(item.id) },
-                            onCancelDownload = { cancelDownload(item.id) },
-                        )
+            val pullRefreshState = rememberFluePullToRefreshState(
+                refreshing = pullRefreshing,
+                onRefresh = {
+                    reloadToken++
+                    pullRefreshRequestedToken = reloadToken
+                    // 分类是筛选栏的数据源，与列表同批刷新；失败也不阻塞列表。
+                    categoriesReloadToken++
+                },
+                atTop = {
+                    if (viewMode == WatchStoreViewMode.LIST) {
+                        listState.firstVisibleItemIndex == 0 &&
+                            listState.firstVisibleItemScrollOffset == 0
+                    } else {
+                        gridState.firstVisibleItemIndex == 0 &&
+                            gridState.firstVisibleItemScrollOffset == 0
                     }
-                    items(statusRows, key = { it.first }) { row -> row.second() }
-                }
-            } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    state = gridState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = browseContentPadding,
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    gridItems(visibleEntries, key = { it.id }) { item ->
-                        val transientState = downloadStates[item.id]
-                            ?.collectAsStateWithLifecycle()
-                            ?.value
-                        WatchFaceGridCard(
-                            repository = repository,
-                            item = item,
-                            downloadState = transientState ?: persistentInstallState(item.id),
-                            onOpen = { openDetail(item.id) },
-                            onDownload = { download(item.id) },
-                            onCancelDownload = { cancelDownload(item.id) },
-                        )
+                },
+            )
+            Box(modifier = Modifier.fillMaxSize()) {
+                // 指示器画在列表下方图层、被内容位移带出来：列表本体由
+                // fluePullToRefresh 的 graphicsLayer 一起下移，指示器停在
+                // 顶端固定位置，视觉上就是从列表底下被拉出来的。
+                PullRefreshIndicator(
+                    state = pullRefreshState,
+                    refreshing = pullRefreshing,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                )
+                if (viewMode == WatchStoreViewMode.LIST) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .flueElasticNestedScroll(listState)
+                            .fluePullToRefresh(pullRefreshState),
+                        contentPadding = browseContentPadding,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(visibleEntries, key = { it.id }) { item ->
+                            val transientState = downloadStates[item.id]
+                                ?.collectAsStateWithLifecycle()
+                                ?.value
+                            WatchFaceListCard(
+                                repository = repository,
+                                item = item,
+                                downloadState = transientState ?: persistentInstallState(item.id),
+                                onOpen = { openDetail(item.id) },
+                                onDownload = { download(item.id) },
+                                onCancelDownload = { cancelDownload(item.id) },
+                            )
+                        }
+                        items(statusRows, key = { it.first }) { row -> row.second() }
                     }
-                    gridItems(
-                        statusRows,
-                        key = { it.first },
-                        span = { GridItemSpan(maxLineSpan) },
-                    ) { row -> row.second() }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        state = gridState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .fluePullToRefresh(pullRefreshState),
+                        contentPadding = browseContentPadding,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        gridItems(visibleEntries, key = { it.id }) { item ->
+                            val transientState = downloadStates[item.id]
+                                ?.collectAsStateWithLifecycle()
+                                ?.value
+                            WatchFaceGridCard(
+                                repository = repository,
+                                item = item,
+                                downloadState = transientState ?: persistentInstallState(item.id),
+                                onOpen = { openDetail(item.id) },
+                                onDownload = { download(item.id) },
+                                onCancelDownload = { cancelDownload(item.id) },
+                            )
+                        }
+                        gridItems(
+                            statusRows,
+                            key = { it.first },
+                            span = { GridItemSpan(maxLineSpan) },
+                        ) { row -> row.second() }
+                    }
                 }
             }
         }
@@ -1035,6 +1121,23 @@ private fun WatchStoreScreen(
                 onDismiss = { uploadVisible = false },
             )
         }
+
+        // 已上传表盘管理：列出当前账号上传的全部表盘，支持删除。
+        AnimatedVisibility(
+            visible = myUploadsVisible,
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(3f),
+            enter = fadeIn(animationSpec = style.pageMotionSpec) +
+                scaleIn(initialScale = 0.96f, animationSpec = style.pageMotionSpec),
+            exit = fadeOut(animationSpec = style.pageMotionSpec) +
+                scaleOut(targetScale = 0.96f, animationSpec = style.pageMotionSpec),
+        ) {
+            MyUploadsOverlay(
+                repository = repository,
+                onDismiss = { myUploadsVisible = false },
+            )
+        }
     }
 }
 
@@ -1044,6 +1147,7 @@ private fun StoreHeader(
     viewMode: WatchStoreViewMode,
     onToggleViewMode: () -> Unit,
     onUpload: () -> Unit,
+    onMyUploads: () -> Unit,
 ) {
     val style = LauncherTheme.style
     Row(
@@ -1056,6 +1160,14 @@ private fun StoreHeader(
         Column(Modifier.weight(1f)) {
             Text("表盘市场", color = style.titleColor, fontSize = 17.sp, fontWeight = FontWeight.Bold)
             Text("Watchmaker Community", color = style.secondaryTextColor, fontSize = 10.sp)
+        }
+        IconButton(onClick = onMyUploads, modifier = Modifier.size(40.dp)) {
+            Icon(
+                imageVector = Icons.Default.Inventory2,
+                contentDescription = "我的上传",
+                tint = style.titleColor,
+                modifier = Modifier.size(20.dp),
+            )
         }
         IconButton(onClick = onUpload, modifier = Modifier.size(40.dp)) {
             Icon(
@@ -1285,7 +1397,9 @@ private fun InstallStateLineContent(
             }
         }
         is WatchStoreInstallState.Installed -> Text(
-            "已安装",
+            downloadState.record.compatibilityReport?.let { report ->
+                if (report.isFullyCompatible) "已安装" else "已安装 · ${report.issueCount} 项兼容性问题"
+            } ?: "已安装",
             color = style.positiveColor,
             fontSize = 10.sp,
             maxLines = 1,
@@ -1325,6 +1439,49 @@ private fun InstallStateLineContent(
                     iconPainterRes = R.drawable.ic_flue_download_round,
                     iconSize = if (compact) 12.dp else 14.dp,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WatchCompatibilityReportSection(report: WatchStoreCompatibilityReport) {
+    val style = LauncherTheme.style
+    val issueLines = buildList {
+        if (report.unsupportedTags.isNotEmpty()) {
+            add("未识别标签：${report.unsupportedTags.sorted().take(4).joinToString(", ")}")
+        }
+        if (report.unsupportedLayerTypes.isNotEmpty()) {
+            add("未知图层：${report.unsupportedLayerTypes.sorted().take(4).joinToString(", ")}")
+        }
+        if (report.unsupportedExpressions.isNotEmpty()) {
+            add("未支持表达式：${report.unsupportedExpressions.sorted().take(2).joinToString("；")}")
+        }
+        report.previewIssue?.let { issue ->
+            add(
+                when (issue) {
+                    com.flue.launcher.watchface.store.WatchStorePreviewIssue.MISSING -> "预览图：包内缺少 preview.jpg"
+                    com.flue.launcher.watchface.store.WatchStorePreviewIssue.EMPTY -> "预览图：文件为空"
+                    com.flue.launcher.watchface.store.WatchStorePreviewIssue.UNSUPPORTED_ENCODING -> "预览图：格式无法识别"
+                },
+            )
+        }
+        report.inspectionError?.let { add("检查未完成：$it") }
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(style.cardColor.copy(alpha = 0.72f), style.rowShape)
+            .border(1.dp, style.outlineColor.copy(alpha = 0.38f), style.rowShape)
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text("兼容性报告", color = style.titleColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        if (issueLines.isEmpty()) {
+            Text("此版本的图层、动态标签与预览图均已通过检查", color = style.positiveColor, fontSize = 11.sp)
+        } else {
+            issueLines.forEach { line ->
+                Text(line, color = style.secondaryTextColor, fontSize = 11.sp, lineHeight = 15.sp)
             }
         }
     }
@@ -1486,7 +1643,7 @@ private fun WatchFaceDetailPage(
     repository: WatchStoreRepository,
     detail: WatchStoreWatchFaceDetail?,
     summary: WatchStoreWatchFace?,
-    localDescriptor: LunchWatchFaceDescriptor?,
+    localDescriptor: WatchFaceDescriptor?,
     loading: Boolean,
     error: String?,
     downloadState: WatchStoreInstallState,
@@ -1678,11 +1835,14 @@ private fun WatchFaceDetailPage(
                                     Spacer(Modifier.width(5.dp))
                                     Text("已安装", color = style.positiveColor, fontSize = 12.sp)
                                 }
-                                Text(
-                                    "名称：${record.resolvedDisplayName(fallbackName) ?: displayName}",
-                                    color = style.secondaryTextColor,
-                                    fontSize = 11.sp,
-                                )
+                                 Text(
+                                     "名称：${record.resolvedDisplayName(fallbackName) ?: displayName}",
+                                     color = style.secondaryTextColor,
+                                     fontSize = 11.sp,
+                                 )
+                                record.compatibilityReport?.let { report ->
+                                    WatchCompatibilityReportSection(report)
+                                }
                                 // 点击后立刻反馈「已应用」并置灰，避免用户反复点。
                                 var appliedThisVisit by remember(record.logicalId) { mutableStateOf(false) }
                                 val storeContext = LocalContext.current
@@ -1772,6 +1932,260 @@ private fun WatchFaceDetailPage(
 }
 
 /**
+ * 已上传表盘管理覆层。
+ *
+ * 从 GET /api/my/watchfaces 加载当前账号上传的全部表盘，支持删除（DELETE）。
+ * 未登录时显示提示，无需重定向到登录流。
+ */
+@Composable
+private fun MyUploadsOverlay(
+    repository: WatchStoreRepository,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val style = LauncherTheme.style
+    val scope = rememberCoroutineScope()
+    val api = remember { HttpWatchStoreApi() }
+    val authStore = remember { WatchStoreAuthStore(context) }
+    val session = remember { authStore.read() }
+
+    var entries by remember { mutableStateOf<List<MyWatchFaceEntry>>(emptyList()) }
+    var loading by remember { mutableStateOf(session != null) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var deleteTarget by remember { mutableStateOf<MyWatchFaceEntry?>(null) }
+    var deleteInProgress by remember { mutableStateOf(false) }
+    var deleteError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(session?.token) {
+        val token = session?.token ?: return@LaunchedEffect
+        loading = true
+        loadError = null
+        runCatching {
+            withContext(Dispatchers.IO) { api.listMyWatchFaces(token) }
+        }.onSuccess { list ->
+            entries = list
+        }.onFailure { e ->
+            e.throwIfCancellation()
+            loadError = e.userFacingMessage()
+        }
+        loading = false
+    }
+
+    BackHandler(onBack = onDismiss)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(style.screenBackground),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+        ) {
+            // 顶栏
+            Row(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onDismiss, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = style.titleColor)
+                }
+                Column(Modifier.weight(1f)) {
+                    Text("我的上传", color = style.titleColor, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                    if (session != null) {
+                        Text(session.username, color = style.secondaryTextColor, fontSize = 10.sp)
+                    }
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+
+            when {
+                session == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.Inventory2,
+                            contentDescription = null,
+                            tint = style.secondaryTextColor,
+                            modifier = Modifier.size(40.dp),
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text("请先登录后查看已上传的表盘", color = style.secondaryTextColor, fontSize = 14.sp)
+                    }
+                }
+                loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    MiuixLoadingIndicator(
+                        Modifier.size(28.dp),
+                        strokeWidth = 2.dp,
+                        color = style.accentColor,
+                    )
+                }
+                loadError != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(horizontal = 24.dp),
+                    ) {
+                        Icon(Icons.Default.Warning, contentDescription = null, tint = style.accentColor, modifier = Modifier.size(32.dp))
+                        Spacer(Modifier.height(8.dp))
+                        Text(loadError!!, color = style.bodyColor, fontSize = 13.sp, textAlign = TextAlign.Center)
+                    }
+                }
+                entries.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("暂无上传记录", color = style.secondaryTextColor, fontSize = 14.sp)
+                }
+                else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(entries, key = { it.id }) { entry ->
+                        MyUploadEntryRow(
+                            entry = entry,
+                            repository = repository,
+                            onDeleteRequest = { deleteTarget = it },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // 删除确认对话框
+    val target = deleteTarget
+    if (target != null) {
+        AlertDialog(
+            onDismissRequest = { if (!deleteInProgress) { deleteTarget = null; deleteError = null } },
+            title = { Text("删除确认", color = style.titleColor) },
+            text = {
+                Column {
+                    Text("确定要删除「${target.name}」？", color = style.bodyColor)
+                    Spacer(Modifier.height(4.dp))
+                    Text("此操作无法撤销。", color = style.secondaryTextColor, fontSize = 12.sp)
+                    if (deleteError != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(deleteError!!, color = style.accentColor, fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !deleteInProgress,
+                    onClick = {
+                        val token = session?.token ?: return@TextButton
+                        scope.launch {
+                            deleteInProgress = true
+                            deleteError = null
+                            runCatching {
+                                withContext(Dispatchers.IO) { api.deleteMyWatchFace(token, target.id) }
+                            }.onSuccess {
+                                entries = entries.filterNot { it.id == target.id }
+                                deleteTarget = null
+                                deleteError = null
+                            }.onFailure { e ->
+                                e.throwIfCancellation()
+                                deleteError = e.userFacingMessage()
+                            }
+                            deleteInProgress = false
+                        }
+                    },
+                ) {
+                    if (deleteInProgress) {
+                        MiuixLoadingIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = style.accentColor)
+                    } else {
+                        Text("删除", color = style.accentColor)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !deleteInProgress,
+                    onClick = { deleteTarget = null; deleteError = null },
+                ) { Text("取消", color = style.secondaryTextColor) }
+            },
+        )
+    }
+}
+
+@Composable
+private fun MyUploadEntryRow(
+    entry: MyWatchFaceEntry,
+    repository: WatchStoreRepository,
+    onDeleteRequest: (MyWatchFaceEntry) -> Unit,
+) {
+    val style = LauncherTheme.style
+    val previewSizePx = 56
+    var bitmap by remember(entry.id) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(entry.id) {
+        runCatching {
+            val bmp = withContext(Dispatchers.IO) { repository.loadPreview(entry.id, previewSizePx, previewSizePx) }
+            bitmap = bmp.asImageBitmap()
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(style.cardColor, style.rowShape)
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(previewSizePx.dp)
+                .background(style.outlineColor.copy(alpha = 0.15f), style.rowShape)
+                .clip(style.rowShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            val img = bitmap
+            if (img != null) {
+                Image(
+                    bitmap = img,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Icon(
+                    Icons.Default.Inventory2,
+                    contentDescription = null,
+                    tint = style.secondaryTextColor,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                entry.name,
+                color = style.bodyColor,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                buildString {
+                    append(entry.category.name)
+                    append(" · ")
+                    append(screenTypeLabel(entry.screenType))
+                    append(" · ↓")
+                    append(entry.downloadCount)
+                },
+                color = style.secondaryTextColor,
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        IconButton(onClick = { onDeleteRequest(entry) }, modifier = Modifier.size(36.dp)) {
+            Icon(
+                Icons.Default.Delete,
+                contentDescription = "删除",
+                tint = style.secondaryTextColor,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
+}
+
+/**
  * 商店内上传覆层。与编辑器上传覆层同构：登录/注册 → 选择来源 → 元数据 →
  * 上传；登录表单、凭据记忆与错误映射复用 WatchStoreUploadCommon 里的共享
  * 实现。来源有两路：a) 已安装 .watch 表盘（经 WatchEditorSession 导出）；
@@ -1780,7 +2194,7 @@ private fun WatchFaceDetailPage(
 @Composable
 private fun StoreUploadOverlay(
     repository: WatchStoreRepository,
-    installedFaces: List<LunchWatchFaceDescriptor>,
+    installedFaces: List<WatchFaceDescriptor>,
     onUploaded: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -2442,7 +2856,7 @@ private fun CatalogRecoveryRow(
 @Composable
 private fun LocalInstalledWatchFaceCard(
     record: WatchFaceRecord,
-    descriptor: LunchWatchFaceDescriptor?,
+    descriptor: WatchFaceDescriptor?,
     onOpen: () -> Unit,
 ) {
     val style = LauncherTheme.style
@@ -2477,7 +2891,7 @@ private fun LocalInstalledWatchFaceCard(
 
 @Composable
 private fun LocalInstalledWatchPreview(
-    descriptor: LunchWatchFaceDescriptor?,
+    descriptor: WatchFaceDescriptor?,
     modifier: Modifier,
 ) {
     val style = LauncherTheme.style
@@ -2579,6 +2993,56 @@ private fun WatchPreview(
 /** 预览图三态：Crossfade 的比较键，位图内容本身仍从闭包读取。 */
 private enum class WatchPreviewState { LOADING, FAILED, READY }
 
+/**
+ * 下拉刷新指示器。外观走 style token，三套 UiStyle 各自成立。
+ *
+ * 未越阈值时画一个跟随进度收拢的箭头刷新图标，越过阈值或正在刷新时换成
+ * MiuixLoadingIndicator，与商店里其它加载态同源。
+ */
+@Composable
+private fun PullRefreshIndicator(
+    state: FluePullToRefreshState,
+    refreshing: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val style = LauncherTheme.style
+    val progress = state.progress
+    if (progress <= 0.01f && !refreshing) return
+    Box(
+        modifier = modifier
+            .padding(top = 6.dp)
+            .size(30.dp)
+            .graphicsLayer {
+                // 指示器停在顶端，靠 alpha/scale 跟随进度出现，不额外位移：
+                // 列表本体已经被 fluePullToRefresh 下移，两者叠加会跑太快。
+                alpha = if (refreshing) 1f else progress
+                val scale = 0.7f + 0.3f * progress
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(CircleShape)
+            .background(style.cardColor),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (refreshing || state.willRefresh) {
+            MiuixLoadingIndicator(
+                Modifier.size(17.dp),
+                strokeWidth = 2.dp,
+                color = style.accentColor,
+            )
+        } else {
+            Icon(
+                painter = painterResource(R.drawable.ic_flue_refresh_round),
+                contentDescription = null,
+                tint = style.accentColor,
+                modifier = Modifier
+                    .size(17.dp)
+                    .graphicsLayer { rotationZ = progress * 270f },
+            )
+        }
+    }
+}
+
 @Composable
 private fun LoadingStateRow(label: String) {
     val style = LauncherTheme.style
@@ -2668,7 +3132,7 @@ private fun Throwable.throwIfCancellation() {
 
 private suspend fun exportInstalledWatchFace(
     context: android.content.Context,
-    descriptor: LunchWatchFaceDescriptor,
+    descriptor: WatchFaceDescriptor,
     destination: Uri,
 ): Result<Unit> = runCatching {
     withContext(Dispatchers.IO) {

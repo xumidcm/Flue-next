@@ -92,7 +92,8 @@ class NativeAppListDragControllerTest {
             keys = listOf(key("a"), key("b"), key("c"), key("d"))
         }
         val scheduler = FakeDragScheduler()
-        val controller = NativeAppListDragController(host, scheduler, policy)
+        // 文件夹功能关闭时仍有实时避让预览。
+        val controller = NativeAppListDragController(host, scheduler, policy, allowFolderCreation = { false })
         startDrag(controller, scheduler)
 
         host.hitKey = key("b")
@@ -114,17 +115,50 @@ class NativeAppListDragControllerTest {
     }
 
     @Test
+    fun `with folder creation enabled reorder preview is suppressed but drop still commits the move`() {
+        val host = FakeDragHost().apply {
+            keys = listOf(key("a"), key("b"), key("c"), key("d"))
+        }
+        val scheduler = FakeDragScheduler()
+        // 文件夹功能开启时不再发实时预览位移，但落手时仍提交排序。
+        val controller = NativeAppListDragController(host, scheduler, policy, allowFolderCreation = { true })
+        startDrag(controller, scheduler)
+
+        host.hitKey = key("b")
+        controller.onMove(10f, 150f, 630L)
+        host.hitKey = key("d")
+        controller.onMove(10f, 220f, 640L)
+        host.hitKey = key("c")
+        controller.onMove(10f, 180f, 650L)
+
+        assertEquals(0, host.previewMoveCount)
+        assertFalse(host.commands.any { it is AppListCommand.Move })
+
+        controller.onUp(10f, 150f, 651L)
+
+        // 没有预览就没有虚拟列表位移：源仍在 c 之前，落到 c 的位置等于插到
+        // c 之后，所以 beforeKey 是 d。上面那条有预览的用例里，每次预览都会
+        // 改动虚拟列表，落手时几何已经不同，beforeKey 才是 c。
+        assertEquals(
+            listOf(AppListCommand.Move(key("a"), beforeKey = key("d"))),
+            host.commands.filterIsInstance<AppListCommand.Move>(),
+        )
+    }
+
+    @Test
     fun `edge auto scroll repeats by frame and stops on release`() {
         val host = FakeDragHost().apply { hitKey = key("a") }
         val scheduler = FakeDragScheduler()
         val controller = NativeAppListDragController(host, scheduler, policy)
         startDrag(controller, scheduler)
 
+        host.hitKey = key("b")
         controller.onMove(10f, 398f, 700L)
         assertTrue(scheduler.hasFrame)
         scheduler.runFrame()
         assertTrue(host.scrollDeltas.single() > 0f)
         assertTrue(scheduler.hasFrame)
+        assertEquals(0, host.previewMoveCount)
 
         assertTrue(controller.onUp(10f, 398f, 720L))
         assertFalse(scheduler.hasFrame)
@@ -223,6 +257,7 @@ class NativeAppListDragControllerTest {
 
         scheduler.advanceTo(1_200L)
         assertEquals(key("b"), host.folderHoverKey)
+        assertEquals(0, host.previewMoveCount)
         controller.onUp(10f, 150f, 1_201L)
 
         assertEquals(
@@ -232,6 +267,25 @@ class NativeAppListDragControllerTest {
         assertEquals(key("a") to key("b"), host.folderCommitPreview)
         assertEquals(1, host.discardWithoutRestoreCount)
         assertTrue(host.finishPreviewCalls.isEmpty())
+    }
+
+    @Test
+    fun `accepted folder dispatch forwards authoritative stable key to settle preview`() {
+        val authoritativeFolderKey = key("folder:new")
+        val host = FakeDragHost().apply {
+            dispatchedFolderKey = authoritativeFolderKey
+        }
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+        startDrag(controller, scheduler)
+
+        host.hitKey = key("b")
+        controller.onMove(10f, 150f, 700L)
+        scheduler.advanceTo(1_200L)
+        controller.onUp(10f, 150f, 1_201L)
+
+        assertEquals(authoritativeFolderKey, host.folderCommitDestinationKey)
+        assertEquals(1, host.discardWithoutRestoreCount)
     }
 
     @Test
@@ -540,6 +594,8 @@ class NativeAppListDragControllerTest {
         var rejectFolderCommands = false
         var rejectMoveCommands = false
         var folderCommitPreview: Pair<AppItemKey, AppItemKey>? = null
+        var dispatchedFolderKey: AppItemKey? = null
+        var folderCommitDestinationKey: AppItemKey? = null
         val finishPreviewCalls = mutableListOf<Boolean>()
         val completePreviewCalls = mutableListOf<Boolean>()
         private val dragPreview = NativeStableKeyDragPreview()
@@ -581,6 +637,23 @@ class NativeAppListDragControllerTest {
         override fun previewFolderCommit(source: AppItemKey, target: AppItemKey): Boolean {
             folderCommitPreview = source to target
             return true
+        }
+        override fun previewFolderCommit(
+            source: AppItemKey,
+            target: AppItemKey,
+            folderKey: AppItemKey?,
+        ): Boolean {
+            folderCommitDestinationKey = folderKey
+            return previewFolderCommit(source, target)
+        }
+        override fun dispatchFolder(
+            command: AppListCommand.CreateFolder,
+        ): NativeFolderDispatchResult {
+            val accepted = dispatch(command)
+            return NativeFolderDispatchResult(
+                accepted = accepted,
+                folderKey = dispatchedFolderKey.takeIf { accepted },
+            )
         }
         override fun discardDragPreviewAwaitingAuthoritative() {
             discardWithoutRestoreCount++

@@ -44,14 +44,14 @@ import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
-import com.flue.launcher.watchface.LunchWatchFaceDescriptor
-import com.flue.launcher.watchface.LunchWatchFaceScanner
+import com.flue.launcher.watchface.WatchFaceDescriptor
+import com.flue.launcher.watchface.WatchFaceDescriptors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
 fun WatchFaceSettingCard(
-    descriptor: LunchWatchFaceDescriptor,
+    descriptor: WatchFaceDescriptor,
     selected: Boolean,
     scale: Float,
     uiStyle: UiStyle = UiStyle.APPLE_WATCH,
@@ -61,7 +61,13 @@ fun WatchFaceSettingCard(
     videoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
     onSelect: () -> Unit,
     onOpenSettings: (() -> Unit)? = null,
-    onDelete: (() -> Unit)? = null
+    onDelete: (() -> Unit)? = null,
+    /**
+     * 表盘刷新令牌。编辑保存会原地覆盖 preview.jpg —— 路径和 stableKey 都
+     * 不变，只有文件内容变了。令牌自增时重新 stat 一次文件，缩略图才会跟着
+     * 换；否则列表里永远是原作者那张预览图。
+     */
+    refreshToken: Int = 0,
 ) {
     val cardInteraction = remember { MutableInteractionSource() }
     val cardPressed by cardInteraction.collectIsPressedAsState()
@@ -103,9 +109,29 @@ fun WatchFaceSettingCard(
             )
         } else {
             val context = androidx.compose.ui.platform.LocalContext.current
-            val previewBitmap by produceState<ImageBitmap?>(initialValue = null, key1 = descriptor.stableKey) {
+            // 编辑保存会原地覆盖 preview.jpg：路径和 stableKey 都不变，只有
+            // 文件本身变了。单用 stableKey 做 key 会让 produceState 不重跑，
+            // 列表里永远显示原作者那张预览图（老师报的问题）。把文件指纹
+            // 一起算进 key，和 externalWatchFacePaletteCacheKey 同一口径。
+            val previewFingerprint = remember(
+                descriptor.stableKey,
+                descriptor.previewFilePath,
+                refreshToken,
+            ) {
+                val previewFile = descriptor.previewFilePath?.let { java.io.File(it) }
+                if (previewFile != null && previewFile.isFile) {
+                    "${previewFile.lastModified()}|${previewFile.length()}"
+                } else {
+                    ""
+                }
+            }
+            val previewBitmap by produceState<ImageBitmap?>(
+                initialValue = null,
+                key1 = descriptor.stableKey,
+                key2 = previewFingerprint,
+            ) {
                 value = withContext(Dispatchers.Default) {
-                    LunchWatchFaceScanner.loadPreviewDrawable(context, descriptor)
+                    WatchFaceDescriptors.loadPreviewDrawable(context, descriptor)
                         ?.toBitmap(120, 120)
                         ?.asImageBitmap()
                 }
@@ -144,11 +170,7 @@ fun WatchFaceSettingCard(
                     )
                 }
                 val meta = buildString {
-                    if (!descriptor.isBuiltin && descriptor.packageName != null) {
-                        append(descriptor.packageName)
-                    }
                     if (descriptor.author != null) {
-                        if (isNotEmpty()) append("  ·  ")
                         append(descriptor.author)
                     }
                     if (descriptor.versionCode > 0) {

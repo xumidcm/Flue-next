@@ -2,11 +2,14 @@ package com.flue.launcher
 
 import android.app.Application
 import android.content.Context
-import com.dudu.wearlauncher.utils.ILog
+import com.flue.launcher.logging.FlueLog
 import com.flue.launcher.data.repository.AppRepository
 import com.flue.launcher.data.repository.WidgetRepository
+import com.flue.launcher.i18n.FlueLocaleManager
 import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
+import com.flue.launcher.watchface.standard.WatchWeatherRepository
+import com.flue.launcher.watchface.standard.WatchWeatherSources
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -15,9 +18,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 class FlueApplication : Application() {
     val repositories: FlueRepositories by lazy { FlueRepositories(this) }
 
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(FlueLocaleManager.applyLocale(base))
+    }
+
     override fun onCreate() {
         super.onCreate()
-        ILog.configureDiagnostics(this)
+        FlueLog.configureDiagnostics(this)
+        // Standard, JB, and editor previews all resolve their null weather
+        // source through this one application-owned repository. Its cached
+        // snapshot and temperature-unit preference therefore survive host
+        // recreation and remain identical across those surfaces.
+        WatchWeatherSources.applicationSource = WatchWeatherRepository.default(this)
     }
 
     companion object {

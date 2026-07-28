@@ -1,5 +1,6 @@
 package com.flue.launcher.watchface.store.catalog
 
+import com.flue.launcher.watchface.store.WatchStoreCompatibilityReport
 import java.security.MessageDigest
 import java.util.Locale
 
@@ -66,6 +67,8 @@ data class WatchFaceRecord(
      * id that is not derived from the downloaded archive hash.
      */
     val activeLauncherId: String? = null,
+    /** Last install-time compatibility inspection; watch.xml name never participates in identity. */
+    val compatibilityReport: WatchStoreCompatibilityReport? = null,
 ) {
     init {
         require(logicalId.isNotBlank() && logicalId.length <= MAX_LOGICAL_ID_LENGTH) {
@@ -126,6 +129,9 @@ data class InstalledWatchFaceIdentity(
     val launcherId: String,
     val displayName: String,
     val installedAtEpochMs: Long,
+    /** Optional inspection inputs used when recovering a published install journal. */
+    val sourceDirPath: String? = null,
+    val previewFilePath: String? = null,
 )
 
 data class WatchFaceMarketCandidate(
@@ -176,7 +182,7 @@ data class WatchFaceCatalogSnapshot(
     }
 
     companion object {
-        const val CURRENT_SCHEMA_VERSION = 2
+        const val CURRENT_SCHEMA_VERSION = 3
     }
 }
 

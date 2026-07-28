@@ -1,4 +1,6 @@
-package com.flue.launcher
+﻿package com.flue.launcher
+
+import com.flue.launcher.i18n.FlueComponentActivity
 
 import android.content.Intent
 import android.os.Build
@@ -34,6 +36,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -83,8 +86,11 @@ import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.navigation.OverlayGestureTarget
 import com.flue.launcher.ui.navigation.ScreenState
 import com.flue.launcher.ui.anim.LayerAnimValues
+import com.flue.launcher.ui.anim.LayerFrameSnapshot
 import com.flue.launcher.ui.anim.flueBackdropFill
 import com.flue.launcher.ui.anim.flueLegacyBlur
+import com.flue.launcher.ui.anim.shouldRenderLayerBlur
+import com.flue.launcher.ui.anim.systemBlurEffectForRadiusPx
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.animation.core.spring
 import com.flue.launcher.ui.notification.NotificationLayer
@@ -100,11 +106,10 @@ import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
-import com.flue.launcher.watchface.LunchWatchFaceHost
-import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceHost
 import com.flue.launcher.watchface.jbwatch.JbWatchFaceHost
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceHost
 import com.flue.launcher.watchface.standard.rememberWatchmakerWatchDataProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -143,7 +148,7 @@ private fun ExternalLaunchState.sessionSourceStateOrNull(): ScreenState? = when 
     ExternalLaunchState.Idle -> null
 }
 
-class LauncherActivity : ComponentActivity() {
+class LauncherActivity : FlueComponentActivity() {
 
     private val vm: LauncherViewModel by viewModels()
     private var deferredResumeMaintenance: Runnable? = null
@@ -187,6 +192,12 @@ class LauncherActivity : ComponentActivity() {
         RecentsVisibility.apply(this)
         vm.setLauncherInteractive(true)
         vm.onLauncherResumed()
+        // 从表盘编辑器返回时，磁盘上的 watch.xml / 资产已更新，但 ViewModel
+        // 缓存的 descriptor 和 refreshToken 还是旧值，导致 WatchmakerWatchFaceView
+        // 命中"same key + same token"早返回，不重载。
+        // force = true 绕过25s节流，重扫并 bump token；view 走 KEEP_CURRENT_UNTIL_READY
+        // 路径（同 face ID），旧帧持续显示直到新内容就绪，不会出现黑帧。
+        vm.refreshWatchFaces(force = true)
         scheduleDeferredResumeMaintenance()
     }
 
@@ -262,11 +273,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appListReturnShrinkEnabled by vm.appListReturnShrinkEnabled.collectAsStateWithLifecycle()
     val legacyAppListTransitionEnabled by vm.legacyAppListTransitionEnabled.collectAsStateWithLifecycle()
     val appListReturnIconFloatEnabled by vm.appListReturnIconFloatEnabled.collectAsStateWithLifecycle()
-    val rawFaceReturnShrinkEnabled by vm.faceReturnShrinkEnabled.collectAsStateWithLifecycle()
     val reduceDynamicEffects by vm.reduceDynamicEffects.collectAsStateWithLifecycle()
     val appListStaggerEnabled by vm.appListStaggerEnabled.collectAsStateWithLifecycle()
-    // 减弱动态效果开启时表盘收缩强制开启：去掉回弹后需要收缩行程承载转场层次。
-    val faceReturnShrinkEnabled = rawFaceReturnShrinkEnabled || reduceDynamicEffects
+    // 「减弱动态效果」与「表盘收缩动画」是两个独立开关，不再互相拉扯。
+    // 以前这里是 raw || reduceDynamicEffects：开了减弱动态效果就强制收缩，
+    // 用户关不掉。减弱动态效果现在只负责它自己那件事（去掉越界回弹，
+    // 见 appListMotionSpec 的 allowOvershoot）。
+    val faceReturnShrinkEnabled by vm.faceReturnShrinkEnabled.collectAsStateWithLifecycle()
     val activeMotionProfile by vm.activeMotionProfile.collectAsStateWithLifecycle()
     val showStepCount by vm.showStepCount.collectAsStateWithLifecycle()
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
@@ -277,8 +290,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val watchmakerForceFill by vm.watchmakerForceFill.collectAsStateWithLifecycle()
-    val dingDingCatFillScreen by vm.dingDingCatFillScreen.collectAsStateWithLifecycle()
-    val dingDingCatPlaybackSpeedPercent by vm.dingDingCatPlaybackSpeedPercent.collectAsStateWithLifecycle()
     val doubleTapLockScreenEnabled by vm.doubleTapLockScreenEnabled.collectAsStateWithLifecycle()
     val powerMenuButtonEnabled by vm.powerMenuButtonEnabled.collectAsStateWithLifecycle()
     val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
@@ -290,6 +301,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val showMediaCustomActions by vm.showMediaCustomActions.collectAsStateWithLifecycle()
     val swapMusicNotificationComponents by vm.swapMusicNotificationComponents.collectAsStateWithLifecycle()
     val musicTextSwitchAnimation by vm.musicTextSwitchAnimation.collectAsStateWithLifecycle()
+    val glassHighlightEnabled by vm.glassHighlightEnabled.collectAsStateWithLifecycle()
     val launchSourceState by vm.launchSourceState.collectAsStateWithLifecycle()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsStateWithLifecycle()
     val selectedWatchFace by vm.selectedWatchFace.collectAsStateWithLifecycle()
@@ -506,7 +518,22 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val isOpeningAppList =
         (prevState == ScreenState.Face && screenState == ScreenState.Apps) || isDirectLaunchEnteringAppList
     val isClosingAppListToFace = prevState == ScreenState.Apps && screenState == ScreenState.Face
-    val isEnteringAppList = prevState != ScreenState.Apps && screenState == ScreenState.Apps
+    // 同步版的「上一帧屏幕状态」。
+    //
+    // prevState 由释放协程在动画 settle 之后才回写（见下面那个 LaunchedEffect
+    // 的 finally），所以它天生滞后。zIndex 判定不能只读它：进列表途中反向
+    // 滑回表盘的那一帧，screenState 已经是 Face，而 prevState 还停在 Face，
+    // isOpeningAppList 与 isClosingAppListToFace 同时为假、appListLayerReleaseHold
+    // 也还没置位，appListLayerRaised 于是整个塌成 false——列表层 zIndex 从
+    // 3f 掉到 0f 钻到表盘背后，下一帧又抬回来，这就是「进入应用列表时打断
+    // 会闪一下」。
+    //
+    // SideEffect 在每次成功组合之后才回写，所以组合期读到的恒为上一帧的值，
+    // 正好补上协程回写之前那一帧的空档；从第二帧起由 appListLayerReleaseHold
+    // 接手。
+    var lastComposedState by remember { mutableStateOf(screenState) }
+    SideEffect { lastComposedState = screenState }
+    val appListTouchedLastFrame = lastComposedState == ScreenState.Apps
     var appListReturnOriginActive by remember {
         mutableStateOf(
             screenState == ScreenState.App &&
@@ -514,7 +541,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 activeLaunchUsesOrigin,
         )
     }
-    var appListShadowsReady by remember { mutableStateOf(screenState == ScreenState.Apps) }
     // 启动/返回转场的唯一进度时钟。提前声明：pivot 保持与 acknowledge 都要
     // 等它物理收敛，而不是各自跑一个 380ms 壁钟——壁钟在 ~650ms 的 spring
     // 中途翻转 transformOrigin / externalLaunchState，就是「缩放中途直接跳到
@@ -597,16 +623,30 @@ fun LauncherScreen(vm: LauncherViewModel) {
     // enter direction had no suspension at all, so isOpeningAppList flipped on
     // the second frame and forced a full native re-style mid-transition.
     LaunchedEffect(screenState) {
+        // screenState 是委托属性，协程里读它拿的是「当前实时值」而不是本次
+        // 启动时的那个状态。这里必须先把本协程负责的状态钉死成局部量。
+        //
+        // 不钉的后果（进列表途中反向滑回表盘就会踩到）：
+        //   协程 A 在 Face→Apps 时启动，挂起等 settle；
+        //   用户打断，screenState 变 Face，A 被取消，finally 里
+        //   `prevState = screenState` 读到的是实时值 Face（本该是 Apps）；
+        //   协程 B 随即启动，previousState 也读到 Face，于是在
+        //   `previousState == thisState` 这一步直接提前返回——
+        //   appListLayerReleaseHold = true 永远执行不到，
+        //   isClosingAppListToFace 也永远为假。
+        // 结果是退场全程 appListLayerRaised 塌成 false，列表层 zIndex 掉到
+        // 表盘背后，就是「进入应用列表时打断会闪一下」。
+        val thisState = screenState
         val previousState = prevState
-        if (previousState == screenState) return@LaunchedEffect
-        if (previousState != ScreenState.Apps && screenState != ScreenState.Apps) {
+        if (previousState == thisState) return@LaunchedEffect
+        if (previousState != ScreenState.Apps && thisState != ScreenState.Apps) {
             // The app-list layer is not part of this transition; nothing to hold.
             appListLayerReleaseHold = false
-            prevState = screenState
+            prevState = thisState
             return@LaunchedEffect
         }
         appListLayerReleaseHold =
-            previousState == ScreenState.Apps && screenState != ScreenState.Apps
+            previousState == ScreenState.Apps && thisState != ScreenState.Apps
         val settlesSeen = appListLayerSettleCount
         try {
             // The 2.5s cap is only a safety net for a settle signal that never
@@ -617,7 +657,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             }
         } finally {
             appListLayerReleaseHold = false
-            prevState = screenState
+            prevState = thisState
         }
     }
     // 独立记录上一个状态：prevState 由释放协程在 settle 后才更新，直接读它
@@ -638,22 +678,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
         } else {
             appListEntryAnimationToken + 1L
         }
-    }
-    LaunchedEffect(screenState, iconShadowEnabled) {
-        if (!iconShadowEnabled || screenState != ScreenState.Apps) {
-            appListShadowsReady = false
-            return@LaunchedEffect
-        }
-        appListShadowsReady = false
-        val shadowDelayMs = when {
-            isReturningFromApp -> activeMotionProfile.appReturn.handoffMillis.toLong()
-            isEnteringAppList -> activeMotionProfile.appListEnter.handoffMillis.toLong()
-            else -> 0L
-        }
-        if (shadowDelayMs > 0L) {
-            delay(shadowDelayMs)
-        }
-        appListShadowsReady = true
     }
     val launcherScope = rememberCoroutineScope()
     var retainedLaunchIcon by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
@@ -717,6 +741,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
         sessionLaunchOrigin ?: retainedLaunchOrigin ?: appOpenOrigin
     val notificationTransition = remember { Animatable(if (notificationSceneActive) 1f else 0f) }
     var notificationGestureActive by remember { mutableStateOf(false) }
+    // 跟手期间的通知进度走这个同步状态，不走 Animatable。
+    //
+    // Animatable.snapTo 是挂起函数，必须包在 launcherScope.launch 里，主线程
+    // 调度天生差一帧：手指已经按下并移动、notificationGestureActive 也已置
+    // true，但 notificationTransition.value 还停在上一帧的值。通知层这一帧
+    // 按旧位置画、下一帧才跳到手指位置——就是「刚拉下来那一刻突然跳跃下来」。
+    // 同步 MutableFloatState 没有这个延迟，Animatable 只负责抬手后的收尾。
+    var notificationGestureProgress by remember {
+        mutableFloatStateOf(if (notificationSceneActive) 1f else 0f)
+    }
     var notificationTargetProgress by remember { mutableFloatStateOf(if (notificationSceneActive) 1f else 0f) }
     var notificationReturnState by remember { mutableStateOf(ScreenState.Stack) }
     val backPressRequests by vm.backPressRequests.collectAsStateWithLifecycle()
@@ -787,7 +821,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
             (launchTransitionUnderlying || nativeListTransitionInMotion)
     val faceLayerBlurEnabled = layerBlurEnabled && !transitionBlurSuppressed
     val appListLayerBlurEnabled = layerBlurEnabled && !transitionBlurSuppressed
-    val effectiveIconShadowEnabled = iconShadowEnabled && appListShadowsReady
+    // Keep platform elevation stable for the whole transition. Row alpha already
+    // gates elevation while an icon is invisible, so a delayed global switch only
+    // creates a discontinuity between the return animation and its settled frame.
+    val effectiveIconShadowEnabled = iconShadowEnabled
     val fadeLaunch = launchSourceState == ScreenState.Stack || launchSourceState == ScreenState.Notifications
     val iconLaunchAvailable = currentLaunchIcon != null || retainedLaunchIcon != null
     val iconlessFadeLaunch = fadeLaunch && !iconLaunchAvailable
@@ -809,7 +846,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
             notificationTransition.animateTo(
                 notificationTargetProgress,
                 tween(durationMillis = NOTIFICATION_TRANSITION_MS)
-            )
+            ) {
+                // 收尾动画逐帧把值回写到跟手状态——所有读取方只认 notificationGestureProgress，
+                // 不用再区分「手势中」还是「弹簧收尾中」两种路径。
+                notificationGestureProgress = value.coerceIn(0f, 1f)
+            }
         }
     }
 
@@ -890,6 +931,18 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appListLaunchPlateProvider = remember {
         { appListLaunchPlateValues(launchMotionProgress.value) }
     }
+    // 边缘渐隐遮罩的 provider：只跟 alpha 走，不跟 scale / translation 走。
+    // 遮罩不参与缩放，它必须始终铺满屏幕顶底边界——否则缩小时遮罩一起收，
+    // 顶底露出未覆盖的区域，屏幕外的行内容就会从边缘钻进来。
+    val appListLaunchFadeProvider = remember(uiStyle, appListReturnShrinkEnabled) {
+        {
+            appListLaunchValues(
+                progress = launchMotionProgress.value,
+                uiStyle = uiStyle,
+                shrinkOnAppReturn = appListReturnShrinkEnabled,
+            ).copy(scale = 1f, translationX = 0f, translationY = 0f)
+        }
+    }
     // The launch dispatch delay keeps the splash on screen long enough; it
     // must not also delay the source icon until the last few frames.
     val iconRevealFraction = 0.06f
@@ -912,7 +965,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val density = LocalDensity.current
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
-        val notificationProgress = notificationTransition.value.coerceIn(0f, 1f)
+        val notificationProgress = notificationGestureProgress.coerceIn(0f, 1f)
         val keepNotificationLayer = notificationProgress > 0.001f || notificationSceneActive || notificationGestureActive
         // 覆层进度改 Animatable：打开侧由 GestureHost 逐帧 snapTo（全程跟手），
         // 抬手按位置+投影速度定向，settle 用带初速度的 spring 收尾。以前的
@@ -921,7 +974,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val widgetPageAnim = remember { Animatable(0f) }
         val controlCenterAnim = remember { Animatable(0f) }
         var overlayGestureTarget by remember { mutableStateOf<OverlayGestureTarget?>(null) }
-        var overlayReleaseVelocity by remember { mutableFloatStateOf(0f) }
+        // 抬手初速度必须按目标分开存。以前是一个共享变量：控制中心下拉松手
+        // 写进速度后，三个 settle 的 LaunchedEffect 都因 overlayGestureTarget
+        // 归 null 而重启，谁先跑谁就把这个速度抢走灌进自己的 Animatable——
+        // 负一屏/小组件于是被一股不属于它的初速度甩出来一截，且下拉越猛
+        // 弹得越厉害（就是「拉控制中心时负一屏快捷启动会弹出来」）。
+        val overlayReleaseVelocities = remember {
+            mutableStateMapOf<OverlayGestureTarget, Float>()
+        }
         val overlaySettleSpec = remember {
             spring<Float>(dampingRatio = 0.88f, stiffness = 380f, visibilityThreshold = 0.001f)
         }
@@ -938,19 +998,22 @@ fun LauncherScreen(vm: LauncherViewModel) {
         ) 1f else 0f
         LaunchedEffect(sidePageTarget, overlayGestureTarget) {
             if (overlayGestureTarget != OverlayGestureTarget.Stack) {
-                val initialVelocity = overlayReleaseVelocity.also { overlayReleaseVelocity = 0f }
+                val initialVelocity =
+                    overlayReleaseVelocities.remove(OverlayGestureTarget.Stack) ?: 0f
                 sidePageAnim.animateTo(sidePageTarget, overlaySettleSpec, initialVelocity)
             }
         }
         LaunchedEffect(widgetPageTarget, overlayGestureTarget) {
             if (overlayGestureTarget != OverlayGestureTarget.Widgets) {
-                val initialVelocity = overlayReleaseVelocity.also { overlayReleaseVelocity = 0f }
+                val initialVelocity =
+                    overlayReleaseVelocities.remove(OverlayGestureTarget.Widgets) ?: 0f
                 widgetPageAnim.animateTo(widgetPageTarget, overlaySettleSpec, initialVelocity)
             }
         }
         LaunchedEffect(controlCenterTarget, overlayGestureTarget) {
             if (overlayGestureTarget != OverlayGestureTarget.ControlCenter) {
-                val initialVelocity = overlayReleaseVelocity.also { overlayReleaseVelocity = 0f }
+                val initialVelocity =
+                    overlayReleaseVelocities.remove(OverlayGestureTarget.ControlCenter) ?: 0f
                 controlCenterAnim.animateTo(controlCenterTarget, overlaySettleSpec, initialVelocity)
             }
         }
@@ -964,7 +1027,19 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     sidePageAnim.value,
                     widgetPageAnim.value,
                     controlCenterAnim.value,
-                    notificationTransition.value,
+                    notificationGestureProgress,
+                ).coerceIn(0f, 1f)
+            }
+        }
+        // One draw-phase snapshot shared by the face transform and backdrop.
+        // It captures the actual spring/external-clock frame, so Apps/Settings
+        // and all side overlays use the same reversible edge-fill geometry.
+        val faceLayerFrame = remember { LayerFrameSnapshot() }
+        val faceBackdropFillProgress = remember {
+            {
+                maxOf(
+                    overlayBackdropProgress(),
+                    faceLayerFrame.backdropProgress(),
                 ).coerceIn(0f, 1f)
             }
         }
@@ -974,17 +1049,26 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     sidePageAnim.value,
                     widgetPageAnim.value,
                     controlCenterAnim.value,
-                    notificationTransition.value,
+                    notificationGestureProgress,
                 ) > 0.001f
             }
         }
-        val faceBackdropProvider = remember {
+        // 通知中心压在负一屏上时，负一屏自己的模糊进度。只跟通知的进度走，
+        // 不跟 sidePageAnim——负一屏滑入本身不该把自己糊掉。
+        val sidePageNotificationBlurProgress = remember {
+            { notificationGestureProgress.coerceIn(0f, 1f) }
+        }
+        // 「表盘收缩动画」关掉后，覆层拉出时表盘也不再缩放下沉——只留模糊
+        // 与轻微压暗。这个 provider 是覆层拖动期间真正生效的逐帧值（外部时钟），
+        // faceLayerValues 那边的静态目标只在非拖动路径上用，两处都得门控，
+        // 否则开关看起来"对负一屏没用"。
+        val faceBackdropProvider = remember(faceReturnShrinkEnabled) {
             {
                 val p = maxOf(
                     sidePageAnim.value,
                     widgetPageAnim.value,
                     controlCenterAnim.value,
-                    notificationTransition.value,
+                    notificationGestureProgress,
                 ).coerceIn(0f, 1f)
                 // p=0 必须精确等于表盘静止态（外部时钟撤走零跳变）。
                 // alpha 只轻降：表盘变透明会露出纯黑底、还削弱镜像背衬的
@@ -993,21 +1077,24 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 // 边缘让出的像素全靠背衬副本硬撑。让位靠模糊 + 轻微下压表达，
                 // 让出的那一圈由 flueBackdropFill 向外延展填充。
                 LayerAnimValues(
-                    scale = 1f - 0.08f * p,
+                    scale = if (faceReturnShrinkEnabled) 1f - 0.08f * p else 1f,
                     blur = 24f * p,
                     alpha = 1f - 0.15f * p,
-                    translationY = 0.030f * p,
+                    translationY = if (faceReturnShrinkEnabled) 0.030f * p else 0f,
                 )
             }
         }
         val faceAnimState = screenState
         val updateNotificationTransitionProgress: (Float) -> Unit = { progress ->
+            // 同步写状态，不经过协程——协程调度那一帧的延迟就是首帧跳跃的来源。
+            notificationGestureProgress = progress.coerceIn(0f, 1f)
             notificationGestureActive = true
-            launcherScope.launch {
-                notificationTransition.snapTo(progress.coerceIn(0f, 1f))
-            }
         }
         val settleNotificationTransition: (Float) -> Unit = { target ->
+            // 把 Animatable 播种到跟手的最后一帧再交给弹簧，否则收尾会从
+            // 一个过期的值起跑，抬手瞬间又跳一下。
+            val handoff = notificationGestureProgress
+            launcherScope.launch { notificationTransition.snapTo(handoff) }
             notificationGestureActive = false
             notificationTargetProgress = target.coerceIn(0f, 1f)
         }
@@ -1052,6 +1139,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val controlCenterVisible = controlCenterProgress > 0.001f || screenState == ScreenState.ControlCenter
         val sideSceneOverlayActive = sideScreenVisible || widgetPageVisible || controlCenterVisible
         val appListLayerRaised = screenState == ScreenState.Apps ||
+            // 打断转场时补位：prevState 尚未回写的那一帧靠它顶住 zIndex，
+            // 否则列表层会瞬间掉到表盘背后闪一下。
+            appListTouchedLastFrame ||
             isOpeningAppList ||
             isClosingAppListToFace ||
             isReturningFromApp ||
@@ -1094,7 +1184,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
             onOverlayRelease = { target, progress, velocity ->
                 // 位置 + 投影速度共同定向：拖过 42% 或快甩都算开。
                 val open = progress > 0.42f || velocity > 1.6f
-                overlayReleaseVelocity = velocity
+                // 只给刚被拖的那个覆层留初速度，其余两个照常从 0 收尾。
+                overlayReleaseVelocities[target] = velocity
                 overlayGestureTarget = null
                 val overlayState = when (target) {
                     OverlayGestureTarget.Stack -> ScreenState.Stack
@@ -1150,6 +1241,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         .background(appListColors.background)
                 )
             }
+            var folderOverlayProgress by remember { mutableFloatStateOf(0f) }
+            LaunchedEffect(openFolder?.componentKey) {
+                if (openFolder == null) folderOverlayProgress = 0f
+            }
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1170,16 +1266,29 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     // 防黑边是必需职责而不是装饰效果，所以不挂在「高级材质」
                     // 开关上，也不因 API < 31 而整体关掉。
                     .flueBackdropFill(
-                        progress = overlayBackdropProgress,
+                        progress = faceBackdropFillProgress,
                         enabled = true,
+                        fallbackColor = launcherStyle.screenBackground,
+                        // 背衬的中心矩形必须和表盘 graphicsLayer 使用同一帧的
+                        // scale/translation；矩形外再由 flueBackdropFill 做四边
+                        // 与四角镜像，避免只放大中心副本造成粘滞/黑缝。
+                        contentScale = {
+                            if (overlayBackdropActive) {
+                                faceBackdropProvider().scale
+                            } else {
+                                faceLayerFrame.scale
+                            }
+                        },
+                        contentTranslationYFraction = {
+                            if (overlayBackdropActive) {
+                                faceBackdropProvider().translationY
+                            } else {
+                                faceLayerFrame.translationY
+                            }
+                        },
                     )
-                    // API 31+ 的模糊由 scaleBlurAlpha 的 RenderEffect 负责；
-                    // 27–30 走涂抹近似，进负一屏/小组件/控制中心/通知中心
-                    // 一样能看到毛玻璃，且同样不挂在「高级材质」开关上。
-                    .flueLegacyBlur(
-                        progress = overlayBackdropProgress,
-                        enabled = true,
-                    )
+                    // API 31+ 由 scaleBlurAlpha / RenderEffect 实时模糊；
+                    // API 27-30 的清晰/预制模糊帧混合已由 flueBackdropFill 处理。
                     .scaleBlurAlpha(
                         targetValues = faceLayerValues(
                             faceAnimState,
@@ -1192,6 +1301,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         origin = LayerPivot.Center,
                         valuesProvider = faceBackdropProvider,
                         externallyDriven = overlayBackdropActive,
+                        frameSnapshot = faceLayerFrame,
                     )
             ) {
                 AnimatedContent(
@@ -1202,8 +1312,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         (
                             selectedWatchFace.id == selectedWatchFaceId &&
                                 (
-                                    selectedWatchFace.isDingDingCat ||
-                                        selectedWatchFace.isJbWatch ||
+                                    selectedWatchFace.isJbWatch ||
                                         selectedWatchFace.isWatchmaker
                                     ) &&
                                 !selectedWatchFace.sourceDirPath.isNullOrBlank()
@@ -1278,34 +1387,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 )
                             }
                         }
-                    } else if (selectedWatchFace.isDingDingCat) {
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            DingDingCatWatchFaceHost(
-                                descriptor = selectedWatchFace,
-                                isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
-                                refreshToken = watchFaceRefreshToken,
-                                fillScreen = dingDingCatFillScreen,
-                                playbackSpeedPercent = dingDingCatPlaybackSpeedPercent,
-                                onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
-                                onDoubleTap = if (
-                                    doubleTapLockScreenEnabled &&
-                                    launcherInteractive &&
-                                    screenState == ScreenState.Face &&
-                                    !sideSceneOverlayActive
-                                ) lockScreenWithAccessibility else null,
-                                onLoadFailure = { descriptor, error ->
-                                    val rootCause = generateSequence(error) { it.cause }.last()
-                                    vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
-                                }
-                            )
-                            if (watchFaceBottomFadeEnabled) {
-                                WatchFaceBottomFadeOverlay(
-                                    color = watchFaceFadePalette.fadeEdge,
-                                    heightDp = honeycombBottomFade,
-                                    blurRadiusDp = if (blurEnabled && edgeBlurEnabled) honeycombEdgeBlurRadius else 0f
-                                )
-                            }
-                        }
                     } else if (selectedWatchFace.isJbWatch) {
                         Box(modifier = Modifier.fillMaxSize()) {
                             JbWatchFaceHost(
@@ -1333,31 +1414,27 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             }
                         }
                     } else {
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            LunchWatchFaceHost(
-                                descriptor = selectedWatchFace,
-                                isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
-                                refreshToken = watchFaceRefreshToken,
-                                onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
-                                onDoubleTap = if (
-                                    doubleTapLockScreenEnabled &&
-                                    launcherInteractive &&
-                                    screenState == ScreenState.Face &&
-                                    !sideSceneOverlayActive
-                                ) lockScreenWithAccessibility else null,
-                                onLoadFailure = { descriptor, error ->
-                                    val rootCause = generateSequence(error) { it.cause }.last()
-                                    vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
-                                }
-                            )
-                            if (watchFaceBottomFadeEnabled) {
-                                WatchFaceBottomFadeOverlay(
-                                    color = watchFaceFadePalette.fadeEdge,
-                                    heightDp = honeycombBottomFade,
-                                    blurRadiusDp = if (blurEnabled && edgeBlurEnabled) honeycombEdgeBlurRadius else 0f
-                                )
-                            }
-                        }
+                        // Closed-model defensive fallback; unsupported plugin types no
+                        // longer exist and can never reach an external runtime.
+                        WatchFaceLayer(
+                            watchFaceId = BUILT_IN_WATCHFACE_ID,
+                            isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
+                            uiStyle = uiStyle,
+                            showChargingPowerText = watchFaceChargingPowerText,
+                            showStatusIndicators = false,
+                            showBottomFade = watchFaceBottomFadeEnabled,
+                            bottomFadeColor = watchFaceFadePalette.fadeEdge,
+                            bottomFadeHeightDp = honeycombBottomFade,
+                            bottomFadeBlurRadiusDp = if (blurEnabled && edgeBlurEnabled) honeycombEdgeBlurRadius else 0f,
+                            hasNotifications = showNotification && notificationGroups.isNotEmpty(),
+                            onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
+                            onDoubleTap = if (
+                                doubleTapLockScreenEnabled &&
+                                launcherInteractive &&
+                                screenState == ScreenState.Face &&
+                                !sideSceneOverlayActive
+                            ) lockScreenWithAccessibility else null,
+                        )
                     }
                 }
             }
@@ -1460,6 +1537,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         // 让位，避免黑底跟着图标一起缩。
                         backgroundHandledByPlate = appListLayerRaised,
                         folderOpen = openFolder != null,
+                        folderOverlayProgress = folderOverlayProgress,
                         useWatchFaceColors = useAppListWatchFaceColors,
                         rowBorderEnabled = appListRowBorderEnabled,
                         allowFolderCreation = appListFoldersEnabled,
@@ -1501,6 +1579,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
             // state switch cannot remove it one frame too early.
             val nativeEdgeFadeVisible =
                 screenState == ScreenState.Apps ||
+                    // 与 appListLayerRaised 用同一个补位项：打断转场那一帧
+                    // 上面五项可能同时为假，遮罩会在列表还在淡出时整体卸载，
+                    // 正是上面注释说的「提前一帧移除就会闪」。
+                    appListTouchedLastFrame ||
                     isOpeningAppList ||
                     isClosingAppListToFace ||
                     appListLayerReleaseHold ||
@@ -1516,34 +1598,53 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .fillMaxSize()
                     .zIndex(3.1f)
                     .scaleBlurAlpha(
+                        // 遮罩层不参与缩放：targetValues / provider 都去掉
+                        // scale 和 translation，只保留 alpha（让遮罩随列表
+                        // 淡入淡出而不是随它缩放）。如果遮罩也缩，顶底边缘
+                        // 会露出没有渐变覆盖的区域，屏幕外的行内容就会在
+                        // 缩小时从顶底钻进来。
                         targetValues = appListLayerValues(
                             screenState,
                             uiStyle,
                             shrinkOnAppReturn = appListReturnShrinkEnabled,
                             shrinkOnFaceReturn = faceReturnShrinkEnabled,
                             legacyTransition = legacyAppListTransitionEnabled,
-                        ),
-                        screenWidth = screenWidthPx,
-                        screenHeight = screenHeightPx,
+                        ).copy(scale = 1f, translationX = 0f, translationY = 0f),
                         blurEnabled = false,
                         origin = appListLayerOrigin,
                         scaleSpec = appListMotionSpec,
                         alphaSpec = appListAlphaSpec,
                         blurSpec = appListBlurSpec,
                         translationSpec = appListMotionSpec,
-                        valuesProvider = appListLaunchValuesProvider,
+                        valuesProvider = appListLaunchFadeProvider,
                         externallyDriven = appListLaunchDriven,
                     ),
             )
 
             val visibleFolder = openFolder
-            if (screenState == ScreenState.Apps && visibleFolder != null) {
-                val appListScale = appListScalePercent.coerceIn(50, 200) / 100f
-                val folderIconShape = when {
-                    layoutMode == LayoutMode.List -> RoundedCornerShape((14.dp * appListScale).coerceIn(10.dp, 24.dp))
-                    uiStyle == UiStyle.MATERIAL_3 -> RoundedCornerShape((18.dp * appListScale).coerceIn(12.dp, 24.dp))
-                    else -> launcherStyle.bubbleShape
+            // 从文件夹里点开应用不再关闭文件夹（老师指定）：从应用返回时
+            // 仍然停在这个文件夹里，跟 iOS / watchOS 的行为一致。
+            //
+            // openFolder 全程不清空，所以 Apps 态挂载条件自然成立；
+            // Apps→App 的那一帧要靠 folderHeldForLaunch 顶住，否则面板会
+            // 在启动遮罩还全透明时（alpha = progress*1.6，p≈0）先卸载，
+            // 露出一帧光秃秃的应用列表——就是「打开文件夹里的应用会闪」。
+            val folderHeldForLaunch = screenState == ScreenState.App &&
+                launchSourceState == ScreenState.Apps &&
+                showLaunchBackdrop
+            // dismissToken：当 screenState 离开 Apps（非应用启动场景）时自增，
+            // 通知 AppFolderOverlay 播放180ms淡出动画，然后由它自己调
+            // onDismiss() → closeFolder()，避免直接卸载导致模糊层闪消。
+            var folderDismissToken by remember { mutableStateOf(0) }
+            LaunchedEffect(screenState) {
+                if (screenState != ScreenState.Apps && !folderHeldForLaunch && visibleFolder != null) {
+                    folderDismissToken++
                 }
+            }
+            if (visibleFolder != null) {
+                // 文件夹内外统一圆形（老师指定）。和 nativeAppListConfig 里的
+                // iconShape 同源——那边现在也恒为 CIRCLE，两侧不会再分叉。
+                val folderIconShape = CircleShape
                 AppFolderOverlay(
                     folder = visibleFolder,
                     items = openFolderItems,
@@ -1552,8 +1653,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     iconShape = folderIconShape,
                     blurEnabled = blurEnabled,
                     twoToneIconsEnabled = twoToneIconsEnabled,
+                    iconShadowEnabled = effectiveIconShadowEnabled,
                     onAppClick = { appInfo, origin ->
-                        vm.closeFolder()
+                        // 不关面板：返回时仍停在文件夹内。
                         launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
                     },
                     onReorderItems = { orderedItems -> vm.reorderFolderItems(visibleFolder, orderedItems) },
@@ -1563,6 +1665,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     onExcludeApp = { appInfo -> vm.setAppHidden(appInfo.componentKey, true) },
                     onRemoveShortcut = vm::removeAppListShortcut,
                     onDismiss = vm::closeFolder,
+                    onTransitionProgress = { folderOverlayProgress = it },
+                    dismissRequestToken = folderDismissToken,
                     modifier = Modifier.zIndex(5.4f)
                 )
             }
@@ -1601,6 +1705,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     modifier = Modifier
                         .fillMaxSize()
                         .zIndex(4f)
+                        // 从负一屏上拉通知中心时，被模糊的应该是负一屏自己。
+                        // 这层以前只有位移 + alpha，一件模糊都没挂，所以通知
+                        // 叠上来只剩它自己的灰底，底下的负一屏全程清晰。
+                        // 27–30 走涂抹近似，31+ 由下面的 RenderEffect 负责；
+                        // 两者都不挂在「高级材质」开关上。
+                        .flueLegacyBlur(
+                            progress = sidePageNotificationBlurProgress,
+                            enabled = true,
+                        )
                         .graphicsLayer {
                             // 纯位移进场：图层自身永远不透明也不缩放。以前
                             // alpha 跟进度走，滑入全程能透过负一屏看到表盘
@@ -1613,6 +1726,20 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             val offscreen = size.width.coerceAtLeast(screenWidthPx)
                             translationX = (sidePageProgress - 1f) * offscreen
                             alpha = if (sidePageProgress > 0.001f) 1f else 0f
+                            val blurP = sidePageNotificationBlurProgress()
+                            val radiusPx = with(density) { (24f * blurP).dp.toPx() }
+                                .roundToInt()
+                                .coerceAtLeast(0)
+                            renderEffect = if (
+                                shouldRenderLayerBlur(
+                                    sdkInt = Build.VERSION.SDK_INT,
+                                    blurEnabled = true,
+                                    alpha = alpha,
+                                    radiusPx = radiusPx,
+                                )
+                            ) {
+                                systemBlurEffectForRadiusPx(radiusPx)
+                            } else null
                         }
                 ) {
                     SmartStackLayer(
@@ -1714,7 +1841,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onOpenNotifications = { openNotificationsFrom(ScreenState.ControlCenter) },
                         onDismissToFace = { vm.setState(ScreenState.Face) },
                         showPowerButton = powerMenuButtonEnabled,
-                        onPowerClick = openPowerDialogWithAccessibility
+                        onPowerClick = openPowerDialogWithAccessibility,
+                        glassHighlightEnabled = glassHighlightEnabled,
                     )
                 }
             }

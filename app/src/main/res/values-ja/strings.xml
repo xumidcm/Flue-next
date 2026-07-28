@@ -1,0 +1,539 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Flue Next</string>
+    <string name="shortcut_settings">ランチャー設定</string>
+    <string name="settings_title">ランチャー設定</string>
+    <string name="internal_watchface_config_title">内蔵文字盤設定</string>
+    <string name="flue_accessibility_label">Flue アクセシビリティ制御</string>
+    <string name="flue_accessibility_description">この権限はダブルタップ画面ロックと電源オプションの表示にのみ使用されます。Flueはインターネットに接続せず、ユーザー情報を収集しません。</string>
+
+    <!-- 汎用 -->
+    <string name="follow_system">システムに従う</string>
+
+    <!-- 設定ホームセクションヘッダー -->
+    <string name="settings_section_system">システムとツール</string>
+    <string name="settings_section_about">About</string>
+
+    <!-- 言語 -->
+    <string name="settings_language">言語</string>
+    <string name="settings_language_follow_system">システムに従う</string>
+    <string name="settings_language_zh">中国語</string>
+    <string name="settings_language_en">英語</string>
+    <string name="settings_language_ja">日本語</string>
+
+    <!-- 機能トグルナビカード -->
+    <string name="settings_feature_toggles">機能切替</string>
+    <string name="settings_feature_toggles_sub">サイド画面、通知、コントロールセンター、文字盤インジケーター</string>
+
+    <!-- 表示調整 -->
+    <string name="settings_display_fit">表示調整</string>
+    <string name="settings_display_fit_sub">グローバル UI、アプリリストサイズ、セーフエリア</string>
+    <string name="settings_global_ui_size">グローバル UI サイズ</string>
+    <string name="settings_honeycomb_cols">ハニカム列数</string>
+    <string name="settings_honeycomb_cols_fmt">%d 列</string>
+    <string name="settings_app_list_size">アプリリストサイズ</string>
+    <string name="settings_fisheye">魚眼エフェクト</string>
+    <string name="settings_fisheye_on">範囲・強度・エッジ間隔の調整を有効にする</string>
+    <string name="settings_fisheye_off">アプリリストのエッジスケーリングを無効にする</string>
+    <string name="settings_fisheye_range">魚眼範囲</string>
+    <string name="settings_fisheye_range_fmt">%d 行</string>
+    <string name="settings_md3_top_fisheye">MD3 上部魚眼</string>
+    <string name="settings_md3_top_fisheye_sub">MD3 ハニカムリストの中央より上のアイコンのみに適用</string>
+    <string name="settings_fisheye_strength">魚眼強度</string>
+    <string name="settings_edge_spacing">エッジアイコン間隔</string>
+    <string name="settings_edge_spacing_sub">画面端に近づくほどアイコン間の視覚的間隔を縮小</string>
+    <string name="settings_left_safe_area">アプリリスト左セーフエリア</string>
+    <string name="settings_rotary_haptics">ロータリーハプティクス</string>
+    <string name="settings_rotary_haptics_on">クラウンスクロール時に軽い振動フィードバックを維持</string>
+    <string name="settings_rotary_haptics_off">クラウンスクロールの振動フィードバックを無効にする</string>
+
+    <!-- 外観：表示設定 -->
+    <string name="settings_display_header">表示設定</string>
+    <string name="settings_theme_system">システム</string>
+    <string name="settings_theme_system_sub">システムのテーマ設定に従う</string>
+    <string name="settings_theme_dark">ダークモード</string>
+    <string name="settings_theme_dark_sub">ダークテーマを強制適用</string>
+    <string name="settings_theme_light">ライトモード</string>
+    <string name="settings_theme_light_sub">ライトテーマを強制適用</string>
+
+    <!-- インターフェーススタイル -->
+    <string name="settings_ui_style_header">インターフェーススタイル</string>
+    <string name="settings_ui_aw">Apple Watch スタイル</string>
+    <string name="settings_ui_aw_sub">ガラス質感、コンパクトカード、丸いキャリア、軽快なモーション</string>
+    <string name="settings_ui_md3">Material 3 スタイル</string>
+    <string name="settings_ui_md3_sub">大きなブロック、MD3E ジオメトリ、明確なレイヤー構造</string>
+    <string name="settings_ui_miuix">MIUIX スタイル</string>
+    <string name="settings_ui_miuix_sub">HyperOS ビジュアル言語：角丸カードとブルーアクセント</string>
+
+    <!-- 画面形状 -->
+    <string name="settings_screen_shape_header">画面形状</string>
+    <string name="settings_screen_shape_auto">自動</string>
+    <string name="settings_screen_shape_auto_sub">システムの報告する画面形状に従う</string>
+    <string name="settings_screen_shape_round">丸型</string>
+    <string name="settings_screen_shape_override_sub">システムが誤報告する場合に手動指定</string>
+    <string name="settings_screen_shape_square">四角型</string>
+
+    <!-- ビジュアルエフェクト -->
+    <string name="settings_visual_effects_header">ビジュアルエフェクト</string>
+    <string name="settings_blur">ブラー</string>
+    <string name="settings_blur_sub">対応 Android バージョンでブラーを有効にする</string>
+    <string name="settings_edge_blur">エッジブラー（実験的）</string>
+    <string name="settings_edge_blur_sub">上下端に追加のブラーを適用する</string>
+    <string name="settings_edge_blur_radius">エッジブラー半径</string>
+    <string name="settings_direct_launch">Flue 起動時にアプリリストへ</string>
+    <string name="settings_direct_launch_on">起動後にアプリリストを表示し、文字盤に戻る操作を維持</string>
+    <string name="settings_direct_launch_off">デフォルトで最初に文字盤を表示</string>
+
+    <!-- 文字盤設定 -->
+    <string name="settings_watchface_bottom_fade">文字盤ボトムフェード</string>
+    <string name="settings_watchface_bottom_fade_on">AW と MD3 文字盤の下部フェードを維持</string>
+    <string name="settings_watchface_bottom_fade_off">文字盤下部フェードを無効にする</string>
+    <string name="settings_watchface_date_language">日付言語</string>
+    <string name="settings_watchface_date_system">システム</string>
+    <string name="settings_watchface_date_system_sub">曜日と月名がシステム言語に従う</string>
+    <string name="settings_watchface_date_zh_sub">中国語の曜日・月名スタイル</string>
+    <string name="settings_watchface_date_en_sub">英語の曜日・月名スタイル</string>
+    <string name="settings_watchface_date_ja_sub">日本語の曜日・月名スタイル</string>
+    <string name="settings_watchface_status">文字盤ステータスインジケーター</string>
+    <string name="settings_watchface_status_sub">文字盤上部に充電と通知インジケーターを表示</string>
+    <string name="settings_watchface_charging_power">充電電力テキスト</string>
+    <string name="settings_watchface_charging_power_sub">充電中に文字盤へ電力または充電テキストを表示</string>
+
+    <!-- 機能切替ページ -->
+    <string name="settings_feature_toggles_title">機能切替</string>
+    <string name="settings_side_screen_card">サイド画面設定</string>
+    <string name="settings_side_screen_card_sub">サイド画面、ウィジェットページ、歩数、カードレイアウト</string>
+    <string name="settings_notifications_card">通知センター</string>
+    <string name="settings_notifications_card_sub">通知プレビューと常時通知フィルター</string>
+    <string name="settings_control_center_card">コントロールセンター</string>
+    <string name="settings_control_center_card_sub">プルダウンパネル、メディアカード、電源ボタン</string>
+    <string name="settings_gestures_card">ジェスチャーとボタン</string>
+    <string name="settings_gestures_card_sub">ダブルタップロック等の操作設定</string>
+    <string name="settings_app_list_behavior_card">アプリリスト動作</string>
+    <string name="settings_app_list_behavior_card_sub">マスクカラー、行背景、フォルダー</string>
+
+    <!-- サイド画面 -->
+    <string name="settings_side_screen_title">サイド画面設定</string>
+    <string name="settings_side_screen">サイド画面</string>
+    <string name="settings_side_screen_sub">文字盤から右にスワイプでクイック起動と通知プレビューを開く</string>
+    <string name="settings_widget_page">ウィジェットページを表示</string>
+    <string name="settings_widget_page_on">文字盤から左にスワイプで独立したウィジェットページを開く</string>
+    <string name="settings_widget_page_off">左スワイプウィジェットページを無効にする</string>
+    <string name="settings_swap_music_notifications">音楽と通知を入れ替え</string>
+    <string name="settings_swap_music_notifications_on">サイド画面に音楽カード、コントロールセンターに通知カードを表示</string>
+    <string name="settings_swap_music_notifications_off">サイド画面に通知、コントロールセンターに音楽のデフォルト配置を維持</string>
+    <string name="settings_show_steps">歩数を表示</string>
+    <string name="settings_show_steps_sub">サイド画面下部のバッテリー右側に歩数を表示</string>
+
+    <!-- 通知 -->
+    <string name="settings_notifications_title">通知センター</string>
+    <string name="settings_show_notifications">通知を表示</string>
+    <string name="settings_show_notifications_on">サイド画面のクイック起動の下に通知プレビューを表示</string>
+    <string name="settings_show_notifications_off">サイド画面から通知を非表示にする</string>
+    <string name="settings_show_ongoing">常時通知を表示</string>
+    <string name="settings_show_ongoing_on">有用な常時通知を表示し、システムノイズをフィルタリング</string>
+    <string name="settings_show_ongoing_off">常時通知を非表示にする</string>
+
+    <!-- コントロールセンター -->
+    <string name="settings_control_center_title">コントロールセンター</string>
+    <string name="settings_show_cc">コントロールセンターを表示</string>
+    <string name="settings_show_cc_on">文字盤からプルダウンして輝度・音量・クイックトグルを開く</string>
+    <string name="settings_show_cc_off">プルダウンコントロールセンターを無効にする</string>
+    <string name="settings_show_music">音楽コントロールカード</string>
+    <string name="settings_show_music_on">コントロールセンターにメディアカードを表示</string>
+    <string name="settings_show_music_off">コントロールセンターからメディアカードを非表示にする</string>
+    <string name="settings_media_actions">メディアアプリアクション</string>
+    <string name="settings_media_actions_on">前曲・次曲の両側にアプリ定義のアクションを表示</string>
+    <string name="settings_media_actions_off">前曲・再生・次曲ボタンのみ表示</string>
+    <string name="settings_cc_power">コントロールセンター電源ボタン</string>
+    <string name="settings_cc_power_accessible">アクセシビリティが有効：電源アイコンタップで電源オプションを開く</string>
+    <string name="settings_cc_power_require">アクセシビリティが必要：電源オプションを開くためのみ使用</string>
+
+    <!-- ジェスチャー -->
+    <string name="settings_gestures_title">ジェスチャーとボタン</string>
+    <string name="settings_double_tap_lock">ダブルタップでロック</string>
+    <string name="settings_double_tap_on">アクセシビリティが有効：文字盤をダブルタップで画面ロック</string>
+    <string name="settings_double_tap_require">アクセシビリティが必要：ダブルタップ画面ロックにのみ使用</string>
+
+    <!-- アプリリスト動作 -->
+    <string name="settings_app_list_behavior_title">アプリリスト動作</string>
+    <string name="settings_watchface_launch_mask">文字盤起動マスクカラー</string>
+    <string name="settings_watchface_launch_mask_on">リストからアプリを開く際、起動マスクを文字盤の色でティント</string>
+    <string name="settings_watchface_launch_mask_off">中立的な黒白マスクを使用し、アプリリスト背景は純黒・純白を維持</string>
+    <string name="settings_list_row_bg">リスト行背景</string>
+    <string name="settings_list_row_bg_on">各リスト行の後ろにティント背景を表示</string>
+    <string name="settings_list_row_bg_off">リスト行の背景ティントを非表示にする</string>
+    <string name="settings_allow_folders">フォルダー作成を許可</string>
+    <string name="settings_allow_folders_on">アイコンを別のアイコンの上に500ms保持してフォルダーを作成</string>
+    <string name="settings_allow_folders_off">ドラッグでのフォルダー作成を無効にして並べ替えのみ維持</string>
+    <string name="settings_two_tone_icons">二色アイコン</string>
+    <string name="settings_two_tone_icons_sub">アダプティブモノクロームを優先し、それ以外はグレースケール+ティント</string>
+    <string name="settings_icon_shadow">アイコンシャドウ</string>
+    <string name="settings_icon_shadow_sub">アプリアイコンとドラッグプレビューのシャドウ描画を軽減</string>
+    <string name="settings_direct_launch_app_list">Flue 起動時にアプリリストへ</string>
+    <string name="settings_direct_launch_app_list_on">起動後にアプリリストを表示し、文字盤に戻る操作を維持</string>
+    <string name="settings_direct_launch_app_list_off">デフォルトで最初に文字盤を表示</string>
+
+    <!-- アニメーション -->
+    <string name="settings_launch_animation">Flue 起動と戻るアニメーション</string>
+    <string name="settings_launch_animation_sub">オフ時はシステムに従う；オン時は Flue マスクとアイコン起源モーションを使用</string>
+    <string name="settings_app_list_shrink">アプリリスト縮小アニメーション</string>
+    <string name="settings_app_list_shrink_sub">アプリから戻る時はフェードのみ；全体スケールをスキップ</string>
+    <string name="settings_icon_float">戻る時のアイコンフロート</string>
+    <string name="settings_icon_float_sub">アプリから戻る時に行フロートインを再生</string>
+    <string name="settings_face_shrink">文字盤縮小アニメーション</string>
+    <string name="settings_face_shrink_sub">文字盤への戻りやオーバーレイ表示時のスケールをスキップ</string>
+    <string name="settings_legacy_transition">レガシートランジション</string>
+    <string name="settings_legacy_transition_sub">watchOS 以前のトランジションを使用：文字盤がズームインして見える</string>
+    <string name="settings_stagger_entry">時差エントリーアニメーション</string>
+    <string name="settings_stagger_entry_sub">アプリリスト入場時、上の行から順に時差で登場</string>
+    <string name="settings_reduce_motion">モーション軽減</string>
+    <string name="settings_reduce_motion_sub">トランジション後のオーバーシュートを除去：アニメーションが正確に停止</string>
+    <string name="settings_hide_recents">履歴カードを非表示</string>
+    <string name="settings_hide_recents_sub">システムの履歴画面から Flue を非表示にする</string>
+
+    <!-- 検索インデックス：検索専用タイトル -->
+    <string name="search_t_theme_system">システムに従う（ライト/ダーク）</string>
+    <string name="search_t_edge_blur">エッジぼかし</string>
+    <string name="search_t_splash_delay">起動オーバーレイの遅延</string>
+    <string name="search_t_watchface_store">文字盤ストア</string>
+    <string name="search_t_watchface_editor_new">文字盤を新規作成</string>
+    <string name="search_t_watchface_import">文字盤ファイルをインポート</string>
+    <string name="search_t_watchface_more">文字盤の詳細設定</string>
+    <string name="search_t_widget_page">ウィジェットページ</string>
+    <string name="search_t_motion_profile_entry">モーションプロファイルの入口</string>
+    <string name="search_t_music_text_anim">音楽テキストアニメーション</string>
+    <string name="search_t_backup">バックアップと復元</string>
+    <string name="search_t_donate">寄付</string>
+
+    <!-- 検索インデックス：説明 -->
+    <string name="search_d_appearance">レイアウト・テーマ・UI スタイル・ぼかし</string>
+    <string name="search_d_layout_honeycomb">アイコンのハニカム配置</string>
+    <string name="search_d_layout_list">アイコンを縦一列に表示</string>
+    <string name="search_d_theme_mode">テーマモード</string>
+    <string name="search_d_ui_style">Apple Watch / MD3 / MIUIX</string>
+    <string name="search_d_screen_shape">丸型または四角形を手動指定</string>
+    <string name="search_d_blur">ぼかしとガラスエフェクト</string>
+    <string name="search_d_edge_blur">アプリ一覧の上下端のぼかしフェード</string>
+    <string name="search_d_edge_blur_radius">エッジのぼかし強度</string>
+    <string name="search_d_top_fade">アプリ一覧の上部フェード高さ</string>
+    <string name="search_d_bottom_fade">アプリ一覧の下部フェード高さ</string>
+    <string name="search_d_direct_launch">文字盤をスキップしてアプリ一覧へ直行</string>
+    <string name="search_d_splash_delay">オーバーレイの表示時間</string>
+    <string name="search_d_display_size">UI サイズ・ハニカム列数・魚眼</string>
+    <string name="search_d_global_ui_scale">全体のスケール</string>
+    <string name="search_d_honeycomb_cols">ハニカムグリッドの列数</string>
+    <string name="search_d_app_list_scale">アイコンとテキストを統一スケール</string>
+    <string name="search_d_fisheye">端に近いアイコンを縮小</string>
+    <string name="search_d_fisheye_range">魚眼ゾーンの行数</string>
+    <string name="search_d_fisheye_strength">端のアイコンの縮小量</string>
+    <string name="search_d_edge_spacing">端に近いほどアイコン間隔が狭くなる</string>
+    <string name="search_d_left_safe_area">左側の余白</string>
+    <string name="search_d_rotary_haptics">クラウンスクロール時の触覚フィードバック</string>
+    <string name="search_d_watchfaces">文字盤の選択と管理</string>
+    <string name="search_d_watchface_store">文字盤をオンラインでダウンロード</string>
+    <string name="search_d_watchface_editor_new">文字盤エディターを開く</string>
+    <string name="search_d_watchface_import">.watch パッケージをインポート</string>
+    <string name="search_d_watchface_more">心拍・日付言語・状態インジケーター</string>
+    <string name="search_d_watchface_date_locale">システム / 中文 / English / 日本語</string>
+    <string name="search_d_force_fill">文字盤を画面いっぱいに引き伸ばす</string>
+    <string name="search_d_heart_rate">心拍の読み取りを許可</string>
+    <string name="search_d_watchface_font">カスタム文字盤フォントファイル</string>
+    <string name="search_d_watchface_bottom_fade">文字盤の下部フェード</string>
+    <string name="search_d_watchface_status">充電の雷マークと通知ドット</string>
+    <string name="search_d_charging_power">充電中にワット数を表示</string>
+    <string name="search_d_icon_packs">サードパーティのアイコンパック</string>
+    <string name="search_d_hidden_apps">一覧からアプリを非表示</string>
+    <string name="search_d_feature_toggles">サイド画面・通知・コントロールセンター・ジェスチャー</string>
+    <string name="search_d_side_screen">サイド画面・ウィジェット・歩数</string>
+    <string name="search_d_side_screen_toggle">右スワイプでクイック起動と通知へ</string>
+    <string name="search_d_widget_page">左スワイプでウィジェットページへ</string>
+    <string name="search_d_show_steps">サイド画面下部の歩数</string>
+    <string name="search_d_swap">サイド画面とコントロールセンターのカードを入れ替え</string>
+    <string name="search_d_notifications">通知の表示と常駐フィルター</string>
+    <string name="search_d_show_notifications">サイド画面の通知プレビュー</string>
+    <string name="search_d_show_ongoing">システムノイズをフィルタリング</string>
+    <string name="search_d_control_center">プルダウンパネル・音楽カード・電源ボタン</string>
+    <string name="search_d_show_cc">文字盤を引き下げてコントロールセンターへ</string>
+    <string name="search_d_show_music">コントロールセンターのメディアカード</string>
+    <string name="search_d_media_actions">メディアカードの追加操作ボタン</string>
+    <string name="search_d_cc_power">電源オプションを開く（ユーザー補助が必要）</string>
+    <string name="search_d_gestures">ダブルタップでスリープなど</string>
+    <string name="search_d_double_tap">ユーザー補助の許可が必要</string>
+    <string name="search_d_app_list_behavior">マスクの色・行の背景・フォルダー</string>
+    <string name="search_d_folders">アイコンをドラッグしてフォルダーを作成</string>
+    <string name="search_d_launch_mask">起動オーバーレイを文字盤の色に合わせる</string>
+    <string name="search_d_row_bg">リストモードの行の背景色</string>
+    <string name="search_d_performance">アニメーションの切り替えとアイコン品質</string>
+    <string name="search_d_stagger">行ごとに時間差で入場</string>
+    <string name="search_d_legacy">watchOS 三段式以前の旧アニメーション</string>
+    <string name="search_d_app_list_shrink">戻るときに全体をスケール</string>
+    <string name="search_d_icon_float">アプリから戻るときに上浮きアニメーションを再生</string>
+    <string name="search_d_face_shrink">文字盤に戻るときやオーバーレイを引き出すときにスケール</string>
+    <string name="search_d_reduce_motion">トランジション後にオーバーシュートしない</string>
+    <string name="search_d_launch_animation">アプリの起動・終了トランジションを制御</string>
+    <string name="search_d_icon_shadow">プラットフォームの高さシャドウ</string>
+    <string name="search_d_two_tone">モノクロレイヤーまたはグレースケール着色</string>
+    <string name="search_d_low_res">アイコンの負荷を下げてパフォーマンス向上</string>
+    <string name="search_d_music_text">曲替えのテキストトランジション</string>
+    <string name="search_d_hide_recents">履歴画面から Flue を非表示</string>
+    <string name="search_d_thumbnails">写真・動画リストのプレビュー画像</string>
+    <string name="search_d_motion_profile_entry">モーションプロファイルページへ移動</string>
+    <string name="search_d_motion_profile">時間・ベジェ・ばねのパラメーター</string>
+    <string name="search_d_motion_bounce">境界を越えた瞬間にバウンスバック</string>
+    <string name="search_d_edge_strength">境界バウンスの幅</string>
+    <string name="search_d_tools">バックアップ・診断・ファイル管理</string>
+    <string name="search_d_export_log">クラッシュとシステムログを書き出す</string>
+    <string name="search_d_diagnostic">一時的に診断ログを有効化</string>
+    <string name="search_d_reset">外観とパフォーマンスの設定をリセット</string>
+    <string name="search_d_backup">設定のエクスポート / インポート</string>
+    <string name="search_d_about">バージョンとクレジット</string>
+    <string name="search_d_donate">開発を支援</string>
+
+    <!-- 共通操作 -->
+    <string name="settings_language_restart_title">再起動が必要です</string>
+    <string name="settings_language_restart_message">言語の変更を完全に適用するには Flue を再起動する必要があります。「確定」をタップすると今すぐ再起動します。</string>
+    <string name="settings_language_restart_confirm">確定</string>
+    <string name="toast_language_save_failed">言語設定を保存できませんでした。もう一度お試しください。</string>
+    <string name="action_delete">削除</string>
+    <string name="action_cancel">キャンセル</string>
+    <string name="action_share">共有</string>
+    <string name="action_done">完了</string>
+
+    <!-- 進捗と結果 -->
+    <string name="progress_import_watchface">文字盤をインポート</string>
+    <string name="progress_import_watchface_detail">標準 .watch / jb_watch 文字盤を判別してインポートしています</string>
+    <string name="progress_import_done">インポート完了</string>
+    <string name="progress_export_config">設定をエクスポート</string>
+    <string name="progress_export_config_detail">Flue バックアップ ZIP を書き込んでいます</string>
+    <string name="progress_export_done">エクスポート完了</string>
+    <string name="progress_read_config">設定を読み込み</string>
+    <string name="progress_read_config_detail">バックアップ ZIP を確認しています</string>
+    <string name="progress_import_config">設定をインポート</string>
+    <string name="progress_import_config_detail">選択した項目を復元しています</string>
+
+    <!-- トースト -->
+    <string name="toast_font_save_failed">フォントを保存できませんでした</string>
+    <string name="toast_font_updated">文字盤のフォントを更新しました</string>
+    <string name="toast_import_failed_fmt">インポートに失敗しました：%s</string>
+    <string name="toast_export_failed_fmt">エクスポートに失敗しました：%s</string>
+    <string name="toast_read_failed_fmt">読み込みに失敗しました：%s</string>
+    <string name="toast_delete_failed_fmt">削除に失敗しました：%s</string>
+    <string name="toast_deleted_fmt">%s を削除しました</string>
+    <string name="toast_grant_accessibility">システム設定で Flue のユーザー補助を許可してください</string>
+    <string name="toast_no_custom_curves">エクスポートできるカスタムモーションカーブがありません</string>
+    <string name="toast_curves_exported">モーションカーブをエクスポートしました</string>
+    <string name="toast_curves_imported_fmt">%d 件のモーションカーブをインポートしました</string>
+    <string name="toast_no_watchface_config">この文字盤に利用できる設定はありません</string>
+    <string name="toast_body_sensors_granted">身体センサーの権限を許可しました</string>
+    <string name="toast_select_at_least_one">1 項目以上を選択してください</string>
+    <string name="toast_pick_backup_first">先にバックアップファイルを選択してください</string>
+    <string name="toast_share_failed">共有に失敗しました</string>
+    <string name="toast_export_failed">エクスポートに失敗しました</string>
+    <string name="toast_qq_copied_fmt">QQ をコピーしました：%s</string>
+
+    <string name="backup_unknown_location">不明な場所</string>
+
+    <!-- 設定ホーム -->
+    <string name="settings_root_title">Flue の設定</string>
+    <string name="settings_search_empty">一致する設定はありません</string>
+    <string name="settings_section_appearance">外観</string>
+    <string name="settings_section_watchface">文字盤</string>
+    <string name="settings_section_app_list">アプリ一覧</string>
+    <string name="settings_section_animation">アニメーション</string>
+    <string name="settings_section_input">ジェスチャーと入力</string>
+    <string name="settings_appearance">表示と外観</string>
+    <string name="settings_appearance_sub">レイアウト・ぼかし・起動アイコン</string>
+    <string name="settings_appearance_sub_md3">レイアウト・マテリアル階層・MD3 モーション</string>
+    <string name="settings_watchfaces">文字盤</string>
+    <string name="settings_watchfaces_sub_md3_fmt">MD3 ホームと文字盤の図形が連動しています · %s</string>
+    <string name="settings_icon_packs">アイコンパック</string>
+    <string name="settings_icon_pack_system_default">システム標準アイコン</string>
+    <string name="settings_hidden_apps">非表示のアプリ</string>
+    <string name="settings_hidden_apps_count_fmt">%d 個のアプリを非表示中</string>
+    <string name="settings_performance">パフォーマンスとアニメーション</string>
+    <string name="settings_performance_sub">アイコン品質とアニメーションの制御</string>
+    <string name="settings_tools">ツール</string>
+    <string name="settings_tools_sub">バックアップ・ログ書き出し・初期化</string>
+    <string name="settings_about">このアプリについて</string>
+    <string name="settings_about_sub_fmt">Flue Next  %s</string>
+
+    <!-- 文字盤 -->
+    <string name="settings_watchface_refresh">文字盤を再スキャン</string>
+    <string name="settings_watchface_refresh_sub">標準 .watch、インストール済み文字盤、互換フォルダーをスキャン</string>
+    <string name="settings_watchface_import">文字盤をインポート</string>
+    <string name="settings_watchface_import_sub">標準 Watchmaker .watch 文字盤をインポート（jb_watch パッケージ対応）</string>
+    <string name="settings_watchface_store">文字盤ストア</string>
+    <string name="settings_watchface_store_sub">Watchmaker Community Store を閲覧し、.watch 文字盤を安全にインストール</string>
+    <string name="settings_watchface_editor_new">.watch 文字盤を新規作成</string>
+    <string name="settings_watchface_editor_new_sub">内蔵エディターで基本レイヤーを作り、リアルタイムでプレビュー</string>
+    <string name="settings_watchface_editor_current">現在の標準文字盤を編集</string>
+    <string name="settings_watchface_editor_current_sub_fmt">%s を分離した下書きで編集し、新しい文字盤として保存</string>
+    <string name="settings_watchface_more">文字盤の詳細設定</string>
+    <string name="settings_watchface_more_sub">内蔵文字盤のフォントと下部フェード</string>
+    <string name="settings_watchmaker_force_fill">画面いっぱいに表示</string>
+    <string name="settings_watchmaker_force_fill_on">キャンバス中心を基点に拡大し、端をトリミング</string>
+    <string name="settings_watchmaker_force_fill_off">デザインキャンバス全体を表示し、指定された形状に従う</string>
+    <string name="settings_watchface_heart_rate">文字盤の心拍データ</string>
+    <string name="settings_watchface_heart_rate_on">身体センサーを許可済み。対応する .watch タグで心拍を取得できます</string>
+    <string name="settings_watchface_heart_rate_off">未許可の間は心拍を利用できません。タップすると許可を求めます</string>
+    <string name="settings_watch_weather">文字盤の天気</string>
+    <string name="settings_watch_weather_sub">標準文字盤と JB 文字盤で共有する天気の場所と温度単位を設定します</string>
+    <string name="settings_watch_weather_city">手動の都市</string>
+    <string name="settings_watch_weather_city_selected_fmt">現在使用中：%s</string>
+    <string name="settings_watch_weather_city_system">システムのおおよその位置情報を使用中</string>
+    <string name="settings_watch_weather_city_unset">未設定です。都市を入力するか、おおよその位置情報を許可してください</string>
+    <string name="settings_watch_weather_use_system">システムの位置情報を使用</string>
+    <string name="settings_watch_weather_use_system_active">システムのおおよその位置情報を使用中です。タップすると更新します</string>
+    <string name="settings_watch_weather_use_system_sub">手動の都市を消去し、システムのおおよその位置情報を使用します</string>
+    <string name="settings_watch_weather_unit">温度単位</string>
+    <string name="settings_watch_weather_celsius">摂氏（°C）</string>
+    <string name="settings_watch_weather_celsius_sub">既定値です。内部の天気データは常に摂氏で保存されます</string>
+    <string name="settings_watch_weather_fahrenheit">華氏（°F）</string>
+    <string name="settings_watch_weather_fahrenheit_sub">文字盤の描画時にだけ華氏へ変換します</string>
+    <string name="settings_watch_weather_refresh">天気を更新</string>
+    <string name="settings_watch_weather_refresh_sub">選択した場所を使ってバックグラウンドで天気キャッシュを更新します</string>
+    <string name="settings_watch_weather_city_dialog_title">手動の都市を設定</string>
+    <string name="settings_watch_weather_city_dialog_message">都市名を入力すると、Flue が Open-Meteo で位置を解決します。都市名はこの端末にのみ保存されます。</string>
+    <string name="settings_watch_weather_city_hint">例：東京</string>
+    <string name="toast_weather_system_location">システムのおおよその位置情報に切り替えました</string>
+    <string name="toast_weather_location_denied">位置情報は許可されませんでした。以前の手動の都市を維持します</string>
+    <string name="toast_weather_refresh_requested">天気の更新を要求しました</string>
+    <string name="toast_weather_city_saved">都市を保存し、天気の更新を要求しました</string>
+    <string name="settings_watchface_font">文字盤のフォント</string>
+    <string name="settings_watchface_font_default">システム標準フォント</string>
+    <string name="settings_watchface_font_clear">標準フォントに戻す</string>
+    <string name="settings_watchface_font_clear_sub">保存された文字盤フォントを消去</string>
+
+    <!-- このアプリについて・寄付 -->
+    <string name="settings_about_title">このアプリについて</string>
+    <string name="settings_donate_title">開発を支援</string>
+    <string name="settings_donate_tip">Flue Next の開発を支援していただき、本当にありがとうございます！下の QR コードをタップすると全画面で表示できます。</string>
+    <string name="settings_donate_wechat">WeChat</string>
+    <string name="settings_donate_preview_tap">サムネイルをタップして全画面表示</string>
+    <string name="settings_donate_alipay">Alipay</string>
+    <string name="about_author_name">柚子柚子皮</string>
+    <string name="about_community_group_fmt">グループ番号 %s</string>
+    <string name="about_join_group">コミュニティに参加してアップデートを受け取る</string>
+    <string name="about_donate">開発を支援</string>
+    <string name="about_donate_methods">WeChat / Alipay</string>
+    <string name="about_open_source">以下のオープンソースプロジェクトに感謝</string>
+    <string name="about_qq_copy_fmt">QQ をコピーしました：%s</string>
+
+    <!-- 言語の AI 翻訳免責 -->
+    <string name="settings_lang_ai_disclaimer_en">English and Japanese translations are AI-generated and may not be fully accurate.</string>
+
+    <!-- アイコンパック -->
+    <string name="settings_icon_pack_default">システム標準</string>
+    <string name="settings_icon_pack_default_sub">現在のシステム標準アイコンパックを使用</string>
+    <string name="settings_icon_pack_adw">ADW アイコンパック</string>
+    <string name="settings_icon_pack_refresh">アイコンパックを再読み込み</string>
+    <string name="settings_icon_pack_refresh_sub">インストール済みの ADW アイコンパックを再スキャン</string>
+
+    <!-- 外観の追加 -->
+    <string name="settings_section_layout">レイアウト</string>
+    <string name="settings_layout_honeycomb">ハニカムレイアウト</string>
+    <string name="settings_layout_honeycomb_sub">Apple Watch スタイル</string>
+    <string name="settings_layout_list">リストレイアウト</string>
+    <string name="settings_layout_list_sub">縦並びの定番リスト</string>
+    <string name="settings_top_fade">上部フェード範囲</string>
+    <string name="settings_bottom_fade">下部フェード範囲</string>
+    <string name="settings_section_launch">起動</string>
+    <string name="settings_splash">起動オーバーレイ</string>
+    <string name="settings_splash_sub">アプリを開くときにアイコンのトランジションを表示</string>
+    <string name="settings_glass_highlight">グラスハイライト</string>
+    <string name="settings_glass_highlight_on">コントロールセンターで iOS 風の縦型 Pill スライダーと半透明ハイライトを使用</string>
+    <string name="settings_glass_highlight_off">コントロールセンターで従来の横型スライダーを使用</string>
+    <string name="settings_splash_delay">オーバーレイの表示時間</string>
+
+    <!-- パフォーマンスとアニメーション -->
+    <string name="settings_performance_title">パフォーマンスとアニメーション</string>
+    <string name="settings_low_res_icons">低解像度アイコン</string>
+    <string name="settings_low_res_icons_sub">アイコンの処理負荷を下げてスクロールをなめらかにする</string>
+    <string name="settings_music_text_animation">音楽テキスト切り替えアニメーション</string>
+    <string name="settings_builtin_thumbnails">内蔵マネージャーのサムネイル</string>
+    <string name="settings_builtin_thumbnails_sub">画像・動画リストの左側にプレビューを表示</string>
+    <string name="settings_motion_profile">モーションプロファイル</string>
+    <string name="settings_motion_profile_sub_fmt">%1$s · バウンス %2$s</string>
+    <string name="settings_motion_bounce_on">オン</string>
+    <string name="settings_motion_bounce_off">オフ</string>
+
+    <!-- モーションプロファイル -->
+    <string name="settings_motion_profile_title">モーションプロファイル</string>
+    <string name="settings_motion_profile_hint">プリセットを選んでコピーすると自分用のカーブになります。時間 80〜1200ms、遅延 0〜500ms。境界強度 0 でバウンス無効。</string>
+    <string name="settings_motion_profile_preset">内蔵プリセット（コピーして編集可能）</string>
+    <string name="settings_motion_profile_custom">カスタムモーションカーブ</string>
+    <string name="settings_motion_profile_copy">現在のカーブをコピー</string>
+    <string name="settings_motion_profile_copy_sub">編集可能なコピーを作成してすぐに適用</string>
+    <string name="settings_motion_profile_delete">現在のカスタムカーブを削除</string>
+    <string name="settings_motion_profile_delete_sub">内蔵の Soft・Snappy プリセットは削除されません</string>
+    <string name="settings_motion_bounce">境界バウンス</string>
+    <string name="settings_motion_bounce_sub">ジェスチャーが境界を越えた瞬間にバウンスバックする</string>
+    <string name="settings_motion_bounce_strength">境界強度</string>
+    <string name="settings_motion_phase_duration_fmt">%s の時間</string>
+    <string name="settings_motion_phase_delay_fmt">%s の遅延</string>
+    <string name="settings_motion_bezier">3 次ベジェ曲線</string>
+    <string name="settings_motion_bezier_sub">タイミングカーブの 2 つの制御点を直接操作</string>
+    <string name="settings_motion_spring">物理ばね</string>
+    <string name="settings_motion_spring_sub">減衰比と剛性でバウンス感を調整</string>
+    <string name="settings_motion_damping_fmt">%s の減衰比</string>
+    <string name="settings_motion_stiffness_fmt">%s の剛性</string>
+    <string name="settings_motion_export_curves">カスタムカーブをエクスポート</string>
+    <string name="settings_motion_export_curves_sub">バックアップ用の JSON ファイルとして書き出す</string>
+    <string name="settings_motion_import_curves">カーブをインポート</string>
+    <string name="settings_motion_import_curves_sub">JSON からインポートして新しいカスタムカーブを作成</string>
+    <string name="settings_motion_phase_app_list_enter">アプリ一覧の進入</string>
+    <string name="settings_motion_phase_app_launch">アプリ起動</string>
+    <string name="settings_motion_phase_app_return">アプリからの戻り</string>
+    <string name="settings_motion_phase_pull_to_face">上スワイプで文字盤へ</string>
+    <string name="settings_motion_phase_edge_bounce">境界バウンス</string>
+    <string name="settings_motion_spring_fmt">Spring(減衰 %1$.2f，剛性 %2$d)</string>
+
+    <!-- ツール -->
+    <string name="settings_tools_title">ツール</string>
+    <string name="settings_backup_menu">設定のインポート / エクスポート</string>
+    <string name="settings_backup_menu_sub">バックアップする項目と文字盤リソースを選択</string>
+    <string name="settings_export_log">ログをエクスポート</string>
+    <string name="settings_export_log_sub">Flue の概要、クラッシュファイル、直近 500 行のシステムログを書き出す</string>
+    <string name="settings_diagnostic_logging">診断ログモード</string>
+    <string name="settings_diagnostic_logging_on">有効。5 分後に自動的にオフになります</string>
+    <string name="settings_diagnostic_logging_off">通常はオフ。有効にするとリリース版でも一時的に診断ログを出力します</string>
+    <string name="settings_reset_defaults">初期設定に戻す</string>
+    <string name="settings_reset_defaults_sub">外観とパフォーマンスの設定をリセット</string>
+
+    <!-- バックアップと復元 -->
+    <string name="settings_backup_export_page">設定をエクスポート</string>
+    <string name="settings_backup_export_page_sub">設定・並び順・文字盤リソースを ZIP に書き出す</string>
+    <string name="settings_backup_import_page">設定をインポート</string>
+    <string name="settings_backup_import_page_sub">Flue の ZIP バックアップを選び、項目ごとに復元</string>
+    <string name="settings_backup_export_start">エクスポートを開始</string>
+    <string name="settings_backup_export_start_sub">保存先を選ぶと ZIP バックアップを書き込みます</string>
+    <string name="settings_backup_import_pick">バックアップファイルを選択</string>
+    <string name="settings_backup_import_pick_sub">Flue の ZIP バックアップファイルを選択</string>
+    <string name="settings_backup_preview_fmt">バックアップ版 %1$s · %2$s</string>
+    <string name="settings_backup_unknown_time">日時不明</string>
+    <string name="settings_backup_import_start">インポートを開始</string>
+    <string name="settings_backup_import_start_sub">選択した項目を復元</string>
+    <string name="backup_item_settings">設定</string>
+    <string name="backup_item_settings_sub">外観・パフォーマンス・各種スイッチ</string>
+    <string name="backup_item_app_order">アプリの並び順</string>
+    <string name="backup_item_app_order_sub">アプリ一覧の並び順</string>
+    <string name="backup_item_widget_order">ウィジェットの並び順</string>
+    <string name="backup_item_widget_order_sub">ウィジェット一覧とスロットの順序</string>
+    <string name="backup_item_side_screen_order">サイド画面の並び順</string>
+    <string name="backup_item_side_screen_order_sub">サイド画面のショートカットスロット</string>
+    <string name="backup_item_photo_watchface">画像文字盤</string>
+    <string name="backup_item_photo_watchface_sub">画像文字盤の設定と現在の画像</string>
+    <string name="backup_item_video_watchface">動画文字盤</string>
+    <string name="backup_item_video_watchface_sub">動画文字盤の設定と現在の動画</string>
+    <string name="backup_item_watch_files">.watch 文字盤</string>
+    <string name="backup_item_watch_files_sub">インポート済みのサードパーティ .watch ファイル</string>
+    <string name="backup_summary_none">なし</string>
+    <string name="backup_share_title">設定バックアップを共有</string>
+
+    <!-- 文字盤削除ダイアログ -->
+    <string name="dialog_delete_watchface_title">文字盤を削除</string>
+    <string name="dialog_delete_watchmaker_fmt">%s を削除しますか？この標準 .watch 文字盤は Flue の非公開フォルダーから削除されます。</string>
+    <string name="dialog_delete_jbwatch_fmt">%s を削除しますか？この jb_watch 互換文字盤は Flue の非公開フォルダーから削除されます。</string>
+    <string name="dialog_delete_imported_fmt">%s を削除しますか？このインポート済み文字盤は Flue の非公開フォルダーから削除されます。</string>
+</resources>

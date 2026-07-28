@@ -17,7 +17,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -56,7 +55,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
@@ -78,6 +76,7 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.ui.common.FrostedHeader
+import com.flue.launcher.ui.common.glassSurface
 import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.common.FlueElasticOffsetController
@@ -697,19 +696,12 @@ private fun NotificationCardReplacement(
 @Composable
 private fun ActionDock(content: @Composable () -> Unit) {
     val launcherStyle = LauncherTheme.style
-    val dockColor = if (launcherStyle.cardColor.alpha < 0.35f) {
-        if (launcherStyle.titleColor == Color.White) {
-            Color(0xFF151515).copy(alpha = 0.82f)
-        } else {
-            Color(0xFFF2F2F6).copy(alpha = 0.88f)
-        }
-    } else {
-        launcherStyle.cardColor.copy(alpha = launcherStyle.cardColor.alpha.coerceAtLeast(0.72f))
-    }
+    // 操作栏浮在通知流上方，用薄档玻璃会让图标和下面的卡片糊在一起。
+    // 原来写死的 #151515@0.82 / #F2F2F6@0.88 已收进 glassThick 令牌，
+    // 视觉效果一字未变，但与其他玻璃表面同源，统一调玻璃时不会漏掉这里。
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(dockColor)
+            .glassSurface(launcherStyle.chipShape, launcherStyle.glassThick)
             .padding(horizontal = 7.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -816,7 +808,8 @@ private fun CollapsedStackCard(
                         alpha = 1f - index * 0.10f
                     }
                     .padding(horizontal = COLLAPSED_STACK_HORIZONTAL_INSET_DP.dp)
-                    .clip(RoundedCornerShape(28.dp))
+                    // 形状跟顶卡走，不再写死 28dp。
+                    .clip(LauncherTheme.style.cardShape)
                     .background(notificationStackBackColor(stackBaseColor, index))
             )
         }
@@ -856,22 +849,6 @@ private fun NotificationCard(
     val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }.coerceAtLeast(1f)
     val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }.coerceAtLeast(1f)
     var launchOrigin by remember { mutableStateOf(Offset(0.5f, 0.5f)) }
-    val darkCard = launcherStyle.titleColor == Color.White
-    val cardColor = if (launcherStyle.cardColor.alpha < 0.35f) {
-        if (darkCard) Color(0xFF353535) else Color(0xFFE8E8ED)
-    } else {
-        launcherStyle.cardColor
-    }
-    // watchOS 的玻璃感三件套之二：顶亮底暗的渐变 + 极淡描边。纯色贴纯黑时
-    // 边界只有 12% 亮度差，28dp 转角处会因抗锯齿发虚。
-    val cardBrush = remember(cardColor, darkCard) {
-        if (darkCard) {
-            Brush.verticalGradient(listOf(Color(0xFF3A3A3C), Color(0xFF2C2C2E)))
-        } else {
-            Brush.verticalGradient(listOf(cardColor, cardColor))
-        }
-    }
-    val cardBorder = if (darkCard) Color.White.copy(alpha = 0.07f) else Color.Black.copy(alpha = 0.06f)
     val scale by animateFloatAsState(if (isPressed) 0.968f else 1f, spring(stiffness = 860f, dampingRatio = 0.72f), label = "notif_card")
     Box(
         Modifier
@@ -885,9 +862,10 @@ private fun NotificationCard(
                 )
             }
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(launcherStyle.cardShape)
-            .background(cardBrush)
-            .border(0.8.dp, cardBorder, launcherStyle.cardShape)
+            // 原来深色下是写死的不透明渐变 3A3A3C→2C2C2E（外加 0.07 描边），
+            // 半透明主题还会被强制刷成 #353535。这两条都让通知卡变成实色板，
+            // 与控制中心的玻璃不同源；统一走 glass 令牌，形状仍是各风格的 cardShape。
+            .glassSurface(launcherStyle.cardShape, launcherStyle.glass)
             .instantPressGesture(
                 pressed,
                 enabled = entry.key == "perm" || entry.key == "empty" || entry.contentIntentAvailable,
@@ -1007,27 +985,26 @@ private fun NotificationIcon(icon: ImageBitmap?) {
 /**
  * 堆叠卡必须和最顶上那张横幅同源取色：之前它取的是 appListColors.item
  * （全局列表项色），而顶卡走的是 LauncherTheme.style.cardColor，两者一冲
- * 突就出现「顶卡纯黑、下面堆叠灰色半透明」。这里复用 NotificationCard 的
- * 那套判定，保证深浅两套主题下堆叠都是顶卡的同一块材质。
+ * 突就出现「顶卡纯黑、下面堆叠灰色半透明」。
+ *
+ * 顶卡现在是玻璃（glass 令牌），所以堆叠基色也取 glass 的等效底色 ——
+ * 取 baseColor 而不是 fill 顶色，是因为堆叠只露出 6dp 左右的边，
+ * 用 fill 那档 0.13 的淡度根本看不出有几层。
  */
 @Composable
-internal fun rememberNotificationStackBaseColor(): Color {
-    val launcherStyle = LauncherTheme.style
-    val darkCard = launcherStyle.titleColor == Color.White
-    return if (launcherStyle.cardColor.alpha < 0.35f) {
-        // 顶卡在深色主题下画的是 3A3A3C→2C2C2E 渐变，取渐变底色当堆叠基色。
-        if (darkCard) Color(0xFF2C2C2E) else Color(0xFFE8E8ED)
-    } else {
-        launcherStyle.cardColor
-    }
-}
+internal fun rememberNotificationStackBaseColor(): Color = LauncherTheme.style.glass.baseColor
 
 /**
- * 只按层深做轻微明度位移表达纵深，不再额外压 alpha。调用方的
- * graphicsLayer 已经有一层 alpha，这里再压一次会叠乘成 0.24 左右，
- * 堆叠就透出背景变灰了。
+ * 表达纵深：底色是半透明白/黑veil 时，明度位移毫无作用（白veil 压暗成灰veil，
+ * 透过来的还是同一块背景），只有 alpha 递减才看得出层次；不透明底色反过来
+ * 靠明度位移，压 alpha 会让它透出背景变灰。所以按底色透明度分两条路走。
  */
 internal fun notificationStackBackColor(base: Color, index: Int): Color {
+    if (base.alpha < 0.35f) {
+        // 玻璃：每层递减 26% 的 alpha，越往下越薄。
+        val fade = 1f - (index + 1) * 0.26f
+        return base.copy(alpha = (base.alpha * fade).coerceAtLeast(0.03f))
+    }
     val shift = (index + 1) * 0.06f
     val darkBase = base.red + base.green + base.blue < 1.2f
     val factor = if (darkBase) 1f + shift else 1f - shift

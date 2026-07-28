@@ -153,6 +153,114 @@ class HttpWatchStoreApi(
         ) { }
     }
 
+    /**
+     * Lists all watch faces uploaded by the current user.
+     * Requires a valid Bearer token from [WatchStoreAuthStore].
+     */
+    fun listMyWatchFaces(token: String): List<MyWatchFaceEntry> {
+        val safeToken = requireBearerToken(token)
+        return requestJsonWithAuth(
+            WatchStoreUrlPolicy.myWatchFacesList(base),
+            safeToken,
+            MAX_JSON_BYTES,
+            WatchStoreJsonParser::myWatchFaces,
+        )
+    }
+
+    /**
+     * Permanently deletes an uploaded watch face. The server returns 204 on success.
+     * Throws [WatchStoreHttpException] (403) if the caller does not own the face.
+     */
+    fun deleteMyWatchFace(token: String, id: String) {
+        val safeToken = requireBearerToken(token)
+        deleteWithAuth(WatchStoreUrlPolicy.myWatchFaceDelete(base, id), safeToken)
+    }
+
+    private fun requireBearerToken(token: String): String {
+        val t = token.trim()
+        require(t.isNotEmpty() && t.none { it.isWhitespace() || it.isISOControl() }) {
+            "登录令牌无效，请重新登录"
+        }
+        return t
+    }
+
+    /**
+     * GET with an Authorization: Bearer header. Unlike [request], redirects are
+     * hard failures — we must not replay the token against a third-party Location.
+     */
+    private fun <T> requestJsonWithAuth(url: URI, token: String, maxBytes: Long, parser: (String) -> T): T {
+        try {
+            try {
+                WatchStoreUrlPolicy.requirePublicHttps(url)
+            } catch (error: IllegalArgumentException) {
+                throw WatchStoreRedirectException(error.message ?: "Watch store connection target is unsafe")
+            }
+            val connection = connectionFactory(url.toURL())
+            try {
+                connection.requestMethod = "GET"
+                connection.instanceFollowRedirects = false
+                connection.connectTimeout = config.connectTimeoutMs
+                connection.readTimeout = config.readTimeoutMs
+                connection.useCaches = false
+                connection.setRequestProperty("Accept", "application/json")
+                connection.setRequestProperty("Accept-Encoding", "identity")
+                connection.setRequestProperty("User-Agent", "Flue-Next-WatchStore/1")
+                connection.setRequestProperty("Authorization", "Bearer $token")
+                val status = connection.responseCode
+                if (status in REDIRECT_STATUSES) throw WatchStoreProtocolException("Authenticated request was redirected")
+                if (status == 401) throw WatchStoreHttpException(401, "登录已过期，请重新登录")
+                if (status !in 200..299) throw writeFailure(status, connection)
+                validateContentType(connection, expectPreview = false, expectJson = true)
+                val body = readLimited(connection.inputStream, maxBytes).toString(Charsets.UTF_8)
+                return parser(body)
+            } finally {
+                connection.disconnect()
+            }
+        } catch (error: WatchStoreException) {
+            throw error
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            throw WatchStoreException("Watch store request failed", error)
+        }
+    }
+
+    /** DELETE with Bearer auth; expects 204 No Content. */
+    private fun deleteWithAuth(url: URI, token: String) {
+        try {
+            try {
+                WatchStoreUrlPolicy.requirePublicHttps(url)
+            } catch (error: IllegalArgumentException) {
+                throw WatchStoreRedirectException(error.message ?: "Watch store connection target is unsafe")
+            }
+            val connection = connectionFactory(url.toURL())
+            try {
+                connection.requestMethod = "DELETE"
+                connection.instanceFollowRedirects = false
+                connection.connectTimeout = config.connectTimeoutMs
+                connection.readTimeout = config.readTimeoutMs
+                connection.useCaches = false
+                connection.setRequestProperty("Accept-Encoding", "identity")
+                connection.setRequestProperty("User-Agent", "Flue-Next-WatchStore/1")
+                connection.setRequestProperty("Authorization", "Bearer $token")
+                val status = connection.responseCode
+                if (status in REDIRECT_STATUSES) throw WatchStoreProtocolException("Delete request was redirected")
+                if (status == 401) throw WatchStoreHttpException(401, "登录已过期，请重新登录")
+                if (status == 403) throw WatchStoreHttpException(403, "没有权限删除这个表盘")
+                if (status == 404) throw WatchStoreHttpException(404, "表盘不存在或已被删除")
+                if (status !in 200..299 && status != 204) throw writeFailure(status, connection)
+            } finally {
+                connection.disconnect()
+            }
+        } catch (error: WatchStoreException) {
+            throw error
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            throw WatchStoreException("Watch store request failed", error)
+        }
+    }
+
     private fun authenticate(url: URI, username: String, password: String): WatchStoreAuthResult {
         val cleanUsername = username.trim()
         require(USERNAME_PATTERN.matches(cleanUsername)) { "用户名需要 3-50 位字母、数字或下划线" }

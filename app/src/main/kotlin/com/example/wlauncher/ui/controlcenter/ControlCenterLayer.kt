@@ -1,4 +1,4 @@
-package com.flue.launcher.ui.controlcenter
+﻿package com.flue.launcher.ui.controlcenter
 
 import android.Manifest
 import android.app.NotificationManager
@@ -42,6 +42,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
@@ -93,6 +94,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -126,9 +128,11 @@ import com.flue.launcher.R
 import com.flue.launcher.service.WLauncherNotificationListener
 import com.flue.launcher.ui.common.FrostedHeader
 import com.flue.launcher.ui.common.WatchBatteryPill
+import com.flue.launcher.ui.common.glassSurface
 import com.flue.launcher.ui.common.rememberFlueElasticScrollState
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.notification.NotificationGroupUi
+import com.flue.launcher.ui.notification.notificationStackBackColor
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.delay
@@ -203,6 +207,7 @@ fun ControlCenterLayer(
     onDismissToFace: () -> Unit,
     showPowerButton: Boolean = false,
     onPowerClick: () -> Unit = {},
+    glassHighlightEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -876,11 +881,6 @@ private fun ControlCenterNotificationPreviewCard(
     val launcherStyle = LauncherTheme.style
     val pressedState = rememberPressedState()
     val pressed by pressedState
-    val cardColor = if (launcherStyle.cardColor.alpha < 0.35f) {
-        if (launcherStyle.titleColor == Color.White) Color(0xFF353535) else Color(0xFFE8E8ED)
-    } else {
-        launcherStyle.cardColor
-    }
     val cardScale by animateFloatAsState(
         targetValue = if (pressed) 0.968f else 1f,
         animationSpec = spring(stiffness = 860f, dampingRatio = 0.72f),
@@ -924,8 +924,8 @@ private fun ControlCenterNotificationPreviewCard(
                         alpha = 0.54f - index * 0.16f
                     }
                     .padding(horizontal = (CONTROL_NOTIFICATION_STACK_HORIZONTAL_INSET_DP * (index + 1)).dp)
-                    .clip(RoundedCornerShape(28.dp))
-                    .background(notificationPreviewStackBackColor(launcherStyle.cardColor, index))
+                    .clip(launcherStyle.cardShape)
+                    .background(notificationStackBackColor(launcherStyle.glass.baseColor, index))
             )
         }
         Row(
@@ -936,8 +936,8 @@ private fun ControlCenterNotificationPreviewCard(
                     scaleX = cardScale
                     scaleY = cardScale
                 }
-                .clip(RoundedCornerShape(28.dp))
-                .background(cardColor)
+                // 与通知中心的通知卡、负一屏的通知条同一份 glass 令牌。
+                .glassSurface(launcherStyle.cardShape, launcherStyle.glass)
                 .controlCenterPressGesture(
                     pressedState = pressedState,
                     onGestureLockChange = onGestureLockChange,
@@ -1003,15 +1003,6 @@ private fun ControlCenterNotificationPreviewCard(
                 }
             }
         }
-    }
-}
-
-private fun notificationPreviewStackBackColor(base: Color, index: Int): Color {
-    return when {
-        base == Color.Unspecified -> Color(0xFF2E2E2E)
-        base.alpha > 0.35f -> base.copy(alpha = ((base.alpha * 0.58f) - index * 0.08f).coerceIn(0.20f, 0.48f))
-        index == 0 -> Color(0xFF404040)
-        else -> Color(0xFF303030)
     }
 }
 
@@ -1082,9 +1073,9 @@ private fun ControlToggle(
         animationSpec = spring(dampingRatio = 0.62f, stiffness = 900f),
         label = "control_toggle_scale"
     )
-    // 未激活态与 cardColor 同源（半透明白/黑），不再是不透明的 #2C2C2E ——
-    // 那块色和旁边玻璃卡不同源，质感断层。
-    val inactiveColor = if (darkMode) Color.White.copy(alpha = 0.12f) else Color.Black.copy(alpha = 0.08f)
+    // 未激活态取 glass 的等效底色，与旁边的玻璃卡同一份令牌（原先是手写的
+    // 白 0.12 / 黑 0.08，跟卡片各写一套，改配方时必然漏一处）。
+    val inactiveColor = LauncherTheme.style.glass.baseColor
     val pressedOverlay = if (darkMode) Color.White.copy(alpha = 0.06f) else Color.Black.copy(alpha = 0.05f)
     // 状态色渐变过去而不是瞬间反转 —— 这里曾是全页最生硬的跳变。
     val buttonColor by animateColorAsState(
@@ -1132,6 +1123,7 @@ private fun ControlToggle(
     }
 }
 
+
 @Composable
 private fun ControlSliderCard(
     icon: ImageVector,
@@ -1146,8 +1138,8 @@ private fun ControlSliderCard(
         modifier = Modifier
             .fillMaxWidth()
             .height(height)
-            .clip(RoundedCornerShape(28.dp))
-            .background(launcherStyle.cardColor)
+            // 滑块卡原来是 cardColor 平铺（MD3/MIUIX 下就是不透明实色板）。
+            .glassSurface(launcherStyle.cardShape, launcherStyle.glass)
             .padding(horizontal = horizontalPadding),
         verticalAlignment = Alignment.CenterVertically
     ) {

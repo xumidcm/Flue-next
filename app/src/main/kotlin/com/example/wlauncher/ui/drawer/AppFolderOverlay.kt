@@ -47,6 +47,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -106,6 +107,11 @@ fun AppFolderOverlay(
     iconShape: Shape = if (listMode) RoundedCornerShape(18.dp) else CircleShape,
     blurEnabled: Boolean,
     twoToneIconsEnabled: Boolean,
+    /**
+     * 与列表侧 NativeAppListRowView.syncShadowElevation 同源：静置 8dp。
+     * 文件夹里的图标此前没有这层修饰，和外面并排看是"扁"的。
+     */
+    iconShadowEnabled: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorderItems: (List<AppInfo>) -> Unit,
     onMoveItemOut: (AppInfo) -> Unit,
@@ -114,6 +120,13 @@ fun AppFolderOverlay(
     onExcludeApp: (AppInfo) -> Unit,
     onRemoveShortcut: (AppInfo) -> Unit,
     onDismiss: () -> Unit,
+    /** Reports the same reversible progress used by this panel's alpha animation. */
+    onTransitionProgress: (Float) -> Unit = {},
+    /**
+     * 每次加一触发带动画的关闭（供返回键调用），而不是直接清掉状态跳过退出动画。
+     * LauncherActivity 拦截返回键后递增此值，文件夹自己调 requestDismiss()。
+     */
+    dismissRequestToken: Int = 0,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -129,6 +142,17 @@ fun AppFolderOverlay(
     val itemBounds = remember { mutableStateMapOf<String, Rect>() }
     val iconBounds = remember { mutableStateMapOf<String, Rect>() }
     var showing by remember(folder.componentKey) { mutableStateOf(false) }
+    // The parent owns a monotonically increasing close token.  A freshly
+    // mounted folder must treat the current value as its baseline; otherwise
+    // an old close request from the previous folder immediately dismisses the
+    // next one as soon as it enters composition.
+    var observedDismissRequestToken by remember(folder.componentKey) {
+        mutableStateOf(dismissRequestToken)
+    }
+    // 覆层自身铺满全屏，用它的 root 边界把图标中心归一化成 [0,1] 的启动
+    // 原点。以前一律传 Offset(0.5f, 0.5f)，启动遮罩的图标就从屏幕正中长
+    // 出来，和手指按的那一格对不上。
+    var overlayBounds by remember { mutableStateOf(Rect.Zero) }
     var panelBounds by remember { mutableStateOf(Rect.Zero) }
     var gridBounds by remember { mutableStateOf(Rect.Zero) }
     var menuApp by remember { mutableStateOf<AppInfo?>(null) }
@@ -143,7 +167,7 @@ fun AppFolderOverlay(
     var dragCurrentIndex by remember { mutableStateOf<Int?>(null) }
     var dragOriginalItems by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
     var moveOutJob by remember { mutableStateOf<Job?>(null) }
-    var dismissJob by remember { mutableStateOf<Job?>(null) }
+    var dismissRequested by remember(folder.componentKey) { mutableStateOf(false) }
     val dismissInteraction = remember { MutableInteractionSource() }
     val blockInteraction = remember { MutableInteractionSource() }
     val dragThresholdPx = with(density) { 22.dp.toPx() }
@@ -158,15 +182,12 @@ fun AppFolderOverlay(
     }
 
     fun requestDismiss() {
-        if (dismissJob != null) return
+        if (dismissRequested) return
         cancelMoveOutJob()
         menuApp = null
         renameDialogVisible = false
+        dismissRequested = true
         showing = false
-        dismissJob = scope.launch {
-            delay(190)
-            onDismiss()
-        }
     }
 
     fun finishMoveOut(app: AppInfo) {
@@ -195,6 +216,21 @@ fun AppFolderOverlay(
         if (currentKeys != originalKeys) {
             onReorderItems(visibleItems.toList())
         }
+    }
+
+    /**
+     * 被点的那一格图标中心，归一化到覆层（= 全屏）的 [0,1] 坐标。
+     * 边界还没量到时退回屏幕中心，跟 LaunchBackdropContent 的兜底一致。
+     */
+    fun launchOriginOf(app: AppInfo): Offset {
+        val bounds = iconBounds[app.componentKey] ?: return Offset(0.5f, 0.5f)
+        val width = overlayBounds.width
+        val height = overlayBounds.height
+        if (width <= 0f || height <= 0f) return Offset(0.5f, 0.5f)
+        return Offset(
+            ((bounds.center.x - overlayBounds.left) / width).coerceIn(0f, 1f),
+            ((bounds.center.y - overlayBounds.top) / height).coerceIn(0f, 1f),
+        )
     }
 
     fun updateDraggedItemTarget(app: AppInfo, visualCenter: Offset) {
@@ -240,9 +276,16 @@ fun AppFolderOverlay(
         dragOriginalItems = emptyList()
     }
     LaunchedEffect(folder.componentKey) {
-        dismissJob?.cancel()
-        dismissJob = null
+        dismissRequested = false
         showing = true
+    }
+    // 外部通过 dismissRequestToken 自增来触发带动画的关闭。
+    // 典型场景：用户从应用列表滑出到表盘时，LauncherActivity 自增 token，
+    // 这里拦截后调 requestDismiss() 播180ms淡出，最后由 onDismiss 清状态。
+    LaunchedEffect(dismissRequestToken) {
+        val isNewRequest = dismissRequestToken != observedDismissRequestToken
+        observedDismissRequestToken = dismissRequestToken
+        if (isNewRequest) requestDismiss()
     }
     LaunchedEffect(draggedKey) {
         if (draggedKey != null && folderOverscroll.value != 0f) {
@@ -278,7 +321,6 @@ fun AppFolderOverlay(
     DisposableEffect(Unit) {
         onDispose {
             cancelMoveOutJob()
-            dismissJob?.cancel()
         }
     }
     BackHandler(enabled = true) { requestDismiss() }
@@ -340,13 +382,24 @@ fun AppFolderOverlay(
     val alpha by animateFloatAsState(
         targetValue = if (showing) 1f else 0f,
         animationSpec = tween(180),
-        label = "folder_overlay_alpha"
+        label = "folder_overlay_alpha",
+        finishedListener = { finalAlpha ->
+            // 固定 delay 会在掉帧、动画规格变化或反向时提前卸载 overlay，
+            // 让列表模糊突然跳到 0。只在真实到达关闭端点后清权威状态。
+            if (dismissRequested && finalAlpha <= 0.001f) {
+                dismissRequested = false
+                onDismiss()
+            }
+        },
     )
     val scale by animateFloatAsState(
         targetValue = if (showing) 1f else 0.92f,
         animationSpec = spring(dampingRatio = 0.78f, stiffness = 520f),
         label = "folder_overlay_scale"
     )
+    SideEffect {
+        onTransitionProgress(alpha)
+    }
 
     val folderItemKeys = visibleItems.mapTo(linkedSetOf()) { it.componentKey }
     val folderItemKeySet = folderItemKeys.toSet()
@@ -487,6 +540,7 @@ fun AppFolderOverlay(
     Box(
         modifier = modifier
             .fillMaxSize()
+            .onGloballyPositioned { overlayBounds = it.boundsInRoot() }
             .graphicsLayer { this.alpha = alpha }
             .background(Color.Black.copy(alpha = if (blurEnabled) 0.58f else 0.46f))
             .clickable(indication = null, interactionSource = dismissInteraction) { requestDismiss() },
@@ -757,7 +811,7 @@ fun AppFolderOverlay(
                                         indication = null
                                     ) {
                                         if (draggedKey == null && menuApp == null) {
-                                            onAppClick(app, Offset(0.5f, 0.5f))
+                                            onAppClick(app, launchOriginOf(app))
                                         }
                                     }
                                     .padding(horizontal = 4.dp, vertical = 6.dp),
@@ -766,6 +820,21 @@ fun AppFolderOverlay(
                                 Box(
                                     modifier = Modifier
                                         .size(56.dp)
+                                        .graphicsLayer {
+                                            // 阴影轮廓必须跟 iconShape 走，否则圆
+                                            // 图标底下会露出方角（列表侧同款规则）。
+                                            // alpha 门控：拖起的那一格整体隐去时，
+                                            // 高程阴影不吃 alpha，会单独留在屏上。
+                                            shadowElevation = if (
+                                                iconShadowEnabled && !isDragged
+                                            ) {
+                                                8.dp.toPx()
+                                            } else {
+                                                0f
+                                            }
+                                            shape = iconShape
+                                            clip = true
+                                        }
                                         .clip(iconShape)
                                         .drawWithContent {
                                             drawContent()

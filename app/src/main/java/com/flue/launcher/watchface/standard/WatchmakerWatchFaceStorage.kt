@@ -2,8 +2,8 @@ package com.flue.launcher.watchface.standard
 
 import android.content.Context
 import android.net.Uri
-import com.flue.launcher.watchface.LunchWatchFaceDescriptor
-import com.flue.launcher.watchface.LunchWatchFaceType
+import com.flue.launcher.watchface.WatchFaceDescriptor
+import com.flue.launcher.watchface.WatchFaceType
 import java.io.File
 import java.io.FileOutputStream
 
@@ -15,7 +15,7 @@ data class WatchmakerWatchFaceScanFailure(
 )
 
 data class WatchmakerWatchFaceScanResult(
-    val descriptors: List<LunchWatchFaceDescriptor>,
+    val descriptors: List<WatchFaceDescriptor>,
     val failures: List<WatchmakerWatchFaceScanFailure>,
 ) {
     val isComplete: Boolean get() = failures.isEmpty()
@@ -35,7 +35,7 @@ object WatchmakerWatchFaceStorage {
             }
         }
 
-    fun importArchive(context: Context, uri: Uri): LunchWatchFaceDescriptor {
+    fun importArchive(context: Context, uri: Uri): WatchFaceDescriptor {
         val temporary = File.createTempFile("watchmaker_import_", ".watch", context.cacheDir)
         try {
             context.contentResolver.openInputStream(uri)?.use { input ->
@@ -65,18 +65,18 @@ object WatchmakerWatchFaceStorage {
         }
     }
 
-    fun importArchiveFile(context: Context, archive: File): LunchWatchFaceDescriptor {
+    fun importArchiveFile(context: Context, archive: File): WatchFaceDescriptor {
         val installed = WatchArchiveInstaller().install(archive, rootDirectory(context))
         return installed.toDescriptor()
     }
 
-    fun scan(context: Context): List<LunchWatchFaceDescriptor> =
+    fun scan(context: Context): List<WatchFaceDescriptor> =
         scanWithDiagnostics(context).descriptors
 
     fun scanWithDiagnostics(context: Context): WatchmakerWatchFaceScanResult {
         val parser = WatchmakerDefinitionParser()
         val installer = WatchArchiveInstaller()
-        val ordered = ArrayList<WatchInstallOrder<LunchWatchFaceDescriptor>>()
+        val ordered = ArrayList<WatchInstallOrder<WatchFaceDescriptor>>()
         val failures = ArrayList<WatchmakerWatchFaceScanFailure>()
         rootDirectory(context)
             .listFiles()
@@ -121,7 +121,7 @@ object WatchmakerWatchFaceStorage {
         )
     }
 
-    fun delete(context: Context, descriptor: LunchWatchFaceDescriptor): Boolean {
+    fun delete(context: Context, descriptor: WatchFaceDescriptor): Boolean {
         if (!descriptor.isWatchmaker) return false
         val root = rootDirectory(context).canonicalFile
         val source = descriptor.sourceDirPath?.let(::File)?.canonicalFile ?: return false
@@ -133,14 +133,14 @@ object WatchmakerWatchFaceStorage {
     }
 }
 
-private fun InstalledWatchArchive.toDescriptor(): LunchWatchFaceDescriptor =
+private fun InstalledWatchArchive.toDescriptor(): WatchFaceDescriptor =
     definition.toDescriptor(stableId, rootDirectory, preview)
 
 private fun WatchmakerDefinition.toDescriptor(
     stableId: String,
     rootDirectory: File,
     preferredPreview: File? = null,
-): LunchWatchFaceDescriptor {
+): WatchFaceDescriptor {
     val preview = preferredPreview ?: listOf("preview.jpg", "preview_dim.jpg")
         .asSequence()
         .map { File(rootDirectory, it) }
@@ -149,14 +149,13 @@ private fun WatchmakerDefinition.toDescriptor(
         WatchmakerDefinitionVersion.FORMAT_1 -> "Watchmaker 1.0"
         WatchmakerDefinitionVersion.FORMAT_2 -> "Watchmaker Studio 2.0"
     }
-    return LunchWatchFaceDescriptor(
+    return WatchFaceDescriptor(
         id = "$WATCHMAKER_ID_PREFIX$stableId",
-        type = LunchWatchFaceType.WATCHMAKER,
+        type = WatchFaceType.WATCHMAKER,
         displayName = name.ifBlank { stableId },
         summary = "$versionLabel · ${layers.size} 个图层",
         previewFilePath = preview?.absolutePath,
         sourceDirPath = rootDirectory.absolutePath,
-        watchFaceName = stableId,
         author = rootAttributes["author"]?.takeIf(String::isNotBlank),
         supportsSettings = true,
     )

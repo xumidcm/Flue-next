@@ -101,3 +101,16 @@ data class WatchStorePage(
     val data: List<WatchStoreWatchFace>,
     val pagination: WatchStorePagination,
 )
+
+/** One entry in the current user's uploaded watch-face list (`GET /api/my/watchfaces`). */
+data class MyWatchFaceEntry(
+    val id: String,
+    val name: String,
+    val description: String,
+    val screenType: WatchStoreScreenType,
+    val category: WatchStoreCategory,
+    /** Relative API path; validate before fetching. */
+    val previewUrl: String,
+    val downloadCount: Long,
+    val createdAt: String,
+)

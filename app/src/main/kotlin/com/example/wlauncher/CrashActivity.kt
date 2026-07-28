@@ -1,5 +1,7 @@
 ﻿package com.flue.launcher
 
+import com.flue.launcher.i18n.FlueComponentActivity
+
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
@@ -39,7 +41,7 @@ import com.flue.launcher.util.RecentsVisibility
 import java.io.File
 import java.util.Locale
 
-class CrashActivity : ComponentActivity() {
+class CrashActivity : FlueComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         RecentsVisibility.apply(this)

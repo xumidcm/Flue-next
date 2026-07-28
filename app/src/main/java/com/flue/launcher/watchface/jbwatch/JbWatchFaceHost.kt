@@ -1,10 +1,8 @@
 package com.flue.launcher.watchface.jbwatch
 
-import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas as AndroidCanvas
@@ -12,7 +10,6 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.media.MediaPlayer
-import android.os.BatteryManager
 import android.text.format.DateFormat
 import android.util.Base64
 import android.util.LruCache
@@ -23,7 +20,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,8 +36,13 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
-import com.flue.launcher.watchface.LunchWatchFaceDescriptor
+import com.flue.launcher.watchface.WatchFaceDescriptor
+import com.flue.launcher.watchface.standard.WatchDataProvider
+import com.flue.launcher.watchface.standard.WatchDataSnapshot
+import com.flue.launcher.watchface.standard.WatchmakerExpressionEvaluator
+import com.flue.launcher.watchface.standard.WatchmakerTagResolver
+import com.flue.launcher.watchface.standard.rememberWatchmakerWatchDataProvider
+import com.flue.launcher.watchface.standard.watchWeatherNightSpriteIndex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -64,6 +65,10 @@ private const val JB_LAYOUT_CANVAS_HEIGHT = 512
 private val JB_PROTECTED_IMAGE_KEY = byteArrayOf(0x53, 0x57, 0x48, 0x6E, 0x2D)
 private const val JB_STANDARD_BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 private const val JB_CUSTOM_BASE64 = "ABCgEFGHIJK4MNOPQRSTUVWXYZabcdefDhijklmnopqrstuvwxyz0123L56789+/"
+// Android 14+ uses ICU's regex backend: braces inside a character class must
+// be escaped as well, otherwise this top-level initializer can take the whole
+// JB host down with PatternSyntaxException / ExceptionInInitializerError.
+private val JB_DYNAMIC_TAG_PATTERN = Regex("\\{\\s*([^\\{\\}]+?)\\s*\\}")
 
 data class JbWatchRoot(
     val name: String,
@@ -135,7 +140,11 @@ data class JbWatchFace(
     val designHeight: Int
 ) {
     val needsHighRefresh: Boolean = layers.any { layer ->
-        layer.type == "image_gif" || layer.tapAction?.startsWith("script:") == true || layer.rotation != "0"
+        layer.type == "image_gif" ||
+            layer.tapAction?.startsWith("script:") == true ||
+            layer.rotation != "0" ||
+            WatchmakerTagResolver.requiresFastTicks(layer.text) ||
+            WatchmakerTagResolver.requiresFastTicks(layer.condValue.orEmpty())
     }
 }
 
@@ -303,12 +312,13 @@ object JbWatchParser {
 
 @Composable
 fun JbWatchFaceHost(
-    descriptor: LunchWatchFaceDescriptor,
+    descriptor: WatchFaceDescriptor,
     isFaceVisible: Boolean,
     refreshToken: Int,
-    onLoadFailure: (LunchWatchFaceDescriptor, Throwable) -> Unit,
+    onLoadFailure: (WatchFaceDescriptor, Throwable) -> Unit,
     onLongPress: (() -> Unit)? = null,
     onDoubleTap: (() -> Unit)? = null,
+    dataProvider: WatchDataProvider? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -329,11 +339,16 @@ fun JbWatchFaceHost(
         loadError?.let { onLoadFailure(descriptor, it) }
     }
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
-    val batteryLevel = rememberJbWatchBattery(context)
+    val ownedDataProvider = rememberWatchmakerWatchDataProvider(
+        active = dataProvider == null && isFaceVisible,
+    )
+    val resolvedDataProvider = dataProvider ?: ownedDataProvider
+    val dataSnapshot = runCatching { resolvedDataProvider.snapshot(nowMillis) }
+        .getOrDefault(WatchDataSnapshot())
     val is24Hour = remember(context) { DateFormat.is24HourFormat(context) }
     val latestFace by rememberUpdatedState(face)
     val latestNowMillis by rememberUpdatedState(nowMillis)
-    val latestBatteryLevel by rememberUpdatedState(batteryLevel)
+    val latestDataSnapshot by rememberUpdatedState(dataSnapshot)
     LaunchedEffect(isFaceVisible, face?.needsHighRefresh, descriptor.stableKey, refreshToken) {
         while (isFaceVisible) {
             nowMillis = System.currentTimeMillis()
@@ -355,7 +370,7 @@ fun JbWatchFaceHost(
                                 viewWidth = size.width.toFloat(),
                                 viewHeight = size.height.toFloat(),
                                 nowMillis = latestNowMillis,
-                                batteryLevel = latestBatteryLevel
+                                dataSnapshot = latestDataSnapshot,
                             )
                         }
                     },
@@ -378,7 +393,7 @@ fun JbWatchFaceHost(
                             canvas = native,
                             face = face!!,
                             nowMillis = nowMillis,
-                            batteryLevel = batteryLevel,
+                            dataSnapshot = dataSnapshot,
                             width = size.width.toInt(),
                             height = size.height.toInt(),
                             is24Hour = is24Hour
@@ -393,31 +408,11 @@ fun JbWatchFaceHost(
     }
 }
 
-@Composable
-private fun rememberJbWatchBattery(context: Context): Int {
-    var level by remember { mutableStateOf(100) }
-    DisposableEffect(context) {
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                val rawLevel = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
-                val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-                if (rawLevel >= 0 && scale > 0) {
-                    level = (rawLevel * 100 / scale).coerceIn(0, 100)
-                }
-            }
-        }
-        val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-        ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
-        onDispose { runCatching { context.unregisterReceiver(receiver) } }
-    }
-    return level
-}
-
 private fun drawJbFace(
     canvas: AndroidCanvas,
     face: JbWatchFace,
     nowMillis: Long,
-    batteryLevel: Int,
+    dataSnapshot: WatchDataSnapshot,
     width: Int,
     height: Int,
     is24Hour: Boolean
@@ -433,7 +428,7 @@ private fun drawJbFace(
     canvas.translate(offsetX, offsetY)
     canvas.scale(scale, scale)
     face.layers.forEach { layer ->
-        drawJbLayer(canvas, face, layer, nowMillis, batteryLevel, is24Hour)
+        drawJbLayer(canvas, face, layer, nowMillis, dataSnapshot, is24Hour)
     }
     canvas.restore()
 }
@@ -443,16 +438,16 @@ private fun drawJbLayer(
     face: JbWatchFace,
     layer: JbWatchLayer,
     nowMillis: Long,
-    batteryLevel: Int,
+    dataSnapshot: WatchDataSnapshot,
     is24Hour: Boolean
 ) {
     when (layer.type) {
         "image", "image_gif", "image_cond" -> {
-            drawJbBitmapLayer(canvas, face, layer, nowMillis, batteryLevel)
+            drawJbBitmapLayer(canvas, face, layer, nowMillis, dataSnapshot)
         }
-        "text" -> drawJbTextLayer(canvas, face, layer, nowMillis, batteryLevel, is24Hour)
-        "text_curved" -> drawJbCurvedTextLayer(canvas, face, layer, nowMillis, batteryLevel, is24Hour)
-        "ring" -> drawJbRingLayer(canvas, face, layer, nowMillis, batteryLevel)
+        "text" -> drawJbTextLayer(canvas, face, layer, nowMillis, dataSnapshot, is24Hour)
+        "text_curved" -> drawJbCurvedTextLayer(canvas, face, layer, nowMillis, dataSnapshot, is24Hour)
+        "ring" -> drawJbRingLayer(canvas, face, layer, nowMillis, dataSnapshot)
         "markers_hm" -> drawJbMarkersLayer(canvas, face, layer)
         "shape" -> drawJbShapeLayer(canvas, face, layer)
     }
@@ -463,10 +458,20 @@ private fun drawJbBitmapLayer(
     face: JbWatchFace,
     layer: JbWatchLayer,
     nowMillis: Long,
-    batteryLevel: Int
+    dataSnapshot: WatchDataSnapshot,
 ) {
-    if (!shouldDisplayLayer(layer, nowMillis, batteryLevel)) return
-    val file = resolveJbWatchPath(face.rootDir, layer, nowMillis) ?: return
+    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot)) return
+    val dayFile = resolveJbWatchPath(face.rootDir, layer, nowMillis) ?: return
+    val nightFile = if (
+        layer.type == "image_cond" &&
+        layer.weatherNight.equals("Y", ignoreCase = true) &&
+        isJbWeatherNight(dataSnapshot)
+    ) {
+        resolveJbNightWeatherFile(dayFile)
+    } else {
+        null
+    }
+    val file = nightFile ?: dayFile
     val bitmap = JbWatchBitmapCache.get(file) ?: return
     val displaySize = resolveJbBitmapDisplaySize(layer, bitmap.width, bitmap.height)
     val rect = resolveJbRect(face, layer, displaySize.first, displaySize.second)
@@ -474,14 +479,44 @@ private fun drawJbBitmapLayer(
         alpha = resolveJbLayerOpacity(layer)
     }
     if (layer.type == "image_cond" && !layer.condGrid.isNullOrBlank()) {
-        val index = evaluateWeatherIndex(layer.condValue, weatherCode = "01d")
+        val weatherCode = WatchmakerTagResolver.resolve("wci", Calendar.getInstance().apply {
+            timeInMillis = nowMillis
+        }, dataSnapshot).renderedValue
+        val dayIndex = evaluateWeatherIndex(layer.condValue, weatherCode = weatherCode)
+        val index = if (nightFile != null && resolveJbGrid(layer.condGrid) == (3 to 3)) {
+            watchWeatherNightSpriteIndex(dayIndex)
+        } else {
+            dayIndex
+        }
         drawConditionBitmap(canvas, bitmap, rect, layer.condGrid, index, paint)
     } else {
         canvas.save()
-        rotateJbLayer(canvas, rect, layer.rotation)
+        rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot)
         canvas.drawBitmap(bitmap, null, rect, paint)
         canvas.restore()
     }
+}
+
+private fun isJbWeatherNight(snapshot: WatchDataSnapshot): Boolean {
+    val weather = snapshot.weather
+    weather?.isDaytime?.let { return !it }
+    return (weather?.icon ?: snapshot.weatherIcon)
+        ?.trim()
+        ?.endsWith("n", ignoreCase = true) == true
+}
+
+private fun resolveJbNightWeatherFile(dayFile: File): File? {
+    val extension = dayFile.extension
+    val nightName = if (extension.isBlank()) {
+        "${dayFile.name}_n"
+    } else {
+        "${dayFile.nameWithoutExtension}_n.$extension"
+    }
+    val parent = dayFile.parentFile ?: return null
+    return File(parent, nightName).takeIf(File::isFile)
+        ?: parent.listFiles()?.firstOrNull { candidate ->
+            candidate.isFile && candidate.name.equals(nightName, ignoreCase = true)
+        }
 }
 
 private fun drawJbTextLayer(
@@ -489,11 +524,11 @@ private fun drawJbTextLayer(
     face: JbWatchFace,
     layer: JbWatchLayer,
     nowMillis: Long,
-    batteryLevel: Int,
+    dataSnapshot: WatchDataSnapshot,
     is24Hour: Boolean
 ) {
-    if (!shouldDisplayLayer(layer, nowMillis, batteryLevel)) return
-    val text = resolveJbText(layer.text, nowMillis, batteryLevel, is24Hour)
+    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot)) return
+    val text = resolveJbText(layer.text, nowMillis, dataSnapshot, is24Hour)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = parseJbColor(layer.color)
         textSize = layer.textSize
@@ -526,12 +561,12 @@ private fun drawJbTextLayer(
             alpha = ((layer.oOpacity.coerceIn(0, 100) / 100f) * 255).toInt()
         }
         canvas.save()
-        rotateJbLayer(canvas, rect, layer.rotation)
+        rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot)
         canvas.drawText(text, x, y, outlinePaint)
         canvas.restore()
     }
     canvas.save()
-    rotateJbLayer(canvas, rect, layer.rotation)
+    rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot)
     canvas.drawText(text, x, y, paint)
     canvas.restore()
 }
@@ -541,15 +576,15 @@ private fun drawJbCurvedTextLayer(
     face: JbWatchFace,
     layer: JbWatchLayer,
     nowMillis: Long,
-    batteryLevel: Int,
+    dataSnapshot: WatchDataSnapshot,
     is24Hour: Boolean
 ) {
-    if (!shouldDisplayLayer(layer, nowMillis, batteryLevel)) return
-    val text = resolveJbText(layer.text, nowMillis, batteryLevel, is24Hour)
+    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot)) return
+    val text = resolveJbText(layer.text, nowMillis, dataSnapshot, is24Hour)
     if (text.isBlank()) return
     val center = jbLayerCenter(face, layer)
     val radius = layer.radius.takeIf { it > 0f } ?: 180f
-    val angle = evaluateJbNumericExpression(layer.rotation, nowMillis, batteryLevel)
+    val angle = evaluateJbNumericExpression(layer.rotation, nowMillis, dataSnapshot)
     val radians = Math.toRadians((angle - 90f).toDouble())
     val x = center.x + cos(radians).toFloat() * radius
     val y = center.y + sin(radians).toFloat() * radius
@@ -575,19 +610,19 @@ private fun drawJbRingLayer(
     face: JbWatchFace,
     layer: JbWatchLayer,
     nowMillis: Long,
-    batteryLevel: Int
+    dataSnapshot: WatchDataSnapshot,
 ) {
-    if (!shouldDisplayLayer(layer, nowMillis, batteryLevel)) return
+    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot)) return
     val center = jbLayerCenter(face, layer)
     val outer = layer.radiusOuter.takeIf { it > 0f } ?: layer.radius.takeIf { it > 0f } ?: 210f
     val inner = layer.radiusInner.takeIf { it > 0f } ?: (outer - 14f)
     val stroke = (outer - inner).coerceAtLeast(1f)
     val radius = inner + stroke / 2f
-    val sweep = evaluateJbNumericExpression(layer.angle, nowMillis, batteryLevel)
+    val sweep = evaluateJbNumericExpression(layer.angle, nowMillis, dataSnapshot)
         .takeIf { it > 0f }
         ?: layer.angleTotal.takeIf { it > 0f }
         ?: 360f
-    val start = evaluateJbNumericExpression(layer.rotation, nowMillis, batteryLevel) - 90f
+    val start = evaluateJbNumericExpression(layer.rotation, nowMillis, dataSnapshot) - 90f
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
@@ -638,37 +673,43 @@ private fun drawJbShapeLayer(canvas: AndroidCanvas, face: JbWatchFace, layer: Jb
     canvas.drawCircle(center.x, center.y, radius, paint)
 }
 
-private fun resolveJbText(raw: String, nowMillis: Long, batteryLevel: Int, is24Hour: Boolean): String {
+private fun resolveJbText(
+    raw: String,
+    nowMillis: Long,
+    dataSnapshot: WatchDataSnapshot,
+    is24Hour: Boolean,
+): String {
     val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
-    val hour12 = calendar.get(Calendar.HOUR).let { if (it == 0) 12 else it }
     // EEE / MMM 在部分 locale 会带尾句号（es "lun."、de "Mo."），
     // 统一 trimEnd('.') 避免表盘出现「周一.」式拖尾。
     val weekday = SimpleDateFormat("EEE", Locale.getDefault()).format(nowMillis).trimEnd('.')
     val monthName = SimpleDateFormat("MMM", Locale.getDefault()).format(nowMillis).trimEnd('.')
     val dayOfWeekZero = (calendar.get(Calendar.DAY_OF_WEEK) - Calendar.SUNDAY).coerceIn(0, 6)
-    val source = resolveJbDayConditionalText(raw, dayOfWeekZero) ?: raw
-    return source
-        .replace("{dh23z}", calendar.get(Calendar.HOUR_OF_DAY).toString().padStart(2, '0'))
-        .replace("{dh12z}", hour12.toString().padStart(2, '0'))
-        .replace("{dmz}", calendar.get(Calendar.MINUTE).toString().padStart(2, '0'))
-        .replace("{dsz}", calendar.get(Calendar.SECOND).toString().padStart(2, '0'))
-        .replace("{dd}", calendar.get(Calendar.DAY_OF_MONTH).toString().padStart(2, '0'))
-        .replace("{ddm}", calendar.get(Calendar.MONTH).plus(1).toString().padStart(2, '0'))
+    val source = (resolveJbDayConditionalText(raw, dayOfWeekZero) ?: raw)
+        .replace("{time}", "__JB_TIME__")
+        .replace("{ddm}", "__JB_DDM__")
+        .replace("{dmm}", "__JB_DMM__")
+    val interpolated = JB_DYNAMIC_TAG_PATTERN.replace(source) { match ->
+        WatchmakerTagResolver.resolve(
+            tag = match.groupValues[1],
+            now = calendar,
+            snapshot = dataSnapshot,
+        ).renderedValue
+    }
+    return interpolated
+        // JB exports use these two aliases even though they are not part of
+        // the oldest standard vocabulary. Keep them deterministic here.
+        .replace("__JB_DDM__", calendar.get(Calendar.MONTH).plus(1).toString().padStart(2, '0'))
+        .replace("__JB_DMM__", monthName)
+        .replace("__JB_TIME__", if (is24Hour) {
+            SimpleDateFormat("HH:mm", Locale.getDefault()).format(nowMillis)
+        } else {
+            SimpleDateFormat("hh:mm", Locale.getDefault()).format(nowMillis)
+        })
+        .replace("{dh12z}", WatchmakerTagResolver.resolve("dh12z", calendar, dataSnapshot).renderedValue)
         .replace("{ddw2}", weekday)
         .replace("{ddw}", weekday)
         .replace("{ddw0}", dayOfWeekZero.toString())
-        .replace("{dmm}", monthName)
-        .replace("{wtd}", batteryLevel.toString())
-        .replace("{pblp}", batteryLevel.toString())
-        .replace("{blp}", batteryLevel.toString())
-        .replace("{bl}", batteryLevel.toString())
-        .replace("{ssc}", "0")
-        .replace("{shr}", "--")
-        .replace("{wtld}", "--")
-        .replace("{wthd}", "--")
-        .replace("{wt}", "--")
-        .replace("{dampm}", if (calendar.get(Calendar.AM_PM) == Calendar.AM) "AM" else "PM")
-        .replace("{time}", if (is24Hour) SimpleDateFormat("HH:mm", Locale.getDefault()).format(nowMillis) else SimpleDateFormat("hh:mm", Locale.getDefault()).format(nowMillis))
 }
 
 private fun resolveJbDayConditionalText(raw: String, dayOfWeekZero: Int): String? {
@@ -769,34 +810,30 @@ private fun applyJbLayerScale(layer: JbWatchLayer, width: Float, height: Float):
     return (width * scaleX).coerceAtLeast(1f) to (height * scaleY).coerceAtLeast(1f)
 }
 
-private fun rotateJbLayer(canvas: AndroidCanvas, rect: RectF, rotationRaw: String) {
-    val rotation = rotationRaw.toFloatOrNull() ?: 0f
+private fun rotateJbLayer(
+    canvas: AndroidCanvas,
+    rect: RectF,
+    rotationRaw: String,
+    nowMillis: Long,
+    dataSnapshot: WatchDataSnapshot,
+) {
+    val rotation = evaluateJbNumericExpression(rotationRaw, nowMillis, dataSnapshot)
     if (rotation == 0f) return
     canvas.rotate(rotation, rect.centerX(), rect.centerY())
 }
 
-private fun evaluateJbNumericExpression(raw: String, nowMillis: Long, batteryLevel: Int): Float {
+private fun evaluateJbNumericExpression(
+    raw: String,
+    nowMillis: Long,
+    dataSnapshot: WatchDataSnapshot,
+): Float {
     val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
-    val second = calendar.get(Calendar.SECOND) + calendar.get(Calendar.MILLISECOND) / 1_000f
-    val minute = calendar.get(Calendar.MINUTE) + second / 60f
-    val hour = (calendar.get(Calendar.HOUR_OF_DAY) % 12) + minute / 60f
-    val stepCount = 0f
-    val value = raw
-        .replace("{blp}", batteryLevel.toString())
-        .replace("{bl}", batteryLevel.toString())
-        .replace("{pblp}", batteryLevel.toString())
-        .replace("{wt}", batteryLevel.toString())
-        .replace("{ssc}", stepCount.toString())
-        .replace("{sgx}", "0")
-        .replace("{sgy}", "0")
-        .replace("{dsz}", second.toString())
-        .replace("{dm}", minute.toString())
-        .replace("{dh}", hour.toString())
-        .replace("{dmz}", minute.toString())
-        .replace("{dh23z}", calendar.get(Calendar.HOUR_OF_DAY).toString())
-        .replace("{dh12z}", hour.toString())
-        .replace(" ", "")
-    return evaluateJbArithmetic(value)
+    return WatchmakerExpressionEvaluator.evaluateNumber(
+        raw = raw,
+        fallback = 0f,
+    ) { tag ->
+        WatchmakerTagResolver.resolve(tag, calendar, dataSnapshot)
+    }
 }
 
 private fun evaluateJbArithmetic(raw: String): Float {
@@ -876,17 +913,17 @@ private fun parseJbColor(raw: String): Int {
     return runCatching { android.graphics.Color.parseColor("#$hex") }.getOrElse { android.graphics.Color.WHITE }
 }
 
-private fun shouldDisplayLayer(layer: JbWatchLayer, nowMillis: Long, batteryLevel: Int): Boolean {
+private fun shouldDisplayLayer(
+    layer: JbWatchLayer,
+    nowMillis: Long,
+    dataSnapshot: WatchDataSnapshot,
+): Boolean {
     val expr = layer.condValue?.takeIf { it.isNotBlank() } ?: return true
-    return when {
-        "{wci}" in expr -> evaluateWeatherCondition(expr, weatherCode = "01d")
-        "{pblp}" in expr || "{wtd}" in expr -> batteryLevel >= 0
-        else -> true
+    val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val result = WatchmakerExpressionEvaluator.evaluateNumber(expr, Float.NaN) { tag ->
+        WatchmakerTagResolver.resolve(tag, calendar, dataSnapshot)
     }
-}
-
-private fun evaluateWeatherCondition(expr: String, weatherCode: String): Boolean {
-    return evaluateWeatherIndex(expr, weatherCode) >= 0
+    return result.isNaN() || result != 0f
 }
 
 private fun evaluateWeatherIndex(expr: String?, weatherCode: String): Int {
@@ -957,7 +994,7 @@ private fun handleJbWatchTap(
     viewWidth: Float,
     viewHeight: Float,
     nowMillis: Long,
-    batteryLevel: Int
+    dataSnapshot: WatchDataSnapshot,
 ) {
     val canvasWidth = face.designWidth.coerceAtLeast(1)
     val canvasHeight = face.designHeight.coerceAtLeast(1)
@@ -972,7 +1009,7 @@ private fun handleJbWatchTap(
         .asReversed()
         .firstOrNull { layer ->
             val hitSize = resolveJbHitContentSize(face, layer, nowMillis)
-                shouldDisplayLayer(layer, nowMillis, batteryLevel) &&
+                shouldDisplayLayer(layer, nowMillis, dataSnapshot) &&
                 !layer.tapAction.isNullOrBlank() &&
                 resolveJbRect(
                     face = face,

@@ -612,27 +612,67 @@ sealed interface WatchTapAction {
 
     /**
      * WM_TAP_ACTIONS.md 里 `w_heart_rate` / `widget_health` / `w_fit` 属于
-     * “可配置命名动作”：正主指向用户映射的心率/健康应用，未映射时保持
-     * 静默但动作仍然“被识别”。Flue 没有 tap action 映射设置，所以运行时
+     * "可配置命名动作"：正主指向用户映射的心率/健康应用，未映射时保持
+     * 静默但动作仍然"被识别"。Flue 没有 tap action 映射设置，所以运行时
      * 至少要给出触觉反馈并触发一次新的心率测量。
      */
     data object HeartRate : WatchTapAction
+
+    /**
+     * w_app:com.example.pkg/.MainActivity 或 m_app:com.example.pkg
+     * 或 WatchMaker 社区格式 w_app:label`pkg`activity（backtick 分隔）。
+     * 格式：前缀后跟 packageName，可选 /activityClass 或 `分隔的三段式。
+     */
+    data class AppLaunch(val packageName: String, val activityClass: String?) : WatchTapAction
+
     data class Unsupported(val reason: String) : WatchTapAction
 }
 
 object WatchTapActionParser {
-    fun parse(raw: String?): WatchTapAction {
-        val value = raw.orEmpty().trim().lowercase(Locale.ROOT)
-        return when {
-            value.startsWith("widget_calendar") -> WatchTapAction.Calendar
-            value.startsWith("widget_weather") || value.startsWith("m_update_weather") -> WatchTapAction.Weather
-            value.startsWith("w_heart_rate") || value.startsWith("widget_health") || value.startsWith("w_fit") ->
-                WatchTapAction.HeartRate
-            value.isBlank() -> WatchTapAction.Unsupported("empty tap action")
-            value.startsWith("script:") -> WatchTapAction.Unsupported("scripts are disabled")
-            value.startsWith("w_app:") || value.startsWith("m_app:") -> WatchTapAction.Unsupported("app launch actions are disabled")
-            value.contains('/') || value.contains(':') || value.contains('.') -> WatchTapAction.Unsupported("custom intents are disabled")
-            else -> WatchTapAction.Unsupported("unsupported action")
+    fun parse(raw: String?): WatchTapAction = parseInternal(raw.orEmpty().trim())
+
+    private fun parseInternal(value: String): WatchTapAction {
+        val lower = value.lowercase(Locale.ROOT)
+        if (lower.startsWith("widget_calendar")) return WatchTapAction.Calendar
+        if (lower.startsWith("widget_weather") || lower.startsWith("m_update_weather"))
+            return WatchTapAction.Weather
+        if (lower.startsWith("w_heart_rate") || lower.startsWith("widget_health") ||
+            lower.startsWith("w_fit"))
+            return WatchTapAction.HeartRate
+        if (lower.isBlank()) return WatchTapAction.Unsupported("empty tap action")
+        if (lower.startsWith("script:")) return WatchTapAction.Unsupported("scripts are disabled")
+        if (lower.startsWith("w_app:") || lower.startsWith("m_app:")) {
+            val payload = value.substringAfter(':')
+            // WatchMaker 社区格式：w_app:label`pkg`activity（反引号分隔）
+            if (payload.contains('`')) {
+                val parts = payload.split('`')
+                if (parts.size >= 2) {
+                    val pkg = parts[1].trim()
+                    val act = if (parts.size >= 3) parts[2].trim().ifBlank { null } else null
+                    return if (pkg.isBlank()) {
+                        WatchTapAction.Unsupported("empty package name")
+                    } else {
+                        WatchTapAction.AppLaunch(packageName = pkg, activityClass = act)
+                    }
+                }
+            }
+            // 传统格式：w_app:pkg/.Activity 或 w_app:pkg
+            val slash = payload.indexOf('/')
+            val pkg = if (slash >= 0) payload.substring(0, slash) else payload
+            val act: String? = if (slash < 0) null else {
+                val cls = payload.substring(slash + 1)
+                // 相对类名 (.Activity → com.pkg.Activity)
+                if (cls.startsWith('.')) pkg + cls else cls.ifBlank { null }
+            }
+            return if (pkg.isBlank()) {
+                WatchTapAction.Unsupported("empty package name")
+            } else {
+                WatchTapAction.AppLaunch(packageName = pkg.trim(), activityClass = act?.trim())
+            }
         }
+        // 包含 / : . 的其他格式（URL、component name 等）暂不支持
+        if (lower.contains('/') || lower.contains(':') || lower.contains('.'))
+            return WatchTapAction.Unsupported("custom intents are disabled")
+        return WatchTapAction.Unsupported("unsupported action")
     }
 }

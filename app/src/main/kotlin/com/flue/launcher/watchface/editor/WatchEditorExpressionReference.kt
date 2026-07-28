@@ -3,7 +3,7 @@ package com.flue.launcher.watchface.editor
 /**
  * Curated Watchmaker tag quick-reference for the editor's properties panel.
  * The tag list and semantics follow the upstream `WM_TAGS.md` specification;
- * only the most common ~28 tags are surfaced on the watch screen.
+ * only the most common tags are surfaced on the watch screen.
  */
 data class WatchEditorExpressionEntry(
     val tag: String,
@@ -69,6 +69,30 @@ val WATCH_EDITOR_EXPRESSION_GROUPS: List<WatchEditorExpressionGroup> = listOf(
             WatchEditorExpressionEntry("{ssc}", "今日步数"),
             WatchEditorExpressionEntry("{sscp}", "步数目标完成度（%）"),
             WatchEditorExpressionEntry("{scal}", "消耗卡路里（kCal）"),
+        ),
+    ),
+    WatchEditorExpressionGroup(
+        title = "天气",
+        entries = listOf(
+            WatchEditorExpressionEntry("{wm}", "温度单位（C / F）"),
+            WatchEditorExpressionEntry("{wt}", "当前温度"),
+            WatchEditorExpressionEntry("{wtd}", "当前温度（带单位）"),
+            WatchEditorExpressionEntry("{wth}", "今日最高温度"),
+            WatchEditorExpressionEntry("{wthd}", "今日最高温度（带单位）"),
+            WatchEditorExpressionEntry("{wtl}", "今日最低温度"),
+            WatchEditorExpressionEntry("{wtld}", "今日最低温度（带单位）"),
+            WatchEditorExpressionEntry("{wct}", "当前天气状况"),
+            WatchEditorExpressionEntry("{wci}", "天气条件图标代码"),
+            WatchEditorExpressionEntry("{wl}", "天气位置"),
+            WatchEditorExpressionEntry("{wcl}", "云量（0–1）"),
+            WatchEditorExpressionEntry("{wh}", "湿度（0–100）"),
+            WatchEditorExpressionEntry("{whp}", "湿度（带 %）"),
+            WatchEditorExpressionEntry("{wml}", "手动天气位置"),
+            WatchEditorExpressionEntry("{wisday}", "是否为白天（true / false）"),
+            WatchEditorExpressionEntry("{wlu}", "天气更新时间"),
+            WatchEditorExpressionEntry("{wf0dt}", "今天预报温度"),
+            WatchEditorExpressionEntry("{wf1dth}", "明天预报最高温度"),
+            WatchEditorExpressionEntry("{wf1ht}", "下一小时预报温度"),
         ),
     ),
 )

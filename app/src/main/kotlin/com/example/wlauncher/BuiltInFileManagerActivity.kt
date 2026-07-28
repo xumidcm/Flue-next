@@ -1,4 +1,6 @@
-package com.flue.launcher
+﻿package com.flue.launcher
+
+import com.flue.launcher.i18n.FlueComponentActivity
 
 import android.Manifest
 import android.content.ContentUris
@@ -82,7 +84,7 @@ const val EXTRA_FILE_MANAGER_RESULT_URI = "file_manager_result_uri"
 const val FILE_MANAGER_MODE_IMAGE = "image"
 const val FILE_MANAGER_MODE_VIDEO = "video"
 
-class BuiltInFileManagerActivity : ComponentActivity() {
+class BuiltInFileManagerActivity : FlueComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         RecentsVisibility.apply(this)

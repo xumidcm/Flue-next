@@ -1,0 +1,539 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Flue Next</string>
+    <string name="shortcut_settings">Launcher Settings</string>
+    <string name="settings_title">Launcher Settings</string>
+    <string name="internal_watchface_config_title">Built-in Watch Face Settings</string>
+    <string name="flue_accessibility_label">Flue Accessibility Control</string>
+    <string name="flue_accessibility_description">This permission is used only to control double-tap screen lock and open power options. Flue does not connect to the internet and does not collect any user data.</string>
+
+    <!-- General -->
+    <string name="follow_system">Follow System</string>
+
+    <!-- Settings home section headers -->
+    <string name="settings_section_system">System &amp; Tools</string>
+    <string name="settings_section_about">About</string>
+
+    <!-- Language -->
+    <string name="settings_language">Language</string>
+    <string name="settings_language_follow_system">Follow System</string>
+    <string name="settings_language_zh">Chinese</string>
+    <string name="settings_language_en">English</string>
+    <string name="settings_language_ja">Japanese</string>
+
+    <!-- Feature Toggles nav card -->
+    <string name="settings_feature_toggles">Feature Toggles</string>
+    <string name="settings_feature_toggles_sub">Side screen, notifications, Control Center, and watch face indicators</string>
+
+    <!-- Display Fit -->
+    <string name="settings_display_fit">Display Fit</string>
+    <string name="settings_display_fit_sub">Global UI, app list size, and safe area</string>
+    <string name="settings_global_ui_size">Global UI Size</string>
+    <string name="settings_honeycomb_cols">Honeycomb Columns</string>
+    <string name="settings_honeycomb_cols_fmt">%d columns</string>
+    <string name="settings_app_list_size">App List Size</string>
+    <string name="settings_fisheye">Fisheye Effect</string>
+    <string name="settings_fisheye_on">Enable range, strength, and edge spacing controls</string>
+    <string name="settings_fisheye_off">Disable edge scaling for the app list</string>
+    <string name="settings_fisheye_range">Fisheye Range</string>
+    <string name="settings_fisheye_range_fmt">%d rows</string>
+    <string name="settings_md3_top_fisheye">MD3 Top Fisheye</string>
+    <string name="settings_md3_top_fisheye_sub">Only affects icons above center in the MD3 honeycomb list</string>
+    <string name="settings_fisheye_strength">Fisheye Strength</string>
+    <string name="settings_edge_spacing">Edge Icon Spacing</string>
+    <string name="settings_edge_spacing_sub">Compress visual spacing as icons approach the screen edge</string>
+    <string name="settings_left_safe_area">App List Left Safe Area</string>
+    <string name="settings_rotary_haptics">Rotary Haptics</string>
+    <string name="settings_rotary_haptics_on">Keep a light pulse while scrolling with the crown</string>
+    <string name="settings_rotary_haptics_off">Disable crown scroll haptics</string>
+
+    <!-- Appearance: Display -->
+    <string name="settings_display_header">Display</string>
+    <string name="settings_theme_system">System</string>
+    <string name="settings_theme_system_sub">Follow system theme setting</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_theme_dark_sub">Force dark theme</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_light_sub">Force light theme</string>
+
+    <!-- Interface Style -->
+    <string name="settings_ui_style_header">Interface Style</string>
+    <string name="settings_ui_aw">Apple Watch</string>
+    <string name="settings_ui_aw_sub">Glass layers, compact cards, circular carriers, and tighter motion</string>
+    <string name="settings_ui_md3">Material 3</string>
+    <string name="settings_ui_md3_sub">Bigger blocks, MD3E geometry, and stronger layered surfaces</string>
+    <string name="settings_ui_miuix">MIUIX</string>
+    <string name="settings_ui_miuix_sub">HyperOS visual language: grouped rounded cards with blue accents</string>
+
+    <!-- Screen Shape -->
+    <string name="settings_screen_shape_header">Screen Shape</string>
+    <string name="settings_screen_shape_auto">Auto</string>
+    <string name="settings_screen_shape_auto_sub">Follow what the system reports</string>
+    <string name="settings_screen_shape_round">Round</string>
+    <string name="settings_screen_shape_override_sub">Override when the system reports it wrong</string>
+    <string name="settings_screen_shape_square">Square</string>
+
+    <!-- Visual Effects -->
+    <string name="settings_visual_effects_header">Visual Effects</string>
+    <string name="settings_blur">Blur</string>
+    <string name="settings_blur_sub">Enable blur on supported Android versions</string>
+    <string name="settings_edge_blur">Edge Blur (Experimental)</string>
+    <string name="settings_edge_blur_sub">Apply extra blur near the top and bottom edges</string>
+    <string name="settings_edge_blur_radius">Edge Blur Radius</string>
+    <string name="settings_direct_launch">Open Flue to App List</string>
+    <string name="settings_direct_launch_on">Start in the app list and keep back navigation to the watch face</string>
+    <string name="settings_direct_launch_off">Show the watch face first by default</string>
+
+    <!-- Watch Face settings -->
+    <string name="settings_watchface_bottom_fade">Watch Face Bottom Fade</string>
+    <string name="settings_watchface_bottom_fade_on">Keep the bottom fade on AW and MD3 watch faces</string>
+    <string name="settings_watchface_bottom_fade_off">Disable the bottom watch face fade</string>
+    <string name="settings_watchface_date_language">Date Language</string>
+    <string name="settings_watchface_date_system">System</string>
+    <string name="settings_watchface_date_system_sub">Weekday and month follow the system language</string>
+    <string name="settings_watchface_date_zh_sub">Chinese weekday and month names</string>
+    <string name="settings_watchface_date_en_sub">English weekday and month names</string>
+    <string name="settings_watchface_date_ja_sub">Japanese weekday and month names</string>
+    <string name="settings_watchface_status">Watch Face Status Indicators</string>
+    <string name="settings_watchface_status_sub">Show charging and notification indicators at the top of the watch face</string>
+    <string name="settings_watchface_charging_power">Charging Power Text</string>
+    <string name="settings_watchface_charging_power_sub">Show charging wattage or charging text on the watch face</string>
+
+    <!-- Feature Toggles page -->
+    <string name="settings_feature_toggles_title">Feature Toggles</string>
+    <string name="settings_side_screen_card">Side Screen</string>
+    <string name="settings_side_screen_card_sub">Side screen, widget page, steps and card layout</string>
+    <string name="settings_notifications_card">Notifications</string>
+    <string name="settings_notifications_card_sub">Notification previews and ongoing filters</string>
+    <string name="settings_control_center_card">Control Center</string>
+    <string name="settings_control_center_card_sub">Pull-down panel, media card and power button</string>
+    <string name="settings_gestures_card">Gestures</string>
+    <string name="settings_gestures_card_sub">Double-tap to lock and other gestures</string>
+    <string name="settings_app_list_behavior_card">App List Behavior</string>
+    <string name="settings_app_list_behavior_card_sub">Mask colors, row background and folders</string>
+
+    <!-- Side Screen -->
+    <string name="settings_side_screen_title">Side Screen</string>
+    <string name="settings_side_screen">Side Screen</string>
+    <string name="settings_side_screen_sub">Swipe right from the watch face to open quick launch and notification previews</string>
+    <string name="settings_widget_page">Show Widget Page</string>
+    <string name="settings_widget_page_on">Swipe left from the watch face to open the widget page</string>
+    <string name="settings_widget_page_off">Disable the swipe-left widget page</string>
+    <string name="settings_swap_music_notifications">Swap Music and Notifications</string>
+    <string name="settings_swap_music_notifications_on">Show music on side screen and notifications in Control Center</string>
+    <string name="settings_swap_music_notifications_off">Keep notifications on side screen and music in Control Center</string>
+    <string name="settings_show_steps">Show Step Count</string>
+    <string name="settings_show_steps_sub">Show steps to the right of battery on side screen</string>
+
+    <!-- Notifications -->
+    <string name="settings_notifications_title">Notifications</string>
+    <string name="settings_show_notifications">Show Notifications</string>
+    <string name="settings_show_notifications_on">Show notification previews below quick launch on the side screen</string>
+    <string name="settings_show_notifications_off">Hide notifications from the side screen</string>
+    <string name="settings_show_ongoing">Show Ongoing Notifications</string>
+    <string name="settings_show_ongoing_on">Show useful ongoing notifications while filtering system noise</string>
+    <string name="settings_show_ongoing_off">Hide ongoing notifications</string>
+
+    <!-- Control Center -->
+    <string name="settings_control_center_title">Control Center</string>
+    <string name="settings_show_cc">Show Control Center</string>
+    <string name="settings_show_cc_on">Pull down from the watch face for brightness, volume, and quick toggles</string>
+    <string name="settings_show_cc_off">Disable the pull-down control center</string>
+    <string name="settings_show_music">Music Controls</string>
+    <string name="settings_show_music_on">Show the media card in Control Center</string>
+    <string name="settings_show_music_off">Hide the media card from Control Center</string>
+    <string name="settings_media_actions">Media App Actions</string>
+    <string name="settings_media_actions_on">Show app-defined actions around previous and next</string>
+    <string name="settings_media_actions_off">Keep only previous, play, and next</string>
+    <string name="settings_cc_power">Control Center Power Button</string>
+    <string name="settings_cc_power_accessible">Accessibility is enabled; the power icon opens power options</string>
+    <string name="settings_cc_power_require">Requires Accessibility; used only to open power options</string>
+
+    <!-- Gestures -->
+    <string name="settings_gestures_title">Gestures</string>
+    <string name="settings_double_tap_lock">Double Tap to Lock</string>
+    <string name="settings_double_tap_on">Accessibility is enabled; double tap the watch face to lock the screen</string>
+    <string name="settings_double_tap_require">Requires Accessibility; used only for double-tap screen lock</string>
+
+    <!-- App List Behavior -->
+    <string name="settings_app_list_behavior_title">App List Behavior</string>
+    <string name="settings_watchface_launch_mask">Watch Face Launch Mask Colors</string>
+    <string name="settings_watchface_launch_mask_on">Tint the launch mask from the watch face when opening apps from the list</string>
+    <string name="settings_watchface_launch_mask_off">Use neutral black or white launch masks while the app list background stays pure black or white</string>
+    <string name="settings_list_row_bg">List Row Background</string>
+    <string name="settings_list_row_bg_on">Show the tinted background behind each list row</string>
+    <string name="settings_list_row_bg_off">Hide the list row background tint</string>
+    <string name="settings_allow_folders">Allow Folders</string>
+    <string name="settings_allow_folders_on">Hold a dragged icon over another icon center for 500ms to create a folder</string>
+    <string name="settings_allow_folders_off">Disable drag-to-folder creation and keep reordering only</string>
+    <string name="settings_two_tone_icons">Two-Tone Icons</string>
+    <string name="settings_two_tone_icons_sub">Use adaptive monochrome when available, otherwise grayscale + tint</string>
+    <string name="settings_icon_shadow">Icon Shadow</string>
+    <string name="settings_icon_shadow_sub">Reduce shadow drawing for app icons and drag previews</string>
+    <string name="settings_direct_launch_app_list">Open Flue to App List</string>
+    <string name="settings_direct_launch_app_list_on">Start in the app list and keep back navigation to the watch face</string>
+    <string name="settings_direct_launch_app_list_off">Show the watch face first by default</string>
+
+    <!-- Animations -->
+    <string name="settings_launch_animation">Flue Launch &amp; Return Animation</string>
+    <string name="settings_launch_animation_sub">Follow the system when off; use Flue mask and icon-origin motion when on</string>
+    <string name="settings_app_list_shrink">App List Shrink Animation</string>
+    <string name="settings_app_list_shrink_sub">Fade only when returning from an app; skip the list-wide scale</string>
+    <string name="settings_icon_float">Icon Float on Return</string>
+    <string name="settings_icon_float_sub">Replay the row float-in when returning from an app</string>
+    <string name="settings_face_shrink">Watch Face Shrink Animation</string>
+    <string name="settings_face_shrink_sub">Skip the scale when returning to the face or opening any overlay</string>
+    <string name="settings_legacy_transition">Legacy Transition</string>
+    <string name="settings_legacy_transition_sub">Use the pre-watchOS transition: the face zooms toward you</string>
+    <string name="settings_stagger_entry">Staggered Entry</string>
+    <string name="settings_stagger_entry_sub">Rows enter top-first with a cascading delay</string>
+    <string name="settings_reduce_motion">Reduce Motion</string>
+    <string name="settings_reduce_motion_sub">Remove the settle overshoot: transitions stop exactly at rest</string>
+    <string name="settings_hide_recents">Hide Recents Card</string>
+    <string name="settings_hide_recents_sub">Hide Flue from the system recents screen</string>
+
+    <!-- Search index: titles only used in search -->
+    <string name="search_t_theme_system">Follow system (light/dark)</string>
+    <string name="search_t_edge_blur">Edge blur</string>
+    <string name="search_t_splash_delay">Launch overlay delay</string>
+    <string name="search_t_watchface_store">Watch face store</string>
+    <string name="search_t_watchface_editor_new">New watch face</string>
+    <string name="search_t_watchface_import">Import watch face file</string>
+    <string name="search_t_watchface_more">More watch face settings</string>
+    <string name="search_t_widget_page">Widget page</string>
+    <string name="search_t_motion_profile_entry">Motion profile entry</string>
+    <string name="search_t_music_text_anim">Music text animation</string>
+    <string name="search_t_backup">Backup and restore</string>
+    <string name="search_t_donate">Donate</string>
+
+    <!-- Search index: descriptions -->
+    <string name="search_d_appearance">Layout, theme, UI style and blur</string>
+    <string name="search_d_layout_honeycomb">Icon honeycomb grid</string>
+    <string name="search_d_layout_list">Icons in a single column list</string>
+    <string name="search_d_theme_mode">Theme mode</string>
+    <string name="search_d_ui_style">Apple Watch / MD3 / MIUIX</string>
+    <string name="search_d_screen_shape">Manually specify round or square</string>
+    <string name="search_d_blur">Blur and glass effects</string>
+    <string name="search_d_edge_blur">Blur fade at top and bottom of the app list</string>
+    <string name="search_d_edge_blur_radius">Blur intensity at edges</string>
+    <string name="search_d_top_fade">App list top fade height</string>
+    <string name="search_d_bottom_fade">App list bottom fade height</string>
+    <string name="search_d_direct_launch">Skip the watch face and go straight to the app list</string>
+    <string name="search_d_splash_delay">How long the overlay lingers</string>
+    <string name="search_d_display_size">Global UI size, honeycomb columns, fisheye</string>
+    <string name="search_d_global_ui_scale">Overall scale</string>
+    <string name="search_d_honeycomb_cols">Number of columns in the honeycomb grid</string>
+    <string name="search_d_app_list_scale">Unified icon and text scale</string>
+    <string name="search_d_fisheye">Shrink icons near the edge</string>
+    <string name="search_d_fisheye_range">Number of rows in the fisheye zone</string>
+    <string name="search_d_fisheye_strength">How much edge icons shrink</string>
+    <string name="search_d_edge_spacing">Icons closer to the edge have smaller gaps</string>
+    <string name="search_d_left_safe_area">Left inset padding</string>
+    <string name="search_d_rotary_haptics">Haptic feedback when scrolling the crown</string>
+    <string name="search_d_watchfaces">Select and manage watch faces</string>
+    <string name="search_d_watchface_store">Download watch faces online</string>
+    <string name="search_d_watchface_editor_new">Open the watch face editor</string>
+    <string name="search_d_watchface_import">Import a .watch face package</string>
+    <string name="search_d_watchface_more">Heart rate, date language, status indicators</string>
+    <string name="search_d_watchface_date_locale">System / Chinese / English / Japanese</string>
+    <string name="search_d_force_fill">Stretch the watch face to fill the screen</string>
+    <string name="search_d_heart_rate">Grant access to read heart rate</string>
+    <string name="search_d_watchface_font">Custom watch face font file</string>
+    <string name="search_d_watchface_bottom_fade">Watch face bottom fade</string>
+    <string name="search_d_watchface_status">Charging lightning bolt and notification dot</string>
+    <string name="search_d_charging_power">Show wattage while charging</string>
+    <string name="search_d_icon_packs">Third-party icon packs</string>
+    <string name="search_d_hidden_apps">Hide apps from the list</string>
+    <string name="search_d_feature_toggles">Side screen, notifications, control center, gestures</string>
+    <string name="search_d_side_screen">Side screen, widget page, step count</string>
+    <string name="search_d_side_screen_toggle">Swipe right for quick launch and notifications</string>
+    <string name="search_d_widget_page">Swipe left for the widget page</string>
+    <string name="search_d_show_steps">Step count at the bottom of the side screen</string>
+    <string name="search_d_swap">Swap side screen and control center cards</string>
+    <string name="search_d_notifications">Notification display and persistent filter</string>
+    <string name="search_d_show_notifications">Notification preview on the side screen</string>
+    <string name="search_d_show_ongoing">Filter out system noise</string>
+    <string name="search_d_control_center">Pull-down panel, music card, power button</string>
+    <string name="search_d_show_cc">Pull down the watch face to open control center</string>
+    <string name="search_d_show_music">Media card in control center</string>
+    <string name="search_d_media_actions">Extra action buttons on the media card</string>
+    <string name="search_d_cc_power">Open power options (requires accessibility)</string>
+    <string name="search_d_gestures">Double-tap to sleep etc.</string>
+    <string name="search_d_double_tap">Requires accessibility permission</string>
+    <string name="search_d_app_list_behavior">Mask color, row background, folders</string>
+    <string name="search_d_folders">Drag icons together to create a folder</string>
+    <string name="search_d_launch_mask">Launch overlay follows watch face colors</string>
+    <string name="search_d_row_bg">Row background in list mode</string>
+    <string name="search_d_performance">Animation toggles and icon quality</string>
+    <string name="search_d_stagger">Rows enter one after another</string>
+    <string name="search_d_legacy">Pre-watchOS three-stage animation</string>
+    <string name="search_d_app_list_shrink">Scale on return</string>
+    <string name="search_d_icon_float">Replay the float-in animation when returning from an app</string>
+    <string name="search_d_face_shrink">Scale when returning to watch face or pulling out an overlay</string>
+    <string name="search_d_reduce_motion">Stop transitions at rest, no overshoot bounce</string>
+    <string name="search_d_launch_animation">Take over app launch and return transitions</string>
+    <string name="search_d_icon_shadow">Platform elevation shadows</string>
+    <string name="search_d_two_tone">Monochrome layer or greyscale tint</string>
+    <string name="search_d_low_res">Reduce icon overhead for smoother performance</string>
+    <string name="search_d_music_text">Song change text transition</string>
+    <string name="search_d_hide_recents">Hide Flue from the recents screen</string>
+    <string name="search_d_thumbnails">Photo and video list preview images</string>
+    <string name="search_d_motion_profile_entry">Go to the motion profile page</string>
+    <string name="search_d_motion_profile">Duration, Bézier and spring parameters</string>
+    <string name="search_d_motion_bounce">Bounce back as soon as a gesture crosses the boundary</string>
+    <string name="search_d_edge_strength">Boundary bounce amplitude</string>
+    <string name="search_d_tools">Backups, diagnostics and file management</string>
+    <string name="search_d_export_log">Export crash and system logs</string>
+    <string name="search_d_diagnostic">Temporarily enable diagnostic logging</string>
+    <string name="search_d_reset">Reset appearance and performance options</string>
+    <string name="search_d_backup">Export / import settings</string>
+    <string name="search_d_about">Version and credits</string>
+    <string name="search_d_donate">Support development</string>
+
+    <!-- Common actions -->
+    <string name="settings_language_restart_title">Restart Required</string>
+    <string name="settings_language_restart_message">Flue needs to restart for the language change to take full effect. Tap Confirm to restart now.</string>
+    <string name="settings_language_restart_confirm">Confirm</string>
+    <string name="toast_language_save_failed">Could not save the language setting. Please try again.</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_share">Share</string>
+    <string name="action_done">Done</string>
+
+    <!-- Progress and results -->
+    <string name="progress_import_watchface">Importing watch face</string>
+    <string name="progress_import_watchface_detail">Detecting and importing a standard .watch / jb_watch face</string>
+    <string name="progress_import_done">Import complete</string>
+    <string name="progress_export_config">Exporting settings</string>
+    <string name="progress_export_config_detail">Writing the Flue backup ZIP</string>
+    <string name="progress_export_done">Export complete</string>
+    <string name="progress_read_config">Reading settings</string>
+    <string name="progress_read_config_detail">Checking the backup ZIP</string>
+    <string name="progress_import_config">Importing settings</string>
+    <string name="progress_import_config_detail">Restoring the selected items</string>
+
+    <!-- Toasts -->
+    <string name="toast_font_save_failed">Could not save the font</string>
+    <string name="toast_font_updated">Watch face font updated</string>
+    <string name="toast_import_failed_fmt">Import failed: %s</string>
+    <string name="toast_export_failed_fmt">Export failed: %s</string>
+    <string name="toast_read_failed_fmt">Read failed: %s</string>
+    <string name="toast_delete_failed_fmt">Delete failed: %s</string>
+    <string name="toast_deleted_fmt">Deleted %s</string>
+    <string name="toast_grant_accessibility">Grant Flue accessibility access in system settings</string>
+    <string name="toast_no_custom_curves">No custom motion curves to export</string>
+    <string name="toast_curves_exported">Motion curves exported</string>
+    <string name="toast_curves_imported_fmt">Imported %d motion curves</string>
+    <string name="toast_no_watchface_config">No settings available for this watch face</string>
+    <string name="toast_body_sensors_granted">Body sensors permission granted</string>
+    <string name="toast_select_at_least_one">Select at least one item</string>
+    <string name="toast_pick_backup_first">Pick a backup file first</string>
+    <string name="toast_share_failed">Share failed</string>
+    <string name="toast_export_failed">Export failed</string>
+    <string name="toast_qq_copied_fmt">QQ copied: %s</string>
+
+    <string name="backup_unknown_location">Unknown location</string>
+
+    <!-- Settings home -->
+    <string name="settings_root_title">Flue Settings</string>
+    <string name="settings_search_empty">No matching settings</string>
+    <string name="settings_section_appearance">Appearance</string>
+    <string name="settings_section_watchface">Watch face</string>
+    <string name="settings_section_app_list">App list</string>
+    <string name="settings_section_animation">Animation</string>
+    <string name="settings_section_input">Gestures and input</string>
+    <string name="settings_appearance">Display and appearance</string>
+    <string name="settings_appearance_sub">Layout, blur and launch icons</string>
+    <string name="settings_appearance_sub_md3">Layout, material layers and MD3 motion</string>
+    <string name="settings_watchfaces">Watch faces</string>
+    <string name="settings_watchfaces_sub_md3_fmt">MD3 home and watch face shapes are linked · %s</string>
+    <string name="settings_icon_packs">Icon packs</string>
+    <string name="settings_icon_pack_system_default">System default icons</string>
+    <string name="settings_hidden_apps">Hidden apps</string>
+    <string name="settings_hidden_apps_count_fmt">%d apps hidden</string>
+    <string name="settings_performance">Performance and animation</string>
+    <string name="settings_performance_sub">Icon quality and animation controls</string>
+    <string name="settings_tools">Tools</string>
+    <string name="settings_tools_sub">Backups, log export and reset</string>
+    <string name="settings_about">About</string>
+    <string name="settings_about_sub_fmt">Flue Next  %s</string>
+
+    <!-- Watch faces -->
+    <string name="settings_watchface_refresh">Rescan watch faces</string>
+    <string name="settings_watchface_refresh_sub">Scan standard .watch files, installed faces and compatible folders</string>
+    <string name="settings_watchface_import">Import watch face</string>
+    <string name="settings_watchface_import_sub">Import a standard Watchmaker .watch face (jb_watch packages supported)</string>
+    <string name="settings_watchface_store">Watch face store</string>
+    <string name="settings_watchface_store_sub">Browse the Watchmaker Community Store and install .watch faces safely</string>
+    <string name="settings_watchface_editor_new">New .watch face</string>
+    <string name="settings_watchface_editor_new_sub">Build basic layers in the editor with a live preview</string>
+    <string name="settings_watchface_editor_current">Edit current standard face</string>
+    <string name="settings_watchface_editor_current_sub_fmt">Edit %s in an isolated draft and save as a new face</string>
+    <string name="settings_watchface_more">More watch face options</string>
+    <string name="settings_watchface_more_sub">Built-in face font and bottom fade</string>
+    <string name="settings_watchmaker_force_fill">Force fill</string>
+    <string name="settings_watchmaker_force_fill_on">Scale from the canvas center and crop the edges</string>
+    <string name="settings_watchmaker_force_fill_off">Show the full design canvas and respect the declared shape</string>
+    <string name="settings_watchface_heart_rate">Watch face heart rate</string>
+    <string name="settings_watchface_heart_rate_on">Body sensors granted; supported .watch tags can read heart rate</string>
+    <string name="settings_watchface_heart_rate_off">Heart rate stays unavailable until granted; tap to let the system ask</string>
+    <string name="settings_watch_weather">Watch face weather</string>
+    <string name="settings_watch_weather_sub">Set the weather location and temperature unit shared by standard and JB faces</string>
+    <string name="settings_watch_weather_city">Manual city</string>
+    <string name="settings_watch_weather_city_selected_fmt">Currently using: %s</string>
+    <string name="settings_watch_weather_city_system">Currently using the system’s approximate location</string>
+    <string name="settings_watch_weather_city_unset">Not set; enter a city or allow approximate location</string>
+    <string name="settings_watch_weather_use_system">Use system location</string>
+    <string name="settings_watch_weather_use_system_active">System approximate location is active; tap to refresh now</string>
+    <string name="settings_watch_weather_use_system_sub">Clear the manual city and use the system’s approximate location</string>
+    <string name="settings_watch_weather_unit">Temperature unit</string>
+    <string name="settings_watch_weather_celsius">Celsius (°C)</string>
+    <string name="settings_watch_weather_celsius_sub">Default; weather data is always stored internally in Celsius</string>
+    <string name="settings_watch_weather_fahrenheit">Fahrenheit (°F)</string>
+    <string name="settings_watch_weather_fahrenheit_sub">Convert to Fahrenheit only at the watch face rendering boundary</string>
+    <string name="settings_watch_weather_refresh">Refresh weather</string>
+    <string name="settings_watch_weather_refresh_sub">Update the weather cache in the background using the selected location</string>
+    <string name="settings_watch_weather_city_dialog_title">Set manual city</string>
+    <string name="settings_watch_weather_city_dialog_message">Enter a city name and Flue will resolve it through Open-Meteo. The city name is stored only on this device.</string>
+    <string name="settings_watch_weather_city_hint">For example: Shanghai</string>
+    <string name="toast_weather_system_location">Switched to the system’s approximate location</string>
+    <string name="toast_weather_location_denied">Location permission was not granted; the previous manual city was kept</string>
+    <string name="toast_weather_refresh_requested">Weather refresh requested</string>
+    <string name="toast_weather_city_saved">City saved and weather refresh requested</string>
+    <string name="settings_watchface_font">Watch face font</string>
+    <string name="settings_watchface_font_default">System default font</string>
+    <string name="settings_watchface_font_clear">Restore default font</string>
+    <string name="settings_watchface_font_clear_sub">Clear the saved watch face font</string>
+
+    <!-- About and Donate -->
+    <string name="settings_about_title">About</string>
+    <string name="settings_donate_title">Support development</string>
+    <string name="settings_donate_tip">Thank you so much for supporting Flue Next! Tap a QR code below to view it full screen.</string>
+    <string name="settings_donate_wechat">WeChat</string>
+    <string name="settings_donate_preview_tap">Tap the thumbnail to view full screen</string>
+    <string name="settings_donate_alipay">Alipay</string>
+    <string name="about_author_name">柚子柚子皮</string>
+    <string name="about_community_group_fmt">Group: %s</string>
+    <string name="about_join_group">Join the community for updates</string>
+    <string name="about_donate">Support development</string>
+    <string name="about_donate_methods">WeChat / Alipay</string>
+    <string name="about_open_source">Thanks to these open-source projects</string>
+    <string name="about_qq_copy_fmt">QQ copied: %s</string>
+
+    <!-- Language AI disclaimer -->
+    <string name="settings_lang_ai_disclaimer_en">English and Japanese translations are AI-generated and may not be fully accurate.</string>
+
+    <!-- Icon packs -->
+    <string name="settings_icon_pack_default">System default</string>
+    <string name="settings_icon_pack_default_sub">Use the current system icon pack</string>
+    <string name="settings_icon_pack_adw">ADW icon pack</string>
+    <string name="settings_icon_pack_refresh">Refresh icon packs</string>
+    <string name="settings_icon_pack_refresh_sub">Rescan installed ADW icon packs</string>
+
+    <!-- Appearance extras -->
+    <string name="settings_section_layout">Layout</string>
+    <string name="settings_layout_honeycomb">Honeycomb layout</string>
+    <string name="settings_layout_honeycomb_sub">Apple Watch style</string>
+    <string name="settings_layout_list">List layout</string>
+    <string name="settings_layout_list_sub">Classic vertical list</string>
+    <string name="settings_top_fade">Top fade range</string>
+    <string name="settings_bottom_fade">Bottom fade range</string>
+    <string name="settings_section_launch">Launch</string>
+    <string name="settings_splash">Launch overlay</string>
+    <string name="settings_splash_sub">Show icon transition when opening an app</string>
+    <string name="settings_glass_highlight">Glass highlight</string>
+    <string name="settings_glass_highlight_on">Control center uses iOS-style vertical Pill sliders with a translucent highlight</string>
+    <string name="settings_glass_highlight_off">Control center uses classic horizontal sliders</string>
+    <string name="settings_splash_delay">Overlay duration</string>
+
+    <!-- Performance and animation -->
+    <string name="settings_performance_title">Performance and animation</string>
+    <string name="settings_low_res_icons">Low-resolution icons</string>
+    <string name="settings_low_res_icons_sub">Reduce icon overhead for smoother scrolling</string>
+    <string name="settings_music_text_animation">Music text switch animation</string>
+    <string name="settings_builtin_thumbnails">Built-in manager thumbnails</string>
+    <string name="settings_builtin_thumbnails_sub">Show thumbnails to the left of photo and video list entries</string>
+    <string name="settings_motion_profile">Motion profile</string>
+    <string name="settings_motion_profile_sub_fmt">%1$s · boundary bounce %2$s</string>
+    <string name="settings_motion_bounce_on">on</string>
+    <string name="settings_motion_bounce_off">off</string>
+
+    <!-- Motion profile -->
+    <string name="settings_motion_profile_title">Motion profile</string>
+    <string name="settings_motion_profile_hint">Pick a preset to copy it as your own curve. Duration 80–1200 ms, delay 0–500 ms; set boundary strength to 0 to disable bounce.</string>
+    <string name="settings_motion_profile_preset">Built-in preset (copy to edit)</string>
+    <string name="settings_motion_profile_custom">Custom motion curve</string>
+    <string name="settings_motion_profile_copy">Copy current curve</string>
+    <string name="settings_motion_profile_copy_sub">Create an editable copy and apply it immediately</string>
+    <string name="settings_motion_profile_delete">Delete current custom curve</string>
+    <string name="settings_motion_profile_delete_sub">Built-in soft and snappy presets are kept</string>
+    <string name="settings_motion_bounce">Boundary bounce</string>
+    <string name="settings_motion_bounce_sub">Immediately bounce back when a gesture crosses the edge</string>
+    <string name="settings_motion_bounce_strength">Boundary strength</string>
+    <string name="settings_motion_phase_duration_fmt">%s duration</string>
+    <string name="settings_motion_phase_delay_fmt">%s delay</string>
+    <string name="settings_motion_bezier">Cubic Bézier</string>
+    <string name="settings_motion_bezier_sub">Directly control the two control points of the timing curve</string>
+    <string name="settings_motion_spring">Physical spring</string>
+    <string name="settings_motion_spring_sub">Use damping and stiffness to tune the bounce feel</string>
+    <string name="settings_motion_damping_fmt">%s damping ratio</string>
+    <string name="settings_motion_stiffness_fmt">%s stiffness</string>
+    <string name="settings_motion_export_curves">Export custom curves</string>
+    <string name="settings_motion_export_curves_sub">Export as a JSON file for backup</string>
+    <string name="settings_motion_import_curves">Import curves</string>
+    <string name="settings_motion_import_curves_sub">Import from JSON and create new custom curves</string>
+    <string name="settings_motion_phase_app_list_enter">App list enter</string>
+    <string name="settings_motion_phase_app_launch">App launch</string>
+    <string name="settings_motion_phase_app_return">App return</string>
+    <string name="settings_motion_phase_pull_to_face">Swipe up to watch face</string>
+    <string name="settings_motion_phase_edge_bounce">Boundary bounce</string>
+    <string name="settings_motion_spring_fmt">Spring(damping %1$.2f, stiffness %2$d)</string>
+
+    <!-- Tools -->
+    <string name="settings_tools_title">Tools</string>
+    <string name="settings_backup_menu">Import / export settings</string>
+    <string name="settings_backup_menu_sub">Pick which items and watch face assets to back up</string>
+    <string name="settings_export_log">Export logs</string>
+    <string name="settings_export_log_sub">Export the Flue summary, crash files and last 500 system log lines</string>
+    <string name="settings_diagnostic_logging">Diagnostic logging</string>
+    <string name="settings_diagnostic_logging_on">On, turns off automatically after 5 minutes</string>
+    <string name="settings_diagnostic_logging_off">Off by default; temporarily allows diagnostic logs in release builds</string>
+    <string name="settings_reset_defaults">Reset to defaults</string>
+    <string name="settings_reset_defaults_sub">Reset appearance and performance options</string>
+
+    <!-- Backup and restore -->
+    <string name="settings_backup_export_page">Export settings</string>
+    <string name="settings_backup_export_page_sub">Export settings, ordering and watch face assets as a ZIP</string>
+    <string name="settings_backup_import_page">Import settings</string>
+    <string name="settings_backup_import_page_sub">Pick a Flue ZIP backup and restore selected items</string>
+    <string name="settings_backup_export_start">Start export</string>
+    <string name="settings_backup_export_start_sub">Choose a location, then write the ZIP backup</string>
+    <string name="settings_backup_import_pick">Pick a backup file</string>
+    <string name="settings_backup_import_pick_sub">Choose a Flue ZIP backup file</string>
+    <string name="settings_backup_preview_fmt">Backup version %1$s · %2$s</string>
+    <string name="settings_backup_unknown_time">Unknown time</string>
+    <string name="settings_backup_import_start">Start import</string>
+    <string name="settings_backup_import_start_sub">Restore the selected items</string>
+    <string name="backup_item_settings">Settings</string>
+    <string name="backup_item_settings_sub">Appearance, performance and general toggles</string>
+    <string name="backup_item_app_order">App order</string>
+    <string name="backup_item_app_order_sub">Order of apps in the list</string>
+    <string name="backup_item_widget_order">Widget order</string>
+    <string name="backup_item_widget_order_sub">Widget list and slot order</string>
+    <string name="backup_item_side_screen_order">Side screen order</string>
+    <string name="backup_item_side_screen_order_sub">Side screen shortcut slots</string>
+    <string name="backup_item_photo_watchface">Photo watch face</string>
+    <string name="backup_item_photo_watchface_sub">Photo face settings and the current image</string>
+    <string name="backup_item_video_watchface">Video watch face</string>
+    <string name="backup_item_video_watchface_sub">Video face settings and the current video</string>
+    <string name="backup_item_watch_files">.watch faces</string>
+    <string name="backup_item_watch_files_sub">Imported third-party .watch face files</string>
+    <string name="backup_summary_none">None</string>
+    <string name="backup_share_title">Share settings backup</string>
+
+    <!-- Delete watch face dialog -->
+    <string name="dialog_delete_watchface_title">Delete watch face</string>
+    <string name="dialog_delete_watchmaker_fmt">Delete %s? This standard .watch face will be removed from Flue\'s private folder.</string>
+    <string name="dialog_delete_jbwatch_fmt">Delete %s? This jb_watch compatible face will be removed from Flue\'s private folder.</string>
+    <string name="dialog_delete_imported_fmt">Delete %s? This imported face will be removed from Flue\'s private folder.</string>
+</resources>

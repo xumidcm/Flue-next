@@ -3,6 +3,7 @@ package com.flue.launcher.applist.nativeview
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import com.flue.launcher.applist.model.AppItemKey
 import com.flue.launcher.applist.model.AppListCommand
 import com.flue.launcher.motion.LocalFlueMotionProfile
 
@@ -11,6 +12,7 @@ fun NativeAppListHost(
     content: NativeAppListContent,
     config: NativeAppListConfig,
     onCommand: (AppListCommand) -> Boolean,
+    onCreateFolder: ((AppListCommand.CreateFolder) -> AppItemKey?)? = null,
     onScrollToTop: () -> Unit = {},
     modifier: Modifier = Modifier,
     layoutStrategy: NativeAppListLayoutStrategy = LinearNativeAppListLayoutStrategy,
@@ -29,6 +31,7 @@ fun NativeAppListHost(
             view.setLayoutStrategy(layoutStrategy)
             view.setConfig(nativeConfig)
             view.onCommand = onCommand
+            view.onCreateFolder = onCreateFolder
             view.onScrollToTop = onScrollToTop
             view.submit(content)
         },

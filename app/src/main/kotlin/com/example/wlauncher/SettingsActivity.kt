@@ -1,5 +1,9 @@
 package com.flue.launcher
 
+import androidx.compose.ui.res.stringResource
+import com.flue.launcher.i18n.FlueComponentActivity
+
+
 import android.Manifest
 import android.app.Activity
 import android.content.ClipData
@@ -7,7 +11,10 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.graphics.Color as AndroidColor
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings as AndroidSettings
 import android.widget.Toast
@@ -55,6 +62,7 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -68,8 +76,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -86,6 +99,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -104,6 +118,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -130,11 +145,12 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.dudu.wearlauncher.utils.ILog
+import com.flue.launcher.logging.FlueLog
 import com.flue.launcher.backup.FlueBackupOptions
 import com.flue.launcher.backup.FlueBackupPreview
 import com.flue.launcher.service.FlueAccessibilityService
@@ -170,9 +186,10 @@ import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.InternalWatchFaceStorage
-import com.flue.launcher.watchface.LunchWatchFaceDescriptor
-import com.flue.launcher.watchface.LunchWatchFaceRuntime
+import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.watchface.standard.WatchDateLocale
+import com.flue.launcher.watchface.standard.WatchTemperatureUnit
+import com.flue.launcher.watchface.standard.WatchWeatherRepository
 import com.flue.launcher.watchface.store.WatchStoreRepository
 import java.text.SimpleDateFormat
 import kotlinx.coroutines.Dispatchers
@@ -186,7 +203,9 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
-private const val ABOUT_VERSION = "beta1.5"
+private val ABOUT_VERSION = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+private const val PROJECT_REPOSITORY_LABEL = "xumidcm/Flue"
+private const val PROJECT_REPOSITORY_URL = "https://github.com/xumidcm/Flue"
 private const val COMMUNITY_GROUP_NUMBER = "1097162313"
 private const val AUTHOR_QQ_NUMBER = "3513903055"
 private const val AUTHOR_BILIBILI_URL = "https://m.bilibili.com/space/1609437970"
@@ -196,6 +215,18 @@ const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
 const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
 private val LocalSettingsLeftSafeInsetPercent = compositionLocalOf { 0 }
+
+/**
+ * 搜索跳转目标。[token] 每次点击自增，用来让同一个 key 也能重新触发定位。
+ * [onConsumed] 由 scaffold 在定位完成后回调，避免返回上一页时又跳一次。
+ */
+private data class SettingsSearchTarget(
+    val itemKey: String,
+    val token: Int,
+    val onConsumed: () -> Unit,
+)
+
+private val LocalSettingsSearchTarget = compositionLocalOf<SettingsSearchTarget?> { null }
 
 enum class SettingsDestination {
     ROOT,
@@ -218,6 +249,7 @@ enum class SettingsDestination {
     BACKUP,
     BACKUP_EXPORT,
     BACKUP_IMPORT,
+    LANGUAGE,
     ABOUT,
     DONATE
 }
@@ -248,17 +280,17 @@ private enum class BlockingProgressCompletionAction {
     WatchFaceArchiveImport
 }
 
-private enum class WatchFaceArchiveImportMode {
-    WATCH,
-    LEGACY
-}
 
-class SettingsActivity : ComponentActivity() {
+class SettingsActivity : FlueComponentActivity() {
     private var launchRequestId = 0L
     private var launchConfig by mutableStateOf(SettingsLaunchConfig())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        applySettingsEdgeToEdge(
+            darkTheme = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+                Configuration.UI_MODE_NIGHT_YES,
+        )
         RecentsVisibility.apply(this)
         launchConfig = intent.readSettingsLaunchConfig()
         setContent {
@@ -267,6 +299,15 @@ class SettingsActivity : ComponentActivity() {
             val uiStyle by viewModel.uiStyle.collectAsStateWithLifecycle()
             val globalUiScalePercent by viewModel.globalUiScalePercent.collectAsStateWithLifecycle()
             val screenShape by viewModel.screenShapeOverride.collectAsStateWithLifecycle()
+            val systemInDarkTheme = isSystemInDarkTheme()
+            val darkTheme = when (themeMode) {
+                ThemeMode.SYSTEM -> systemInDarkTheme
+                ThemeMode.DARK -> true
+                ThemeMode.LIGHT -> false
+            }
+            SideEffect {
+                applySettingsEdgeToEdge(darkTheme = darkTheme)
+            }
             WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle, screenShape = screenShape) {
                 ProvideGlobalUiScale(globalUiScalePercent) {
                     SettingsRootScreen(
@@ -275,6 +316,27 @@ class SettingsActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun applySettingsEdgeToEdge(darkTheme: Boolean) {
+        // Settings draws its own opaque theme background. Keep the window edge-to-edge so
+        // transparent status/navigation bars reveal that background instead of the theme's
+        // black windowBackground. WindowCompat also works for gesture and three-button nav.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = AndroidColor.TRANSPARENT
+        window.navigationBarColor = AndroidColor.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.navigationBarDividerColor = AndroidColor.TRANSPARENT
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isStatusBarContrastEnforced = false
+            window.isNavigationBarContrastEnforced = false
+        }
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = !darkTheme
+            isAppearanceLightNavigationBars = !darkTheme
         }
     }
 
@@ -318,6 +380,15 @@ private fun SettingsRootScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val settingsScope = rememberCoroutineScope()
     val vm: LauncherViewModel = viewModel()
+    val weatherRepository = remember(context) { WatchWeatherRepository.default(context) }
+    var weatherManualCity by remember(weatherRepository) {
+        mutableStateOf(weatherRepository.manualCity().orEmpty())
+    }
+    var weatherTemperatureUnit by remember(weatherRepository) {
+        mutableStateOf(weatherRepository.temperatureUnit())
+    }
+    var weatherCityDialogVisible by remember { mutableStateOf(false) }
+    var weatherCityDraft by remember { mutableStateOf("") }
     val rawWatchFaces by vm.availableWatchFaces.collectAsStateWithLifecycle()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsStateWithLifecycle()
     val rawSelectedWatchFace by vm.selectedWatchFace.collectAsStateWithLifecycle()
@@ -354,6 +425,8 @@ private fun SettingsRootScreen(
     val hiddenApps by vm.hiddenApps.collectAsStateWithLifecycle()
     val availableIconPacks by vm.availableIconPacks.collectAsStateWithLifecycle()
     val selectedIconPackPackage by vm.selectedIconPackPackage.collectAsStateWithLifecycle()
+
+
     val watchFaceLastError by vm.watchFaceLastError.collectAsStateWithLifecycle()
     val layoutMode by vm.layoutMode.collectAsStateWithLifecycle()
     val sideScreenEnabled by vm.sideScreenEnabled.collectAsStateWithLifecycle()
@@ -447,17 +520,15 @@ private fun SettingsRootScreen(
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val watchmakerForceFill by vm.watchmakerForceFill.collectAsStateWithLifecycle()
     val watchfaceDateLocale by vm.watchfaceDateLocale.collectAsStateWithLifecycle()
-    val dingDingCatFillScreen by vm.dingDingCatFillScreen.collectAsStateWithLifecycle()
-    val dingDingCatPlaybackSpeedPercent by vm.dingDingCatPlaybackSpeedPercent.collectAsStateWithLifecycle()
-    val dingDingCatImportUnlocked by vm.dingDingCatImportUnlocked.collectAsStateWithLifecycle()
+    val appLanguage by vm.appLanguage.collectAsStateWithLifecycle()
+    val glassHighlightEnabled by vm.glassHighlightEnabled.collectAsStateWithLifecycle()
+    // 表盘保存会原地覆盖 preview.jpg：令牌自增时列表缩略图重读文件。
+    val watchFaceRefreshToken by vm.watchFaceRefreshToken.collectAsStateWithLifecycle()
     val accessibilityServiceConnected by FlueAccessibilityService.connected.collectAsStateWithLifecycle()
     var accessibilityServiceEnabled by remember {
         mutableStateOf(FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected)
     }
     val headerTime = rememberSettingsHeaderTime()
-    val isZh = remember(context.resources.configuration) {
-        context.resources.configuration.locales[0]?.language?.startsWith("zh") == true
-    }
     var backupExportOptions by remember { mutableStateOf(FlueBackupOptions()) }
     var pendingBackupExportOptions by remember { mutableStateOf<FlueBackupOptions?>(null) }
     var backupImportUri by remember { mutableStateOf<Uri?>(null) }
@@ -465,36 +536,52 @@ private fun SettingsRootScreen(
     var backupImportOptions by remember { mutableStateOf(FlueBackupOptions()) }
     var backupBusy by remember { mutableStateOf(false) }
     var backupProgress by remember { mutableStateOf<BlockingProgressState?>(null) }
-    var watchFaceArchiveImportMode by remember { mutableStateOf(WatchFaceArchiveImportMode.WATCH) }
     var bodySensorsPermissionGranted by remember(context) {
         mutableStateOf(hasBodySensorsPermission(context))
     }
     val bodySensorsPermissionLauncher = rememberLauncherForActivityResult(RequestPermission()) {
         bodySensorsPermissionGranted = hasBodySensorsPermission(context)
     }
-    val dingDingCatBackupAvailability = remember(dingDingCatImportUnlocked) {
-        FlueBackupOptions(dingDingCatWatchFaces = dingDingCatImportUnlocked)
+    var coarseLocationPermissionGranted by remember(context) {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
     }
-    val effectiveBackupExportOptions = remember(backupExportOptions, dingDingCatBackupAvailability) {
-        backupExportOptions.constrainedBy(dingDingCatBackupAvailability)
-    }
-    val effectiveBackupImportPreview = remember(backupImportPreview, dingDingCatBackupAvailability) {
-        backupImportPreview?.let { preview ->
-            preview.copy(availableOptions = preview.availableOptions.constrainedBy(dingDingCatBackupAvailability))
+    val coarseLocationPermissionLauncher = rememberLauncherForActivityResult(RequestPermission()) { granted ->
+        coarseLocationPermissionGranted = granted ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+        if (coarseLocationPermissionGranted) {
+            weatherRepository.setManualCity(null)
+            weatherManualCity = ""
+            Toast.makeText(
+                context,
+                context.getString(R.string.toast_weather_system_location),
+                Toast.LENGTH_SHORT,
+            ).show()
+        } else {
+            Toast.makeText(
+                context,
+                context.getString(R.string.toast_weather_location_denied),
+                Toast.LENGTH_SHORT,
+            ).show()
         }
     }
+    val effectiveBackupExportOptions = backupExportOptions
+    val effectiveBackupImportPreview = backupImportPreview
     val effectiveBackupImportOptions = remember(backupImportOptions, effectiveBackupImportPreview) {
-        val available = effectiveBackupImportPreview?.availableOptions ?: FlueBackupOptions(dingDingCatWatchFaces = false)
+        val available = effectiveBackupImportPreview?.availableOptions ?: FlueBackupOptions()
         backupImportOptions.constrainedBy(available)
     }
     val fontPicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
             val savedPath = InternalWatchFaceStorage.copyFont(context, uri)
             if (savedPath.isNullOrBlank()) {
-                Toast.makeText(context, "保存字体失败", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.toast_font_save_failed), Toast.LENGTH_SHORT).show()
             } else {
                 vm.setBuiltInWatchFaceFontPath(savedPath)
-                Toast.makeText(context, "表盘字体已更新", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.toast_font_updated), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -503,20 +590,14 @@ private fun SettingsRootScreen(
             settingsScope.launch {
                 backupBusy = true
                 backupProgress = BlockingProgressState(
-                    title = "导入表盘",
-                    detail = when (watchFaceArchiveImportMode) {
-                        WatchFaceArchiveImportMode.WATCH -> "正在识别并导入标准 .watch / jb_watch 表盘"
-                        WatchFaceArchiveImportMode.LEGACY -> "正在识别旧版叮叮猫表盘"
-                    }
+                    title = context.getString(R.string.progress_import_watchface),
+                    detail = context.getString(R.string.progress_import_watchface_detail)
                 )
-                val result = vm.importWatchFaceArchive(
-                    uri = uri,
-                    allowDingDingCat = watchFaceArchiveImportMode == WatchFaceArchiveImportMode.LEGACY
-                )
+                val result = vm.importWatchFaceArchive(uri = uri)
                 result
                     .onSuccess { descriptor ->
                         backupProgress = BlockingProgressState(
-                            title = "导入完成",
+                            title = context.getString(R.string.progress_import_done),
                             detail = descriptor.displayName,
                             completed = true,
                             completionAction = BlockingProgressCompletionAction.WatchFaceArchiveImport
@@ -526,7 +607,10 @@ private fun SettingsRootScreen(
                         backupProgress = null
                         Toast.makeText(
                             context,
-                            "导入失败：${error.message ?: error.javaClass.simpleName}",
+                            context.getString(
+                                R.string.toast_import_failed_fmt,
+                                error.message ?: error.javaClass.simpleName
+                            ),
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -541,15 +625,15 @@ private fun SettingsRootScreen(
             settingsScope.launch {
                 backupBusy = true
                 backupProgress = BlockingProgressState(
-                    title = "导出配置",
-                    detail = "正在写入 Flue 备份 ZIP"
+                    title = context.getString(R.string.progress_export_config),
+                    detail = context.getString(R.string.progress_export_config_detail)
                 )
                 val result = vm.exportBackup(uri, options)
                 result
                     .onSuccess {
                         backupProgress = BlockingProgressState(
-                            title = "导出完成",
-                            detail = uri.backupDisplayLabel(),
+                            title = context.getString(R.string.progress_export_done),
+                            detail = uri.backupDisplayLabel(context),
                             completed = true,
                             completionAction = BlockingProgressCompletionAction.ExportBackup,
                             shareUri = uri
@@ -559,7 +643,10 @@ private fun SettingsRootScreen(
                         backupProgress = null
                         Toast.makeText(
                             context,
-                            "导出失败：${error.message ?: error.javaClass.simpleName}",
+                            context.getString(
+                                R.string.toast_export_failed_fmt,
+                                error.message ?: error.javaClass.simpleName
+                            ),
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -572,20 +659,23 @@ private fun SettingsRootScreen(
             settingsScope.launch {
                 backupBusy = true
                 backupProgress = BlockingProgressState(
-                    title = "读取配置",
-                    detail = "正在检查备份 ZIP"
+                    title = context.getString(R.string.progress_read_config),
+                    detail = context.getString(R.string.progress_read_config_detail)
                 )
                 val result = vm.readBackupPreview(uri)
                 result
                     .onSuccess { preview ->
                         backupImportUri = uri
                         backupImportPreview = preview
-                        backupImportOptions = preview.availableOptions.constrainedBy(dingDingCatBackupAvailability)
+                        backupImportOptions = preview.availableOptions
                     }
                     .onFailure { error ->
                         Toast.makeText(
                             context,
-                            "读取失败：${error.message ?: error.javaClass.simpleName}",
+                            context.getString(
+                                R.string.toast_read_failed_fmt,
+                                error.message ?: error.javaClass.simpleName
+                            ),
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -596,7 +686,7 @@ private fun SettingsRootScreen(
     }
     val openAccessibilitySettings = remember(context) {
         {
-            Toast.makeText(context, "请在无障碍中授权 Flue 辅助控制", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.toast_grant_accessibility), Toast.LENGTH_SHORT).show()
             context.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS))
             Unit
         }
@@ -609,12 +699,18 @@ private fun SettingsRootScreen(
     var hiddenAppsDraft by remember { mutableStateOf(hiddenApps) }
     var hiddenAppsDirty by remember { mutableStateOf(false) }
     var donatePreviewResId by remember { mutableStateOf<Int?>(null) }
-    var diagnosticLoggingEnabled by remember { mutableStateOf(ILog.isDiagnosticLoggingEnabled()) }
-    var dingDingCatVersionTapCount by remember { mutableStateOf(0) }
-    var dingDingCatLastVersionTapAt by remember { mutableStateOf(0L) }
-    var importedWatchFaceDeleteTarget by remember { mutableStateOf<LunchWatchFaceDescriptor?>(null) }
+    // 语言切换需要整进程重启：仅 recreate() 只重建设置页，桌面那边的
+    // Activity 仍持有旧 locale 的 Configuration。存待生效的语言码，
+    // 用户确认后杀掉进程并冷启。
+    var pendingLanguageRestart by remember { mutableStateOf<String?>(null) }
+    var languageSaveInProgress by remember { mutableStateOf(false) }
+    var diagnosticLoggingEnabled by remember { mutableStateOf(FlueLog.isDiagnosticLoggingEnabled()) }
+    var importedWatchFaceDeleteTarget by remember { mutableStateOf<WatchFaceDescriptor?>(null) }
     val pageScrollPositions = remember { mutableStateMapOf<SettingsDestination, SavedScrollPosition>() }
     val pageScrollResetVersions = remember { mutableStateMapOf<SettingsDestination, Int>() }
+    // 搜索结果点进去要落在具体那一行上，而不是目标页的页顶。
+    var searchTargetItemKey by remember { mutableStateOf<String?>(null) }
+    var searchTargetToken by remember { mutableStateOf(0) }
 
     fun resetPageScroll(target: SettingsDestination) {
         pageScrollPositions.remove(target)
@@ -640,14 +736,16 @@ private fun SettingsRootScreen(
     importedWatchFaceDeleteTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { importedWatchFaceDeleteTarget = null },
-            title = { Text("删除表盘") },
+            title = { Text(stringResource(R.string.dialog_delete_watchface_title)) },
             text = {
                 Text(
                     when {
-                        target.isWatchmaker -> "删除 ${target.displayName}？这个标准 .watch 表盘会从 Flue 私有目录移除。"
-                        target.isJbWatch -> "删除 ${target.displayName}？这个 jb_watch 兼容表盘会从 Flue 私有目录移除。"
-                        target.isDingDingCat -> "删除 ${target.displayName}？这个旧版叮叮猫表盘会从 Flue 私有目录移除。"
-                        else -> "删除 ${target.displayName}？这个导入表盘会从 Flue 私有目录移除。"
+                        target.isWatchmaker ->
+                            stringResource(R.string.dialog_delete_watchmaker_fmt, target.displayName)
+                        target.isJbWatch ->
+                            stringResource(R.string.dialog_delete_jbwatch_fmt, target.displayName)
+                        else ->
+                            stringResource(R.string.dialog_delete_imported_fmt, target.displayName)
                     }
                 )
             },
@@ -659,24 +757,31 @@ private fun SettingsRootScreen(
                             val result = vm.deleteImportedWatchFace(target.id)
                             result
                                 .onSuccess {
-                                    Toast.makeText(context, "已删除 ${target.displayName}", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.toast_deleted_fmt, target.displayName),
+                                        Toast.LENGTH_SHORT
+                                    ).show()
                                 }
                                 .onFailure { error ->
                                     Toast.makeText(
                                         context,
-                                        "删除失败：${error.message ?: error.javaClass.simpleName}",
+                                        context.getString(
+                                            R.string.toast_delete_failed_fmt,
+                                            error.message ?: error.javaClass.simpleName
+                                        ),
                                         Toast.LENGTH_SHORT
                                     ).show()
                                 }
                         }
                     }
                 ) {
-                    Text("删除")
+                    Text(stringResource(R.string.action_delete))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { importedWatchFaceDeleteTarget = null }) {
-                    Text("取消")
+                    Text(stringResource(R.string.action_cancel))
                 }
             }
         )
@@ -715,7 +820,7 @@ private fun SettingsRootScreen(
         if (uri != null) {
             val payload = vm.exportMotionProfileLibraryJson().getOrNull()
             if (payload == null) {
-                Toast.makeText(context, "没有可导出的自定义动画曲线", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.toast_no_custom_curves), Toast.LENGTH_SHORT).show()
             } else {
                 settingsScope.launch(Dispatchers.IO) {
                     runCatching {
@@ -724,13 +829,16 @@ private fun SettingsRootScreen(
                         } ?: error("无法打开导出文件")
                     }.onSuccess {
                         launch(Dispatchers.Main) {
-                            Toast.makeText(context, "动画曲线已导出", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.toast_curves_exported), Toast.LENGTH_SHORT).show()
                         }
                     }.onFailure { error ->
                         launch(Dispatchers.Main) {
                             Toast.makeText(
                                 context,
-                                "导出失败：${error.message ?: error.javaClass.simpleName}",
+                                context.getString(
+                                    R.string.toast_export_failed_fmt,
+                                    error.message ?: error.javaClass.simpleName
+                                ),
                                 Toast.LENGTH_SHORT
                             ).show()
                         }
@@ -753,11 +861,18 @@ private fun SettingsRootScreen(
                 )
                 launch(Dispatchers.Main) {
                     result.onSuccess { imported ->
-                        Toast.makeText(context, "已导入 ${imported.size} 条动画曲线", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.toast_curves_imported_fmt, imported.size),
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }.onFailure { error ->
                         Toast.makeText(
                             context,
-                            "导入失败：${error.message ?: error.javaClass.simpleName}",
+                            context.getString(
+                                R.string.toast_import_failed_fmt,
+                                error.message ?: error.javaClass.simpleName
+                            ),
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -768,11 +883,18 @@ private fun SettingsRootScreen(
     LaunchedEffect(accessibilityServiceConnected) {
         accessibilityServiceEnabled = FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected
     }
-    DisposableEffect(lifecycleOwner, context, accessibilityServiceConnected) {
+    DisposableEffect(lifecycleOwner, context, accessibilityServiceConnected, weatherRepository) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 accessibilityServiceEnabled = FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected
                 bodySensorsPermissionGranted = hasBodySensorsPermission(context)
+                coarseLocationPermissionGranted =
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                    ) == PackageManager.PERMISSION_GRANTED
+                weatherManualCity = weatherRepository.manualCity().orEmpty()
+                weatherTemperatureUnit = weatherRepository.temperatureUnit()
                 // Market/editor activities can install a content-addressed .watch
                 // archive while this SettingsActivity remains alive. Refresh the
                 // shared registry when returning instead of waiting for a cold start.
@@ -853,7 +975,11 @@ private fun SettingsRootScreen(
     BackHandler(enabled = true) { handleBack() }
 
     var settingsSearchQuery by remember { mutableStateOf("") }
+    // 索引文案走 strings.xml，语言切换会重建 Activity，remember(context) 足够。
+    val searchIndex = remember(context) { buildSettingsSearchIndex(context) }
     val selectedIconPackLabel = availableIconPacks.firstOrNull { it.packageName == selectedIconPackPackage }?.label
+
+
     val scrollFor: (SettingsDestination) -> SavedScrollPosition = { target ->
         pageScrollPositions[target] ?: SavedScrollPosition()
     }
@@ -863,13 +989,29 @@ private fun SettingsRootScreen(
         }
     }
 
-    CompositionLocalProvider(
-        LocalSettingsLeftSafeInsetPercent provides appListLeftSafeInsetPercent,
-        LocalFlueMotionProfile provides activeMotionProfile,
+    val settingsSearchTarget = searchTargetItemKey?.let { key ->
+        SettingsSearchTarget(
+            itemKey = key,
+            token = searchTargetToken,
+            onConsumed = { searchTargetItemKey = null },
+        )
+    }
+    // This plate is deliberately outside AnimatedContent: destination transitions may scale,
+    // translate, or fade the interactive page, but must never expose the black window theme.
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(launcherStyle.screenBackground),
     ) {
-        AnimatedContent(
-            targetState = destination,
-            transitionSpec = {
+        CompositionLocalProvider(
+            LocalSettingsLeftSafeInsetPercent provides appListLeftSafeInsetPercent,
+            LocalFlueMotionProfile provides activeMotionProfile,
+            LocalSettingsSearchTarget provides settingsSearchTarget,
+        ) {
+            AnimatedContent(
+                targetState = destination,
+                modifier = Modifier.fillMaxSize(),
+                transitionSpec = {
                 if (uiStyle == UiStyle.MIUIX) {
                     // MIUIX / HyperOS 式层级推拉：进子页新页从右 1/4 滑入 +
                     // 淡入、旧页左移 1/6 让位；返回反向。方向由层级深度判定，
@@ -898,13 +1040,13 @@ private fun SettingsRootScreen(
                                 animationSpec = tween(140)
                             ))
                 }
-            },
-            label = "settings_destination"
-        ) { currentDestination ->
+                },
+                label = "settings_destination"
+            ) { currentDestination ->
         key(currentDestination, pageScrollResetVersions[currentDestination] ?: 0) {
         when (currentDestination) {
             SettingsDestination.ROOT -> SettingsPageScaffold(
-                title = "Flue设置",
+                title = stringResource(R.string.settings_root_title),
                 onBack = {
                     commitHiddenAppsDraft()
                     onFinish()
@@ -922,11 +1064,11 @@ private fun SettingsRootScreen(
                     )
                 }
                 if (settingsSearchQuery.isNotBlank()) {
-                    val searchResults = searchSettingsEntries(settingsSearchQuery, settingsSearchIndex)
+                    val searchResults = searchSettingsEntries(settingsSearchQuery, searchIndex)
                     if (searchResults.isEmpty()) {
                         item("search_empty") {
                             Text(
-                                "没有匹配的设置",
+                                stringResource(R.string.settings_search_empty),
                                 color = LauncherTheme.style.secondaryTextColor,
                                 fontSize = 13.sp,
                             )
@@ -939,6 +1081,10 @@ private fun SettingsRootScreen(
                                 subtitle = entry.description,
                                 onClick = {
                                     settingsSearchQuery = ""
+                                    // 先登记要定位的行，再跳页：目标页首次
+                                    // 组合时就能读到，不用等第二帧。
+                                    searchTargetItemKey = entry.itemKey
+                                    searchTargetToken += 1
                                     runCatching { SettingsDestination.valueOf(entry.destinationName) }
                                         .getOrNull()
                                         ?.let(navigateTo)
@@ -952,86 +1098,108 @@ private fun SettingsRootScreen(
                 // 分组顺序对照 SettingsHierarchy：外观 → 表盘 → 应用列表 →
                 // 动画 → 手势与输入 → 系统与工具 → 关于。
                 item("section_appearance") {
-                    SectionTitle("外观", itemFisheye(listState, "section_appearance", screenCenterY, screenHeightPx))
+                    SectionTitle(stringResource(R.string.settings_section_appearance), itemFisheye(listState, "section_appearance", screenCenterY, screenHeightPx))
                 }
                 item("appearance") {
                     SettingsCategoryCard(
-                        title = "显示与外观",
-                        subtitle = if (uiStyle == UiStyle.MATERIAL_3) "布局、材质层次与 MD3 动效" else "布局、模糊与启动图标",
+                        title = stringResource(R.string.settings_appearance),
+                        subtitle = if (uiStyle == UiStyle.MATERIAL_3) {
+                            stringResource(R.string.settings_appearance_sub_md3)
+                        } else {
+                            stringResource(R.string.settings_appearance_sub)
+                        },
                         onClick = { navigateTo(SettingsDestination.APPEARANCE) },
                         scale = itemFisheye(listState, "appearance", screenCenterY, screenHeightPx)
                     )
                 }
                 item("section_watchface") {
-                    SectionTitle("表盘", itemFisheye(listState, "section_watchface", screenCenterY, screenHeightPx))
+                    SectionTitle(stringResource(R.string.settings_section_watchface), itemFisheye(listState, "section_watchface", screenCenterY, screenHeightPx))
                 }
                 item("watchfaces") {
                     SettingsCategoryCard(
-                        title = "表盘",
-                        subtitle = if (uiStyle == UiStyle.MATERIAL_3) "MD3 主页与表盘图形已联动 · ${selectedWatchFace.displayName}" else selectedWatchFace.displayName,
+                        title = stringResource(R.string.settings_watchfaces),
+                        subtitle = if (uiStyle == UiStyle.MATERIAL_3) {
+                            stringResource(R.string.settings_watchfaces_sub_md3_fmt, selectedWatchFace.displayName)
+                        } else {
+                            selectedWatchFace.displayName
+                        },
                         onClick = { navigateTo(SettingsDestination.WATCH_FACES) },
                         scale = itemFisheye(listState, "watchfaces", screenCenterY, screenHeightPx)
                     )
                 }
                 item("section_app_list") {
-                    SectionTitle("应用列表", itemFisheye(listState, "section_app_list", screenCenterY, screenHeightPx))
+                    SectionTitle(stringResource(R.string.settings_section_app_list), itemFisheye(listState, "section_app_list", screenCenterY, screenHeightPx))
                 }
                 item("icon_packs") {
                     SettingsCategoryCard(
-                        title = "图标包",
-                        subtitle = selectedIconPackLabel ?: "系统默认图标",
+                        title = stringResource(R.string.settings_icon_packs),
+                        subtitle = selectedIconPackLabel ?: stringResource(R.string.settings_icon_pack_system_default),
                         onClick = { navigateTo(SettingsDestination.ICON_PACKS) },
                         scale = itemFisheye(listState, "icon_packs", screenCenterY, screenHeightPx)
                     )
                 }
                 item("hidden_apps") {
                     SettingsCategoryCard(
-                        title = "隐藏应用",
-                        subtitle = "已隐藏 ${hiddenHideableCount} 个应用",
+                        title = stringResource(R.string.settings_hidden_apps),
+                        subtitle = stringResource(R.string.settings_hidden_apps_count_fmt, hiddenHideableCount),
                         onClick = { navigateTo(SettingsDestination.HIDDEN_APPS) },
                         scale = itemFisheye(listState, "hidden_apps", screenCenterY, screenHeightPx)
                     )
                 }
                 item("section_animation") {
-                    SectionTitle("动画", itemFisheye(listState, "section_animation", screenCenterY, screenHeightPx))
+                    SectionTitle(stringResource(R.string.settings_section_animation), itemFisheye(listState, "section_animation", screenCenterY, screenHeightPx))
                 }
                 item("performance") {
                     SettingsCategoryCard(
-                        title = "性能与动画",
-                        subtitle = "图标质量与动画控制",
+                        title = stringResource(R.string.settings_performance),
+                        subtitle = stringResource(R.string.settings_performance_sub),
                         onClick = { navigateTo(SettingsDestination.PERFORMANCE) },
                         scale = itemFisheye(listState, "performance", screenCenterY, screenHeightPx)
                     )
                 }
                 item("section_input") {
-                    SectionTitle("手势与输入", itemFisheye(listState, "section_input", screenCenterY, screenHeightPx))
+                    SectionTitle(stringResource(R.string.settings_section_input), itemFisheye(listState, "section_input", screenCenterY, screenHeightPx))
                 }
                 item("feature_toggles") {
                     SettingsCategoryCard(
-                        title = "功能开关",
-                        subtitle = if (isZh) "副一屏、通知、控制中心和表盘提示" else "Side screen, notifications, Control Center, and watch face indicators",
+                        title = stringResource(R.string.settings_feature_toggles),
+                        subtitle = stringResource(R.string.settings_feature_toggles_sub),
                         onClick = { navigateTo(SettingsDestination.FEATURE_TOGGLES) },
                         scale = itemFisheye(listState, "feature_toggles", screenCenterY, screenHeightPx)
                     )
                 }
                 item("section_system") {
-                    SectionTitle("系统与工具", itemFisheye(listState, "section_system", screenCenterY, screenHeightPx))
+                    SectionTitle(stringResource(R.string.settings_section_system), itemFisheye(listState, "section_system", screenCenterY, screenHeightPx))
+                }
+                item("language") {
+                    val langLabel = when (appLanguage) {
+                        "zh" -> stringResource(R.string.settings_language_zh)
+                        "en" -> stringResource(R.string.settings_language_en)
+                        "ja" -> stringResource(R.string.settings_language_ja)
+                        else -> stringResource(R.string.settings_language_follow_system)
+                    }
+                    SettingsCategoryCard(
+                        title = stringResource(R.string.settings_language),
+                        subtitle = langLabel,
+                        onClick = { navigateTo(SettingsDestination.LANGUAGE) },
+                        scale = itemFisheye(listState, "language", screenCenterY, screenHeightPx)
+                    )
                 }
                 item("tools") {
                     SettingsCategoryCard(
-                        title = "工具",
-                        subtitle = "配置备份、导出日志与恢复默认",
+                        title = stringResource(R.string.settings_tools),
+                        subtitle = stringResource(R.string.settings_tools_sub),
                         onClick = { navigateTo(SettingsDestination.TOOLS) },
                         scale = itemFisheye(listState, "tools", screenCenterY, screenHeightPx)
                     )
                 }
                 item("section_about") {
-                    SectionTitle("关于", itemFisheye(listState, "section_about", screenCenterY, screenHeightPx))
+                    SectionTitle(stringResource(R.string.settings_section_about), itemFisheye(listState, "section_about", screenCenterY, screenHeightPx))
                 }
                 item("about") {
                     SettingsCategoryCard(
-                        title = "关于",
-                        subtitle = "Flue  $ABOUT_VERSION",
+                        title = stringResource(R.string.settings_about),
+                        subtitle = stringResource(R.string.settings_about_sub_fmt, ABOUT_VERSION),
                         onClick = { navigateTo(SettingsDestination.ABOUT) },
                         scale = itemFisheye(listState, "about", screenCenterY, screenHeightPx)
                     )
@@ -1040,7 +1208,7 @@ private fun SettingsRootScreen(
             }
 
             SettingsDestination.HIDDEN_APPS -> SettingsPageScaffold(
-                title = "隐藏应用",
+                title = stringResource(R.string.settings_hidden_apps),
                 onBack = { handleBack() },
                 headerTime = headerTime,
                 initialFirstVisibleItemIndex = scrollFor(SettingsDestination.HIDDEN_APPS).index,
@@ -1049,7 +1217,7 @@ private fun SettingsRootScreen(
             ) { listState, screenCenterY, screenHeightPx, visibleItemKeys ->
                 item("hidden_summary") {
                     MessageCard(
-                        text = "已隐藏 ${hiddenHideableCount} 个应用",
+                        text = stringResource(R.string.settings_hidden_apps_count_fmt, hiddenHideableCount),
                         background = WatchColors.SurfaceGlass,
                         onClick = {}
                     )
@@ -1078,7 +1246,7 @@ private fun SettingsRootScreen(
             }
 
             SettingsDestination.ICON_PACKS -> SettingsPageScaffold(
-                title = "图标包",
+                title = stringResource(R.string.settings_icon_packs),
                 onBack = { handleBack() },
                 headerTime = headerTime,
                 initialFirstVisibleItemIndex = scrollFor(SettingsDestination.ICON_PACKS).index,
@@ -1087,8 +1255,8 @@ private fun SettingsRootScreen(
             ) { listState, screenCenterY, screenHeightPx, _ ->
                 item("icon_pack_default") {
                     SettingsChoiceRow(
-                        title = "系统默认",
-                        subtitle = "使用当前系统默认图标包",
+                        title = stringResource(R.string.settings_icon_pack_default),
+                        subtitle = stringResource(R.string.settings_icon_pack_default_sub),
                         selected = selectedIconPackPackage.isNullOrBlank(),
                         onClick = { vm.setIconPackPackage(null) },
                         scale = itemFisheye(listState, "icon_pack_default", screenCenterY, screenHeightPx)
@@ -1097,7 +1265,7 @@ private fun SettingsRootScreen(
                 items(availableIconPacks, key = { "iconpack_${it.packageName}" }) { pack ->
                     SettingsChoiceRow(
                         title = pack.label,
-                        subtitle = "ADW 图标包",
+                        subtitle = stringResource(R.string.settings_icon_pack_adw),
                         selected = pack.packageName == selectedIconPackPackage,
                         onClick = { vm.setIconPackPackage(pack.packageName) },
                         scale = itemFisheye(listState, "iconpack_${pack.packageName}", screenCenterY, screenHeightPx)
@@ -1105,8 +1273,8 @@ private fun SettingsRootScreen(
                 }
                 item("icon_pack_refresh") {
                     ActionCard(
-                        title = "刷新图标包",
-                        subtitle = "重新扫描已安装的 ADW 图标包",
+                        title = stringResource(R.string.settings_icon_pack_refresh),
+                        subtitle = stringResource(R.string.settings_icon_pack_refresh_sub),
                         icon = { SettingsIcon(material = Icons.Filled.Refresh, miuix = MiuixIcons.Refresh) },
                         onClick = { vm.refreshIconPacks() },
                         scale = itemFisheye(listState, "icon_pack_refresh", screenCenterY, screenHeightPx)
@@ -1115,7 +1283,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.WATCH_FACES -> SettingsPageScaffold(
-            title = "表盘",
+            title = stringResource(R.string.settings_watchfaces),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.WATCH_FACES).index,
@@ -1184,25 +1352,32 @@ private fun SettingsRootScreen(
                                     Intent(context, InternalWatchFaceConfigActivity::class.java)
                                         .putExtra(EXTRA_INTERNAL_WATCHFACE_ID, descriptor.id)
                                 )
-                            } else if (!LunchWatchFaceRuntime.openSettings(context, descriptor)) {
-                                Toast.makeText(context, "没有可用的表盘设置", Toast.LENGTH_SHORT).show()
+                            } else if (descriptor.isWatchmaker) {
+                                context.startActivity(
+                                    Intent(context, WatchEditorActivity::class.java)
+                                        .putExtra(WatchEditorActivity.EXTRA_WATCH_FACE_ID, descriptor.id)
+                                )
+                            } else {
+                                Toast.makeText(context, context.getString(R.string.toast_no_watchface_config), Toast.LENGTH_SHORT).show()
                             }
                         }
                     } else {
                         null
                     },
-                    onDelete = if (descriptor.isDingDingCat || descriptor.isJbWatch || descriptor.isWatchmaker) {
+                    onDelete = if (descriptor.isJbWatch || descriptor.isWatchmaker) {
                         { importedWatchFaceDeleteTarget = descriptor }
                     } else {
                         null
                     },
-                    scale = itemFisheye(listState, descriptor.id, screenCenterY, screenHeightPx)
+                    scale = itemFisheye(listState, descriptor.id, screenCenterY, screenHeightPx),
+                    // 保存表盘会原地覆盖 preview.jpg，令牌驱动缩略图重读。
+                    refreshToken = watchFaceRefreshToken,
                 )
             }
             item("watchface_refresh") {
                 ActionCard(
-                    title = "重新扫描表盘",
-                    subtitle = "扫描标准 .watch、已安装表盘和兼容表盘目录",
+                    title = stringResource(R.string.settings_watchface_refresh),
+                    subtitle = stringResource(R.string.settings_watchface_refresh_sub),
                     scale = itemFisheye(listState, "watchface_refresh", screenCenterY, screenHeightPx),
                     icon = { SettingsIcon(material = Icons.Filled.Refresh, miuix = MiuixIcons.Refresh) },
                     onClick = { vm.refreshWatchFaces(force = true) }
@@ -1210,12 +1385,11 @@ private fun SettingsRootScreen(
             }
             item("watchface_import_archive") {
                 ActionCard(
-                    title = "导入表盘",
-                    subtitle = "导入标准 Watchmaker .watch 表盘（兼容 jb_watch 包）",
+                    title = stringResource(R.string.settings_watchface_import),
+                    subtitle = stringResource(R.string.settings_watchface_import_sub),
                     scale = itemFisheye(listState, "watchface_import_archive", screenCenterY, screenHeightPx),
                     icon = { SettingsIcon(material = Icons.Filled.Add, miuix = MiuixIcons.Add) },
                     onClick = {
-                        watchFaceArchiveImportMode = WatchFaceArchiveImportMode.WATCH
                         watchFaceArchivePicker.launch(
                             arrayOf(
                                 "application/zip",
@@ -1225,30 +1399,13 @@ private fun SettingsRootScreen(
                                 "*/*"
                             )
                         )
-                    },
-                    onLongPress = {
-                        if (dingDingCatImportUnlocked) {
-                            watchFaceArchiveImportMode = WatchFaceArchiveImportMode.LEGACY
-                            watchFaceArchivePicker.launch(
-                                arrayOf(
-                                    "application/zip",
-                                    "application/x-zip-compressed",
-                                    "application/octet-stream",
-                                    "application/*",
-                                    "*/*"
-                                )
-                            )
-                        } else {
-                            Toast.makeText(context, "Ciallo(∠・ω< )⌒☆", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    longPressDurationMs = 2_000L
+                    }
                 )
             }
             item("watchface_store") {
                 ActionCard(
-                    title = "表盘市场",
-                    subtitle = "浏览 Watchmaker Community Store，下载后安全安装 .watch 表盘",
+                    title = stringResource(R.string.settings_watchface_store),
+                    subtitle = stringResource(R.string.settings_watchface_store_sub),
                     scale = itemFisheye(listState, "watchface_store", screenCenterY, screenHeightPx),
                     icon = { SettingsIcon(material = Icons.Filled.Refresh, miuix = MiuixIcons.Refresh) },
                     onClick = {
@@ -1258,8 +1415,8 @@ private fun SettingsRootScreen(
             }
             item("watchface_editor_new") {
                 ActionCard(
-                    title = "新建 .watch 表盘",
-                    subtitle = "使用内置编辑器创建基础图层并实时预览",
+                    title = stringResource(R.string.settings_watchface_editor_new),
+                    subtitle = stringResource(R.string.settings_watchface_editor_new_sub),
                     scale = itemFisheye(listState, "watchface_editor_new", screenCenterY, screenHeightPx),
                     icon = { SettingsIcon(material = Icons.Filled.Add, miuix = MiuixIcons.Add) },
                     onClick = {
@@ -1270,8 +1427,11 @@ private fun SettingsRootScreen(
             if (selectedWatchFace.isWatchmaker) {
                 item("watchface_editor_current") {
                     ActionCard(
-                        title = "编辑当前标准表盘",
-                        subtitle = "在隔离草稿中编辑 ${selectedWatchFace.displayName}，另存为新表盘",
+                        title = stringResource(R.string.settings_watchface_editor_current),
+                        subtitle = stringResource(
+                            R.string.settings_watchface_editor_current_sub_fmt,
+                            selectedWatchFace.displayName
+                        ),
                         scale = itemFisheye(listState, "watchface_editor_current", screenCenterY, screenHeightPx),
                         icon = { SettingsIcon(material = Icons.Filled.Settings, miuix = MiuixIcons.Settings) },
                         onClick = {
@@ -1285,8 +1445,8 @@ private fun SettingsRootScreen(
             }
             item("watchface_more") {
                 SettingsCategoryCard(
-                    title = "更多表盘选项",
-                    subtitle = "内置表盘字体与底部渐隐",
+                    title = stringResource(R.string.settings_watchface_more),
+                    subtitle = stringResource(R.string.settings_watchface_more_sub),
                     onClick = { navigateTo(SettingsDestination.WATCH_FACE_MORE) },
                     scale = itemFisheye(listState, "watchface_more", screenCenterY, screenHeightPx)
                 )
@@ -1294,62 +1454,147 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.WATCH_FACE_MORE -> SettingsPageScaffold(
-            title = "更多表盘选项",
+            title = stringResource(R.string.settings_watchface_more),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.WATCH_FACE_MORE).index,
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.WATCH_FACE_MORE).offset,
             onScrollChanged = { index, offset -> updateScroll(SettingsDestination.WATCH_FACE_MORE, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
-            if (selectedWatchFace.isDingDingCat) {
-                item("dingdingcat_fill_screen") {
-                    SettingsSwitchRow(
-                        title = "铺满全屏",
-                        subtitle = if (dingDingCatFillScreen) {
-                            if (isZh) "只居中放大背景，时间日期保持原布局" else "Center-crop background only; keep time and date layout"
+            item("watch_weather_header") {
+                SectionTitle(
+                    stringResource(R.string.settings_watch_weather),
+                    itemFisheye(listState, "watch_weather_header", screenCenterY, screenHeightPx),
+                )
+            }
+            item("watch_weather_manual_city") {
+                ActionCard(
+                    title = stringResource(R.string.settings_watch_weather_city),
+                    subtitle = weatherManualCity.takeIf(String::isNotBlank)?.let { city ->
+                        stringResource(R.string.settings_watch_weather_city_selected_fmt, city)
+                    } ?: if (coarseLocationPermissionGranted) {
+                        stringResource(R.string.settings_watch_weather_city_system)
+                    } else {
+                        stringResource(R.string.settings_watch_weather_city_unset)
+                    },
+                    scale = itemFisheye(
+                        listState,
+                        "watch_weather_manual_city",
+                        screenCenterY,
+                        screenHeightPx,
+                    ),
+                    icon = {
+                        SettingsIcon(material = Icons.Filled.Settings, miuix = MiuixIcons.Settings)
+                    },
+                    onClick = {
+                        weatherCityDraft = weatherManualCity
+                        weatherCityDialogVisible = true
+                    },
+                )
+            }
+            item("watch_weather_system_location") {
+                ActionCard(
+                    title = stringResource(R.string.settings_watch_weather_use_system),
+                    subtitle = if (coarseLocationPermissionGranted && weatherManualCity.isBlank()) {
+                        stringResource(R.string.settings_watch_weather_use_system_active)
+                    } else {
+                        stringResource(R.string.settings_watch_weather_use_system_sub)
+                    },
+                    scale = itemFisheye(
+                        listState,
+                        "watch_weather_system_location",
+                        screenCenterY,
+                        screenHeightPx,
+                    ),
+                    icon = {
+                        SettingsIcon(material = Icons.Filled.Refresh, miuix = MiuixIcons.Refresh)
+                    },
+                    onClick = {
+                        if (coarseLocationPermissionGranted) {
+                            weatherRepository.setManualCity(null)
+                            weatherManualCity = ""
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.toast_weather_system_location),
+                                Toast.LENGTH_SHORT,
+                            ).show()
                         } else {
-                            if (isZh) "按设计画布等比适配" else "Fit to the designed canvas"
-                        },
-                        checked = dingDingCatFillScreen,
-                        onToggle = vm::setDingDingCatFillScreenEnabled,
-                        scale = itemFisheye(listState, "dingdingcat_fill_screen", screenCenterY, screenHeightPx)
-                    )
-                }
-                item("dingdingcat_playback_speed") {
-                    SettingsSliderRow(
-                        title = if (isZh) "播放速度" else "Playback Speed",
-                        value = dingDingCatPlaybackSpeedPercent.toFloat(),
-                        valueText = "${dingDingCatPlaybackSpeedPercent}%",
-                        localValueText = { value ->
-                            "${LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_STEP_PERCENT.let { step ->
-                                ((value / step).roundToInt() * step).coerceIn(
-                                    LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_MIN_PERCENT,
-                                    LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_MAX_PERCENT
-                                )
-                            }}%"
-                        },
-                        range = LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_MIN_PERCENT.toFloat()..
-                            LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_MAX_PERCENT.toFloat(),
-                        steps = ((LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_MAX_PERCENT -
-                            LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_MIN_PERCENT) /
-                            LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_STEP_PERCENT - 1).coerceAtLeast(0),
-                        onValueChange = { },
-                        onValueChangeFinished = { value ->
-                            val step = LauncherViewModel.DINGDINGCAT_PLAYBACK_SPEED_STEP_PERCENT
-                            vm.setDingDingCatPlaybackSpeedPercent((value / step).roundToInt() * step)
-                        },
-                        scale = itemFisheye(listState, "dingdingcat_playback_speed", screenCenterY, screenHeightPx)
-                    )
-                }
+                            coarseLocationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                        }
+                    },
+                )
+            }
+            item("watch_weather_unit_header") {
+                SectionTitle(
+                    stringResource(R.string.settings_watch_weather_unit),
+                    itemFisheye(listState, "watch_weather_unit_header", screenCenterY, screenHeightPx),
+                )
+            }
+            item("watch_weather_unit_celsius") {
+                SettingsChoiceRow(
+                    title = stringResource(R.string.settings_watch_weather_celsius),
+                    subtitle = stringResource(R.string.settings_watch_weather_celsius_sub),
+                    selected = weatherTemperatureUnit == WatchTemperatureUnit.CELSIUS,
+                    onClick = {
+                        weatherRepository.setTemperatureUnit(WatchTemperatureUnit.CELSIUS)
+                        weatherTemperatureUnit = WatchTemperatureUnit.CELSIUS
+                    },
+                    scale = itemFisheye(
+                        listState,
+                        "watch_weather_unit_celsius",
+                        screenCenterY,
+                        screenHeightPx,
+                    ),
+                )
+            }
+            item("watch_weather_unit_fahrenheit") {
+                SettingsChoiceRow(
+                    title = stringResource(R.string.settings_watch_weather_fahrenheit),
+                    subtitle = stringResource(R.string.settings_watch_weather_fahrenheit_sub),
+                    selected = weatherTemperatureUnit == WatchTemperatureUnit.FAHRENHEIT,
+                    onClick = {
+                        weatherRepository.setTemperatureUnit(WatchTemperatureUnit.FAHRENHEIT)
+                        weatherTemperatureUnit = WatchTemperatureUnit.FAHRENHEIT
+                    },
+                    scale = itemFisheye(
+                        listState,
+                        "watch_weather_unit_fahrenheit",
+                        screenCenterY,
+                        screenHeightPx,
+                    ),
+                )
+            }
+            item("watch_weather_refresh") {
+                ActionCard(
+                    title = stringResource(R.string.settings_watch_weather_refresh),
+                    subtitle = stringResource(R.string.settings_watch_weather_refresh_sub),
+                    scale = itemFisheye(
+                        listState,
+                        "watch_weather_refresh",
+                        screenCenterY,
+                        screenHeightPx,
+                    ),
+                    icon = {
+                        SettingsIcon(material = Icons.Filled.Refresh, miuix = MiuixIcons.Refresh)
+                    },
+                    onClick = {
+                        weatherRepository.requestRefresh()
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.toast_weather_refresh_requested),
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    },
+                )
             }
             if (selectedWatchFace.isWatchmaker) {
                 item("watchmaker_force_fill") {
                     SettingsSwitchRow(
-                        title = "强制铺满",
+                        title = stringResource(R.string.settings_watchmaker_force_fill),
                         subtitle = if (watchmakerForceFill) {
-                            "以表盘画布中心为锚点等比放大并裁切边缘"
+                            stringResource(R.string.settings_watchmaker_force_fill_on)
                         } else {
-                            "完整显示设计画布，并遵循表盘定义的形状"
+                            stringResource(R.string.settings_watchmaker_force_fill_off)
                         },
                         checked = watchmakerForceFill,
                         onToggle = vm::setWatchmakerForceFillEnabled,
@@ -1363,11 +1608,11 @@ private fun SettingsRootScreen(
                 }
                 item("watchmaker_body_sensors") {
                     ActionCard(
-                        title = "表盘心率数据",
+                        title = stringResource(R.string.settings_watchface_heart_rate),
                         subtitle = if (bodySensorsPermissionGranted) {
-                            "已授权身体传感器；支持的 .watch 标签可读取心率"
+                            stringResource(R.string.settings_watchface_heart_rate_on)
                         } else {
-                            "未授权时心率保持不可用；点击后由系统询问授权"
+                            stringResource(R.string.settings_watchface_heart_rate_off)
                         },
                         scale = itemFisheye(
                             listState,
@@ -1388,7 +1633,7 @@ private fun SettingsRootScreen(
                         },
                         onClick = {
                             if (bodySensorsPermissionGranted) {
-                                Toast.makeText(context, "身体传感器权限已授权", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, context.getString(R.string.toast_body_sensors_granted), Toast.LENGTH_SHORT).show()
                             } else {
                                 bodySensorsPermissionLauncher.launch(Manifest.permission.BODY_SENSORS)
                             }
@@ -1399,8 +1644,9 @@ private fun SettingsRootScreen(
             if (selectedWatchFace.isBuiltin) {
                 item("watchface_font") {
                     ActionCard(
-                        title = "表盘字体",
-                        subtitle = builtInWatchFaceFontPath?.let { File(it).name } ?: "系统默认字体",
+                        title = stringResource(R.string.settings_watchface_font),
+                        subtitle = builtInWatchFaceFontPath?.let { File(it).name }
+                            ?: stringResource(R.string.settings_watchface_font_default),
                         scale = itemFisheye(listState, "watchface_font", screenCenterY, screenHeightPx),
                         icon = { SettingsIcon(material = Icons.Filled.Settings, miuix = MiuixIcons.Settings) },
                         onClick = {
@@ -1419,8 +1665,8 @@ private fun SettingsRootScreen(
                 if (!builtInWatchFaceFontPath.isNullOrBlank()) {
                     item("watchface_font_clear") {
                         ActionCard(
-                            title = "恢复默认字体",
-                            subtitle = "清除已保存的表盘字体",
+                            title = stringResource(R.string.settings_watchface_font_clear),
+                            subtitle = stringResource(R.string.settings_watchface_font_clear_sub),
                             scale = itemFisheye(listState, "watchface_font_clear", screenCenterY, screenHeightPx),
                             icon = { SettingsIcon(material = Icons.Filled.Refresh, miuix = MiuixIcons.Refresh) },
                             onClick = { vm.setBuiltInWatchFaceFontPath(null) }
@@ -1430,11 +1676,11 @@ private fun SettingsRootScreen(
             }
             item("watchface_bottom_fade") {
                 SettingsSwitchRow(
-                    title = if (isZh) "表盘底部渐隐遮罩" else "Watch Face Bottom Fade",
+                    title = stringResource(R.string.settings_watchface_bottom_fade),
                     subtitle = if (watchFaceBottomFadeEnabled) {
-                        if (isZh) "AW 和 MD3 表盘底部保留渐隐过渡" else "Keep the bottom fade on AW and MD3 watch faces"
+                        stringResource(R.string.settings_watchface_bottom_fade_on)
                     } else {
-                        if (isZh) "关闭表盘底部渐隐过渡" else "Disable the bottom watch face fade"
+                        stringResource(R.string.settings_watchface_bottom_fade_off)
                     },
                     checked = watchFaceBottomFadeEnabled,
                     onToggle = vm::setWatchFaceBottomFadeEnabled,
@@ -1443,14 +1689,14 @@ private fun SettingsRootScreen(
             }
             item("watchface_date_locale_header") {
                 SectionTitle(
-                    if (isZh) "表盘日期语言" else "Date Language",
+                    stringResource(R.string.settings_watchface_date_language),
                     itemFisheye(listState, "watchface_date_locale_header", screenCenterY, screenHeightPx)
                 )
             }
             item("watchface_date_locale_system") {
                 SettingsChoiceRow(
-                    title = if (isZh) "跟随系统" else "System",
-                    subtitle = if (isZh) "表盘星期与月份跟随系统语言" else "Weekday and month follow the system language",
+                    title = stringResource(R.string.settings_theme_system),
+                    subtitle = stringResource(R.string.settings_watchface_date_system_sub),
                     selected = watchfaceDateLocale == WatchDateLocale.PREFERENCE_SYSTEM,
                     onClick = { vm.setWatchfaceDateLocale(WatchDateLocale.PREFERENCE_SYSTEM) },
                     scale = itemFisheye(listState, "watchface_date_locale_system", screenCenterY, screenHeightPx)
@@ -1459,7 +1705,7 @@ private fun SettingsRootScreen(
             item("watchface_date_locale_zh") {
                 SettingsChoiceRow(
                     title = "中文",
-                    subtitle = if (isZh) "周一 / 1月 样式" else "Chinese weekday and month names",
+                    subtitle = stringResource(R.string.settings_watchface_date_zh_sub),
                     selected = watchfaceDateLocale == WatchDateLocale.PREFERENCE_CHINESE,
                     onClick = { vm.setWatchfaceDateLocale(WatchDateLocale.PREFERENCE_CHINESE) },
                     scale = itemFisheye(listState, "watchface_date_locale_zh", screenCenterY, screenHeightPx)
@@ -1468,7 +1714,7 @@ private fun SettingsRootScreen(
             item("watchface_date_locale_en") {
                 SettingsChoiceRow(
                     title = "English",
-                    subtitle = if (isZh) "Mon / Jan 样式" else "English weekday and month names",
+                    subtitle = stringResource(R.string.settings_watchface_date_en_sub),
                     selected = watchfaceDateLocale == WatchDateLocale.PREFERENCE_ENGLISH,
                     onClick = { vm.setWatchfaceDateLocale(WatchDateLocale.PREFERENCE_ENGLISH) },
                     scale = itemFisheye(listState, "watchface_date_locale_en", screenCenterY, screenHeightPx)
@@ -1477,7 +1723,7 @@ private fun SettingsRootScreen(
             item("watchface_date_locale_ja") {
                 SettingsChoiceRow(
                     title = "日本語",
-                    subtitle = if (isZh) "月 / 1月 样式" else "Japanese weekday and month names",
+                    subtitle = stringResource(R.string.settings_watchface_date_ja_sub),
                     selected = watchfaceDateLocale == WatchDateLocale.PREFERENCE_JAPANESE,
                     onClick = { vm.setWatchfaceDateLocale(WatchDateLocale.PREFERENCE_JAPANESE) },
                     scale = itemFisheye(listState, "watchface_date_locale_ja", screenCenterY, screenHeightPx)
@@ -1485,8 +1731,8 @@ private fun SettingsRootScreen(
             }
             item("watchface_status_indicators") {
                 SettingsSwitchRow(
-                    title = if (isZh) "表盘状态提示" else "Watch Face Status Indicators",
-                    subtitle = if (isZh) "表盘顶部显示充电闪电和通知红点" else "Show charging and notification indicators at the top of the watch face",
+                    title = stringResource(R.string.settings_watchface_status),
+                    subtitle = stringResource(R.string.settings_watchface_status_sub),
                     checked = watchFaceStatusIndicators,
                     onToggle = vm::setWatchFaceStatusIndicatorsEnabled,
                     scale = itemFisheye(listState, "watchface_status_indicators", screenCenterY, screenHeightPx)
@@ -1494,8 +1740,8 @@ private fun SettingsRootScreen(
             }
             item("watchface_charging_power_text") {
                 SettingsSwitchRow(
-                    title = if (isZh) "充电功率文字" else "Charging Power Text",
-                    subtitle = if (isZh) "充电时在表盘里显示功率或充电文字" else "Show charging wattage or charging text on the watch face",
+                    title = stringResource(R.string.settings_watchface_charging_power),
+                    subtitle = stringResource(R.string.settings_watchface_charging_power_sub),
                     checked = watchFaceChargingPowerText,
                     onToggle = vm::setWatchFaceChargingPowerTextEnabled,
                     scale = itemFisheye(listState, "watchface_charging_power_text", screenCenterY, screenHeightPx)
@@ -1504,18 +1750,18 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.APPEARANCE -> SettingsPageScaffold(
-            title = "显示与外观",
+            title = stringResource(R.string.settings_appearance),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.APPEARANCE).index,
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.APPEARANCE).offset,
             onScrollChanged = { index, offset -> updateScroll(SettingsDestination.APPEARANCE, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
-            item("layout_header") { SectionTitle("布局", itemFisheye(listState, "layout_header", screenCenterY, screenHeightPx)) }
+            item("layout_header") { SectionTitle(stringResource(R.string.settings_section_layout), itemFisheye(listState, "layout_header", screenCenterY, screenHeightPx)) }
             item("layout_honeycomb") {
                 SettingsChoiceRow(
-                    title = "蜂窝布局",
-                    subtitle = "Apple Watch 风格",
+                    title = stringResource(R.string.settings_layout_honeycomb),
+                    subtitle = stringResource(R.string.settings_layout_honeycomb_sub),
                     selected = layoutMode == LayoutMode.Honeycomb,
                     onClick = { vm.setLayoutMode(LayoutMode.Honeycomb) },
                     scale = itemFisheye(listState, "layout_honeycomb", screenCenterY, screenHeightPx)
@@ -1523,36 +1769,36 @@ private fun SettingsRootScreen(
             }
             item("layout_list") {
                 SettingsChoiceRow(
-                    title = "列表布局",
-                    subtitle = "经典纵向列表",
+                    title = stringResource(R.string.settings_layout_list),
+                    subtitle = stringResource(R.string.settings_layout_list_sub),
                     selected = layoutMode == LayoutMode.List,
                     onClick = { vm.setLayoutMode(LayoutMode.List) },
                     scale = itemFisheye(listState, "layout_list", screenCenterY, screenHeightPx)
                 )
             }
             item("display_header") {
-                SectionTitle(if (isZh) "显示设置" else "Display", itemFisheye(listState, "display_header", screenCenterY, screenHeightPx))
+                SectionTitle(stringResource(R.string.settings_display_header), itemFisheye(listState, "display_header", screenCenterY, screenHeightPx))
             }
             item("display_size_menu") {
                 SettingsCategoryCard(
-                    title = if (isZh) "显示适配" else "Display Fit",
-                    subtitle = if (isZh) "全局 UI、应用列表大小和安全区" else "Global UI, app list size, and safe area",
+                    title = stringResource(R.string.settings_display_fit),
+                    subtitle = stringResource(R.string.settings_display_fit_sub),
                     onClick = { navigateTo(SettingsDestination.DISPLAY_SIZE) },
                     scale = itemFisheye(listState, "display_size_menu", screenCenterY, screenHeightPx)
                 )
             }
             item("feature_toggles_menu") {
                 SettingsCategoryCard(
-                    title = if (isZh) "功能开关" else "Feature Toggles",
-                    subtitle = if (isZh) "副一屏、通知、控制中心和表盘提示" else "Side screen, notifications, Control Center, and watch face indicators",
+                    title = stringResource(R.string.settings_feature_toggles),
+                    subtitle = stringResource(R.string.settings_feature_toggles_sub),
                     onClick = { navigateTo(SettingsDestination.FEATURE_TOGGLES) },
                     scale = itemFisheye(listState, "feature_toggles_menu", screenCenterY, screenHeightPx)
                 )
             }
             item("theme_mode_system") {
                 SettingsChoiceRow(
-                    title = if (isZh) "跟随系统" else "System",
-                    subtitle = if (isZh) "跟随系统主题设置" else "Follow system theme setting",
+                    title = stringResource(R.string.settings_theme_system),
+                    subtitle = stringResource(R.string.settings_theme_system_sub),
                     selected = themeMode == ThemeMode.SYSTEM,
                     onClick = { vm.setThemeMode(ThemeMode.SYSTEM) },
                     scale = itemFisheye(listState, "theme_mode_system", screenCenterY, screenHeightPx)
@@ -1560,8 +1806,8 @@ private fun SettingsRootScreen(
             }
             item("theme_mode_dark") {
                 SettingsChoiceRow(
-                    title = if (isZh) "深色模式" else "Dark",
-                    subtitle = if (isZh) "强制使用深色主题" else "Force dark theme",
+                    title = stringResource(R.string.settings_theme_dark),
+                    subtitle = stringResource(R.string.settings_theme_dark_sub),
                     selected = themeMode == ThemeMode.DARK,
                     onClick = { vm.setThemeMode(ThemeMode.DARK) },
                     scale = itemFisheye(listState, "theme_mode_dark", screenCenterY, screenHeightPx)
@@ -1569,20 +1815,20 @@ private fun SettingsRootScreen(
             }
             item("theme_mode_light") {
                 SettingsChoiceRow(
-                    title = if (isZh) "浅色模式" else "Light",
-                    subtitle = if (isZh) "强制使用浅色主题" else "Force light theme",
+                    title = stringResource(R.string.settings_theme_light),
+                    subtitle = stringResource(R.string.settings_theme_light_sub),
                     selected = themeMode == ThemeMode.LIGHT,
                     onClick = { vm.setThemeMode(ThemeMode.LIGHT) },
                     scale = itemFisheye(listState, "theme_mode_light", screenCenterY, screenHeightPx)
                 )
             }
             item("ui_style_header") {
-                SectionTitle(if (isZh) "界面风格" else "Interface Style", itemFisheye(listState, "ui_style_header", screenCenterY, screenHeightPx))
+                SectionTitle(stringResource(R.string.settings_ui_style_header), itemFisheye(listState, "ui_style_header", screenCenterY, screenHeightPx))
             }
             item("ui_style_apple_watch") {
                 SettingsChoiceRow(
-                    title = if (isZh) "Apple Watch 风格" else "Apple Watch",
-                    subtitle = if (isZh) "玻璃质感、紧凑卡片、圆形承载与更轻巧的缩放动效" else "Glass layers, compact cards, circular carriers, and tighter motion",
+                    title = stringResource(R.string.settings_ui_aw),
+                    subtitle = stringResource(R.string.settings_ui_aw_sub),
                     selected = uiStyle == UiStyle.APPLE_WATCH,
                     onClick = { vm.setUiStyle(UiStyle.APPLE_WATCH) },
                     scale = itemFisheye(listState, "ui_style_apple_watch", screenCenterY, screenHeightPx)
@@ -1590,8 +1836,8 @@ private fun SettingsRootScreen(
             }
             item("ui_style_material_3") {
                 SettingsChoiceRow(
-                    title = if (isZh) "Material 3 风格" else "Material 3",
-                    subtitle = if (isZh) "大色块平铺、MD3E 图形、分层更明确的首页与列表" else "Bigger blocks, MD3E geometry, and stronger layered surfaces",
+                    title = stringResource(R.string.settings_ui_md3),
+                    subtitle = stringResource(R.string.settings_ui_md3_sub),
                     selected = uiStyle == UiStyle.MATERIAL_3,
                     onClick = { vm.setUiStyle(UiStyle.MATERIAL_3) },
                     scale = itemFisheye(listState, "ui_style_material_3", screenCenterY, screenHeightPx)
@@ -1599,20 +1845,20 @@ private fun SettingsRootScreen(
             }
             item("ui_style_miuix") {
                 SettingsChoiceRow(
-                    title = if (isZh) "MIUIX 风格" else "MIUIX",
-                    subtitle = if (isZh) "HyperOS 视觉语言：成组大圆角卡片与蓝色强调" else "HyperOS visual language: grouped rounded cards with blue accents",
+                    title = stringResource(R.string.settings_ui_miuix),
+                    subtitle = stringResource(R.string.settings_ui_miuix_sub),
                     selected = uiStyle == UiStyle.MIUIX,
                     onClick = { vm.setUiStyle(UiStyle.MIUIX) },
                     scale = itemFisheye(listState, "ui_style_miuix", screenCenterY, screenHeightPx)
                 )
             }
             item("screen_shape_header") {
-                SectionTitle(if (isZh) "屏幕形状" else "Screen Shape", itemFisheye(listState, "screen_shape_header", screenCenterY, screenHeightPx))
+                SectionTitle(stringResource(R.string.settings_screen_shape_header), itemFisheye(listState, "screen_shape_header", screenCenterY, screenHeightPx))
             }
             item("screen_shape_auto") {
                 SettingsChoiceRow(
-                    title = if (isZh) "自动" else "Auto",
-                    subtitle = if (isZh) "跟随系统上报的屏幕形状" else "Follow what the system reports",
+                    title = stringResource(R.string.settings_screen_shape_auto),
+                    subtitle = stringResource(R.string.settings_screen_shape_auto_sub),
                     selected = screenShapeOverride == FlueScreenShape.AUTO,
                     onClick = { vm.setScreenShapeOverride(FlueScreenShape.AUTO) },
                     scale = itemFisheye(listState, "screen_shape_auto", screenCenterY, screenHeightPx)
@@ -1620,8 +1866,8 @@ private fun SettingsRootScreen(
             }
             item("screen_shape_round") {
                 SettingsChoiceRow(
-                    title = if (isZh) "圆屏" else "Round",
-                    subtitle = if (isZh) "部分系统上报错误时手动指定" else "Override when the system reports it wrong",
+                    title = stringResource(R.string.settings_screen_shape_round),
+                    subtitle = stringResource(R.string.settings_screen_shape_override_sub),
                     selected = screenShapeOverride == FlueScreenShape.ROUND,
                     onClick = { vm.setScreenShapeOverride(FlueScreenShape.ROUND) },
                     scale = itemFisheye(listState, "screen_shape_round", screenCenterY, screenHeightPx)
@@ -1629,20 +1875,20 @@ private fun SettingsRootScreen(
             }
             item("screen_shape_square") {
                 SettingsChoiceRow(
-                    title = if (isZh) "方屏" else "Square",
-                    subtitle = if (isZh) "部分系统上报错误时手动指定" else "Override when the system reports it wrong",
+                    title = stringResource(R.string.settings_screen_shape_square),
+                    subtitle = stringResource(R.string.settings_screen_shape_override_sub),
                     selected = screenShapeOverride == FlueScreenShape.SQUARE,
                     onClick = { vm.setScreenShapeOverride(FlueScreenShape.SQUARE) },
                     scale = itemFisheye(listState, "screen_shape_square", screenCenterY, screenHeightPx)
                 )
             }
             item("visual_effects_header") {
-                SectionTitle(if (isZh) "视觉效果" else "Visual Effects", itemFisheye(listState, "visual_effects_header", screenCenterY, screenHeightPx))
+                SectionTitle(stringResource(R.string.settings_visual_effects_header), itemFisheye(listState, "visual_effects_header", screenCenterY, screenHeightPx))
             }
             item("blur_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "高级材质" else "Blur",
-                    subtitle = if (isZh) "建议 Android 12+ 设备开启" else "Enable blur on supported Android versions",
+                    title = stringResource(R.string.settings_blur),
+                    subtitle = stringResource(R.string.settings_blur_sub),
                     checked = blurEnabled,
                     onToggle = vm::setBlurEnabled,
                     scale = itemFisheye(listState, "blur_toggle", screenCenterY, screenHeightPx)
@@ -1650,8 +1896,8 @@ private fun SettingsRootScreen(
             }
             item("edge_blur_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "边缘模糊（实验性）" else "Edge Blur (Experimental)",
-                    subtitle = if (isZh) "在顶部和底部边缘增加模糊，可能带来少量问题" else "Apply extra blur near the top and bottom edges",
+                    title = stringResource(R.string.settings_edge_blur),
+                    subtitle = stringResource(R.string.settings_edge_blur_sub),
                     checked = edgeBlurEnabled,
                     onToggle = vm::setEdgeBlurEnabled,
                     scale = itemFisheye(listState, "edge_blur_toggle", screenCenterY, screenHeightPx)
@@ -1659,7 +1905,7 @@ private fun SettingsRootScreen(
             }
             item("edge_blur_radius") {
                 SettingsSliderRow(
-                    title = if (isZh) "边缘模糊半径" else "Edge Blur Radius",
+                    title = stringResource(R.string.settings_edge_blur_radius),
                     value = honeycombEdgeBlurRadius,
                     valueText = "%.1f dp".format(java.util.Locale.US, honeycombEdgeBlurRadius),
                     localValueText = { "%.1f dp".format(java.util.Locale.US, it) },
@@ -1672,7 +1918,7 @@ private fun SettingsRootScreen(
             }
             item("top_fade") {
                 SettingsSliderRow(
-                    title = "顶部渐隐范围",
+                    title = stringResource(R.string.settings_top_fade),
                     value = honeycombTopFade.toFloat(),
                     valueText = "$honeycombTopFade dp",
                     localValueText = { "${it.roundToInt()} dp" },
@@ -1684,7 +1930,7 @@ private fun SettingsRootScreen(
             }
             item("bottom_fade") {
                 SettingsSliderRow(
-                    title = "底部渐隐范围",
+                    title = stringResource(R.string.settings_bottom_fade),
                     value = honeycombBottomFade.toFloat(),
                     valueText = "$honeycombBottomFade dp",
                     localValueText = { "${it.roundToInt()} dp" },
@@ -1694,11 +1940,11 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "bottom_fade", screenCenterY, screenHeightPx)
                 )
             }
-            item("launch_header") { SectionTitle("启动", itemFisheye(listState, "launch_header", screenCenterY, screenHeightPx)) }
+            item("launch_header") { SectionTitle(stringResource(R.string.settings_section_launch), itemFisheye(listState, "launch_header", screenCenterY, screenHeightPx)) }
             item("splash_toggle") {
                 SettingsSwitchRow(
-                    title = "启动遮罩",
-                    subtitle = "打开应用时显示图标过渡",
+                    title = stringResource(R.string.settings_splash),
+                    subtitle = stringResource(R.string.settings_splash_sub),
                     checked = splashIcon,
                     onToggle = { vm.setSplashIcon(it) },
                     scale = itemFisheye(listState, "splash_toggle", screenCenterY, screenHeightPx)
@@ -1706,21 +1952,33 @@ private fun SettingsRootScreen(
             }
             item("direct_launch_app_list") {
                 SettingsSwitchRow(
-                    title = if (isZh) "打开 Flue 直接进入应用列表" else "Open Flue to App List",
+                    title = stringResource(R.string.settings_direct_launch_app_list),
                     subtitle = if (directLaunchAppListEnabled) {
-                        if (isZh) "启动后自动进入应用列表，仍可返回表盘" else "Start in the app list and keep back navigation to the watch face"
+                        stringResource(R.string.settings_direct_launch_app_list_on)
                     } else {
-                        if (isZh) "默认先显示表盘" else "Show the watch face first by default"
+                        stringResource(R.string.settings_direct_launch_app_list_off)
                     },
                     checked = directLaunchAppListEnabled,
                     onToggle = vm::setDirectLaunchAppListEnabled,
                     scale = itemFisheye(listState, "direct_launch_app_list", screenCenterY, screenHeightPx)
                 )
             }
+            item("glass_highlight") {
+                SettingsSwitchRow(
+                    title = stringResource(R.string.settings_glass_highlight),
+                    subtitle = if (glassHighlightEnabled)
+                        stringResource(R.string.settings_glass_highlight_on)
+                    else
+                        stringResource(R.string.settings_glass_highlight_off),
+                    checked = glassHighlightEnabled,
+                    onToggle = vm::setGlassHighlightEnabled,
+                    scale = itemFisheye(listState, "glass_highlight", screenCenterY, screenHeightPx)
+                )
+            }
             if (splashIcon) {
                 item("splash_delay") {
                     SettingsSliderRow(
-                        title = "遮罩时长",
+                        title = stringResource(R.string.settings_splash_delay),
                         value = splashDelay.toFloat(),
                         valueText = "${splashDelay} ms",
                         localValueText = { "${it.roundToInt()} ms" },
@@ -1734,7 +1992,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.DISPLAY_SIZE -> SettingsPageScaffold(
-            title = if (isZh) "显示适配" else "Display Fit",
+            title = stringResource(R.string.settings_display_fit),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.DISPLAY_SIZE).index,
@@ -1743,7 +2001,7 @@ private fun SettingsRootScreen(
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("global_ui_scale") {
                 SettingsSliderRow(
-                    title = if (isZh) "全局 UI 大小" else "Global UI Size",
+                    title = stringResource(R.string.settings_global_ui_size),
                     value = globalUiScalePercent.toFloat(),
                     valueText = "${globalUiScalePercent}%",
                     localValueText = { "${((it / 5f).roundToInt() * 5).coerceIn(50, 150)}%" },
@@ -1756,10 +2014,10 @@ private fun SettingsRootScreen(
             }
             item("honeycomb_cols") {
                 SettingsSliderRow(
-                    title = if (isZh) "蜂窝列数" else "Honeycomb Columns",
+                    title = stringResource(R.string.settings_honeycomb_cols),
                     value = honeycombCols.toFloat(),
-                    valueText = if (isZh) "$honeycombCols 列" else "$honeycombCols columns",
-                    localValueText = { if (isZh) "${it.roundToInt()} 列" else "${it.roundToInt()} columns" },
+                    valueText = stringResource(R.string.settings_honeycomb_cols_fmt, honeycombCols),
+                    localValueText = { context.resources.getString(R.string.settings_honeycomb_cols_fmt, it.roundToInt()) },
                     range = 1f..5f,
                     steps = 3,
                     onValueChange = { vm.setHoneycombCols(it.roundToInt()) },
@@ -1768,7 +2026,7 @@ private fun SettingsRootScreen(
             }
             item("app_list_scale") {
                 SettingsSliderRow(
-                    title = if (isZh) "应用列表整体大小" else "App List Size",
+                    title = stringResource(R.string.settings_app_list_size),
                     value = appListScalePercent.toFloat(),
                     valueText = "${appListScalePercent}%",
                     range = 50f..200f,
@@ -1779,11 +2037,11 @@ private fun SettingsRootScreen(
             }
             item("app_list_fisheye") {
                 SettingsSwitchRow(
-                    title = if (isZh) "鱼眼效果" else "Fisheye Effect",
+                    title = stringResource(R.string.settings_fisheye),
                     subtitle = if (appListFisheyeEnabled) {
-                        if (isZh) "开启后可调节范围、强度和边缘间距压缩" else "Enable range, strength, and edge spacing controls"
+                        stringResource(R.string.settings_fisheye_on)
                     } else {
-                        if (isZh) "关闭后应用列表不再缩放边缘图标" else "Disable edge scaling for the app list"
+                        stringResource(R.string.settings_fisheye_off)
                     },
                     checked = appListFisheyeEnabled,
                     onToggle = vm::setAppListFisheyeEnabled,
@@ -1792,12 +2050,12 @@ private fun SettingsRootScreen(
             }
             item("app_list_fisheye_range_rows") {
                 SettingsSliderRow(
-                    title = if (isZh) "鱼眼生效范围" else "Fisheye Range",
+                    title = stringResource(R.string.settings_fisheye_range),
                     value = appListFisheyeRangeRows.toFloat(),
-                    valueText = if (isZh) "$appListFisheyeRangeRows 行" else "$appListFisheyeRangeRows rows",
+                    valueText = stringResource(R.string.settings_fisheye_range_fmt, appListFisheyeRangeRows),
                     localValueText = {
                         val rows = it.roundToInt()
-                        if (isZh) "$rows 行" else "$rows rows"
+                        context.resources.getString(R.string.settings_fisheye_range_fmt, rows)
                     },
                     range = 1f..8f,
                     steps = 6,
@@ -1808,8 +2066,8 @@ private fun SettingsRootScreen(
             }
             item("material_honeycomb_top_fisheye") {
                 SettingsSwitchRow(
-                    title = if (isZh) "MD3 顶部鱼眼效果" else "MD3 Top Fisheye",
-                    subtitle = if (isZh) "仅作用于 MD3 蜂窝列表顶部图标" else "Only affects icons above center in the MD3 honeycomb list",
+                    title = stringResource(R.string.settings_md3_top_fisheye),
+                    subtitle = stringResource(R.string.settings_md3_top_fisheye_sub),
                     checked = materialHoneycombTopFisheyeEnabled,
                     enabled = appListFisheyeEnabled,
                     onToggle = vm::setMaterialHoneycombTopFisheyeEnabled,
@@ -1818,7 +2076,7 @@ private fun SettingsRootScreen(
             }
             item("app_list_fisheye_strength") {
                 SettingsSliderRow(
-                    title = if (isZh) "鱼眼效果强度" else "Fisheye Strength",
+                    title = stringResource(R.string.settings_fisheye_strength),
                     value = appListFisheyeStrengthPercent.toFloat(),
                     valueText = "${appListFisheyeStrengthPercent}%",
                     localValueText = { "${it.roundToInt()}%" },
@@ -1831,8 +2089,8 @@ private fun SettingsRootScreen(
             }
             item("app_list_edge_spacing_compression") {
                 SettingsSwitchRow(
-                    title = if (isZh) "边缘图标间距压缩" else "Edge Icon Spacing",
-                    subtitle = if (isZh) "越靠近屏幕边界，图标之间的视觉距离越小" else "Compress visual spacing as icons approach the screen edge",
+                    title = stringResource(R.string.settings_edge_spacing),
+                    subtitle = stringResource(R.string.settings_edge_spacing_sub),
                     checked = appListEdgeSpacingCompressionEnabled,
                     enabled = appListFisheyeEnabled,
                     onToggle = vm::setAppListEdgeSpacingCompressionEnabled,
@@ -1841,7 +2099,7 @@ private fun SettingsRootScreen(
             }
             item("app_list_left_safe_inset") {
                 SettingsSliderRow(
-                    title = if (isZh) "应用列表左侧安全区" else "App List Left Safe Area",
+                    title = stringResource(R.string.settings_left_safe_area),
                     value = appListLeftSafeInsetPercent.toFloat(),
                     valueText = "${appListLeftSafeInsetPercent}%",
                     localValueText = { "${((it / 5f).roundToInt() * 5).coerceIn(0, 50)}%" },
@@ -1853,11 +2111,11 @@ private fun SettingsRootScreen(
             }
             item("rotary_haptics") {
                 SettingsSwitchRow(
-                    title = if (isZh) "表冠滚动震动" else "Rotary Haptics",
+                    title = stringResource(R.string.settings_rotary_haptics),
                     subtitle = if (rotaryHapticsEnabled) {
-                        if (isZh) "表冠滚动时保留轻微震动反馈" else "Keep a light pulse while scrolling with the crown"
+                        stringResource(R.string.settings_rotary_haptics_on)
                     } else {
-                        if (isZh) "关闭表冠滚动震动反馈" else "Disable crown scroll haptics"
+                        stringResource(R.string.settings_rotary_haptics_off)
                     },
                     checked = rotaryHapticsEnabled,
                     onToggle = vm::setRotaryHapticsEnabled,
@@ -1868,7 +2126,7 @@ private fun SettingsRootScreen(
 
             // 「功能开关」从 16 项杂烩改为路牌页：五个按领域归类的三级页。
             SettingsDestination.FEATURE_TOGGLES -> SettingsPageScaffold(
-            title = if (isZh) "功能开关" else "Feature Toggles",
+            title = stringResource(R.string.settings_feature_toggles),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.FEATURE_TOGGLES).index,
@@ -1877,40 +2135,40 @@ private fun SettingsRootScreen(
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("cat_side_screen") {
                 SettingsCategoryCard(
-                    title = if (isZh) "负一屏设置" else "Side Screen",
-                    subtitle = if (isZh) "副一屏、小组件页、步数与卡片布局" else "Side screen, widget page, steps and card layout",
+                    title = stringResource(R.string.settings_side_screen_title),
+                    subtitle = stringResource(R.string.settings_side_screen_card_sub),
                     onClick = { navigateTo(SettingsDestination.SIDE_SCREEN) },
                     scale = itemFisheye(listState, "cat_side_screen", screenCenterY, screenHeightPx)
                 )
             }
             item("cat_notifications") {
                 SettingsCategoryCard(
-                    title = if (isZh) "通知中心" else "Notifications",
-                    subtitle = if (isZh) "通知显示与常驻通知过滤" else "Notification previews and ongoing filters",
+                    title = stringResource(R.string.settings_notifications_title),
+                    subtitle = stringResource(R.string.settings_notifications_card_sub),
                     onClick = { navigateTo(SettingsDestination.NOTIFICATION_SETTINGS) },
                     scale = itemFisheye(listState, "cat_notifications", screenCenterY, screenHeightPx)
                 )
             }
             item("cat_control_center") {
                 SettingsCategoryCard(
-                    title = if (isZh) "控制中心" else "Control Center",
-                    subtitle = if (isZh) "下拉面板、音乐卡片与电源按钮" else "Pull-down panel, media card and power button",
+                    title = stringResource(R.string.settings_control_center_title),
+                    subtitle = stringResource(R.string.settings_control_center_card_sub),
                     onClick = { navigateTo(SettingsDestination.CONTROL_CENTER_SETTINGS) },
                     scale = itemFisheye(listState, "cat_control_center", screenCenterY, screenHeightPx)
                 )
             }
             item("cat_gestures") {
                 SettingsCategoryCard(
-                    title = if (isZh) "手势与按键" else "Gestures",
-                    subtitle = if (isZh) "双击息屏等交互开关" else "Double-tap to lock and other gestures",
+                    title = stringResource(R.string.settings_gestures_title),
+                    subtitle = stringResource(R.string.settings_gestures_card_sub),
                     onClick = { navigateTo(SettingsDestination.GESTURE_SETTINGS) },
                     scale = itemFisheye(listState, "cat_gestures", screenCenterY, screenHeightPx)
                 )
             }
             item("cat_app_list_behavior") {
                 SettingsCategoryCard(
-                    title = if (isZh) "应用列表行为" else "App List Behavior",
-                    subtitle = if (isZh) "遮罩取色、底色与文件夹" else "Mask colors, row background and folders",
+                    title = stringResource(R.string.settings_app_list_behavior_title),
+                    subtitle = stringResource(R.string.settings_app_list_behavior_card_sub),
                     onClick = { navigateTo(SettingsDestination.APP_LIST_BEHAVIOR) },
                     scale = itemFisheye(listState, "cat_app_list_behavior", screenCenterY, screenHeightPx)
                 )
@@ -1918,7 +2176,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.SIDE_SCREEN -> SettingsPageScaffold(
-            title = if (isZh) "负一屏设置" else "Side Screen",
+            title = stringResource(R.string.settings_side_screen_title),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.SIDE_SCREEN).index,
@@ -1927,8 +2185,8 @@ private fun SettingsRootScreen(
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("side_screen_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "副一屏" else "Side Screen",
-                    subtitle = if (isZh) "从表盘右滑进入快捷启动和通知预览" else "Swipe right from the watch face to open quick launch and notification previews",
+                    title = stringResource(R.string.settings_side_screen),
+                    subtitle = stringResource(R.string.settings_side_screen_sub),
                     checked = sideScreenEnabled,
                     onToggle = vm::setSideScreenEnabled,
                     scale = itemFisheye(listState, "side_screen_toggle", screenCenterY, screenHeightPx)
@@ -1936,11 +2194,11 @@ private fun SettingsRootScreen(
             }
             item("widget_center_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "显示小组件页" else "Show Widget Page",
+                    title = stringResource(R.string.settings_widget_page),
                     subtitle = if (showWidgetPage) {
-                        if (isZh) "从表盘左滑进入独立小组件页面" else "Swipe left from the watch face to open the widget page"
+                        stringResource(R.string.settings_widget_page_on)
                     } else {
-                        if (isZh) "关闭左滑小组件页面入口" else "Disable the swipe-left widget page"
+                        stringResource(R.string.settings_widget_page_off)
                     },
                     checked = showWidgetPage,
                     onToggle = vm::setShowWidgetPage,
@@ -1949,11 +2207,11 @@ private fun SettingsRootScreen(
             }
             item("music_notification_swap_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "互换通知和音乐组件" else "Swap Music and Notifications",
+                    title = stringResource(R.string.settings_swap_music_notifications),
                     subtitle = if (swapMusicNotificationComponents) {
-                        if (isZh) "副一屏显示音乐卡片，控制中心显示通知卡片" else "Show music on side screen and notifications in Control Center"
+                        stringResource(R.string.settings_swap_music_notifications_on)
                     } else {
-                        if (isZh) "保持副一屏通知、控制中心音乐的默认位置" else "Keep notifications on side screen and music in Control Center"
+                        stringResource(R.string.settings_swap_music_notifications_off)
                     },
                     checked = swapMusicNotificationComponents,
                     enabled = sideScreenEnabled && showControlCenter,
@@ -1963,8 +2221,8 @@ private fun SettingsRootScreen(
             }
             item("show_step_count") {
                 SettingsSwitchRow(
-                    title = if (isZh) "显示步数" else "Show Step Count",
-                    subtitle = if (isZh) "在侧屏底部电池右侧显示步数" else "Show steps to the right of battery on side screen",
+                    title = stringResource(R.string.settings_show_steps),
+                    subtitle = stringResource(R.string.settings_show_steps_sub),
                     checked = showStepCount,
                     onToggle = vm::setShowStepCountEnabled,
                     scale = itemFisheye(listState, "show_step_count", screenCenterY, screenHeightPx)
@@ -1973,7 +2231,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.NOTIFICATION_SETTINGS -> SettingsPageScaffold(
-            title = if (isZh) "通知中心" else "Notifications",
+            title = stringResource(R.string.settings_notifications_title),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.NOTIFICATION_SETTINGS).index,
@@ -1982,11 +2240,11 @@ private fun SettingsRootScreen(
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("notification_center_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "显示通知" else "Show Notifications",
+                    title = stringResource(R.string.settings_show_notifications),
                     subtitle = if (showNotification) {
-                        if (isZh) "通知预览会显示在副一屏快捷启动下方" else "Show notification previews below quick launch on the side screen"
+                        stringResource(R.string.settings_show_notifications_on)
                     } else {
-                        if (isZh) "隐藏副一屏里的通知列表" else "Hide notifications from the side screen"
+                        stringResource(R.string.settings_show_notifications_off)
                     },
                     checked = showNotification,
                     enabled = sideScreenEnabled,
@@ -1996,11 +2254,11 @@ private fun SettingsRootScreen(
             }
             item("ongoing_notification_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "显示常驻通知" else "Show Ongoing Notifications",
+                    title = stringResource(R.string.settings_show_ongoing),
                     subtitle = if (showOngoingNotifications) {
-                        if (isZh) "显示有内容价值的常驻通知，过滤系统运行和悬浮窗提示" else "Show useful ongoing notifications while filtering system noise"
+                        stringResource(R.string.settings_show_ongoing_on)
                     } else {
-                        if (isZh) "隐藏常驻通知" else "Hide ongoing notifications"
+                        stringResource(R.string.settings_show_ongoing_off)
                     },
                     checked = showOngoingNotifications,
                     enabled = sideScreenEnabled && showNotification,
@@ -2011,7 +2269,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.CONTROL_CENTER_SETTINGS -> SettingsPageScaffold(
-            title = if (isZh) "控制中心" else "Control Center",
+            title = stringResource(R.string.settings_control_center_title),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.CONTROL_CENTER_SETTINGS).index,
@@ -2020,11 +2278,11 @@ private fun SettingsRootScreen(
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("control_center_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "显示控制中心" else "Show Control Center",
+                    title = stringResource(R.string.settings_show_cc),
                     subtitle = if (showControlCenter) {
-                        if (isZh) "从表盘下拉进入亮度、音量和快捷开关" else "Pull down from the watch face for brightness, volume, and quick toggles"
+                        stringResource(R.string.settings_show_cc_on)
                     } else {
-                        if (isZh) "关闭表盘下拉控制中心入口" else "Disable the pull-down control center"
+                        stringResource(R.string.settings_show_cc_off)
                     },
                     checked = showControlCenter,
                     onToggle = vm::setShowControlCenter,
@@ -2033,11 +2291,11 @@ private fun SettingsRootScreen(
             }
             item("music_controls_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "音乐控制卡片" else "Music Controls",
+                    title = stringResource(R.string.settings_show_music),
                     subtitle = if (showMusicControls) {
-                        if (isZh) "控制中心显示当前媒体播放卡片" else "Show the media card in Control Center"
+                        stringResource(R.string.settings_show_music_on)
                     } else {
-                        if (isZh) "隐藏控制中心里的音乐控制卡片" else "Hide the media card from Control Center"
+                        stringResource(R.string.settings_show_music_off)
                     },
                     checked = showMusicControls,
                     enabled = showControlCenter,
@@ -2047,11 +2305,11 @@ private fun SettingsRootScreen(
             }
             item("media_custom_actions_toggle") {
                 SettingsSwitchRow(
-                    title = if (isZh) "音乐应用自定义按钮" else "Media App Actions",
+                    title = stringResource(R.string.settings_media_actions),
                     subtitle = if (showMediaCustomActions) {
-                        if (isZh) "在上一曲、下一曲两侧显示应用自定义操作" else "Show app-defined actions around previous and next"
+                        stringResource(R.string.settings_media_actions_on)
                     } else {
-                        if (isZh) "只保留上一曲、播放和下一曲按钮" else "Keep only previous, play, and next"
+                        stringResource(R.string.settings_media_actions_off)
                     },
                     checked = showMediaCustomActions,
                     enabled = showControlCenter && showMusicControls,
@@ -2061,11 +2319,11 @@ private fun SettingsRootScreen(
             }
             item("power_menu_button") {
                 SettingsSwitchRow(
-                    title = if (isZh) "控制中心电源按钮" else "Control Center Power Button",
+                    title = stringResource(R.string.settings_cc_power),
                     subtitle = if (accessibilityServiceEnabled) {
-                        if (isZh) "已授权无障碍，点击控制中心电源图标会打开电源选项" else "Accessibility is enabled; the power icon opens power options"
+                        stringResource(R.string.settings_cc_power_accessible)
                     } else {
-                        if (isZh) "开启后跳转无障碍授权，仅用于打开电源选项" else "Requires Accessibility; used only to open power options"
+                        stringResource(R.string.settings_cc_power_require)
                     },
                     checked = powerMenuButtonEnabled,
                     enabled = true,
@@ -2082,7 +2340,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.GESTURE_SETTINGS -> SettingsPageScaffold(
-            title = if (isZh) "手势与按键" else "Gestures",
+            title = stringResource(R.string.settings_gestures_title),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.GESTURE_SETTINGS).index,
@@ -2091,11 +2349,11 @@ private fun SettingsRootScreen(
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("double_tap_lock_screen") {
                 SettingsSwitchRow(
-                    title = if (isZh) "双击表盘息屏" else "Double Tap to Lock",
+                    title = stringResource(R.string.settings_double_tap_lock),
                     subtitle = if (accessibilityServiceEnabled) {
-                        if (isZh) "已授权无障碍，双击表盘会立即息屏" else "Accessibility is enabled; double tap the watch face to lock the screen"
+                        stringResource(R.string.settings_double_tap_on)
                     } else {
-                        if (isZh) "开启后跳转无障碍授权，仅用于双击息屏" else "Requires Accessibility; used only for double-tap screen lock"
+                        stringResource(R.string.settings_double_tap_require)
                     },
                     checked = doubleTapLockScreenEnabled,
                     onToggle = { enabled ->
@@ -2111,7 +2369,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.APP_LIST_BEHAVIOR -> SettingsPageScaffold(
-            title = if (isZh) "应用列表行为" else "App List Behavior",
+            title = stringResource(R.string.settings_app_list_behavior_title),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.APP_LIST_BEHAVIOR).index,
@@ -2120,11 +2378,11 @@ private fun SettingsRootScreen(
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("app_list_watchface_colors") {
                 SettingsSwitchRow(
-                    title = if (isZh) "应用遮罩表盘取色" else "Watch Face Launch Mask Colors",
+                    title = stringResource(R.string.settings_watchface_launch_mask),
                     subtitle = if (appListWatchFaceColors) {
-                        if (isZh) "从应用列表打开应用时，遮罩背景继续跟随表盘颜色" else "Tint the launch mask from the watch face when opening apps from the list"
+                        stringResource(R.string.settings_watchface_launch_mask_on)
                     } else {
-                        if (isZh) "打开应用遮罩使用黑白中性色；应用列表背景保持纯黑或纯白" else "Use neutral black or white launch masks while the app list background stays pure black or white"
+                        stringResource(R.string.settings_watchface_launch_mask_off)
                     },
                     checked = appListWatchFaceColors,
                     onToggle = vm::setAppListWatchFaceColors,
@@ -2133,11 +2391,11 @@ private fun SettingsRootScreen(
             }
             item("app_list_row_border") {
                 SettingsSwitchRow(
-                    title = if (isZh) "列表模式底色遮罩" else "List Row Background",
+                    title = stringResource(R.string.settings_list_row_bg),
                     subtitle = if (appListRowBorderEnabled) {
-                        if (isZh) "列表布局中每排应用显示底色遮罩" else "Show the tinted background behind each list row"
+                        stringResource(R.string.settings_list_row_bg_on)
                     } else {
-                        if (isZh) "列表布局中不显示每排应用底色遮罩" else "Hide the list row background tint"
+                        stringResource(R.string.settings_list_row_bg_off)
                     },
                     checked = appListRowBorderEnabled,
                     enabled = layoutMode == LayoutMode.List,
@@ -2147,11 +2405,11 @@ private fun SettingsRootScreen(
             }
             item("app_list_folders_enabled") {
                 SettingsSwitchRow(
-                    title = if (isZh) "允许创建文件夹" else "Allow Folders",
+                    title = stringResource(R.string.settings_allow_folders),
                     subtitle = if (appListFoldersEnabled) {
-                        if (isZh) "长按拖动到另一个图标中心并停留 500ms 后合成文件夹" else "Hold a dragged icon over another icon center for 500ms to create a folder"
+                        stringResource(R.string.settings_allow_folders_on)
                     } else {
-                        if (isZh) "关闭拖动合成文件夹，只保留排序手势" else "Disable drag-to-folder creation and keep reordering only"
+                        stringResource(R.string.settings_allow_folders_off)
                     },
                     checked = appListFoldersEnabled,
                     onToggle = vm::setAppListFoldersEnabled,
@@ -2161,7 +2419,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.PERFORMANCE -> SettingsPageScaffold(
-            title = "性能与动画",
+            title = stringResource(R.string.settings_performance_title),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.PERFORMANCE).index,
@@ -2170,8 +2428,8 @@ private fun SettingsRootScreen(
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("low_res") {
                 SettingsSwitchRow(
-                    title = "低分辨率图标",
-                    subtitle = "降低图标开销以提升流畅度",
+                    title = stringResource(R.string.settings_low_res_icons),
+                    subtitle = stringResource(R.string.settings_low_res_icons_sub),
                     checked = lowResIcons,
                     onToggle = { vm.setLowResIcons(it) },
                     scale = itemFisheye(listState, "low_res", screenCenterY, screenHeightPx)
@@ -2180,7 +2438,7 @@ private fun SettingsRootScreen(
             item("music_text_animation") {
                 val selectedPreset = MusicTextSwitchAnimations.byId(musicTextSwitchAnimation)
                 SettingsCategoryCard(
-                    title = "音乐文字切换动画",
+                    title = stringResource(R.string.settings_music_text_animation),
                     subtitle = selectedPreset.label,
                     onClick = { navigateTo(SettingsDestination.MUSIC_TEXT_ANIMATION) },
                     scale = itemFisheye(listState, "music_text_animation", screenCenterY, screenHeightPx)
@@ -2188,8 +2446,8 @@ private fun SettingsRootScreen(
             }
             item("two_tone_icons") {
                 SettingsSwitchRow(
-                    title = if (isZh) "双色图标" else "Two-Tone Icons",
-                    subtitle = if (isZh) "AdaptiveIcon 使用单色层，其他图标转灰度后填色" else "Use adaptive monochrome when available, otherwise grayscale + tint",
+                    title = stringResource(R.string.settings_two_tone_icons),
+                    subtitle = stringResource(R.string.settings_two_tone_icons_sub),
                     checked = twoToneIconsEnabled,
                     onToggle = vm::setTwoToneIconsEnabled,
                     scale = itemFisheye(listState, "two_tone_icons", screenCenterY, screenHeightPx)
@@ -2197,8 +2455,8 @@ private fun SettingsRootScreen(
             }
             item("icon_shadow") {
                 SettingsSwitchRow(
-                    title = if (isZh) "图标阴影" else "Icon Shadow",
-                    subtitle = if (isZh) "关闭后减少蜂窝与列表拖动时的阴影绘制" else "Reduce shadow drawing for app icons and drag previews",
+                    title = stringResource(R.string.settings_icon_shadow),
+                    subtitle = stringResource(R.string.settings_icon_shadow_sub),
                     checked = iconShadowEnabled,
                     onToggle = vm::setIconShadowEnabled,
                     scale = itemFisheye(listState, "icon_shadow", screenCenterY, screenHeightPx)
@@ -2206,12 +2464,8 @@ private fun SettingsRootScreen(
             }
             item("anim_override") {
                 SettingsSwitchRow(
-                    title = if (isZh) "Flue 启动与返回动画" else "Flue Launch & Return Animation",
-                    subtitle = if (isZh) {
-                        "关闭后跟随系统；开启后使用 Flue 遮罩与图标来源动画"
-                    } else {
-                        "Follow the system when off; use Flue mask and icon-origin motion when on"
-                    },
+                    title = stringResource(R.string.settings_launch_animation),
+                    subtitle = stringResource(R.string.settings_launch_animation_sub),
                     checked = animationOverrideEnabled,
                     onToggle = { vm.setAnimationOverrideEnabled(it) },
                     scale = itemFisheye(listState, "anim_override", screenCenterY, screenHeightPx)
@@ -2219,12 +2473,8 @@ private fun SettingsRootScreen(
             }
             item("app_list_return_shrink") {
                 SettingsSwitchRow(
-                    title = if (isZh) "应用列表收缩动画" else "App List Shrink Animation",
-                    subtitle = if (isZh) {
-                        "关闭后从应用返回列表时只做淡入淡出，不再整体缩放"
-                    } else {
-                        "Fade only when returning from an app; skip the list-wide scale"
-                    },
+                    title = stringResource(R.string.settings_app_list_shrink),
+                    subtitle = stringResource(R.string.settings_app_list_shrink_sub),
                     checked = appListReturnShrinkEnabled,
                     onToggle = vm::setAppListReturnShrinkEnabled,
                     scale = itemFisheye(listState, "app_list_return_shrink", screenCenterY, screenHeightPx)
@@ -2240,12 +2490,8 @@ private fun SettingsRootScreen(
                     exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
                 ) {
                     SettingsSwitchRow(
-                        title = if (isZh) "返回时图标上浮" else "Icon Float on Return",
-                        subtitle = if (isZh) {
-                            "从应用退回列表时重播逐行上浮入场（从表盘进入不受影响）"
-                        } else {
-                            "Replay the row float-in when returning from an app"
-                        },
+                        title = stringResource(R.string.settings_icon_float),
+                        subtitle = stringResource(R.string.settings_icon_float_sub),
                         checked = appListReturnIconFloatEnabled,
                         onToggle = vm::setAppListReturnIconFloatEnabled,
                         scale = itemFisheye(
@@ -2258,30 +2504,20 @@ private fun SettingsRootScreen(
                 }
             }
             item("face_return_shrink") {
-                // 减弱动态效果打开时表盘收缩强制开启且不可修改（回弹被去掉后
-                // 需要收缩行程来承载转场层次）。
+                // 与「减弱动态效果」已解绑：那个开关只管去掉越界回弹，不再
+                // 反过来把收缩强制打开、把这一行锁成灰的。
                 SettingsSwitchRow(
-                    title = if (isZh) "表盘收缩动画" else "Watch Face Shrink Animation",
-                    subtitle = when {
-                        reduceDynamicEffects && isZh -> "减弱动态效果已开启，收缩动画保持开启"
-                        reduceDynamicEffects -> "Forced on while Reduce Motion is enabled"
-                        isZh -> "关闭后返回表盘时只做淡入淡出，不再整体缩放"
-                        else -> "Fade only when returning to the watch face; skip the scale"
-                    },
-                    checked = if (reduceDynamicEffects) true else faceReturnShrinkEnabled,
-                    enabled = !reduceDynamicEffects,
+                    title = stringResource(R.string.settings_face_shrink),
+                    subtitle = stringResource(R.string.settings_face_shrink_sub),
+                    checked = faceReturnShrinkEnabled,
                     onToggle = vm::setFaceReturnShrinkEnabled,
                     scale = itemFisheye(listState, "face_return_shrink", screenCenterY, screenHeightPx)
                 )
             }
             item("legacy_app_list_transition") {
                 SettingsSwitchRow(
-                    title = if (isZh) "还原老转场动画" else "Legacy Transition",
-                    subtitle = if (isZh) {
-                        "使用 watchOS 三段式之前的老动画：表盘放大冲脸进入应用列表"
-                    } else {
-                        "Use the pre-watchOS transition: the face zooms toward you"
-                    },
+                    title = stringResource(R.string.settings_legacy_transition),
+                    subtitle = stringResource(R.string.settings_legacy_transition_sub),
                     checked = legacyAppListTransitionEnabled,
                     onToggle = vm::setLegacyAppListTransitionEnabled,
                     scale = itemFisheye(
@@ -2294,12 +2530,8 @@ private fun SettingsRootScreen(
             }
             item("app_list_stagger") {
                 SettingsSwitchRow(
-                    title = if (isZh) "甩尾入场动画" else "Staggered Entry",
-                    subtitle = if (isZh) {
-                        "进入应用列表时第一行先入屏，下面的行逐行跟进"
-                    } else {
-                        "Rows enter top-first with a cascading delay"
-                    },
+                    title = stringResource(R.string.settings_stagger_entry),
+                    subtitle = stringResource(R.string.settings_stagger_entry_sub),
                     checked = appListStaggerEnabled,
                     onToggle = vm::setAppListStaggerEnabled,
                     scale = itemFisheye(listState, "app_list_stagger", screenCenterY, screenHeightPx)
@@ -2307,24 +2539,18 @@ private fun SettingsRootScreen(
             }
             item("reduce_dynamic_effects") {
                 SettingsSwitchRow(
-                    title = if (isZh) "减弱动态效果" else "Reduce Motion",
-                    subtitle = if (isZh) {
-                        "去掉转场收尾的越界回弹：动画到位即停，不再弹一下"
-                    } else {
-                        "Remove the settle overshoot: transitions stop exactly at rest"
-                    },
+                    title = stringResource(R.string.settings_reduce_motion),
+                    subtitle = stringResource(R.string.settings_reduce_motion_sub),
                     checked = reduceDynamicEffects,
-                    onToggle = { reduce ->
-                        vm.setReduceDynamicEffects(reduce)
-                        if (reduce) vm.setFaceReturnShrinkEnabled(true)
-                    },
+                    // 不再顺手把表盘收缩打开：两个开关互不干涉。
+                    onToggle = vm::setReduceDynamicEffects,
                     scale = itemFisheye(listState, "reduce_dynamic_effects", screenCenterY, screenHeightPx)
                 )
             }
             item("hide_from_recents") {
                 SettingsSwitchRow(
-                    title = if (isZh) "隐藏后台卡片" else "Hide Recents Card",
-                    subtitle = if (isZh) "从最近任务中隐藏 Flue 的后台卡片" else "Hide Flue from the system recents screen",
+                    title = stringResource(R.string.settings_hide_recents),
+                    subtitle = stringResource(R.string.settings_hide_recents_sub),
                     checked = hideFromRecents,
                     onToggle = vm::setHideFromRecents,
                     scale = itemFisheye(listState, "hide_from_recents", screenCenterY, screenHeightPx)
@@ -2332,8 +2558,8 @@ private fun SettingsRootScreen(
             }
             item("builtin_manager_thumbnails") {
                 SettingsSwitchRow(
-                    title = "内置管理器缩略图",
-                    subtitle = "在图片/视频列表左侧显示预览图",
+                    title = stringResource(R.string.settings_builtin_thumbnails),
+                    subtitle = stringResource(R.string.settings_builtin_thumbnails_sub),
                     checked = builtInManagerThumbnails,
                     onToggle = { vm.setBuiltInManagerThumbnails(it) },
                     scale = itemFisheye(listState, "builtin_manager_thumbnails", screenCenterY, screenHeightPx)
@@ -2341,8 +2567,16 @@ private fun SettingsRootScreen(
             }
             item("motion_profile") {
                 SettingsCategoryCard(
-                    title = "动画曲线配置",
-                    subtitle = "${activeMotionProfile.name} · 边界回弹 ${if (activeMotionProfile.bounceEnabled) "开启" else "关闭"}",
+                    title = stringResource(R.string.settings_motion_profile),
+                    subtitle = stringResource(
+                        R.string.settings_motion_profile_sub_fmt,
+                        activeMotionProfile.name,
+                        if (activeMotionProfile.bounceEnabled) {
+                            stringResource(R.string.settings_motion_bounce_on)
+                        } else {
+                            stringResource(R.string.settings_motion_bounce_off)
+                        }
+                    ),
                     onClick = { navigateTo(SettingsDestination.MOTION_PROFILE) },
                     scale = itemFisheye(listState, "motion_profile", screenCenterY, screenHeightPx)
                 )
@@ -2350,7 +2584,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.MOTION_PROFILE -> SettingsPageScaffold(
-            title = "动画曲线配置",
+            title = stringResource(R.string.settings_motion_profile_title),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.MOTION_PROFILE).index,
@@ -2360,7 +2594,7 @@ private fun SettingsRootScreen(
             val motionProfileEditable = !FlueMotionProfiles.isBuiltIn(activeMotionProfile.id)
             item("motion_intro") {
                 MessageCard(
-                    text = "选择预设后可复制为自己的曲线。时长 80–1200ms，衔接 0–500ms；边界强度 0 表示关闭回弹。",
+                    text = stringResource(R.string.settings_motion_profile_hint),
                     background = WatchColors.SurfaceGlass,
                     onClick = {}
                 )
@@ -2368,7 +2602,11 @@ private fun SettingsRootScreen(
             items(activeMotionProfileOptions(motionProfiles), key = { "motion_profile_${it.id}" }) { profile ->
                 SettingsChoiceRow(
                     title = profile.name,
-                    subtitle = if (FlueMotionProfiles.isBuiltIn(profile.id)) "内置预设（复制后可编辑）" else "自定义动画曲线",
+                    subtitle = if (FlueMotionProfiles.isBuiltIn(profile.id)) {
+                        stringResource(R.string.settings_motion_profile_preset)
+                    } else {
+                        stringResource(R.string.settings_motion_profile_custom)
+                    },
                     selected = profile.id == activeMotionProfile.id,
                     onClick = { vm.setActiveMotionProfile(profile.id) },
                     scale = itemFisheye(listState, "motion_profile_${profile.id}", screenCenterY, screenHeightPx)
@@ -2376,24 +2614,24 @@ private fun SettingsRootScreen(
             }
             item("motion_copy") {
                 ActionCard(
-                    title = "复制当前曲线",
-                    subtitle = "创建可编辑副本并立即使用",
+                    title = stringResource(R.string.settings_motion_profile_copy),
+                    subtitle = stringResource(R.string.settings_motion_profile_copy_sub),
                     onClick = { vm.copyMotionProfile() },
                     scale = itemFisheye(listState, "motion_copy", screenCenterY, screenHeightPx)
                 )
             }
             item("motion_delete") {
                 ActionCard(
-                    title = "删除当前自定义曲线",
-                    subtitle = "内置柔和与激进预设不会被删除",
+                    title = stringResource(R.string.settings_motion_profile_delete),
+                    subtitle = stringResource(R.string.settings_motion_profile_delete_sub),
                     onClick = { vm.deleteMotionProfile(activeMotionProfile.id) },
                     scale = itemFisheye(listState, "motion_delete", screenCenterY, screenHeightPx)
                 )
             }
             item("motion_bounce") {
                 SettingsSwitchRow(
-                    title = "触边回弹",
-                    subtitle = "同一手势跨过边界时立即产生边缘回弹",
+                    title = stringResource(R.string.settings_motion_bounce),
+                    subtitle = stringResource(R.string.settings_motion_bounce_sub),
                     checked = activeMotionProfile.bounceEnabled,
                     enabled = motionProfileEditable,
                     onToggle = { vm.setMotionBounceEnabled(it) },
@@ -2402,7 +2640,7 @@ private fun SettingsRootScreen(
             }
             item("motion_edge_strength") {
                 SettingsSliderRow(
-                    title = "边界强度",
+                    title = stringResource(R.string.settings_motion_bounce_strength),
                     value = activeMotionProfile.edgeStrength.toFloat(),
                     valueText = "${activeMotionProfile.edgeStrength}/10",
                     localValueText = { "${it.roundToInt()}/10" },
@@ -2415,16 +2653,16 @@ private fun SettingsRootScreen(
             }
             MotionPhaseKey.entries.forEach { key ->
                 val phase = activeMotionProfile.phase(key)
-                val keyName = key.motionPhaseLabel()
+                val keyName = key.motionPhaseLabel(context)
                 item("motion_section_$key") {
                     SectionTitle(
-                        text = "$keyName · ${phase.easing.motionEasingSummary()}",
+                        text = "$keyName · ${phase.easing.motionEasingSummary(context)}",
                         scale = itemFisheye(listState, "motion_section_$key", screenCenterY, screenHeightPx),
                     )
                 }
                 item("motion_duration_$key") {
                     SettingsSliderRow(
-                        title = "$keyName 时长",
+                        title = stringResource(R.string.settings_motion_phase_duration_fmt, keyName),
                         value = phase.durationMillis.toFloat(),
                         valueText = "${phase.durationMillis} ms",
                         localValueText = { "${it.roundToInt()} ms" },
@@ -2438,7 +2676,7 @@ private fun SettingsRootScreen(
                 }
                 item("motion_handoff_$key") {
                     SettingsSliderRow(
-                        title = "$keyName 衔接",
+                        title = stringResource(R.string.settings_motion_phase_delay_fmt, keyName),
                         value = phase.handoffMillis.toFloat(),
                         valueText = "${phase.handoffMillis} ms",
                         localValueText = { "${it.roundToInt()} ms" },
@@ -2452,8 +2690,8 @@ private fun SettingsRootScreen(
                 }
                 item("motion_easing_cubic_$key") {
                     SettingsChoiceRow(
-                        title = "三次贝塞尔曲线",
-                        subtitle = "直接控制时间曲线的两个控制点",
+                        title = stringResource(R.string.settings_motion_bezier),
+                        subtitle = stringResource(R.string.settings_motion_bezier_sub),
                         selected = phase.easing is MotionEasing.CubicBezier,
                         enabled = motionProfileEditable,
                         onClick = {
@@ -2467,8 +2705,8 @@ private fun SettingsRootScreen(
                 }
                 item("motion_easing_spring_$key") {
                     SettingsChoiceRow(
-                        title = "物理弹簧",
-                        subtitle = "使用阻尼与刚度控制回弹手感",
+                        title = stringResource(R.string.settings_motion_spring),
+                        subtitle = stringResource(R.string.settings_motion_spring_sub),
                         selected = phase.easing is MotionEasing.Spring,
                         enabled = motionProfileEditable,
                         onClick = {
@@ -2522,7 +2760,7 @@ private fun SettingsRootScreen(
                     is MotionEasing.Spring -> {
                         item("motion_${key}_damping") {
                             SettingsSliderRow(
-                                title = "$keyName 阻尼比",
+                                title = stringResource(R.string.settings_motion_damping_fmt, keyName),
                                 value = easing.dampingRatio,
                                 valueText = "%.2f".format(Locale.US, easing.dampingRatio),
                                 localValueText = { "%.2f".format(Locale.US, it) },
@@ -2546,7 +2784,7 @@ private fun SettingsRootScreen(
                         }
                         item("motion_${key}_stiffness") {
                             SettingsSliderRow(
-                                title = "$keyName 刚度",
+                                title = stringResource(R.string.settings_motion_stiffness_fmt, keyName),
                                 value = easing.stiffness,
                                 valueText = "${easing.stiffness.roundToInt()}",
                                 localValueText = { "${it.roundToInt()}" },
@@ -2573,16 +2811,16 @@ private fun SettingsRootScreen(
             }
             item("motion_export") {
                 ActionCard(
-                    title = "导出自定义曲线",
-                    subtitle = "导出为可备份的 JSON 文件",
+                    title = stringResource(R.string.settings_motion_export_curves),
+                    subtitle = stringResource(R.string.settings_motion_export_curves_sub),
                     onClick = { motionExportPicker.launch("flue-motion-profiles.json") },
                     scale = itemFisheye(listState, "motion_export", screenCenterY, screenHeightPx)
                 )
             }
             item("motion_import") {
                 ActionCard(
-                    title = "导入曲线",
-                    subtitle = "从 JSON 导入并生成新的自定义曲线",
+                    title = stringResource(R.string.settings_motion_import_curves),
+                    subtitle = stringResource(R.string.settings_motion_import_curves_sub),
                     onClick = { motionImportPicker.launch(arrayOf("application/json", "text/plain")) },
                     scale = itemFisheye(listState, "motion_import", screenCenterY, screenHeightPx)
                 )
@@ -2590,7 +2828,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.MUSIC_TEXT_ANIMATION -> SettingsPageScaffold(
-            title = "音乐文字切换动画",
+            title = stringResource(R.string.settings_music_text_animation),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.MUSIC_TEXT_ANIMATION).index,
@@ -2609,7 +2847,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.TOOLS -> SettingsPageScaffold(
-            title = "工具",
+            title = stringResource(R.string.settings_tools_title),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.TOOLS).index,
@@ -2618,36 +2856,40 @@ private fun SettingsRootScreen(
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("backup_menu") {
                 SettingsCategoryCard(
-                    title = "导入/导出配置",
-                    subtitle = "选择备份项目、导入项目和表盘资源",
+                    title = stringResource(R.string.settings_backup_menu),
+                    subtitle = stringResource(R.string.settings_backup_menu_sub),
                     onClick = { navigateTo(SettingsDestination.BACKUP) },
                     scale = itemFisheye(listState, "backup_menu", screenCenterY, screenHeightPx)
                 )
             }
             item("export_log") {
                 ActionCard(
-                    title = "导出日志",
-                    subtitle = "导出 Flue 摘要、崩溃文件和最近 500 行系统日志",
+                    title = stringResource(R.string.settings_export_log),
+                    subtitle = stringResource(R.string.settings_export_log_sub),
                     onClick = { settingsScope.launch { exportLog(context) } },
                     scale = itemFisheye(listState, "export_log", screenCenterY, screenHeightPx)
                 )
             }
             item("diagnostic_logging") {
                 SettingsSwitchRow(
-                    title = "诊断日志模式",
-                    subtitle = if (diagnosticLoggingEnabled) "已开启，5 分钟后自动关闭" else "默认关闭，开启后临时允许 release 输出诊断日志",
+                    title = stringResource(R.string.settings_diagnostic_logging),
+                    subtitle = if (diagnosticLoggingEnabled) {
+                        stringResource(R.string.settings_diagnostic_logging_on)
+                    } else {
+                        stringResource(R.string.settings_diagnostic_logging_off)
+                    },
                     checked = diagnosticLoggingEnabled,
                     onToggle = { enabled ->
                         diagnosticLoggingEnabled = enabled
-                        ILog.setDiagnosticLoggingEnabled(context, enabled, DIAGNOSTIC_LOG_DURATION_MS)
+                        FlueLog.setDiagnosticLoggingEnabled(context, enabled, DIAGNOSTIC_LOG_DURATION_MS)
                     },
                     scale = itemFisheye(listState, "diagnostic_logging", screenCenterY, screenHeightPx)
                 )
             }
             item("reset_defaults") {
                 ActionCard(
-                    title = "恢复默认设置",
-                    subtitle = "重置桌面外观与性能选项",
+                    title = stringResource(R.string.settings_reset_defaults),
+                    subtitle = stringResource(R.string.settings_reset_defaults_sub),
                     onClick = { vm.resetSettings() },
                     scale = itemFisheye(listState, "reset_defaults", screenCenterY, screenHeightPx)
                 )
@@ -2655,7 +2897,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.BACKUP -> SettingsPageScaffold(
-            title = "导入/导出配置",
+            title = stringResource(R.string.settings_backup_menu),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.BACKUP).index,
@@ -2664,16 +2906,16 @@ private fun SettingsRootScreen(
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("backup_export_page") {
                 SettingsCategoryCard(
-                    title = "导出配置",
-                    subtitle = "导出设置、排序和表盘资源为 ZIP",
+                    title = stringResource(R.string.settings_backup_export_page),
+                    subtitle = stringResource(R.string.settings_backup_export_page_sub),
                     onClick = { navigateTo(SettingsDestination.BACKUP_EXPORT) },
                     scale = itemFisheye(listState, "backup_export_page", screenCenterY, screenHeightPx)
                 )
             }
             item("backup_import_page") {
                 SettingsCategoryCard(
-                    title = "导入配置",
-                    subtitle = "选择 Flue ZIP 备份并按项目恢复",
+                    title = stringResource(R.string.settings_backup_import_page),
+                    subtitle = stringResource(R.string.settings_backup_import_page_sub),
                     onClick = { navigateTo(SettingsDestination.BACKUP_IMPORT) },
                     scale = itemFisheye(listState, "backup_import_page", screenCenterY, screenHeightPx)
                 )
@@ -2681,7 +2923,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.BACKUP_EXPORT -> SettingsPageScaffold(
-            title = "导出配置",
+            title = stringResource(R.string.settings_backup_export_page),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.BACKUP_EXPORT).index,
@@ -2693,16 +2935,16 @@ private fun SettingsRootScreen(
                 screenCenterY = screenCenterY,
                 screenHeightPx = screenHeightPx,
                 options = effectiveBackupExportOptions,
-                availableOptions = dingDingCatBackupAvailability,
-                onOptionsChange = { backupExportOptions = it.constrainedBy(dingDingCatBackupAvailability) }
+                availableOptions = FlueBackupOptions(),
+                onOptionsChange = { backupExportOptions = it }
             )
             item("export_backup_start") {
                 ActionCard(
-                    title = "开始导出",
-                    subtitle = "选择保存位置后写入 ZIP 备份",
+                    title = stringResource(R.string.settings_backup_export_start),
+                    subtitle = stringResource(R.string.settings_backup_export_start_sub),
                     onClick = {
                         if (!effectiveBackupExportOptions.hasAny) {
-                            Toast.makeText(context, "至少选择一项", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.toast_select_at_least_one), Toast.LENGTH_SHORT).show()
                         } else if (!backupBusy) {
                             pendingBackupExportOptions = effectiveBackupExportOptions
                             backupCreatePicker.launch(vm.suggestedBackupFileName())
@@ -2714,7 +2956,7 @@ private fun SettingsRootScreen(
         }
 
             SettingsDestination.BACKUP_IMPORT -> SettingsPageScaffold(
-            title = "导入配置",
+            title = stringResource(R.string.settings_backup_import_page),
             onBack = { handleBack() },
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.BACKUP_IMPORT).index,
@@ -2723,10 +2965,17 @@ private fun SettingsRootScreen(
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("import_backup_pick") {
                 ActionCard(
-                    title = "选择备份文件",
-                    subtitle = effectiveBackupImportPreview?.let { preview ->
-                        "备份版本 ${preview.appVersion} · ${preview.createdAt.ifBlank { "未知时间" }}"
-                    } ?: "选择 Flue ZIP 备份文件",
+                    title = stringResource(R.string.settings_backup_import_pick),
+                    subtitle = run {
+                        val unknownTime = stringResource(R.string.settings_backup_unknown_time)
+                        effectiveBackupImportPreview?.let { preview ->
+                            stringResource(
+                                R.string.settings_backup_preview_fmt,
+                                preview.appVersion,
+                                preview.createdAt.ifBlank { unknownTime }
+                            )
+                        } ?: stringResource(R.string.settings_backup_import_pick_sub)
+                    },
                     onClick = {
                         if (!backupBusy) {
                             backupOpenPicker.launch(
@@ -2753,28 +3002,28 @@ private fun SettingsRootScreen(
                 )
                 item("import_backup_start") {
                     ActionCard(
-                        title = "开始导入",
-                        subtitle = "恢复所选项目",
+                        title = stringResource(R.string.settings_backup_import_start),
+                        subtitle = stringResource(R.string.settings_backup_import_start_sub),
                         onClick = {
                             val uri = backupImportUri
                             if (uri == null) {
-                                Toast.makeText(context, "先选择备份文件", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, context.getString(R.string.toast_pick_backup_first), Toast.LENGTH_SHORT).show()
                             } else if (!effectiveBackupImportOptions.hasAny) {
-                                Toast.makeText(context, "至少选择一项", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, context.getString(R.string.toast_select_at_least_one), Toast.LENGTH_SHORT).show()
                             } else if (!backupBusy) {
                                 val options = effectiveBackupImportOptions
                                 settingsScope.launch {
                                     backupBusy = true
                                     backupProgress = BlockingProgressState(
-                                        title = "导入配置",
-                                        detail = "正在恢复所选项目"
+                                        title = context.getString(R.string.progress_import_config),
+                                        detail = context.getString(R.string.progress_import_config_detail)
                                     )
                                     val result = vm.importBackup(uri, options)
                                     result
                                         .onSuccess {
                                             backupProgress = BlockingProgressState(
-                                                title = "导入完成",
-                                                detail = options.backupSummaryText(),
+                                                title = context.getString(R.string.progress_import_done),
+                                                detail = options.backupSummaryText(context),
                                                 completed = true,
                                                 completionAction = BlockingProgressCompletionAction.ImportBackup
                                             )
@@ -2785,7 +3034,10 @@ private fun SettingsRootScreen(
                                             backupProgress = null
                                             Toast.makeText(
                                                 context,
-                                                "导入失败：${error.message ?: error.javaClass.simpleName}",
+                                                context.getString(
+                                                    R.string.toast_import_failed_fmt,
+                                                    error.message ?: error.javaClass.simpleName
+                                                ),
                                                 Toast.LENGTH_SHORT
                                             ).show()
                                         }
@@ -2799,8 +3051,54 @@ private fun SettingsRootScreen(
             }
         }
 
+            SettingsDestination.LANGUAGE -> SettingsPageScaffold(
+                title = stringResource(R.string.settings_language),
+                onBack = { handleBack() },
+                headerTime = headerTime,
+                initialFirstVisibleItemIndex = scrollFor(SettingsDestination.LANGUAGE).index,
+                initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.LANGUAGE).offset,
+                onScrollChanged = { index, offset -> updateScroll(SettingsDestination.LANGUAGE, index, offset) }
+            ) { listState, screenCenterY, screenHeightPx, _ ->
+                com.flue.launcher.i18n.FlueLocaleManager.options.forEach { option ->
+                    val key = "lang_${option.code.ifEmpty { "system" }}"
+                    item(key) {
+                        val label = when {
+                            option.code.isEmpty() -> stringResource(R.string.settings_language_follow_system)
+                            option.code == "zh"    -> "中文"
+                            option.code == "en"    -> "English"
+                            option.code == "ja"    -> "日本語"
+                            else                   -> option.labelEn
+                        }
+                        SettingsChoiceRow(
+                            title = label,
+                            subtitle = "",
+                            selected = appLanguage == option.code,
+                            onClick = {
+                                // 已经是当前语言就不弹重启确认，避免误触白跑一次冷启。
+                                if (appLanguage == option.code) return@SettingsChoiceRow
+                                pendingLanguageRestart = option.code
+                            },
+                            scale = itemFisheye(listState, key, screenCenterY, screenHeightPx)
+                        )
+                    }
+                }
+                // 英文 / 日文 由 AI 翻译，提示准确性可能不足
+                if (appLanguage == "en" || appLanguage == "ja") {
+                    item("lang_ai_disclaimer") {
+                        MessageCard(
+                            text = if (appLanguage == "ja")
+                                "英語・日本語の翻訳は AI によって生成されており、完全に正確ではない場合があります。"
+                            else
+                                "English and Japanese translations are AI-generated and may not be fully accurate.",
+                            background = WatchColors.SurfaceGlass,
+                            onClick = {}
+                        )
+                    }
+                }
+            }
+
             SettingsDestination.ABOUT -> SettingsPageScaffold(
-                title = "关于",
+                title = stringResource(R.string.settings_about_title),
                 onBack = { handleBack() },
                 headerTime = headerTime,
                 initialFirstVisibleItemIndex = scrollFor(SettingsDestination.ABOUT).index,
@@ -2810,30 +3108,14 @@ private fun SettingsRootScreen(
                 item("about_card") {
                     AboutCard(
                         onDonateClick = { navigateTo(SettingsDestination.DONATE) },
-                        onVersionClick = {
-                            val now = System.currentTimeMillis()
-                            dingDingCatVersionTapCount = if (now - dingDingCatLastVersionTapAt <= 1_800L) {
-                                dingDingCatVersionTapCount + 1
-                            } else {
-                                1
-                            }
-                            dingDingCatLastVersionTapAt = now
-                            if (dingDingCatVersionTapCount >= 5) {
-                                dingDingCatVersionTapCount = 0
-                                vm.setDingDingCatImportUnlocked(!dingDingCatImportUnlocked)
-                                Toast.makeText(
-                                    context,
-                                    "喵～",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            }
-                        },
+                        // 版本号点击不再触发任何历史格式导入入口。
+                        onVersionClick = {},
                         scale = itemFisheye(listState, "about_card", screenCenterY, screenHeightPx)
                     )
                 }
             }
             SettingsDestination.DONATE -> SettingsPageScaffold(
-                title = "捐赠支持",
+                title = stringResource(R.string.settings_donate_title),
                 onBack = { handleBack() },
                 headerTime = headerTime,
                 initialFirstVisibleItemIndex = scrollFor(SettingsDestination.DONATE).index,
@@ -2842,15 +3124,15 @@ private fun SettingsRootScreen(
             ) { listState, screenCenterY, screenHeightPx, _ ->
                 item("donate_tip") {
                     MessageCard(
-                        text = "真的很感谢你能支持 Flue 开发！点开下方二维码可全屏查看",
+                        text = stringResource(R.string.settings_donate_tip),
                         background = Color(0xFF1A2233),
                         onClick = {}
                     )
                 }
                 item("donate_wechat") {
                     DonateMethodCard(
-                        title = "微信",
-                        subtitle = "点击预览图全屏查看",
+                        title = stringResource(R.string.settings_donate_wechat),
+                        subtitle = stringResource(R.string.settings_donate_preview_tap),
                         resId = R.drawable.donate_wechat,
                         scale = itemFisheye(listState, "donate_wechat", screenCenterY, screenHeightPx),
                         onPreviewClick = { donatePreviewResId = R.drawable.donate_wechat }
@@ -2858,21 +3140,183 @@ private fun SettingsRootScreen(
                 }
                 item("donate_alipay") {
                     DonateMethodCard(
-                        title = "支付宝",
-                        subtitle = "点击预览图全屏查看",
+                        title = stringResource(R.string.settings_donate_alipay),
+                        subtitle = stringResource(R.string.settings_donate_preview_tap),
                         resId = R.drawable.donate_alipay,
                         scale = itemFisheye(listState, "donate_alipay", screenCenterY, screenHeightPx),
                         onPreviewClick = { donatePreviewResId = R.drawable.donate_alipay }
                     )
                 }
             }
+            }
+            }
+            }
         }
+
+        donatePreviewResId?.let { resId ->
+            DonatePreviewDialog(resId = resId, onDismiss = { donatePreviewResId = null })
         }
+
+        if (weatherCityDialogVisible) {
+            AlertDialog(
+                onDismissRequest = { weatherCityDialogVisible = false },
+                title = { Text(stringResource(R.string.settings_watch_weather_city_dialog_title)) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(stringResource(R.string.settings_watch_weather_city_dialog_message))
+                        OutlinedTextField(
+                            value = weatherCityDraft,
+                            onValueChange = { weatherCityDraft = it.take(120) },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(stringResource(R.string.settings_watch_weather_city)) },
+                            placeholder = {
+                                Text(stringResource(R.string.settings_watch_weather_city_hint))
+                            },
+                            singleLine = true,
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = weatherCityDraft.isNotBlank(),
+                        onClick = {
+                            val city = weatherCityDraft.trim().take(120)
+                            if (city.isNotEmpty()) {
+                                weatherRepository.setManualCity(city)
+                                weatherManualCity = city
+                                weatherCityDialogVisible = false
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.toast_weather_city_saved),
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        },
+                    ) {
+                        Text(stringResource(R.string.action_done))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { weatherCityDialogVisible = false }) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                },
+            )
+        }
+
+        pendingLanguageRestart?.let { languageCode ->
+            AlertDialog(
+                onDismissRequest = {
+                    if (!languageSaveInProgress) pendingLanguageRestart = null
+                },
+                title = { Text(stringResource(R.string.settings_language_restart_title)) },
+                text = { Text(stringResource(R.string.settings_language_restart_message)) },
+                confirmButton = {
+                    TextButton(
+                        enabled = !languageSaveInProgress,
+                        onClick = {
+                            if (languageSaveInProgress) return@TextButton
+                            languageSaveInProgress = true
+                            settingsScope.launch {
+                                val saved = vm.setAppLanguage(context, languageCode)
+                                languageSaveInProgress = false
+                                if (saved) {
+                                    pendingLanguageRestart = null
+                                    restartFlueProcess(context)
+                                } else {
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.toast_language_save_failed),
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            }
+                        },
+                    ) { Text(stringResource(R.string.settings_language_restart_confirm)) }
+                },
+                dismissButton = {
+                    TextButton(
+                        enabled = !languageSaveInProgress,
+                        onClick = { pendingLanguageRestart = null },
+                    ) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                },
+            )
         }
     }
+}
 
-    donatePreviewResId?.let { resId ->
-        DonatePreviewDialog(resId = resId, onDismiss = { donatePreviewResId = null })
+/**
+ * 整进程冷启，让每个 Activity 的 attachBaseContext 重新走一遍
+ * FlueLocaleManager.applyLocale。
+ *
+ * 只 recreate() 当前 Activity 是不够的：桌面那边的 LauncherActivity 还活着，
+ * 它持有的 Configuration 仍是旧 locale，切回去就露出没翻译的旧文案。
+ * 直接用 CLEAR_TASK 拉起新的 LauncherActivity，再结束旧设置页。
+ * 新 Activity 的 attachBaseContext 会重新读取 SharedPreferences 语言真源，
+ * 不依赖可能被系统批处理的 AlarmManager，也不需要杀进程留下黑屏窗口。
+ */
+private fun restartFlueProcess(context: android.content.Context) {
+    // 包内同时声明了 LauncherActivity 与 SettingsActivity 两个 LAUNCHER
+    // 入口；getLaunchIntentForPackage() 在部分 ROM 上会解析回当前设置页，
+    // CLEAR_TASK 后等于又打开旧入口。显式指定桌面 Activity，确保新的
+    // attachBaseContext 一定从 SharedPreferences 启动真源读取语言。
+    val launchIntent = android.content.Intent(context, LauncherActivity::class.java).apply {
+        addFlags(
+            android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK,
+        )
+    }
+    runCatching {
+        context.startActivity(launchIntent)
+        // CLEAR_TASK already removes this Activity in the normal path; finish is
+        // an idempotent fallback for OEM task managers that keep the old record.
+        (context as? android.app.Activity)?.finish()
+    }.onFailure {
+        // OEM task managers can reject a task replacement while the Activity is
+        // stopping. Keep the language saved and at least refresh this page.
+        (context as? android.app.Activity)?.recreate()
+    }
+}
+
+/**
+ * 只登记 key 顺序的影子 [LazyListScope]。
+ *
+ * 搜索结果要跳到具体某一行需要 key→index，但 LazyListState 只暴露「当前
+ * 可见项」的 key，屏幕外的拿不到。把页面的 content 往这个影子 scope 里跑
+ * 一遍就能拿到完整顺序——item 的 @Composable 内容一行都不会执行，只登记
+ * key，所以没有额外开销也没有副作用（content 本身不是 @Composable）。
+ */
+private class SettingsKeyIndexRecorder : LazyListScope {
+    private val keys = ArrayList<Any?>()
+
+    fun indexOf(key: String): Int = keys.indexOfFirst { it == key }
+
+    override fun item(
+        key: Any?,
+        contentType: Any?,
+        content: @Composable LazyItemScope.() -> Unit,
+    ) {
+        keys += key
+    }
+
+    override fun items(
+        count: Int,
+        key: ((index: Int) -> Any)?,
+        contentType: (index: Int) -> Any?,
+        itemContent: @Composable LazyItemScope.(index: Int) -> Unit,
+    ) {
+        repeat(count) { index -> keys += key?.invoke(index) }
+    }
+
+    @ExperimentalFoundationApi
+    override fun stickyHeader(
+        key: Any?,
+        contentType: Any?,
+        content: @Composable LazyItemScope.(Int) -> Unit,
+    ) {
+        keys += key
     }
 }
 
@@ -2914,14 +3358,31 @@ private fun SettingsPageScaffold(
 
     val rotaryScrollMultiplier = 1.18f
 
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(launcherStyle.screenBackground)
-    ) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val screenHeightPx = constraints.maxHeight.toFloat()
         val screenCenterY = screenHeightPx / 2f
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
+        val safeDrawingPadding = WindowInsets.safeDrawing.asPaddingValues()
+        val horizontalContentPadding = if (settingsRoundScreen) 26.dp else 16.dp
+        val verticalContentPadding = if (settingsRoundScreen) 30.dp else 18.dp
+
+        // 搜索结果跳转定位。目标 key 不属于本页时 indexOf 返回 -1，本页
+        // 什么都不做（转场期间新旧两页同时在树上，靠这条区分）。
+        val searchTarget = LocalSettingsSearchTarget.current
+        LaunchedEffect(searchTarget?.token, searchTarget?.itemKey) {
+            val target = searchTarget ?: return@LaunchedEffect
+            val recorder = SettingsKeyIndexRecorder()
+            // 标题项也要登记，否则算出来的 index 会整体偏移。
+            recorder.item(null, null) {}
+            with(recorder) {
+                content(listState, screenCenterY, screenHeightPx, emptySet())
+            }
+            val index = recorder.indexOf(target.itemKey)
+            if (index < 0) return@LaunchedEffect
+            // 目标行滚到靠上位置（留一点上文），而不是贴着顶边。
+            listState.animateScrollToItem(index, scrollOffset = -(screenHeightPx * 0.18f).toInt())
+            target.onConsumed()
+        }
 
         LazyColumn(
             state = listState,
@@ -2936,17 +3397,17 @@ private fun SettingsPageScaffold(
                         listState.scrollBy(-rotaryDelta)
                     }
                 }
-                .flueElasticNestedScroll(listState)
-                .padding(
-                    // 圆屏适配走"整块统一内缩"：固定内接安全区 padding，
-                    // 块内文字与控件比例不变。绝不做逐行弦宽动态收窄——
-                    // 行在滚动中逐帧变宽会让文字不断重排（"文字抽搐"）。
-                    start = (if (settingsRoundScreen) 26.dp else 16.dp) + leftSafeInset,
-                    top = if (settingsRoundScreen) 30.dp else 18.dp,
-                    end = if (settingsRoundScreen) 26.dp else 16.dp,
-                    bottom = 18.dp,
-                ),
-            contentPadding = PaddingValues(bottom = if (settingsRoundScreen) 56.dp else 28.dp),
+                .flueElasticNestedScroll(listState),
+            // The list owns the whole edge-to-edge viewport. Insets only move its items, so
+            // the static background still paints behind round corners and transparent bars.
+            // Keep a single scrollable top/bottom inset; the old modifier padding + bottom
+            // contentPadding + tail spacer stacked into permanent empty bands.
+            contentPadding = PaddingValues(
+                start = horizontalContentPadding + leftSafeInset,
+                top = safeDrawingPadding.calculateTopPadding() + verticalContentPadding,
+                end = horizontalContentPadding,
+                bottom = safeDrawingPadding.calculateBottomPadding() + verticalContentPadding,
+            ),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             // 顶栏（返回圆钮 + 时间）按老师要求删除：返回交给系统手势与
@@ -2966,9 +3427,6 @@ private fun SettingsPageScaffold(
                 )
             }
             content(listState, screenCenterY, screenHeightPx, visibleItemKeys)
-            item("tail_spacer") {
-                Spacer(modifier = Modifier.height(56.dp))
-            }
         }
     }
 }
@@ -3177,20 +3635,21 @@ private fun activeMotionProfileOptions(
         .thenBy { it.name },
 )
 
-private fun MotionPhaseKey.motionPhaseLabel(): String = when (this) {
-    MotionPhaseKey.APP_LIST_ENTER -> "应用列表进入"
-    MotionPhaseKey.APP_LAUNCH -> "应用启动"
-    MotionPhaseKey.APP_RETURN -> "应用返回"
-    MotionPhaseKey.PULL_TO_FACE -> "上滑返回表盘"
-    MotionPhaseKey.EDGE_BOUNCE -> "边界回弹"
+private fun MotionPhaseKey.motionPhaseLabel(context: Context): String = when (this) {
+    MotionPhaseKey.APP_LIST_ENTER -> context.getString(R.string.settings_motion_phase_app_list_enter)
+    MotionPhaseKey.APP_LAUNCH -> context.getString(R.string.settings_motion_phase_app_launch)
+    MotionPhaseKey.APP_RETURN -> context.getString(R.string.settings_motion_phase_app_return)
+    MotionPhaseKey.PULL_TO_FACE -> context.getString(R.string.settings_motion_phase_pull_to_face)
+    MotionPhaseKey.EDGE_BOUNCE -> context.getString(R.string.settings_motion_phase_edge_bounce)
 }
 
-private fun MotionEasing.motionEasingSummary(): String = when (this) {
+private fun MotionEasing.motionEasingSummary(context: Context): String = when (this) {
     is MotionEasing.CubicBezier ->
         "Bezier(%.2f, %.2f, %.2f, %.2f)".format(Locale.US, x1, y1, x2, y2)
 
     is MotionEasing.Spring ->
-        "Spring(阻尼 %.2f，刚度 %d)".format(Locale.US, dampingRatio, stiffness.roundToInt())
+        context.getString(R.string.settings_motion_spring_fmt)
+            .format(Locale.US, dampingRatio, stiffness.roundToInt())
 }
 
 @Composable
@@ -3662,7 +4121,7 @@ private fun AboutCard(
     fun copyAuthorQq() {
         val clipboard = context.getSystemService(ClipboardManager::class.java)
         clipboard?.setPrimaryClip(ClipData.newPlainText("QQ", AUTHOR_QQ_NUMBER))
-        Toast.makeText(context, "已复制 QQ：$AUTHOR_QQ_NUMBER", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, context.getString(R.string.about_qq_copy_fmt, AUTHOR_QQ_NUMBER), Toast.LENGTH_SHORT).show()
     }
     Box(
         modifier = Modifier
@@ -3709,11 +4168,11 @@ private fun AboutCard(
                         contentScale = ContentScale.Crop
                     )
                 } else {
-                    Text("Flue", color = launcherStyle.titleColor, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text(stringResource(R.string.app_name), color = launcherStyle.titleColor, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 }
             }
             Spacer(modifier = Modifier.height(14.dp))
-            Text("Flue", color = launcherStyle.titleColor, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.app_name), color = launcherStyle.titleColor, fontSize = 24.sp, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 ABOUT_VERSION,
@@ -3741,7 +4200,7 @@ private fun AboutCard(
                 Spacer(modifier = Modifier.width(10.dp))
                 Column {
                     Text(
-                        "柚子柚子皮",
+                        stringResource(R.string.about_author_name),
                         color = launcherStyle.titleColor,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
@@ -3762,28 +4221,10 @@ private fun AboutCard(
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(30.dp)
-                        .clip(CircleShape)
-                        .background(launcherStyle.titleColor.copy(alpha = 0.12f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("C", color = launcherStyle.titleColor, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                }
-                Spacer(modifier = Modifier.width(10.dp))
-                Column {
-                    Text("cjryrx", color = launcherStyle.titleColor, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text("QQ：124018406", color = WatchColors.TextTertiary, fontSize = 11.sp)
-                }
-            }
             Spacer(modifier = Modifier.height(18.dp))
             ActionCard(
-                title = "加入交流群获取更新",
-                subtitle = "群号 $COMMUNITY_GROUP_NUMBER",
+                title = stringResource(R.string.about_join_group),
+                subtitle = stringResource(R.string.about_community_group_fmt, COMMUNITY_GROUP_NUMBER),
                 onClick = {
                     context.startActivity(
                         Intent(
@@ -3796,20 +4237,20 @@ private fun AboutCard(
             )
             Spacer(modifier = Modifier.height(10.dp))
             ActionCard(
-                title = "捐赠支持",
-                subtitle = "微信 / 支付宝",
+                title = stringResource(R.string.about_donate),
+                subtitle = stringResource(R.string.about_donate_methods),
                 onClick = onDonateClick,
                 scale = 1f
             )
             Spacer(modifier = Modifier.height(10.dp))
             ActionCard(
-                title = "感谢以下开源项目",
-                subtitle = "dudu-Dev0/Lunch",
+                title = stringResource(R.string.about_open_source),
+                subtitle = PROJECT_REPOSITORY_LABEL,
                 onClick = {
                     context.startActivity(
                         Intent(
                             Intent.ACTION_VIEW,
-                            android.net.Uri.parse("https://github.com/dudu-Dev0/Lunch")
+                            android.net.Uri.parse(PROJECT_REPOSITORY_URL)
                         )
                     )
                 },
@@ -3990,8 +4431,8 @@ private fun BackupOptionsDialog(
                     if (availableOptions.settings) {
                         item("backup_settings") {
                             BackupOptionSwitch(
-                                title = "设置",
-                                subtitle = "桌面外观、性能、开关等通用设置",
+                                title = stringResource(R.string.backup_item_settings),
+                                subtitle = stringResource(R.string.backup_item_settings_sub),
                                 checked = options.settings,
                                 onToggle = { onOptionsChange(options.copy(settings = it)) }
                             )
@@ -4000,8 +4441,8 @@ private fun BackupOptionsDialog(
                     if (availableOptions.appOrder) {
                         item("backup_app_order") {
                             BackupOptionSwitch(
-                                title = "应用排序",
-                                subtitle = "应用列表的排列顺序",
+                                title = stringResource(R.string.backup_item_app_order),
+                                subtitle = stringResource(R.string.backup_item_app_order_sub),
                                 checked = options.appOrder,
                                 onToggle = { onOptionsChange(options.copy(appOrder = it)) }
                             )
@@ -4010,8 +4451,8 @@ private fun BackupOptionsDialog(
                     if (availableOptions.widgetOrder) {
                         item("backup_widget_order") {
                             BackupOptionSwitch(
-                                title = "小组件排序",
-                                subtitle = "小组件列表和槽位顺序",
+                                title = stringResource(R.string.backup_item_widget_order),
+                                subtitle = stringResource(R.string.backup_item_widget_order_sub),
                                 checked = options.widgetOrder,
                                 onToggle = { onOptionsChange(options.copy(widgetOrder = it)) }
                             )
@@ -4020,8 +4461,8 @@ private fun BackupOptionsDialog(
                     if (availableOptions.sideScreenOrder) {
                         item("backup_side_screen_order") {
                             BackupOptionSwitch(
-                                title = "负一屏排序",
-                                subtitle = "负一屏快捷启动槽位",
+                                title = stringResource(R.string.backup_item_side_screen_order),
+                                subtitle = stringResource(R.string.backup_item_side_screen_order_sub),
                                 checked = options.sideScreenOrder,
                                 onToggle = { onOptionsChange(options.copy(sideScreenOrder = it)) }
                             )
@@ -4030,8 +4471,8 @@ private fun BackupOptionsDialog(
                     if (availableOptions.photoWatchFace) {
                         item("backup_photo_watchface") {
                             BackupOptionSwitch(
-                                title = "图片表盘",
-                                subtitle = "图片表盘配置和当前图片",
+                                title = stringResource(R.string.backup_item_photo_watchface),
+                                subtitle = stringResource(R.string.backup_item_photo_watchface_sub),
                                 checked = options.photoWatchFace,
                                 onToggle = { onOptionsChange(options.copy(photoWatchFace = it)) }
                             )
@@ -4040,20 +4481,20 @@ private fun BackupOptionsDialog(
                     if (availableOptions.videoWatchFace) {
                         item("backup_video_watchface") {
                             BackupOptionSwitch(
-                                title = "视频表盘",
-                                subtitle = "视频表盘配置和当前视频",
+                                title = stringResource(R.string.backup_item_video_watchface),
+                                subtitle = stringResource(R.string.backup_item_video_watchface_sub),
                                 checked = options.videoWatchFace,
                                 onToggle = { onOptionsChange(options.copy(videoWatchFace = it)) }
                             )
                         }
                     }
-                    if (availableOptions.dingDingCatWatchFaces) {
-                        item("backup_dingdingcat") {
+                    if (availableOptions.watchFiles) {
+                        item("backup_watch_files") {
                             BackupOptionSwitch(
-                                title = "旧版表盘",
-                                subtitle = "已经导入的旧版 ZIP 表盘",
-                                checked = options.dingDingCatWatchFaces,
-                                onToggle = { onOptionsChange(options.copy(dingDingCatWatchFaces = it)) }
+                                title = stringResource(R.string.backup_item_watch_files),
+                                subtitle = stringResource(R.string.backup_item_watch_files_sub),
+                                checked = options.watchFiles,
+                                onToggle = { onOptionsChange(options.copy(watchFiles = it)) }
                             )
                         }
                     }
@@ -4067,7 +4508,7 @@ private fun BackupOptionsDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("取消")
+                Text(stringResource(R.string.action_cancel))
             }
         }
     )
@@ -4101,8 +4542,8 @@ private fun LazyListScope.backupOptionRows(
     if (availableOptions.settings) {
         item("backup_settings") {
             BackupOptionSwitch(
-                title = "设置",
-                subtitle = "桌面外观、性能、开关等通用设置",
+                title = stringResource(R.string.backup_item_settings),
+                subtitle = stringResource(R.string.backup_item_settings_sub),
                 checked = options.settings,
                 onToggle = { onOptionsChange(options.copy(settings = it)) },
                 scale = itemFisheye(listState, "backup_settings", screenCenterY, screenHeightPx)
@@ -4112,8 +4553,8 @@ private fun LazyListScope.backupOptionRows(
     if (availableOptions.appOrder) {
         item("backup_app_order") {
             BackupOptionSwitch(
-                title = "应用排序",
-                subtitle = "应用列表的排列顺序",
+                title = stringResource(R.string.backup_item_app_order),
+                subtitle = stringResource(R.string.backup_item_app_order_sub),
                 checked = options.appOrder,
                 onToggle = { onOptionsChange(options.copy(appOrder = it)) },
                 scale = itemFisheye(listState, "backup_app_order", screenCenterY, screenHeightPx)
@@ -4123,8 +4564,8 @@ private fun LazyListScope.backupOptionRows(
     if (availableOptions.widgetOrder) {
         item("backup_widget_order") {
             BackupOptionSwitch(
-                title = "小组件排序",
-                subtitle = "小组件列表和槽位顺序",
+                title = stringResource(R.string.backup_item_widget_order),
+                subtitle = stringResource(R.string.backup_item_widget_order_sub),
                 checked = options.widgetOrder,
                 onToggle = { onOptionsChange(options.copy(widgetOrder = it)) },
                 scale = itemFisheye(listState, "backup_widget_order", screenCenterY, screenHeightPx)
@@ -4134,8 +4575,8 @@ private fun LazyListScope.backupOptionRows(
     if (availableOptions.sideScreenOrder) {
         item("backup_side_screen_order") {
             BackupOptionSwitch(
-                title = "负一屏排序",
-                subtitle = "负一屏快捷启动槽位",
+                title = stringResource(R.string.backup_item_side_screen_order),
+                subtitle = stringResource(R.string.backup_item_side_screen_order_sub),
                 checked = options.sideScreenOrder,
                 onToggle = { onOptionsChange(options.copy(sideScreenOrder = it)) },
                 scale = itemFisheye(listState, "backup_side_screen_order", screenCenterY, screenHeightPx)
@@ -4145,8 +4586,8 @@ private fun LazyListScope.backupOptionRows(
     if (availableOptions.photoWatchFace) {
         item("backup_photo_watchface") {
             BackupOptionSwitch(
-                title = "图片表盘",
-                subtitle = "图片表盘配置和当前图片",
+                title = stringResource(R.string.backup_item_photo_watchface),
+                subtitle = stringResource(R.string.backup_item_photo_watchface_sub),
                 checked = options.photoWatchFace,
                 onToggle = { onOptionsChange(options.copy(photoWatchFace = it)) },
                 scale = itemFisheye(listState, "backup_photo_watchface", screenCenterY, screenHeightPx)
@@ -4156,44 +4597,45 @@ private fun LazyListScope.backupOptionRows(
     if (availableOptions.videoWatchFace) {
         item("backup_video_watchface") {
             BackupOptionSwitch(
-                title = "视频表盘",
-                subtitle = "视频表盘配置和当前视频",
+                title = stringResource(R.string.backup_item_video_watchface),
+                subtitle = stringResource(R.string.backup_item_video_watchface_sub),
                 checked = options.videoWatchFace,
                 onToggle = { onOptionsChange(options.copy(videoWatchFace = it)) },
                 scale = itemFisheye(listState, "backup_video_watchface", screenCenterY, screenHeightPx)
             )
         }
     }
-    if (availableOptions.dingDingCatWatchFaces) {
-        item("backup_dingdingcat") {
+    if (availableOptions.watchFiles) {
+        item("backup_watch_files") {
             BackupOptionSwitch(
-                title = "旧版表盘",
-                subtitle = "已经导入的旧版 ZIP 表盘",
-                checked = options.dingDingCatWatchFaces,
-                onToggle = { onOptionsChange(options.copy(dingDingCatWatchFaces = it)) },
-                scale = itemFisheye(listState, "backup_dingdingcat", screenCenterY, screenHeightPx)
+                title = stringResource(R.string.backup_item_watch_files),
+                subtitle = stringResource(R.string.backup_item_watch_files_sub),
+                checked = options.watchFiles,
+                onToggle = { onOptionsChange(options.copy(watchFiles = it)) },
+                scale = itemFisheye(listState, "backup_watch_files", screenCenterY, screenHeightPx)
             )
         }
     }
 }
 
-private fun FlueBackupOptions.backupSummaryText(): String {
+private fun FlueBackupOptions.backupSummaryText(context: Context): String {
     val labels = buildList {
-        if (settings) add("设置")
-        if (appOrder) add("应用排序")
-        if (widgetOrder) add("小组件排序")
-        if (sideScreenOrder) add("负一屏排序")
-        if (photoWatchFace) add("图片表盘")
-        if (videoWatchFace) add("视频表盘")
-        if (dingDingCatWatchFaces) add("旧版表盘")
+        if (settings) add(context.getString(R.string.backup_item_settings))
+        if (appOrder) add(context.getString(R.string.backup_item_app_order))
+        if (widgetOrder) add(context.getString(R.string.backup_item_widget_order))
+        if (sideScreenOrder) add(context.getString(R.string.backup_item_side_screen_order))
+        if (photoWatchFace) add(context.getString(R.string.backup_item_photo_watchface))
+        if (videoWatchFace) add(context.getString(R.string.backup_item_video_watchface))
+        if (watchFiles) add(context.getString(R.string.backup_item_watch_files))
     }
-    return labels.takeIf { it.isNotEmpty() }?.joinToString(" · ") ?: "无"
+    return labels.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+        ?: context.getString(R.string.backup_summary_none)
 }
 
-private fun Uri.backupDisplayLabel(): String {
+private fun Uri.backupDisplayLabel(context: Context): String {
     return runCatching {
         val path = lastPathSegment?.substringAfterLast(':').orEmpty().ifBlank { toString() }
-        path.substringAfterLast('/').ifBlank { "未知位置" }
+        path.substringAfterLast('/').ifBlank { context.getString(R.string.backup_unknown_location) }
     }.getOrElse { toString() }
 }
 
@@ -4240,11 +4682,11 @@ private fun BlockingProgressDialog(
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         if (state.shareUri != null) {
                             TextButton(onClick = onShare) {
-                                Text("分享", color = WatchColors.ActiveCyan)
+                                Text(stringResource(R.string.action_share), color = WatchColors.ActiveCyan)
                             }
                         }
                         TextButton(onClick = onDismiss) {
-                            Text("完成", color = WatchColors.ActiveCyan)
+                            Text(stringResource(R.string.action_done), color = WatchColors.ActiveCyan)
                         }
                     }
                 }
@@ -4262,11 +4704,11 @@ private fun shareBackupUri(context: android.content.Context, uri: Uri) {
                     putExtra(Intent.EXTRA_STREAM, uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 },
-                "分享配置备份"
+                context.getString(R.string.backup_share_title)
             )
         )
     }.onFailure {
-        Toast.makeText(context, "分享失败", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, context.getString(R.string.toast_share_failed), Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -4292,7 +4734,7 @@ private suspend fun exportLog(context: android.content.Context) {
                 writeText(
                     buildString {
                         appendLine("===== Flue Diagnostics =====")
-                        appendLine("diagnosticLoggingEnabled=${ILog.isDiagnosticLoggingEnabled()}")
+                        appendLine("diagnosticLoggingEnabled=${FlueLog.isDiagnosticLoggingEnabled()}")
                         appendLine()
                         appendLine("===== Private Crash Files =====")
                         appendLine(crashSummary)
@@ -4311,11 +4753,11 @@ private suspend fun exportLog(context: android.content.Context) {
                     putExtra(Intent.EXTRA_STREAM, uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 },
-                "导出日志"
+                context.getString(R.string.settings_export_log)
             )
         )
     } catch (_: Exception) {
-        Toast.makeText(context, "导出失败", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, context.getString(R.string.toast_export_failed), Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -4343,48 +4785,108 @@ private fun rememberSettingsHeaderTime(): String {
  * 设置搜索索引：标题 / 描述 / 关键词（含拼音首字母与英文别名）。
  * destinationName 用字符串与枚举解耦；命中跳转到对应页面。
  */
-private val settingsSearchIndex: List<SettingsSearchEntry> = listOf(
-    SettingsSearchEntry("APPEARANCE", null, "显示与外观", "布局、主题、界面风格与模糊", listOf("xsywg", "appearance", "theme", "zhuti", "fengge")),
-    SettingsSearchEntry("APPEARANCE", "ui_style", "界面风格", "Apple Watch / MD3 / MIUIX 三选一", listOf("jmfg", "style", "miuix", "md3")),
-    SettingsSearchEntry("APPEARANCE", "screen_shape", "屏幕形状", "圆屏 / 方屏手动指定", listOf("pmxz", "round", "yuanping", "fangping")),
-    SettingsSearchEntry("APPEARANCE", "advanced_material", "高级材质", "模糊与玻璃效果", listOf("gjcz", "blur", "mohu", "boli")),
-    SettingsSearchEntry("APPEARANCE", "edge_blur", "边缘模糊", "应用列表上下边缘的模糊渐隐", listOf("bymh", "edge blur")),
-    SettingsSearchEntry("DISPLAY_SIZE", null, "显示适配", "全局 UI 大小、蜂窝列数、鱼眼", listOf("xssp", "size", "daxiao", "fisheye", "yuyan")),
-    SettingsSearchEntry("DISPLAY_SIZE", "global_ui_scale", "全局 UI 大小", "整体缩放", listOf("qjdx", "scale", "suofang")),
-    SettingsSearchEntry("WATCH_FACES", null, "表盘", "选择与管理表盘", listOf("bp", "watchface", "biaopan")),
-    SettingsSearchEntry("WATCH_FACE_MORE", null, "表盘更多设置", "心率授权、日期语言、状态提示", listOf("bpgd", "xinlv", "riqi", "date")),
-    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_date_locale", "表盘日期语言", "跟随系统 / 中文 / English / 日本語", listOf("rqyy", "date locale", "yuyan")),
-    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_status_indicators", "表盘状态提示", "充电闪电与通知红点", listOf("ztts", "indicator")),
-    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_charging_power_text", "充电功率文字", "充电时显示功率", listOf("cdgl", "charging", "wattage")),
-    SettingsSearchEntry("ICON_PACKS", null, "图标包", "第三方图标包", listOf("tbb", "icon pack")),
-    SettingsSearchEntry("HIDDEN_APPS", null, "隐藏应用", "从列表隐藏应用", listOf("ycyy", "hidden", "yincang")),
-    SettingsSearchEntry("FEATURE_TOGGLES", null, "功能开关", "负一屏、通知、控制中心、手势", listOf("gnkg", "toggles")),
-    SettingsSearchEntry("SIDE_SCREEN", null, "负一屏设置", "副一屏、小组件页、步数", listOf("fyp", "side screen", "fuyiping", "xiaozujian")),
-    SettingsSearchEntry("SIDE_SCREEN", "side_screen_toggle", "副一屏", "右滑进入快捷启动与通知预览", listOf("fyp", "side screen")),
-    SettingsSearchEntry("SIDE_SCREEN", "widget_center_toggle", "小组件页", "左滑进入小组件", listOf("xzjy", "widget")),
-    SettingsSearchEntry("SIDE_SCREEN", "show_step_count", "显示步数", "侧屏底部步数", listOf("xsbs", "steps", "bushu")),
-    SettingsSearchEntry("SIDE_SCREEN", "music_notification_swap_toggle", "互换通知和音乐组件", "负一屏与控制中心卡片对调", listOf("hhzj", "swap")),
-    SettingsSearchEntry("NOTIFICATION_SETTINGS", null, "通知中心", "通知显示与常驻过滤", listOf("tzzx", "notification", "tongzhi")),
-    SettingsSearchEntry("NOTIFICATION_SETTINGS", "notification_center_toggle", "显示通知", "副一屏通知预览", listOf("xstz", "notifications")),
-    SettingsSearchEntry("NOTIFICATION_SETTINGS", "ongoing_notification_toggle", "显示常驻通知", "过滤系统噪音", listOf("czts", "ongoing")),
-    SettingsSearchEntry("CONTROL_CENTER_SETTINGS", null, "控制中心", "下拉面板、音乐卡片、电源按钮", listOf("kzzx", "control center", "kongzhi")),
-    SettingsSearchEntry("CONTROL_CENTER_SETTINGS", "music_controls_toggle", "音乐控制卡片", "控制中心媒体卡", listOf("yykz", "music", "yinyue")),
-    SettingsSearchEntry("CONTROL_CENTER_SETTINGS", "power_menu_button", "控制中心电源按钮", "打开电源选项（需无障碍）", listOf("dyaj", "power")),
-    SettingsSearchEntry("GESTURE_SETTINGS", null, "手势与按键", "双击息屏等", listOf("ssaj", "gesture", "shoushi")),
-    SettingsSearchEntry("GESTURE_SETTINGS", "double_tap_lock_screen", "双击表盘息屏", "需无障碍授权", listOf("sjxp", "double tap", "xiping")),
-    SettingsSearchEntry("APP_LIST_BEHAVIOR", null, "应用列表行为", "遮罩取色、底色、文件夹", listOf("yylb", "app list")),
-    SettingsSearchEntry("APP_LIST_BEHAVIOR", "app_list_folders_enabled", "允许创建文件夹", "拖动合成文件夹", listOf("wjj", "folder", "wenjianjia")),
-    SettingsSearchEntry("APP_LIST_BEHAVIOR", "app_list_watchface_colors", "应用遮罩表盘取色", "启动遮罩跟随表盘颜色", listOf("zzqs", "mask color")),
-    SettingsSearchEntry("PERFORMANCE", null, "性能与动画", "动画开关与图标质量", listOf("xnydh", "performance", "donghua")),
-    SettingsSearchEntry("PERFORMANCE", "app_list_stagger", "甩尾入场动画", "逐行错峰进入", listOf("swrc", "stagger")),
-    SettingsSearchEntry("PERFORMANCE", "legacy_app_list_transition", "还原老转场动画", "watchOS 三段式之前的老动画", listOf("lzcd", "legacy")),
-    SettingsSearchEntry("PERFORMANCE", "app_list_return_shrink", "应用列表收缩动画", "返回时整体缩放", listOf("sswd", "shrink")),
-    SettingsSearchEntry("PERFORMANCE", "app_list_return_icon_float", "返回时图标上浮", "从应用退回重播上浮入场", listOf("tbsf", "icon float")),
-    SettingsSearchEntry("PERFORMANCE", "icon_shadow", "图标阴影", "平台高程阴影", listOf("tbyy", "shadow", "yinying")),
-    SettingsSearchEntry("MOTION_PROFILE", null, "动画曲线配置", "时长、贝塞尔、弹簧参数", listOf("dhqx", "motion", "quxian", "spring")),
-    SettingsSearchEntry("MUSIC_TEXT_ANIMATION", null, "音乐文字动画", "切歌文字过渡", listOf("yywz", "music text")),
-    SettingsSearchEntry("TOOLS", null, "工具", "备份、诊断与文件管理", listOf("gj", "tools", "beifen")),
-    SettingsSearchEntry("BACKUP", null, "备份与恢复", "导出 / 导入配置", listOf("bfyf", "backup")),
-    SettingsSearchEntry("ABOUT", null, "关于", "版本与致谢", listOf("gy", "about", "banben")),
-    SettingsSearchEntry("DONATE", null, "捐赠", "支持开发", listOf("jz", "donate", "juanzeng")),
-)
+/**
+ * 设置搜索索引。
+ *
+ * itemKey 必须和目标页 LazyColumn 里 `item("...")` 的 key 逐字一致——搜索
+ * 结果就是靠它跳到具体那一行的（见 SettingsPageScaffold 的 searchTarget
+ * 定位逻辑）。以前这里有几个 key 是凭印象写的（advanced_material /
+ * edge_blur / ui_style / screen_shape / watchface_date_locale），页面里
+ * 并不存在，点进去只能落在页顶。
+ *
+ * 覆盖原则：每一个开关 / 滑块都要有自己的条目，不能只索引到分组页。
+ */
+private fun buildSettingsSearchIndex(context: Context): List<SettingsSearchEntry> {
+    fun s(id: Int): String = context.getString(id)
+    return listOf(
+    SettingsSearchEntry("APPEARANCE", null, s(R.string.settings_appearance), s(R.string.search_d_appearance), listOf("xsywg", "appearance", "theme", "zhuti", "fengge")),
+    SettingsSearchEntry("APPEARANCE", "layout_honeycomb", s(R.string.settings_layout_honeycomb), s(R.string.search_d_layout_honeycomb), listOf("fwbj", "honeycomb", "fengwo")),
+    SettingsSearchEntry("APPEARANCE", "layout_list", s(R.string.settings_layout_list), s(R.string.search_d_layout_list), listOf("lbbj", "list", "liebiao")),
+    SettingsSearchEntry("APPEARANCE", "theme_mode_system", s(R.string.search_t_theme_system), s(R.string.search_d_theme_mode), listOf("gssx", "system theme", "shenqian")),
+    SettingsSearchEntry("APPEARANCE", "theme_mode_dark", s(R.string.settings_theme_dark), s(R.string.search_d_theme_mode), listOf("ssms", "dark", "shense")),
+    SettingsSearchEntry("APPEARANCE", "theme_mode_light", s(R.string.settings_theme_light), s(R.string.search_d_theme_mode), listOf("qsms", "light", "qianse")),
+    SettingsSearchEntry("APPEARANCE", "ui_style_header", s(R.string.settings_ui_style_header), s(R.string.search_d_ui_style), listOf("jmfg", "style", "miuix", "md3")),
+    SettingsSearchEntry("APPEARANCE", "screen_shape_header", s(R.string.settings_screen_shape_header), s(R.string.search_d_screen_shape), listOf("pmxz", "round", "yuanping", "fangping")),
+    SettingsSearchEntry("APPEARANCE", "blur_toggle", s(R.string.settings_blur), s(R.string.search_d_blur), listOf("gjcz", "blur", "mohu", "boli")),
+    SettingsSearchEntry("APPEARANCE", "edge_blur_toggle", s(R.string.search_t_edge_blur), s(R.string.search_d_edge_blur), listOf("bymh", "edge blur")),
+    SettingsSearchEntry("APPEARANCE", "edge_blur_radius", s(R.string.settings_edge_blur_radius), s(R.string.search_d_edge_blur_radius), listOf("bymhbj", "blur radius", "banjing")),
+    SettingsSearchEntry("APPEARANCE", "top_fade", s(R.string.settings_top_fade), s(R.string.search_d_top_fade), listOf("dbjy", "top fade", "jianyin")),
+    SettingsSearchEntry("APPEARANCE", "bottom_fade", s(R.string.settings_bottom_fade), s(R.string.search_d_bottom_fade), listOf("dbjy", "bottom fade")),
+    SettingsSearchEntry("APPEARANCE", "splash_toggle", s(R.string.settings_splash), s(R.string.settings_splash_sub), listOf("qdzz", "splash", "zhezhao")),
+    SettingsSearchEntry("APPEARANCE", "direct_launch_app_list", s(R.string.settings_direct_launch_app_list), s(R.string.search_d_direct_launch), listOf("zjjr", "direct launch")),
+    SettingsSearchEntry("APPEARANCE", "splash_delay", s(R.string.search_t_splash_delay), s(R.string.search_d_splash_delay), listOf("qdyc", "splash delay", "yanchi")),
+    SettingsSearchEntry("DISPLAY_SIZE", null, s(R.string.settings_display_fit), s(R.string.search_d_display_size), listOf("xssp", "size", "daxiao", "fisheye", "yuyan")),
+    SettingsSearchEntry("DISPLAY_SIZE", "global_ui_scale", s(R.string.settings_global_ui_size), s(R.string.search_d_global_ui_scale), listOf("qjdx", "scale", "suofang")),
+    SettingsSearchEntry("DISPLAY_SIZE", "honeycomb_cols", s(R.string.settings_honeycomb_cols), s(R.string.search_d_honeycomb_cols), listOf("fwls", "columns", "lieshu")),
+    SettingsSearchEntry("DISPLAY_SIZE", "app_list_scale", s(R.string.settings_app_list_size), s(R.string.search_d_app_list_scale), listOf("lbdx", "app list size")),
+    SettingsSearchEntry("DISPLAY_SIZE", "app_list_fisheye", s(R.string.settings_fisheye), s(R.string.search_d_fisheye), listOf("yyxg", "fisheye", "yuyan")),
+    SettingsSearchEntry("DISPLAY_SIZE", "app_list_fisheye_range_rows", s(R.string.settings_fisheye_range), s(R.string.search_d_fisheye_range), listOf("yysx", "fisheye range")),
+    SettingsSearchEntry("DISPLAY_SIZE", "app_list_fisheye_strength", s(R.string.settings_fisheye_strength), s(R.string.search_d_fisheye_strength), listOf("yyqd", "fisheye strength")),
+    SettingsSearchEntry("DISPLAY_SIZE", "app_list_edge_spacing_compression", s(R.string.settings_edge_spacing), s(R.string.search_d_edge_spacing), listOf("byjj", "edge spacing")),
+    SettingsSearchEntry("DISPLAY_SIZE", "app_list_left_safe_inset", s(R.string.settings_left_safe_area), s(R.string.search_d_left_safe_area), listOf("zcaqq", "safe area", "anquanqu")),
+    SettingsSearchEntry("DISPLAY_SIZE", "rotary_haptics", s(R.string.settings_rotary_haptics), s(R.string.search_d_rotary_haptics), listOf("bgzd", "rotary haptics", "zhendong")),
+    SettingsSearchEntry("WATCH_FACES", null, s(R.string.settings_watchfaces), s(R.string.search_d_watchfaces), listOf("bp", "watchface", "biaopan")),
+    SettingsSearchEntry("WATCH_FACES", "watchface_store", s(R.string.search_t_watchface_store), s(R.string.search_d_watchface_store), listOf("bpsd", "store", "shangdian")),
+    SettingsSearchEntry("WATCH_FACES", "watchface_editor_new", s(R.string.search_t_watchface_editor_new), s(R.string.search_d_watchface_editor_new), listOf("xjbp", "editor", "bianjiqi")),
+    SettingsSearchEntry("WATCH_FACES", "watchface_import_archive", s(R.string.search_t_watchface_import), s(R.string.search_d_watchface_import), listOf("drbp", "import", "daoru", "watch")),
+    SettingsSearchEntry("WATCH_FACE_MORE", null, s(R.string.search_t_watchface_more), s(R.string.search_d_watchface_more), listOf("bpgd", "xinlv", "riqi", "date")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watch_weather_header", s(R.string.settings_watch_weather), s(R.string.settings_watch_weather_sub), listOf("tq", "weather", "tianqi")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watch_weather_manual_city", s(R.string.settings_watch_weather_city), s(R.string.settings_watch_weather_city_unset), listOf("cs", "city", "chengshi", "location")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watch_weather_unit_header", s(R.string.settings_watch_weather_unit), s(R.string.settings_watch_weather_celsius_sub), listOf("wd", "temperature", "celsius", "fahrenheit", "sheshi", "huashi")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_date_locale_header", s(R.string.settings_watchface_date_language), s(R.string.search_d_watchface_date_locale), listOf("rqyy", "date locale", "yuyan")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchmaker_force_fill", s(R.string.settings_watchmaker_force_fill), s(R.string.search_d_force_fill), listOf("qzpm", "force fill", "puman")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchmaker_body_sensors", s(R.string.settings_watchface_heart_rate), s(R.string.search_d_heart_rate), listOf("bpxl", "heart rate", "xinlv")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_font", s(R.string.settings_watchface_font), s(R.string.search_d_watchface_font), listOf("bpzt", "font", "ziti")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_bottom_fade", s(R.string.settings_watchface_bottom_fade), s(R.string.search_d_watchface_bottom_fade), listOf("bpdb", "bottom fade")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_status_indicators", s(R.string.settings_watchface_status), s(R.string.search_d_watchface_status), listOf("ztts", "indicator")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_charging_power_text", s(R.string.settings_watchface_charging_power), s(R.string.search_d_charging_power), listOf("cdgl", "charging", "wattage")),
+    SettingsSearchEntry("ICON_PACKS", null, s(R.string.settings_icon_packs), s(R.string.search_d_icon_packs), listOf("tbb", "icon pack")),
+    SettingsSearchEntry("HIDDEN_APPS", null, s(R.string.settings_hidden_apps), s(R.string.search_d_hidden_apps), listOf("ycyy", "hidden", "yincang")),
+    SettingsSearchEntry("FEATURE_TOGGLES", null, s(R.string.settings_feature_toggles), s(R.string.search_d_feature_toggles), listOf("gnkg", "toggles")),
+    SettingsSearchEntry("SIDE_SCREEN", null, s(R.string.settings_side_screen_title), s(R.string.search_d_side_screen), listOf("fyp", "side screen", "fuyiping", "xiaozujian")),
+    SettingsSearchEntry("SIDE_SCREEN", "side_screen_toggle", s(R.string.settings_side_screen), s(R.string.search_d_side_screen_toggle), listOf("fyp", "side screen")),
+    SettingsSearchEntry("SIDE_SCREEN", "widget_center_toggle", s(R.string.search_t_widget_page), s(R.string.search_d_widget_page), listOf("xzjy", "widget")),
+    SettingsSearchEntry("SIDE_SCREEN", "show_step_count", s(R.string.settings_show_steps), s(R.string.search_d_show_steps), listOf("xsbs", "steps", "bushu")),
+    SettingsSearchEntry("SIDE_SCREEN", "music_notification_swap_toggle", s(R.string.settings_swap_music_notifications), s(R.string.search_d_swap), listOf("hhzj", "swap")),
+    SettingsSearchEntry("NOTIFICATION_SETTINGS", null, s(R.string.settings_notifications_title), s(R.string.search_d_notifications), listOf("tzzx", "notification", "tongzhi")),
+    SettingsSearchEntry("NOTIFICATION_SETTINGS", "notification_center_toggle", s(R.string.settings_show_notifications), s(R.string.search_d_show_notifications), listOf("xstz", "notifications")),
+    SettingsSearchEntry("NOTIFICATION_SETTINGS", "ongoing_notification_toggle", s(R.string.settings_show_ongoing), s(R.string.search_d_show_ongoing), listOf("czts", "ongoing")),
+    SettingsSearchEntry("CONTROL_CENTER_SETTINGS", null, s(R.string.settings_control_center_title), s(R.string.search_d_control_center), listOf("kzzx", "control center", "kongzhi")),
+    SettingsSearchEntry("CONTROL_CENTER_SETTINGS", "control_center_toggle", s(R.string.settings_show_cc), s(R.string.search_d_show_cc), listOf("xskzzx", "show control center")),
+    SettingsSearchEntry("CONTROL_CENTER_SETTINGS", "music_controls_toggle", s(R.string.settings_show_music), s(R.string.search_d_show_music), listOf("yykz", "music", "yinyue")),
+    SettingsSearchEntry("CONTROL_CENTER_SETTINGS", "media_custom_actions_toggle", s(R.string.settings_media_actions), s(R.string.search_d_media_actions), listOf("zdyaj", "media actions")),
+    SettingsSearchEntry("CONTROL_CENTER_SETTINGS", "power_menu_button", s(R.string.settings_cc_power), s(R.string.search_d_cc_power), listOf("dyaj", "power")),
+    SettingsSearchEntry("GESTURE_SETTINGS", null, s(R.string.settings_gestures_title), s(R.string.search_d_gestures), listOf("ssaj", "gesture", "shoushi")),
+    SettingsSearchEntry("GESTURE_SETTINGS", "double_tap_lock_screen", s(R.string.settings_double_tap_lock), s(R.string.search_d_double_tap), listOf("sjxp", "double tap", "xiping")),
+    SettingsSearchEntry("APP_LIST_BEHAVIOR", null, s(R.string.settings_app_list_behavior_title), s(R.string.search_d_app_list_behavior), listOf("yylb", "app list")),
+    SettingsSearchEntry("APP_LIST_BEHAVIOR", "app_list_folders_enabled", s(R.string.settings_allow_folders), s(R.string.search_d_folders), listOf("wjj", "folder", "wenjianjia")),
+    SettingsSearchEntry("APP_LIST_BEHAVIOR", "app_list_watchface_colors", s(R.string.settings_watchface_launch_mask), s(R.string.search_d_launch_mask), listOf("zzqs", "mask color")),
+    SettingsSearchEntry("APP_LIST_BEHAVIOR", "app_list_row_border", s(R.string.settings_list_row_bg), s(R.string.search_d_row_bg), listOf("dsmz", "row background")),
+    SettingsSearchEntry("PERFORMANCE", null, s(R.string.settings_performance), s(R.string.search_d_performance), listOf("xnydh", "performance", "donghua")),
+    SettingsSearchEntry("PERFORMANCE", "app_list_stagger", s(R.string.settings_stagger_entry), s(R.string.search_d_stagger), listOf("swrc", "stagger")),
+    SettingsSearchEntry("PERFORMANCE", "legacy_app_list_transition", s(R.string.settings_legacy_transition), s(R.string.search_d_legacy), listOf("lzcd", "legacy")),
+    SettingsSearchEntry("PERFORMANCE", "app_list_return_shrink", s(R.string.settings_app_list_shrink), s(R.string.search_d_app_list_shrink), listOf("sswd", "shrink")),
+    SettingsSearchEntry("PERFORMANCE", "app_list_return_icon_float", s(R.string.settings_icon_float), s(R.string.search_d_icon_float), listOf("tbsf", "icon float")),
+    SettingsSearchEntry("PERFORMANCE", "face_return_shrink", s(R.string.settings_face_shrink), s(R.string.search_d_face_shrink), listOf("bpss", "face shrink", "shousuo", "biaopan")),
+    SettingsSearchEntry("PERFORMANCE", "reduce_dynamic_effects", s(R.string.settings_reduce_motion), s(R.string.search_d_reduce_motion), listOf("jrdt", "reduce motion", "jianruo", "huitan")),
+    SettingsSearchEntry("PERFORMANCE", "anim_override", s(R.string.settings_launch_animation), s(R.string.search_d_launch_animation), listOf("qdfh", "launch animation")),
+    SettingsSearchEntry("PERFORMANCE", "icon_shadow", s(R.string.settings_icon_shadow), s(R.string.search_d_icon_shadow), listOf("tbyy", "shadow", "yinying")),
+    SettingsSearchEntry("PERFORMANCE", "two_tone_icons", s(R.string.settings_two_tone_icons), s(R.string.search_d_two_tone), listOf("sstb", "two tone", "shuangse")),
+    SettingsSearchEntry("PERFORMANCE", "low_res", s(R.string.settings_low_res_icons), s(R.string.search_d_low_res), listOf("dfbl", "low res", "fenbianlv")),
+    SettingsSearchEntry("PERFORMANCE", "music_text_animation", s(R.string.settings_music_text_animation), s(R.string.search_d_music_text), listOf("yywz", "music text")),
+    SettingsSearchEntry("PERFORMANCE", "hide_from_recents", s(R.string.settings_hide_recents), s(R.string.search_d_hide_recents), listOf("ychtkp", "recents", "houtai")),
+    SettingsSearchEntry("PERFORMANCE", "builtin_manager_thumbnails", s(R.string.settings_builtin_thumbnails), s(R.string.search_d_thumbnails), listOf("sltu", "thumbnails", "suoluetu")),
+    SettingsSearchEntry("PERFORMANCE", "motion_profile", s(R.string.search_t_motion_profile_entry), s(R.string.search_d_motion_profile_entry), listOf("dhqx", "motion profile")),
+    SettingsSearchEntry("MOTION_PROFILE", null, s(R.string.settings_motion_profile_title), s(R.string.search_d_motion_profile), listOf("dhqx", "motion", "quxian", "spring")),
+    SettingsSearchEntry("MOTION_PROFILE", "motion_bounce", s(R.string.settings_motion_bounce), s(R.string.search_d_motion_bounce), listOf("cbht", "bounce", "huitan")),
+    SettingsSearchEntry("MOTION_PROFILE", "motion_edge_strength", s(R.string.settings_motion_bounce_strength), s(R.string.search_d_edge_strength), listOf("bjqd", "edge strength")),
+    SettingsSearchEntry("MUSIC_TEXT_ANIMATION", null, s(R.string.search_t_music_text_anim), s(R.string.search_d_music_text), listOf("yywz", "music text")),
+    SettingsSearchEntry("TOOLS", null, s(R.string.settings_tools), s(R.string.search_d_tools), listOf("gj", "tools", "beifen")),
+    SettingsSearchEntry("TOOLS", "export_log", s(R.string.settings_export_log), s(R.string.search_d_export_log), listOf("dcrz", "export log", "rizhi")),
+    SettingsSearchEntry("TOOLS", "diagnostic_logging", s(R.string.settings_diagnostic_logging), s(R.string.search_d_diagnostic), listOf("zdrz", "diagnostic")),
+    SettingsSearchEntry("TOOLS", "reset_defaults", s(R.string.settings_reset_defaults), s(R.string.search_d_reset), listOf("hfmr", "reset", "moren")),
+    SettingsSearchEntry("BACKUP", null, s(R.string.search_t_backup), s(R.string.search_d_backup), listOf("bfyf", "backup")),
+    SettingsSearchEntry("ABOUT", null, s(R.string.settings_about), s(R.string.search_d_about), listOf("gy", "about", "banben")),
+    SettingsSearchEntry("DONATE", null, s(R.string.search_t_donate), s(R.string.search_d_donate), listOf("jz", "donate", "juanzeng")),
+    )
+}

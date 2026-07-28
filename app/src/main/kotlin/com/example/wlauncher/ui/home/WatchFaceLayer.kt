@@ -80,8 +80,8 @@ import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
-import com.flue.launcher.watchface.LunchWatchFaceDescriptor
-import com.flue.launcher.watchface.LunchWatchFaceScanner
+import com.flue.launcher.watchface.WatchFaceDescriptor
+import com.flue.launcher.watchface.WatchFaceDescriptors
 import com.flue.launcher.watchface.WatchFacePhotoCache
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.LauncherStyle
@@ -1415,7 +1415,7 @@ fun rememberAppListSeedColor(
     videoPath: String?,
     photoOptions: BuiltInWatchFaceOptions,
     videoOptions: BuiltInWatchFaceOptions,
-    watchFaceDescriptor: LunchWatchFaceDescriptor? = null,
+    watchFaceDescriptor: WatchFaceDescriptor? = null,
     enabled: Boolean = true
 ): Color {
     if (!enabled) return Color.Transparent
@@ -1425,8 +1425,6 @@ fun rememberAppListSeedColor(
         val cacheKey = remember(
             descriptor.stableKey,
             descriptor.versionCode,
-            descriptor.previewResId,
-            descriptor.previewAssetPath,
             descriptor.previewFilePath,
             descriptor.sourceDirPath
         ) {
@@ -1474,16 +1472,13 @@ private fun externalWatchFaceDefaultPalette(): ClockPalette {
     )
 }
 
-private fun externalWatchFacePaletteCacheKey(descriptor: LunchWatchFaceDescriptor): String {
+private fun externalWatchFacePaletteCacheKey(descriptor: WatchFaceDescriptor): String {
     val previewPath = descriptor.previewFilePath
-    val previewAsset = descriptor.previewAssetPath
     val previewSource = when {
         !previewPath.isNullOrBlank() -> {
             val file = File(previewPath)
             "file|${file.absolutePath}|${file.lastModified()}|${file.length()}"
         }
-        !previewAsset.isNullOrBlank() -> "asset|$previewAsset"
-        descriptor.previewResId != 0 -> "res|${descriptor.packageName.orEmpty()}|${descriptor.previewResId}"
         else -> "none"
     }
     return "external|${descriptor.stableKey}|${descriptor.versionCode}|$previewSource"
@@ -1491,10 +1486,10 @@ private fun externalWatchFacePaletteCacheKey(descriptor: LunchWatchFaceDescripto
 
 private suspend fun sampleWatchFaceDescriptorPalette(
     context: Context,
-    descriptor: LunchWatchFaceDescriptor
+    descriptor: WatchFaceDescriptor
 ): ClockPalette? = withContext(Dispatchers.Default) {
     runCatching {
-        val drawable = LunchWatchFaceScanner.loadPreviewDrawable(context, descriptor) ?: return@runCatching null
+        val drawable = WatchFaceDescriptors.loadPreviewDrawable(context, descriptor) ?: return@runCatching null
         val bitmap = drawable.toSamplingBitmap() ?: return@runCatching null
         try {
             val color = averageBitmapColor(bitmap, 0 until bitmap.width, 0 until bitmap.height)

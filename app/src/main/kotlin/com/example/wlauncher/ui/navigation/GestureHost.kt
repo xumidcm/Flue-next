@@ -53,8 +53,13 @@ fun GestureHost(
     }
     // 覆层已经打开时，这一次拖拽是「往回收」：进度基准是 1，手指反向移动
     // 让它递减到 0，抬手仍由 onOverlayRelease 带初速度收尾。
+    // 三个覆层都要认领关闭方向，不能只有控制中心：负一屏 / 小组件页此前
+    // 一律返回 null，关闭方向没人认领，于是「拉出跟手、退出不跟手」。
+    // 小组件页被编辑手势锁住时不认领，把关闭交还给下面的 80px 兜底分支。
     val closingOverlay: OverlayGestureTarget? = when (screenState) {
         ScreenState.ControlCenter -> OverlayGestureTarget.ControlCenter
+        ScreenState.Stack -> OverlayGestureTarget.Stack
+        ScreenState.Widgets -> OverlayGestureTarget.Widgets.takeIf { !widgetsBackGestureLocked }
         else -> null
     }
     Box(
@@ -106,11 +111,27 @@ fun GestureHost(
                             return@detectDragGestures
                         }
 
-                        // 覆层已打开：认领关闭方向的跟手。控制中心是下拉打开，
-                        // 所以只有向上的位移才算「往回收」。
+                        // 覆层已打开：认领关闭方向的跟手。方向门必须按目标
+                        // 分派——以前这里把轴向硬编码成竖向且只认 totalDy<0，
+                        // 那是控制中心（下拉打开、上滑收回）的规则。负一屏是
+                        // 右滑打开、关闭方向向左；小组件页相反；两者都得走横轴，
+                        // 所以光把它们加进 closingOverlay 是不够的。
+                        val closingClaimed = closingOverlay != null && when (closingOverlay) {
+                            OverlayGestureTarget.ControlCenter ->
+                                abs(totalDy) > axisLockPx &&
+                                    abs(totalDy) > abs(totalDx) &&
+                                    totalDy < 0f
+                            OverlayGestureTarget.Stack ->
+                                abs(totalDx) > axisLockPx &&
+                                    abs(totalDx) > abs(totalDy) &&
+                                    totalDx < 0f
+                            OverlayGestureTarget.Widgets ->
+                                abs(totalDx) > axisLockPx &&
+                                    abs(totalDx) > abs(totalDy) &&
+                                    totalDx > 0f
+                        }
                         if (closingOverlay != null && !consumed &&
-                            abs(totalDy) > axisLockPx && abs(totalDy) > abs(totalDx) &&
-                            totalDy < 0f && onOverlayDrag != null
+                            closingClaimed && onOverlayDrag != null
                         ) {
                             overlayTarget = closingOverlay
                             consumed = true

@@ -24,7 +24,8 @@ import androidx.core.graphics.PathParser
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.layout.fillMaxSize
-import com.flue.launcher.watchface.LunchWatchFaceDescriptor
+import com.flue.launcher.watchface.WatchFaceDescriptor
+import com.flue.launcher.watchface.editor.WatchCanvasSize
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,7 +48,7 @@ import kotlin.math.sin
  * A deliberately self-contained native renderer for the open Watchmaker
  * `.watch` format.  The view owns the frame clock and asset loading; Compose
  * only hosts this one coarse-grained view.  Unsupported layer types remain
- * invisible instead of being routed through the legacy Lunch renderer.
+ * invisible instead of being routed through an unsupported plugin renderer.
  *
  * This is the first production seam for the format.  It implements the common
  * static/time layers used by real 1.0 and Studio 2.0 faces (image, text, ring,
@@ -134,8 +135,66 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         return bitmap
     }
 
+    /**
+     * 把整块表盘离屏渲染成位图，用于重新生成 preview.jpg。
+     *
+     * 与 [onDraw] 同一套坐标契约（居中原点 + 方形/圆形裁剪 + 背景色 + 全部
+     * renderPlan），但不依赖 View 的宽高，所以未上屏也能出图。编辑器保存时
+     * 用它覆盖草稿里作者自带的 preview.jpg —— 否则表盘列表和商店永远显示
+     * 原作者那张预览（老师报的「改完保存甚至上传都不换预览图」）。
+     */
+    fun renderFaceBitmap(sizePx: Int): Bitmap? {
+        if (disposed || sizePx <= 0) return null
+        val prepared = source ?: return null
+        val extentW = prepared.designExtentWidth
+        val extentH = prepared.designExtentHeight
+        // sizePx 作为长边预算，短边按声明比例收窄：方形表盘仍出 sizePx² 位图，
+        // 非方表盘出的 preview.jpg 比例才和实际渲染一致。
+        val scale = sizePx / max(extentW, extentH)
+        val bitmapWidth = (extentW * scale).roundToInt().coerceAtLeast(1)
+        val bitmapHeight = (extentH * scale).roundToInt().coerceAtLeast(1)
+        val bitmap = Bitmap.createBitmap(bitmapWidth, bitmapHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.save()
+        canvas.scale(scale, scale)
+        canvas.translate(extentW / 2f, extentH / 2f)
+        canvas.clipRect(-extentW / 2f, -extentH / 2f, extentW / 2f, extentH / 2f)
+        if (prepared.definition.shape == WatchFaceShape.ROUND) {
+            pathScratch.reset()
+            pathScratch.addCircle(0f, 0f, min(extentW, extentH) / 2f, Path.Direction.CW)
+            canvas.clipPath(pathScratch)
+        }
+        calendar.timeInMillis = System.currentTimeMillis()
+        frameDataSnapshot = runCatching { dataProvider.snapshot(calendar.timeInMillis) }
+            .getOrDefault(WatchDataSnapshot())
+        backgroundPaint.color =
+            resolveColor(prepared.definition.rootAttributes["bg_color"], Color.BLACK, prepared)
+        canvas.drawRect(
+            -extentW / 2f,
+            -extentH / 2f,
+            extentW / 2f,
+            extentH / 2f,
+            backgroundPaint,
+        )
+        runCatching { prepared.renderPlan.forEach { drawRenderItem(canvas, it, prepared) } }
+        canvas.restore()
+        return bitmap
+    }
+
     private val bitmapCache = LinkedHashMap<String, Bitmap>(16, 0.75f, true)
     private val movieCache = LinkedHashMap<String, Movie>(4, 0.75f, true)
+    /**
+     * 帧序列图层上一次成功画出的位图，按图层的完整 path 表达式索引。
+     *
+     * GIF 帧序列（`a.png`b.png`c.png`）每帧是独立文件、各有各的 cacheRevision，
+     * 所以 [requestBitmap] 里那套「同一素材的上一帧」兜底跨不过帧边界：切帧那
+     * 一瞬新键必然未命中，整层直接 return 什么都不画 —— 每换一帧黑一下，就是
+     * GIF 持续闪烁的根因。这里按图层维度记住最后画成功的那张，解码没跟上时
+     * 继续画它，宁可停在旧帧也绝不闪黑。
+     *
+     * 只在主线程的 onDraw 里读写，不需要 cacheLock。
+     */
+    private val lastDrawnFrameByLayer = LinkedHashMap<String, Bitmap>(8, 0.75f, true)
     private var bitmapCacheBytes = 0L
     private val activeAssetLoads = HashSet<AssetLoadClaim>(MAX_CONCURRENT_ASSET_LOADS)
     /** Asset key -> bind generation which owns the in-flight decode. */
@@ -192,12 +251,12 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     )
 
     fun bind(
-        descriptor: LunchWatchFaceDescriptor,
+        descriptor: WatchFaceDescriptor,
         refreshToken: Int,
         isFaceVisible: Boolean,
         onLongPress: (() -> Unit)?,
         onDoubleTap: (() -> Unit)?,
-        onLoadFailure: (LunchWatchFaceDescriptor, Throwable) -> Unit,
+        onLoadFailure: (WatchFaceDescriptor, Throwable) -> Unit,
         onTapAction: ((WatchTapAction) -> Unit)? = null,
     ) {
         if (disposed) return
@@ -263,7 +322,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 } ?: prepared
                 if (replacement !== current) current?.clearRuntimeCaches()
                 source = replacement
-                if (replacement !== current) {
+                if (replacement !== current && reloadMode == WatchSourceReloadMode.CLEAR_BEFORE_LOAD) {
+                    // 不同表盘切换：重置 GIF / 帧序列计时，从第0帧开始播。
+                    // 同表盘刷新（reloadMode == KEEP_CURRENT_UNTIL_READY）时保留
+                    // 旧计时器，GIF 从中断处继续，不出现疯狂闪烁。
                     frameStartedAtUptimeMs = SystemClock.uptimeMillis()
                 }
                 scheduleTicks()
@@ -363,10 +425,16 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             canvas.drawColor(Color.BLACK)
             return
         }
+        // 设计空间跟随表盘自己声明的画布比例（基准边恒 512）。方形声明算出来
+        // 就是 512×512，所以这里对存量表盘是恒等变换。
+        val extentW = prepared.designExtentWidth
+        val extentH = prepared.designExtentHeight
         val transform = watchCanvasTransform(
             viewWidth = width.toFloat(),
             viewHeight = height.toFloat(),
             forceFill = forceFill,
+            designWidth = extentW,
+            designHeight = extentH,
         )
         canvas.save()
         canvas.translate(transform.left, transform.top)
@@ -375,11 +443,12 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // top-left canvas coordinates. Keeping this translation at the single
         // renderer boundary makes every primitive (including groups and
         // rings) use the same coordinate contract.
-        canvas.translate(DESIGN_SIZE / 2f, DESIGN_SIZE / 2f)
-        canvas.clipRect(-DESIGN_SIZE / 2f, -DESIGN_SIZE / 2f, DESIGN_SIZE / 2f, DESIGN_SIZE / 2f)
+        canvas.translate(extentW / 2f, extentH / 2f)
+        canvas.clipRect(-extentW / 2f, -extentH / 2f, extentW / 2f, extentH / 2f)
         if (prepared.definition.shape == WatchFaceShape.ROUND) {
             pathScratch.reset()
-            pathScratch.addCircle(0f, 0f, DESIGN_SIZE / 2f, Path.Direction.CW)
+            // 圆形取内切圆：非方画布上按长边画会把圆裁出画布外。
+            pathScratch.addCircle(0f, 0f, min(extentW, extentH) / 2f, Path.Direction.CW)
             canvas.clipPath(pathScratch)
         }
         calendar.timeInMillis = System.currentTimeMillis()
@@ -387,7 +456,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             .getOrDefault(WatchDataSnapshot())
         tapTargets.clear()
         backgroundPaint.color = resolveColor(prepared.definition.rootAttributes["bg_color"], Color.BLACK, prepared)
-        canvas.drawRect(-DESIGN_SIZE / 2f, -DESIGN_SIZE / 2f, DESIGN_SIZE / 2f, DESIGN_SIZE / 2f, backgroundPaint)
+        canvas.drawRect(-extentW / 2f, -extentH / 2f, extentW / 2f, extentH / 2f, backgroundPaint)
         prepared.renderPlan.forEach { drawRenderItem(canvas, it, prepared) }
         canvas.restore()
     }
@@ -512,10 +581,63 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             dynamicNumber(attrs["gif_delay"], 100f, source).roundToInt().toLong(),
         )
         val path = framePaths.getOrNull(frameIndex) ?: pathExpression.substringBefore('`').trim()
-        val resolved = resolveAsset(path, source, conventionalDirectory = "images") ?: return
+        val wantsNightWeatherSheet = sprite &&
+            attrs["weather_night"].equals("Y", ignoreCase = true) &&
+            isWeatherNightFrame()
+        val nightPath = if (wantsNightWeatherSheet) watchWeatherNightAssetReference(path) else null
+        val nightResolved = nightPath?.let { candidate ->
+            resolveAsset(candidate, source, conventionalDirectory = "images")
+        }
+        val usingNightWeatherSheet = nightResolved != null
+        val selectedPath = if (usingNightWeatherSheet) nightPath.orEmpty() else path
+        val resolved = nightResolved
+            ?: resolveAsset(path, source, conventionalDirectory = "images")
+            ?: return
         val sharedSize = attrs["size"]
         val movie = if (resolved.file.extension.equals("gif", true)) requestMovie(resolved, source) else null
-        val bitmap = if (movie == null) requestBitmap(path, source) else null
+        val requestedBitmap = if (movie == null) requestBitmap(selectedPath, source) else null
+        // 帧序列预取：解码是异步的，而每帧只在真正要画的那一刻才请求，
+        // 于是切帧必然未命中。提前把下一帧排进解码队列，等索引推进时
+        // 通常已经在缓存里，兜底路径就很少被用到。
+        if (movie == null && framePaths.size > 1) {
+            val rawNextPath = framePaths[(frameIndex + 1) % framePaths.size]
+            val nextPath = if (usingNightWeatherSheet) {
+                watchWeatherNightAssetReference(rawNextPath)
+            } else {
+                rawNextPath
+            }
+            if (nextPath != selectedPath) requestBitmap(nextPath, source)
+        }
+        // 跨帧兜底：新帧还没解码好就继续画这一层上次画成的那张。
+        var drawingNightWeatherSheet = usingNightWeatherSheet
+        val bitmap = if (movie == null) {
+            val fallbackKey = "$pathExpression\u0000${if (usingNightWeatherSheet) "night" else "day"}"
+            val usable = requestedBitmap?.takeIf { !it.isRecycled }
+            if (usable != null) {
+                lastDrawnFrameByLayer[fallbackKey] = usable
+                while (lastDrawnFrameByLayer.size > MAX_LAST_FRAME_ENTRIES) {
+                    val iterator = lastDrawnFrameByLayer.entries.iterator()
+                    if (!iterator.hasNext()) break
+                    iterator.next()
+                    iterator.remove()
+                }
+                usable
+            } else {
+                // 回收过的位图不能画：命中就当成没有，避免画到已释放内存。
+                lastDrawnFrameByLayer[fallbackKey]?.takeIf { !it.isRecycled }
+                    ?: if (usingNightWeatherSheet) {
+                        // 日夜切换时夜图也走异步解码；准备好之前沿用白天最后一帧，
+                        // 避免条件图标短暂透明。
+                        drawingNightWeatherSheet = false
+                        lastDrawnFrameByLayer["$pathExpression\u0000day"]
+                            ?.takeIf { !it.isRecycled }
+                    } else {
+                        null
+                    }
+            }
+        } else {
+            null
+        }
         val nativeWidth = movie?.width()?.toFloat() ?: bitmap?.width?.toFloat() ?: return
         val nativeHeight = movie?.height()?.toFloat() ?: bitmap?.height?.toFloat() ?: return
         val width = dynamicNumber(attrs["width"] ?: sharedSize, nativeWidth, source).coerceAtLeast(1f)
@@ -535,7 +657,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             1 to 1
         }
         val index = if (sprite) {
-            watchSpriteIndex(
+            val dayIndex = watchSpriteIndex(
                 dynamicNumber(
                     attrs["cond_value"] ?: attrs["condition"] ?: attrs["value"],
                     1f,
@@ -543,6 +665,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 ),
                 grid.first * grid.second,
             )
+            if (drawingNightWeatherSheet && grid.first == 3 && grid.second == 3) {
+                watchWeatherNightSpriteIndex(dayIndex)
+            } else {
+                dayIndex
+            }
         } else {
             0
         }
@@ -575,6 +702,14 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // image_tap 专用图层；带显式 tap_action 的普通 image 也要可点。
         if (tapAction || !attrs["tap_action"].isNullOrBlank()) recordTapTarget(canvas, dst, attrs)
         imagePaint.colorFilter = null
+    }
+
+    private fun isWeatherNightFrame(): Boolean {
+        val weather = frameDataSnapshot.weather
+        weather?.isDaytime?.let { return !it }
+        return (weather?.icon ?: frameDataSnapshot.weatherIcon)
+            ?.trim()
+            ?.endsWith("n", ignoreCase = true) == true
     }
 
     private fun drawText(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {
@@ -1433,7 +1568,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                             DYNAMIC_TAG_PATTERN.containsMatchIn(value)
                         }) ||
                         layer.attributes.values.any { value ->
-                            value.contains("{drss}") || value.contains("{dss}")
+                            WatchmakerTagResolver.requiresFastTicks(value)
                         }
                 },
         )
@@ -1791,6 +1926,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             .getOrElse { runCatching { byteCount.toLong() }.getOrDefault(0L) }
 
     private fun clearAssetCaches() {
+        // 兜底图持有的就是 bitmapCache 里那批实例，下面要把它们 recycle 掉：
+        // 先松手，否则 map 里留着一堆已回收引用（画的时候有 isRecycled 守卫，
+        // 但没必要留悬垂引用占着）。
+        lastDrawnFrameByLayer.clear()
         synchronized(cacheLock) {
             bitmapCache.values.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
             bitmapCache.clear()
@@ -1946,9 +2085,6 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     private fun routeTapAction(action: WatchTapAction) {
         if (action === WatchTapAction.HeartRate) {
-            // 规范（WM_TAP_ACTIONS.md）里 w_heart_rate/widget_health 是可配置
-            // 命名动作：未映射目标应用时保持静默，但动作本身被识别。Flue 没有
-            // 映射设置，所以最小行为是触觉反馈 + 触发一次新的心率测量并重绘。
             performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
             runCatching { dataProvider.requestRefresh() }
             invalidate()
@@ -1958,20 +2094,27 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             WatchTapAction.Calendar -> Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CALENDAR)
             WatchTapAction.Weather -> Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_WEATHER)
             WatchTapAction.HeartRate -> null
+            is WatchTapAction.AppLaunch -> {
+                val act = action.activityClass
+                if (act != null) {
+                    Intent(Intent.ACTION_MAIN).apply {
+                        component = android.content.ComponentName(action.packageName, act)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                } else {
+                    context.packageManager.getLaunchIntentForPackage(action.packageName)
+                }
+            }
             is WatchTapAction.Unsupported -> null
         }
         if (intent == null) {
-            val reason = (action as? WatchTapAction.Unsupported)?.reason ?: "unsupported action"
+            val reason = (action as? WatchTapAction.Unsupported)?.reason
+                ?: "找不到应用 ${(action as? WatchTapAction.AppLaunch)?.packageName}"
             Toast.makeText(context, "表盘点击动作不可用: $reason", Toast.LENGTH_SHORT).show()
             return
         }
-        val resolved = runCatching { intent.resolveActivity(context.packageManager) }.getOrNull()
-        if (resolved == null) {
-            Toast.makeText(context, "设备没有可用的目标应用", Toast.LENGTH_SHORT).show()
-            return
-        }
         runCatching {
-            context.startActivity(intent)
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }.onFailure {
             Toast.makeText(context, "无法打开目标应用", Toast.LENGTH_SHORT).show()
         }
@@ -2031,6 +2174,18 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val svgDocuments: Map<String, PreparedWatchSvgDocument<Path>>,
         val needsFastTicks: Boolean,
     ) {
+        /**
+         * 声明画布换算出的设计空间尺寸，构造时算一次。
+         *
+         * 根属性解析涉及字符串处理，放到 onDraw 里就是每帧一次；而安装目录在
+         * 一个 PreparedSource 的生命周期内是不变的，缓存下来即可。
+         * 方形声明（512²/466²/360²，以及不声明 width/height 的老表盘）算出来
+         * 仍是 512×512，渲染路径与改动前逐像素一致。
+         */
+        val canvasSize = WatchCanvasSize.fromRootAttributes(definition.rootAttributes)
+        val designExtentWidth: Float = canvasSize.designExtentWidth
+        val designExtentHeight: Float = canvasSize.designExtentHeight
+
         /** Main-thread-only bounded memoization; the installed tree is immutable. */
         val assetResolutionCache = WatchStringLruCache<ResolvedAsset>(
             maximumEntries = MAX_ASSET_RESOLUTION_CACHE_ENTRIES,
@@ -2102,6 +2257,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         private const val MAX_BITMAP_CACHE_ENTRIES = 24
         private const val MAX_BITMAP_CACHE_BYTES = 24L * 1024L * 1024L
         private const val MAX_MOVIE_CACHE_ENTRIES = 4
+        /** 帧序列兜底图上限：一块表盘同时有几个 GIF 图层已属极端情况。 */
+        private const val MAX_LAST_FRAME_ENTRIES = 8
         private const val MAX_TYPEFACE_CACHE_ENTRIES = 16
         private const val MAX_BITMAP_FAILURE_ENTRIES = 64
         private const val MAX_MOVIE_FAILURE_ENTRIES = 16
@@ -2149,19 +2306,22 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
 @Composable
 fun WatchmakerWatchFaceHost(
-    descriptor: LunchWatchFaceDescriptor,
+    descriptor: WatchFaceDescriptor,
     isFaceVisible: Boolean,
     refreshToken: Int,
     onLongPress: (() -> Unit)?,
     onDoubleTap: (() -> Unit)?,
-    onLoadFailure: (LunchWatchFaceDescriptor, Throwable) -> Unit,
+    onLoadFailure: (WatchFaceDescriptor, Throwable) -> Unit,
     dataProvider: WatchDataProvider? = null,
+    /** Null selects [WatchWeatherSources.default]; callers may inject a deterministic source. */
+    weatherSource: WatchWeatherSource? = null,
     onTapAction: ((WatchTapAction) -> Unit)? = null,
     forceFill: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val ownedDataProvider = rememberWatchmakerWatchDataProvider(
         active = dataProvider == null && isFaceVisible,
+        weatherSource = weatherSource,
     )
     val resolvedDataProvider = dataProvider ?: ownedDataProvider
     AndroidView(

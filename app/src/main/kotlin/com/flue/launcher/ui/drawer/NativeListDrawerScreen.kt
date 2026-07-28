@@ -1,6 +1,8 @@
 package com.flue.launcher.ui.drawer
 
 import android.os.Build
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.background
@@ -37,10 +39,12 @@ import com.flue.launcher.applist.nativeview.NativeAppListRowBorder
 import com.flue.launcher.applist.nativeview.NativeAppListTheme
 import com.flue.launcher.applist.nativeview.NativeDeviceShape
 import com.flue.launcher.applist.nativeview.NativeFisheyePreset
+import com.flue.launcher.applist.nativeview.quantizeNativeBlurRadiusPx
 import com.flue.launcher.applist.nativeview.selectNativeBlurTier
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.theme.UiStyle
 import kotlin.math.roundToInt
+import kotlin.math.max
 
 /**
  * Edge mask owned by a sibling of the blurred app-list layer. Keeping this
@@ -140,6 +144,7 @@ fun NativeListDrawerScreen(
      */
     backgroundHandledByPlate: Boolean = false,
     folderOpen: Boolean = false,
+    folderOverlayProgress: Float = if (folderOpen) 1f else 0f,
     useWatchFaceColors: Boolean = false,
     rowBorderEnabled: Boolean = false,
     allowFolderCreation: Boolean = true,
@@ -148,7 +153,7 @@ fun NativeListDrawerScreen(
     onAppClick: (AppInfo, Offset) -> Unit,
     onLongClick: (AppInfo) -> Unit = {},
     onReorder: (AppListCommand.Move) -> Boolean = { false },
-    onCreateFolder: (AppListCommand.CreateFolder) -> Boolean = { false },
+    onCreateFolder: (AppListCommand.CreateFolder) -> String? = { null },
     onExcludeApp: (AppInfo) -> Unit = {},
     onRemoveShortcut: (AppInfo) -> Unit = {},
     onRenameFolder: (AppInfo, String) -> Unit = { _, _ -> },
@@ -159,6 +164,15 @@ fun NativeListDrawerScreen(
     val projection = rememberNativeAppListProjection(apps, twoToneIconsEnabled)
     var actionAppKey by remember { mutableStateOf<String?>(null) }
     val actionApp = actionAppKey?.let { key -> projection.appsByKey[AppItemKey(key)] }
+    val actionOverlayProgress by animateFloatAsState(
+        targetValue = if (actionApp != null) 1f else 0f,
+        animationSpec = tween(180),
+        label = "native_action_overlay_progress",
+    )
+    val overlayProgress = max(
+        folderOverlayProgress.coerceIn(0f, 1f),
+        actionOverlayProgress,
+    )
     LaunchedEffect(actionAppKey, projection) {
         if (actionAppKey != null && actionApp == null) actionAppKey = null
     }
@@ -204,6 +218,8 @@ fun NativeListDrawerScreen(
                 bottomBlurRadiusDp = bottomBlurRadiusDp,
                 drawEdgeFadeMaskInNativeView = drawEdgeFadeMaskInNativeView,
                 overlayOpen = actionApp != null || folderOpen,
+                overlayProgress = overlayProgress,
+                dragBlocked = folderOpen,
                 blurEnabled = blurEnabled,
                 edgeBlurEnabled = edgeBlurEnabled,
                 suppressHeavyEffects = suppressHeavyEffects,
@@ -224,6 +240,9 @@ fun NativeListDrawerScreen(
         NativeAppListHost(
             content = projection.content,
             config = config,
+            onCreateFolder = { command ->
+                onCreateFolder(command)?.let(::AppItemKey)
+            },
             onCommand = { command ->
                 val app = projection.appsByKey[command.keyOrNull()]
                 when (command) {
@@ -241,7 +260,10 @@ fun NativeListDrawerScreen(
                         true
                     }
                     is AppListCommand.Move -> onReorder(command)
-                    is AppListCommand.CreateFolder -> onCreateFolder(command)
+                    // Folder creation uses NativeAppListHost's typed result
+                    // callback above so the exact repository stable key can
+                    // drive the overlay settle destination.
+                    is AppListCommand.CreateFolder -> false
                     is AppListCommand.Hide -> app?.let {
                         onExcludeApp(it)
                         true
@@ -331,6 +353,18 @@ internal data class NativeListDrawerConfigRequest(
     val bottomBlurRadiusDp: Float,
     val drawEdgeFadeMaskInNativeView: Boolean = true,
     val overlayOpen: Boolean,
+    /** Reversible 0..1 progress shared with the overlay panel animation. */
+    val overlayProgress: Float = if (overlayOpen) 1f else 0f,
+    /**
+     * 是否禁止拖动排序。只有文件夹展开时才该为真。
+     *
+     * 不能复用 [overlayOpen]：那个标志还包含长按弹出的应用详情（actionApp），
+     * 而「长按 → 拖动」是排序的唯一入口，用它当闸门会在拖动该开始的那一刻
+     * 正好关闭，beginDrag 直接被拒，手指一滑就回落成列表滚动——表现为不管
+     * 合成文件夹开关如何，长按只能弹详情、完全拖不动。
+     * [overlayOpen] 仍然负责两种覆层共用的内容模糊。
+     */
+    val dragBlocked: Boolean = false,
     val blurEnabled: Boolean,
     val edgeBlurEnabled: Boolean,
     val suppressHeavyEffects: Boolean,
@@ -408,6 +442,16 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         edgeBlurEnabled = request.edgeBlurEnabled,
         suppressHeavyEffects = request.suppressHeavyEffects,
     )
+    // Folder progress changes every frame. Keep the config itself stable until
+    // the RenderEffect radius crosses a cache bucket; otherwise AndroidView's
+    // update path reapplies the adapter and every visible child at 60 Hz.
+    val contentOverlayBlurBucketPx = if (request.blurEnabled && request.sdkInt >= 31) {
+        quantizeNativeBlurRadiusPx(
+            16f * density * request.overlayProgress.coerceIn(0f, 1f),
+        )
+    } else {
+        0
+    }
     return NativeAppListConfig(
         active = request.active,
         initialResetToken = request.initialResetToken,
@@ -422,11 +466,10 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         rowPaddingBottomPx = verticalPaddingPx,
         labelTextSizePx = (scaledTextSizeSp * density * fontScale).coerceAtLeast(1f),
         iconLabelGapPx = (scaledIconTextGapDp * density).roundToInt().coerceAtLeast(0),
-        iconShape = if (request.appleWatchIconShape) {
-            NativeAppListIconShape.CIRCLE
-        } else {
-            NativeAppListIconShape.ROUNDED_RECT
-        },
+        // 全部风格统一走圆形（老师指定）：MIUIX / MD3 以前是圆角矩形，
+        // 和文件夹里的圆形图标并排看是两套语言。iconCornerRadiusPx 留着
+        // 给按压高亮 / 行底色用，图标本体不再读它。
+        iconShape = NativeAppListIconShape.CIRCLE,
         iconCornerRadiusPx = if (request.presentation == NativeAppListPresentation.DENSE_GRID) {
             (18f * scale).coerceIn(12f, 24f) * density
         } else {
@@ -446,7 +489,7 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         centerEdgeItems = request.presentation == NativeAppListPresentation.LINEAR,
         allowFolderCreation = request.allowFolderCreation,
         // 文件夹 / 长按菜单开着时列表不接受起拖。
-        dragEnabled = !request.overlayOpen,
+        dragEnabled = !request.dragBlocked,
         iconShadowEnabled = request.iconShadowEnabled,
         edgeSpacingCompressionEnabled = request.edgeSpacingCompressionEnabled,
         entryMotionEnabled = !request.appleWatchIconShape,
@@ -497,8 +540,10 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
             ?.times(density)
             ?: 0f,
         drawEdgeFadeMask = request.drawEdgeFadeMaskInNativeView,
-        contentOverlayBlurRadiusPx = if (request.overlayOpen) 16f * density else 0f,
-        contentOverlayBlurEligible = request.blurEnabled && request.sdkInt >= 31,
+        contentOverlayBlurRadiusPx = contentOverlayBlurBucketPx.toFloat(),
+        contentOverlayBlurEligible = request.blurEnabled &&
+            request.sdkInt >= 31 &&
+            contentOverlayBlurBucketPx > 0,
         blurTier = blurTier,
         rotaryHapticsEnabled = request.rotaryHapticsEnabled,
         theme = if (request.darkMode) NativeAppListTheme.DARK else NativeAppListTheme.LIGHT,

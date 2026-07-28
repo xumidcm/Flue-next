@@ -25,9 +25,18 @@ import kotlin.math.roundToInt
 
 internal class AndroidWatchDataProvider(
     context: Context,
-    private val weatherSource: WatchWeatherSource? = null,
+    weatherSource: WatchWeatherSource? = null,
 ) : WatchDataProvider, SensorEventListener {
     private val appContext = context.applicationContext
+    /**
+     * Null means the application-owned cache/default seam, not "weather is
+     * permanently disabled". The same default is used by standard, JB and
+     * editor previews, while tests or a future worker can still inject a
+     * deterministic source explicitly.
+     */
+    private val weatherSource: WatchWeatherSource = weatherSource
+        ?: WatchWeatherSources.applicationSource
+        ?: WatchWeatherRepository.default(appContext)
     private val batteryManager = appContext.getSystemService(BatteryManager::class.java)
     private val sensorManager = appContext.getSystemService(SensorManager::class.java)
     private val wifiManager = appContext.getSystemService(WifiManager::class.java)
@@ -80,6 +89,11 @@ internal class AndroidWatchDataProvider(
         refreshBatteryFallback()
         refreshWifiSignal()
         refreshBluetoothState()
+        // Cache-first and nonblocking: the renderer keeps showing the last good
+        // snapshot while every newly-visible provider asks the application
+        // repository for a foreground refresh immediately.
+        (weatherSource as? WatchWeatherRepository)?.requestRefresh()
+            ?: runCatching { weatherSource.snapshot(System.currentTimeMillis()) }
         runCatching {
             ContextCompat.registerReceiver(
                 appContext,
@@ -135,7 +149,9 @@ internal class AndroidWatchDataProvider(
     }
 
     override fun snapshot(nowEpochMs: Long): WatchDataSnapshot {
-        val weather = runCatching { weatherSource?.snapshot(nowEpochMs) }.getOrNull()
+        val weather = runCatching { weatherSource.snapshot(nowEpochMs) }
+            .getOrNull()
+            ?.let(::canonicalWatchWeatherSnapshot)
         val gyro = gyroscope
         return WatchDataSnapshot(
             batteryPercent = batteryPercent,
@@ -147,12 +163,25 @@ internal class AndroidWatchDataProvider(
             gyroscopeZ = gyro?.third,
             wifiSignalFraction = wifiSignalFraction,
             bluetoothEnabled = bluetoothEnabled,
-            weatherTemperature = weather?.temperature,
+            weather = weather,
+            // Compatibility fields retain the first slice's public snapshot
+            // shape. New renderers consume [weather], whose values are
+            // canonical Celsius with an explicit presentation unit.
+            weatherTemperature = weatherTemperatureNumber(
+                weather?.temperatureCelsius,
+                weather?.displayUnit ?: WatchTemperatureUnit.CELSIUS,
+            ),
             weatherCondition = weather?.condition,
             weatherIcon = weather?.icon,
-            weatherHigh = weather?.high,
-            weatherLow = weather?.low,
-            weatherTemperatureUnit = weather?.temperatureUnit,
+            weatherHigh = weatherTemperatureNumber(
+                weather?.highCelsius,
+                weather?.displayUnit ?: WatchTemperatureUnit.CELSIUS,
+            ),
+            weatherLow = weatherTemperatureNumber(
+                weather?.lowCelsius,
+                weather?.displayUnit ?: WatchTemperatureUnit.CELSIUS,
+            ),
+            weatherTemperatureUnit = weather?.displayUnit?.symbol,
             weatherHumidity = weather?.humidity,
             weatherLocation = weather?.location,
         )
@@ -163,6 +192,8 @@ internal class AndroidWatchDataProvider(
         refreshBatteryFallback()
         refreshWifiSignal()
         refreshBluetoothState()
+        (weatherSource as? WatchWeatherRepository)?.requestRefresh()
+            ?: runCatching { weatherSource.snapshot(System.currentTimeMillis()) }
         if (hasPermission(Manifest.permission.BODY_SENSORS)) {
             // 很多手表的心率传感器只在（重新）注册监听时才开始一次新的测量，
             // 所以点按心率组件时重新武装传感器来触发刷新。这也覆盖了
@@ -309,7 +340,17 @@ fun rememberWatchmakerWatchDataProvider(
     permissionRevision: Any? = null,
 ): WatchDataProvider {
     val context = LocalContext.current.applicationContext
-    val provider = remember(context, weatherSource) { AndroidWatchDataProvider(context, weatherSource) }
+    // Keep the nullable argument as an injection seam. When no caller owns a
+    // source, use the application default cache instead of a permanently-null
+    // provider; that is what lets the launcher and editor share future weather
+    // updates without touching a store API.
+    val resolvedWeatherSource = remember(context, weatherSource) {
+        weatherSource ?: WatchWeatherSources.applicationSource
+            ?: WatchWeatherRepository.default(context)
+    }
+    val provider = remember(context, resolvedWeatherSource) {
+        AndroidWatchDataProvider(context, resolvedWeatherSource)
+    }
     DisposableEffect(provider, active, permissionRevision) {
         if (active) provider.start() else provider.stop()
         onDispose(provider::stop)

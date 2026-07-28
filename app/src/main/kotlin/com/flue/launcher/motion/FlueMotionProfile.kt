@@ -161,21 +161,23 @@ object FlueMotionProfiles {
         id = GENTLE_ID,
         name = "柔和",
         bounceEnabled = true,
-        edgeStrength = 5,
+        edgeStrength = 10,
         appListEnter = MotionPhase(
             durationMillis = 320,
             handoffMillis = 60,
             easing = MotionEasing.CubicBezier(0.22f, 1f, 0.36f, 1f),
         ),
+        // 老师指定：appLaunch 阻尼调到 1.05，与 appReturn 同阻尼同刚度——
+        // 进出同一条弹簧，来回手感对称；1.05 略过阻尼，收尾不回弹。
         appLaunch = MotionPhase(
             durationMillis = 360,
             handoffMillis = 110,
-            easing = MotionEasing.CubicBezier(0.18f, 0.88f, 0.22f, 1f),
+            easing = MotionEasing.Spring(dampingRatio = 1.05f, stiffness = 669f),
         ),
         appReturn = MotionPhase(
             durationMillis = 380,
             handoffMillis = 100,
-            easing = MotionEasing.Spring(dampingRatio = 0.78f, stiffness = 420f),
+            easing = MotionEasing.Spring(dampingRatio = 1.05f, stiffness = 1226.27f),
         ),
         pullToFace = MotionPhase(
             durationMillis = 340,

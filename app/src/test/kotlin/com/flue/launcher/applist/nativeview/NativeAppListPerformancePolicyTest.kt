@@ -170,7 +170,7 @@ class NativeAppListPerformancePolicyTest {
     fun interactionScaleKeepsTheLegacyPriorityAndTargets() {
         assertEquals(1f, nativeInteractionScale(false, false, false), 0f)
         assertEquals(0.97f, nativeInteractionScale(true, false, false), 0f)
-        assertEquals(0.90f, nativeInteractionScale(true, false, true), 0f)
+        assertEquals(1f,    nativeInteractionScale(true, false, true), 0f)  // folderHover 不再缩放
         assertEquals(0.965f, nativeInteractionScale(true, true, true), 0f)
     }
 

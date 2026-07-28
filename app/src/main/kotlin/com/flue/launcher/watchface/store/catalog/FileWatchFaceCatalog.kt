@@ -1,5 +1,7 @@
 package com.flue.launcher.watchface.store.catalog
 
+import com.flue.launcher.watchface.store.toJsonObject
+import com.flue.launcher.watchface.store.toWatchStoreCompatibilityReport
 import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
@@ -54,11 +56,15 @@ class FileWatchFaceCatalog(
             .map(WatchFaceRecord::installedAtEpochMs)
             .filter { it > 0L }
             .maxOrNull()
+        val inheritedCompatibilityReport = matches.asSequence()
+            .mapNotNull(WatchFaceRecord::compatibilityReport)
+            .firstOrNull()
         val merged = record.copy(
             installedAtEpochMs = maxOf(record.installedAtEpochMs, inheritedInstalledAt ?: 0L),
             displayNameOverride = record.displayNameOverride?.trim()?.takeIf(String::isNotEmpty)
                 ?: inheritedName,
             legacyIds = inheritedAliases + record.legacyIds,
+            compatibilityReport = record.compatibilityReport ?: inheritedCompatibilityReport,
         )
         val records = normalize(replaced + merged)
         writeLocked(records)
@@ -286,6 +292,7 @@ class FileWatchFaceCatalog(
                 }
             },
             activeLauncherId = json.optionalString("activeLauncherId"),
+            compatibilityReport = json.optJSONObject("compatibilityReport")?.toWatchStoreCompatibilityReport(),
         )
     }
 
@@ -326,6 +333,8 @@ class FileWatchFaceCatalog(
         .put("source", source.toJson())
         .put("legacyIds", JSONArray().apply { legacyIds.sorted().forEach(::put) })
         .put("activeLauncherId", activeLauncherId ?: JSONObject.NULL)
+        .put("compatibilityReport", compatibilityReport?.toJsonObject() ?: JSONObject.NULL)
+
 
     private fun WatchFaceInstallSource.toJson(): JSONObject = when (this) {
         is WatchFaceInstallSource.Market -> JSONObject()

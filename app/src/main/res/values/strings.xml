@@ -1,8 +1,537 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Flue</string>
+    <string name="app_name">Flue Next</string>
     <string name="shortcut_settings">桌面设置</string>
     <string name="settings_title">桌面设置</string>
     <string name="internal_watchface_config_title">内置表盘设置</string>
     <string name="flue_accessibility_label">Flue 辅助控制</string>
     <string name="flue_accessibility_description">该权限仅用于控制双击息屏与打开电源选项。Flue并不联网，不会窃取用户任何信息。</string>
+
+    <!-- 通用 -->
+    <string name="follow_system">跟随系统</string>
+
+    <!-- 设置主页节标题 -->
+    <string name="settings_section_system">系统与工具</string>
+    <string name="settings_section_about">关于</string>
+
+    <!-- 语言 -->
+    <string name="settings_language">语言</string>
+    <string name="settings_language_follow_system">跟随系统</string>
+    <string name="settings_language_zh">中文</string>
+    <string name="settings_language_en">English</string>
+    <string name="settings_language_ja">日本語</string>
+
+    <!-- 功能开关导航卡片 -->
+    <string name="settings_feature_toggles">功能开关</string>
+    <string name="settings_feature_toggles_sub">副一屏、通知、控制中心和表盘提示</string>
+
+    <!-- 显示适配 -->
+    <string name="settings_display_fit">显示适配</string>
+    <string name="settings_display_fit_sub">全局 UI、应用列表大小和安全区</string>
+    <string name="settings_global_ui_size">全局 UI 大小</string>
+    <string name="settings_honeycomb_cols">蜂窝列数</string>
+    <string name="settings_honeycomb_cols_fmt">%d 列</string>
+    <string name="settings_app_list_size">应用列表整体大小</string>
+    <string name="settings_fisheye">鱼眼效果</string>
+    <string name="settings_fisheye_on">开启后可调节范围、强度和边缘间距压缩</string>
+    <string name="settings_fisheye_off">关闭后应用列表不再缩放边缘图标</string>
+    <string name="settings_fisheye_range">鱼眼生效范围</string>
+    <string name="settings_fisheye_range_fmt">%d 行</string>
+    <string name="settings_md3_top_fisheye">MD3 顶部鱼眼效果</string>
+    <string name="settings_md3_top_fisheye_sub">仅作用于 MD3 蜂窝列表顶部图标</string>
+    <string name="settings_fisheye_strength">鱼眼效果强度</string>
+    <string name="settings_edge_spacing">边缘图标间距压缩</string>
+    <string name="settings_edge_spacing_sub">越靠近屏幕边界，图标之间的视觉距离越小</string>
+    <string name="settings_left_safe_area">应用列表左侧安全区</string>
+    <string name="settings_rotary_haptics">表冠滚动震动</string>
+    <string name="settings_rotary_haptics_on">表冠滚动时保留轻微震动反馈</string>
+    <string name="settings_rotary_haptics_off">关闭表冠滚动震动反馈</string>
+
+    <!-- 外观：显示设置 -->
+    <string name="settings_display_header">显示设置</string>
+    <string name="settings_theme_system">跟随系统</string>
+    <string name="settings_theme_system_sub">跟随系统主题设置</string>
+    <string name="settings_theme_dark">深色模式</string>
+    <string name="settings_theme_dark_sub">强制使用深色主题</string>
+    <string name="settings_theme_light">浅色模式</string>
+    <string name="settings_theme_light_sub">强制使用浅色主题</string>
+
+    <!-- 界面风格 -->
+    <string name="settings_ui_style_header">界面风格</string>
+    <string name="settings_ui_aw">Apple Watch 风格</string>
+    <string name="settings_ui_aw_sub">玻璃质感、紧凑卡片、圆形承载与更轻巧的缩放动效</string>
+    <string name="settings_ui_md3">Material 3 风格</string>
+    <string name="settings_ui_md3_sub">大色块平铺、MD3E 图形、分层更明确的首页与列表</string>
+    <string name="settings_ui_miuix">MIUIX 风格</string>
+    <string name="settings_ui_miuix_sub">HyperOS 视觉语言：成组大圆角卡片与蓝色强调</string>
+
+    <!-- 屏幕形状 -->
+    <string name="settings_screen_shape_header">屏幕形状</string>
+    <string name="settings_screen_shape_auto">自动</string>
+    <string name="settings_screen_shape_auto_sub">跟随系统上报的屏幕形状</string>
+    <string name="settings_screen_shape_round">圆屏</string>
+    <string name="settings_screen_shape_override_sub">部分系统上报错误时手动指定</string>
+    <string name="settings_screen_shape_square">方屏</string>
+
+    <!-- 视觉效果 -->
+    <string name="settings_visual_effects_header">视觉效果</string>
+    <string name="settings_blur">高级材质</string>
+    <string name="settings_blur_sub">建议 Android 12+ 设备开启</string>
+    <string name="settings_edge_blur">边缘模糊（实验性）</string>
+    <string name="settings_edge_blur_sub">在顶部和底部边缘增加模糊，可能带来少量问题</string>
+    <string name="settings_edge_blur_radius">边缘模糊半径</string>
+    <string name="settings_direct_launch">打开 Flue 直接进入应用列表</string>
+    <string name="settings_direct_launch_on">启动后自动进入应用列表，仍可返回表盘</string>
+    <string name="settings_direct_launch_off">默认先显示表盘</string>
+
+    <!-- 表盘设置 -->
+    <string name="settings_watchface_bottom_fade">表盘底部渐隐遮罩</string>
+    <string name="settings_watchface_bottom_fade_on">AW 和 MD3 表盘底部保留渐隐过渡</string>
+    <string name="settings_watchface_bottom_fade_off">关闭表盘底部渐隐过渡</string>
+    <string name="settings_watchface_date_language">表盘日期语言</string>
+    <string name="settings_watchface_date_system">跟随系统</string>
+    <string name="settings_watchface_date_system_sub">表盘星期与月份跟随系统语言</string>
+    <string name="settings_watchface_date_zh_sub">周一 / 1月 样式</string>
+    <string name="settings_watchface_date_en_sub">Mon / Jan 样式</string>
+    <string name="settings_watchface_date_ja_sub">月 / 1月 样式</string>
+    <string name="settings_watchface_status">表盘状态提示</string>
+    <string name="settings_watchface_status_sub">表盘顶部显示充电闪电和通知红点</string>
+    <string name="settings_watchface_charging_power">充电功率文字</string>
+    <string name="settings_watchface_charging_power_sub">充电时在表盘里显示功率或充电文字</string>
+
+    <!-- 功能开关页 -->
+    <string name="settings_feature_toggles_title">功能开关</string>
+    <string name="settings_side_screen_card">负一屏设置</string>
+    <string name="settings_side_screen_card_sub">副一屏、小组件页、步数与卡片布局</string>
+    <string name="settings_notifications_card">通知中心</string>
+    <string name="settings_notifications_card_sub">通知显示与常驻通知过滤</string>
+    <string name="settings_control_center_card">控制中心</string>
+    <string name="settings_control_center_card_sub">下拉面板、音乐卡片与电源按钮</string>
+    <string name="settings_gestures_card">手势与按键</string>
+    <string name="settings_gestures_card_sub">双击息屏等交互开关</string>
+    <string name="settings_app_list_behavior_card">应用列表行为</string>
+    <string name="settings_app_list_behavior_card_sub">遮罩取色、底色与文件夹</string>
+
+    <!-- 负一屏 -->
+    <string name="settings_side_screen_title">负一屏设置</string>
+    <string name="settings_side_screen">副一屏</string>
+    <string name="settings_side_screen_sub">从表盘右滑进入快捷启动和通知预览</string>
+    <string name="settings_widget_page">显示小组件页</string>
+    <string name="settings_widget_page_on">从表盘左滑进入独立小组件页面</string>
+    <string name="settings_widget_page_off">关闭左滑小组件页面入口</string>
+    <string name="settings_swap_music_notifications">互换通知和音乐组件</string>
+    <string name="settings_swap_music_notifications_on">副一屏显示音乐卡片，控制中心显示通知卡片</string>
+    <string name="settings_swap_music_notifications_off">保持副一屏通知、控制中心音乐的默认位置</string>
+    <string name="settings_show_steps">显示步数</string>
+    <string name="settings_show_steps_sub">在侧屏底部电池右侧显示步数</string>
+
+    <!-- 通知中心 -->
+    <string name="settings_notifications_title">通知中心</string>
+    <string name="settings_show_notifications">显示通知</string>
+    <string name="settings_show_notifications_on">通知预览会显示在副一屏快捷启动下方</string>
+    <string name="settings_show_notifications_off">隐藏副一屏里的通知列表</string>
+    <string name="settings_show_ongoing">显示常驻通知</string>
+    <string name="settings_show_ongoing_on">显示有内容价值的常驻通知，过滤系统运行和悬浮窗提示</string>
+    <string name="settings_show_ongoing_off">隐藏常驻通知</string>
+
+    <!-- 控制中心 -->
+    <string name="settings_control_center_title">控制中心</string>
+    <string name="settings_show_cc">显示控制中心</string>
+    <string name="settings_show_cc_on">从表盘下拉进入亮度、音量和快捷开关</string>
+    <string name="settings_show_cc_off">关闭表盘下拉控制中心入口</string>
+    <string name="settings_show_music">音乐控制卡片</string>
+    <string name="settings_show_music_on">控制中心显示当前媒体播放卡片</string>
+    <string name="settings_show_music_off">隐藏控制中心里的音乐控制卡片</string>
+    <string name="settings_media_actions">音乐应用自定义按钮</string>
+    <string name="settings_media_actions_on">在上一曲、下一曲两侧显示应用自定义操作</string>
+    <string name="settings_media_actions_off">只保留上一曲、播放和下一曲按钮</string>
+    <string name="settings_cc_power">控制中心电源按钮</string>
+    <string name="settings_cc_power_accessible">已授权无障碍，点击控制中心电源图标会打开电源选项</string>
+    <string name="settings_cc_power_require">开启后跳转无障碍授权，仅用于打开电源选项</string>
+
+    <!-- 手势与按键 -->
+    <string name="settings_gestures_title">手势与按键</string>
+    <string name="settings_double_tap_lock">双击表盘息屏</string>
+    <string name="settings_double_tap_on">已授权无障碍，双击表盘会立即息屏</string>
+    <string name="settings_double_tap_require">开启后跳转无障碍授权，仅用于双击息屏</string>
+
+    <!-- 应用列表行为 -->
+    <string name="settings_app_list_behavior_title">应用列表行为</string>
+    <string name="settings_watchface_launch_mask">应用遮罩表盘取色</string>
+    <string name="settings_watchface_launch_mask_on">从应用列表打开应用时，遮罩背景继续跟随表盘颜色</string>
+    <string name="settings_watchface_launch_mask_off">打开应用遮罩使用黑白中性色；应用列表背景保持纯黑或纯白</string>
+    <string name="settings_list_row_bg">列表模式底色遮罩</string>
+    <string name="settings_list_row_bg_on">列表布局中每排应用显示底色遮罩</string>
+    <string name="settings_list_row_bg_off">列表布局中不显示每排应用底色遮罩</string>
+    <string name="settings_allow_folders">允许创建文件夹</string>
+    <string name="settings_allow_folders_on">长按拖动到另一个图标中心并停留 500ms 后合成文件夹</string>
+    <string name="settings_allow_folders_off">关闭拖动合成文件夹，只保留排序手势</string>
+    <string name="settings_two_tone_icons">双色图标</string>
+    <string name="settings_two_tone_icons_sub">AdaptiveIcon 使用单色层，其他图标转灰度后填色</string>
+    <string name="settings_icon_shadow">图标阴影</string>
+    <string name="settings_icon_shadow_sub">关闭后减少蜂窝与列表拖动时的阴影绘制</string>
+    <string name="settings_direct_launch_app_list">打开 Flue 直接进入应用列表</string>
+    <string name="settings_direct_launch_app_list_on">启动后自动进入应用列表，仍可返回表盘</string>
+    <string name="settings_direct_launch_app_list_off">默认先显示表盘</string>
+
+    <!-- 动画 -->
+    <string name="settings_launch_animation">Flue 启动与返回动画</string>
+    <string name="settings_launch_animation_sub">关闭后跟随系统；开启后使用 Flue 遮罩与图标来源动画</string>
+    <string name="settings_app_list_shrink">应用列表收缩动画</string>
+    <string name="settings_app_list_shrink_sub">关闭后从应用返回列表时只做淡入淡出，不再整体缩放</string>
+    <string name="settings_icon_float">返回时图标上浮</string>
+    <string name="settings_icon_float_sub">从应用退回列表时重播逐行上浮入场（从表盘进入不受影响）</string>
+    <string name="settings_face_shrink">表盘收缩动画</string>
+    <string name="settings_face_shrink_sub">关闭后返回表盘、拉出负一屏 / 小组件 / 控制中心都不再整体缩放</string>
+    <string name="settings_legacy_transition">还原老转场动画</string>
+    <string name="settings_legacy_transition_sub">使用 watchOS 三段式之前的老动画：表盘放大冲脸进入应用列表</string>
+    <string name="settings_stagger_entry">甩尾入场动画</string>
+    <string name="settings_stagger_entry_sub">进入应用列表时第一行先入屏，下面的行逐行跟进</string>
+    <string name="settings_reduce_motion">减弱动态效果</string>
+    <string name="settings_reduce_motion_sub">去掉转场收尾的越界回弹：动画到位即停，不再弹一下</string>
+    <string name="settings_hide_recents">隐藏后台卡片</string>
+    <string name="settings_hide_recents_sub">从最近任务中隐藏 Flue 的后台卡片</string>
+
+    <!-- 搜索索引：仅搜索用的标题 -->
+    <string name="search_t_theme_system">跟随系统深浅色</string>
+    <string name="search_t_edge_blur">边缘模糊</string>
+    <string name="search_t_splash_delay">启动遮罩延迟</string>
+    <string name="search_t_watchface_store">表盘商店</string>
+    <string name="search_t_watchface_editor_new">新建表盘</string>
+    <string name="search_t_watchface_import">导入表盘文件</string>
+    <string name="search_t_watchface_more">表盘更多设置</string>
+    <string name="search_t_widget_page">小组件页</string>
+    <string name="search_t_motion_profile_entry">动画曲线配置入口</string>
+    <string name="search_t_music_text_anim">音乐文字动画</string>
+    <string name="search_t_backup">备份与恢复</string>
+    <string name="search_t_donate">捐赠</string>
+
+    <!-- 搜索索引：描述 -->
+    <string name="search_d_appearance">布局、主题、界面风格与模糊</string>
+    <string name="search_d_layout_honeycomb">图标蜂窝排列</string>
+    <string name="search_d_layout_list">图标单列列表排列</string>
+    <string name="search_d_theme_mode">主题模式</string>
+    <string name="search_d_ui_style">Apple Watch / MD3 / MIUIX 三选一</string>
+    <string name="search_d_screen_shape">圆屏 / 方屏手动指定</string>
+    <string name="search_d_blur">模糊与玻璃效果</string>
+    <string name="search_d_edge_blur">应用列表上下边缘的模糊渐隐</string>
+    <string name="search_d_edge_blur_radius">上下边缘模糊强度</string>
+    <string name="search_d_top_fade">应用列表顶部渐隐高度</string>
+    <string name="search_d_bottom_fade">应用列表底部渐隐高度</string>
+    <string name="search_d_direct_launch">跳过表盘直达列表</string>
+    <string name="search_d_splash_delay">遮罩停留时长</string>
+    <string name="search_d_display_size">全局 UI 大小、蜂窝列数、鱼眼</string>
+    <string name="search_d_global_ui_scale">整体缩放</string>
+    <string name="search_d_honeycomb_cols">蜂窝布局每行列数</string>
+    <string name="search_d_app_list_scale">图标与文字统一缩放</string>
+    <string name="search_d_fisheye">边缘图标缩小</string>
+    <string name="search_d_fisheye_range">参与鱼眼的行数</string>
+    <string name="search_d_fisheye_strength">边缘缩小幅度</string>
+    <string name="search_d_edge_spacing">靠近边界时间距变小</string>
+    <string name="search_d_left_safe_area">左侧留白</string>
+    <string name="search_d_rotary_haptics">旋钮滚动触感反馈</string>
+    <string name="search_d_watchfaces">选择与管理表盘</string>
+    <string name="search_d_watchface_store">在线下载表盘</string>
+    <string name="search_d_watchface_editor_new">打开表盘编辑器</string>
+    <string name="search_d_watchface_import">导入 .watch 表盘包</string>
+    <string name="search_d_watchface_more">心率授权、日期语言、状态提示</string>
+    <string name="search_d_watchface_date_locale">跟随系统 / 中文 / English / 日本語</string>
+    <string name="search_d_force_fill">表盘拉伸铺满屏幕</string>
+    <string name="search_d_heart_rate">授权读取心率</string>
+    <string name="search_d_watchface_font">自定义表盘字体文件</string>
+    <string name="search_d_watchface_bottom_fade">表盘底部渐隐</string>
+    <string name="search_d_watchface_status">充电闪电与通知红点</string>
+    <string name="search_d_charging_power">充电时显示功率</string>
+    <string name="search_d_icon_packs">第三方图标包</string>
+    <string name="search_d_hidden_apps">从列表隐藏应用</string>
+    <string name="search_d_feature_toggles">负一屏、通知、控制中心、手势</string>
+    <string name="search_d_side_screen">副一屏、小组件页、步数</string>
+    <string name="search_d_side_screen_toggle">右滑进入快捷启动与通知预览</string>
+    <string name="search_d_widget_page">左滑进入小组件</string>
+    <string name="search_d_show_steps">侧屏底部步数</string>
+    <string name="search_d_swap">负一屏与控制中心卡片对调</string>
+    <string name="search_d_notifications">通知显示与常驻过滤</string>
+    <string name="search_d_show_notifications">副一屏通知预览</string>
+    <string name="search_d_show_ongoing">过滤系统噪音</string>
+    <string name="search_d_control_center">下拉面板、音乐卡片、电源按钮</string>
+    <string name="search_d_show_cc">表盘下拉打开控制中心</string>
+    <string name="search_d_show_music">控制中心媒体卡</string>
+    <string name="search_d_media_actions">媒体卡额外操作按钮</string>
+    <string name="search_d_cc_power">打开电源选项（需无障碍）</string>
+    <string name="search_d_gestures">双击息屏等</string>
+    <string name="search_d_double_tap">需无障碍授权</string>
+    <string name="search_d_app_list_behavior">遮罩取色、底色、文件夹</string>
+    <string name="search_d_folders">拖动合成文件夹</string>
+    <string name="search_d_launch_mask">启动遮罩跟随表盘颜色</string>
+    <string name="search_d_row_bg">列表行底色</string>
+    <string name="search_d_performance">动画开关与图标质量</string>
+    <string name="search_d_stagger">逐行错峰进入</string>
+    <string name="search_d_legacy">watchOS 三段式之前的老动画</string>
+    <string name="search_d_app_list_shrink">返回时整体缩放</string>
+    <string name="search_d_icon_float">从应用退回重播上浮入场</string>
+    <string name="search_d_face_shrink">返回表盘与拉出覆层时的整体缩放</string>
+    <string name="search_d_reduce_motion">去掉转场收尾的越界回弹</string>
+    <string name="search_d_launch_animation">接管应用启动与返回转场</string>
+    <string name="search_d_icon_shadow">平台高程阴影</string>
+    <string name="search_d_two_tone">单色层或灰度填色</string>
+    <string name="search_d_low_res">降低图标开销提升流畅度</string>
+    <string name="search_d_music_text">切歌文字过渡</string>
+    <string name="search_d_hide_recents">从最近任务隐藏 Flue</string>
+    <string name="search_d_thumbnails">图片视频列表预览图</string>
+    <string name="search_d_motion_profile_entry">进入动画曲线页</string>
+    <string name="search_d_motion_profile">时长、贝塞尔、弹簧参数</string>
+    <string name="search_d_motion_bounce">跨过边界立即回弹</string>
+    <string name="search_d_edge_strength">边缘回弹幅度</string>
+    <string name="search_d_tools">备份、诊断与文件管理</string>
+    <string name="search_d_export_log">导出崩溃与系统日志</string>
+    <string name="search_d_diagnostic">临时开启诊断日志</string>
+    <string name="search_d_reset">重置外观与性能选项</string>
+    <string name="search_d_backup">导出 / 导入配置</string>
+    <string name="search_d_about">版本与致谢</string>
+    <string name="search_d_donate">支持开发</string>
+
+    <!-- 通用动作 -->
+    <string name="settings_language_restart_title">需要重启应用</string>
+    <string name="settings_language_restart_message">切换语言后需要重启 Flue 才能完全生效。点击确定立即重启。</string>
+    <string name="settings_language_restart_confirm">确定</string>
+    <string name="toast_language_save_failed">保存语言设置失败，请重试</string>
+    <string name="action_delete">删除</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_share">分享</string>
+    <string name="action_done">完成</string>
+
+    <!-- 进度与结果提示 -->
+    <string name="progress_import_watchface">导入表盘</string>
+    <string name="progress_import_watchface_detail">正在识别并导入标准 .watch / jb_watch 表盘</string>
+    <string name="progress_import_done">导入完成</string>
+    <string name="progress_export_config">导出配置</string>
+    <string name="progress_export_config_detail">正在写入 Flue 备份 ZIP</string>
+    <string name="progress_export_done">导出完成</string>
+    <string name="progress_read_config">读取配置</string>
+    <string name="progress_read_config_detail">正在检查备份 ZIP</string>
+    <string name="progress_import_config">导入配置</string>
+    <string name="progress_import_config_detail">正在恢复所选项目</string>
+
+    <!-- Toast -->
+    <string name="toast_font_save_failed">保存字体失败</string>
+    <string name="toast_font_updated">表盘字体已更新</string>
+    <string name="toast_import_failed_fmt">导入失败：%s</string>
+    <string name="toast_export_failed_fmt">导出失败：%s</string>
+    <string name="toast_read_failed_fmt">读取失败：%s</string>
+    <string name="toast_delete_failed_fmt">删除失败：%s</string>
+    <string name="toast_deleted_fmt">已删除 %s</string>
+    <string name="toast_grant_accessibility">请在无障碍中授权 Flue 辅助控制</string>
+    <string name="toast_no_custom_curves">没有可导出的自定义动画曲线</string>
+    <string name="toast_curves_exported">动画曲线已导出</string>
+    <string name="toast_curves_imported_fmt">已导入 %d 条动画曲线</string>
+    <string name="toast_no_watchface_config">没有可用的表盘设置</string>
+    <string name="toast_body_sensors_granted">身体传感器权限已授权</string>
+    <string name="toast_select_at_least_one">至少选择一项</string>
+    <string name="toast_pick_backup_first">先选择备份文件</string>
+    <string name="toast_share_failed">分享失败</string>
+    <string name="toast_export_failed">导出失败</string>
+    <string name="toast_qq_copied_fmt">已复制 QQ：%s</string>
+
+    <string name="backup_unknown_location">未知位置</string>
+
+    <!-- 设置首页 -->
+    <string name="settings_root_title">Flue设置</string>
+    <string name="settings_search_empty">没有匹配的设置</string>
+    <string name="settings_section_appearance">外观</string>
+    <string name="settings_section_watchface">表盘</string>
+    <string name="settings_section_app_list">应用列表</string>
+    <string name="settings_section_animation">动画</string>
+    <string name="settings_section_input">手势与输入</string>
+    <string name="settings_appearance">显示与外观</string>
+    <string name="settings_appearance_sub">布局、模糊与启动图标</string>
+    <string name="settings_appearance_sub_md3">布局、材质层次与 MD3 动效</string>
+    <string name="settings_watchfaces">表盘</string>
+    <string name="settings_watchfaces_sub_md3_fmt">MD3 主页与表盘图形已联动 · %s</string>
+    <string name="settings_icon_packs">图标包</string>
+    <string name="settings_icon_pack_system_default">系统默认图标</string>
+    <string name="settings_hidden_apps">隐藏应用</string>
+    <string name="settings_hidden_apps_count_fmt">已隐藏 %d 个应用</string>
+    <string name="settings_performance">性能与动画</string>
+    <string name="settings_performance_sub">图标质量与动画控制</string>
+    <string name="settings_tools">工具</string>
+    <string name="settings_tools_sub">配置备份、导出日志与恢复默认</string>
+    <string name="settings_about">关于</string>
+    <string name="settings_about_sub_fmt">Flue Next  %s</string>
+
+    <!-- 表盘页 -->
+    <string name="settings_watchface_refresh">重新扫描表盘</string>
+    <string name="settings_watchface_refresh_sub">扫描标准 .watch、已安装表盘和兼容表盘目录</string>
+    <string name="settings_watchface_import">导入表盘</string>
+    <string name="settings_watchface_import_sub">导入标准 Watchmaker .watch 表盘（兼容 jb_watch 包）</string>
+    <string name="settings_watchface_store">表盘市场</string>
+    <string name="settings_watchface_store_sub">浏览 Watchmaker Community Store，下载后安全安装 .watch 表盘</string>
+    <string name="settings_watchface_editor_new">新建 .watch 表盘</string>
+    <string name="settings_watchface_editor_new_sub">使用内置编辑器创建基础图层并实时预览</string>
+    <string name="settings_watchface_editor_current">编辑当前标准表盘</string>
+    <string name="settings_watchface_editor_current_sub_fmt">在隔离草稿中编辑 %s，另存为新表盘</string>
+    <string name="settings_watchface_more">更多表盘选项</string>
+    <string name="settings_watchface_more_sub">内置表盘字体与底部渐隐</string>
+    <string name="settings_watchmaker_force_fill">强制铺满</string>
+    <string name="settings_watchmaker_force_fill_on">以表盘画布中心为锚点等比放大并裁切边缘</string>
+    <string name="settings_watchmaker_force_fill_off">完整显示设计画布，并遵循表盘定义的形状</string>
+    <string name="settings_watchface_heart_rate">表盘心率数据</string>
+    <string name="settings_watchface_heart_rate_on">已授权身体传感器；支持的 .watch 标签可读取心率</string>
+    <string name="settings_watchface_heart_rate_off">未授权时心率保持不可用；点击后由系统询问授权</string>
+    <string name="settings_watch_weather">表盘天气</string>
+    <string name="settings_watch_weather_sub">设置标准与 JB 表盘共用的天气位置和温度单位</string>
+    <string name="settings_watch_weather_city">手动城市</string>
+    <string name="settings_watch_weather_city_selected_fmt">当前使用：%s</string>
+    <string name="settings_watch_weather_city_system">当前使用系统粗略定位</string>
+    <string name="settings_watch_weather_city_unset">未设置；可输入城市，或授权系统粗略定位</string>
+    <string name="settings_watch_weather_use_system">使用系统位置</string>
+    <string name="settings_watch_weather_use_system_active">已启用系统粗略定位；点击可立即刷新</string>
+    <string name="settings_watch_weather_use_system_sub">清除手动城市，并使用系统粗略定位</string>
+    <string name="settings_watch_weather_unit">温度单位</string>
+    <string name="settings_watch_weather_celsius">摄氏度（°C）</string>
+    <string name="settings_watch_weather_celsius_sub">默认单位；内部天气数据始终以摄氏度保存</string>
+    <string name="settings_watch_weather_fahrenheit">华氏度（°F）</string>
+    <string name="settings_watch_weather_fahrenheit_sub">仅在表盘渲染边界转换为华氏度</string>
+    <string name="settings_watch_weather_refresh">刷新天气</string>
+    <string name="settings_watch_weather_refresh_sub">使用当前位置在后台更新天气缓存</string>
+    <string name="settings_watch_weather_city_dialog_title">设置手动城市</string>
+    <string name="settings_watch_weather_city_dialog_message">输入城市名后，Flue 会通过 Open-Meteo 解析位置。城市名只保存在本机。</string>
+    <string name="settings_watch_weather_city_hint">例如：上海</string>
+    <string name="toast_weather_system_location">已切换到系统粗略定位</string>
+    <string name="toast_weather_location_denied">未获得定位权限，已保留原来的手动城市</string>
+    <string name="toast_weather_refresh_requested">已请求刷新天气</string>
+    <string name="toast_weather_city_saved">已保存城市并请求刷新天气</string>
+    <string name="settings_watchface_font">表盘字体</string>
+    <string name="settings_watchface_font_default">系统默认字体</string>
+    <string name="settings_watchface_font_clear">恢复默认字体</string>
+    <string name="settings_watchface_font_clear_sub">清除已保存的表盘字体</string>
+
+    <!-- About 与 Donate -->
+    <string name="settings_about_title">关于</string>
+    <string name="settings_donate_title">捐赠支持</string>
+    <string name="settings_donate_tip">真的很感谢你能支持 Flue Next 开发！点开下方二维码可全屏查看</string>
+    <string name="settings_donate_wechat">微信</string>
+    <string name="settings_donate_preview_tap">点击预览图全屏查看</string>
+    <string name="settings_donate_alipay">支付宝</string>
+    <string name="about_author_name">柚子柚子皮</string>
+    <string name="about_community_group_fmt">群号 %s</string>
+    <string name="about_join_group">加入交流群获取更新</string>
+    <string name="about_donate">捐赠支持</string>
+    <string name="about_donate_methods">微信 / 支付宝</string>
+    <string name="about_open_source">感谢以下开源项目</string>
+    <string name="about_qq_copy_fmt">已复制 QQ：%s</string>
+
+    <!-- 语言页 AI 翻译免责 -->
+    <string name="settings_lang_ai_disclaimer_en">English and Japanese translations are AI-generated and may not be fully accurate.</string>
+    <string name="settings_icon_pack_default">系统默认</string>
+    <string name="settings_icon_pack_default_sub">使用当前系统默认图标包</string>
+    <string name="settings_icon_pack_adw">ADW 图标包</string>
+    <string name="settings_icon_pack_refresh">刷新图标包</string>
+    <string name="settings_icon_pack_refresh_sub">重新扫描已安装的 ADW 图标包</string>
+
+    <!-- 外观页补充 -->
+    <string name="settings_section_layout">布局</string>
+    <string name="settings_layout_honeycomb">蜂窝布局</string>
+    <string name="settings_layout_honeycomb_sub">Apple Watch 风格</string>
+    <string name="settings_layout_list">列表布局</string>
+    <string name="settings_layout_list_sub">经典纵向列表</string>
+    <string name="settings_top_fade">顶部渐隐范围</string>
+    <string name="settings_bottom_fade">底部渐隐范围</string>
+    <string name="settings_section_launch">启动</string>
+    <string name="settings_splash">启动遮罩</string>
+    <string name="settings_splash_sub">打开应用时显示图标过渡</string>
+    <string name="settings_glass_highlight">玻璃高光</string>
+    <string name="settings_glass_highlight_on">控制中心使用 iOS 风格垂直 Pill 滑块与半透明高光效果</string>
+    <string name="settings_glass_highlight_off">控制中心使用经典横向滑块</string>
+    <string name="settings_splash_delay">遮罩时长</string>
+
+    <!-- 性能与动画页 -->
+    <string name="settings_performance_title">性能与动画</string>
+    <string name="settings_low_res_icons">低分辨率图标</string>
+    <string name="settings_low_res_icons_sub">降低图标开销以提升流畅度</string>
+    <string name="settings_music_text_animation">音乐文字切换动画</string>
+    <string name="settings_builtin_thumbnails">内置管理器缩略图</string>
+    <string name="settings_builtin_thumbnails_sub">在图片/视频列表左侧显示预览图</string>
+    <string name="settings_motion_profile">动画曲线配置</string>
+    <string name="settings_motion_profile_sub_fmt">%1$s · 边界回弹 %2$s</string>
+    <string name="settings_motion_bounce_on">开启</string>
+    <string name="settings_motion_bounce_off">关闭</string>
+
+    <!-- 动画曲线配置页 -->
+    <string name="settings_motion_profile_title">动画曲线配置</string>
+    <string name="settings_motion_profile_hint">选择预设后可复制为自己的曲线。时长 80–1200ms，衔接 0–500ms；边界强度 0 表示关闭回弹。</string>
+    <string name="settings_motion_profile_preset">内置预设（复制后可编辑）</string>
+    <string name="settings_motion_profile_custom">自定义动画曲线</string>
+    <string name="settings_motion_profile_copy">复制当前曲线</string>
+    <string name="settings_motion_profile_copy_sub">创建可编辑副本并立即使用</string>
+    <string name="settings_motion_profile_delete">删除当前自定义曲线</string>
+    <string name="settings_motion_profile_delete_sub">内置柔和与激进预设不会被删除</string>
+    <string name="settings_motion_bounce">触边回弹</string>
+    <string name="settings_motion_bounce_sub">同一手势跨过边界时立即产生边缘回弹</string>
+    <string name="settings_motion_bounce_strength">边界强度</string>
+    <string name="settings_motion_phase_duration_fmt">%s 时长</string>
+    <string name="settings_motion_phase_delay_fmt">%s 衔接</string>
+    <string name="settings_motion_bezier">三次贝塞尔曲线</string>
+    <string name="settings_motion_bezier_sub">直接控制时间曲线的两个控制点</string>
+    <string name="settings_motion_spring">物理弹簧</string>
+    <string name="settings_motion_spring_sub">使用阻尼与刚度控制回弹手感</string>
+    <string name="settings_motion_damping_fmt">%s 阻尼比</string>
+    <string name="settings_motion_stiffness_fmt">%s 刚度</string>
+    <string name="settings_motion_export_curves">导出自定义曲线</string>
+    <string name="settings_motion_export_curves_sub">导出为可备份的 JSON 文件</string>
+    <string name="settings_motion_import_curves">导入曲线</string>
+    <string name="settings_motion_import_curves_sub">从 JSON 导入并生成新的自定义曲线</string>
+    <string name="settings_motion_phase_app_list_enter">应用列表进入</string>
+    <string name="settings_motion_phase_app_launch">应用启动</string>
+    <string name="settings_motion_phase_app_return">应用返回</string>
+    <string name="settings_motion_phase_pull_to_face">上滑返回表盘</string>
+    <string name="settings_motion_phase_edge_bounce">边界回弹</string>
+    <string name="settings_motion_spring_fmt">Spring(阻尼 %1$.2f，刚度 %2$d)</string>
+
+    <!-- 工具页 -->
+    <string name="settings_tools_title">工具</string>
+    <string name="settings_backup_menu">导入/导出配置</string>
+    <string name="settings_backup_menu_sub">选择备份项目、导入项目和表盘资源</string>
+    <string name="settings_export_log">导出日志</string>
+    <string name="settings_export_log_sub">导出 Flue 摘要、崩溃文件和最近 500 行系统日志</string>
+    <string name="settings_diagnostic_logging">诊断日志模式</string>
+    <string name="settings_diagnostic_logging_on">已开启，5 分钟后自动关闭</string>
+    <string name="settings_diagnostic_logging_off">默认关闭，开启后临时允许 release 输出诊断日志</string>
+    <string name="settings_reset_defaults">恢复默认设置</string>
+    <string name="settings_reset_defaults_sub">重置桌面外观与性能选项</string>
+
+    <!-- 备份与恢复 -->
+    <string name="settings_backup_export_page">导出配置</string>
+    <string name="settings_backup_export_page_sub">导出设置、排序和表盘资源为 ZIP</string>
+    <string name="settings_backup_import_page">导入配置</string>
+    <string name="settings_backup_import_page_sub">选择 Flue ZIP 备份并按项目恢复</string>
+    <string name="settings_backup_export_start">开始导出</string>
+    <string name="settings_backup_export_start_sub">选择保存位置后写入 ZIP 备份</string>
+    <string name="settings_backup_import_pick">选择备份文件</string>
+    <string name="settings_backup_import_pick_sub">选择 Flue ZIP 备份文件</string>
+    <string name="settings_backup_preview_fmt">备份版本 %1$s · %2$s</string>
+    <string name="settings_backup_unknown_time">未知时间</string>
+    <string name="settings_backup_import_start">开始导入</string>
+    <string name="settings_backup_import_start_sub">恢复所选项目</string>
+    <string name="backup_item_settings">设置</string>
+    <string name="backup_item_settings_sub">桌面外观、性能、开关等通用设置</string>
+    <string name="backup_item_app_order">应用排序</string>
+    <string name="backup_item_app_order_sub">应用列表的排列顺序</string>
+    <string name="backup_item_widget_order">小组件排序</string>
+    <string name="backup_item_widget_order_sub">小组件列表和槽位顺序</string>
+    <string name="backup_item_side_screen_order">负一屏排序</string>
+    <string name="backup_item_side_screen_order_sub">负一屏快捷启动槽位</string>
+    <string name="backup_item_photo_watchface">图片表盘</string>
+    <string name="backup_item_photo_watchface_sub">图片表盘配置和当前图片</string>
+    <string name="backup_item_video_watchface">视频表盘</string>
+    <string name="backup_item_video_watchface_sub">视频表盘配置和当前视频</string>
+    <string name="backup_item_watch_files">.watch 表盘</string>
+    <string name="backup_item_watch_files_sub">已导入的第三方 .watch 表盘文件</string>
+    <string name="backup_summary_none">无</string>
+    <string name="backup_share_title">分享配置备份</string>
+
+    <!-- 删除表盘对话框 -->
+    <string name="dialog_delete_watchface_title">删除表盘</string>
+    <string name="dialog_delete_watchmaker_fmt">删除 %s？这个标准 .watch 表盘会从 Flue 私有目录移除。</string>
+    <string name="dialog_delete_jbwatch_fmt">删除 %s？这个 jb_watch 兼容表盘会从 Flue 私有目录移除。</string>
+    <string name="dialog_delete_imported_fmt">删除 %s？这个导入表盘会从 Flue 私有目录移除。</string>
 </resources>

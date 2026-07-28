@@ -1,4 +1,4 @@
-package com.flue.launcher.data.repository
+﻿package com.flue.launcher.data.repository
 
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
@@ -71,7 +71,9 @@ class AppRepository(private val context: Context) {
         private const val APP_LIST_CACHE_FILE = "snapshot.json"
 
         // 版本 4：自适应图标改为自绘抗锯齿裁剪，旧缓存位图带黑色锯齿边，必须整体重建。
-        private const val APP_LIST_CACHE_VERSION = 4
+        // 版本 5：文件夹合成底板从 0.24 圆角矩形改为整圆，旧缓存里那张方底板
+        //         不会自己刷新，必须靠版本号顶掉。
+        private const val APP_LIST_CACHE_VERSION = 5
 
         /** 自适应图标图层与可见区域的比例（108/72）。 */
         private const val ADAPTIVE_ICON_LAYER_SCALE = 108f / 72f
@@ -339,6 +341,72 @@ class AppRepository(private val context: Context) {
         saveCachedSnapshot(catalogItems)
     }
 
+    /**
+     * 只重组文件夹与顶层排序，不碰 PackageManager。
+     *
+     * 文件夹增删改本质只改了一条归属关系，但以前一律走 [refresh]：那里会
+     * 重跑 queryIntentActivities 并对每个应用调 loadLabel(pm)（图标虽有缓存，
+     * label 没有），上百个应用就是用户看到的「放手后要等好一会儿文件夹才出来」。
+     *
+     * 这条路径复用已发布的 [itemCatalog]（AppInfo 里图标和标签都是现成的），
+     * 只重建文件夹合成图标 + 重算顶层列表，代价与应用数无关。
+     *
+     * 前提是已经有过一次完整扫描（[freshScanPublished]）；否则回落全量刷新。
+     */
+    private fun refreshFolderCompositionOnly(iconSize: Int = currentIconSize) {
+        if (!freshScanPublished) {
+            refreshAsync(iconSize)
+            return
+        }
+        // 必须占用一个新 generation：refreshJob.cancel() 对 refresh() 是无效的
+        // （它是普通函数，体内没有挂起点，协程取消不会打断它），它唯一的退出
+        // 依据就是 isCurrentRefresh()。不推进 generation 的话，一个在文件夹
+        // 写盘之前就读过 loadFolders() 的全量刷新会在我们发布之后，带着「还
+        // 没有这个文件夹」的旧快照覆盖回来——文件夹刚出现又消失。
+        synchronized(this) { refreshGeneration += 1 }
+        val useTwoToneIconsSnapshot = useTwoToneIcons
+        // 只取真实条目：itemCatalog 里也混着上一轮合成的文件夹条目，
+        // 拿它们当子项会套娃。
+        val catalogItems = itemCatalog.values.filterNot { it.isFolder }
+        val catalogMap = catalogItems.associateBy { it.componentKey }
+        val storedFolders = itemStorage.loadFolders()
+        val folderChildKeys = storedFolders.flatMap { folder -> folder.itemKeys }.toSet()
+        val folderEntries = storedFolders.mapNotNull { folder ->
+            val liveKeys = folder.itemKeys.filter { key -> catalogMap.containsKey(key) }
+            if (liveKeys.isEmpty()) {
+                null
+            } else {
+                createFolderEntry(
+                    folder = folder.copy(itemKeys = liveKeys),
+                    childItems = liveKeys.mapNotNull(catalogMap::get),
+                    iconSize = iconSize,
+                    useTwoToneIcons = useTwoToneIconsSnapshot,
+                )
+            }
+        }
+        val topLevelItems = ArrayList<AppInfo>(catalogItems.size + folderEntries.size)
+        topLevelItems += catalogItems.filterNot { it.componentKey in folderChildKeys }
+        topLevelItems += folderEntries
+
+        itemCatalog = catalogMap + folderEntries.associateBy { it.componentKey }
+        folderCatalog = storedFolders
+        synchronized(customOrderMonitor) {
+            val orderSnapshot = customOrderSnapshot
+            _allSelectableApps.value = sortApps(catalogItems, orderSnapshot)
+            _allApps.value = sortApps(topLevelItems, orderSnapshot)
+            applyFilters()
+        }
+        saveCachedSnapshot(catalogItems)
+    }
+
+    /** 文件夹类改动的异步轻量刷新，避免在拖动收尾的主线程上做合成。 */
+    private fun refreshFolderCompositionAsync() {
+        synchronized(refreshMonitor) {
+            refreshJob?.cancel()
+            refreshJob = scope.launch { refreshFolderCompositionOnly() }
+        }
+    }
+
     fun launchApp(appInfo: AppInfo): Boolean {
         if (appInfo.isFolder) return false
         if (appInfo.isAppListShortcut) {
@@ -503,43 +571,44 @@ class AppRepository(private val context: Context) {
     fun createFolder(sourceKey: String, targetKey: String): String? {
         val targetName = itemCatalog[targetKey]?.label ?: "文件夹"
         val folder = itemStorage.createFolder(sourceKey, targetKey, targetName) ?: return null
-        refreshAsync()
+        // 只重组文件夹，不重扫 PackageManager（放手后的长时间卡顿根因）。
+        refreshFolderCompositionAsync()
         return folder.componentKey
     }
 
     fun renameFolder(folderKey: String, name: String): Boolean {
         val renamed = itemStorage.renameFolder(folderKey, name)
-        if (renamed) refreshAsync()
+        if (renamed) refreshFolderCompositionAsync()
         return renamed
     }
 
     fun dissolveFolder(folderKey: String): List<String> {
         val keys = itemStorage.dissolveFolder(folderKey)
-        if (keys.isNotEmpty()) refreshAsync()
+        if (keys.isNotEmpty()) refreshFolderCompositionAsync()
         return keys
     }
 
     fun moveItemOutOfFolder(folderKey: String, itemKey: String): FolderMutationResult {
         val result = itemStorage.moveItemOutOfFolder(folderKey, itemKey)
-        if (result.succeeded) refreshAsync()
+        if (result.succeeded) refreshFolderCompositionAsync()
         return result
     }
 
     fun addItemsToFolder(folderKey: String, itemKeys: List<String>): FolderMutationResult {
         val result = itemStorage.addItemsToFolder(folderKey, itemKeys)
-        if (result.succeeded && result.itemKeys.isNotEmpty()) refreshAsync()
+        if (result.succeeded && result.itemKeys.isNotEmpty()) refreshFolderCompositionAsync()
         return result
     }
 
     fun setFolderItems(folderKey: String, itemKeys: List<String>): FolderMutationResult {
         val result = itemStorage.setFolderItems(folderKey, itemKeys)
-        if (result.succeeded) refreshAsync()
+        if (result.succeeded) refreshFolderCompositionAsync()
         return result
     }
 
     fun reorderFolderItems(folderKey: String, orderedKeys: List<String>): FolderMutationResult {
         val result = itemStorage.reorderFolderItems(folderKey, orderedKeys)
-        if (result.succeeded && result.itemKeys.isNotEmpty()) refreshAsync()
+        if (result.succeeded && result.itemKeys.isNotEmpty()) refreshFolderCompositionAsync()
         return result
     }
 
@@ -1339,8 +1408,11 @@ class AppRepository(private val context: Context) {
         val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
         val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xDD2C2C2E.toInt() }
-        val radius = size * 0.24f
-        canvas.drawRoundRect(RectF(0f, 0f, size.toFloat(), size.toFloat()), radius, radius, bgPaint)
+        // 底板画圆，不是圆角方块。列表侧的 iconClipPath 现在恒为
+        // addCircle（图标全部统一圆形），底板若还是 0.24·size 的圆角矩形，
+        // 四角会被裁掉一截、边缘也和旁边的圆图标对不齐——截图里那个文件夹
+        // 缩略图明显比周围图标"方"就是它。
+        canvas.drawCircle(size / 2f, size / 2f, size / 2f, bgPaint)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
         // 2x2 子图标网格必须落在内切圆里：蜂窝 / Apple Watch 风格会把整张
         // 文件夹图按圆形裁剪，旧的 0.36+0.08（总宽 0.80·size）四角到中心是

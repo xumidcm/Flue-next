@@ -17,7 +17,97 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+
+/**
+ * 玻璃质感令牌（三套风格共用一份配方）。
+ *
+ * 「玻璃」不是一个颜色，是三层叠加，缺一层就塑料：
+ * 1. 根底 `screenBackground.copy(alpha = 0.62f)` —— 表盘背衬透上来，这层才是「毛」；
+ * 2. [fill]：表面顶浓底淡的半透明填充 —— 玻璃自身的厚度；
+ * 3. [highlight]：顶亮底暗的极细描边 —— 玻璃边缘的高光。贴纯黑时没它，
+ *    大圆角转角处只有十几个百分点的亮度差，抗锯齿一上去就发虚。
+ *
+ * **只统一质感，不统一形状**：形状一律由调用方传入，MIUIX 的大圆角、
+ * MD3 的 Expressive 形状各自保留，否则三套风格失去区分度。
+ */
+@Stable
+data class GlassSurfaceTokens(
+    val fill: Brush,
+    val highlight: Brush,
+    val borderWidth: Dp,
+    /** 需要纯色而非 Brush 的场合（堆叠层背衬、圆形开关底）的等效底色。 */
+    val baseColor: Color,
+)
+
+/**
+ * 玻璃厚度档。分档的判据是**这块表面下面压着什么**：
+ *
+ * - [Thin] 压着表盘背衬（控制中心 / 负一屏 / 通知中心的卡片、通知条、
+ *   快捷启动 dock）。背衬已被根底压暗，薄玻璃透过去仍然干净。
+ * - [Thick] 压着别的内容（通知中心那条浮在通知流上方的操作栏）。这里用
+ *   薄档会让按钮图标和下面的通知卡糊在一起，必须挡住底下的东西。
+ */
+enum class GlassTier { Thin, Thick }
+
+/**
+ * 生成玻璃令牌。三套风格调用同一个工厂 —— 老师要求玻璃质感统一，
+ * 区分度交给形状、强调色、字体与背景色承担。
+ *
+ * 取值来源：[GlassTier.Thin] 的深色档是快捷启动 dock 那套实测配方
+ * （白 0.13→0.06 填充、白 0.18→0.04 描边、0.8dp）原封不动；
+ * [GlassTier.Thick] 的两档是通知操作栏原先写死的 `#151515` @0.82 /
+ * `#F2F2F6` @0.88，同样一字未改，只是从写死搬进了令牌 —— 留在原地
+ * 就等于在统一配方之外另开一份私有配方，下次调玻璃必然漏掉它。
+ *
+ * 浅色模式的薄档镜像成黑并略收：同 alpha 的黑 veil 在浅底上视觉重量
+ * 比白 veil 更沉。
+ */
+fun flueGlassTokens(
+    darkMode: Boolean,
+    tier: GlassTier = GlassTier.Thin,
+): GlassSurfaceTokens {
+    val tint = if (darkMode) Color.White else Color.Black
+    // 高光描边两档共用一份配方：厚档底子虽然接近不透明，但那圈亮边是
+    // 「玻璃」的读法所在，去掉就变成一块普通的深色药丸了。
+    val highlight = Brush.verticalGradient(
+        listOf(
+            tint.copy(alpha = if (darkMode) 0.18f else 0.14f),
+            tint.copy(alpha = if (darkMode) 0.04f else 0.03f),
+        )
+    )
+    return when (tier) {
+        GlassTier.Thin -> GlassSurfaceTokens(
+            fill = Brush.verticalGradient(
+                listOf(
+                    tint.copy(alpha = if (darkMode) 0.13f else 0.10f),
+                    tint.copy(alpha = if (darkMode) 0.06f else 0.045f),
+                )
+            ),
+            highlight = highlight,
+            borderWidth = 0.8.dp,
+            // 比 fill 顶色再浓一点：堆叠层只露出 6dp 左右的边，太淡就看不出层数。
+            baseColor = tint.copy(alpha = if (darkMode) 0.16f else 0.11f),
+        )
+        GlassTier.Thick -> {
+            // 厚档保持平铺而不做渐变：操作栏只有 30dp 高，渐变在这个高度上
+            // 看不出来，反而会让上下两端的挡光能力不一致。
+            val base = if (darkMode) {
+                Color(0xFF151515).copy(alpha = 0.82f)
+            } else {
+                Color(0xFFF2F2F6).copy(alpha = 0.88f)
+            }
+            GlassSurfaceTokens(
+                fill = SolidColor(base),
+                highlight = highlight,
+                borderWidth = 0.8.dp,
+                baseColor = base,
+            )
+        }
+    }
+}
 
 @Stable
 data class LauncherStyle(
@@ -46,6 +136,10 @@ data class LauncherStyle(
     val chipShape: Shape = CircleShape,
     val rowShape: Shape = RoundedCornerShape(18.dp),
     val panelShape: Shape = RoundedCornerShape(30.dp),
+    /** 玻璃质感（控制中心 / 负一屏 / 通知中心的表面材质），三套风格同源。 */
+    val glass: GlassSurfaceTokens,
+    /** 厚玻璃：浮在别的内容上方的表面（通知操作栏）。见 [GlassTier]。 */
+    val glassThick: GlassSurfaceTokens,
     val watchFaceOverlayStrength: Float,
     val faceSwitchEnterSpec: FiniteAnimationSpec<Float>,
     val faceSwitchExitSpec: FiniteAnimationSpec<Float>,
@@ -97,6 +191,8 @@ fun appleWatchLauncherStyle(darkMode: Boolean): LauncherStyle {
         chipShape = CircleShape,
         rowShape = RoundedCornerShape(18.dp),
         panelShape = RoundedCornerShape(30.dp),
+        glass = flueGlassTokens(darkMode),
+        glassThick = flueGlassTokens(darkMode, GlassTier.Thick),
         watchFaceOverlayStrength = 1f,
         faceSwitchEnterSpec = tween(durationMillis = 220, delayMillis = 70),
         faceSwitchExitSpec = tween(durationMillis = 180),
@@ -144,6 +240,8 @@ fun materialLauncherStyle(darkMode: Boolean): LauncherStyle {
         chipShape = CircleShape,
         rowShape = RoundedCornerShape(24.dp),
         panelShape = RoundedCornerShape(36.dp),
+        glass = flueGlassTokens(darkMode),
+        glassThick = flueGlassTokens(darkMode, GlassTier.Thick),
         watchFaceOverlayStrength = 1.25f,
         faceSwitchEnterSpec = tween(durationMillis = 300, delayMillis = 20),
         faceSwitchExitSpec = tween(durationMillis = 220),
@@ -203,6 +301,8 @@ fun miuixLauncherStyle(darkMode: Boolean): LauncherStyle {
         chipShape = CircleShape,
         rowShape = RoundedCornerShape(14.dp),
         panelShape = RoundedCornerShape(22.dp),
+        glass = flueGlassTokens(darkMode),
+        glassThick = flueGlassTokens(darkMode, GlassTier.Thick),
         watchFaceOverlayStrength = 1f,
         faceSwitchEnterSpec = tween(durationMillis = 260, delayMillis = 40),
         faceSwitchExitSpec = tween(durationMillis = 200),

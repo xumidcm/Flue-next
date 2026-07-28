@@ -40,6 +40,7 @@ class WatchArchiveInstallerTest {
         assertTrue(installed.preview?.isFile == true)
         assertEquals("Simple", installed.definition.name)
         assertEquals(WatchmakerDefinitionVersion.FORMAT_1, installed.definition.version)
+        assertEquals(WatchFaceShape.ROUND, installed.definition.shape)
         assertEquals(listOf("image", "text"), installed.definition.layers.map { it.type })
         assertFalse(File(installed.rootDirectory, "watch.pxml").exists())
     }

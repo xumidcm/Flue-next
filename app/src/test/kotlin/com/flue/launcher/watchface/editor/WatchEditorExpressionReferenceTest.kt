@@ -8,7 +8,7 @@ class WatchEditorExpressionReferenceTest {
     @Test
     fun curatedTagListStaysCompactAndWellFormed() {
         val entries = WATCH_EDITOR_EXPRESSION_GROUPS.flatMap { it.entries }
-        assertTrue("expected 20..30 tags, got ${entries.size}", entries.size in 20..30)
+        assertTrue("expected 30..55 tags, got ${entries.size}", entries.size in 30..55)
         val tagPattern = Regex("^\\{[a-z0-9_]+\\}$")
         entries.forEach { entry ->
             assertTrue("malformed tag: ${entry.tag}", tagPattern.matches(entry.tag))
@@ -24,8 +24,12 @@ class WatchEditorExpressionReferenceTest {
     @Test
     fun specCriticalTagsArePresent() {
         val tags = WATCH_EDITOR_EXPRESSION_GROUPS.flatMap { it.entries }.map { it.tag }.toSet()
-        // Time, date, battery, heart rate and the spec-correct step tag {ssc}.
-        listOf("{dh}", "{dhz}", "{dm}", "{ds}", "{dd}", "{dyy}", "{ddw}", "{bl}", "{shr}", "{ssc}")
+        // Time, date, battery, health and the shared weather contract.
+        listOf(
+            "{dh}", "{dhz}", "{dm}", "{ds}", "{dd}", "{dyy}", "{ddw}",
+            "{bl}", "{shr}", "{ssc}", "{wt}", "{wtd}", "{wct}", "{wci}",
+            "{wcl}", "{whp}", "{wl}", "{wml}", "{wf1dth}", "{wf1ht}",
+        )
             .forEach { assertTrue("missing $it", it in tags) }
     }
 

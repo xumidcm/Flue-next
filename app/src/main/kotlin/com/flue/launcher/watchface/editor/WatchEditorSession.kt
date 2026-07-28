@@ -2,7 +2,7 @@ package com.flue.launcher.watchface.editor
 
 import android.content.Context
 import android.net.Uri
-import com.flue.launcher.watchface.LunchWatchFaceDescriptor
+import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.watchface.standard.SecureWatchXmlParser
 import com.flue.launcher.watchface.standard.WatchInstallMetadata
 import com.flue.launcher.watchface.standard.WatchArchiveValidator
@@ -528,6 +528,28 @@ class WatchEditorSession private constructor(
         return watchXmlFile
     }
 
+    /**
+     * 用新渲染的截图覆盖草稿里的 preview.jpg。
+     *
+     * 表盘列表和商店都读包内 watch.xml 旁边的 preview.jpg（见
+     * WatchmakerWatchFaceStorage.previewNextTo），而那张图是原作者打包时带的。
+     * 编辑保存不重写它，列表和商店就永远显示旧预览。这里在 save /
+     * saveCurrentRevision / exportWatch 之前调，让三条路径都带上新图。
+     *
+     * 同时写 preview.jpg 和 preview_dim.jpg：扫描器按这个顺序找，只覆盖前者
+     * 会让存在 preview_dim.jpg 的老包在暗色档位下仍显示旧图。
+     */
+    @Synchronized
+    fun writePreviewImage(bytes: ByteArray) {
+        ensureOpen()
+        require(bytes.isNotEmpty()) { "预览图内容为空" }
+        val parent = watchXmlFile.parentFile ?: throw WatchEditorException("草稿目录结构异常")
+        writeAtomically(File(parent, "preview.jpg"), bytes)
+        // 只在原包已有 dim 变体时才覆盖，避免给没有它的表盘凭空加文件。
+        val dim = File(parent, "preview_dim.jpg")
+        if (dim.isFile) writeAtomically(dim, bytes)
+    }
+
     /** Saves the current XML and atomically exports the complete draft as .watch. */
     @Synchronized
     fun exportWatch(outputFile: File): WatchEditorExportResult {
@@ -934,7 +956,7 @@ class WatchEditorSession private constructor(
         /** Opens an installed standard descriptor by copying it into cache first. */
         fun open(
             context: Context,
-            descriptor: LunchWatchFaceDescriptor,
+            descriptor: WatchFaceDescriptor,
             limits: WatchEditorLimits = WatchEditorLimits.DEFAULT,
         ): WatchEditorSession {
             require(descriptor.isWatchmaker) { "只有标准 .watch 表盘可在编辑器中打开" }
@@ -997,8 +1019,15 @@ class WatchEditorSession private constructor(
             name: String = "New Watch",
             limits: WatchEditorLimits = WatchEditorLimits.DEFAULT,
             roundShape: Boolean = false,
+            canvasSize: WatchCanvasSize = WatchCanvasSize.DEFAULT,
         ): WatchEditorSession =
-            createBlank(File(context.cacheDir, DRAFT_DIRECTORY_NAME), name, limits, roundShape = roundShape)
+            createBlank(
+                File(context.cacheDir, DRAFT_DIRECTORY_NAME),
+                name,
+                limits,
+                roundShape = roundShape,
+                canvasSize = canvasSize,
+            )
 
         fun createBlank(
             cacheDirectory: File,
@@ -1006,6 +1035,7 @@ class WatchEditorSession private constructor(
             limits: WatchEditorLimits = WatchEditorLimits.DEFAULT,
             removeDraftOnClose: Boolean = true,
             roundShape: Boolean = false,
+            canvasSize: WatchCanvasSize = WatchCanvasSize.DEFAULT,
         ): WatchEditorSession {
             val cache = prepareCacheDirectory(cacheDirectory)
             val draft = createDraftDirectory(cache)
@@ -1016,8 +1046,12 @@ class WatchEditorSession private constructor(
                 // definition.shape == ROUND 罩上圆形裁剪 —— 方屏表盘删光元素后
                 // 仍有一圈圆形遮罩就是它。现在跟随调用方传入的屏幕形状。
                 val shapeCode = if (roundShape) "R" else "S"
+                // 画布尺寸落在根节点上（缺省 512×512 与历史表盘一致），新建时
+                // 由调用方按屏幕/预设/自定义决定，见 WatchCanvasSize。
                 val xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
-                    "<Watch name=\"${escapeXmlAttribute(safeName)}\" build_source=\"studio\" shape=\"$shapeCode\"/>"
+                    "<Watch name=\"${escapeXmlAttribute(safeName)}\" build_source=\"studio\"" +
+                    " shape=\"$shapeCode\"" +
+                    " width=\"${canvasSize.width}\" height=\"${canvasSize.height}\"/>"
                 writeAtomically(resolveFile(draft, watchXml), xml.toByteArray(StandardCharsets.UTF_8))
                 val document = parseXml(resolveFile(draft, watchXml), limits)
                 return WatchEditorSession(

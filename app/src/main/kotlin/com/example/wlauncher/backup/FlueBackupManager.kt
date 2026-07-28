@@ -12,8 +12,8 @@ import com.flue.launcher.data.repository.WidgetRepository
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.viewmodel.dataStore
 import com.flue.launcher.watchface.WatchFacePhotoCache
-import com.flue.launcher.watchface.dingdingcat.DingDingCatDialParser
-import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceStorage
+import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStorage
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -34,11 +34,12 @@ data class FlueBackupOptions(
     val sideScreenOrder: Boolean = true,
     val photoWatchFace: Boolean = true,
     val videoWatchFace: Boolean = true,
-    val dingDingCatWatchFaces: Boolean = true
+    /** 已安装的 .watch 表盘文件（WatchmakerWatchFaceStorage 里的表盘）。 */
+    val watchFiles: Boolean = true
 ) {
     val hasAny: Boolean
         get() = settings || appOrder || widgetOrder || sideScreenOrder ||
-            photoWatchFace || videoWatchFace || dingDingCatWatchFaces
+            photoWatchFace || videoWatchFace || watchFiles
 
     fun constrainedBy(available: FlueBackupOptions): FlueBackupOptions {
         return FlueBackupOptions(
@@ -48,7 +49,7 @@ data class FlueBackupOptions(
             sideScreenOrder = sideScreenOrder && available.sideScreenOrder,
             photoWatchFace = photoWatchFace && available.photoWatchFace,
             videoWatchFace = videoWatchFace && available.videoWatchFace,
-            dingDingCatWatchFaces = dingDingCatWatchFaces && available.dingDingCatWatchFaces
+            watchFiles = watchFiles && available.watchFiles
         )
     }
 }
@@ -65,7 +66,8 @@ object FlueBackupManager {
     private const val PHOTO_MEDIA_ENTRY = "watchfaces/photo/media"
     private const val VIDEO_MEDIA_ENTRY = "watchfaces/video/media"
     private const val FONT_ENTRY = "watchfaces/font/current"
-    private const val DINGDINGCAT_ROOT_ENTRY = "watchfaces/dingdingcat/"
+
+    private const val WATCH_ARCHIVES_PREFIX = "watchfaces/watch/"
 
     private val appOrderKey = LauncherViewModel.KEY_APP_ORDER.name
     private val sideScreenShortcutsKey = LauncherViewModel.KEY_SIDE_SCREEN_SHORTCUTS.name
@@ -121,7 +123,6 @@ object FlueBackupManager {
         sideScreenShortcutsKey,
         sideScreenWidgetsKey,
         lastWatchFaceErrorKey,
-        LauncherViewModel.KEY_DINGDINGCAT_IMPORT_UNLOCKED.name,
         fontPathKey
     ) + photoPreferenceNames + videoPreferenceNames
 
@@ -181,10 +182,20 @@ object FlueBackupManager {
                     .put("fontEntry", fontMedia?.let { "$FONT_ENTRY.${it.extension.ifBlank { "ttf" }}" } ?: JSONObject.NULL)
             )
         }
-        if (options.dingDingCatWatchFaces) {
-            val root = DingDingCatWatchFaceStorage.rootDir(context)
-            manifest.put("dingDingCatWatchFaces", JSONObject().put("rootEntry", DINGDINGCAT_ROOT_ENTRY))
-            manifest.put("dingDingCatCount", root.listFiles()?.count { it.isDirectory } ?: 0)
+
+        // 已安装的 .watch 表盘：每个子目录打成内嵌 ZIP，记录目录列表供 import 识别。
+        val watchFaceDirs = if (options.watchFiles) {
+            runCatching {
+                WatchmakerWatchFaceStorage.rootDirectory(context)
+                    .listFiles()
+                    .orEmpty()
+                    .filter { it.isDirectory }
+            }.getOrDefault(emptyList())
+        } else emptyList()
+        if (options.watchFiles && watchFaceDirs.isNotEmpty()) {
+            val entries = JSONArray()
+            watchFaceDirs.forEach { dir -> entries.put("$WATCH_ARCHIVES_PREFIX${dir.name}.watch") }
+            manifest.put("watchFiles", JSONObject().put("archives", entries))
         }
 
         context.contentResolver.openOutputStream(targetUri)?.use { rawOutput ->
@@ -200,10 +211,23 @@ object FlueBackupManager {
                     val entry = "$FONT_ENTRY.${fontMedia.extension.ifBlank { "ttf" }}"
                     zip.writeFileEntry(entry, fontMedia)
                 }
-                if (options.dingDingCatWatchFaces) {
-                    val root = DingDingCatWatchFaceStorage.rootDir(context)
-                    root.listFiles()?.filter { it.isDirectory }?.forEach { dir ->
-                        zip.writeDirectory(dir, "$DINGDINGCAT_ROOT_ENTRY${dir.name}/")
+                // 把每个已安装表盘目录打成内嵌 .watch（ZIP），写进备份包。
+                if (options.watchFiles) {
+                    watchFaceDirs.forEach { faceDir ->
+                        val archiveName = "$WATCH_ARCHIVES_PREFIX${faceDir.name}.watch"
+                        val watchBytes = ByteArrayOutputStream().also { baos ->
+                            ZipOutputStream(baos).use { inner ->
+                                faceDir.walkTopDown().filter { it.isFile }.forEach { file ->
+                                    val rel = file.relativeTo(faceDir).path.replace('\\', '/')
+                                    inner.putNextEntry(ZipEntry(rel))
+                                    file.inputStream().use { it.copyTo(inner) }
+                                    inner.closeEntry()
+                                }
+                            }
+                        }.toByteArray()
+                        zip.putNextEntry(ZipEntry(archiveName))
+                        zip.write(watchBytes)
+                        zip.closeEntry()
                     }
                 }
             }
@@ -283,8 +307,27 @@ object FlueBackupManager {
                 }
             }
 
-            if (selected.dingDingCatWatchFaces) {
-                restoreDingDingCatWatchFaces(context, File(tempRoot, DINGDINGCAT_ROOT_ENTRY))
+            // 历史非 .watch 格式条目不再恢复，直接随 tempRoot 一起丢弃
+            // （静默跳过，不报错）。
+
+            // 还原 .watch 表盘：提取内嵌 .watch 文件并调 importArchiveFile 安装。
+            if (selected.watchFiles) {
+                val archivesObj = manifest.optJSONObject("watchFiles")
+                val archives = archivesObj?.optJSONArray("archives")
+                if (archives != null) {
+                    repeat(archives.length()) { i ->
+                        val entry = archives.optString(i)
+                        if (entry.isNotBlank()) {
+                            val archiveFile = File(tempRoot, entry)
+                            if (archiveFile.isFile) {
+                                runCatching {
+                                    WatchmakerWatchFaceStorage.importArchiveFile(context, archiveFile)
+                                }
+                                // 单个表盘失败不中断整体恢复
+                            }
+                        }
+                    }
+                }
             }
         } finally {
             tempRoot.deleteRecursively()
@@ -321,20 +364,6 @@ object FlueBackupManager {
             }
     }
 
-    private fun restoreDingDingCatWatchFaces(context: Context, sourceRoot: File) {
-        if (!sourceRoot.isDirectory) return
-        val targetRoot = DingDingCatWatchFaceStorage.rootDir(context)
-        sourceRoot.listFiles()?.filter { it.isDirectory }?.forEach { sourceDir ->
-            val targetDir = File(targetRoot, sourceDir.name)
-            runCatching {
-                targetDir.deleteRecursively()
-                sourceDir.copyRecursively(targetDir, overwrite = true)
-                DingDingCatDialParser.parse(targetDir)
-            }.onFailure {
-                targetDir.deleteRecursively()
-            }
-        }
-    }
 
     private fun copyInternalWatchFaceMedia(context: Context, source: File, folder: String): String {
         val targetRoot = File(context.filesDir, "internal_watchfaces/$folder").apply { mkdirs() }
@@ -378,7 +407,7 @@ object FlueBackupManager {
                 sideScreenOrder = manifest.has("sideScreenShortcuts"),
                 photoWatchFace = manifest.has("photoWatchFace"),
                 videoWatchFace = manifest.has("videoWatchFace"),
-                dingDingCatWatchFaces = manifest.has("dingDingCatWatchFaces")
+                watchFiles = manifest.has("watchFiles")
             )
         )
     }
@@ -473,7 +502,6 @@ object FlueBackupManager {
             .put("sideScreenOrder", sideScreenOrder)
             .put("photoWatchFace", photoWatchFace)
             .put("videoWatchFace", videoWatchFace)
-            .put("dingDingCatWatchFaces", dingDingCatWatchFaces)
     }
 
     private fun String.splitCsvJson(): JSONArray {

@@ -17,6 +17,10 @@
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <uses-permission android:name="android.permission.BODY_SENSORS" />
+    <!-- Weather uses an already-granted coarse last-known fix only; the app
+         never requests location permission implicitly. Manual city remains
+         the no-permission fallback. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
@@ -116,12 +120,6 @@
 
         <activity
             android:name=".CrashActivity"
-            android:exported="false"
-            android:theme="@style/Theme.WatchLauncher"
-            android:screenOrientation="portrait" />
-
-        <activity
-            android:name="com.dudu.wearlauncher.ui.WatchSurfaceBaseActivity"
             android:exported="false"
             android:theme="@style/Theme.WatchLauncher"
             android:screenOrientation="portrait" />

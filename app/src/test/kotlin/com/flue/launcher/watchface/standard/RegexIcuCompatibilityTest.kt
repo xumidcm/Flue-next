@@ -14,7 +14,7 @@ import java.io.File
  *
  * 违规的后果远比"匹配不到"严重：这些 `Regex` 大多是 `companion object` /
  * 顶层 `private val` 字段，编译失败会在类初始化时抛
- * `ExceptionInInitializerError`，**整个类无法加载**。beta1.5 上表盘编辑器
+ * `ExceptionInInitializerError`，**整个类无法加载**。旧版本表盘编辑器
  * 与表盘下载就是这样被打挂的：
  *
  * ```

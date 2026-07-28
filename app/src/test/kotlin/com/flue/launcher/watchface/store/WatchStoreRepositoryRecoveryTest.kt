@@ -1,7 +1,7 @@
 package com.flue.launcher.watchface.store
 
-import com.flue.launcher.watchface.LunchWatchFaceDescriptor
-import com.flue.launcher.watchface.LunchWatchFaceType
+import com.flue.launcher.watchface.WatchFaceDescriptor
+import com.flue.launcher.watchface.WatchFaceType
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceScanFailure
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceScanResult
 import com.flue.launcher.watchface.store.catalog.FileWatchFaceCatalog
@@ -31,9 +31,9 @@ class WatchStoreRepositoryRecoveryTest {
             val launcherId = "watchmaker:watch_${revision.take(32)}"
             val catalogFile = root.resolve("watch-face-catalog.json")
             val journalFile = root.resolve("watch-face-install-journal.json")
-            val descriptor = LunchWatchFaceDescriptor(
+            val descriptor = WatchFaceDescriptor(
                 id = launcherId,
-                type = LunchWatchFaceType.WATCHMAKER,
+                type = WatchFaceType.WATCHMAKER,
                 displayName = "学生时光",
             )
             val first = repository(root, catalogFile, journalFile, listOf(descriptor))
@@ -172,7 +172,7 @@ class WatchStoreRepositoryRecoveryTest {
         root: File,
         catalogFile: File,
         journalFile: File,
-        installed: List<LunchWatchFaceDescriptor>,
+        installed: List<WatchFaceDescriptor>,
     ) = WatchStoreRepository(
         api = NoOpWatchStoreApi,
         cacheRoot = root.resolve("cache"),
@@ -182,9 +182,9 @@ class WatchStoreRepositoryRecoveryTest {
         ioDispatcher = Dispatchers.Unconfined,
     )
 
-    private fun descriptor(id: String, name: String) = LunchWatchFaceDescriptor(
+    private fun descriptor(id: String, name: String) = WatchFaceDescriptor(
         id = id,
-        type = LunchWatchFaceType.WATCHMAKER,
+        type = WatchFaceType.WATCHMAKER,
         displayName = name,
     )
 

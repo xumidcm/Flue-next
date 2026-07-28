@@ -76,6 +76,33 @@ internal object WatchStoreJsonParser {
         )
     }
 
+    /** Parses `GET /api/my/watchfaces` → `{data:[...]}`. */
+    fun myWatchFaces(payload: String): List<MyWatchFaceEntry> {
+        val root = parseObject(payload)
+        val data = requiredArray(root, "data")
+        if (data.length() > MAX_PAGE_ITEMS) fail("Too many uploaded watchfaces")
+        return buildList(data.length()) {
+            for (index in 0 until data.length()) {
+                val obj = data.optJSONObject(index) ?: fail("data[$index] is not an object")
+                val category = parseCategory(requiredObject(obj, "category"))
+                add(
+                    MyWatchFaceEntry(
+                        id = requiredString(obj, "id", MAX_URL_LENGTH),
+                        name = requiredString(obj, "name", MAX_NAME_LENGTH),
+                        description = optionalString(obj, "description", MAX_DESCRIPTION_LENGTH),
+                        screenType = WatchStoreScreenType.fromApi(
+                            requiredString(obj, "screen_type", 32),
+                        ),
+                        category = category,
+                        previewUrl = requiredString(obj, "preview_url", MAX_URL_LENGTH),
+                        downloadCount = requiredLong(obj, "download_count", minimum = 0),
+                        createdAt = requiredString(obj, "created_at", MAX_URL_LENGTH),
+                    ),
+                )
+            }
+        }
+    }
+
     /**
      * Lenient error-body reader for the write endpoints. Understands the
      * service's express-validator shape `{errors:[{msg, path|param}]}` plus

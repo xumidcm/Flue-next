@@ -1,4 +1,6 @@
-package com.flue.launcher
+﻿package com.flue.launcher
+
+import com.flue.launcher.i18n.FlueComponentActivity
 
 import android.app.Application
 import android.app.Activity.RESULT_OK
@@ -87,7 +89,7 @@ import java.io.File
 
 const val EXTRA_INTERNAL_WATCHFACE_ID = "internal_watchface_id"
 
-class InternalWatchFaceConfigActivity : ComponentActivity() {
+class InternalWatchFaceConfigActivity : FlueComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         RecentsVisibility.apply(this)

@@ -34,6 +34,7 @@ import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.iconForDisplay
 import com.flue.launcher.iconpack.IconPackDescriptor
 import com.flue.launcher.iconpack.IconPackScanner
+import com.flue.launcher.i18n.persistLanguageSelection
 import com.flue.launcher.launchsession.CancelReason
 import com.flue.launcher.launchsession.ExternalLaunchRequest
 import com.flue.launcher.launchsession.ExternalLaunchSession
@@ -70,12 +71,8 @@ import com.flue.launcher.watchface.WatchFaceClockStyle
 import com.flue.launcher.watchface.WatchFaceMd3eShape
 import com.flue.launcher.watchface.InternalWatchFaceStorage
 import com.flue.launcher.watchface.WatchFacePhotoCache
-import com.flue.launcher.watchface.LunchWatchFaceDescriptor
-import com.flue.launcher.watchface.LunchWatchFaceRegistry
-import com.flue.launcher.watchface.LunchWatchFaceScanner
-import com.flue.launcher.watchface.dingdingcat.DINGDINGCAT_ID_PREFIX
-import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceScanner
-import com.flue.launcher.watchface.dingdingcat.DingDingCatWatchFaceStorage
+import com.flue.launcher.watchface.WatchFaceDescriptor
+import com.flue.launcher.watchface.WatchFaceDescriptors
 import com.flue.launcher.watchface.jbwatch.JBWATCH_ID_PREFIX
 import com.flue.launcher.watchface.jbwatch.JbWatchFaceStorage
 import com.flue.launcher.watchface.standard.WATCHMAKER_ID_PREFIX
@@ -110,7 +107,14 @@ private const val MAX_GENERIC_WATCH_ARCHIVE_BYTES = 32L * 1024L * 1024L
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
-        private var cachedWatchFaces: List<LunchWatchFaceDescriptor>? = null
+        private var cachedWatchFaces: List<WatchFaceDescriptor>? = null
+
+        /**
+         * 进程级刷新令牌：所有 Activity 共享同一个实例，避免跨 Activity 的
+         * bump 因 ViewModel 隔离而失效（见 _watchFaceRefreshToken 注释）。
+         */
+        @JvmField
+        val sharedWatchFaceRefreshToken = MutableStateFlow(0)
 
         val KEY_LAYOUT = stringPreferencesKey("layout_mode")
         val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
@@ -173,9 +177,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_WATCHFACE_BOTTOM_FADE = booleanPreferencesKey("watchface_bottom_fade_enabled")
         val KEY_WATCHMAKER_FORCE_FILL = booleanPreferencesKey("watchmaker_force_fill")
         val KEY_WATCHFACE_DATE_LOCALE = stringPreferencesKey("watchface_date_locale")
-        val KEY_DINGDINGCAT_FILL_SCREEN = booleanPreferencesKey("dingdingcat_fill_screen")
-        val KEY_DINGDINGCAT_PLAYBACK_SPEED_PERCENT = intPreferencesKey("dingdingcat_playback_speed_percent")
-        val KEY_DINGDINGCAT_IMPORT_UNLOCKED = booleanPreferencesKey("dingdingcat_import_unlocked")
         val KEY_DEVICE_PRESET_APPLIED = booleanPreferencesKey("device_preset_applied")
         val KEY_HIDDEN_APPS = stringPreferencesKey("hidden_apps")
         val KEY_ICON_PACK_PACKAGE = stringPreferencesKey("icon_pack_package")
@@ -218,14 +219,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_VIDEO_CUSTOM_TEXT = stringPreferencesKey("video_custom_text")
         val KEY_BUILTIN_MANAGER_THUMBNAILS = booleanPreferencesKey("builtin_manager_thumbnails")
         val KEY_HIDE_FROM_RECENTS = booleanPreferencesKey("hide_from_recents")
+        val KEY_APP_LANGUAGE = stringPreferencesKey("app_language")
+        val KEY_GLASS_HIGHLIGHT = booleanPreferencesKey("glass_highlight_enabled")
         val KEY_SIDE_SCREEN_WIDGETS = stringPreferencesKey("side_screen_widgets")
         val KEY_SIDE_SCREEN_SHORTCUT_ROWS = intPreferencesKey("side_screen_shortcut_rows")
         val KEY_SIDE_SCREEN_SHORTCUT_COLS = intPreferencesKey("side_screen_shortcut_cols")
         private const val SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY = 12
         private const val APP_LIST_LEFT_SAFE_INSET_MAX_PERCENT = 50
-        const val DINGDINGCAT_PLAYBACK_SPEED_MIN_PERCENT = 80
-        const val DINGDINGCAT_PLAYBACK_SPEED_MAX_PERCENT = 400
-        const val DINGDINGCAT_PLAYBACK_SPEED_STEP_PERCENT = 10
 
         private fun normalizeEdgeBlurTenths(value: Int): Int {
             return ((value.coerceIn(5, 50) / 5f).roundToInt() * 5).coerceIn(5, 50)
@@ -250,17 +250,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             return ((value.coerceIn(50, 150) / 5f).roundToInt() * 5).coerceIn(50, 150)
         }
 
-        private fun normalizeDingDingCatPlaybackSpeedPercent(value: Int): Int {
-            return ((value.coerceIn(
-                DINGDINGCAT_PLAYBACK_SPEED_MIN_PERCENT,
-                DINGDINGCAT_PLAYBACK_SPEED_MAX_PERCENT
-            ) / DINGDINGCAT_PLAYBACK_SPEED_STEP_PERCENT.toFloat()).roundToInt() *
-                DINGDINGCAT_PLAYBACK_SPEED_STEP_PERCENT)
-                .coerceIn(
-                    DINGDINGCAT_PLAYBACK_SPEED_MIN_PERCENT,
-                    DINGDINGCAT_PLAYBACK_SPEED_MAX_PERCENT
-                )
-        }
     }
 
     private val store = application.dataStore
@@ -427,7 +416,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val iconShadowEnabled: StateFlow<Boolean> = _iconShadowEnabled.asStateFlow()
     private val _appListReturnShrinkEnabled = MutableStateFlow(true)
     val appListReturnShrinkEnabled: StateFlow<Boolean> = _appListReturnShrinkEnabled.asStateFlow()
-    private val _faceReturnShrinkEnabled = MutableStateFlow(true)
+    // 老师指定：表盘缩放默认关。
+    private val _faceReturnShrinkEnabled = MutableStateFlow(false)
     val faceReturnShrinkEnabled: StateFlow<Boolean> = _faceReturnShrinkEnabled.asStateFlow()
     // 还原 watchOS 三段式之前的老转场（表盘 2.5 倍冲脸 / 列表缩点退场）。
     private val _legacyAppListTransitionEnabled = MutableStateFlow(false)
@@ -446,7 +436,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val motionProfiles: StateFlow<List<FlueMotionProfile>> = _motionProfiles.asStateFlow()
     private val _activeMotionProfile = MutableStateFlow(FlueMotionProfiles.Gentle)
     val activeMotionProfile: StateFlow<FlueMotionProfile> = _activeMotionProfile.asStateFlow()
-    private val _showStepCount = MutableStateFlow(true)
+    // 老师指定：步数显示默认关。
+    private val _showStepCount = MutableStateFlow(false)
     val showStepCount: StateFlow<Boolean> = _showStepCount.asStateFlow()
 
     private val _splashIcon = MutableStateFlow(true)
@@ -484,12 +475,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     // 表盘日期语言：system/zh/en/ja 四档，默认跟随系统。
     private val _watchfaceDateLocale = MutableStateFlow(WatchDateLocale.PREFERENCE_SYSTEM)
     val watchfaceDateLocale: StateFlow<String> = _watchfaceDateLocale.asStateFlow()
-    private val _dingDingCatFillScreen = MutableStateFlow(false)
-    val dingDingCatFillScreen: StateFlow<Boolean> = _dingDingCatFillScreen.asStateFlow()
-    private val _dingDingCatPlaybackSpeedPercent = MutableStateFlow(100)
-    val dingDingCatPlaybackSpeedPercent: StateFlow<Int> = _dingDingCatPlaybackSpeedPercent.asStateFlow()
-    private val _dingDingCatImportUnlocked = MutableStateFlow(false)
-    val dingDingCatImportUnlocked: StateFlow<Boolean> = _dingDingCatImportUnlocked.asStateFlow()
     private val _notificationAccessGranted = MutableStateFlow(false)
     val notificationAccessGranted: StateFlow<Boolean> = _notificationAccessGranted.asStateFlow()
     private val _expandedNotificationGroups = MutableStateFlow<Set<String>>(emptySet())
@@ -514,19 +499,30 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _selectedIconPackPackage = MutableStateFlow<String?>(null)
     val selectedIconPackPackage: StateFlow<String?> = _selectedIconPackPackage.asStateFlow()
 
-    private val _availableWatchFaces = MutableStateFlow(cachedWatchFaces ?: LunchWatchFaceScanner.builtInDescriptors())
-    val availableWatchFaces: StateFlow<List<LunchWatchFaceDescriptor>> = _availableWatchFaces.asStateFlow()
+    private val _availableWatchFaces = MutableStateFlow(cachedWatchFaces ?: WatchFaceDescriptors.builtInDescriptors())
+    val availableWatchFaces: StateFlow<List<WatchFaceDescriptor>> = _availableWatchFaces.asStateFlow()
 
     private val _selectedWatchFaceId = MutableStateFlow(BUILT_IN_WATCHFACE_ID)
     val selectedWatchFaceId: StateFlow<String> = _selectedWatchFaceId.asStateFlow()
 
-    private val _selectedWatchFace = MutableStateFlow(LunchWatchFaceScanner.builtInDescriptor(BUILT_IN_WATCHFACE_ID))
-    val selectedWatchFace: StateFlow<LunchWatchFaceDescriptor> = _selectedWatchFace.asStateFlow()
+    private val _selectedWatchFace = MutableStateFlow(WatchFaceDescriptors.builtInDescriptor(BUILT_IN_WATCHFACE_ID))
+    val selectedWatchFace: StateFlow<WatchFaceDescriptor> = _selectedWatchFace.asStateFlow()
 
     private val _watchFaceSelectionReady = MutableStateFlow(false)
     val watchFaceSelectionReady: StateFlow<Boolean> = _watchFaceSelectionReady.asStateFlow()
 
-    private val _watchFaceRefreshToken = MutableStateFlow(0)
+    /**
+     * 表盘重载令牌——**进程级共享**，不是 per-ViewModel。
+     *
+     * ViewModel 按 Activity 作用域各存一份，编辑器（WatchEditorActivity）里
+     * bump 自己那份，桌面（LauncherActivity）那份纹丝不动，
+     * WatchmakerWatchFaceView.bind() 的
+     * `descriptorKey 相同 && refreshToken 相同` 短路就永远命中：改完保存返回
+     * 看到的还是旧渲染，必须切到别的表盘再切回来（换了 descriptorKey 才绕过
+     * 短路）才显示新效果——老师报的就是这个。挂到 companion 上让同进程内
+     * 所有实例共享同一个流。
+     */
+    private val _watchFaceRefreshToken = sharedWatchFaceRefreshToken
     val watchFaceRefreshToken: StateFlow<Int> = _watchFaceRefreshToken.asStateFlow()
 
     private val _watchFaceLastError = MutableStateFlow<String?>(null)
@@ -640,6 +636,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val builtInManagerThumbnails: StateFlow<Boolean> = _builtInManagerThumbnails.asStateFlow()
     private val _hideFromRecents = MutableStateFlow(true)
     val hideFromRecents: StateFlow<Boolean> = _hideFromRecents.asStateFlow()
+    // 启动语言真源是 SharedPreferences；DataStore 只保存镜像，不能回灌旧值。
+    private val _appLanguage = MutableStateFlow(
+        com.flue.launcher.i18n.FlueLocaleManager.getSavedLanguage(application)
+    )
+    val appLanguage: StateFlow<String> = _appLanguage.asStateFlow()
+    private val _glassHighlightEnabled = MutableStateFlow(true)
+    val glassHighlightEnabled: StateFlow<Boolean> = _glassHighlightEnabled.asStateFlow()
 
     private val _appOpenOrigin = MutableStateFlow(Offset(0.5f, 0.5f))
     val appOpenOrigin: StateFlow<Offset> = _appOpenOrigin.asStateFlow()
@@ -944,7 +947,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListReturnIconFloatEnabled.value = loadedAppListReturnIconFloat
                 }
 
-                val loadedFaceReturnShrink = prefs[KEY_FACE_RETURN_SHRINK] ?: true
+                val loadedFaceReturnShrink = prefs[KEY_FACE_RETURN_SHRINK] ?: false
                 if (_faceReturnShrinkEnabled.value != loadedFaceReturnShrink) {
                     _faceReturnShrinkEnabled.value = loadedFaceReturnShrink
                 }
@@ -985,7 +988,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _activeMotionProfile.value = loadedMotionProfile
                 }
 
-                val loadedShowStepCount = prefs[KEY_SHOW_STEP_COUNT] ?: true
+                val loadedShowStepCount = prefs[KEY_SHOW_STEP_COUNT] ?: false
                 if (_showStepCount.value != loadedShowStepCount) {
                     _showStepCount.value = loadedShowStepCount
                 }
@@ -1017,23 +1020,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 }
                 // 渲染热路径读的是进程级 override，偏好每次落地都同步一次。
                 WatchDateLocale.override = WatchDateLocale.fromPreference(loadedWatchfaceDateLocale)
-
-                val loadedDingDingCatFillScreen = prefs[KEY_DINGDINGCAT_FILL_SCREEN] ?: false
-                if (_dingDingCatFillScreen.value != loadedDingDingCatFillScreen) {
-                    _dingDingCatFillScreen.value = loadedDingDingCatFillScreen
-                }
-
-                val loadedDingDingCatPlaybackSpeed = normalizeDingDingCatPlaybackSpeedPercent(
-                    prefs[KEY_DINGDINGCAT_PLAYBACK_SPEED_PERCENT] ?: 100
-                )
-                if (_dingDingCatPlaybackSpeedPercent.value != loadedDingDingCatPlaybackSpeed) {
-                    _dingDingCatPlaybackSpeedPercent.value = loadedDingDingCatPlaybackSpeed
-                }
-
-                val loadedDingDingCatImportUnlocked = prefs[KEY_DINGDINGCAT_IMPORT_UNLOCKED] ?: false
-                if (_dingDingCatImportUnlocked.value != loadedDingDingCatImportUnlocked) {
-                    _dingDingCatImportUnlocked.value = loadedDingDingCatImportUnlocked
-                }
 
                 val notificationSettingMigrated = prefs[KEY_NOTIFICATION_SETTING_MIGRATED] ?: false
                 val loadedShowNotification = if (notificationSettingMigrated) {
@@ -1308,6 +1294,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedHideFromRecents = prefs[KEY_HIDE_FROM_RECENTS] ?: true
                 if (_hideFromRecents.value != loadedHideFromRecents) _hideFromRecents.value = loadedHideFromRecents
 
+                // Locale is needed synchronously from Application/Activity.attachBaseContext,
+                // so SharedPreferences is the sole authority. DataStore keeps a mirror for
+                // backup/settings export only and must never overwrite the boot value.
+                val loadedAppLanguage = com.flue.launcher.i18n.FlueLocaleManager
+                    .getSavedLanguage(getApplication())
+                if (_appLanguage.value != loadedAppLanguage) _appLanguage.value = loadedAppLanguage
+
+                val loadedGlassHighlight = prefs[KEY_GLASS_HIGHLIGHT] ?: true
+                if (_glassHighlightEnabled.value != loadedGlassHighlight) _glassHighlightEnabled.value = loadedGlassHighlight
+
                 watchFacePrefsHydrated = true
                 syncSelectedWatchFace()
             }
@@ -1323,9 +1319,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             state == ScreenState.ControlCenter && !_showControlCenter.value -> ScreenState.Face
             else -> state
         }
-        if (_screenState.value != ScreenState.Apps) {
-            closeFolder()
-        }
+        // 不再在这里直接 closeFolder()。
+        // LauncherActivity 观测到 screenState 离开 Apps 后，会通过
+        // dismissRequestToken 通知 AppFolderOverlay 播放190ms淡出动画，
+        // 动画结束时 overlay 自己调 onDismiss() → closeFolder()。
+        // 保留：如果压根没有 folder 打开，就是个 noop，不影响其他逻辑。
         _revealedNotificationTarget.value = null
     }
 
@@ -1640,7 +1638,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             ScreenState.Face -> Unit
             ScreenState.Apps -> {
                 if (_openFolder.value != null) {
-                    closeFolder()
+                    // 文件夹由 AppFolderOverlay 自己的 BackHandler 关闭，
+                    // 携带190ms 退出动画；这里不直接清状态，否则会跳过动画。
+                    // （BackHandler 注册在 Compose 树里，按 LIFO 顺序先于
+                    //  Activity 层的 requestBackPress 回调触发；只有当 Compose
+                    //  的 BackHandler 彻底不响应时这条分支才会被执行，所以
+                    //  什么都不做比强制清状态更安全。）
                 } else {
                     _screenState.value = ScreenState.Face
                 }
@@ -1766,16 +1769,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _openFolderItems.value = emptyList()
     }
 
-    fun createFolder(command: AppListCommand.CreateFolder): Boolean {
-        if (command.source == command.target) return false
+    fun createFolder(command: AppListCommand.CreateFolder): String? {
+        if (command.source == command.target) return null
         val current = apps.value
-        if (current.map(AppInfo::componentKey).distinct().size != current.size) return false
+        if (current.map(AppInfo::componentKey).distinct().size != current.size) return null
         val sourceIndex = current.indexOfFirst { it.componentKey == command.source.value }
         val targetIndex = current.indexOfFirst { it.componentKey == command.target.value }
-        if (sourceIndex == -1 || targetIndex == -1 || sourceIndex == targetIndex) return false
+        if (sourceIndex == -1 || targetIndex == -1 || sourceIndex == targetIndex) return null
         val source = current[sourceIndex]
         val target = current[targetIndex]
-        val folderKey = appRepository.createFolder(source.componentKey, target.componentKey) ?: return false
+        val folderKey = appRepository.createFolder(source.componentKey, target.componentKey) ?: return null
         val insertIndex = minOf(sourceIndex, targetIndex)
         val nextOrder = current
             .filterIndexed { index, _ -> index != sourceIndex && index != targetIndex }
@@ -1783,7 +1786,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             .toMutableList()
         nextOrder.add(insertIndex.coerceIn(0, nextOrder.size), folderKey)
         setAppOrder(nextOrder)
-        return true
+        return folderKey
     }
 
     fun removeAppListShortcut(shortcut: AppInfo) {
@@ -2277,21 +2280,30 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_WATCHFACE_DATE_LOCALE] = value } }
     }
 
-    fun setDingDingCatFillScreenEnabled(enabled: Boolean) {
-        _dingDingCatFillScreen.value = enabled
-        persist { store.edit { it[KEY_DINGDINGCAT_FILL_SCREEN] = enabled } }
-    }
-
-    fun setDingDingCatPlaybackSpeedPercent(value: Int) {
-        val normalized = normalizeDingDingCatPlaybackSpeedPercent(value)
-        _dingDingCatPlaybackSpeedPercent.value = normalized
-        persist { store.edit { it[KEY_DINGDINGCAT_PLAYBACK_SPEED_PERCENT] = normalized } }
-    }
-
-    fun setDingDingCatImportUnlocked(unlocked: Boolean) {
-        _dingDingCatImportUnlocked.value = unlocked
-        persist { store.edit { it[KEY_DINGDINGCAT_IMPORT_UNLOCKED] = unlocked } }
-    }
+    /**
+     * 切换 UI 语言。
+     *
+     * 同时写入 DataStore（供下次启动前 DataStore 热更新）和
+     * [com.flue.launcher.i18n.FlueLocaleManager] 的 SharedPreferences（供
+     * [attachBaseContext] 同步读取）。切换后调用方需重建所有 Activity
+     * 才能使新语言生效（[android.app.Activity.recreate]）。
+     */
+    suspend fun setAppLanguage(context: android.content.Context, language: String): Boolean =
+        withContext(Dispatchers.IO) {
+            val result = persistLanguageSelection(
+                language = language,
+                saveStartupLanguage = { canonicalLanguage ->
+                    com.flue.launcher.i18n.FlueLocaleManager.saveLanguage(context, canonicalLanguage)
+                },
+                mirrorLanguage = { canonicalLanguage ->
+                    store.edit { it[KEY_APP_LANGUAGE] = canonicalLanguage }
+                },
+            )
+            if (result.isSuccess) {
+                _appLanguage.value = result.language
+            }
+            result.isSuccess
+        }
 
     fun setShowNotification(show: Boolean) {
         _showNotification.value = show
@@ -2410,7 +2422,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         cachedWatchFaces?.let { cached ->
             if (_availableWatchFaces.value != cached) {
                 _availableWatchFaces.value = cached
-                LunchWatchFaceRegistry.update(cached)
                 watchFaceScanHydrated = true
                 syncSelectedWatchFace(freshScanCompleted = true)
             }
@@ -2427,7 +2438,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    suspend fun importJbWatchFace(uri: Uri): Result<LunchWatchFaceDescriptor> {
+    suspend fun importJbWatchFace(uri: Uri): Result<WatchFaceDescriptor> {
         return runCatching {
             watchFaceRefreshJob?.cancel()
             val descriptor = withContext(Dispatchers.IO) {
@@ -2437,17 +2448,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    suspend fun importDingDingCatWatchFace(uri: Uri): Result<LunchWatchFaceDescriptor> {
-        return runCatching {
-            watchFaceRefreshJob?.cancel()
-            val descriptor = withContext(Dispatchers.IO) {
-                DingDingCatWatchFaceStorage.importZip(getApplication(), uri)
-            }
-            finishImportedWatchFaceImport(descriptor)
-        }
-    }
-
-    suspend fun importWatchmakerWatchFace(uri: Uri): Result<LunchWatchFaceDescriptor> {
+    suspend fun importWatchmakerWatchFace(uri: Uri): Result<WatchFaceDescriptor> {
         return runCatching {
             watchFaceRefreshJob?.cancel()
             val descriptor = withContext(Dispatchers.IO) {
@@ -2462,7 +2463,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
      * content-addressed storage path as a user-imported .watch file.
      * The caller owns the temporary file and may delete it after completion.
      */
-    suspend fun importWatchmakerWatchFaceFile(archive: File): Result<LunchWatchFaceDescriptor> {
+    suspend fun importWatchmakerWatchFaceFile(archive: File): Result<WatchFaceDescriptor> {
         return runCatching {
             watchFaceRefreshJob?.cancel()
             require(archive.isFile) { "编辑后的 .watch 文件不存在" }
@@ -2474,7 +2475,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     /** Installs a community-store download through the standard .watch path. */
-    suspend fun installWatchStoreArchive(archive: File): Result<LunchWatchFaceDescriptor> {
+    suspend fun installWatchStoreArchive(archive: File): Result<WatchFaceDescriptor> {
         return runCatching {
             watchFaceRefreshJob?.cancel()
             require(archive.isFile) { "市场下载的 .watch 文件不存在" }
@@ -2485,10 +2486,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    suspend fun importWatchFaceArchive(
-        uri: Uri,
-        allowDingDingCat: Boolean = true
-    ): Result<LunchWatchFaceDescriptor> {
+    suspend fun importWatchFaceArchive(uri: Uri): Result<WatchFaceDescriptor> {
         return runCatching {
             watchFaceRefreshJob?.cancel()
             val descriptor = withContext(Dispatchers.IO) {
@@ -2497,19 +2495,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                         WatchFaceArchiveKind.Watchmaker ->
                             WatchmakerWatchFaceStorage.importArchiveFile(getApplication(), archive)
                         WatchFaceArchiveKind.JbWatch -> JbWatchFaceStorage.importArchiveFile(getApplication(), archive)
-                        WatchFaceArchiveKind.DingDingCat -> {
-                            if (!allowDingDingCat) {
-                                error("单击导入只支持 jb_watch/.watch 表盘；旧版叮叮猫表盘请开启隐藏选项后长按导入")
-                            }
-                            DingDingCatWatchFaceStorage.importZipFile(getApplication(), archive)
-                        }
-                        WatchFaceArchiveKind.Unknown -> {
-                            if (allowDingDingCat) {
-                                error("无法识别表盘包：需要标准 .watch、jb_watch 或 dial.json")
-                            } else {
-                                error("无法识别标准 .watch/jb_watch 表盘包：需要 watch.xml")
-                            }
-                        }
+                        WatchFaceArchiveKind.Unknown ->
+                            error("无法识别标准 .watch/jb_watch 表盘包：需要 watch.xml")
                     }
                 }
             }
@@ -2517,7 +2504,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    private suspend fun finishImportedWatchFaceImport(descriptor: LunchWatchFaceDescriptor): LunchWatchFaceDescriptor {
+    private suspend fun finishImportedWatchFaceImport(descriptor: WatchFaceDescriptor): WatchFaceDescriptor {
         val scannedRaw = withContext(Dispatchers.IO) { scanAllWatchFaces() }
         val scanned = if (scannedRaw.any { it.id == descriptor.id }) {
             scannedRaw
@@ -2529,7 +2516,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _selectedWatchFaceId.value = selected.id
         _watchFaceLastError.value = null
         _selectedWatchFace.value = selected
-        LunchWatchFaceRegistry.setCurrentSelectedId(selected.id)
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
         lastWatchFaceRefreshAt = SystemClock.elapsedRealtime()
         withContext(Dispatchers.IO) {
@@ -2587,13 +2573,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             val requestedIds = ids.asSequence().filter(String::isNotBlank).toSet()
             require(requestedIds.isNotEmpty()) { "表盘不存在" }
             val descriptors = _availableWatchFaces.value.filter {
-                it.id in requestedIds && (it.isDingDingCat || it.isJbWatch || it.isWatchmaker)
+                it.id in requestedIds && (it.isJbWatch || it.isWatchmaker)
             }
             if (descriptors.isEmpty()) error("表盘不存在")
             val failedIds = withContext(Dispatchers.IO) {
                 descriptors.mapNotNull { descriptor ->
                     val deleted = when {
-                        descriptor.isDingDingCat -> DingDingCatWatchFaceStorage.delete(getApplication(), descriptor)
                         descriptor.isJbWatch -> JbWatchFaceStorage.delete(getApplication(), descriptor)
                         descriptor.isWatchmaker -> WatchmakerWatchFaceStorage.delete(getApplication(), descriptor)
                         else -> false
@@ -2647,19 +2632,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    private fun scanAllWatchFaces(): List<LunchWatchFaceDescriptor> {
+    private fun scanAllWatchFaces(): List<WatchFaceDescriptor> {
         val context = getApplication<Application>()
-        return LunchWatchFaceScanner.builtInDescriptors() +
-            LunchWatchFaceScanner.scanInstalled(context) +
-            DingDingCatWatchFaceScanner.scanImported(context) +
+        return WatchFaceDescriptors.builtInDescriptors() +
             JbWatchFaceStorage.scan(context) +
             WatchmakerWatchFaceStorage.scan(context)
     }
 
-    private fun publishWatchFaces(watchFaces: List<LunchWatchFaceDescriptor>) {
+    private fun publishWatchFaces(watchFaces: List<WatchFaceDescriptor>) {
         cachedWatchFaces = watchFaces
         _availableWatchFaces.value = watchFaces
-        LunchWatchFaceRegistry.update(watchFaces)
         watchFaceScanHydrated = true
     }
 
@@ -2911,6 +2893,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_HIDE_FROM_RECENTS] = enabled } }
     }
 
+    fun setGlassHighlightEnabled(enabled: Boolean) {
+        _glassHighlightEnabled.value = enabled
+        persist { store.edit { it[KEY_GLASS_HIGHLIGHT] = enabled } }
+    }
+
     fun requestWatchFaceRefresh() {
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
     }
@@ -3107,7 +3094,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _twoToneIconsEnabled.value = false
         _iconShadowEnabled.value = true
         _appListReturnShrinkEnabled.value = true
-        _faceReturnShrinkEnabled.value = true
+        _faceReturnShrinkEnabled.value = false
         _legacyAppListTransitionEnabled.value = false
         _appListReturnIconFloatEnabled.value = false
         _reduceDynamicEffects.value = false
@@ -3115,7 +3102,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appListStaggerEnabled.value = false
         _motionProfiles.value = FlueMotionProfiles.builtIns
         _activeMotionProfile.value = FlueMotionProfiles.Gentle
-        _showStepCount.value = true
+        _showStepCount.value = false
         _showNotification.value = true
         _showOngoingNotifications.value = false
         _rotaryHapticsEnabled.value = true
@@ -3132,13 +3119,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _watchmakerForceFill.value = false
         _watchfaceDateLocale.value = WatchDateLocale.PREFERENCE_SYSTEM
         WatchDateLocale.override = null
-        _dingDingCatFillScreen.value = false
-        _dingDingCatPlaybackSpeedPercent.value = 100
-        _dingDingCatImportUnlocked.value = false
         _hiddenApps.value = emptySet()
         _selectedIconPackPackage.value = null
         _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
-        _selectedWatchFace.value = LunchWatchFaceScanner.builtInDescriptor(BUILT_IN_WATCHFACE_ID)
+        _selectedWatchFace.value = WatchFaceDescriptors.builtInDescriptor(BUILT_IN_WATCHFACE_ID)
         _watchFaceLastError.value = null
         _builtInPhotoClockPosition.value = WatchClockPosition.CENTER
         _builtInVideoClockPosition.value = WatchClockPosition.CENTER
@@ -3183,7 +3167,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             twoTone = false,
             iconSize = 128
         )
-        LunchWatchFaceRegistry.setCurrentSelectedId(BUILT_IN_WATCHFACE_ID)
         persist {
             store.edit {
                 it[KEY_LAYOUT] = LayoutMode.Honeycomb.name
@@ -3220,7 +3203,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_ICON_SHADOW] = true
                 it.remove(booleanPreferencesKey("classic_return_animation_enabled"))
                 it[KEY_APP_LIST_RETURN_SHRINK] = true
-                it[KEY_FACE_RETURN_SHRINK] = true
+                it[KEY_FACE_RETURN_SHRINK] = false
                 it[KEY_LEGACY_APP_LIST_TRANSITION] = false
                 it[KEY_APP_LIST_RETURN_ICON_FLOAT] = false
                 it[KEY_REDUCE_DYNAMIC_EFFECTS] = false
@@ -3228,7 +3211,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_APP_LIST_STAGGER] = false
                 it[KEY_MOTION_PROFILE_ID] = FlueMotionProfiles.GENTLE_ID
                 it[KEY_CUSTOM_MOTION_PROFILES] = FlueMotionProfileJson.encodeLibrary(emptyList())
-                it[KEY_SHOW_STEP_COUNT] = true
+                it[KEY_SHOW_STEP_COUNT] = false
                 it[KEY_LEGACY_CIRCULAR_ICONS] = true
                 it[KEY_SHOW_NOTIFICATION] = true
                 it[KEY_SHOW_ONGOING_NOTIFICATIONS] = false
@@ -3245,9 +3228,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_WATCHFACE_BOTTOM_FADE] = false
                 it[KEY_WATCHMAKER_FORCE_FILL] = false
                 it.remove(KEY_WATCHFACE_DATE_LOCALE)
-                it[KEY_DINGDINGCAT_FILL_SCREEN] = false
-                it[KEY_DINGDINGCAT_PLAYBACK_SPEED_PERCENT] = 100
-                it[KEY_DINGDINGCAT_IMPORT_UNLOCKED] = false
                 it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
                 it.remove(KEY_SIDE_SCREEN_SHORTCUTS)
                 it.remove(KEY_SIDE_SCREEN_WIDGETS)
@@ -3333,20 +3313,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         when {
             match != null -> {
                 _selectedWatchFace.value = match
-                LunchWatchFaceRegistry.setCurrentSelectedId(match.id)
             }
             isImportedArchiveId(requestedId) &&
                 _selectedWatchFace.value.id == requestedId &&
                 (
-                    _selectedWatchFace.value.isDingDingCat ||
-                        _selectedWatchFace.value.isJbWatch ||
+                    _selectedWatchFace.value.isJbWatch ||
                         _selectedWatchFace.value.isWatchmaker
-                    ) -> {
-                LunchWatchFaceRegistry.setCurrentSelectedId(requestedId)
-            }
+                    ) -> Unit
             isImportedArchiveId(requestedId) && !freshScanCompleted -> {
                 selectionResolved = false
-                LunchWatchFaceRegistry.setCurrentSelectedId(requestedId)
                 if (watchFaceRefreshJob?.isActive != true) {
                     refreshWatchFaces(force = true)
                 }
@@ -3354,10 +3329,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             watchFaceScanHydrated -> {
                 val fallback = available.firstOrNull { it.id == BUILT_IN_WATCHFACE_ID }
                     ?: available.firstOrNull()
-                    ?: LunchWatchFaceScanner.builtInDescriptor(BUILT_IN_WATCHFACE_ID)
+                    ?: WatchFaceDescriptors.builtInDescriptor(BUILT_IN_WATCHFACE_ID)
                 _selectedWatchFace.value = fallback
                 _selectedWatchFaceId.value = fallback.id
-                LunchWatchFaceRegistry.setCurrentSelectedId(fallback.id)
                 if (watchFacePrefsHydrated && requestedId != fallback.id) {
                     persist {
                         store.edit { it[KEY_SELECTED_WATCHFACE_ID] = fallback.id }
@@ -3365,24 +3339,25 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 }
             }
             else -> {
-                _selectedWatchFace.value = LunchWatchFaceScanner.builtInDescriptor(BUILT_IN_WATCHFACE_ID)
-                LunchWatchFaceRegistry.setCurrentSelectedId(requestedId)
+                _selectedWatchFace.value = WatchFaceDescriptors.builtInDescriptor(BUILT_IN_WATCHFACE_ID)
             }
         }
 
         _watchFaceSelectionReady.value = watchFacePrefsHydrated && watchFaceScanHydrated && selectionResolved
     }
 
+    /**
+     * 历史非 .watch 格式 id 不再算「已导入表盘」。旧偏好在扫描完成后会
+     * 自动退回内置表盘，避免卡在空白表盘上。
+     */
     private fun isImportedArchiveId(id: String): Boolean {
-        return id.startsWith(DINGDINGCAT_ID_PREFIX) ||
-            id.startsWith(JBWATCH_ID_PREFIX) ||
+        return id.startsWith(JBWATCH_ID_PREFIX) ||
             id.startsWith(WATCHMAKER_ID_PREFIX)
     }
 
     private enum class WatchFaceArchiveKind {
         Watchmaker,
         JbWatch,
-        DingDingCat,
         Unknown
     }
 
@@ -3420,7 +3395,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             when {
                 "watch.xml" in names && "watch.pxml" in names -> WatchFaceArchiveKind.JbWatch
                 "watch.xml" in names -> WatchFaceArchiveKind.Watchmaker
-                "dial.json" in names -> WatchFaceArchiveKind.DingDingCat
                 else -> WatchFaceArchiveKind.Unknown
             }
         }

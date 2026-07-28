@@ -6,6 +6,22 @@ import org.junit.Test
 
 class WatchEditorLayoutPolicyTest {
     @Test
+    fun staleTransformCommitDoesNotRestoreAnOlderSelection() {
+        assertTrue(
+            !shouldKeepWatchEditorSelectionForTransformCommit(
+                transformStartSelectionGeneration = 4,
+                currentSelectionGeneration = 5,
+            ),
+        )
+        assertTrue(
+            shouldKeepWatchEditorSelectionForTransformCommit(
+                transformStartSelectionGeneration = 5,
+                currentSelectionGeneration = 5,
+            ),
+        )
+    }
+
+    @Test
     fun compactWatchKeepsCanvasLargeEnoughForDirectManipulation() {
         val preview = watchEditorPreviewSizeDp(maxWidthDp = 240f, maxHeightDp = 280f)
 
@@ -69,5 +85,21 @@ class WatchEditorLayoutPolicyTest {
             lifecycle.finish(completedNormally = false),
         )
         assertEquals(null, lifecycle.finish(completedNormally = true))
+    }
+
+    @Test
+    fun transformCommitGateRejectsTheNextGestureUntilThePreviousCommitFinishes() {
+        val gate = WatchEditorTransformGate()
+
+        assertTrue(gate.tryBeginGesture())
+        assertTrue(gate.beginCommit())
+        assertTrue(!gate.tryBeginGesture())
+        assertTrue(gate.isBusy())
+
+        gate.finishCommit()
+
+        assertTrue(gate.tryBeginGesture())
+        gate.cancelGesture()
+        assertTrue(!gate.isBusy())
     }
 }

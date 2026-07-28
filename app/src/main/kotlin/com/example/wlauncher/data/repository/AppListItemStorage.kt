@@ -372,12 +372,16 @@ class AppListItemStorage(private val context: Context) {
                 put("itemKeys", JSONArray(folder.itemKeys))
             })
         }
-        // Folder mutations are user-visible structural operations. Commit the
-        // tiny JSON record before returning so a second repository instance (or
-        // an immediate process restart) cannot observe a stale folder graph.
-        check(prefs.edit().putString(KEY_FOLDERS, array.toString()).commit()) {
-            "Unable to persist app-list folders"
-        }
+        // 这里曾经用 commit()：主线程同步阻塞落盘。文件夹的创建 / 拖入 /
+        // 拖出全部走这个函数，而它们都发生在手指抬起的那一刻，于是每次建
+        // 文件夹放手后都要卡一下磁盘 IO——就是「放手后卡住一段时间才成功
+        // 创建」。
+        //
+        // 改 apply()：内存值同步更新（同进程内紧接着的 loadFolders 立刻能
+        // 读到新图，原注释担心的「第二个 repository 实例读到过期图」不会
+        // 发生），真正的写盘由框架挪到后台线程。唯一让掉的是「commit 返回
+        // 前就落盘」这一点持久性，只在硬杀进程的那一瞬有差别。
+        prefs.edit().putString(KEY_FOLDERS, array.toString()).apply()
     }
 
     private companion object {

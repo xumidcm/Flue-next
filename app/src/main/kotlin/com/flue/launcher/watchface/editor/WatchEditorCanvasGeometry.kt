@@ -316,20 +316,36 @@ fun hitTestWatchEditorLayers(
     slopDesign: Float = 0f,
 ): Int? {
     for (index in geometries.indices.reversed()) {
-        val geometry = geometries[index]
-        if (!geometry.hitTestable) continue
-        val inverse = worldMatrices[index].inverted() ?: continue
-        val local = inverse.apply(x, y)
-        val slopLocal = slopDesign / worldMatrices[index].scaleMagnitude()
-        val box = geometry.localBox
-        if (
-            abs(local.x - box.centerX) <= box.halfWidth + slopLocal &&
-            abs(local.y - box.centerY) <= box.halfHeight + slopLocal
-        ) {
+        if (hitTestWatchEditorLayer(geometries, worldMatrices, index, x, y, slopDesign)) {
             return index
         }
     }
     return null
+}
+
+/**
+ * Whether the design-space point falls inside one specific layer's bounds.
+ *
+ * 拆出来供「已选中元素独占拖动」用：选中态下先只测选中的那一层，命中就直接
+ * 拖它，不再被压在它上面的图层抢走（老师指定：只有单击才切换选择）。
+ */
+fun hitTestWatchEditorLayer(
+    geometries: List<WatchEditorLayerGeometry>,
+    worldMatrices: List<WatchEditorAffine>,
+    index: Int,
+    x: Float,
+    y: Float,
+    slopDesign: Float = 0f,
+): Boolean {
+    val geometry = geometries.getOrNull(index) ?: return false
+    if (!geometry.hitTestable) return false
+    val matrix = worldMatrices.getOrNull(index) ?: return false
+    val inverse = matrix.inverted() ?: return false
+    val local = inverse.apply(x, y)
+    val slopLocal = slopDesign / matrix.scaleMagnitude()
+    val box = geometry.localBox
+    return abs(local.x - box.centerX) <= box.halfWidth + slopLocal &&
+        abs(local.y - box.centerY) <= box.halfHeight + slopLocal
 }
 
 /** The selection frame: content box corners mapped into design space. */
@@ -549,7 +565,50 @@ fun watchEditorDragDeltaInParentFrame(
     return parentInverse.applyVector(deltaX, deltaY)
 }
 
-/** Converts view-pixel coordinates into centered design-space coordinates. */
+/**
+ * 视图像素 ↔ 设计坐标的双轴映射。
+ *
+ * 和渲染器 `watchCanvasTransform` 用同一套契约：**等比** scale 取
+ * `min(viewW/designW, viewH/designH)`，画布在视口内居中（letterbox）。所以这里
+ * 以视口中心为基准反投，而不是「除以宽度」——后者只在视口比例恰好等于设计比例
+ * 时才成立，而编辑器预览的高度是弹簧动画驱动的，动画中途两者必然不相等。用
+ * 中心反投在动画每一帧都和渲染结果对齐。
+ *
+ * [designWidth] / [designHeight] 缺省是原生方形画布，方形表盘行为与改动前一致。
+ */
+data class WatchEditorCanvasMapping(
+    val viewWidthPx: Float,
+    val viewHeightPx: Float,
+    val designWidth: Float = WatchmakerGeometry.DESIGN_SIZE,
+    val designHeight: Float = WatchmakerGeometry.DESIGN_SIZE,
+) {
+    /** 等比缩放因子（视图像素 / 设计单位）；退化输入回落 1 避免除零。 */
+    val scale: Float
+        get() {
+            if (viewWidthPx <= 0f || viewHeightPx <= 0f) return 1f
+            if (designWidth <= 0f || designHeight <= 0f) return 1f
+            val candidate = minOf(viewWidthPx / designWidth, viewHeightPx / designHeight)
+            return if (candidate > 0f && candidate.isFinite()) candidate else 1f
+        }
+
+    fun designX(pxX: Float): Float = (pxX - viewWidthPx / 2f) / scale
+
+    fun designY(pxY: Float): Float = (pxY - viewHeightPx / 2f) / scale
+
+    fun viewX(designX: Float): Float = designX * scale + viewWidthPx / 2f
+
+    fun viewY(designY: Float): Float = designY * scale + viewHeightPx / 2f
+
+    /** 视图像素长度（触摸容差、手柄半径）换算成设计单位。 */
+    fun designLength(lengthPx: Float): Float = lengthPx / scale
+}
+
+/**
+ * Converts view-pixel coordinates into centered design-space coordinates.
+ *
+ * 单轴旧签名，等价于方形画布 + 方形视口的 [WatchEditorCanvasMapping]。保留它让
+ * 既有调用点和单元测试不必全改。
+ */
 fun watchEditorDesignFromViewPx(px: Float, viewSizePx: Float): Float {
     if (viewSizePx <= 0f) return 0f
     return px / viewSizePx * WatchmakerGeometry.DESIGN_SIZE - WatchmakerGeometry.DESIGN_SIZE / 2f

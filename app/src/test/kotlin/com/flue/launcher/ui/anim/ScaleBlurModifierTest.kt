@@ -8,6 +8,31 @@ import org.junit.Test
 
 class ScaleBlurModifierTest {
     @Test
+    fun backdropBlurProgressUsesStableTwoPixelBuckets() {
+        assertEquals(0, quantizeBackdropBlurRadiusPx(Float.NaN))
+        assertEquals(0, quantizeBackdropBlurRadiusPx(0f))
+        assertEquals(2, quantizeBackdropBlurRadiusPx(0.01f))
+        assertEquals(16, quantizeBackdropBlurRadiusPx(0.25f))
+        assertEquals(32, quantizeBackdropBlurRadiusPx(0.50f))
+        assertEquals(64, quantizeBackdropBlurRadiusPx(1f))
+        assertEquals(64, quantizeBackdropBlurRadiusPx(2f))
+    }
+
+    @Test
+    fun legacyBackdropCrossfadesClearAndPreblurredFramesWithoutAlphaJump() {
+        assertEquals(LegacyBackdropBlend(1f, 0f), legacyBackdropBlend(Float.NaN))
+        assertEquals(LegacyBackdropBlend(1f, 0f), legacyBackdropBlend(0f))
+        assertEquals(LegacyBackdropBlend(0.75f, 0.25f), legacyBackdropBlend(0.25f))
+        assertEquals(LegacyBackdropBlend(0f, 1f), legacyBackdropBlend(1f))
+        assertEquals(LegacyBackdropBlend(0f, 1f), legacyBackdropBlend(2f))
+
+        for (step in 0..20) {
+            val blend = legacyBackdropBlend(step / 20f)
+            assertEquals(1f, blend.clearAlpha + blend.blurredAlpha, 0.0001f)
+        }
+    }
+
+    @Test
     fun explicitCenterAndLaunchIconResolveDeterministically() {
         assertEquals(Offset(0.5f, 0.5f), LayerPivot.Center.resolve())
         assertEquals(
@@ -44,5 +69,36 @@ class ScaleBlurModifierTest {
         assertFalse(shouldRenderLayerBlur(31, false, 1f, 8))
         assertFalse(shouldRenderLayerBlur(31, true, 1f, 0))
         assertTrue(shouldRenderLayerBlur(31, true, 0.011f, 8))
+    }
+
+    @Test
+    fun backdropFrameActivatesForRealShrinkOrTranslationOnly() {
+        val frame = LayerFrameSnapshot()
+        frame.update(
+            scale = 1f,
+            blur = 24f,
+            alpha = 0.2f,
+            translationX = 0f,
+            translationY = 0f,
+        )
+        assertEquals(0f, frame.backdropProgress(), 0f)
+
+        frame.update(
+            scale = 0.925f,
+            blur = 12f,
+            alpha = 0.5f,
+            translationX = 0f,
+            translationY = 0.035f,
+        )
+        assertEquals(0.5f, frame.backdropProgress(), 0.0001f)
+
+        frame.update(
+            scale = 0.85f,
+            blur = 24f,
+            alpha = 0f,
+            translationX = 0f,
+            translationY = 0.07f,
+        )
+        assertEquals(1f, frame.backdropProgress(), 0f)
     }
 }

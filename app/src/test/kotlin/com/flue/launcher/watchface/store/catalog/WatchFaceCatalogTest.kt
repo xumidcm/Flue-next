@@ -1,5 +1,7 @@
 package com.flue.launcher.watchface.store.catalog
 
+import com.flue.launcher.watchface.store.WatchStoreCompatibilityReport
+import com.flue.launcher.watchface.store.WatchStorePreviewIssue
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -47,6 +49,13 @@ class WatchFaceCatalogTest {
             displayNameOverride = "我的表盘",
             legacyIds = setOf("watchmaker:watch_${"a".repeat(32)}", "old:42"),
             activeLauncherId = "watchmaker:watch_${"a".repeat(32)}",
+            compatibilityReport = WatchStoreCompatibilityReport(
+                unsupportedTags = setOf("{future_tag}"),
+                unsupportedLayerTypes = setOf("future-layer"),
+                unsupportedExpressions = setOf("future expression"),
+                previewIssue = WatchStorePreviewIssue.EMPTY,
+                inspectionError = "diagnostic",
+            ),
         )
 
         catalog.upsert(record)
@@ -88,6 +97,25 @@ class WatchFaceCatalogTest {
             assertEquals(newer, snapshot.findMarketInstall(STORE_ID, "same-name-2"))
             assertNull(snapshot.findMarketInstall(STORE_ID, "missing"))
         }
+
+    @Test
+    fun `xml names never merge distinct market api identities`() = withCatalog { _, catalog ->
+        val firstId = "watchmaker:watch_${"1".repeat(32)}"
+        val secondId = "watchmaker:watch_${"2".repeat(32)}"
+        catalog.upsert(
+            marketRecord("market:api-a", "a".repeat(64), 100L, "api-a")
+                .copy(installedDisplayName = "同一个 XML 名称", activeLauncherId = firstId, legacyIds = setOf(firstId)),
+        )
+        catalog.upsert(
+            marketRecord("market:api-b", "b".repeat(64), 200L, "api-b")
+                .copy(installedDisplayName = "同一个 XML 名称", activeLauncherId = secondId, legacyIds = setOf(secondId)),
+        )
+
+        val snapshot = catalog.read()
+        assertEquals(2, snapshot.records.size)
+        assertEquals("market:api-a", snapshot.findMarketInstall(STORE_ID, "api-a")?.logicalId)
+        assertEquals("market:api-b", snapshot.findMarketInstall(STORE_ID, "api-b")?.logicalId)
+    }
 
     @Test
     fun `updating one market remote replaces its active revision instead of duplicating it`() =

@@ -31,7 +31,9 @@ private fun LayerAnimValues.shrinkGated(enabled: Boolean): LayerAnimValues =
  * 表盘层状态映射。
  *
  * [shrinkOnFaceReturn] 关闭后，表盘层在打开应用列表 / 应用时不再放大位移，
- * 只做淡入淡出与模糊，避免收缩动画被抽帧后直接闪现归位。
+ * 只做淡入淡出与模糊，避免收缩动画被抽帧后直接闪现归位。负一屏 / 小组件 /
+ * 控制中心 / 通知中心这四档覆层以前不受它管，开关关掉后表盘照样缩——
+ * 现在一并门控，「关闭表盘收缩动画」对所有覆层一致生效。
  * [legacyTransition] 开启时（仅非 Material 风格）还原 watchOS 三段式之前的
  * 老动画：表盘 2.5 倍放大冲脸，而不是压暗下沉让位。
  */
@@ -48,10 +50,18 @@ fun faceLayerValues(
                 LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
             ScreenState.App ->
                 LayerAnimValues(scale = 2.5f, blur = 15f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
-            ScreenState.Stack -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
-            ScreenState.Notifications -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
-            ScreenState.Widgets -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
-            ScreenState.ControlCenter -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.5f)
+            ScreenState.Stack ->
+                LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
+                    .shrinkGated(shrinkOnFaceReturn)
+            ScreenState.Notifications ->
+                LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
+                    .shrinkGated(shrinkOnFaceReturn)
+            ScreenState.Widgets ->
+                LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
+                    .shrinkGated(shrinkOnFaceReturn)
+            ScreenState.ControlCenter ->
+                LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.5f)
+                    .shrinkGated(shrinkOnFaceReturn)
         }
     } else if (uiStyle.isMaterial) {
         when (state) {
@@ -60,10 +70,18 @@ fun faceLayerValues(
                 LayerAnimValues(scale = 1.22f, blur = 7f, alpha = 0.22f).shrinkGated(shrinkOnFaceReturn)
             ScreenState.App ->
                 LayerAnimValues(scale = 1.28f, blur = 9f, alpha = 0.14f).shrinkGated(shrinkOnFaceReturn)
-            ScreenState.Stack -> LayerAnimValues(scale = 0.93f, blur = 3f, alpha = 0.58f)
-            ScreenState.Notifications -> LayerAnimValues(scale = 0.92f, blur = 4f, alpha = 0.52f)
-            ScreenState.Widgets -> LayerAnimValues(scale = 0.93f, blur = 3f, alpha = 0.58f)
-            ScreenState.ControlCenter -> LayerAnimValues(scale = 0.94f, blur = 5f, alpha = 0.48f)
+            ScreenState.Stack ->
+                LayerAnimValues(scale = 0.93f, blur = 3f, alpha = 0.58f)
+                    .shrinkGated(shrinkOnFaceReturn)
+            ScreenState.Notifications ->
+                LayerAnimValues(scale = 0.92f, blur = 4f, alpha = 0.52f)
+                    .shrinkGated(shrinkOnFaceReturn)
+            ScreenState.Widgets ->
+                LayerAnimValues(scale = 0.93f, blur = 3f, alpha = 0.58f)
+                    .shrinkGated(shrinkOnFaceReturn)
+            ScreenState.ControlCenter ->
+                LayerAnimValues(scale = 0.94f, blur = 5f, alpha = 0.48f)
+                    .shrinkGated(shrinkOnFaceReturn)
         }
     } else {
         when (state) {
@@ -77,10 +95,18 @@ fun faceLayerValues(
             ScreenState.App ->
                 LayerAnimValues(scale = 0.88f, blur = 15f, alpha = 0f, translationY = 0.07f)
                     .shrinkGated(shrinkOnFaceReturn)
-            ScreenState.Stack -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
-            ScreenState.Notifications -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
-            ScreenState.Widgets -> LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
-            ScreenState.ControlCenter -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.5f)
+            ScreenState.Stack ->
+                LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
+                    .shrinkGated(shrinkOnFaceReturn)
+            ScreenState.Notifications ->
+                LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
+                    .shrinkGated(shrinkOnFaceReturn)
+            ScreenState.Widgets ->
+                LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
+                    .shrinkGated(shrinkOnFaceReturn)
+            ScreenState.ControlCenter ->
+                LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.5f)
+                    .shrinkGated(shrinkOnFaceReturn)
         }
     }
 

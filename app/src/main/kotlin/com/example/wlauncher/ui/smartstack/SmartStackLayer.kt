@@ -1,4 +1,4 @@
-package com.flue.launcher.ui.smartstack
+﻿package com.flue.launcher.ui.smartstack
 
 import android.Manifest
 import android.app.Activity
@@ -137,6 +137,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
+import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.WidgetInfo
 import com.flue.launcher.data.model.iconForDisplay
@@ -144,6 +145,7 @@ import com.flue.launcher.FlueApplication
 import com.flue.launcher.R
 import com.flue.launcher.data.repository.WidgetRepository
 import com.flue.launcher.ui.common.FrostedHeader
+import com.flue.launcher.ui.common.glassSurface
 import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.common.WatchBatteryPill
@@ -768,6 +770,7 @@ fun SmartStackLayer(
             QuickPanel(
                 items = shortcutItems,
                 slotCenters = slotCenters,
+                dockWidth = contentWidth,
                 onAdd = { onRevealTargetChange(null); modalState = SideScreenModalState.ShortcutPicker(it) },
                 onOpenActions = { slot, app ->
                     onRevealTargetChange(null)
@@ -1863,12 +1866,31 @@ private fun WidgetDragPreviewCard(
 /** 快捷启动 dock 的列数（设计蓝本 §9：2 行 × 4 列）。 */
 private const val QUICK_DOCK_COLUMNS = 4
 
-/** dock 图标的 squircle 圆角：52dp 图标 → 约 14.5dp 圆角。 */
+/** dock 图标的 squircle 圆角：按比例取，图标放大后圆角自动跟随。 */
 private val QuickDockIconShape = RoundedCornerShape(percent = 28)
+
+/**
+ * dock 尺寸。
+ *
+ * 宽度**必须等于 contentWidth**（也就是下面「暂无通知」横幅、音乐卡共用
+ * 的那条内容宽度），三者左右边缘对齐才是一条竖直线。上一轮误把宽度改成
+ * 「贴着图标条」，dock 就比横幅窄了一圈——老师要的不是这个。
+ *
+ * 要加长的是**纵向**：图标封顶放宽到 64dp、行距和内边距同步加大，两行
+ * 图标撑起来的高度比原先高约 30dp，横向仍然铺满 contentWidth。
+ */
+private val QUICK_DOCK_MAX_ICON = 64.dp
+private val QUICK_DOCK_ICON_SPACING = 14.dp
+
+/** 纵向内边距单独给，比横向大一档，dock 才「高」起来而不是「胖」起来。 */
+private val QUICK_DOCK_PADDING_HORIZONTAL = 12.dp
+private val QUICK_DOCK_PADDING_VERTICAL = 18.dp
 
 @Composable private fun QuickPanel(
     items: List<AppInfo?>,
     slotCenters: MutableMap<Int, Offset>,
+    /** 与通知横幅/音乐卡同源的内容宽度，dock 必须与它们左右对齐。 */
+    dockWidth: Dp,
     onAdd: (Int) -> Unit,
     onOpenActions: (Int, AppInfo) -> Unit,
     onCloseActions: () -> Unit,
@@ -1880,41 +1902,28 @@ private val QuickDockIconShape = RoundedCornerShape(percent = 28)
     val dragThresholdPx = with(density) { 10.dp.toPx() }
     val dropThresholdPx = with(density) { 68.dp.toPx() }
     val visibleSlots = remember(items.size) { items.indices.toSet() }
-    val iconSpacing = 10.dp
+    val iconSpacing = QUICK_DOCK_ICON_SPACING
     var draggingSlot by remember { mutableStateOf<Int?>(null) }
     var pressedSlot by remember { mutableStateOf<Int?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
     var dragMoved by remember { mutableStateOf(false) }
     val dockShape = LauncherTheme.style.panelShape
-    BoxWithConstraints(
-        Modifier
-            .fillMaxWidth(0.88f)
-            .clip(dockShape)
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        Color.White.copy(alpha = 0.13f),
-                        Color.White.copy(alpha = 0.06f)
-                    )
-                )
-            )
-            .border(
-                0.8.dp,
-                Brush.verticalGradient(
-                    listOf(
-                        Color.White.copy(alpha = 0.18f),
-                        Color.White.copy(alpha = 0.04f)
-                    )
-                ),
-                dockShape
-            )
-            .padding(12.dp)
-    ) {
-        // 窄屏兜底：4 列摆不下 52dp 时按可用宽度收缩，间距保持 10dp。
-        val iconSize = ((maxWidth - iconSpacing * (QUICK_DOCK_COLUMNS - 1)) / QUICK_DOCK_COLUMNS)
-            .coerceAtMost(52.dp)
+    // 宽度由调用方给（= contentWidth），这里只按它反算图标尺寸：图标条
+    // 铺满可用宽度，多余空白归零，同时纵向内边距把 dock 撑高。
+    run {
+        val usable = dockWidth - QUICK_DOCK_PADDING_HORIZONTAL * 2 -
+            iconSpacing * (QUICK_DOCK_COLUMNS - 1)
+        val iconSize = (usable / QUICK_DOCK_COLUMNS).coerceAtMost(QUICK_DOCK_MAX_ICON)
         Column(
-            Modifier.fillMaxWidth(),
+            Modifier
+                .width(dockWidth)
+                // 原先这里写死白 0.13→0.06 填充 + 白 0.18→0.04 描边；那套实测配方
+                // 现在提成了 glass 令牌，三套风格与通知条共用同一份，取值不变。
+                .glassSurface(dockShape, LauncherTheme.style.glass)
+                .padding(
+                    horizontal = QUICK_DOCK_PADDING_HORIZONTAL,
+                    vertical = QUICK_DOCK_PADDING_VERTICAL,
+                ),
             verticalArrangement = Arrangement.spacedBy(iconSpacing),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -2230,11 +2239,6 @@ private fun EmptyWidgetCard(width: Dp) {
     onMeasuredHeight: ((Int) -> Unit)? = null
 ) {
     val launcherStyle = LauncherTheme.style
-    val cardColor = if (launcherStyle.cardColor.alpha < 0.35f) {
-        if (launcherStyle.titleColor == Color.White) Color(0xFF353535) else Color(0xFFE8E8ED)
-    } else {
-        launcherStyle.cardColor
-    }
     val pressed = rememberPressedState(); val isPressed by pressed
     val scale by animateFloatAsState(if (isPressed) 0.968f else 1f, spring(stiffness = 860f, dampingRatio = 0.72f), label = "preview_scale")
     Box(
@@ -2244,8 +2248,10 @@ private fun EmptyWidgetCard(width: Dp) {
                 onMeasuredHeight?.invoke(coordinates.size.height)
             }
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .clip(RoundedCornerShape(28.dp))
-            .background(cardColor)
+            // 通知条原来走 cardColor，且半透明时被强制刷成不透明 #353535 ——
+            // 上面那栏快捷启动是玻璃，它是实色板，两者材质断层。改成同一份
+            // glass 令牌；形状换 cardShape，三套风格各自的圆角语言仍然保留。
+            .glassSurface(launcherStyle.cardShape, launcherStyle.glass)
             .instantPressGesture(pressed, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
@@ -2293,7 +2299,8 @@ private fun EmptyWidgetCard(width: Dp) {
                     .padding(horizontal = STACKED_PREVIEW_HORIZONTAL_INSET_DP.dp)
                     .fillMaxWidth()
                     .height(stackCardHeight)
-                    .clip(RoundedCornerShape(28.dp))
+                    // 堆叠层跟顶卡同形状同源色，否则「顶卡玻璃、下面实色灰」。
+                    .clip(LauncherTheme.style.cardShape)
                     .background(notificationStackBackColor(stackBaseColor, index))
             )
         }

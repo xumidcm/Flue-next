@@ -2552,7 +2552,11 @@ class NativeAppListRowViewBehaviorTest {
         dispatchThroughHierarchy(view, MotionEvent.ACTION_MOVE, y = 140f, eventTime = 32L)
 
         assertEquals(bottomOffset, view.computeVerticalScrollOffset())
-        assertEquals(-5.4f, pullOffsetOf(view), 1f)
+        // 阻尼是 0.18 × strengthScale，而 strengthScale 由档位的 edgeStrength
+        // 推出（见 FlueSpringEdgeEffect 的 updateMotionProfile）。这里必须跟着
+        // 档位算，不能写死一个数字——柔和档 edgeStrength 从 5 调到 10 时
+        // strengthScale 翻倍成 2.0，写死的 -5.4 当场失效。
+        assertEquals(-5.4f * activeEdgeStrengthScale(), pullOffsetOf(view), 1f)
         dispatchThroughHierarchy(view, MotionEvent.ACTION_CANCEL, y = 140f, eventTime = 33L)
         view.release()
         activity.finish()
@@ -2806,11 +2810,14 @@ class NativeAppListRowViewBehaviorTest {
         val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
         activity.setContentView(view)
         val compactHeight = 100
+        // 与生产公式同源：48dp 与视口 14% 各自先乘 strengthScale 再取小者。
+        // strengthScale 跟档位的 edgeStrength 走，所以这里不能写死。
+        val strengthScale = activeEdgeStrengthScale()
         val compactMaximum = minOf(
-            48f * view.resources.displayMetrics.density,
-            compactHeight * 0.14f,
+            48f * view.resources.displayMetrics.density * strengthScale,
+            compactHeight * 0.14f * strengthScale,
         )
-        val pullDistance = compactMaximum / 0.18f + 20f
+        val pullDistance = compactMaximum / (0.18f * strengthScale) + 20f
         val expandedHeight = (pullDistance * 2f + 40f).toInt()
         measureAndLayout(view, width = 100, height = expandedHeight)
 
@@ -3291,6 +3298,20 @@ class NativeAppListRowViewBehaviorTest {
             .getDeclaredField("pullOffsetPx")
             .apply { isAccessible = true }
         return field.getFloat(view)
+    }
+
+    /**
+     * 边缘物理的强度系数，与 FlueSpringEdgeEffect.updateMotionProfile 同一条
+     * 公式。drawingConfig() 不覆盖 motionProfile，用的就是 NativeAppListConfig
+     * 的默认档（柔和），所以这里直接读它的 edgeStrength。
+     *
+     * 断言必须走这个函数而不是写死数字：档位调参（例如柔和档 edgeStrength
+     * 5 → 10）会让 maxOffsetPx 与 pullResistance 整体缩放，写死的期望值当场
+     * 失效，而被测的其实是「48dp / 视口 14% / 0.18 阻尼」这套公式本身。
+     */
+    private fun activeEdgeStrengthScale(): Float {
+        val edgeStrength = drawingConfig().motionProfile.edgeStrength.coerceIn(0, 10)
+        return (edgeStrength / 5f).coerceIn(0f, 2f)
     }
 
     private fun interactionScaleOf(view: NativeAppListRowView): Float {

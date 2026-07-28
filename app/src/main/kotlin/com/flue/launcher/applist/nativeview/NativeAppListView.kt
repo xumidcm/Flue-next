@@ -26,6 +26,8 @@ import kotlin.math.roundToInt
 
 private const val NATIVE_DRAG_SETTLE_DURATION_MS = 130L
 private const val NATIVE_DRAG_PREVIEW_DURATION_MS = 150L
+private const val NATIVE_FOLDER_SETTLE_LAYOUT_WAIT_FRAMES = 4
+private const val NATIVE_FOLDER_SETTLE_MAX_WAIT_FRAMES = 60
 private val NATIVE_DRAG_SETTLE_INTERPOLATOR = PathInterpolator(0.2f, 0f, 0f, 1f)
 
 private data class NativeDragPreviewMove(
@@ -79,6 +81,12 @@ class NativeAppListView @JvmOverloads constructor(
     private var entryAnimator: ValueAnimator? = null
     private var entryAnimationGeneration = 0L
     private var motionBlurSuppressed = false
+    /**
+     * Bucket currently attached to this RecyclerView's full-content layer.
+     * Folder blur progress is sampled every frame, but the effect itself only
+     * needs to change when quantization crosses a bucket boundary.
+     */
+    private var installedContentOverlayBlurBucketPx = Int.MIN_VALUE
     private val restoreMotionBlur = Runnable {
         if (!released && scrollState == SCROLL_STATE_IDLE) {
             setMotionBlurSuppressed(false)
@@ -159,6 +167,15 @@ class NativeAppListView @JvmOverloads constructor(
     private var autoScrollRemainder = 0f
     private var folderSettleCenterX = Float.NaN
     private var folderSettleCenterY = Float.NaN
+    /**
+     * 文件夹落位的权威 folder 行 key。
+     *
+     * 不能只存坐标：previewFolderCommit 采样坐标之后紧接着 submitList 把
+     * source/target 行都会在 app + app 合并后被移除，旧 key 和预采坐标都
+     * 不能作为落点。必须持有 ViewModel/仓库同步返回的新 folder stable key，
+     * 等权威 adapter/layout 提交后重新查坐标。
+     */
+    private var folderSettleTargetKey: AppItemKey? = null
     private var dragSettleGeneration = 0L
     private var dragPreviewAnimator: ValueAnimator? = null
     private var dragPreviewAnimationGeneration = 0L
@@ -176,6 +193,11 @@ class NativeAppListView @JvmOverloads constructor(
 
     /** Returns true when the command owner accepted the request. */
     var onCommand: ((AppListCommand) -> Boolean)? = null
+    /**
+     * Folder creation is the one drag command that needs a return payload:
+     * the repository-owned stable key of the resulting folder row.
+     */
+    var onCreateFolder: ((AppListCommand.CreateFolder) -> AppItemKey?)? = null
     var onScrollToTop: (() -> Unit)? = null
 
     private fun onNativeAdapterListCommitted(itemCount: Int) {
@@ -815,7 +837,22 @@ class NativeAppListView @JvmOverloads constructor(
             }
             !next.value.active || !next.value.entryMotionEnabled -> {
                 cancelEntryAnimation(resetProgress = false)
-                next.value.runtimeEntryProgress = 1f
+                // 入场动画还在飞的时候被打断（进列表途中反向滑回表盘，active
+                // 立刻变 false）不能把进度直接掐到 1：每一行会从半空瞬移到
+                // 终点位置与不透明度——这就是「进入应用列表时打断会闪一下」。
+                // 下面那条 entryAnimationWasRunning 分支本来就是为了保护
+                // 飞行中的动画，但 !active 在 when 里排在它前面，打断时永远
+                // 先命中，保护形同虚设。
+                //
+                // 冻结在当前进度即可：整层此刻正在淡出 + 缩小，冻结看不出来，
+                // 瞬移看得出来。再次进入 Apps 会 bump entryAnimationToken 从
+                // 0 重播；从应用返回那条不 bump 的路径会落到下面的 else，
+                // 用宿主的 entryProgress（恒为 1f）恢复，不会卡在半途。
+                next.value.runtimeEntryProgress = if (entryAnimationWasRunning) {
+                    previousEntryProgress
+                } else {
+                    1f
+                }
             }
             entryAnimationWasRunning -> {
                 // Configuration updates (palette, blur, geometry) must not
@@ -904,8 +941,12 @@ class NativeAppListView @JvmOverloads constructor(
         stopScroll()
         removeOnScrollListener(childVisualScrollListener)
         removeOnChildAttachStateChangeListener(childVisualAttachListener)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) setRenderEffect(null)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            setRenderEffect(null)
+            installedContentOverlayBlurBucketPx = 0
+        }
         onCommand = null
+        onCreateFolder = null
         onScrollToTop = null
         nativeAdapter.clearSynchronously()
         itemAnimator?.endAnimations()
@@ -1394,16 +1435,51 @@ class NativeAppListView @JvmOverloads constructor(
         override fun previewFolderCommit(
             source: AppItemKey,
             target: AppItemKey,
+            folderKey: AppItemKey?,
         ): Boolean {
+            // 只记权威返回的 folder key，不猜时间/名字。旧 host 没有返回
+            // key 时，只有现存 folder 行可安全作为兼容迁移代理。
+            folderSettleTargetKey = folderKey ?: when {
+                nativeAdapter.rowForKey(target)?.entry?.type ==
+                    com.flue.launcher.applist.model.AppItemType.FOLDER -> target
+                nativeAdapter.rowForKey(source)?.entry?.type ==
+                    com.flue.launcher.applist.model.AppItemType.FOLDER -> source
+                else -> null
+            }
+            // Keep a last-resort visual destination for a legacy host or an
+            // off-screen authoritative folder.  The exact key is always
+            // attempted first after the adapter/layout commit.
             val targetRow = holderForKey(target)?.itemView as? NativeAppListRowView
             folderSettleCenterX = targetRow?.iconCenterXInParentWithoutFlow() ?: Float.NaN
             folderSettleCenterY = targetRow?.iconCenterYInParentWithoutFlow() ?: Float.NaN
             return nativeAdapter.previewFolderCommit(source, target).also { accepted ->
                 if (!accepted) {
+                    folderSettleTargetKey = null
                     folderSettleCenterX = Float.NaN
                     folderSettleCenterY = Float.NaN
                 }
             }
+        }
+
+        override fun dispatchFolder(
+            command: AppListCommand.CreateFolder,
+        ): NativeFolderDispatchResult {
+            val createFolder = onCreateFolder
+            if (createFolder != null) {
+                val folderKey = createFolder(command)
+                return NativeFolderDispatchResult(
+                    accepted = folderKey != null,
+                    folderKey = folderKey,
+                )
+            }
+            // Direct NativeAppListView users compiled before the typed result
+            // callback retain their old boolean behavior.  They intentionally
+            // have no guessed folder key, so only the normal cleanup path is
+            // available until they migrate to onCreateFolder.
+            return NativeFolderDispatchResult(
+                accepted = dispatchCommandResult(command),
+                folderKey = null,
+            )
         }
 
         override fun discardDragPreviewAwaitingAuthoritative() =
@@ -1489,39 +1565,13 @@ class NativeAppListView @JvmOverloads constructor(
             if (committed && sourceKey != null && dragOverlay != null) {
                 dragOverlay.setDragVisualState(false)
                 postOnAnimation {
-                    if (
-                        released ||
-                        generation != dragSettleGeneration ||
-                        dragOverlayView !== dragOverlay
-                    ) {
-                        return@postOnAnimation
-                    }
-                    val destination = holderForKey(sourceKey)?.itemView as? NativeAppListRowView
-                    val destinationCenterX = when {
-                        folderSettleCenterX.isFinite() -> folderSettleCenterX
-                        destination != null -> destination.iconCenterXInParentWithoutFlow()
-                        else -> Float.NaN
-                    }
-                    val destinationCenterY = when {
-                        folderSettleCenterY.isFinite() -> folderSettleCenterY
-                        destination != null -> destination.iconCenterYInParentWithoutFlow()
-                        else -> Float.NaN
-                    }
-                    if (!destinationCenterX.isFinite() || !destinationCenterY.isFinite()) {
-                        removeDragOverlay(generation, sourceKey, dragOverlay)
-                        return@postOnAnimation
-                    }
-                    val currentCenterX = dragOverlay.iconCenterXInParentWithoutFlow()
-                    val currentCenterY = dragOverlay.iconCenterYInParentWithoutFlow()
-                    dragOverlay.animate()
-                        .translationX(dragOverlay.translationX + destinationCenterX - currentCenterX)
-                        .translationY(dragOverlay.translationY + destinationCenterY - currentCenterY)
-                        .setDuration(NATIVE_DRAG_SETTLE_DURATION_MS)
-                        .setInterpolator(NATIVE_DRAG_SETTLE_INTERPOLATOR)
-                        .withEndAction {
-                            removeDragOverlay(generation, sourceKey, dragOverlay)
-                        }
-                        .start()
+                    settleDragOverlay(
+                        generation = generation,
+                        sourceKey = sourceKey,
+                        dragOverlay = dragOverlay,
+                        waitFrame = 0,
+                        committedWaitFrames = 0,
+                    )
                 }
             } else if (dragOverlay != null) {
                 removeDragOverlay(generation, sourceKey, dragOverlay)
@@ -1565,17 +1615,133 @@ class NativeAppListView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Settles one drag generation into the post-command row.  A folder
+     * command removes the source/target rows optimistically, then publishes a
+     * new folder row asynchronously.  Keep this generation's overlay alive
+     * until that stable key has a laid-out holder; never sample the removed
+     * target position and never let a stale callback touch the next session.
+     */
+    private fun settleDragOverlay(
+        generation: Long,
+        sourceKey: AppItemKey,
+        dragOverlay: NativeAppListRowView,
+        waitFrame: Int,
+        committedWaitFrames: Int,
+    ) {
+        if (
+            released ||
+            generation != dragSettleGeneration ||
+            dragOverlayView !== dragOverlay
+        ) {
+            val ownsCurrentSession =
+                generation == dragSettleGeneration && dragOverlayView === dragOverlay
+            detachDragOverlay(dragOverlay)
+            if (ownsCurrentSession) finishDragVisualState(sourceKey)
+            return
+        }
+
+        val folderKey = folderSettleTargetKey
+        val folderKeyCommitted = folderKey != null &&
+            nativeAdapter.currentList.any { it.stableKey == folderKey }
+        val folderTargetRow = folderKey
+            ?.let { holderForKey(it)?.itemView as? NativeAppListRowView }
+        // The authoritative content may be in the adapter snapshot one frame
+        // before RecyclerView lays out its holder. Give it a few frames before
+        // falling back to the last known target geometry.
+        if (
+            folderKey != null &&
+            folderTargetRow == null &&
+            (!folderKeyCommitted || committedWaitFrames < NATIVE_FOLDER_SETTLE_LAYOUT_WAIT_FRAMES) &&
+            waitFrame < NATIVE_FOLDER_SETTLE_MAX_WAIT_FRAMES
+        ) {
+            postOnAnimation {
+                settleDragOverlay(
+                    generation = generation,
+                    sourceKey = sourceKey,
+                    dragOverlay = dragOverlay,
+                    waitFrame = waitFrame + 1,
+                    committedWaitFrames = if (folderKeyCommitted) {
+                        committedWaitFrames + 1
+                    } else {
+                        0
+                    },
+                )
+            }
+            return
+        }
+
+        // For legacy hosts without a typed folder result, sourceKey may be the
+        // surviving folder row.  Typed hosts use the exact new folder key
+        // above; only if no holder is attached do we use the captured center.
+        val destination = holderForKey(sourceKey)?.itemView as? NativeAppListRowView
+        val settleRow = folderTargetRow ?: destination
+        val destinationCenterX = when {
+            settleRow != null -> settleRow.iconCenterXInParentWithoutFlow()
+            folderSettleCenterX.isFinite() -> folderSettleCenterX
+            else -> Float.NaN
+        }
+        val destinationCenterY = when {
+            settleRow != null -> settleRow.iconCenterYInParentWithoutFlow()
+            folderSettleCenterY.isFinite() -> folderSettleCenterY
+            else -> Float.NaN
+        }
+        if (!destinationCenterX.isFinite() || !destinationCenterY.isFinite()) {
+            removeDragOverlay(generation, sourceKey, dragOverlay)
+            return
+        }
+        val currentCenterX = dragOverlay.iconCenterXInParentWithoutFlow()
+        val currentCenterY = dragOverlay.iconCenterYInParentWithoutFlow()
+        var settled = false
+        fun settleOnce() {
+            if (settled) return
+            settled = true
+            removeDragOverlay(generation, sourceKey, dragOverlay)
+        }
+        dragOverlay.animate()
+            .translationX(dragOverlay.translationX + destinationCenterX - currentCenterX)
+            .translationY(dragOverlay.translationY + destinationCenterY - currentCenterY)
+            .setDuration(NATIVE_DRAG_SETTLE_DURATION_MS)
+            .setInterpolator(NATIVE_DRAG_SETTLE_INTERPOLATOR)
+            .setListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) = settleOnce()
+
+                override fun onAnimationCancel(animation: android.animation.Animator) = settleOnce()
+            })
+            .start()
+    }
+
     private fun removeDragOverlay(
         generation: Long,
         sourceKey: AppItemKey?,
         dragOverlay: NativeAppListRowView,
     ) {
-        if (generation != dragSettleGeneration || dragOverlayView !== dragOverlay) return
+        if (generation != dragSettleGeneration || dragOverlayView !== dragOverlay) {
+            // 这一代已被更新的手势接管：落位动画不该再跑，但浮层本身必须
+            // 拆掉。以前直接 return 会把它永久留在 ViewOverlay 上——那层画在
+            // 所有内容之上且不随列表滚动，就是「图标粘在背景上」。
+            detachDragOverlay(dragOverlay)
+            return
+        }
+        detachDragOverlay(dragOverlay)
+        dragOverlayView = null
+        finishDragVisualState(sourceKey)
+    }
+
+    /**
+     * 无条件把拖动浮层从 ViewOverlay 上摘下来。
+     *
+     * 不看 generation、不看 dragOverlayView 身份：任何路径下这个 View 都不该
+     * 留在 overlay 里。幂等，重复调用安全。
+     */
+    private fun detachDragOverlay(dragOverlay: NativeAppListRowView) {
+        // 先摘 listener 再 cancel：落位监听器挂在 ViewPropertyAnimator 上，
+        // 留着会在这个 View 被回收复用后的动画上误触发。
+        dragOverlay.animate().setListener(null)
         dragOverlay.animate().cancel()
         overlay.remove(dragOverlay)
         dragOverlay.clearBinding()
-        dragOverlayView = null
-        finishDragVisualState(sourceKey)
+        if (dragOverlayView === dragOverlay) dragOverlayView = null
     }
 
     private fun cancelDragSettle(removeOverlay: Boolean) {
@@ -1595,6 +1761,17 @@ class NativeAppListView @JvmOverloads constructor(
         draggedSourceKey = null
         folderSettleCenterX = Float.NaN
         folderSettleCenterY = Float.NaN
+        folderSettleTargetKey = null
+        // 必须清 folderHoverKey：不清的话，权威快照到达、目标行被移除后，
+        // 那个 key 仍然留在这里。如果对应 holder 还没回收、仍在屏幕上，
+        // applyChildVisual 和 attach listener 会因为 key == folderHoverKey
+        // 而重新给它打上 hover 状态，变成粘在背景上的幽灵图标。
+        val previousHoverKey = folderHoverKey
+        folderHoverKey = null
+        previousHoverKey?.let { key ->
+            (holderForKey(key)?.itemView as? NativeAppListRowView)
+                ?.setFolderHoverState(false)
+        }
         sourceKey?.let(::holderForKey)?.itemView?.isPressed = false
         (layoutManager as? NativeSpatialAppListLayoutManager)?.reapplyChildVisuals()
         applyAttachedChildVisuals()
@@ -1754,6 +1931,8 @@ class NativeAppListView @JvmOverloads constructor(
     private fun applyContentOverlayBlur() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
         val bucket = nativeContentOverlayBlurBucketPx(currentConfig.value)
+        if (installedContentOverlayBlurBucketPx == bucket) return
+        installedContentOverlayBlurBucketPx = bucket
         setRenderEffect(bucket.takeIf { it > 0 }?.let(NativeSystemBlurEffectCache::get))
     }
 

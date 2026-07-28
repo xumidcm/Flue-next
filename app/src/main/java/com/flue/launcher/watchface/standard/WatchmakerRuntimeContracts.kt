@@ -18,6 +18,7 @@ import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.round
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.math.tan
@@ -112,25 +113,36 @@ internal data class WatchCanvasTransform(
 )
 
 /**
- * Maps WatchMaker's square design canvas into the current viewport.
+ * Maps WatchMaker's design canvas into the current viewport.
  *
  * The default mode fits the complete canvas and keeps the definition's shape
  * clipping semantics. Force-fill uses a centered crop, so rectangular screens
  * never anchor the face to one edge.
+ *
+ * [designWidth] / [designHeight] default to the square native canvas, so every
+ * existing caller keeps its exact behaviour. A face that declares a genuinely
+ * non-square canvas passes its own design extents (see
+ * `WatchCanvasSize.designExtentWidth`); the scale stays uniform on both axes so
+ * nothing is ever anamorphically stretched — only the letterbox offsets differ.
  */
 internal fun watchCanvasTransform(
     viewWidth: Float,
     viewHeight: Float,
     forceFill: Boolean,
+    designWidth: Float = WatchmakerGeometry.DESIGN_SIZE,
+    designHeight: Float = WatchmakerGeometry.DESIGN_SIZE,
 ): WatchCanvasTransform {
     require(viewWidth.isFinite() && viewWidth > 0f) { "viewWidth must be positive" }
     require(viewHeight.isFinite() && viewHeight > 0f) { "viewHeight must be positive" }
-    val designSize = WatchmakerGeometry.DESIGN_SIZE
-    val scale = (if (forceFill) max(viewWidth, viewHeight) else min(viewWidth, viewHeight)) / designSize
+    require(designWidth.isFinite() && designWidth > 0f) { "designWidth must be positive" }
+    require(designHeight.isFinite() && designHeight > 0f) { "designHeight must be positive" }
+    val scaleX = viewWidth / designWidth
+    val scaleY = viewHeight / designHeight
+    val scale = if (forceFill) max(scaleX, scaleY) else min(scaleX, scaleY)
     return WatchCanvasTransform(
         scale = scale,
-        left = (viewWidth - designSize * scale) / 2f,
-        top = (viewHeight - designSize * scale) / 2f,
+        left = (viewWidth - designWidth * scale) / 2f,
+        top = (viewHeight - designHeight * scale) / 2f,
     )
 }
 
@@ -291,6 +303,15 @@ data class WatchDataSnapshot(
     val gyroscopeZ: Float? = null,
     val wifiSignalFraction: Float? = null,
     val bluetoothEnabled: Boolean? = null,
+    /**
+     * Preferred weather contract. Values inside [WatchWeatherSnapshot] are
+     * always Celsius; the display unit is a presentation choice, never an
+     * input-unit ambiguity for renderers.
+     */
+    val weather: WatchWeatherSnapshot? = null,
+    // Kept for callers compiled against the first runtime slice. New sources
+    // should populate [weather] instead, so every renderer shares the typed
+    // Celsius contract below.
     val weatherTemperature: String? = null,
     val weatherCondition: String? = null,
     val weatherIcon: String? = null,
@@ -317,7 +338,60 @@ fun interface WatchWeatherSource {
     fun snapshot(nowEpochMs: Long): WatchWeatherSnapshot?
 }
 
+/** The unit selected for rendering. Weather source values themselves stay Celsius. */
+enum class WatchTemperatureUnit(val symbol: String) {
+    CELSIUS("C"),
+    FAHRENHEIT("F");
+
+    companion object {
+        fun fromRaw(value: String?): WatchTemperatureUnit {
+            val normalized = value.orEmpty().trim().removePrefix("°")
+            return if (
+                normalized.equals("F", ignoreCase = true) ||
+                normalized.equals("FAHRENHEIT", ignoreCase = true)
+            ) {
+                FAHRENHEIT
+            } else {
+                CELSIUS
+            }
+        }
+    }
+}
+
+/** One daily forecast entry, addressed deterministically by its one-based day offset. */
+data class WatchWeatherForecast(
+    val dayOffset: Int = 1,
+    val temperatureCelsius: Double? = null,
+    val highCelsius: Double? = null,
+    val lowCelsius: Double? = null,
+    val condition: String? = null,
+    /** WatchMaker-style condition code, normalized to `NNd` / `NNn` when possible. */
+    val icon: String? = null,
+)
+
+/** One hourly forecast entry. Offsets are one-based (`1` is the next hour). */
+data class WatchWeatherHourlyForecast(
+    val hourOffset: Int = 1,
+    val hourOfDay: Int? = null,
+    val temperatureCelsius: Double? = null,
+    val condition: String? = null,
+    val icon: String? = null,
+)
+
 data class WatchWeatherSnapshot(
+    /** Canonical temperature source of truth, in degrees Celsius. */
+    val temperatureCelsius: Double? = null,
+    val highCelsius: Double? = null,
+    val lowCelsius: Double? = null,
+    val displayUnit: WatchTemperatureUnit = WatchTemperatureUnit.CELSIUS,
+    val observedAtEpochMs: Long? = null,
+    /** Optional source-formatted value; when absent the resolver emits HH:mm:ss. */
+    val lastUpdatedText: String? = null,
+    val isDaytime: Boolean? = null,
+    val forecast: List<WatchWeatherForecast> = emptyList(),
+    val hourlyForecast: List<WatchWeatherHourlyForecast> = emptyList(),
+    /** WatchMaker `{wcl}` contract: cloud cover as a fraction in 0..1. */
+    val cloudCoverFraction: Double? = null,
     val temperature: String? = null,
     val condition: String? = null,
     val icon: String? = null,
@@ -327,6 +401,218 @@ data class WatchWeatherSnapshot(
     val humidity: Int? = null,
     val location: String? = null,
 )
+
+/**
+ * Thread-safe in-memory cache used by the application default weather seam.
+ * It deliberately does no I/O: callers can update it from a location/network
+ * worker, while watch render frames only read an already available snapshot.
+ */
+class WatchWeatherSnapshotCache(
+    private val maxAgeMs: Long = DEFAULT_MAX_AGE_MS,
+) : WatchWeatherSource {
+    private data class Entry(
+        val snapshot: WatchWeatherSnapshot,
+        val receivedAtEpochMs: Long,
+    )
+
+    @Volatile
+    private var entry: Entry? = null
+
+    fun update(snapshot: WatchWeatherSnapshot, receivedAtEpochMs: Long = System.currentTimeMillis()) {
+        if (receivedAtEpochMs < 0L) return
+        entry = Entry(snapshot, receivedAtEpochMs)
+    }
+
+    fun clear() {
+        entry = null
+    }
+
+    override fun snapshot(nowEpochMs: Long): WatchWeatherSnapshot? {
+        val current = entry ?: return null
+        val age = nowEpochMs - current.receivedAtEpochMs
+        return current.snapshot.takeIf { age in 0..maxAgeMs }
+    }
+
+    companion object {
+        const val DEFAULT_MAX_AGE_MS: Long = 30L * 60L * 1_000L
+    }
+}
+
+/**
+ * Application-wide weather injection point. Flue intentionally does not call
+ * a store endpoint for weather; an app-owned worker may install a nonblocking
+ * source or publish snapshots here. Both standard and JB hosts use this same
+ * default when no explicit source is supplied.
+ */
+object WatchWeatherSources {
+    private val cache = WatchWeatherSnapshotCache()
+
+    @Volatile
+    var applicationSource: WatchWeatherSource? = null
+
+    private val defaultSource = WatchWeatherSource { nowEpochMs ->
+        // Ask the application source first: repositories may apply a user
+        // preference (for example C/F) on every read even while the canonical
+        // weather payload itself remains cached. The local cache is only a
+        // last-good fallback when that source is temporarily unavailable.
+        runCatching {
+            applicationSource?.snapshot(nowEpochMs)
+        }.getOrNull()?.also { snapshot ->
+            cache.update(snapshot, nowEpochMs)
+        } ?: cache.snapshot(nowEpochMs)
+    }
+
+    fun default(): WatchWeatherSource = defaultSource
+
+    fun publish(snapshot: WatchWeatherSnapshot, receivedAtEpochMs: Long = System.currentTimeMillis()) {
+        cache.update(snapshot, receivedAtEpochMs)
+    }
+}
+
+/** Converts legacy string weather payloads into the typed Celsius contract. */
+internal fun canonicalWatchWeatherSnapshot(raw: WatchWeatherSnapshot): WatchWeatherSnapshot {
+    val legacyUnit = raw.temperatureUnit
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+        ?.let(WatchTemperatureUnit::fromRaw)
+    val sourceUnit = legacyUnit ?: raw.displayUnit
+    fun canonical(rawValue: String?, explicitCelsius: Double?): Double? {
+        val value = explicitCelsius?.takeIf(Double::isFinite)
+            ?: parseWeatherNumber(rawValue)
+            ?: return null
+        // A typed value is already Celsius. Legacy strings carry their unit
+        // through temperatureUnit and are converted exactly once here.
+        return if (explicitCelsius != null || sourceUnit == WatchTemperatureUnit.CELSIUS) {
+            value
+        } else {
+            (value - 32.0) * 5.0 / 9.0
+        }
+    }
+    val normalizedForecast = raw.forecast.mapNotNull { item ->
+        val offset = item.dayOffset.takeIf { it > 0 } ?: return@mapNotNull null
+        item.copy(
+            dayOffset = offset,
+            temperatureCelsius = item.temperatureCelsius?.takeIf(Double::isFinite),
+            highCelsius = item.highCelsius?.takeIf(Double::isFinite),
+            lowCelsius = item.lowCelsius?.takeIf(Double::isFinite),
+            condition = item.condition?.trim()?.takeIf(String::isNotEmpty),
+            icon = normalizeWatchWeatherIcon(item.icon, item.icon?.endsWith("d", true)),
+        )
+    }
+    val normalizedHourlyForecast = raw.hourlyForecast.mapNotNull { item ->
+        val offset = item.hourOffset.takeIf { it in 1..12 } ?: return@mapNotNull null
+        item.copy(
+            hourOffset = offset,
+            hourOfDay = item.hourOfDay?.takeIf { it in 0..23 },
+            temperatureCelsius = item.temperatureCelsius?.takeIf(Double::isFinite),
+            condition = item.condition?.trim()?.takeIf(String::isNotEmpty),
+            icon = normalizeWatchWeatherIcon(item.icon, item.icon?.endsWith("d", true)),
+        )
+    }
+    return raw.copy(
+        temperatureCelsius = canonical(raw.temperature, raw.temperatureCelsius),
+        highCelsius = canonical(raw.high, raw.highCelsius),
+        lowCelsius = canonical(raw.low, raw.lowCelsius),
+        displayUnit = legacyUnit ?: raw.displayUnit,
+        condition = raw.condition?.trim()?.takeIf(String::isNotEmpty),
+        icon = normalizeWatchWeatherIcon(raw.icon, raw.isDaytime),
+        humidity = raw.humidity?.coerceIn(0, 100),
+        location = raw.location?.trim()?.takeIf(String::isNotEmpty),
+        forecast = normalizedForecast,
+        hourlyForecast = normalizedHourlyForecast,
+        cloudCoverFraction = raw.cloudCoverFraction
+            ?.takeIf(Double::isFinite)
+            ?.coerceIn(0.0, 1.0),
+    )
+}
+
+private fun parseWeatherNumber(raw: String?): Double? {
+    val value = raw?.trim()?.replace(',', '.') ?: return null
+    if (value.isBlank()) return null
+    val match = Regex("[-+]?\\d+(?:\\.\\d+)?").find(value) ?: return null
+    return match.value.toDoubleOrNull()?.takeIf(Double::isFinite)
+}
+
+/** Stable NNd icon form used by standard/JB tags and image condition grids. */
+internal fun normalizeWatchWeatherIcon(raw: String?, isDaytime: Boolean?): String? {
+    val value = raw?.trim()?.lowercase(Locale.ROOT)?.takeIf(String::isNotEmpty) ?: return null
+    val suffix = when {
+        value.endsWith('d') -> 'd'
+        value.endsWith('n') -> 'n'
+        isDaytime == false -> 'n'
+        else -> 'd'
+    }
+    val digits = value.trimEnd('d', 'n').filter(Char::isDigit)
+    if (digits.isBlank()) return value
+    val numericCode = digits.toIntOrNull() ?: return value
+    return numericCode.coerceIn(0, 99).toString().padStart(2, '0') + suffix
+}
+
+/** WatchMaker condition tags compare day-code-only values; night is `{wisday}`. */
+internal fun normalizeWatchmakerConditionIcon(raw: String?): String? {
+    val normalized = normalizeWatchWeatherIcon(raw, true) ?: return null
+    val numeric = Regex("^(\\d{2})[dn]$").matchEntire(normalized) ?: return normalized
+    return numeric.groupValues[1] + "d"
+}
+
+/** Inserts WatchMaker's `_n` suffix before the file extension. */
+internal fun watchWeatherNightAssetReference(reference: String): String {
+    val slash = max(reference.lastIndexOf('/'), reference.lastIndexOf('\\'))
+    val dot = reference.lastIndexOf('.').takeIf { it > slash }
+    return if (dot == null) {
+        "${reference}_n"
+    } else {
+        reference.substring(0, dot) + "_n" + reference.substring(dot)
+    }
+}
+
+/** Zero-based cell remap used by `weather_night=Y` 3x3 sprite exports. */
+internal fun watchWeatherNightSpriteIndex(dayIndex: Int): Int = when (dayIndex) {
+    0 -> 3 // clear day cell 1 -> moon cell 4
+    1, 2 -> 2 // few/partly cloudy -> night cell 3
+    3 -> 8 // overcast cell 4 -> fallback cell 9
+    else -> dayIndex
+}
+
+internal fun weatherTemperatureNumber(celsius: Double?, unit: WatchTemperatureUnit): String? {
+    val value = celsius?.takeIf(Double::isFinite)?.let {
+        if (unit == WatchTemperatureUnit.FAHRENHEIT) it * 9.0 / 5.0 + 32.0 else it
+    } ?: return null
+    val rounded = round(value * 10.0) / 10.0
+    return if (rounded == rounded.toLong().toDouble()) {
+        rounded.toLong().toString()
+    } else {
+        java.lang.String.format(Locale.US, "%.1f", rounded)
+    }
+}
+
+internal fun weatherTemperatureWithUnit(celsius: Double?, unit: WatchTemperatureUnit): String? =
+    weatherTemperatureNumber(celsius, unit)?.let { "$it°${unit.symbol}" }
+
+private fun weatherSnapshotFor(snapshot: WatchDataSnapshot): WatchWeatherSnapshot? {
+    snapshot.weather?.let { return canonicalWatchWeatherSnapshot(it) }
+    val hasLegacyWeather = listOf(
+        snapshot.weatherTemperature,
+        snapshot.weatherCondition,
+        snapshot.weatherIcon,
+        snapshot.weatherHigh,
+        snapshot.weatherLow,
+        snapshot.weatherLocation,
+    ).any { !it.isNullOrBlank() } || snapshot.weatherHumidity != null
+    if (!hasLegacyWeather) return null
+    return canonicalWatchWeatherSnapshot(
+        WatchWeatherSnapshot(
+            temperature = snapshot.weatherTemperature,
+            condition = snapshot.weatherCondition,
+            icon = snapshot.weatherIcon,
+            high = snapshot.weatherHigh,
+            low = snapshot.weatherLow,
+            temperatureUnit = snapshot.weatherTemperatureUnit,
+            humidity = snapshot.weatherHumidity,
+            location = snapshot.weatherLocation,
+        ),
+    )
+}
 
 object EmptyWatchDataProvider : WatchDataProvider {
     private val empty = WatchDataSnapshot()
@@ -748,11 +1034,9 @@ object WatchDateLocale {
  */
 object WatchmakerTagResolver {
     private val knownUnavailableTags = setOf(
-        // Weather/calendar/location providers are optional on Android.  They
-        // stay known so a missing provider renders "--" and never leaks the
-        // literal "{tag}" into a face.
-        "weather", "wcl", "wct", "wth", "wci", "whp", "wp", "wr",
-        "wsr", "wss", "wisday", "wloc",
+        // Providers are optional on Android. They stay known so a missing
+        // source renders "--" and never leaks a literal tag into a face.
+        "weather", "wp", "wr", "wsr", "wss",
         "cal", "calendar", "next_event",
         "phone_battery", "pbl", "pblp", "pbc",
         "bv", "bi", "btc", "btf", "sscp", "stsc",
@@ -761,10 +1045,13 @@ object WatchmakerTagResolver {
     )
 
     private val builtInTags = setOf(
-        "dh", "dhz", "dh23", "dh24", "dh23z", "dh24z",
-        "dm", "dmz", "ds", "dss", "drss", "drs", "drm", "drh",
+        "dh", "dhz", "dh11", "dh11z", "dh12", "dh12z",
+        "dh23", "dh24", "dh23z", "dh24z", "da", "dampm",
+        "dm", "dmz", "ds", "dsz", "dss", "dssz", "dsps",
+        "drss", "drs", "drms", "drm", "drm0", "drh", "drh0", "drh24", "drmh24",
+        "dz", "dzz", "dtp",
         "dd", "ddz", "ddw0", "ddw", "ddw1", "ddw2", "ddww",
-        "dn", "dnn", "dnnn", "dnnnn", "dy", "dyyyy",
+        "dn", "dnn", "dnnn", "dnnnn", "dy", "dyy", "dyyyy",
         "bl", "blp", "batt", "battery", "battery_level",
         "pbl", "pblp", "pbr",
         "bc", "charging", "is_charging",
@@ -773,20 +1060,47 @@ object WatchmakerTagResolver {
         // {shr_1..9}：最近 N 分钟的历史心率读数。
         "shr_1", "shr_2", "shr_3", "shr_4", "shr_5", "shr_6", "shr_7", "shr_8", "shr_9",
         "sgx", "sgy", "sgz", "pws", "nbc",
-        "wt", "wtemp", "weather_temperature",
-        "wcond", "weather_condition", "wct",
-        "wicon", "weather_icon", "wci",
+        "wm", "wt", "wtd", "wtemp", "weather_temperature",
+        "wcond", "weather_condition", "wct", "wcct",
+        "wicon", "weather_icon", "wci", "wcci",
         "whigh", "weather_high", "wth", "wthd",
-        "wlow", "weather_low", "wtl", "wtld", "wtd",
-        "whum", "weather_humidity", "wh",
-        "wloc", "weather_location",
+        "wlow", "weather_low", "wtl", "wtld",
+        "whum", "weather_humidity", "wh", "whp", "wchn", "wchp",
+        "wcl", "wl", "wml", "wlc", "wloc", "weather_location", "wlu", "wisday",
+        // Legacy WatchMaker five-day forecast vocabulary.
+        "wfah", "wfal", "wfact", "wfaci",
+        "wbbh", "wfbl", "wfbct", "wfbci",
+        "wfch", "wfcl", "wfcct", "wfcci",
+        "wfdh", "wfdl", "wfdct", "wfdci",
+        "wfeh", "wfel", "wfect", "wfeci",
         "ucolor",
+    )
+
+    private val utcCapableTags = setOf(
+        "dh", "dhz", "dh11", "dh11z", "dh12", "dh12z",
+        "dh23", "dh24", "dh23z", "dh24z", "dm", "dmz",
+        "ds", "dsz", "dss", "dssz", "dsps", "da", "dampm",
+        "drss", "drs", "drms", "drm", "drm0", "drh", "drh0", "drh24", "drmh24",
+        "dd", "ddz", "ddw0", "ddw", "ddw1", "ddw2", "ddww",
+        "dn", "dnn", "dnnn", "dnnnn", "dy", "dyy", "dyyyy", "dtp", "dz", "dzz",
+    )
+
+    private val fastTickTagPattern = Regex(
+        "\\{\\s*(?:utc_?)?(?:dssz?|dsps|drss|drms|drm|dtp)(?:_?utc)?\\s*\\}",
+        RegexOption.IGNORE_CASE,
     )
 
     fun isKnown(tag: String): Boolean {
         val normalized = tag.trim().lowercase(Locale.ROOT)
-        return normalized in builtInTags || normalized in knownUnavailableTags
+        return normalized in builtInTags ||
+            normalized in knownUnavailableTags ||
+            utcBaseTag(normalized) != null ||
+            forecastTagParts(normalized) != null ||
+            hourlyForecastTagParts(normalized) != null
     }
+
+    /** Shared high-refresh vocabulary for runtime and editor preview. */
+    fun requiresFastTicks(raw: String): Boolean = fastTickTagPattern.containsMatchIn(raw)
 
     fun resolve(
         tag: String,
@@ -797,46 +1111,96 @@ object WatchmakerTagResolver {
         // settings 里选定的 zh/en/ja），测试可显式传入以保证确定性。
         locale: Locale = WatchDateLocale.current(),
     ): WatchTagResolution {
-        val normalized = tag.trim().lowercase(Locale.ROOT)
-        val hour24 = now.get(Calendar.HOUR_OF_DAY)
+        val requestedTag = tag.trim().lowercase(Locale.ROOT)
+        val utcBase = utcBaseTag(requestedTag)
+        val normalized = utcBase ?: requestedTag
+        val effectiveNow = if (utcBase != null) {
+            Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+                timeInMillis = now.timeInMillis
+            }
+        } else {
+            now
+        }
+        val weather = weatherSnapshotFor(snapshot)
+        val hour24 = effectiveNow.get(Calendar.HOUR_OF_DAY)
         val hour12 = (hour24 % 12).let { if (it == 0) 12 else it }
         val value = when (normalized) {
-            "dh" -> hour12.toString()
-            "dhz" -> hour12.toString().padStart(2, '0')
-            "dh23", "dh24" -> hour24.toString()
-            "dh23z", "dh24z" -> hour24.toString().padStart(2, '0')
-            "dm" -> now.get(Calendar.MINUTE).toString()
-            "dmz" -> now.get(Calendar.MINUTE).toString().padStart(2, '0')
-            "ds" -> now.get(Calendar.SECOND).toString()
-            "dss" -> now.get(Calendar.SECOND).toString().padStart(2, '0')
-            "drss", "drs" ->
-                ((now.get(Calendar.SECOND) + now.get(Calendar.MILLISECOND) / 1_000f) * 6f).toString()
-            "drm" ->
-                ((now.get(Calendar.MINUTE) + now.get(Calendar.SECOND) / 60f) * 6f).toString()
-            "drh" ->
-                ((hour24 % 12 + now.get(Calendar.MINUTE) / 60f) * 30f).toString()
-            "dd" -> now.get(Calendar.DAY_OF_MONTH).toString()
-            "ddz" -> now.get(Calendar.DAY_OF_MONTH).toString().padStart(2, '0')
-            "ddw0" -> (now.get(Calendar.DAY_OF_WEEK) - Calendar.SUNDAY).toString()
+            "dh", "dh12" -> hour12.toString()
+            "dhz", "dh12z" -> hour12.toString().padStart(2, '0')
+            "dh11" -> (hour24 % 12).toString()
+            "dh11z" -> (hour24 % 12).toString().padStart(2, '0')
+            "dh23" -> hour24.toString()
+            "dh23z" -> hour24.toString().padStart(2, '0')
+            "dh24" -> (if (hour24 == 0) 24 else hour24).toString()
+            "dh24z" -> (if (hour24 == 0) 24 else hour24).toString().padStart(2, '0')
+            "da", "dampm" -> if (effectiveNow.get(Calendar.AM_PM) == Calendar.AM) "AM" else "PM"
+            "dm" -> effectiveNow.get(Calendar.MINUTE).toString()
+            "dmz" -> effectiveNow.get(Calendar.MINUTE).toString().padStart(2, '0')
+            "ds" -> effectiveNow.get(Calendar.SECOND).toString()
+            "dsz" -> effectiveNow.get(Calendar.SECOND).toString().padStart(2, '0')
+            "dss" -> effectiveNow.get(Calendar.MILLISECOND).toString()
+            "dssz" -> effectiveNow.get(Calendar.MILLISECOND).toString().padStart(3, '0')
+            "dsps" ->
+                (effectiveNow.get(Calendar.SECOND) * 1_000 + effectiveNow.get(Calendar.MILLISECOND)).toString()
+            "drs" -> renderCompactNumber(effectiveNow.get(Calendar.SECOND) * 6f)
+            "drss" -> renderCompactNumber(
+                (effectiveNow.get(Calendar.SECOND) + effectiveNow.get(Calendar.MILLISECOND) / 1_000f) * 6f,
+            )
+            "drms" -> renderCompactNumber(effectiveNow.get(Calendar.MILLISECOND) * 0.36f)
+            "drm0" -> renderCompactNumber(effectiveNow.get(Calendar.MINUTE) * 6f)
+            "drm" -> renderCompactNumber(
+                (effectiveNow.get(Calendar.MINUTE) +
+                    effectiveNow.get(Calendar.SECOND) / 60f +
+                    effectiveNow.get(Calendar.MILLISECOND) / 60_000f) * 6f,
+            )
+            "drh0" -> renderCompactNumber((hour24 % 12) * 30f)
+            "drh" -> renderCompactNumber(
+                (hour24 % 12 +
+                    effectiveNow.get(Calendar.MINUTE) / 60f +
+                    effectiveNow.get(Calendar.SECOND) / 3_600f) * 30f,
+            )
+            "drh24" -> renderCompactNumber(hour24 * 15f)
+            "drmh24" -> renderCompactNumber(
+                (hour24 + effectiveNow.get(Calendar.MINUTE) / 60f) * 15f,
+            )
+            "dd" -> effectiveNow.get(Calendar.DAY_OF_MONTH).toString()
+            "ddz" -> effectiveNow.get(Calendar.DAY_OF_MONTH).toString().padStart(2, '0')
+            "ddw0" -> (effectiveNow.get(Calendar.DAY_OF_WEEK) - Calendar.SUNDAY).toString()
             // 星期标签统一 trimEnd('.')：不少 locale 的缩写数据自带尾句号
             // （es "lun."、de "Mo." 等），落到表盘上就是「周一.」式的拖尾。
-            "ddw" -> now.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, locale)
+            "ddw" -> effectiveNow.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, locale)
                 ?.trimEnd('.')
-            "ddw1" -> now.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.NARROW_FORMAT, locale)
+            "ddw1" -> effectiveNow.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.NARROW_FORMAT, locale)
                 ?.trimEnd('.')
-            "ddw2" -> now.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, locale)
+            "ddw2" -> effectiveNow.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, locale)
                 ?.trimEnd('.')
                 ?.take(2)
-            "ddww" -> now.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.LONG, locale)
+            "ddww" -> effectiveNow.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.LONG, locale)
                 ?.trimEnd('.')
             // WM_TAGS.md:538 —— {dn} = Month number (1–12)。此前只实现了
             // dnn/dnnn/dnnnn，漏掉 dn 本体，用它的表盘月份直接渲染成不可用。
-            "dn" -> (now.get(Calendar.MONTH) + 1).toString()
-            "dnn" -> (now.get(Calendar.MONTH) + 1).toString().padStart(2, '0')
-            "dnnn" -> now.getDisplayName(Calendar.MONTH, Calendar.SHORT, locale)
-            "dnnnn" -> now.getDisplayName(Calendar.MONTH, Calendar.LONG, locale)
-            "dy" -> (now.get(Calendar.YEAR) % 100).toString().padStart(2, '0')
-            "dyyyy" -> now.get(Calendar.YEAR).toString()
+            "dn" -> (effectiveNow.get(Calendar.MONTH) + 1).toString()
+            "dnn" -> (effectiveNow.get(Calendar.MONTH) + 1).toString().padStart(2, '0')
+            "dnnn" -> effectiveNow.getDisplayName(Calendar.MONTH, Calendar.SHORT, locale)
+            "dnnnn" -> effectiveNow.getDisplayName(Calendar.MONTH, Calendar.LONG, locale)
+            "dy" -> (effectiveNow.get(Calendar.YEAR) % 100).toString().padStart(2, '0')
+            "dyy", "dyyyy" -> effectiveNow.get(Calendar.YEAR).toString()
+            "dz" -> effectiveNow.timeZone.getDisplayName(
+                effectiveNow.timeZone.inDaylightTime(effectiveNow.time),
+                java.util.TimeZone.SHORT,
+                locale,
+            )
+            "dzz" -> effectiveNow.timeZone.getDisplayName(
+                effectiveNow.timeZone.inDaylightTime(effectiveNow.time),
+                java.util.TimeZone.LONG,
+                locale,
+            )
+            "dtp" -> renderCompactNumber(
+                (hour24 * 3_600_000L +
+                    effectiveNow.get(Calendar.MINUTE) * 60_000L +
+                    effectiveNow.get(Calendar.SECOND) * 1_000L +
+                    effectiveNow.get(Calendar.MILLISECOND)).toFloat() / 86_400_000f,
+            )
             "bl", "batt", "battery", "battery_level" -> snapshot.batteryPercent?.toString()
             "blp" -> snapshot.batteryPercent?.let { "$it%" }
             "pbl" -> snapshot.batteryPercent?.toString()
@@ -866,32 +1230,197 @@ object WatchmakerTagResolver {
                 (snapshot.wifiSignalFraction ?: 0f).coerceIn(0f, 1f),
             )
             "nbc" -> (snapshot.bluetoothEnabled ?: false).toString()
-            "wt", "wtemp", "weather_temperature" -> snapshot.weatherTemperature
-            "wtd" -> temperatureWithUnit(snapshot.weatherTemperature, snapshot.weatherTemperatureUnit)
-            "wcond", "weather_condition", "wct" -> snapshot.weatherCondition
-            "wicon", "weather_icon", "wci" -> snapshot.weatherIcon
-            "whigh", "weather_high", "wth" -> snapshot.weatherHigh
-            "wthd" -> temperatureWithUnit(snapshot.weatherHigh, snapshot.weatherTemperatureUnit)
-            "wlow", "weather_low", "wtl" -> snapshot.weatherLow
-            "wtld" -> temperatureWithUnit(snapshot.weatherLow, snapshot.weatherTemperatureUnit)
-            "whum", "weather_humidity", "wh", "whp" -> snapshot.weatherHumidity?.toString()
-            "wloc", "weather_location" -> snapshot.weatherLocation
+            "wm" -> weather?.displayUnit?.symbol
+            "wt", "wtemp", "weather_temperature" ->
+                weatherTemperatureNumber(weather?.temperatureCelsius, weather?.displayUnit ?: WatchTemperatureUnit.CELSIUS)
+            "wtd" ->
+                weatherTemperatureWithUnit(weather?.temperatureCelsius, weather?.displayUnit ?: WatchTemperatureUnit.CELSIUS)
+            // wct was emitted as condition text by Flue's first runtime slice;
+            // retain that alias while the canonical WatchMaker spelling wcct
+            // is also supported.
+            "wcond", "weather_condition", "wct", "wcct" -> weather?.condition
+            "wicon", "weather_icon", "wci", "wcci" ->
+                normalizeWatchmakerConditionIcon(weather?.icon)
+            "whigh", "weather_high", "wth" ->
+                weatherTemperatureNumber(weather?.highCelsius, weather?.displayUnit ?: WatchTemperatureUnit.CELSIUS)
+            "wthd" ->
+                weatherTemperatureWithUnit(weather?.highCelsius, weather?.displayUnit ?: WatchTemperatureUnit.CELSIUS)
+            "wlow", "weather_low", "wtl" ->
+                weatherTemperatureNumber(weather?.lowCelsius, weather?.displayUnit ?: WatchTemperatureUnit.CELSIUS)
+            "wtld" ->
+                weatherTemperatureWithUnit(weather?.lowCelsius, weather?.displayUnit ?: WatchTemperatureUnit.CELSIUS)
+            "whum", "weather_humidity", "wh", "wchn" -> weather?.humidity?.toString()
+            "whp", "wchp" -> weather?.humidity?.let { "$it%" }
+            "wcl" -> weather?.cloudCoverFraction?.let { renderCompactNumber(it.toFloat()) }
+            "wl", "wml", "wlc", "wloc", "weather_location" -> weather?.location
+            "wisday" -> weather?.isDaytime
+                ?.let { if (it) "true" else "false" }
+                ?: weather?.icon?.lastOrNull()?.let { suffix ->
+                    when (suffix) {
+                        'd' -> "true"
+                        'n' -> "false"
+                        else -> null
+                    }
+                }
+            "wlu" -> weather?.lastUpdatedText?.trim()?.takeIf(String::isNotEmpty)
+                ?: weather?.observedAtEpochMs?.let { updatedAt ->
+                    java.text.SimpleDateFormat("HH:mm:ss", locale).apply {
+                        timeZone = effectiveNow.timeZone
+                    }.format(updatedAt)
+                }
             "ucolor" -> userColor
-            else -> null
+            else -> resolveForecastTag(normalized, weather)
+                ?: resolveHourlyForecastTag(normalized, weather)
         }
         if (value != null) return WatchTagResolution.Resolved(value)
-        return if (isKnown(normalized)) {
-            WatchTagResolution.Unavailable(normalized)
+        return if (isKnown(requestedTag)) {
+            WatchTagResolution.Unavailable(requestedTag)
         } else {
-            WatchTagResolution.Unsupported(normalized)
+            WatchTagResolution.Unsupported(requestedTag)
         }
     }
 
-    private fun temperatureWithUnit(value: String?, unit: String?): String? {
-        val temperature = value?.trim()?.takeIf(String::isNotEmpty) ?: return null
-        if ('°' in temperature) return temperature
-        val normalizedUnit = unit?.trim()?.removePrefix("°").orEmpty()
-        return if (normalizedUnit.isBlank()) temperature else "$temperature°$normalizedUnit"
+    private data class ForecastTagParts(
+        val dayOffset: Int,
+        val field: String,
+        val withUnit: Boolean = false,
+    )
+
+    private fun forecastTagParts(tag: String): ForecastTagParts? {
+        // Canonical WatchMaker daily vocabulary: 0=today, 1=tomorrow, ... 5.
+        Regex("^wf([0-5])d(t|th|tl|ct|ci)$").matchEntire(tag)?.let { match ->
+            val dayOffset = match.groupValues[1].toInt() + 1
+            return when (match.groupValues[2]) {
+                "t" -> ForecastTagParts(dayOffset, "temperature")
+                "th" -> ForecastTagParts(dayOffset, "high")
+                "tl" -> ForecastTagParts(dayOffset, "low")
+                "ct" -> ForecastTagParts(dayOffset, "condition")
+                else -> ForecastTagParts(dayOffset, "icon")
+            }
+        }
+        val legacy = when (tag) {
+            "wbbh" -> ForecastTagParts(2, "high") // typo seen in legacy exports
+            else -> Regex("^wf([a-e])(h|hd|l|ld|ct|ci)$").matchEntire(tag)?.let { match ->
+                val day = match.groupValues[1][0] - 'a' + 1
+                when (match.groupValues[2]) {
+                    "h" -> ForecastTagParts(day, "high")
+                    "hd" -> ForecastTagParts(day, "high", withUnit = true)
+                    "l" -> ForecastTagParts(day, "low")
+                    "ld" -> ForecastTagParts(day, "low", withUnit = true)
+                    "ct" -> ForecastTagParts(day, "condition")
+                    else -> ForecastTagParts(day, "icon")
+                }
+            }
+        }
+        if (legacy != null) return legacy
+        Regex("^wf(\\d+)(h|hd|l|ld|ct|ci)$").matchEntire(tag)?.let { match ->
+            val day = match.groupValues[1].toIntOrNull() ?: return@let
+            return when (match.groupValues[2]) {
+                "h" -> ForecastTagParts(day, "high")
+                "hd" -> ForecastTagParts(day, "high", withUnit = true)
+                "l" -> ForecastTagParts(day, "low")
+                "ld" -> ForecastTagParts(day, "low", withUnit = true)
+                "ct" -> ForecastTagParts(day, "condition")
+                else -> ForecastTagParts(day, "icon")
+            }
+        }
+        Regex("^wfa(\\d+)(h|hd|l|ld|ct|ci)$").matchEntire(tag)?.let { match ->
+            val day = match.groupValues[1].toIntOrNull() ?: return@let
+            return when (match.groupValues[2]) {
+                "h" -> ForecastTagParts(day, "high")
+                "hd" -> ForecastTagParts(day, "high", withUnit = true)
+                "l" -> ForecastTagParts(day, "low")
+                "ld" -> ForecastTagParts(day, "low", withUnit = true)
+                "ct" -> ForecastTagParts(day, "condition")
+                else -> ForecastTagParts(day, "icon")
+            }
+        }
+        val numbered = Regex("^(wthd|wth|wtld|wtl|wct|wci)(\\d+)$").matchEntire(tag) ?: return null
+        val day = numbered.groupValues[2].toIntOrNull() ?: return null
+        return when (numbered.groupValues[1]) {
+            "wth" -> ForecastTagParts(day, "high")
+            "wthd" -> ForecastTagParts(day, "high", withUnit = true)
+            "wtl" -> ForecastTagParts(day, "low")
+            "wtld" -> ForecastTagParts(day, "low", withUnit = true)
+            "wct" -> ForecastTagParts(day, "condition")
+            else -> ForecastTagParts(day, "icon")
+        }
+    }
+
+    private fun resolveForecastTag(tag: String, weather: WatchWeatherSnapshot?): String? {
+        val parts = forecastTagParts(tag) ?: return null
+        val forecast = weather?.forecast?.firstOrNull { it.dayOffset == parts.dayOffset } ?: return null
+        return when (parts.field) {
+            "temperature" -> {
+                val celsius = forecast.temperatureCelsius
+                    ?: (if (parts.dayOffset == 1) weather.temperatureCelsius else null)
+                    ?: listOfNotNull(forecast.highCelsius, forecast.lowCelsius)
+                        .takeIf { it.isNotEmpty() }
+                        ?.average()
+                weatherTemperatureNumber(celsius, weather.displayUnit)
+            }
+            "high" -> if (parts.withUnit) {
+                weatherTemperatureWithUnit(forecast.highCelsius, weather.displayUnit)
+            } else {
+                weatherTemperatureNumber(forecast.highCelsius, weather.displayUnit)
+            }
+            "low" -> if (parts.withUnit) {
+                weatherTemperatureWithUnit(forecast.lowCelsius, weather.displayUnit)
+            } else {
+                weatherTemperatureNumber(forecast.lowCelsius, weather.displayUnit)
+            }
+            "condition" -> forecast.condition
+            else -> normalizeWatchmakerConditionIcon(forecast.icon)
+        }
+    }
+
+    private data class HourlyForecastTagParts(
+        val hourOffset: Int,
+        val field: String,
+    )
+
+    private fun hourlyForecastTagParts(tag: String): HourlyForecastTagParts? {
+        val match = Regex("^wf(1[0-2]|[1-9])h(t|h|ct|ci)$").matchEntire(tag) ?: return null
+        val offset = match.groupValues[1].toInt()
+        val field = when (match.groupValues[2]) {
+            "t" -> "temperature"
+            "h" -> "hour"
+            "ct" -> "condition"
+            else -> "icon"
+        }
+        return HourlyForecastTagParts(offset, field)
+    }
+
+    private fun resolveHourlyForecastTag(tag: String, weather: WatchWeatherSnapshot?): String? {
+        val parts = hourlyForecastTagParts(tag) ?: return null
+        val forecast = weather?.hourlyForecast
+            ?.firstOrNull { it.hourOffset == parts.hourOffset }
+            ?: return null
+        return when (parts.field) {
+            "temperature" -> weatherTemperatureNumber(forecast.temperatureCelsius, weather.displayUnit)
+            "hour" -> forecast.hourOfDay?.toString()
+            "condition" -> forecast.condition
+            else -> normalizeWatchWeatherIcon(forecast.icon, forecast.icon?.endsWith("d", true))
+        }
+    }
+
+    private fun utcBaseTag(tag: String): String? {
+        val base = when (tag) {
+            // Canonical names from WM_TAGS.md. UTC 24-hour tags use 0..23,
+            // despite the local `{dh24}` tag using 1..24.
+            "dhutc12" -> "dh"
+            "dhutc12z" -> "dhz"
+            "dhutc24" -> "dh23"
+            "dhutc24z" -> "dh23z"
+            else -> when {
+            tag.startsWith("utc_") -> tag.removePrefix("utc_")
+            tag.startsWith("utc") -> tag.removePrefix("utc")
+            tag.endsWith("_utc") -> tag.removeSuffix("_utc")
+            tag.endsWith("utc") -> tag.removeSuffix("utc")
+            else -> return null
+            }
+        }
+        return base.takeIf { it in utcCapableTags }
     }
 
     private fun renderCompactNumber(value: Float): String =

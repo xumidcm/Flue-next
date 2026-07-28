@@ -19,6 +19,19 @@ internal interface NativeAppListDragHost {
     fun finishDragPreview(commit: Boolean): AppListCommand.Move? = null
     fun completeDragPreview(accepted: Boolean) = Unit
     fun previewFolderCommit(source: AppItemKey, target: AppItemKey): Boolean = false
+    fun previewFolderCommit(
+        source: AppItemKey,
+        target: AppItemKey,
+        folderKey: AppItemKey?,
+    ): Boolean = previewFolderCommit(source, target)
+    /**
+     * Dispatches a folder command and returns the authoritative folder key
+     * when the command owner can provide it.  The default keeps old hosts and
+     * tests source-compatible; the result's folderKey may be null for legacy
+     * owners.
+     */
+    fun dispatchFolder(command: AppListCommand.CreateFolder): NativeFolderDispatchResult =
+        NativeFolderDispatchResult(accepted = dispatch(command), folderKey = null)
     fun discardDragPreviewAwaitingAuthoritative() = Unit
     /**
      * Dispatches a command and reports whether the owner accepted it.
@@ -37,6 +50,11 @@ internal interface NativeAppListDragHost {
     fun scrollBy(deltaPx: Float)
     fun performDragHaptic()
 }
+
+internal data class NativeFolderDispatchResult(
+    val accepted: Boolean,
+    val folderKey: AppItemKey?,
+)
 
 internal interface NativeDragScheduler {
     val nowMillis: Long
@@ -77,6 +95,12 @@ internal class NativeAppListDragController(
     private var lastAutoScrollFrameAtMillis: Long? = null
     private var frameScheduled = false
     private var folderCommandDispatched = false
+    /**
+     * Folder creation is deliberately optimistic.  When the policy or the
+     * repository rejects it at release time, retain a stable-key move plan so
+     * the same gesture can still settle as a normal reorder.
+     */
+    private var folderFallbackMove: AppListCommand.Move? = null
     private var scheduledFolderTarget: AppItemKey? = null
     private var scheduledFolderDeadlineMillis = Long.MIN_VALUE
     private var released = false
@@ -117,10 +141,22 @@ internal class NativeAppListDragController(
         val folderCandidate = host.folderKeyAt(x, y).takeIf {
             allowFolderCreation()
         }
+        // 开启「允许创建文件夹」后不再播实时避让位移（老师指定）。
+        //
+        // 两件事抢同一个悬停语义：拖到另一个图标上，既可以理解成「插到它
+        // 前面」（邻居让位）也可以理解成「和它合成文件夹」。同时播避让，
+        // 手指底下的格子会一边让位一边高亮成文件夹目标，落手前根本看不出
+        // 会发生哪一种。所以文件夹功能开着时，把实时预览目标掐成 null：
+        // 状态机不再发 Move 效果，也就没有 previewMove 的位移动画。
+        //
+        // 排序本身不受影响——onUp 仍然拿真实的 reorderTarget 去提交，
+        // 且 lastMoveTarget 停在 source 上，那条「与上次预览相同就跳过」
+        // 的短路不会误伤落手时的排序。
+        val previewTarget = if (allowFolderCreation()) null else reorderTarget
         val effects = machine.onMove(
             pointerX = x,
             pointerY = y,
-            targetKey = reorderTarget,
+            targetKey = previewTarget,
             speedPxPerMs = speed,
             nowMillis = eventTimeMillis,
             folderCandidateKey = folderCandidate,
@@ -231,6 +267,7 @@ internal class NativeAppListDragController(
                     host.dispatch(AppListCommand.DismissActions)
                 is NativeDragEffect.StartDrag -> {
                     folderCommandDispatched = false
+                    folderFallbackMove = null
                     if (!host.beginDragPreview(effect.key)) {
                         // The adapter snapshot changed after the long press.
                         // Never create an overlay without an owned stable-key
@@ -249,19 +286,26 @@ internal class NativeAppListDragController(
                     if (allowFolderCreation()) {
                         val command = host.planFolder(effect.source, effect.target)
                         if (command != null) {
-                            if (host.dispatch(command)) {
-                                host.previewFolderCommit(effect.source, effect.target)
+                            val result = host.dispatchFolder(command)
+                            if (result.accepted) {
+                                host.previewFolderCommit(
+                                    effect.source,
+                                    effect.target,
+                                    result.folderKey,
+                                )
                                 folderCommandDispatched = true
                             } else {
                                 // The UI/repository rejected the folder
                                 // request.  The target remains a valid
-                                // reorder destination, so settle the
-                                // existing preview as a normal move.
+                                // reorder destination. Restore exactly one
+                                // stable-key move preview so CommitDrag can
+                                // settle the same gesture normally.
+                                restoreFolderTargetAsMove(effect.source, effect.target)
                             }
                         } else {
                             // A target rejected by the existing folder policy
-                            // remains a valid reorder destination, so keep the
-                            // already-running stable-key preview as a move.
+                            // remains a valid reorder destination.
+                            restoreFolderTargetAsMove(effect.source, effect.target)
                         }
                     }
                 NativeDragEffect.CommitDrag -> {
@@ -273,21 +317,31 @@ internal class NativeAppListDragController(
                         host.discardDragPreviewAwaitingAuthoritative()
                         host.endDrag(committed = true)
                     } else {
-                        val move = host.finishDragPreview(commit = true)
+                        val move = host.finishDragPreview(commit = true) ?: folderFallbackMove
                         val committed = move?.let(host::dispatch) == true
                         host.completeDragPreview(committed)
                         host.endDrag(committed = committed)
                     }
                     folderCommandDispatched = false
+                    folderFallbackMove = null
                 }
                 NativeDragEffect.FinishDrag -> {
                     host.finishDragPreview(commit = false)
                     host.endDrag(committed = false)
                     folderCommandDispatched = false
+                    folderFallbackMove = null
                 }
             }
         }
         if (!machine.isTracking) activePolicy = null
+    }
+
+    private fun restoreFolderTargetAsMove(source: AppItemKey, target: AppItemKey) {
+        // The virtual preview can fail if a concurrent adapter update removed
+        // either row. Keep a separately planned command as a safe fallback;
+        // both representations are keyed by stable IDs rather than positions.
+        folderFallbackMove = host.planMove(source, target)
+        host.previewMove(source, target)
     }
 
     private fun updateAutoScrollSchedule() {
@@ -348,7 +402,11 @@ internal class NativeAppListDragController(
                 machine.onMove(
                     pointerX = lastPointerX,
                     pointerY = lastPointerY,
-                    targetKey = host.reorderKeyAt(lastPointerX, lastPointerY),
+                    targetKey = if (allowFolderCreation()) {
+                        null
+                    } else {
+                        host.reorderKeyAt(lastPointerX, lastPointerY)
+                    },
                     speedPxPerMs = 0f,
                     nowMillis = now,
                     folderCandidateKey = currentTarget.takeIf { it == expectedTarget },
@@ -395,7 +453,11 @@ internal class NativeAppListDragController(
             machine.onMove(
                 pointerX = lastPointerX,
                 pointerY = lastPointerY,
-                targetKey = host.reorderKeyAt(lastPointerX, lastPointerY),
+                targetKey = if (allowFolderCreation()) {
+                    null
+                } else {
+                    host.reorderKeyAt(lastPointerX, lastPointerY)
+                },
                 speedPxPerMs = 0f,
                 nowMillis = scheduler.nowMillis,
                 folderCandidateKey = folderCandidate,

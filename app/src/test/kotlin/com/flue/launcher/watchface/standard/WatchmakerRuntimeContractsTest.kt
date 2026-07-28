@@ -84,6 +84,35 @@ class WatchmakerRuntimeContractsTest {
     }
 
     @Test
+    fun canvasTransformKeepsUniformScaleForNonSquareDesignExtents() {
+        // 320×385 声明 → 设计空间 512×616。视口按同比例给（500×601.6）时
+        // 两轴 scale 相等，没有 letterbox 边。
+        val matched = watchCanvasTransform(
+            viewWidth = 500f,
+            viewHeight = 601.5625f,
+            forceFill = false,
+            designWidth = 512f,
+            designHeight = 616f,
+        )
+        assertEquals(500f / 512f, matched.scale, 0.0001f)
+        assertEquals(0f, matched.left, 0.01f)
+        assertEquals(0f, matched.top, 0.01f)
+
+        // 视口偏方时按短边等比装入，长边留居中黑边——scale 仍是单一值，
+        // 绝不做各轴不同的拉伸。
+        val letterboxed = watchCanvasTransform(
+            viewWidth = 600f,
+            viewHeight = 400f,
+            forceFill = false,
+            designWidth = 512f,
+            designHeight = 616f,
+        )
+        assertEquals(400f / 616f, letterboxed.scale, 0.0001f)
+        assertEquals((600f - 512f * (400f / 616f)) / 2f, letterboxed.left, 0.01f)
+        assertEquals(0f, letterboxed.top, 0.01f)
+    }
+
+    @Test
     fun dynamicTagResolverDistinguishesUnavailableAndUnsupportedTags() {
         val calendar = Calendar.getInstance().apply {
             set(2026, Calendar.JULY, 23, 18, 5, 9)
@@ -184,13 +213,185 @@ class WatchmakerRuntimeContractsTest {
             weatherHumidity = 72,
         )
 
-        assertEquals("26", WatchmakerTagResolver.resolve("wtd", calendar, snapshot).renderedValue)
+        assertEquals("26°C", WatchmakerTagResolver.resolve("wtd", calendar, snapshot).renderedValue)
         assertEquals("Cloudy", WatchmakerTagResolver.resolve("wct", calendar, snapshot).renderedValue)
         assertEquals("03d", WatchmakerTagResolver.resolve("wci", calendar, snapshot).renderedValue)
         assertEquals("30", WatchmakerTagResolver.resolve("wth", calendar, snapshot).renderedValue)
         assertEquals("20", WatchmakerTagResolver.resolve("wtl", calendar, snapshot).renderedValue)
-        assertEquals("72", WatchmakerTagResolver.resolve("whp", calendar, snapshot).renderedValue)
+        assertEquals("72%", WatchmakerTagResolver.resolve("whp", calendar, snapshot).renderedValue)
         assertEquals("--", WatchmakerTagResolver.resolve("wcl", calendar, snapshot).renderedValue)
+    }
+
+    @Test
+    fun canonicalWeatherSnapshotRendersCelsiusAndFahrenheitWithoutDoubleConversion() {
+        assertEquals(WatchTemperatureUnit.CELSIUS, WatchTemperatureUnit.fromRaw(null))
+        assertEquals(WatchTemperatureUnit.FAHRENHEIT, WatchTemperatureUnit.fromRaw("°F"))
+        assertEquals(WatchTemperatureUnit.FAHRENHEIT, WatchTemperatureUnit.fromRaw("FAHRENHEIT"))
+        val calendar = Calendar.getInstance().apply {
+            clear()
+            set(2026, Calendar.JULY, 23, 18, 5, 9)
+        }
+        val celsius = WatchWeatherSnapshot(
+            temperatureCelsius = 25.0,
+            highCelsius = 30.0,
+            lowCelsius = 20.0,
+            displayUnit = WatchTemperatureUnit.CELSIUS,
+            icon = "3d",
+            condition = "Cloudy",
+            humidity = 72,
+            location = "Shanghai",
+            isDaytime = true,
+            cloudCoverFraction = 0.42,
+        )
+        val celsiusSnapshot = WatchDataSnapshot(weather = celsius)
+        assertEquals("C", WatchmakerTagResolver.resolve("wm", calendar, celsiusSnapshot).renderedValue)
+        assertEquals("25", WatchmakerTagResolver.resolve("wt", calendar, celsiusSnapshot).renderedValue)
+        assertEquals("25°C", WatchmakerTagResolver.resolve("wtd", calendar, celsiusSnapshot).renderedValue)
+        assertEquals("30°C", WatchmakerTagResolver.resolve("wthd", calendar, celsiusSnapshot).renderedValue)
+        assertEquals("20°C", WatchmakerTagResolver.resolve("wtld", calendar, celsiusSnapshot).renderedValue)
+        assertEquals("03d", WatchmakerTagResolver.resolve("wci", calendar, celsiusSnapshot).renderedValue)
+        assertEquals("Cloudy", WatchmakerTagResolver.resolve("wcct", calendar, celsiusSnapshot).renderedValue)
+        assertEquals("0.42", WatchmakerTagResolver.resolve("wcl", calendar, celsiusSnapshot).renderedValue)
+        assertEquals("Shanghai", WatchmakerTagResolver.resolve("wl", calendar, celsiusSnapshot).renderedValue)
+        assertEquals("Shanghai", WatchmakerTagResolver.resolve("wml", calendar, celsiusSnapshot).renderedValue)
+        assertEquals("72", WatchmakerTagResolver.resolve("wchn", calendar, celsiusSnapshot).renderedValue)
+        assertEquals("72%", WatchmakerTagResolver.resolve("whp", calendar, celsiusSnapshot).renderedValue)
+        assertEquals("72%", WatchmakerTagResolver.resolve("wchp", calendar, celsiusSnapshot).renderedValue)
+        assertEquals("true", WatchmakerTagResolver.resolve("wisday", calendar, celsiusSnapshot).renderedValue)
+
+        val nightSnapshot = WatchDataSnapshot(weather = celsius.copy(icon = "10n", isDaytime = false))
+        assertEquals("10d", WatchmakerTagResolver.resolve("wci", calendar, nightSnapshot).renderedValue)
+        assertEquals("false", WatchmakerTagResolver.resolve("wisday", calendar, nightSnapshot).renderedValue)
+
+        val fahrenheitSnapshot = WatchDataSnapshot(
+            weather = celsius.copy(displayUnit = WatchTemperatureUnit.FAHRENHEIT),
+        )
+        assertEquals("F", WatchmakerTagResolver.resolve("wm", calendar, fahrenheitSnapshot).renderedValue)
+        assertEquals("77", WatchmakerTagResolver.resolve("wt", calendar, fahrenheitSnapshot).renderedValue)
+        assertEquals("77°F", WatchmakerTagResolver.resolve("wtd", calendar, fahrenheitSnapshot).renderedValue)
+        assertEquals("86°F", WatchmakerTagResolver.resolve("wthd", calendar, fahrenheitSnapshot).renderedValue)
+        assertEquals("68°F", WatchmakerTagResolver.resolve("wtld", calendar, fahrenheitSnapshot).renderedValue)
+
+        // A legacy F string is converted to Celsius exactly once, then rendered
+        // back in the requested F presentation unit.
+        val legacyFahrenheit = WatchDataSnapshot(
+            weatherTemperature = "77",
+            weatherTemperatureUnit = "F",
+        )
+        assertEquals("77°F", WatchmakerTagResolver.resolve("wtd", calendar, legacyFahrenheit).renderedValue)
+    }
+
+    @Test
+    fun weatherUpdateAndForecastAliasesStayDeterministic() {
+        val now = Calendar.getInstance().apply {
+            clear()
+            timeZone = java.util.TimeZone.getTimeZone("UTC")
+            set(2026, Calendar.JULY, 23, 18, 5, 9)
+        }
+        val observedAt = now.timeInMillis
+        val snapshot = WatchDataSnapshot(
+            weather = WatchWeatherSnapshot(
+                observedAtEpochMs = observedAt,
+                lastUpdatedText = null,
+                displayUnit = WatchTemperatureUnit.CELSIUS,
+                forecast = listOf(
+                    WatchWeatherForecast(
+                        dayOffset = 1,
+                        temperatureCelsius = 23.0,
+                        highCelsius = 28.0,
+                        lowCelsius = 19.0,
+                        condition = "Rain",
+                        icon = "10n",
+                    ),
+                    WatchWeatherForecast(
+                        dayOffset = 2,
+                        temperatureCelsius = 24.0,
+                        highCelsius = 29.0,
+                        lowCelsius = 20.0,
+                        condition = "Cloudy",
+                        icon = "4d",
+                    ),
+                ),
+                hourlyForecast = listOf(
+                    WatchWeatherHourlyForecast(
+                        hourOffset = 1,
+                        hourOfDay = 19,
+                        temperatureCelsius = 24.0,
+                        condition = "Rain",
+                        icon = "10n",
+                    ),
+                ),
+            ),
+        )
+        assertEquals("18:05:09", WatchmakerTagResolver.resolve("wlu", now, snapshot).renderedValue)
+        assertEquals("28", WatchmakerTagResolver.resolve("wfah", now, snapshot).renderedValue)
+        assertEquals("19", WatchmakerTagResolver.resolve("wfal", now, snapshot).renderedValue)
+        assertEquals("Rain", WatchmakerTagResolver.resolve("wfact", now, snapshot).renderedValue)
+        assertEquals("10d", WatchmakerTagResolver.resolve("wfaci", now, snapshot).renderedValue)
+        assertEquals("28", WatchmakerTagResolver.resolve("wth1", now, snapshot).renderedValue)
+        assertEquals("28°C", WatchmakerTagResolver.resolve("wthd1", now, snapshot).renderedValue)
+        assertEquals("20", WatchmakerTagResolver.resolve("wtl2", now, snapshot).renderedValue)
+        assertEquals("04d", WatchmakerTagResolver.resolve("wci2", now, snapshot).renderedValue)
+        assertEquals("23", WatchmakerTagResolver.resolve("wf0dt", now, snapshot).renderedValue)
+        assertEquals("28", WatchmakerTagResolver.resolve("wf0dth", now, snapshot).renderedValue)
+        assertEquals("20", WatchmakerTagResolver.resolve("wf1dtl", now, snapshot).renderedValue)
+        assertEquals("Rain", WatchmakerTagResolver.resolve("wf0dct", now, snapshot).renderedValue)
+        assertEquals("10d", WatchmakerTagResolver.resolve("wf0dci", now, snapshot).renderedValue)
+        assertEquals("24", WatchmakerTagResolver.resolve("wf1ht", now, snapshot).renderedValue)
+        assertEquals("19", WatchmakerTagResolver.resolve("wf1hh", now, snapshot).renderedValue)
+        assertEquals("Rain", WatchmakerTagResolver.resolve("wf1hct", now, snapshot).renderedValue)
+        assertEquals("10n", WatchmakerTagResolver.resolve("wf1hci", now, snapshot).renderedValue)
+    }
+
+    @Test
+    fun timeAliasesUseMillisecondsAndCorrectHourRangesIncludingUtc() {
+        val calendar = Calendar.getInstance().apply {
+            clear()
+            timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
+            set(2026, Calendar.JULY, 23, 0, 5, 9)
+            set(Calendar.MILLISECOND, 42)
+        }
+        val snapshot = WatchDataSnapshot()
+        assertEquals("09", WatchmakerTagResolver.resolve("dsz", calendar, snapshot).renderedValue)
+        assertEquals("42", WatchmakerTagResolver.resolve("dss", calendar, snapshot).renderedValue)
+        assertEquals("042", WatchmakerTagResolver.resolve("dssz", calendar, snapshot).renderedValue)
+        assertEquals("9042", WatchmakerTagResolver.resolve("dsps", calendar, snapshot).renderedValue)
+        assertEquals("0", WatchmakerTagResolver.resolve("dh11", calendar, snapshot).renderedValue)
+        assertEquals("24", WatchmakerTagResolver.resolve("dh24", calendar, snapshot).renderedValue)
+        assertEquals("24", WatchmakerTagResolver.resolve("dh24z", calendar, snapshot).renderedValue)
+        assertEquals("16", WatchmakerTagResolver.resolve("dh23utc", calendar, snapshot).renderedValue)
+        assertEquals("16", WatchmakerTagResolver.resolve("dhutc24", calendar, snapshot).renderedValue)
+        assertEquals("04", WatchmakerTagResolver.resolve("dhutc12z", calendar, snapshot).renderedValue)
+        assertEquals("AM", WatchmakerTagResolver.resolve("da", calendar, snapshot).renderedValue)
+        assertEquals("54", WatchmakerTagResolver.resolve("drs", calendar, snapshot).renderedValue)
+        assertEquals(54.252f, WatchmakerTagResolver.resolve("drss", calendar, snapshot).renderedValue.toFloat(), 0.01f)
+        assertEquals(15.12f, WatchmakerTagResolver.resolve("drms", calendar, snapshot).renderedValue.toFloat(), 0.01f)
+        assertTrue(WatchmakerTagResolver.isKnown("dh11utc"))
+        assertTrue(WatchmakerTagResolver.isKnown("dhutc24"))
+        assertTrue(WatchmakerTagResolver.requiresFastTicks("rotate({drss})"))
+        assertTrue(WatchmakerTagResolver.requiresFastTicks("rotate({drm})"))
+        assertTrue(WatchmakerTagResolver.requiresFastTicks("progress({dtp})"))
+        assertTrue(WatchmakerTagResolver.requiresFastTicks("text {dssz}"))
+    }
+
+    @Test
+    fun weatherSnapshotCacheReturnsFreshEntriesOnly() {
+        val cache = WatchWeatherSnapshotCache(maxAgeMs = 1_000L)
+        val snapshot = WatchWeatherSnapshot(temperatureCelsius = 21.0)
+        cache.update(snapshot, receivedAtEpochMs = 10_000L)
+        assertEquals(snapshot, cache.snapshot(10_999L))
+        assertNull(cache.snapshot(11_001L))
+    }
+
+    @Test
+    fun weatherNightSpritesUseTheCompanionSheetAndWatchMakerCellRemap() {
+        assertEquals("images/weather_n.png", watchWeatherNightAssetReference("images/weather.png"))
+        assertEquals("weather_n", watchWeatherNightAssetReference("weather"))
+        assertEquals(3, watchWeatherNightSpriteIndex(0))
+        assertEquals(2, watchWeatherNightSpriteIndex(1))
+        assertEquals(2, watchWeatherNightSpriteIndex(2))
+        assertEquals(8, watchWeatherNightSpriteIndex(3))
+        assertEquals(5, watchWeatherNightSpriteIndex(5))
     }
 
     @Test

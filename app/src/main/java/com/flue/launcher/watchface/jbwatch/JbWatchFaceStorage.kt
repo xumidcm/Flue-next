@@ -2,8 +2,8 @@ package com.flue.launcher.watchface.jbwatch
 
 import android.content.Context
 import android.net.Uri
-import com.flue.launcher.watchface.LunchWatchFaceDescriptor
-import com.flue.launcher.watchface.LunchWatchFaceType
+import com.flue.launcher.watchface.WatchFaceDescriptor
+import com.flue.launcher.watchface.WatchFaceType
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
@@ -36,7 +36,7 @@ object JbWatchFaceStorage {
         return File(context.filesDir, ROOT_FOLDER).apply { mkdirs() }
     }
 
-    fun importArchive(context: Context, uri: Uri): LunchWatchFaceDescriptor {
+    fun importArchive(context: Context, uri: Uri): WatchFaceDescriptor {
         val tempZip = File.createTempFile("jbwatch_import_", ".watch", context.cacheDir)
         try {
             context.contentResolver.openInputStream(uri)?.use { input ->
@@ -69,7 +69,7 @@ object JbWatchFaceStorage {
         }
     }
 
-    fun importArchiveFile(context: Context, archive: File): LunchWatchFaceDescriptor {
+    fun importArchiveFile(context: Context, archive: File): WatchFaceDescriptor {
         val tempExtract = File(context.cacheDir, "jbwatch_extract_${System.currentTimeMillis()}").apply {
             deleteRecursively()
             mkdirs()
@@ -93,13 +93,13 @@ object JbWatchFaceStorage {
         }
     }
 
-    fun delete(context: Context, descriptor: LunchWatchFaceDescriptor): Boolean {
+    fun delete(context: Context, descriptor: WatchFaceDescriptor): Boolean {
         val dir = descriptor.sourceDirPath?.let(::File) ?: return false
         if (!dir.exists()) return false
         return dir.deleteRecursively()
     }
 
-    fun scan(context: Context): List<LunchWatchFaceDescriptor> {
+    fun scan(context: Context): List<WatchFaceDescriptor> {
         val root = rootDir(context)
         val dirs = root.listFiles()?.filter { it.isDirectory } ?: emptyList()
         return dirs.mapNotNull { dir ->
@@ -141,15 +141,14 @@ object JbWatchFaceStorage {
         )
     }
 
-    private fun JbWatchMetadata.toDescriptor(): LunchWatchFaceDescriptor {
-        return LunchWatchFaceDescriptor(
+    private fun JbWatchMetadata.toDescriptor(): WatchFaceDescriptor {
+        return WatchFaceDescriptor(
             id = "$JBWATCH_ID_PREFIX$id",
-            type = LunchWatchFaceType.JBWATCH,
+            type = WatchFaceType.JBWATCH,
             displayName = title,
             summary = summary,
             previewFilePath = previewFileName?.let { File(rootDir, it).absolutePath },
             sourceDirPath = rootDir.absolutePath,
-            watchFaceName = id
         )
     }
 

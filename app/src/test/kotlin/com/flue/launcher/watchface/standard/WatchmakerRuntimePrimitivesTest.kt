@@ -266,7 +266,15 @@ class WatchmakerRuntimePrimitivesTest {
         assertEquals(WatchTapAction.HeartRate, WatchTapActionParser.parse("widget_health"))
         assertEquals(WatchTapAction.HeartRate, WatchTapActionParser.parse("w_fit"))
         assertTrue(WatchTapActionParser.parse("script:do_anything()") is WatchTapAction.Unsupported)
-        assertTrue(WatchTapActionParser.parse("w_app:com.example/.MainActivity") is WatchTapAction.Unsupported)
+        // w_app: 现在解析为 AppLaunch 而非 Unsupported
+        val appLaunch = WatchTapActionParser.parse("w_app:com.example/.MainActivity")
+        assertTrue(appLaunch is WatchTapAction.AppLaunch)
+        assertEquals("com.example", (appLaunch as WatchTapAction.AppLaunch).packageName)
+        assertEquals("com.example.MainActivity", appLaunch.activityClass)
+        val pkgOnly = WatchTapActionParser.parse("m_app:com.example.pkg")
+        assertTrue(pkgOnly is WatchTapAction.AppLaunch)
+        assertEquals("com.example.pkg", (pkgOnly as WatchTapAction.AppLaunch).packageName)
+        assertNull(pkgOnly.activityClass)
         assertTrue(WatchTapActionParser.parse("https://example.com") is WatchTapAction.Unsupported)
     }
 
