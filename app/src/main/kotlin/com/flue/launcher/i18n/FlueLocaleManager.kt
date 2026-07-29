@@ -63,25 +63,25 @@ object FlueLocaleManager {
         )
     }
 
-    /**
-     * 如果保存了非系统语言，返回应用了该语言的 [Context]；
-     * 否则原样返回 [context]。
-     */
+    /** 返回应用了已保存语言的 [Context]。跟随系统时也显式限制到受支持语言。 */
     fun applyLocale(context: Context): Context {
         val language = getSavedLanguage(context)
         val locale = localeForLanguage(language, systemLocale())
         Locale.setDefault(locale)
-        if (language.isBlank()) return context
-        val config = Configuration(context.resources.configuration)
-        config.setLocale(locale)
-        return context.createConfigurationContext(config)
+        return context.withLocale(locale)
     }
 
-    /** 获取当前生效的语言代码（跟随系统时返回系统语言标签）。 */
+    /**
+     * 为尚未持久化的语言选择创建资源 Context。
+     * 用于让“需要重启”对话框立即显示目标语言，而不是旧 Activity 的语言。
+     */
+    fun contextForLanguageSelection(context: Context, language: String): Context =
+        context.withLocale(localeForLanguage(language, systemLocale()))
+
+    /** 获取当前实际生效的受支持语言代码。 */
     fun effectiveLanguage(context: Context): String {
         val saved = getSavedLanguage(context)
-        if (saved.isNotBlank()) return saved
-        return systemLocale().language.ifBlank { "zh" }
+        return localeForLanguage(saved, systemLocale()).language
     }
 
     /** 所有可选语言描述（用于设置页渲染）。 */
@@ -147,8 +147,21 @@ private fun canonicalLanguage(language: String?): String {
 internal fun localeForLanguage(language: String?, systemLocale: Locale): Locale {
     val canonicalLanguage = canonicalLanguage(language)
     return if (canonicalLanguage.isBlank()) {
-        systemLocale
+        supportedSystemLocale(systemLocale)
     } else {
         Locale.forLanguageTag(canonicalLanguage)
     }
+}
+
+/** Unsupported system locales explicitly fall back to English resources. */
+internal fun supportedSystemLocale(systemLocale: Locale): Locale =
+    when (systemLocale.language.lowercase(Locale.ROOT)) {
+        "zh", "en", "ja" -> systemLocale
+        else -> Locale.ENGLISH
+    }
+
+private fun Context.withLocale(locale: Locale): Context {
+    val config = Configuration(resources.configuration)
+    config.setLocale(locale)
+    return createConfigurationContext(config)
 }

@@ -19,12 +19,95 @@ class WatchmakerRuntimePrimitivesTest {
         assertEquals("images/b.png", selectWatchGifFrame(paths, 100, 100)?.path)
         assertEquals(0, selectWatchGifFrame(paths, 300, 100)?.index)
         assertEquals(1, selectWatchGifFrame(paths, 1, 0)?.index)
+        assertEquals(0, selectWatchGifFrame(paths, 49)?.index)
+        assertEquals(1, selectWatchGifFrame(paths, 50)?.index)
         assertEquals(
             MAX_WATCH_GIF_FRAME_PATHS,
             parseWatchGifPaths(
                 (0..MAX_WATCH_GIF_FRAME_PATHS + 10).joinToString("`") { "images/$it.png" },
             ).size,
         )
+    }
+
+    @Test
+    fun editorVideoSequencesAreNotTruncatedAtTheLegacy128FrameLimit() {
+        val paths = (0 until 256).joinToString("`") { index ->
+            "images/frame_${index.toString().padStart(5, '0')}.jpg"
+        }
+
+        val parsed = parseWatchGifPaths(paths)
+
+        assertEquals(256, parsed.size)
+        assertEquals("images/frame_00255.jpg", parsed.last())
+        assertEquals(255, watchGifFrameIndex(parsed.size, 25_500L, 100L))
+        assertEquals(0, watchGifFrameIndex(parsed.size, 25_600L, 100L))
+    }
+
+    @Test
+    fun galleryFramesAcceptProviderAndEditorListsAndLoopByDurOnSeconds() {
+        assertEquals(
+            listOf("gallery/a.jpg", "gallery/b.jpg", "gallery/c.jpg"),
+            parseWatchGalleryPaths("gallery/a.jpg|gallery/b.jpg`gallery/c.jpg"),
+        )
+        assertEquals(5_000L, watchGalleryFrameDurationMs(0f))
+        assertEquals(250L, watchGalleryFrameDurationMs(0.25f))
+        assertEquals(0, watchGalleryFrameIndex(3, elapsedMs = 4_999L, durationOnSeconds = 5f))
+        assertEquals(1, watchGalleryFrameIndex(3, elapsedMs = 5_000L, durationOnSeconds = 5f))
+        assertEquals(0, watchGalleryFrameIndex(3, elapsedMs = 15_000L, durationOnSeconds = 5f))
+        assertTrue(watchLayerRequiresFrameTicks("gallery_2d", emptyMap()))
+    }
+
+    @Test
+    fun ordinaryImageLayersWithGifContentStillRequestFrameTicks() {
+        assertTrue(watchLayerRequiresFrameTicks("image", mapOf("path" to "images/background.gif")))
+        assertTrue(watchLayerRequiresFrameTicks("image", mapOf("path" to "a.png`b.png")))
+        assertTrue(watchLayerRequiresFrameTicks("image_gif", mapOf("path" to "frame.png")))
+        assertFalse(watchLayerRequiresFrameTicks("image", mapOf("path" to "background.png")))
+    }
+
+    @Test
+    fun legacyCounterTagsRepeatReverseAndRespectDelay() {
+        assertEquals("50", resolveWatchCounterTag("c_0_100_2_st", 1_000L))
+        assertEquals("100", resolveWatchCounterTag("c_0_100_2_st", 8_000L))
+        assertEquals("25", resolveWatchCounterTag("c_0_100_2_rp", 2_500L))
+        assertEquals("75", resolveWatchCounterTag("c_0_100_2_rv", 2_500L))
+        assertEquals("0", resolveWatchCounterTag("c_0_100_2_rv_2", 1_000L))
+        assertEquals("50", resolveWatchCounterTag("c_0_100_2_rv_2", 3_000L))
+        assertEquals("1.235", resolveWatchCounterTag("c_elapsed", 1_235L))
+        assertNull(resolveWatchCounterTag("c_bad", 1_000L))
+
+        assertTrue(isWatchCounterTag("c_-20.5_20.5_3_rv"))
+        assertTrue(watchCounterRequiresFrameTicks("{c_-20.5_20.5_3_rv}"))
+        assertTrue(WatchmakerTagResolver.requiresFastTicks("{c_0_100_2_rp}"))
+        assertFalse(watchCounterRequiresFrameTicks("{dh24}:{dmz}"))
+    }
+
+    @Test
+    fun slideTextAnimationMovesInAndLoopsWithoutAHiddenBlackFrame() {
+        val entering = watchTextAnimationFrame(
+            animIn = "SlideLeft",
+            animOut = "SlideLeft",
+            durationInSeconds = 1f,
+            durationOnSeconds = 1f,
+            durationOutSeconds = 1f,
+            durationOffSeconds = 0.5f,
+            delayStartSeconds = 0f,
+            repeatCount = -1,
+            restartOnLoad = true,
+            elapsedMs = 0L,
+        )
+        assertEquals(WatchTextAnimationPhase.ENTERING, entering.phase)
+        assertTrue(entering.translationX > 0f)
+
+        val visible = watchTextAnimationFrame(
+            "SlideLeft", "SlideLeft", 1f, 1f, 1f, 0.5f, 0f, -1, true, 1_500L,
+        )
+        assertEquals(WatchTextAnimationPhase.VISIBLE, visible.phase)
+
+        val nextCycle = watchTextAnimationFrame(
+            "SlideLeft", "SlideLeft", 1f, 1f, 1f, 0.5f, 0f, -1, true, 3_500L,
+        )
+        assertEquals(WatchTextAnimationPhase.ENTERING, nextCycle.phase)
     }
 
     @Test

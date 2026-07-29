@@ -578,12 +578,11 @@ internal fun weatherTemperatureNumber(celsius: Double?, unit: WatchTemperatureUn
     val value = celsius?.takeIf(Double::isFinite)?.let {
         if (unit == WatchTemperatureUnit.FAHRENHEIT) it * 9.0 / 5.0 + 32.0 else it
     } ?: return null
-    val rounded = round(value * 10.0) / 10.0
-    return if (rounded == rounded.toLong().toDouble()) {
-        rounded.toLong().toString()
-    } else {
-        java.lang.String.format(Locale.US, "%.1f", rounded)
-    }
+    // WatchMaker temperature tags are display values, not raw sensor samples.
+    // Keeping fractional source precision here leaked strings such as
+    // `23.6000°` through legacy/JB expressions. Round once at the shared
+    // resolver boundary so the runtime, editor and every forecast alias agree.
+    return round(value).toLong().toString()
 }
 
 internal fun weatherTemperatureWithUnit(celsius: Double?, unit: WatchTemperatureUnit): String? =
@@ -625,16 +624,46 @@ enum class WatchSourceReloadMode {
 }
 
 /**
- * Refreshing the same installed face must not expose an empty renderer while
- * watch.xml is parsed again. A different descriptor cannot reuse the previous
- * frame because it belongs to another package.
+ * Generation gate for handing an editor's live transform to a freshly parsed
+ * watch source. Both descriptor and refresh token participate so a late load
+ * from another face can never clear the transform currently under the finger.
+ */
+class WatchLiveTransformHandoff {
+    private data class SourceIdentity(
+        val descriptorKey: String,
+        val refreshToken: Int,
+    )
+
+    private var pending: SourceIdentity? = null
+
+    fun arm(descriptorKey: String, refreshToken: Int) {
+        pending = SourceIdentity(descriptorKey, refreshToken)
+    }
+
+    fun cancel() {
+        pending = null
+    }
+
+    fun consumeIfReady(descriptorKey: String, refreshToken: Int): Boolean {
+        if (pending != SourceIdentity(descriptorKey, refreshToken)) return false
+        pending = null
+        return true
+    }
+}
+
+/**
+ * Never expose an empty renderer while a replacement source is prepared.
+ *
+ * A different descriptor cannot reuse the previous package's assets as its own,
+ * but the view can keep the already-rendered face visible and hand over
+ * atomically once the new source and its first visual assets are ready.
  */
 fun watchSourceReloadMode(
     currentDescriptorKey: String?,
     nextDescriptorKey: String,
     hasPreparedSource: Boolean,
 ): WatchSourceReloadMode =
-    if (hasPreparedSource && currentDescriptorKey == nextDescriptorKey) {
+    if (hasPreparedSource) {
         WatchSourceReloadMode.KEEP_CURRENT_UNTIL_READY
     } else {
         WatchSourceReloadMode.CLEAR_BEFORE_LOAD
@@ -1094,13 +1123,15 @@ object WatchmakerTagResolver {
         val normalized = tag.trim().lowercase(Locale.ROOT)
         return normalized in builtInTags ||
             normalized in knownUnavailableTags ||
+            isWatchCounterTag(normalized) ||
             utcBaseTag(normalized) != null ||
             forecastTagParts(normalized) != null ||
             hourlyForecastTagParts(normalized) != null
     }
 
     /** Shared high-refresh vocabulary for runtime and editor preview. */
-    fun requiresFastTicks(raw: String): Boolean = fastTickTagPattern.containsMatchIn(raw)
+    fun requiresFastTicks(raw: String): Boolean =
+        fastTickTagPattern.containsMatchIn(raw) || watchCounterRequiresFrameTicks(raw)
 
     fun resolve(
         tag: String,

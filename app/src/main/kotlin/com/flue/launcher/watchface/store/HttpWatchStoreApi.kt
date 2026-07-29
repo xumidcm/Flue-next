@@ -488,7 +488,10 @@ class HttpWatchStoreApi(
         const val MAX_PREVIEW_BYTES: Long = 6L * 1024L * 1024L
         // Keep transport and installer budgets aligned. A lower HTTP limit
         // would reject valid font/media-heavy packages before validation.
-        const val MAX_WATCH_BYTES: Long = 96L * 1024L * 1024L
+        // Keep public-store downloads aligned with WatchArchiveInstaller. A
+        // package accepted from local storage must not be rejected solely
+        // because it came through the community server.
+        const val MAX_WATCH_BYTES: Long = 500L * 1024L * 1024L
 
         /** Server-side cap for one uploaded `.watch` archive. */
         const val MAX_UPLOAD_BYTES: Long = 50L * 1024L * 1024L

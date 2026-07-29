@@ -3,7 +3,19 @@ package com.flue.launcher.ui.common
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
+
+const val DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP = 40
+const val MAX_OVERLAY_MASK_CORNER_RADIUS_DP = 120
+
+fun normalizeOverlayMaskCornerRadiusDp(value: Int): Int =
+    ((value.coerceIn(0, MAX_OVERLAY_MASK_CORNER_RADIUS_DP) / 5f).roundToInt() * 5)
+        .coerceIn(0, MAX_OVERLAY_MASK_CORNER_RADIUS_DP)
 
 /**
  * 屏幕形状来源的唯一入口。
@@ -29,3 +41,13 @@ fun isFlueScreenRound(): Boolean = when (LocalFlueScreenShapeOverride.current) {
     FlueScreenShape.SQUARE -> false
     FlueScreenShape.AUTO -> LocalConfiguration.current.isScreenRound
 }
+
+/** Shared root mask for Smart Stack, Control Center and the widget page. */
+@Composable
+@ReadOnlyComposable
+fun flueOverlayMaskShape(squareCornerRadiusDp: Int): Shape =
+    if (isFlueScreenRound()) {
+        CircleShape
+    } else {
+        RoundedCornerShape(normalizeOverlayMaskCornerRadiusDp(squareCornerRadiusDp).dp)
+    }

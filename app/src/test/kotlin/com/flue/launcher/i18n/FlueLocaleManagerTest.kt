@@ -58,10 +58,12 @@ class FlueLocaleManagerTest {
     }
 
     @Test
-    fun localeSelectionUsesSystemLocaleInsteadOfPreviousForcedLocale() {
+    fun localeSelectionUsesSupportedSystemLocaleAndFallsBackToEnglish() {
         val systemLocale = Locale.CANADA_FRENCH
 
-        assertEquals(systemLocale, localeForLanguage("", systemLocale))
+        assertEquals(Locale.ENGLISH, localeForLanguage("", systemLocale))
+        assertEquals(Locale.JAPAN, localeForLanguage("", Locale.JAPAN))
+        assertEquals(Locale.SIMPLIFIED_CHINESE, localeForLanguage("", Locale.SIMPLIFIED_CHINESE))
         assertEquals("zh", localeForLanguage("zh", systemLocale).language)
         assertEquals("en", localeForLanguage("en", systemLocale).language)
         assertEquals("ja", localeForLanguage("ja", systemLocale).language)
@@ -163,7 +165,7 @@ class FlueLocaleManagerTest {
                     systemLocale,
                 ),
             )
-            assertEquals(systemLocale, Locale.getDefault())
+            assertEquals(Locale.ENGLISH, Locale.getDefault())
         } finally {
             Locale.setDefault(previousLocale)
         }

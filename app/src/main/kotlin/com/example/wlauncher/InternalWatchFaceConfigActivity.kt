@@ -62,6 +62,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -116,6 +117,7 @@ private fun InternalWatchFaceConfigScreen(
     onBack: () -> Unit
 ) {
     val vm: LauncherViewModel = viewModel()
+    val application = vm.getApplication<Application>()
     val launcherStyle = LauncherTheme.style
     val photoPath by vm.builtInPhotoPath.collectAsStateWithLifecycle()
     val videoPath by vm.builtInVideoPath.collectAsStateWithLifecycle()
@@ -272,11 +274,11 @@ private fun InternalWatchFaceConfigScreen(
     val picker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
             val savedPath = handlePickedMedia(
-                application = vm.getApplication(),
+                application = application,
                 watchFaceId = watchFaceId,
                 sourceUri = uri,
                 onMessage = { message ->
-                    Toast.makeText(vm.getApplication(), message, Toast.LENGTH_SHORT).show()
+                    Toast.makeText(application, message, Toast.LENGTH_SHORT).show()
                 }
             )
             if (!savedPath.isNullOrBlank()) {
@@ -291,12 +293,20 @@ private fun InternalWatchFaceConfigScreen(
     }
     val fontPicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
-            val savedPath = InternalWatchFaceStorage.copyFont(vm.getApplication(), uri)
+            val savedPath = InternalWatchFaceStorage.copyFont(application, uri)
             if (savedPath.isNullOrBlank()) {
-                Toast.makeText(vm.getApplication(), "\u4FDD\u5B58\u5B57\u4F53\u5931\u8D25", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    application,
+                    application.getString(R.string.internal_watchface_font_save_failed),
+                    Toast.LENGTH_SHORT,
+                ).show()
             } else {
                 vm.setBuiltInWatchFaceFontPath(savedPath)
-                Toast.makeText(vm.getApplication(), "\u8868\u76D8\u5B57\u4F53\u5DF2\u66F4\u65B0", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    application,
+                    application.getString(R.string.internal_watchface_font_updated),
+                    Toast.LENGTH_SHORT,
+                ).show()
             }
         }
     }
@@ -305,11 +315,11 @@ private fun InternalWatchFaceConfigScreen(
         val uriText = result.data?.getStringExtra(EXTRA_FILE_MANAGER_RESULT_URI).orEmpty()
         val uri = uriText.takeIf { it.isNotBlank() }?.let(Uri::parse) ?: return@rememberLauncherForActivityResult
         val savedPath = handlePickedMedia(
-            application = vm.getApplication(),
+            application = application,
             watchFaceId = watchFaceId,
             sourceUri = uri,
             onMessage = { message ->
-                Toast.makeText(vm.getApplication(), message, Toast.LENGTH_SHORT).show()
+                Toast.makeText(application, message, Toast.LENGTH_SHORT).show()
             }
         )
         if (!savedPath.isNullOrBlank()) {
@@ -344,14 +354,20 @@ private fun InternalWatchFaceConfigScreen(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
         Text(
-            text = if (isPhoto) "\u56FE\u7247\u8868\u76D8\u8BBE\u7F6E" else "\u89C6\u9891\u8868\u76D8\u8BBE\u7F6E",
+            text = stringResource(
+                if (isPhoto) R.string.internal_watchface_photo_title
+                else R.string.internal_watchface_video_title,
+            ),
             color = launcherStyle.titleColor,
             fontSize = 22.sp,
             fontWeight = FontWeight.Bold
         )
         Spacer(modifier = Modifier.height(10.dp))
         Text(
-            text = if (isPhoto) "\u9009\u62E9\u4E00\u5F20\u56FE\u7247\u4F5C\u4E3A\u8868\u76D8\u80CC\u666F" else "\u9009\u62E9\u4E00\u4E2A\u89C6\u9891\u4F5C\u4E3A\u8868\u76D8\u80CC\u666F",
+            text = stringResource(
+                if (isPhoto) R.string.internal_watchface_photo_subtitle
+                else R.string.internal_watchface_video_subtitle,
+            ),
             color = WatchColors.TextTertiary,
             fontSize = 13.sp
         )
@@ -417,7 +433,7 @@ private fun InternalWatchFaceConfigScreen(
         Spacer(modifier = Modifier.height(22.dp))
 
         Text(
-            text = "\u8868\u76D8\u6837\u5F0F",
+            text = stringResource(R.string.internal_watchface_style),
             color = launcherStyle.titleColor,
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,
@@ -435,7 +451,7 @@ private fun InternalWatchFaceConfigScreen(
         if (localClockStyle == WatchFaceClockStyle.MD3E_CLOCK) {
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "MD3E\u8868\u76D8\u5F62\u72B6",
+                text = stringResource(R.string.internal_watchface_md3e_shape),
                 color = launcherStyle.titleColor,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -454,7 +470,7 @@ private fun InternalWatchFaceConfigScreen(
         Spacer(modifier = Modifier.height(12.dp))
         if (localClockStyle == WatchFaceClockStyle.MD3E_CLOCK) {
             ToggleRow(
-                label = "\u4ECE\u8868\u76D8\u81EA\u52A8\u53D6\u8272",
+                label = stringResource(R.string.internal_watchface_auto_colors),
                 enabled = localMd3eAutoColors,
                 onToggle = {
                     localMd3eAutoColors = !localMd3eAutoColors
@@ -468,7 +484,7 @@ private fun InternalWatchFaceConfigScreen(
             if (!localMd3eAutoColors) {
                 Spacer(modifier = Modifier.height(10.dp))
                 ColorRgbSliderGroup(
-                    title = "\u6587\u5B57\u989C\u8272",
+                    title = stringResource(R.string.internal_watchface_text_color),
                     argb = localMd3eTextColorArgb,
                     onColorChange = {
                         localMd3eTextColorArgb = it
@@ -477,7 +493,7 @@ private fun InternalWatchFaceConfigScreen(
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 ColorRgbSliderGroup(
-                    title = "\u8868\u76D8\u989C\u8272",
+                    title = stringResource(R.string.internal_watchface_face_color),
                     argb = localMd3eFaceColorArgb,
                     onColorChange = {
                         localMd3eFaceColorArgb = it
@@ -486,7 +502,7 @@ private fun InternalWatchFaceConfigScreen(
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 ColorRgbSliderGroup(
-                    title = "\u65F6\u9488\u989C\u8272",
+                    title = stringResource(R.string.internal_watchface_hour_hand_color),
                     argb = localMd3eHourColorArgb,
                     onColorChange = {
                         localMd3eHourColorArgb = it
@@ -495,7 +511,7 @@ private fun InternalWatchFaceConfigScreen(
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 ColorRgbSliderGroup(
-                    title = "\u5206\u9488\u989C\u8272",
+                    title = stringResource(R.string.internal_watchface_minute_hand_color),
                     argb = localMd3eMinuteColorArgb,
                     onColorChange = {
                         localMd3eMinuteColorArgb = it
@@ -504,7 +520,7 @@ private fun InternalWatchFaceConfigScreen(
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 ColorRgbSliderGroup(
-                    title = "\u79D2\u9488\u989C\u8272",
+                    title = stringResource(R.string.internal_watchface_second_hand_color),
                     argb = localMd3eSecondColorArgb,
                     onColorChange = {
                         localMd3eSecondColorArgb = it
@@ -514,7 +530,7 @@ private fun InternalWatchFaceConfigScreen(
             }
         } else {
             ToggleRow(
-                label = "\u4F7F\u7528\u8868\u76D8\u4E3B\u9898\u8272",
+                label = stringResource(R.string.internal_watchface_use_theme_color),
                 enabled = localUseThemeTextColor,
                 onToggle = {
                     localUseThemeTextColor = !localUseThemeTextColor
@@ -528,7 +544,7 @@ private fun InternalWatchFaceConfigScreen(
             if (!localUseThemeTextColor) {
                 Spacer(modifier = Modifier.height(10.dp))
                 ColorRgbSliderGroup(
-                    title = "\u6587\u5B57\u989C\u8272",
+                    title = stringResource(R.string.internal_watchface_text_color),
                     argb = localTextColorArgb,
                     onColorChange = {
                         localTextColorArgb = it
@@ -541,7 +557,7 @@ private fun InternalWatchFaceConfigScreen(
         if (localClockStyle == WatchFaceClockStyle.DIGITAL) {
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-            text = "\u65F6\u95F4\u4F4D\u7F6E",
+            text = stringResource(R.string.internal_watchface_clock_position),
             color = launcherStyle.titleColor,
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,
@@ -563,7 +579,10 @@ private fun InternalWatchFaceConfigScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-            text = "\u65F6\u95F4\u5927\u5C0F  ${localClockSize.toInt()}sp",
+            text = stringResource(
+                R.string.internal_watchface_clock_size_fmt,
+                localClockSize.toInt(),
+            ),
             color = launcherStyle.titleColor,
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,
@@ -588,7 +607,7 @@ private fun InternalWatchFaceConfigScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
             ToggleRow(
-            label = "\u7C97\u4F53\u65F6\u949F",
+            label = stringResource(R.string.internal_watchface_bold_clock),
             enabled = localClockBold,
             onToggle = {
                 localClockBold = !localClockBold
@@ -603,7 +622,7 @@ private fun InternalWatchFaceConfigScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
         ToggleRow(
-            label = "\u663E\u793A\u79D2",
+            label = stringResource(R.string.internal_watchface_show_seconds),
             enabled = localShowSeconds,
             onToggle = {
                 localShowSeconds = !localShowSeconds
@@ -629,9 +648,10 @@ private fun InternalWatchFaceConfigScreen(
         )
 
         Spacer(modifier = Modifier.height(8.dp))
-        ActionButton(
-            text = watchFaceFontPath?.let { "\u66F4\u6362\u8868\u76D8\u5B57\u4F53\uFF1A${File(it).name}" } ?: "\u9009\u62E9\u8868\u76D8\u5B57\u4F53"
-        ) {
+        val fontActionText = watchFaceFontPath?.let { path ->
+            stringResource(R.string.internal_watchface_change_font_fmt, File(path).name)
+        } ?: stringResource(R.string.internal_watchface_select_font)
+        ActionButton(text = fontActionText) {
             fontPicker.launch(
                 arrayOf(
                     "font/*",
@@ -645,7 +665,7 @@ private fun InternalWatchFaceConfigScreen(
 
         if (!watchFaceFontPath.isNullOrBlank()) {
             Spacer(modifier = Modifier.height(8.dp))
-            ActionButton(text = "\u6062\u590D\u9ED8\u8BA4\u5B57\u4F53") {
+            ActionButton(text = stringResource(R.string.internal_watchface_reset_font)) {
                 vm.setBuiltInWatchFaceFontPath(null)
             }
         }
@@ -653,7 +673,7 @@ private fun InternalWatchFaceConfigScreen(
         if (!isPhoto) {
             Spacer(modifier = Modifier.height(8.dp))
             ToggleRow(
-                label = "\u89C6\u9891\u94FA\u6EE1\u5168\u5C4F",
+                label = stringResource(R.string.internal_watchface_video_fill_screen),
                 enabled = localVideoFillScreen,
                 onToggle = {
                     localVideoFillScreen = !localVideoFillScreen
@@ -662,7 +682,7 @@ private fun InternalWatchFaceConfigScreen(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "\u65F6\u949F\u989C\u8272",
+                text = stringResource(R.string.internal_watchface_clock_color),
                 color = launcherStyle.titleColor,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -682,9 +702,15 @@ private fun InternalWatchFaceConfigScreen(
 
         ActionButton(
             text = if (localPath.isNullOrBlank()) {
-                if (isPhoto) "\u9009\u62E9\u56FE\u7247" else "\u9009\u62E9\u89C6\u9891"
+                stringResource(
+                    if (isPhoto) R.string.internal_watchface_select_image
+                    else R.string.internal_watchface_select_video,
+                )
             } else {
-                if (isPhoto) "\u66F4\u6362\u56FE\u7247" else "\u66F4\u6362\u89C6\u9891"
+                stringResource(
+                    if (isPhoto) R.string.internal_watchface_change_image
+                    else R.string.internal_watchface_change_video,
+                )
             },
             onLongClick = {
                 val intent = Intent(vm.getApplication(), BuiltInFileManagerActivity::class.java).apply {
@@ -702,7 +728,10 @@ private fun InternalWatchFaceConfigScreen(
         Spacer(modifier = Modifier.height(10.dp))
 
         ActionButton(
-            text = if (isPhoto) "\u6E05\u9664\u56FE\u7247" else "\u6E05\u9664\u89C6\u9891",
+            text = stringResource(
+                if (isPhoto) R.string.internal_watchface_clear_image
+                else R.string.internal_watchface_clear_video,
+            ),
             enabled = !localPath.isNullOrBlank()
         ) {
             localPath = null
@@ -715,7 +744,7 @@ private fun InternalWatchFaceConfigScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        ActionButton(text = "\u8FD4\u56DE") {
+        ActionButton(text = stringResource(R.string.common_back)) {
             persistPendingChanges()
             onBack()
         }
@@ -787,10 +816,10 @@ private fun handlePickedMedia(
     }
 
     if (savedPath.isNullOrBlank()) {
-        onMessage("\u4FDD\u5B58\u5A92\u4F53\u5931\u8D25")
+        onMessage(context.getString(R.string.internal_watchface_media_save_failed))
         return null
     }
-    onMessage("\u8868\u76D8\u5A92\u4F53\u5DF2\u66F4\u65B0")
+    onMessage(context.getString(R.string.internal_watchface_media_updated))
     return savedPath
 }
 @Composable
@@ -804,12 +833,12 @@ private fun ClockStylePickerRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
         ) {
             SmallChoiceChip(
-                label = "\u6570\u5B57",
+                label = stringResource(R.string.internal_watchface_style_digital),
                 selected = current == WatchFaceClockStyle.DIGITAL,
                 modifier = Modifier.weight(1f)
             ) { onSelect(WatchFaceClockStyle.DIGITAL) }
             SmallChoiceChip(
-                label = "AW\u98CE\u683C",
+                label = stringResource(R.string.internal_watchface_style_apple),
                 selected = current == WatchFaceClockStyle.APPLE_WATCH,
                 modifier = Modifier.weight(1f)
             ) { onSelect(WatchFaceClockStyle.APPLE_WATCH) }
@@ -819,12 +848,12 @@ private fun ClockStylePickerRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
         ) {
             SmallChoiceChip(
-                label = "MD3\u98CE\u683C",
+                label = stringResource(R.string.internal_watchface_style_md3),
                 selected = current == WatchFaceClockStyle.MD3_ANALOG,
                 modifier = Modifier.weight(1f)
             ) { onSelect(WatchFaceClockStyle.MD3_ANALOG) }
             SmallChoiceChip(
-                label = "MD3E\u56FE\u5F62",
+                label = stringResource(R.string.internal_watchface_style_md3e),
                 selected = current == WatchFaceClockStyle.MD3E_CLOCK,
                 modifier = Modifier.weight(1f)
             ) { onSelect(WatchFaceClockStyle.MD3E_CLOCK) }
@@ -843,17 +872,17 @@ private fun Md3eShapePickerRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
     ) {
         SmallChoiceChip(
-            label = "\u66F2\u5947",
+            label = stringResource(R.string.internal_watchface_shape_cookie),
             selected = current == WatchFaceMd3eShape.COOKIE,
             modifier = Modifier.weight(1f)
         ) { onSelect(WatchFaceMd3eShape.COOKIE) }
         SmallChoiceChip(
-            label = "\u67D4\u661F",
+            label = stringResource(R.string.internal_watchface_shape_soft_star),
             selected = current == WatchFaceMd3eShape.SOFT_STAR,
             modifier = Modifier.weight(1f)
         ) { onSelect(WatchFaceMd3eShape.SOFT_STAR) }
         SmallChoiceChip(
-            label = "\u5706\u5F62",
+            label = stringResource(R.string.internal_watchface_shape_circle),
             selected = current == WatchFaceMd3eShape.CIRCLE,
             modifier = Modifier.weight(1f)
         ) { onSelect(WatchFaceMd3eShape.CIRCLE) }
@@ -867,7 +896,7 @@ private fun CustomTextField(
 ) {
     val launcherStyle = LauncherTheme.style
     Text(
-        text = "\u81EA\u5B9A\u4E49\u6587\u5B57",
+        text = stringResource(R.string.internal_watchface_custom_text),
         color = launcherStyle.titleColor,
         fontSize = 15.sp,
         fontWeight = FontWeight.SemiBold,
@@ -879,7 +908,10 @@ private fun CustomTextField(
         onValueChange = onValueChange,
         singleLine = true,
         placeholder = {
-            Text("\u663E\u793A\u5728\u8868\u76D8\u4E0A", color = WatchColors.TextTertiary)
+            Text(
+                stringResource(R.string.internal_watchface_custom_text_hint),
+                color = WatchColors.TextTertiary,
+            )
         },
         colors = TextFieldDefaults.colors(
             focusedContainerColor = WatchColors.SurfaceGlass,
@@ -981,20 +1013,20 @@ private fun PositionPickerRow(
     ) {
         listOf(
             listOf(
-                WatchClockPosition.TOP_LEFT to "\u5DE6\u4E0A",
-                WatchClockPosition.TOP_CENTER to "\u4E2D\u4E0A",
-                WatchClockPosition.TOP_RIGHT to "\u53F3\u4E0A"
+                WatchClockPosition.TOP_LEFT to stringResource(R.string.internal_watchface_position_top_left),
+                WatchClockPosition.TOP_CENTER to stringResource(R.string.internal_watchface_position_top_center),
+                WatchClockPosition.TOP_RIGHT to stringResource(R.string.internal_watchface_position_top_right),
             ),
             listOf(
-                WatchClockPosition.LEFT_CENTER to "\u5DE6\u4E2D",
-                WatchClockPosition.CENTER to "\u4E2D\u95F4",
-                WatchClockPosition.RIGHT_CENTER to "\u53F3\u4E2D"
+                WatchClockPosition.LEFT_CENTER to stringResource(R.string.internal_watchface_position_center_left),
+                WatchClockPosition.CENTER to stringResource(R.string.internal_watchface_position_center),
+                WatchClockPosition.RIGHT_CENTER to stringResource(R.string.internal_watchface_position_center_right),
             ),
             listOf(
-                WatchClockPosition.BOTTOM_LEFT to "\u5DE6\u4E0B",
-                WatchClockPosition.BOTTOM_CENTER to "\u4E2D\u4E0B",
-                WatchClockPosition.BOTTOM_RIGHT to "\u53F3\u4E0B"
-            )
+                WatchClockPosition.BOTTOM_LEFT to stringResource(R.string.internal_watchface_position_bottom_left),
+                WatchClockPosition.BOTTOM_CENTER to stringResource(R.string.internal_watchface_position_bottom_center),
+                WatchClockPosition.BOTTOM_RIGHT to stringResource(R.string.internal_watchface_position_bottom_right),
+            ),
         ).forEach { rowItems ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1027,12 +1059,12 @@ private fun ClockColorPickerRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
     ) {
         SmallChoiceChip(
-            label = "\u767D\u8272",
+            label = stringResource(R.string.internal_watchface_color_white),
             selected = current == WatchClockColorMode.WHITE,
             modifier = Modifier.width(120.dp)
         ) { onSelect(WatchClockColorMode.WHITE) }
         SmallChoiceChip(
-            label = "\u9ED1\u8272",
+            label = stringResource(R.string.internal_watchface_color_black),
             selected = current == WatchClockColorMode.BLACK,
             modifier = Modifier.width(120.dp)
         ) { onSelect(WatchClockColorMode.BLACK) }

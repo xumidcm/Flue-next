@@ -22,13 +22,14 @@ class ScaleBlurModifierTest {
     fun legacyBackdropCrossfadesClearAndPreblurredFramesWithoutAlphaJump() {
         assertEquals(LegacyBackdropBlend(1f, 0f), legacyBackdropBlend(Float.NaN))
         assertEquals(LegacyBackdropBlend(1f, 0f), legacyBackdropBlend(0f))
-        assertEquals(LegacyBackdropBlend(0.75f, 0.25f), legacyBackdropBlend(0.25f))
-        assertEquals(LegacyBackdropBlend(0f, 1f), legacyBackdropBlend(1f))
-        assertEquals(LegacyBackdropBlend(0f, 1f), legacyBackdropBlend(2f))
+        assertEquals(LegacyBackdropBlend(1f, 0.25f), legacyBackdropBlend(0.25f))
+        assertEquals(LegacyBackdropBlend(1f, 1f), legacyBackdropBlend(1f))
+        assertEquals(LegacyBackdropBlend(1f, 1f), legacyBackdropBlend(2f))
 
         for (step in 0..20) {
             val blend = legacyBackdropBlend(step / 20f)
-            assertEquals(1f, blend.clearAlpha + blend.blurredAlpha, 0.0001f)
+            assertEquals(1f, blend.clearAlpha, 0.0001f)
+            assertEquals(step / 20f, blend.blurredAlpha, 0.0001f)
         }
     }
 

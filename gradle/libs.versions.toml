@@ -12,6 +12,10 @@ graphics-shapes = "1.0.1"
 junit = "4.13.2"
 recyclerview = "1.4.0"
 robolectric = "4.16.1"
+# 0.9.x raises the Android AAR floor to compileSdk 37. Flue currently uses
+# AGP 8.13.2 / compileSdk 36, so keep the newest official API-36 build.
+miuix = "0.8.8"
+ffmpeg-kit = "8.1.7"
 
 [libraries]
 core-ktx = { module = "androidx.core:core-ktx", version.ref = "core-ktx" }
@@ -35,6 +39,9 @@ graphics-shapes = { module = "androidx.graphics:graphics-shapes", version.ref = 
 junit = { module = "junit:junit", version.ref = "junit" }
 recyclerview = { module = "androidx.recyclerview:recyclerview", version.ref = "recyclerview" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+miuix-icons = { module = "top.yukonga.miuix.kmp:miuix-icons", version.ref = "miuix" }
+miuix-core = { module = "top.yukonga.miuix.kmp:miuix", version.ref = "miuix" }
+ffmpeg-kit-video = { module = "dev.ffmpegkit-maintained:ffmpeg-kit-video", version.ref = "ffmpeg-kit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -9,14 +9,11 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
-import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
-import org.json.JSONArray
-import org.json.JSONObject
 import org.w3c.dom.Document
 import org.w3c.dom.Element
 import org.w3c.dom.Node
@@ -30,13 +27,12 @@ import javax.xml.transform.stream.StreamResult
  *
  * The converter intentionally owns format detection and conversion rather than
  * making the UI inspect archive entries. This keeps the editor independent from
- * HSC/WFF implementation details and lets us return an honest compatibility
+ * WFF implementation details and lets us return an honest compatibility
  * report when a source contains a feature Flue cannot render yet.
  */
 enum class WatchSourceFormat {
     WATCHMAKER_1,
     WATCHMAKER_2,
-    HSC,
     WFF,
     UNKNOWN,
 }
@@ -79,7 +75,6 @@ data class WatchFormatProbe(
  *
  * Capability baseline is WFTools 4c61b943. The implementation deliberately
  * keeps a small, dependency-free core suitable for old Wear devices:
- *  - HSC dial.json image/text/number/progress layers become WatchMaker layers.
  *  - WFF declarative XML image/text/arc/progress nodes are converted.
  *  - Studio 2.0 WatchMaker groups/themes are flattened to format 1.0 while
  *    unknown XML attributes and nodes remain in the DOM.
@@ -121,7 +116,6 @@ class WatchFormatConverter(
         return try {
             val probe = detect(extracted.root)
             when (probe.format) {
-                WatchSourceFormat.HSC -> convertHsc(extracted, output, probe)
                 WatchSourceFormat.WFF -> convertWff(extracted, output, probe)
                 WatchSourceFormat.WATCHMAKER_2 -> flattenWatchmaker(extracted, output, probe)
                 WatchSourceFormat.WATCHMAKER_1 -> {
@@ -146,7 +140,7 @@ class WatchFormatConverter(
                         preservedEntryCount = probe.entryNames.size,
                         unsupportedFeatures = listOf("unknown-format"),
                     ),
-                    message = "无法识别文件格式。支持 .watch、HSC dial.json 和 WFF watchface.xml。",
+                    message = "无法识别文件格式。支持 .watch 和 WFF watchface.xml。",
                 )
             }
         } catch (error: Exception) {
@@ -172,17 +166,9 @@ class WatchFormatConverter(
             .toList()
         val watchXml = names.firstOrNull { it.substringAfterLast('/').equals("watch.xml", true) }
         val watchPxml = names.firstOrNull { it.substringAfterLast('/').equals("watch.pxml", true) }
-        val dial = names.firstOrNull { it.substringAfterLast('/').equals("dial.json", true) }
         val wff = names.firstOrNull {
             it.substringAfterLast('/').equals("watchface.xml", true) ||
                 it.substringAfterLast('/').equals("watch_face.xml", true)
-        }
-        if (dial != null) {
-            val json = File(root, dial).readText(StandardCharsets.UTF_8)
-            val title = runCatching {
-                JSONObject(json).optStringAny("title", "name", "dialName")
-            }.getOrNull()
-            return WatchFormatProbe(WatchSourceFormat.HSC, title, names, false)
         }
         if (wff != null) {
             val title = runCatching {
@@ -223,111 +209,6 @@ class WatchFormatConverter(
             }
         }
         return WatchFormatProbe(WatchSourceFormat.UNKNOWN, null, names, false)
-    }
-
-    private fun convertHsc(
-        extracted: ExtractedArchive,
-        output: File,
-        probe: WatchFormatProbe,
-    ): WatchConversionResult {
-        val dialPath = probe.entryNames.first {
-            it.substringAfterLast('/').equals("dial.json", true)
-        }
-        val rootJson = JSONObject(File(extracted.root, dialPath).readText(StandardCharsets.UTF_8))
-        val drawpoints = rootJson.optJSONArrayAny("drawpoints", "drawPoints", "layers")
-        val warnings = mutableListOf<String>()
-        val unsupported = mutableListOf<String>()
-        val fixes = mutableListOf<String>()
-        val title = rootJson.optStringAny("title", "name", "dialName").ifBlank {
-            "HSC Converted"
-        }
-        val width = (rootJson.optIntAny("width", "canvasWidth", "screenWidth") ?: 512)
-            .coerceAtLeast(1)
-        val height = (rootJson.optIntAny("height", "canvasHeight", "screenHeight") ?: 512)
-            .coerceAtLeast(1)
-        val destinationRoot = temporaryOutputRoot(output)
-        val imagesDir = File(destinationRoot, "images").also { it.mkdirs() }
-        val fontsDir = File(destinationRoot, "fonts").also { it.mkdirs() }
-        val document = newWatchDocument(
-            title = title,
-            shape = if (width == height) "R" else "S",
-            width = width,
-            height = height,
-        )
-        val watch = document.documentElement
-        var converted = 0
-        if (drawpoints == null) {
-            destinationRoot.deleteRecursively()
-            return WatchConversionResult.Failure(
-                report = WatchConversionReport(
-                    sourceFormat = WatchSourceFormat.HSC,
-                    title = title,
-                    convertedLayerCount = 0,
-                    preservedEntryCount = extracted.entryNames.size,
-                    unsupportedFeatures = listOf("drawpoints"),
-                ),
-                message = "HSC dial.json 缺少 drawpoints 图层数组",
-            )
-        }
-        for (index in 0 until drawpoints.length()) {
-            val point = drawpoints.optJSONObject(index) ?: continue
-            val type = point.optStringAny("pointType", "type", "kind").ifBlank { "UNKNOWN" }
-            val normalized = type.uppercase(Locale.ROOT)
-            val layer = when {
-                normalized.startsWith("TEXT") || normalized.startsWith("TIME") ||
-                    normalized.startsWith("DATE") || normalized.startsWith("WEEK") ||
-                    normalized.contains("NUM") ->
-                    appendHscText(document, point, width, height, normalized, warnings)
-                normalized.contains("PICTURE") || normalized.contains("PICTRUE") ||
-                    normalized.contains("IMAGE") ->
-                    appendHscImage(
-                        extracted.root,
-                        imagesDir,
-                        document,
-                        point,
-                        width,
-                        height,
-                        warnings,
-                    )
-                normalized.contains("PROGRESS") || normalized.contains("PROCESS") ->
-                    appendHscProgress(document, point, width, height, warnings)
-                else -> null
-            }
-            if (layer != null) {
-                converted++
-            } else {
-                unsupported += type
-            }
-        }
-        copyHscFontsAndPreview(extracted.root, destinationRoot, fontsDir)
-        if (converted == 0) {
-            destinationRoot.deleteRecursively()
-            return WatchConversionResult.Failure(
-                report = WatchConversionReport(
-                    sourceFormat = WatchSourceFormat.HSC,
-                    title = title,
-                    convertedLayerCount = 0,
-                    preservedEntryCount = extracted.entryNames.size,
-                    unsupportedFeatures = unsupported.distinct().ifEmpty { listOf("no-renderable-layer") },
-                    warnings = warnings,
-                ),
-                message = "HSC 没有可转换的图层；未生成伪造表盘。",
-            )
-        }
-        if (unsupported.isNotEmpty()) {
-            warnings += "有 ${unsupported.distinct().size} 种 HSC 图层未实现，已列入兼容报告"
-        }
-        val xml = serializeDocument(document)
-        File(destinationRoot, "watch.xml").writeBytes(xml)
-        val report = compatibilityReport(File(destinationRoot, "watch.xml"), WatchSourceFormat.HSC, title)
-            .copy(
-                convertedLayerCount = converted,
-                preservedEntryCount = extracted.entryNames.size,
-                unsupportedFeatures = unsupported.distinct(),
-                warnings = warnings.distinct(),
-                fixes = fixes,
-            )
-        return commitArchive(destinationRoot, output, report)
     }
 
     private fun convertWff(
@@ -488,108 +369,6 @@ class WatchFormatConverter(
         return commitArchive(destinationRoot, output, report)
     }
 
-    private fun appendHscText(
-        document: Document,
-        point: JSONObject,
-        width: Int,
-        height: Int,
-        type: String,
-        warnings: MutableList<String>,
-    ): Element {
-        val layer = document.createElement("Layer")
-        layer.setAttribute("type", "text")
-        val x = point.optDoubleAny("startX", "x") ?: 0.0
-        val y = point.optDoubleAny("startY", "y") ?: 0.0
-        layer.setAttribute("x", fmt(x - width / 2.0))
-        layer.setAttribute("y", fmt(y - height / 2.0))
-        layer.setAttribute("text", hscTextExpression(type, point))
-        val font = point.optJSONObject("font")
-        val size = font?.optDoubleAny("textSize", "size") ?: point.optDoubleAny("textSize", "size")
-        if (size != null && size > 0) layer.setAttribute("text_size", fmt(size))
-        val color = font?.optIntAny("color") ?: point.optIntAny("color")
-        if (color != null) layer.setAttribute("color", colorToHex(color))
-        val alpha = point.optIntAny("alpha")
-        if (alpha != null && alpha >= 0) layer.setAttribute("opacity", ((alpha * 100) / 255).coerceIn(0, 100).toString())
-        document.documentElement.appendChild(layer)
-        if (type !in SUPPORTED_HSC_TEXT_TYPES) warnings += "HSC 文本类型 $type 使用近似 WatchMaker tag"
-        return layer
-    }
-
-    private fun appendHscImage(
-        sourceRoot: File,
-        imagesDir: File,
-        document: Document,
-        point: JSONObject,
-        width: Int,
-        height: Int,
-        warnings: MutableList<String>,
-    ): Element? {
-        val paths = point.optJSONArrayAny("pices", "pieces", "paths")
-        val raw = paths?.optString(0).orEmpty().ifBlank {
-            point.optStringAny("path", "src", "image")
-        }
-        if (raw.isBlank()) {
-            warnings += "HSC 图片图层缺少 pices/path"
-            return null
-        }
-        val source = findAsset(sourceRoot, raw) ?: run {
-            warnings += "HSC 图片资源不存在：$raw"
-            return null
-        }
-        val targetName = uniqueName(imagesDir, source.name)
-        source.copyTo(File(imagesDir, targetName), overwrite = true)
-        val layer = document.createElement("Layer")
-        layer.setAttribute("type", if ((paths?.length() ?: 0) > 1) "image_gif" else "image")
-        layer.setAttribute("path", "images/$targetName")
-        layer.setAttribute(
-            "x",
-            fmt((point.optDoubleAny("startX", "x") ?: 0.0) - width / 2.0),
-        )
-        layer.setAttribute(
-            "y",
-            fmt((point.optDoubleAny("startY", "y") ?: 0.0) - height / 2.0),
-        )
-        point.optDoubleAny("scale")?.takeIf { it > 0 }?.let { layer.setAttribute("scale", fmt(it)) }
-        point.optIntAny("rotate")?.let { layer.setAttribute("rotation", it.toString()) }
-        point.optIntAny("alpha")?.takeIf { it >= 0 }?.let {
-            layer.setAttribute("opacity", ((it * 100) / 255).coerceIn(0, 100).toString())
-        }
-        if ((paths?.length() ?: 0) > 1) {
-            warnings += "HSC 多帧图片 $raw 仅保留首帧；完整帧展开需要 WFTools bitmap pipeline"
-        }
-        document.documentElement.appendChild(layer)
-        return layer
-    }
-
-    private fun appendHscProgress(
-        document: Document,
-        point: JSONObject,
-        width: Int,
-        height: Int,
-        warnings: MutableList<String>,
-    ): Element {
-        val layer = document.createElement("Layer")
-        layer.setAttribute("type", "progress")
-        layer.setAttribute(
-            "x",
-            fmt((point.optDoubleAny("startX", "x") ?: 0.0) - width / 2.0),
-        )
-        layer.setAttribute(
-            "y",
-            fmt((point.optDoubleAny("startY", "y") ?: 0.0) - height / 2.0),
-        )
-        layer.setAttribute("value", point.optStringAny("dataFormat", "startValue").ifBlank { "50" })
-        point.optIntAny("processWidth", "width")?.let { layer.setAttribute("width", it.toString()) }
-        point.optDoubleAny("fromDegrees")?.let { layer.setAttribute("from", fmt(it)) }
-        point.optDoubleAny("toDegrees")?.let { layer.setAttribute("to", fmt(it)) }
-        point.optIntAny("color")?.let { layer.setAttribute("color", colorToHex(it)) }
-        document.documentElement.appendChild(layer)
-        if (point.optStringAny("processType").isNotBlank()) {
-            warnings += "HSC progress processType 使用原始值，设备 renderer 可能需要兼容映射"
-        }
-        return layer
-    }
-
     private fun appendWffImage(
         sourceRoot: File,
         imagesDir: File,
@@ -637,20 +416,6 @@ class WatchFormatConverter(
         copyIfPresent(source, layer, "x", "y", "width", "height", "rotation", "opacity", "color", "radius", "value")
         document.documentElement.appendChild(layer)
         return layer
-    }
-
-    private fun copyHscFontsAndPreview(sourceRoot: File, destinationRoot: File, fontsDir: File) {
-        sourceRoot.walkTopDown().filter { it.isFile }.forEach { source ->
-            when {
-                source.extension.lowercase(Locale.ROOT) in setOf("ttf", "otf", "ttc") -> {
-                    val target = File(fontsDir, uniqueName(fontsDir, source.name))
-                    source.copyTo(target, overwrite = true)
-                }
-                source.name.equals("preview.jpg", true) || source.name.equals("preview.png", true) -> {
-                    source.copyTo(File(destinationRoot, "preview.jpg"), overwrite = true)
-                }
-            }
-        }
     }
 
     private fun compatibilityReport(
@@ -703,7 +468,7 @@ class WatchFormatConverter(
     ) {
         sourceRoot.walkTopDown().filter { it.isFile && predicate(it) }.forEach { source ->
             val relative = source.relativeTo(sourceRoot).invariantSeparatorsPath
-            if (relative.startsWith(".") || relative.equals("dial.json", true)) return@forEach
+            if (relative.startsWith(".")) return@forEach
             val target = File(destinationRoot, relative)
             target.parentFile?.mkdirs()
             source.copyTo(target, overwrite = true)
@@ -958,35 +723,12 @@ class WatchFormatConverter(
 
     private companion object {
         const val DEFAULT_MAX_ENTRIES = 1024
-        const val DEFAULT_MAX_ENTRY_BYTES = 64L * 1024L * 1024L
-        const val DEFAULT_MAX_TOTAL_BYTES = 192L * 1024L * 1024L
+        const val DEFAULT_MAX_ENTRY_BYTES = 450L * 1024L * 1024L
+        const val DEFAULT_MAX_TOTAL_BYTES = 500L * 1024L * 1024L
         const val MAXIMUM_XML_BYTES = 24L * 1024L * 1024L
         const val MAX_PARENT_DEPTH = 64
-        val SUPPORTED_HSC_TEXT_TYPES = setOf(
-            "TEXT_NORMAL", "TEXT_WEEK", "TEXT_WEEKX", "TEXT_ROLL",
-            "TIME_HH", "TIME_HHMM", "TIME_HHMMSS", "TIME_MM", "TIME_SS",
-        )
     }
 }
-
-private fun JSONObject.optStringAny(vararg keys: String): String =
-    keys.asSequence().map { optString(it, "") }.firstOrNull { it.isNotBlank() }.orEmpty()
-
-private fun JSONObject.optIntAny(vararg keys: String): Int? =
-    keys.asSequence().mapNotNull { key ->
-        if (!has(key) || isNull(key)) null else optInt(key, Int.MIN_VALUE).takeUnless { it == Int.MIN_VALUE }
-    }.firstOrNull()
-
-private fun JSONObject.optDoubleAny(vararg keys: String): Double? =
-    keys.asSequence().mapNotNull { key ->
-        if (!has(key) || isNull(key)) null else optDouble(key, Double.NaN).takeUnless { it.isNaN() }
-    }.firstOrNull()
-
-private fun JSONObject.optJSONArrayAny(vararg keys: String): JSONArray? =
-    keys.asSequence().mapNotNull { optJSONArray(it) }.firstOrNull()
-
-private fun JSONArray.optString(index: Int): String =
-    if (index in 0 until length()) optString(index, "") else ""
 
 private fun Sequence<Element>.asIterable(): List<Element> = toList()
 
@@ -1012,34 +754,6 @@ private class NodeListSequence(private val nodeList: org.w3c.dom.NodeList) : Seq
 
 private fun org.w3c.dom.NodeList.asSequenceElements(): Sequence<Element> = NodeListSequence(this)
 
-private fun colorToHex(value: Int): String = "#%08X".format(Locale.ROOT, value)
-
 private fun fmt(value: Double): String =
     if (value == value.toLong().toDouble()) value.toLong().toString()
     else String.format(Locale.US, "%.2f", value)
-
-private fun hscTextExpression(type: String, point: JSONObject): String {
-    val raw = point.optStringAny("text", "startValue", "nextText")
-    return when {
-        "HH_A" in type || "TIME_HH_A" in type -> "math.floor({dh23}/10)"
-        "HH_B" in type || "TIME_HH_B" in type -> "{dh23}%10"
-        "MINUTE_A" in type || "MM_A" in type -> "math.floor({dm}/10)"
-        "MINUTE_B" in type || "MM_B" in type -> "{dm}%10"
-        "SECOND_A" in type || "SS_A" in type -> "math.floor({ds}/10)"
-        "SECOND_B" in type || "SS_B" in type -> "{ds}%10"
-        "TIME_HHMMSS" in type -> "'{dh23z}:{dmz}:{dsz}'"
-        "TIME_HHMM" in type -> "'{dh23z}:{dmz}'"
-        "TIME_HH" in type -> "'{dh23z}'"
-        "TIME_MM" in type || "TIME_MINUTE" in type -> "'{dmz}'"
-        "TIME_SS" in type || "TIME_SECOND" in type -> "'{dsz}'"
-        "DATE_CHINA" in type -> "'{dn}月{dd}日'"
-        "DATE" in type -> "'{dd}/{dn}/{dyy}'"
-        "WEEK" in type -> "'{ddw}'"
-        "HEARTRATE" in type -> "'{shr}'"
-        "STEP" in type -> "'{ssc}'"
-        "CHARGE" in type -> "'{bl}%'"
-        "TEMPERATURE" in type || "WEATHER" in type -> "'{wt}'"
-        "SIGNAL" in type -> "math.floor({ncs}*100)"
-        else -> raw
-    }
-}

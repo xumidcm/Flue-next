@@ -21,16 +21,25 @@ data class JbWatchMetadata(
     val previewFileName: String? = null
 )
 
+internal data class JbWatchArchiveLimits(
+    val maximumArchiveBytes: Long,
+    val maximumEntryCount: Int,
+    val maximumSingleEntryBytes: Long,
+    val maximumExpandedBytes: Long,
+)
+
 object JbWatchFaceStorage {
     private const val ROOT_FOLDER = "jbwatch_faces"
 
     // 与 standard 侧 WatchArchiveValidator 对齐的导入防护。此前这条导入
     // 通道对归档大小 / 条目数 / 展开总量没有任何限制，一个高压缩比的
     // zip 炸弹就能写满 /data 让整机异常（审查报告 P1-23）。
-    private const val MAX_ARCHIVE_BYTES = 96L * 1024L * 1024L
-    private const val MAX_ENTRY_COUNT = 2_048
-    private const val MAX_SINGLE_ENTRY_BYTES = 64L * 1024L * 1024L
-    private const val MAX_TOTAL_EXTRACTED_BYTES = 256L * 1024L * 1024L
+    private val DEFAULT_ARCHIVE_LIMITS = JbWatchArchiveLimits(
+        maximumArchiveBytes = 500L * 1024L * 1024L,
+        maximumEntryCount = 2_048,
+        maximumSingleEntryBytes = 450L * 1024L * 1024L,
+        maximumExpandedBytes = 500L * 1024L * 1024L,
+    )
 
     fun rootDir(context: Context): File {
         return File(context.filesDir, ROOT_FOLDER).apply { mkdirs() }
@@ -41,7 +50,12 @@ object JbWatchFaceStorage {
         try {
             context.contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(tempZip).use { output ->
-                    copyWithLimit(input, output, MAX_ARCHIVE_BYTES, "表盘归档")
+                    copyWithLimit(
+                        input,
+                        output,
+                        DEFAULT_ARCHIVE_LIMITS.maximumArchiveBytes,
+                        "表盘归档",
+                    )
                 }
             } ?: error("无法读取 .watch 表盘归档")
             return importArchiveFile(context, tempZip)
@@ -69,13 +83,20 @@ object JbWatchFaceStorage {
         }
     }
 
-    fun importArchiveFile(context: Context, archive: File): WatchFaceDescriptor {
+    fun importArchiveFile(context: Context, archive: File): WatchFaceDescriptor =
+        importArchiveFile(context, archive, DEFAULT_ARCHIVE_LIMITS)
+
+    internal fun importArchiveFile(
+        context: Context,
+        archive: File,
+        limits: JbWatchArchiveLimits,
+    ): WatchFaceDescriptor {
         val tempExtract = File(context.cacheDir, "jbwatch_extract_${System.currentTimeMillis()}").apply {
             deleteRecursively()
             mkdirs()
         }
         try {
-            extractArchive(archive, tempExtract)
+            extractArchive(archive, tempExtract, limits)
             val watchRoot = findWatchRoot(tempExtract)
                 ?: error("缺少 watch.xml / watch.pxml")
             runCatching { JbWatchParser.parse(watchRoot) }
@@ -168,21 +189,21 @@ object JbWatchFaceStorage {
         }
     }
 
-    private fun extractArchive(zipFile: File, targetRoot: File) {
-        require(zipFile.length() <= MAX_ARCHIVE_BYTES) {
-            "表盘归档超过大小上限（${MAX_ARCHIVE_BYTES / (1024 * 1024)}MB）"
+    private fun extractArchive(zipFile: File, targetRoot: File, limits: JbWatchArchiveLimits) {
+        require(zipFile.length() <= limits.maximumArchiveBytes) {
+            "表盘归档超过大小上限（${limits.maximumArchiveBytes / (1024 * 1024)}MB）"
         }
         ZipFile(zipFile).use { zip ->
             var entryCount = 0
             var totalExtracted = 0L
             zip.entries().asSequence().forEach { entry ->
                 entryCount += 1
-                require(entryCount <= MAX_ENTRY_COUNT) {
-                    "表盘归档条目过多（上限 $MAX_ENTRY_COUNT）"
+                require(entryCount <= limits.maximumEntryCount) {
+                    "表盘归档条目过多（上限 ${limits.maximumEntryCount}）"
                 }
-                totalExtracted += copyEntry(zip, entry, targetRoot)
-                require(totalExtracted <= MAX_TOTAL_EXTRACTED_BYTES) {
-                    "表盘归档展开总量超限（上限 ${MAX_TOTAL_EXTRACTED_BYTES / (1024 * 1024)}MB）"
+                totalExtracted += copyEntry(zip, entry, targetRoot, limits.maximumSingleEntryBytes)
+                require(totalExtracted <= limits.maximumExpandedBytes) {
+                    "表盘归档展开总量超限（上限 ${limits.maximumExpandedBytes / (1024 * 1024)}MB）"
                 }
             }
         }
@@ -199,7 +220,12 @@ object JbWatchFaceStorage {
     }
 
     /** 返回该条目实际展开的字节数（目录为 0）。 */
-    private fun copyEntry(zip: ZipFile, entry: ZipEntry, targetRoot: File): Long {
+    private fun copyEntry(
+        zip: ZipFile,
+        entry: ZipEntry,
+        targetRoot: File,
+        maximumSingleEntryBytes: Long,
+    ): Long {
         val normalized = entry.name.replace('\\', '/')
         val outFile = File(targetRoot, normalized)
         val canonicalTarget = outFile.canonicalFile
@@ -216,7 +242,7 @@ object JbWatchFaceStorage {
         // 必须按实际写出的字节数计数。
         zip.getInputStream(entry).use { input ->
             FileOutputStream(canonicalTarget).use { output ->
-                return copyWithLimit(input, output, MAX_SINGLE_ENTRY_BYTES, "归档条目 ${entry.name}")
+                return copyWithLimit(input, output, maximumSingleEntryBytes, "归档条目 ${entry.name}")
             }
         }
     }

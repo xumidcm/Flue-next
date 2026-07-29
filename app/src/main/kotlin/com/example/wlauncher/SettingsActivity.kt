@@ -2,6 +2,7 @@ package com.flue.launcher
 
 import androidx.compose.ui.res.stringResource
 import com.flue.launcher.i18n.FlueComponentActivity
+import com.flue.launcher.i18n.FlueLocaleManager
 
 
 import android.Manifest
@@ -13,6 +14,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color as AndroidColor
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -63,6 +65,8 @@ import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -74,6 +78,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.WindowInsets
@@ -92,13 +97,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -131,6 +135,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -155,8 +160,10 @@ import com.flue.launcher.backup.FlueBackupOptions
 import com.flue.launcher.backup.FlueBackupPreview
 import com.flue.launcher.service.FlueAccessibilityService
 import com.flue.launcher.ui.common.FlueScreenShape
+import com.flue.launcher.ui.common.MAX_OVERLAY_MASK_CORNER_RADIUS_DP
 import com.flue.launcher.ui.common.bottomFisheyeScale
 import com.flue.launcher.ui.common.isFlueScreenRound
+import com.flue.launcher.ui.common.normalizeOverlayMaskCornerRadiusDp
 import com.flue.launcher.ui.common.flueElasticNestedScroll
 import com.flue.launcher.motion.LocalFlueMotionProfile
 import com.flue.launcher.motion.FlueMotionProfile
@@ -189,8 +196,14 @@ import com.flue.launcher.watchface.InternalWatchFaceStorage
 import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.watchface.standard.WatchDateLocale
 import com.flue.launcher.watchface.standard.WatchTemperatureUnit
+import com.flue.launcher.watchface.standard.WatchWeatherLocation
 import com.flue.launcher.watchface.standard.WatchWeatherRepository
 import com.flue.launcher.watchface.store.WatchStoreRepository
+import top.yukonga.miuix.kmp.icon.MiuixIcons as OfficialMiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Add as OfficialAdd
+import top.yukonga.miuix.kmp.icon.extended.Refresh as OfficialRefresh
+import top.yukonga.miuix.kmp.icon.extended.Settings as OfficialSettings
+import top.yukonga.miuix.kmp.icon.extended.Ok as OfficialOk
 import java.text.SimpleDateFormat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -203,9 +216,21 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
-private val ABOUT_VERSION = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
-private const val PROJECT_REPOSITORY_LABEL = "xumidcm/Flue"
-private const val PROJECT_REPOSITORY_URL = "https://github.com/xumidcm/Flue"
+private val ABOUT_VERSION = BuildConfig.VERSION_NAME
+private data class OpenSourceProject(val name: String, val url: String)
+private val OPEN_SOURCE_PROJECTS = listOf(
+    OpenSourceProject("compose-miuix-ui/miuix", "https://github.com/compose-miuix-ui/miuix"),
+    OpenSourceProject("ailife8881/wftools", "https://gitlab.com/ailife8881/wftools"),
+    OpenSourceProject("ailife8881/clox", "https://gitlab.com/ailife8881/clox"),
+    OpenSourceProject(
+        "ailife8881/watchmaker-community-store",
+        "https://gitlab.com/ailife8881/watchmaker-community-store",
+    ),
+    OpenSourceProject(
+        "ailife8881/watchmaker-definition",
+        "https://gitlab.com/ailife8881/watchmaker-definition",
+    ),
+)
 private const val COMMUNITY_GROUP_NUMBER = "1097162313"
 private const val AUTHOR_QQ_NUMBER = "3513903055"
 private const val AUTHOR_BILIBILI_URL = "https://m.bilibili.com/space/1609437970"
@@ -284,6 +309,7 @@ private enum class BlockingProgressCompletionAction {
 class SettingsActivity : FlueComponentActivity() {
     private var launchRequestId = 0L
     private var launchConfig by mutableStateOf(SettingsLaunchConfig())
+    private var appliedWindowBackgroundArgb: Int? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -305,10 +331,14 @@ class SettingsActivity : FlueComponentActivity() {
                 ThemeMode.DARK -> true
                 ThemeMode.LIGHT -> false
             }
-            SideEffect {
-                applySettingsEdgeToEdge(darkTheme = darkTheme)
-            }
             WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle, screenShape = screenShape) {
+                val windowBackgroundArgb = LauncherTheme.style.screenBackground.toArgb()
+                SideEffect {
+                    applySettingsEdgeToEdge(
+                        darkTheme = darkTheme,
+                        windowBackgroundArgb = windowBackgroundArgb,
+                    )
+                }
                 ProvideGlobalUiScale(globalUiScalePercent) {
                     SettingsRootScreen(
                         onFinish = { finish() },
@@ -320,11 +350,18 @@ class SettingsActivity : FlueComponentActivity() {
     }
 
     @Suppress("DEPRECATION")
-    private fun applySettingsEdgeToEdge(darkTheme: Boolean) {
+    private fun applySettingsEdgeToEdge(
+        darkTheme: Boolean,
+        windowBackgroundArgb: Int = if (darkTheme) AndroidColor.BLACK else 0xFFF7F7F7.toInt(),
+    ) {
         // Settings draws its own opaque theme background. Keep the window edge-to-edge so
         // transparent status/navigation bars reveal that background instead of the theme's
         // black windowBackground. WindowCompat also works for gesture and three-button nav.
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        if (appliedWindowBackgroundArgb != windowBackgroundArgb) {
+            window.setBackgroundDrawable(ColorDrawable(windowBackgroundArgb))
+            appliedWindowBackgroundArgb = windowBackgroundArgb
+        }
         window.statusBarColor = AndroidColor.TRANSPARENT
         window.navigationBarColor = AndroidColor.TRANSPARENT
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -381,14 +418,20 @@ private fun SettingsRootScreen(
     val settingsScope = rememberCoroutineScope()
     val vm: LauncherViewModel = viewModel()
     val weatherRepository = remember(context) { WatchWeatherRepository.default(context) }
-    var weatherManualCity by remember(weatherRepository) {
-        mutableStateOf(weatherRepository.manualCity().orEmpty())
+    var weatherLocationLabel by remember(weatherRepository) {
+        mutableStateOf(weatherRepository.activeLocationLabel().orEmpty())
+    }
+    var weatherUsingSystemLocation by remember(weatherRepository) {
+        mutableStateOf(weatherRepository.isUsingSystemLocation())
     }
     var weatherTemperatureUnit by remember(weatherRepository) {
         mutableStateOf(weatherRepository.temperatureUnit())
     }
     var weatherCityDialogVisible by remember { mutableStateOf(false) }
     var weatherCityDraft by remember { mutableStateOf("") }
+    var weatherCityCandidates by remember { mutableStateOf<List<WatchWeatherLocation>>(emptyList()) }
+    var weatherCitySearching by remember { mutableStateOf(false) }
+    var weatherCitySearchError by remember { mutableStateOf<String?>(null) }
     val rawWatchFaces by vm.availableWatchFaces.collectAsStateWithLifecycle()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsStateWithLifecycle()
     val rawSelectedWatchFace by vm.selectedWatchFace.collectAsStateWithLifecycle()
@@ -449,6 +492,7 @@ private fun SettingsRootScreen(
     val appListLeftSafeInsetPercent by vm.appListLeftSafeInsetPercent.collectAsStateWithLifecycle()
     val appListScalePercent by vm.appListScalePercent.collectAsStateWithLifecycle()
     val globalUiScalePercent by vm.globalUiScalePercent.collectAsStateWithLifecycle()
+    val overlayMaskCornerRadiusDp by vm.overlayMaskCornerRadiusDp.collectAsStateWithLifecycle()
     val appListWatchFaceColors by vm.appListWatchFaceColors.collectAsStateWithLifecycle()
     val appListRowBorderEnabled by vm.appListRowBorderEnabled.collectAsStateWithLifecycle()
     val appListFoldersEnabled by vm.appListFoldersEnabled.collectAsStateWithLifecycle()
@@ -505,6 +549,7 @@ private fun SettingsRootScreen(
     val themeMode by vm.themeMode.collectAsStateWithLifecycle()
     val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
     val launcherStyle = LauncherTheme.style
+    val flueScreenRound = isFlueScreenRound()
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
     val showOngoingNotifications by vm.showOngoingNotifications.collectAsStateWithLifecycle()
     val rotaryHapticsEnabled by vm.rotaryHapticsEnabled.collectAsStateWithLifecycle()
@@ -548,18 +593,37 @@ private fun SettingsRootScreen(
                 PackageManager.PERMISSION_GRANTED,
         )
     }
+    fun resolveAndUseSystemWeatherLocation() {
+        settingsScope.launch {
+            val resolved = withContext(Dispatchers.IO) {
+                runCatching { weatherRepository.resolveSystemLocation() }.getOrNull()
+            }
+            if (resolved != null) {
+                weatherRepository.useSystemLocation(resolved)
+                weatherLocationLabel = resolved.label.orEmpty()
+                weatherUsingSystemLocation = true
+                Toast.makeText(
+                    context,
+                    resolved.label?.takeIf(String::isNotBlank)?.let { label ->
+                        context.getString(R.string.toast_weather_system_location_resolved_fmt, label)
+                    } ?: context.getString(R.string.toast_weather_system_location),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            } else {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.toast_weather_system_location_unavailable),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
     val coarseLocationPermissionLauncher = rememberLauncherForActivityResult(RequestPermission()) { granted ->
         coarseLocationPermissionGranted = granted ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
         if (coarseLocationPermissionGranted) {
-            weatherRepository.setManualCity(null)
-            weatherManualCity = ""
-            Toast.makeText(
-                context,
-                context.getString(R.string.toast_weather_system_location),
-                Toast.LENGTH_SHORT,
-            ).show()
+            resolveAndUseSystemWeatherLocation()
         } else {
             Toast.makeText(
                 context,
@@ -706,6 +770,7 @@ private fun SettingsRootScreen(
     var languageSaveInProgress by remember { mutableStateOf(false) }
     var diagnosticLoggingEnabled by remember { mutableStateOf(FlueLog.isDiagnosticLoggingEnabled()) }
     var importedWatchFaceDeleteTarget by remember { mutableStateOf<WatchFaceDescriptor?>(null) }
+    var showOverlayMaskCornerDialog by remember { mutableStateOf(false) }
     val pageScrollPositions = remember { mutableStateMapOf<SettingsDestination, SavedScrollPosition>() }
     val pageScrollResetVersions = remember { mutableStateMapOf<SettingsDestination, Int>() }
     // 搜索结果点进去要落在具体那一行上，而不是目标页的页顶。
@@ -784,6 +849,17 @@ private fun SettingsRootScreen(
                     Text(stringResource(R.string.action_cancel))
                 }
             }
+        )
+    }
+
+    if (showOverlayMaskCornerDialog && !flueScreenRound) {
+        OverlayMaskCornerRadiusDialog(
+            currentRadiusDp = overlayMaskCornerRadiusDp,
+            onDismiss = { showOverlayMaskCornerDialog = false },
+            onSave = { radiusDp ->
+                vm.setOverlayMaskCornerRadiusDp(radiusDp)
+                showOverlayMaskCornerDialog = false
+            },
         )
     }
 
@@ -893,7 +969,8 @@ private fun SettingsRootScreen(
                         context,
                         Manifest.permission.ACCESS_COARSE_LOCATION,
                     ) == PackageManager.PERMISSION_GRANTED
-                weatherManualCity = weatherRepository.manualCity().orEmpty()
+                weatherLocationLabel = weatherRepository.activeLocationLabel().orEmpty()
+                weatherUsingSystemLocation = weatherRepository.isUsingSystemLocation()
                 weatherTemperatureUnit = weatherRepository.temperatureUnit()
                 // Market/editor activities can install a content-addressed .watch
                 // archive while this SettingsActivity remains alive. Refresh the
@@ -1379,7 +1456,7 @@ private fun SettingsRootScreen(
                     title = stringResource(R.string.settings_watchface_refresh),
                     subtitle = stringResource(R.string.settings_watchface_refresh_sub),
                     scale = itemFisheye(listState, "watchface_refresh", screenCenterY, screenHeightPx),
-                    icon = { SettingsIcon(material = Icons.Filled.Refresh, miuix = MiuixIcons.Refresh) },
+                    icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialRefresh, miuix = OfficialMiuixIcons.OfficialRefresh) },
                     onClick = { vm.refreshWatchFaces(force = true) }
                 )
             }
@@ -1388,7 +1465,7 @@ private fun SettingsRootScreen(
                     title = stringResource(R.string.settings_watchface_import),
                     subtitle = stringResource(R.string.settings_watchface_import_sub),
                     scale = itemFisheye(listState, "watchface_import_archive", screenCenterY, screenHeightPx),
-                    icon = { SettingsIcon(material = Icons.Filled.Add, miuix = MiuixIcons.Add) },
+                    icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialAdd, miuix = OfficialMiuixIcons.OfficialAdd) },
                     onClick = {
                         watchFaceArchivePicker.launch(
                             arrayOf(
@@ -1407,7 +1484,7 @@ private fun SettingsRootScreen(
                     title = stringResource(R.string.settings_watchface_store),
                     subtitle = stringResource(R.string.settings_watchface_store_sub),
                     scale = itemFisheye(listState, "watchface_store", screenCenterY, screenHeightPx),
-                    icon = { SettingsIcon(material = Icons.Filled.Refresh, miuix = MiuixIcons.Refresh) },
+                    icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialRefresh, miuix = OfficialMiuixIcons.OfficialRefresh) },
                     onClick = {
                         context.startActivity(Intent(context, WatchStoreActivity::class.java))
                     }
@@ -1418,7 +1495,7 @@ private fun SettingsRootScreen(
                     title = stringResource(R.string.settings_watchface_editor_new),
                     subtitle = stringResource(R.string.settings_watchface_editor_new_sub),
                     scale = itemFisheye(listState, "watchface_editor_new", screenCenterY, screenHeightPx),
-                    icon = { SettingsIcon(material = Icons.Filled.Add, miuix = MiuixIcons.Add) },
+                    icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialAdd, miuix = OfficialMiuixIcons.OfficialAdd) },
                     onClick = {
                         context.startActivity(Intent(context, WatchEditorActivity::class.java))
                     }
@@ -1433,7 +1510,7 @@ private fun SettingsRootScreen(
                             selectedWatchFace.displayName
                         ),
                         scale = itemFisheye(listState, "watchface_editor_current", screenCenterY, screenHeightPx),
-                        icon = { SettingsIcon(material = Icons.Filled.Settings, miuix = MiuixIcons.Settings) },
+                        icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialSettings, miuix = OfficialMiuixIcons.OfficialSettings) },
                         onClick = {
                             context.startActivity(
                                 Intent(context, WatchEditorActivity::class.java)
@@ -1470,9 +1547,9 @@ private fun SettingsRootScreen(
             item("watch_weather_manual_city") {
                 ActionCard(
                     title = stringResource(R.string.settings_watch_weather_city),
-                    subtitle = weatherManualCity.takeIf(String::isNotBlank)?.let { city ->
-                        stringResource(R.string.settings_watch_weather_city_selected_fmt, city)
-                    } ?: if (coarseLocationPermissionGranted) {
+                    subtitle = weatherLocationLabel.takeIf(String::isNotBlank)?.let { label ->
+                        stringResource(R.string.settings_watch_weather_city_selected_fmt, label)
+                    } ?: if (coarseLocationPermissionGranted && weatherUsingSystemLocation) {
                         stringResource(R.string.settings_watch_weather_city_system)
                     } else {
                         stringResource(R.string.settings_watch_weather_city_unset)
@@ -1484,10 +1561,12 @@ private fun SettingsRootScreen(
                         screenHeightPx,
                     ),
                     icon = {
-                        SettingsIcon(material = Icons.Filled.Settings, miuix = MiuixIcons.Settings)
+                        SettingsIcon(material = OfficialMiuixIcons.OfficialSettings, miuix = OfficialMiuixIcons.OfficialSettings)
                     },
                     onClick = {
-                        weatherCityDraft = weatherManualCity
+                        weatherCityDraft = ""
+                        weatherCityCandidates = emptyList()
+                        weatherCitySearchError = null
                         weatherCityDialogVisible = true
                     },
                 )
@@ -1495,8 +1574,10 @@ private fun SettingsRootScreen(
             item("watch_weather_system_location") {
                 ActionCard(
                     title = stringResource(R.string.settings_watch_weather_use_system),
-                    subtitle = if (coarseLocationPermissionGranted && weatherManualCity.isBlank()) {
-                        stringResource(R.string.settings_watch_weather_use_system_active)
+                    subtitle = if (coarseLocationPermissionGranted && weatherUsingSystemLocation) {
+                        weatherLocationLabel.takeIf(String::isNotBlank)?.let { label ->
+                            stringResource(R.string.settings_watch_weather_use_system_active_fmt, label)
+                        } ?: stringResource(R.string.settings_watch_weather_use_system_active)
                     } else {
                         stringResource(R.string.settings_watch_weather_use_system_sub)
                     },
@@ -1507,17 +1588,11 @@ private fun SettingsRootScreen(
                         screenHeightPx,
                     ),
                     icon = {
-                        SettingsIcon(material = Icons.Filled.Refresh, miuix = MiuixIcons.Refresh)
+                        SettingsIcon(material = OfficialMiuixIcons.OfficialRefresh, miuix = OfficialMiuixIcons.OfficialRefresh)
                     },
                     onClick = {
                         if (coarseLocationPermissionGranted) {
-                            weatherRepository.setManualCity(null)
-                            weatherManualCity = ""
-                            Toast.makeText(
-                                context,
-                                context.getString(R.string.toast_weather_system_location),
-                                Toast.LENGTH_SHORT,
-                            ).show()
+                            resolveAndUseSystemWeatherLocation()
                         } else {
                             coarseLocationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
                         }
@@ -1575,7 +1650,7 @@ private fun SettingsRootScreen(
                         screenHeightPx,
                     ),
                     icon = {
-                        SettingsIcon(material = Icons.Filled.Refresh, miuix = MiuixIcons.Refresh)
+                        SettingsIcon(material = OfficialMiuixIcons.OfficialRefresh, miuix = OfficialMiuixIcons.OfficialRefresh)
                     },
                     onClick = {
                         weatherRepository.requestRefresh()
@@ -1623,9 +1698,9 @@ private fun SettingsRootScreen(
                         icon = {
                             Icon(
                                 if (bodySensorsPermissionGranted) {
-                                    Icons.Filled.CheckCircle
+                                    OfficialMiuixIcons.OfficialOk
                                 } else {
-                                    Icons.Filled.Settings
+                                    OfficialMiuixIcons.OfficialSettings
                                 },
                                 contentDescription = null,
                                 tint = WatchColors.ActiveCyan,
@@ -1648,7 +1723,7 @@ private fun SettingsRootScreen(
                         subtitle = builtInWatchFaceFontPath?.let { File(it).name }
                             ?: stringResource(R.string.settings_watchface_font_default),
                         scale = itemFisheye(listState, "watchface_font", screenCenterY, screenHeightPx),
-                        icon = { SettingsIcon(material = Icons.Filled.Settings, miuix = MiuixIcons.Settings) },
+                        icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialSettings, miuix = OfficialMiuixIcons.OfficialSettings) },
                         onClick = {
                             fontPicker.launch(
                                 arrayOf(
@@ -1668,7 +1743,7 @@ private fun SettingsRootScreen(
                             title = stringResource(R.string.settings_watchface_font_clear),
                             subtitle = stringResource(R.string.settings_watchface_font_clear_sub),
                             scale = itemFisheye(listState, "watchface_font_clear", screenCenterY, screenHeightPx),
-                            icon = { SettingsIcon(material = Icons.Filled.Refresh, miuix = MiuixIcons.Refresh) },
+                            icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialRefresh, miuix = OfficialMiuixIcons.OfficialRefresh) },
                             onClick = { vm.setBuiltInWatchFaceFontPath(null) }
                         )
                     }
@@ -1786,6 +1861,24 @@ private fun SettingsRootScreen(
                     onClick = { navigateTo(SettingsDestination.DISPLAY_SIZE) },
                     scale = itemFisheye(listState, "display_size_menu", screenCenterY, screenHeightPx)
                 )
+            }
+            if (!flueScreenRound) {
+                item("overlay_mask_corner_radius") {
+                    SettingsCategoryCard(
+                        title = stringResource(R.string.settings_overlay_mask_corner_radius),
+                        subtitle = stringResource(
+                            R.string.settings_overlay_mask_corner_radius_sub_fmt,
+                            overlayMaskCornerRadiusDp,
+                        ),
+                        onClick = { showOverlayMaskCornerDialog = true },
+                        scale = itemFisheye(
+                            listState,
+                            "overlay_mask_corner_radius",
+                            screenCenterY,
+                            screenHeightPx,
+                        ),
+                    )
+                }
             }
             item("feature_toggles_menu") {
                 SettingsCategoryCard(
@@ -2439,7 +2532,7 @@ private fun SettingsRootScreen(
                 val selectedPreset = MusicTextSwitchAnimations.byId(musicTextSwitchAnimation)
                 SettingsCategoryCard(
                     title = stringResource(R.string.settings_music_text_animation),
-                    subtitle = selectedPreset.label,
+                    subtitle = stringResource(selectedPreset.labelRes),
                     onClick = { navigateTo(SettingsDestination.MUSIC_TEXT_ANIMATION) },
                     scale = itemFisheye(listState, "music_text_animation", screenCenterY, screenHeightPx)
                 )
@@ -2837,8 +2930,8 @@ private fun SettingsRootScreen(
         ) { listState, screenCenterY, screenHeightPx, _ ->
             items(MusicTextSwitchAnimations.presets, key = { "music_text_anim_${it.id}" }) { preset ->
                 SettingsChoiceRow(
-                    title = preset.label,
-                    subtitle = preset.subtitle,
+                    title = stringResource(preset.labelRes),
+                    subtitle = stringResource(preset.subtitleRes),
                     selected = MusicTextSwitchAnimations.normalizeId(musicTextSwitchAnimation) == preset.id,
                     onClick = { vm.setMusicTextSwitchAnimation(preset.id) },
                     scale = itemFisheye(listState, "music_text_anim_${preset.id}", screenCenterY, screenHeightPx)
@@ -3162,11 +3255,20 @@ private fun SettingsRootScreen(
                 onDismissRequest = { weatherCityDialogVisible = false },
                 title = { Text(stringResource(R.string.settings_watch_weather_city_dialog_title)) },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 360.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         Text(stringResource(R.string.settings_watch_weather_city_dialog_message))
                         OutlinedTextField(
                             value = weatherCityDraft,
-                            onValueChange = { weatherCityDraft = it.take(120) },
+                            onValueChange = {
+                                weatherCityDraft = it.take(120)
+                                weatherCityCandidates = emptyList()
+                                weatherCitySearchError = null
+                            },
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text(stringResource(R.string.settings_watch_weather_city)) },
                             placeholder = {
@@ -3174,26 +3276,74 @@ private fun SettingsRootScreen(
                             },
                             singleLine = true,
                         )
+                        if (weatherCitySearching) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                                Text(stringResource(R.string.settings_watch_weather_city_searching))
+                            }
+                        }
+                        weatherCitySearchError?.let { message ->
+                            Text(message, color = MaterialTheme.colorScheme.error)
+                        }
+                        weatherCityCandidates.forEach { candidate ->
+                            TextButton(
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = {
+                                    weatherRepository.setManualLocation(candidate)
+                                    weatherLocationLabel = candidate.label.orEmpty()
+                                    weatherUsingSystemLocation = false
+                                    weatherCityDialogVisible = false
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(
+                                            R.string.toast_weather_city_saved_fmt,
+                                            candidate.label.orEmpty(),
+                                        ),
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                },
+                            ) {
+                                Text(
+                                    text = buildString {
+                                        append(candidate.label.orEmpty())
+                                        append('\n')
+                                        append(String.format(Locale.US, "%.4f, %.4f", candidate.latitude, candidate.longitude))
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    textAlign = TextAlign.Start,
+                                )
+                            }
+                        }
                     }
                 },
                 confirmButton = {
                     TextButton(
-                        enabled = weatherCityDraft.isNotBlank(),
+                        enabled = weatherCityDraft.isNotBlank() && !weatherCitySearching,
                         onClick = {
-                            val city = weatherCityDraft.trim().take(120)
-                            if (city.isNotEmpty()) {
-                                weatherRepository.setManualCity(city)
-                                weatherManualCity = city
-                                weatherCityDialogVisible = false
-                                Toast.makeText(
-                                    context,
-                                    context.getString(R.string.toast_weather_city_saved),
-                                    Toast.LENGTH_SHORT,
-                                ).show()
+                            val query = weatherCityDraft.trim().take(120)
+                            if (query.isEmpty()) return@TextButton
+                            weatherCitySearching = true
+                            weatherCityCandidates = emptyList()
+                            weatherCitySearchError = null
+                            settingsScope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    runCatching { weatherRepository.searchLocations(query) }
+                                }
+                                weatherCitySearching = false
+                                weatherCityCandidates = result.getOrDefault(emptyList())
+                                weatherCitySearchError = when {
+                                    result.isFailure -> context.getString(R.string.settings_watch_weather_city_search_failed)
+                                    weatherCityCandidates.isEmpty() -> context.getString(R.string.settings_watch_weather_city_no_results)
+                                    else -> null
+                                }
                             }
                         },
                     ) {
-                        Text(stringResource(R.string.action_done))
+                        Text(stringResource(R.string.action_search))
                     }
                 },
                 dismissButton = {
@@ -3205,12 +3355,15 @@ private fun SettingsRootScreen(
         }
 
         pendingLanguageRestart?.let { languageCode ->
+            val dialogContext = remember(context, languageCode) {
+                FlueLocaleManager.contextForLanguageSelection(context, languageCode)
+            }
             AlertDialog(
                 onDismissRequest = {
                     if (!languageSaveInProgress) pendingLanguageRestart = null
                 },
-                title = { Text(stringResource(R.string.settings_language_restart_title)) },
-                text = { Text(stringResource(R.string.settings_language_restart_message)) },
+                title = { Text(dialogContext.getString(R.string.settings_language_restart_title)) },
+                text = { Text(dialogContext.getString(R.string.settings_language_restart_message)) },
                 confirmButton = {
                     TextButton(
                         enabled = !languageSaveInProgress,
@@ -3226,20 +3379,20 @@ private fun SettingsRootScreen(
                                 } else {
                                     Toast.makeText(
                                         context,
-                                        context.getString(R.string.toast_language_save_failed),
+                                        dialogContext.getString(R.string.toast_language_save_failed),
                                         Toast.LENGTH_SHORT,
                                     ).show()
                                 }
                             }
                         },
-                    ) { Text(stringResource(R.string.settings_language_restart_confirm)) }
+                    ) { Text(dialogContext.getString(R.string.settings_language_restart_confirm)) }
                 },
                 dismissButton = {
                     TextButton(
                         enabled = !languageSaveInProgress,
                         onClick = { pendingLanguageRestart = null },
                     ) {
-                        Text(stringResource(R.string.action_cancel))
+                        Text(dialogContext.getString(R.string.action_cancel))
                     }
                 },
             )
@@ -3758,7 +3911,7 @@ private fun SettingsChoiceRow(
                 Text(subtitle, color = launcherStyle.secondaryTextColor, fontSize = 12.sp)
             }
             if (selected) {
-                Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = launcherStyle.accentColor)
+                Icon(OfficialMiuixIcons.OfficialOk, contentDescription = null, tint = launcherStyle.accentColor)
             }
         }
     }
@@ -4242,34 +4395,30 @@ private fun AboutCard(
                 onClick = onDonateClick,
                 scale = 1f
             )
-            Spacer(modifier = Modifier.height(10.dp))
-            ActionCard(
-                title = stringResource(R.string.about_open_source),
-                subtitle = PROJECT_REPOSITORY_LABEL,
-                onClick = {
-                    context.startActivity(
-                        Intent(
-                            Intent.ACTION_VIEW,
-                            android.net.Uri.parse(PROJECT_REPOSITORY_URL)
-                        )
-                    )
-                },
-                scale = 1f
+            Spacer(modifier = Modifier.height(18.dp))
+            Text(
+                text = stringResource(R.string.about_open_source),
+                color = launcherStyle.titleColor,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(modifier = Modifier.height(10.dp))
-            ActionCard(
-                title = "Lyricon",
-                subtitle = "tomakino/lyricon",
-                onClick = {
-                    context.startActivity(
-                        Intent(
-                            Intent.ACTION_VIEW,
-                            android.net.Uri.parse("https://github.com/tomakino/lyricon")
+            Spacer(modifier = Modifier.height(8.dp))
+            OPEN_SOURCE_PROJECTS.forEachIndexed { index, project ->
+                ActionCard(
+                    title = project.name,
+                    subtitle = project.url,
+                    onClick = {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, android.net.Uri.parse(project.url))
                         )
-                    )
-                },
-                scale = 1f
-            )
+                    },
+                    scale = 1f,
+                )
+                if (index != OPEN_SOURCE_PROJECTS.lastIndex) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
+            }
         }
     }
 }
@@ -4318,6 +4467,180 @@ private fun DonateMethodCard(
                     .clip(RoundedCornerShape(22.dp))
                     .background(launcherStyle.pressedCardColor)
             )
+        }
+    }
+}
+
+@Composable
+private fun OverlayMaskCornerRadiusDialog(
+    currentRadiusDp: Int,
+    onDismiss: () -> Unit,
+    onSave: (Int) -> Unit,
+) {
+    val launcherStyle = LauncherTheme.style
+    var localRadiusDp by remember(currentRadiusDp) {
+        mutableFloatStateOf(currentRadiusDp.toFloat())
+    }
+    // The preview is the dialog itself. Keep its shape on the exact slider
+    // frame instead of adding a second easing animation behind the finger.
+    val previewRadiusDp = localRadiusDp
+        .coerceIn(0f, MAX_OVERLAY_MASK_CORNER_RADIUS_DP.toFloat())
+        .dp
+    val dialogShape = RoundedCornerShape(previewRadiusDp)
+    val interactionSource = remember { MutableInteractionSource() }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.22f))
+                .padding(WindowInsets.safeDrawing.asPaddingValues())
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadow(24.dp, dialogShape, clip = false)
+                    .clip(dialogShape)
+                    .background(launcherStyle.cardColor.copy(alpha = 0.98f))
+                    // High-light and panel use exactly the same animated shape,
+                    // so the white glass edge follows the slider without lag.
+                    .border(
+                        launcherStyle.glass.borderWidth,
+                        launcherStyle.glass.highlight,
+                        dialogShape,
+                    )
+                    .padding(horizontal = 22.dp, vertical = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Box(modifier = Modifier.size(62.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .align(Alignment.TopStart)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(launcherStyle.accentColor),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .align(Alignment.BottomEnd)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(launcherStyle.accentColor)
+                            .border(3.dp, launcherStyle.cardColor, RoundedCornerShape(12.dp)),
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = stringResource(R.string.dialog_overlay_mask_corner_title),
+                    color = launcherStyle.titleColor,
+                    fontSize = 25.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = stringResource(R.string.dialog_overlay_mask_corner_subtitle),
+                    color = launcherStyle.secondaryTextColor,
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(20.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(launcherStyle.compactShape)
+                        .background(launcherStyle.titleColor.copy(alpha = 0.055f))
+                        .padding(horizontal = 8.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .clickable(
+                                interactionSource = interactionSource,
+                                indication = null,
+                            ) {
+                                localRadiusDp = (localRadiusDp - 5f).coerceAtLeast(0f)
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("−", color = launcherStyle.secondaryTextColor, fontSize = 30.sp)
+                    }
+                    Slider(
+                        value = localRadiusDp,
+                        onValueChange = {
+                            localRadiusDp = it.coerceIn(
+                                0f,
+                                MAX_OVERLAY_MASK_CORNER_RADIUS_DP.toFloat(),
+                            )
+                        },
+                        valueRange = 0f..MAX_OVERLAY_MASK_CORNER_RADIUS_DP.toFloat(),
+                        colors = SliderDefaults.colors(
+                            thumbColor = launcherStyle.accentColor,
+                            activeTrackColor = launcherStyle.accentColor,
+                            inactiveTrackColor = launcherStyle.secondaryTextColor.copy(alpha = 0.28f),
+                        ),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .clickable(
+                                interactionSource = interactionSource,
+                                indication = null,
+                            ) {
+                                localRadiusDp = (localRadiusDp + 5f)
+                                    .coerceAtMost(MAX_OVERLAY_MASK_CORNER_RADIUS_DP.toFloat())
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("+", color = launcherStyle.secondaryTextColor, fontSize = 30.sp)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = stringResource(
+                        R.string.dialog_overlay_mask_corner_value_fmt,
+                        localRadiusDp.roundToInt(),
+                    ),
+                    color = launcherStyle.bodyColor,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = stringResource(R.string.dialog_overlay_mask_corner_hint),
+                    color = launcherStyle.secondaryTextColor,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(20.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(launcherStyle.accentColor)
+                        .clickable {
+                            onSave(normalizeOverlayMaskCornerRadiusDp(localRadiusDp.roundToInt()))
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = stringResource(R.string.action_save_changes),
+                        color = Color.White,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
         }
     }
 }
@@ -4665,7 +4988,7 @@ private fun BlockingProgressDialog(
             ) {
                 if (state.completed) {
                     Icon(
-                        imageVector = Icons.Filled.CheckCircle,
+                        imageVector = OfficialMiuixIcons.OfficialOk,
                         contentDescription = null,
                         tint = WatchColors.ActiveCyan,
                         modifier = Modifier.size(52.dp)

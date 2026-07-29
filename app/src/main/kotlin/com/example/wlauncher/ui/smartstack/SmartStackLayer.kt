@@ -79,10 +79,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -128,6 +124,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -137,7 +134,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Add
+import top.yukonga.miuix.kmp.icon.extended.Back
+import top.yukonga.miuix.kmp.icon.extended.Location
 import com.flue.launcher.ui.common.isFlueScreenRound
+import com.flue.launcher.ui.common.DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP
+import com.flue.launcher.ui.common.flueOverlayMaskShape
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.WidgetInfo
 import com.flue.launcher.data.model.iconForDisplay
@@ -506,6 +509,8 @@ fun SmartStackLayer(
     showMusicCard: Boolean = false,
     showMediaCustomActions: Boolean = true,
     musicTextSwitchAnimation: String = MusicTextSwitchAnimations.DEFAULT_ID,
+    glassHighlightEnabled: Boolean = true,
+    overlayMaskCornerRadiusDp: Int = DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP,
     leftSafeInsetPercent: Int,
     notificationsEnabled: Boolean,
     notificationAccessGranted: Boolean,
@@ -607,13 +612,7 @@ fun SmartStackLayer(
             .fillMaxSize()
             // 圆屏整圆裁剪（40dp 圆角矩形在圆屏上会露出底边弧线）；根底改
             // 半透明玻璃：表盘背衬在下面被压暗模糊，这层透出它就是毛玻璃。
-            .clip(
-                if (com.flue.launcher.ui.common.isFlueScreenRound()) {
-                    androidx.compose.foundation.shape.CircleShape
-                } else {
-                    RoundedCornerShape(40.dp)
-                },
-            )
+            .clip(flueOverlayMaskShape(overlayMaskCornerRadiusDp))
             .background(launcherStyle.screenBackground.copy(alpha = 0.62f))
             .pointerInput(notificationAccessGranted, canOpenNotificationsFromSide, modalState, notificationsSceneActive, transitionInFlight) {
                 if (modalState != SideScreenModalState.None || notificationsSceneActive || transitionInFlight) return@pointerInput
@@ -794,6 +793,7 @@ fun SmartStackLayer(
                     notificationAccessGranted = notificationAccessGranted,
                     musicTextSwitchAnimation = musicTextSwitchAnimation,
                     showMediaCustomActions = showMediaCustomActions,
+                    glassHighlightEnabled = glassHighlightEnabled,
                     modifier = Modifier.width(contentWidth)
                 )
                 Spacer(Modifier.height(20.dp))
@@ -807,8 +807,16 @@ fun SmartStackLayer(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     when {
-                        !notificationAccessGranted -> PreviewInfoCard("开启通知访问", "副一屏上滑进入通知中心后完成授权", onOpenNotifications)
-                        previewGroups.isEmpty() -> PreviewInfoCard("暂无通知", "副一屏上滑可打开通知中心", onOpenNotifications)
+                        !notificationAccessGranted -> PreviewInfoCard(
+                            stringResource(R.string.side_notification_permission_title),
+                            stringResource(R.string.side_notification_permission_subtitle),
+                            onOpenNotifications,
+                        )
+                        previewGroups.isEmpty() -> PreviewInfoCard(
+                            stringResource(R.string.side_notification_empty_title),
+                            stringResource(R.string.side_notification_empty_subtitle),
+                            onOpenNotifications,
+                        )
                         else -> previewRows.forEach { row ->
                             when (row) {
                                 is PreviewRow.Aggregate -> StackedPreviewCard(
@@ -909,6 +917,7 @@ fun WidgetPageLayer(
     onSwapWidget: (Int, Int) -> Unit,
     onRemoveWidget: (Int) -> Unit,
     onEditModeChange: (Boolean) -> Unit = {},
+    overlayMaskCornerRadiusDp: Int = DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -1173,14 +1182,8 @@ fun WidgetPageLayer(
             .onGloballyPositioned { coordinates ->
                 widgetPageRootOffset = coordinates.positionInRoot()
             }
-            .background(
-                launcherStyle.screenBackground.copy(alpha = 0.62f),
-                if (com.flue.launcher.ui.common.isFlueScreenRound()) {
-                    androidx.compose.foundation.shape.CircleShape
-                } else {
-                    RoundedCornerShape(40.dp)
-                },
-            )
+            .clip(flueOverlayMaskShape(overlayMaskCornerRadiusDp))
+            .background(launcherStyle.screenBackground.copy(alpha = 0.62f))
     ) {
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val availableWidth = maxWidth - leftSafeInset
@@ -1583,19 +1586,21 @@ fun WidgetPageLayer(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "小组件",
+                        text = stringResource(R.string.widget_title),
                         color = launcherStyle.titleColor,
                         fontSize = 24.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         WidgetPageChip(
-                            label = if (editMode) "完成" else "编辑",
+                            label = stringResource(
+                                if (editMode) R.string.widget_done else R.string.widget_edit,
+                            ),
                             onClick = { editMode = !editMode },
                             enabled = widgetCards.isNotEmpty()
                         )
                         WidgetPageChip(
-                            label = "添加",
+                            label = stringResource(R.string.widget_add),
                             onClick = {
                                 editMode = false
                                 showPicker = true
@@ -2191,7 +2196,7 @@ private fun WidgetCard(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "小组件不可用",
+                    text = stringResource(R.string.widget_unavailable),
                     color = WatchColors.TextSecondary,
                     fontSize = 13.sp
                 )
@@ -2212,7 +2217,7 @@ private fun EmptyWidgetCard(width: Dp) {
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text = "还没有小组件，点右上角添加",
+            text = stringResource(R.string.widget_empty),
             color = WatchColors.TextSecondary,
             fontSize = 13.sp
         )
@@ -2224,7 +2229,7 @@ private fun EmptyWidgetCard(width: Dp) {
     val pressed = rememberPressedState(); val isPressed by pressed
     val scale by animateFloatAsState(if (isPressed) 0.958f else 1f, spring(stiffness = 860f, dampingRatio = 0.72f), label = "side_add")
     Box(Modifier.size(size).graphicsLayer { scaleX = scale; scaleY = scale }.clip(shape).background(launcherStyle.topBarChipColor).instantPressGesture(pressed, onClick = onClick), contentAlignment = Alignment.Center) {
-        Icon(Icons.Filled.Add, null, tint = launcherStyle.topBarTextColor, modifier = Modifier.size(24.dp))
+        Icon(MiuixIcons.Add, null, tint = launcherStyle.topBarTextColor, modifier = Modifier.size(24.dp))
     }
 }
 
@@ -2314,7 +2319,12 @@ private fun EmptyWidgetCard(width: Dp) {
                     }
                 }
             )
-            Text("+${hiddenCount}条新消息", color = WatchColors.TextTertiary, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 6.dp))
+            Text(
+                stringResource(R.string.side_hidden_messages_fmt, hiddenCount),
+                color = WatchColors.TextTertiary,
+                fontSize = 12.sp,
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 6.dp),
+            )
         }
     }
 }
@@ -2355,7 +2365,13 @@ private fun ShortcutPickerOverlay(
     val (pickerOverscroll, pickerNestedScroll) = rememberPickerOverscrollConnection(listState)
     ModalShell(onDismiss) { dismiss ->
         Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFF1E1E1E)).padding(vertical = 12.dp)) {
-            Text("添加快捷启动", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 10.dp))
+            Text(
+                stringResource(R.string.side_add_shortcut),
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 10.dp),
+            )
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -2433,7 +2449,7 @@ private fun WidgetPickerOverlay(
     ModalShell(onDismiss, backHandlerEnabled = selectedPackage == null) { dismiss ->
         Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFF1E1E1E)).padding(vertical = 12.dp)) {
             Text(
-                selectedApp?.label ?: "添加小组件",
+                selectedApp?.label ?: stringResource(R.string.widget_add_widget),
                 color = Color.White,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -2468,7 +2484,11 @@ private fun WidgetPickerOverlay(
                     if (widgetPickerItems.isEmpty()) {
                         item {
                             Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                                Text("未找到可用的小组件", color = WatchColors.TextTertiary, fontSize = 14.sp)
+                                Text(
+                                    stringResource(R.string.widget_no_results),
+                                    color = WatchColors.TextTertiary,
+                                    fontSize = 14.sp,
+                                )
                             }
                         }
                     } else if (it == null) {
@@ -2527,13 +2547,18 @@ private fun WidgetPickerBackRow(onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
-            Icons.AutoMirrored.Filled.ArrowBack,
+            MiuixIcons.Back,
             contentDescription = null,
             tint = Color.White,
             modifier = Modifier.size(18.dp)
         )
         Spacer(Modifier.width(9.dp))
-        Text("返回应用列表", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            stringResource(R.string.widget_back_to_apps),
+            color = Color.White,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
@@ -2594,7 +2619,12 @@ private fun WidgetPickerAppRow(
         Spacer(Modifier.width(12.dp))
         Column {
             Text(app.label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            Text("${app.widgets.size} 个小组件", color = WatchColors.TextTertiary, fontSize = 11.sp, maxLines = 1)
+            Text(
+                stringResource(R.string.widget_count_fmt, app.widgets.size),
+                color = WatchColors.TextTertiary,
+                fontSize = 11.sp,
+                maxLines = 1,
+            )
         }
     }
 }
@@ -2742,7 +2772,12 @@ private fun ShortcutPickerRow(
         ) {
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xFF2C2C2E))) {
                 Box(Modifier.fillMaxWidth().clickable { onRemove(); dismiss() }.padding(horizontal = 16.dp, vertical = 14.dp)) {
-                    Text("移除", color = Color(0xFFFF453A), fontSize = 15.sp, fontWeight = FontWeight.W500)
+                    Text(
+                        stringResource(R.string.action_remove),
+                        color = Color(0xFFFF453A),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.W500,
+                    )
                 }
             }
             Spacer(Modifier.height(16.dp))
@@ -2835,11 +2870,19 @@ private suspend fun AwaitPointerEventScope.awaitPrimaryDown(): PointerInputChang
 }
 
 @Composable private fun rememberClockSnapshot(): SideScreenClockSnapshot {
+    val context = LocalContext.current
+    val locale = context.resources.configuration.locales[0] ?: Locale.getDefault()
     var snapshot by remember { mutableStateOf(SideScreenClockSnapshot("--:--", "--")) }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(locale) {
+        val datePattern = android.text.format.DateFormat.getBestDateTimePattern(locale, "MMMdEEEE")
+        val dateFormatter = SimpleDateFormat(datePattern, locale)
+        val timeFormatter = android.text.format.DateFormat.getTimeFormat(context)
         while (true) {
-            val now = Date(); val locale = Locale.getDefault()
-            snapshot = SideScreenClockSnapshot(SimpleDateFormat("HH:mm", locale).format(now), if (locale.language.startsWith("zh")) SimpleDateFormat("M月d日 EEEE", Locale.CHINA).format(now) else SimpleDateFormat("MMM d, EEEE", locale).format(now))
+            val now = Date()
+            snapshot = SideScreenClockSnapshot(
+                timeFormatter.format(now),
+                dateFormatter.format(now),
+            )
             delay(1000)
         }
     }
@@ -2906,7 +2949,7 @@ private fun WatchBatteryAndStepsPill(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Filled.DirectionsWalk,
+                    imageVector = MiuixIcons.Location,
                     contentDescription = null,
                     tint = launcherStyle.bodyColor,
                     modifier = Modifier.size(18.dp)

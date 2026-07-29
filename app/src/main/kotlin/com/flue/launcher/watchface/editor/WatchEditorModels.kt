@@ -9,8 +9,8 @@ import java.util.UUID
  * the editor cannot accidentally become an unbounded file-copy surface.
  */
 data class WatchEditorLimits(
-    val maxTotalBytes: Long = 96L * 1024L * 1024L,
-    val maxFileBytes: Long = 32L * 1024L * 1024L,
+    val maxTotalBytes: Long = 500L * 1024L * 1024L,
+    val maxFileBytes: Long = 450L * 1024L * 1024L,
     val maxHistoryBytes: Long = 32L * 1024L * 1024L,
     val maxXmlDepth: Int = 128,
 ) {

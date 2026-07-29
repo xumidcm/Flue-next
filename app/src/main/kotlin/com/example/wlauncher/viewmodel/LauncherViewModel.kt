@@ -46,6 +46,8 @@ import com.flue.launcher.motion.FlueMotionProfile
 import com.flue.launcher.motion.FlueMotionProfileJson
 import com.flue.launcher.motion.FlueMotionProfiles
 import com.flue.launcher.ui.common.FlueScreenShape
+import com.flue.launcher.ui.common.DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP
+import com.flue.launcher.ui.common.normalizeOverlayMaskCornerRadiusDp
 import com.flue.launcher.motion.MotionEasing
 import com.flue.launcher.motion.MotionPhaseKey
 import com.flue.launcher.service.FlueAccessibilityService
@@ -102,7 +104,7 @@ val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "la
 private const val EXTERNAL_LAUNCH_BACKGROUND_TIMEOUT_MS = 1_500L
 private const val APP_ORDER_WRITE_DEBOUNCE_MS = 120L
 private const val EXTERNAL_RETURN_EVIDENCE_WAIT_MS = 300L
-private const val MAX_GENERIC_WATCH_ARCHIVE_BYTES = 32L * 1024L * 1024L
+private const val MAX_GENERIC_WATCH_ARCHIVE_BYTES = 500L * 1024L * 1024L
 
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -144,6 +146,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT = intPreferencesKey("app_list_left_safe_inset_percent")
         val KEY_APP_LIST_SCALE_PERCENT = intPreferencesKey("app_list_scale_percent")
         val KEY_GLOBAL_UI_SCALE_PERCENT = intPreferencesKey("global_ui_scale_percent")
+        val KEY_OVERLAY_MASK_CORNER_RADIUS_DP = intPreferencesKey("overlay_mask_corner_radius_dp")
         val KEY_APP_LIST_WATCHFACE_COLORS = booleanPreferencesKey("app_list_watchface_colors")
         val KEY_APP_LIST_ROW_BORDER = booleanPreferencesKey("app_list_row_border_enabled")
         val KEY_APP_LIST_FOLDERS_ENABLED = booleanPreferencesKey("app_list_folders_enabled")
@@ -402,6 +405,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val appListScalePercent: StateFlow<Int> = _appListScalePercent.asStateFlow()
     private val _globalUiScalePercent = MutableStateFlow(100)
     val globalUiScalePercent: StateFlow<Int> = _globalUiScalePercent.asStateFlow()
+    private val _overlayMaskCornerRadiusDp = MutableStateFlow(DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP)
+    val overlayMaskCornerRadiusDp: StateFlow<Int> = _overlayMaskCornerRadiusDp.asStateFlow()
     private val _appListWatchFaceColors = MutableStateFlow(false)
     val appListWatchFaceColors: StateFlow<Boolean> = _appListWatchFaceColors.asStateFlow()
     private val _appListRowBorderEnabled = MutableStateFlow(false)
@@ -888,6 +893,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedGlobalUiScale = normalizeGlobalUiScalePercent(prefs[KEY_GLOBAL_UI_SCALE_PERCENT] ?: 100)
                 if (_globalUiScalePercent.value != loadedGlobalUiScale) {
                     _globalUiScalePercent.value = loadedGlobalUiScale
+                }
+
+                val loadedOverlayMaskCornerRadius = normalizeOverlayMaskCornerRadiusDp(
+                    prefs[KEY_OVERLAY_MASK_CORNER_RADIUS_DP] ?: DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP,
+                )
+                if (_overlayMaskCornerRadiusDp.value != loadedOverlayMaskCornerRadius) {
+                    _overlayMaskCornerRadiusDp.value = loadedOverlayMaskCornerRadius
                 }
 
                 val loadedAppListWatchFaceColors = prefs[KEY_APP_LIST_WATCHFACE_COLORS] ?: false
@@ -2052,6 +2064,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun setOverlayMaskCornerRadiusDp(value: Int) {
+        _overlayMaskCornerRadiusDp.value = normalizeOverlayMaskCornerRadiusDp(value)
+        val savedValue = _overlayMaskCornerRadiusDp.value
+        persistDebounced("key_overlay_mask_corner_radius_dp") {
+            store.edit { it[KEY_OVERLAY_MASK_CORNER_RADIUS_DP] = savedValue }
+        }
+    }
+
     fun setAppListWatchFaceColors(enabled: Boolean) {
         _appListWatchFaceColors.value = enabled
         persist { store.edit { it[KEY_APP_LIST_WATCHFACE_COLORS] = enabled } }
@@ -3087,6 +3107,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appListLeftSafeInsetPercent.value = 0
         _appListScalePercent.value = 100
         _globalUiScalePercent.value = 100
+        _overlayMaskCornerRadiusDp.value = DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP
         _appListWatchFaceColors.value = false
         _appListRowBorderEnabled.value = false
         _appListFoldersEnabled.value = true
@@ -3194,6 +3215,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT] = 0
                 it[KEY_APP_LIST_SCALE_PERCENT] = 100
                 it[KEY_GLOBAL_UI_SCALE_PERCENT] = 100
+                it[KEY_OVERLAY_MASK_CORNER_RADIUS_DP] = DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP
                 it[KEY_APP_LIST_WATCHFACE_COLORS] = false
                 it[KEY_APP_LIST_ROW_BORDER] = false
                 it[KEY_APP_LIST_FOLDERS_ENABLED] = true
@@ -3374,7 +3396,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                         if (count < 0) break
                         copied += count.toLong()
                         if (copied > MAX_GENERIC_WATCH_ARCHIVE_BYTES) {
-                            throw IllegalArgumentException("表盘包超过 32MB 限制")
+                            throw IllegalArgumentException(
+                                "表盘包超过 ${MAX_GENERIC_WATCH_ARCHIVE_BYTES / (1024L * 1024L)}MB 限制",
+                            )
                         }
                         output.write(buffer, 0, count)
                     }

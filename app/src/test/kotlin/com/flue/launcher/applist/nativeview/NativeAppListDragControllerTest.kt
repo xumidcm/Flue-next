@@ -286,6 +286,10 @@ class NativeAppListDragControllerTest {
 
         assertEquals(authoritativeFolderKey, host.folderCommitDestinationKey)
         assertEquals(1, host.discardWithoutRestoreCount)
+        assertEquals(
+            listOf("prepare", "dispatch", "complete:true"),
+            host.folderDispatchVisualEvents,
+        )
     }
 
     @Test
@@ -596,6 +600,7 @@ class NativeAppListDragControllerTest {
         var folderCommitPreview: Pair<AppItemKey, AppItemKey>? = null
         var dispatchedFolderKey: AppItemKey? = null
         var folderCommitDestinationKey: AppItemKey? = null
+        val folderDispatchVisualEvents = mutableListOf<String>()
         val finishPreviewCalls = mutableListOf<Boolean>()
         val completePreviewCalls = mutableListOf<Boolean>()
         private val dragPreview = NativeStableKeyDragPreview()
@@ -646,9 +651,16 @@ class NativeAppListDragControllerTest {
             folderCommitDestinationKey = folderKey
             return previewFolderCommit(source, target)
         }
+        override fun prepareFolderDispatchVisuals(source: AppItemKey, target: AppItemKey) {
+            folderDispatchVisualEvents += "prepare"
+        }
+        override fun completeFolderDispatchVisuals(accepted: Boolean) {
+            folderDispatchVisualEvents += "complete:$accepted"
+        }
         override fun dispatchFolder(
             command: AppListCommand.CreateFolder,
         ): NativeFolderDispatchResult {
+            folderDispatchVisualEvents += "dispatch"
             val accepted = dispatch(command)
             return NativeFolderDispatchResult(
                 accepted = accepted,

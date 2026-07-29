@@ -282,6 +282,14 @@ class WatchmakerRuntimeContractsTest {
     }
 
     @Test
+    fun weatherTemperatureTagsRoundToWholeDegrees() {
+        assertEquals("24", weatherTemperatureNumber(23.6, WatchTemperatureUnit.CELSIUS))
+        assertEquals("23", weatherTemperatureNumber(23.4, WatchTemperatureUnit.CELSIUS))
+        assertEquals("74", weatherTemperatureNumber(23.6, WatchTemperatureUnit.FAHRENHEIT))
+        assertEquals("-4", weatherTemperatureNumber(-4.4, WatchTemperatureUnit.CELSIUS))
+    }
+
+    @Test
     fun weatherUpdateAndForecastAliasesStayDeterministic() {
         val now = Calendar.getInstance().apply {
             clear()
@@ -689,19 +697,41 @@ class WatchmakerRuntimeContractsTest {
     }
 
     @Test
-    fun sameDescriptorRefreshKeepsTheLastPreparedFrameUntilReplacementIsReady() {
+    fun anyPreparedFaceStaysVisibleUntilItsReplacementIsReady() {
         assertEquals(
             WatchSourceReloadMode.KEEP_CURRENT_UNTIL_READY,
             watchSourceReloadMode("watch:one", "watch:one", hasPreparedSource = true),
         )
         assertEquals(
-            WatchSourceReloadMode.CLEAR_BEFORE_LOAD,
+            WatchSourceReloadMode.KEEP_CURRENT_UNTIL_READY,
             watchSourceReloadMode("watch:one", "watch:two", hasPreparedSource = true),
         )
         assertEquals(
             WatchSourceReloadMode.CLEAR_BEFORE_LOAD,
             watchSourceReloadMode("watch:one", "watch:one", hasPreparedSource = false),
         )
+    }
+
+    @Test
+    fun liveTransformHandoffOnlyReleasesForTheArmedSourceIdentity() {
+        val handoff = WatchLiveTransformHandoff()
+
+        handoff.arm(descriptorKey = "watch:one", refreshToken = 8)
+
+        assertFalse(handoff.consumeIfReady(descriptorKey = "watch:one", refreshToken = 7))
+        assertFalse(handoff.consumeIfReady(descriptorKey = "watch:two", refreshToken = 8))
+        assertTrue(handoff.consumeIfReady(descriptorKey = "watch:one", refreshToken = 8))
+        assertFalse(handoff.consumeIfReady(descriptorKey = "watch:one", refreshToken = 8))
+    }
+
+    @Test
+    fun startingAnotherGestureCancelsThePreviousSourceHandoff() {
+        val handoff = WatchLiveTransformHandoff()
+
+        handoff.arm(descriptorKey = "watch:one", refreshToken = 3)
+        handoff.cancel()
+
+        assertFalse(handoff.consumeIfReady(descriptorKey = "watch:one", refreshToken = 3))
     }
 
     @Test

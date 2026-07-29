@@ -58,6 +58,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -148,11 +149,31 @@ private fun BuiltInFileManagerScreen(
     val vm: LauncherViewModel = viewModel()
     val showThumbnails by vm.builtInManagerThumbnails.collectAsStateWithLifecycle()
     val launcherStyle = LauncherTheme.style
+    val unnamedFileLabel = stringResource(R.string.file_manager_unnamed_file)
+    val unknownPathLabel = stringResource(R.string.file_manager_unknown_path)
+    val unknownTimeLabel = stringResource(R.string.file_manager_unknown_time)
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
-    val mediaList by produceState<List<MediaItem>?>(initialValue = null, mode, hasPermission) {
-        value = if (hasPermission) withContext(Dispatchers.IO) { queryMedia(context, mode) } else emptyList()
+    val mediaList by produceState<List<MediaItem>?>(
+        initialValue = null,
+        mode,
+        hasPermission,
+        unnamedFileLabel,
+        unknownPathLabel,
+    ) {
+        value = if (hasPermission) {
+            withContext(Dispatchers.IO) {
+                queryMedia(
+                    context = context,
+                    mode = mode,
+                    unnamedFileLabel = unnamedFileLabel,
+                    unknownPathLabel = unknownPathLabel,
+                )
+            }
+        } else {
+            emptyList()
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -169,7 +190,10 @@ private fun BuiltInFileManagerScreen(
             }
     ) {
         Text(
-            text = if (mode == FILE_MANAGER_MODE_VIDEO) "内置文件管理器（视频）" else "内置文件管理器（图片）",
+            text = stringResource(
+                if (mode == FILE_MANAGER_MODE_VIDEO) R.string.file_manager_video_title
+                else R.string.file_manager_image_title,
+            ),
             color = launcherStyle.titleColor,
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold
@@ -177,14 +201,17 @@ private fun BuiltInFileManagerScreen(
         Spacer(modifier = Modifier.height(10.dp))
         if (!hasPermission) {
             Text(
-                text = "需要存储权限才能读取媒体文件",
+                text = stringResource(R.string.file_manager_permission_required),
                 color = WatchColors.TextTertiary,
                 fontSize = 13.sp
             )
             Spacer(modifier = Modifier.height(12.dp))
-            FileManagerActionButton(text = "申请权限", onClick = onRequestPermission)
+            FileManagerActionButton(
+                text = stringResource(R.string.file_manager_request_permission),
+                onClick = onRequestPermission,
+            )
             Spacer(modifier = Modifier.height(8.dp))
-            FileManagerActionButton(text = "返回", onClick = onBack)
+            FileManagerActionButton(text = stringResource(R.string.common_back), onClick = onBack)
             return
         }
 
@@ -207,7 +234,10 @@ private fun BuiltInFileManagerScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = if (mode == FILE_MANAGER_MODE_VIDEO) "未发现可用视频" else "未发现可用图片",
+                    text = stringResource(
+                        if (mode == FILE_MANAGER_MODE_VIDEO) R.string.file_manager_empty_videos
+                        else R.string.file_manager_empty_images,
+                    ),
                     color = WatchColors.TextTertiary,
                     fontSize = 13.sp
                 )
@@ -222,7 +252,8 @@ private fun BuiltInFileManagerScreen(
             ) {
                 items(mediaList!!, key = { it.uri.toString() }) { item ->
                     val subTitle = remember(item) {
-                        val createdLabel = item.createdAtMillis?.let(::formatMediaCreatedAt) ?: "未知时间"
+                        val createdLabel = item.createdAtMillis?.let(::formatMediaCreatedAt)
+                            ?: unknownTimeLabel
                         "$createdLabel\n${item.path}"
                     }
                     val scale = itemFisheye(listState, item.uri.toString())
@@ -262,7 +293,7 @@ private fun BuiltInFileManagerScreen(
         }
 
         Spacer(modifier = Modifier.height(8.dp))
-        FileManagerActionButton(text = "返回", onClick = onBack)
+        FileManagerActionButton(text = stringResource(R.string.common_back), onClick = onBack)
     }
 }
 
@@ -358,7 +389,12 @@ private data class MediaItem(
     val path: String
 )
 
-private fun queryMedia(context: Context, mode: String): List<MediaItem> {
+private fun queryMedia(
+    context: Context,
+    mode: String,
+    unnamedFileLabel: String,
+    unknownPathLabel: String,
+): List<MediaItem> {
     val resolver = context.contentResolver
     val baseUri = if (mode == FILE_MANAGER_MODE_VIDEO) {
         MediaStore.Video.Media.EXTERNAL_CONTENT_URI
@@ -386,9 +422,9 @@ private fun queryMedia(context: Context, mode: String): List<MediaItem> {
                 val path = if (pathIndex >= 0) cursor.getString(pathIndex).orEmpty() else ""
                 items += MediaItem(
                     uri = ContentUris.withAppendedId(baseUri, id),
-                    displayName = name.ifBlank { "未命名文件" },
+                    displayName = name.ifBlank { unnamedFileLabel },
                     createdAtMillis = dateAddedSeconds.takeIf { it > 0L }?.times(1000L),
-                    path = path.ifBlank { "未知路径" }
+                    path = path.ifBlank { unknownPathLabel },
                 )
             }
         }

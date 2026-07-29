@@ -108,7 +108,8 @@ app/
       common/                          通用交互与组件
     watchface/                         内置表盘配置与存储
   src/main/java/com/flue/launcher/watchface/
-    LunchWatchFace*.kt                 表盘注册、宿主与扫描逻辑
+    standard/                          标准 .watch 表盘解析、运行与存储
+    jbwatch/                           JB 兼容表盘运行与存储
 .github/workflows/build.yml            CI 构建流程
 ```
 

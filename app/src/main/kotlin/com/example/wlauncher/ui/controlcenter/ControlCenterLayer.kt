@@ -36,9 +36,11 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -65,16 +67,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.Brightness6
-import androidx.compose.material.icons.filled.DoNotDisturbOn
-import androidx.compose.material.icons.filled.NetworkCell
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.PowerSettingsNew
-import androidx.compose.material.icons.outlined.Settings as SettingsIcon
-import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -88,6 +80,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -95,6 +88,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -113,13 +108,28 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.sp
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Blocklist
+import top.yukonga.miuix.kmp.icon.extended.Back
+import top.yukonga.miuix.kmp.icon.extended.Carrier
+import top.yukonga.miuix.kmp.icon.extended.Forward
+import top.yukonga.miuix.kmp.icon.extended.Link
+import top.yukonga.miuix.kmp.icon.extended.Messages
+import top.yukonga.miuix.kmp.icon.extended.Music
+import top.yukonga.miuix.kmp.icon.extended.Pause
+import top.yukonga.miuix.kmp.icon.extended.Play
+import top.yukonga.miuix.kmp.icon.extended.Reset
+import top.yukonga.miuix.kmp.icon.extended.SearchDevice
+import top.yukonga.miuix.kmp.icon.extended.Settings
+import top.yukonga.miuix.kmp.icon.extended.Theme
+import top.yukonga.miuix.kmp.icon.extended.VolumeUp
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import androidx.mediarouter.app.SystemOutputSwitcherDialogController
@@ -127,7 +137,9 @@ import com.flue.launcher.FlueApplication
 import com.flue.launcher.R
 import com.flue.launcher.service.WLauncherNotificationListener
 import com.flue.launcher.ui.common.FrostedHeader
+import com.flue.launcher.ui.common.DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP
 import com.flue.launcher.ui.common.WatchBatteryPill
+import com.flue.launcher.ui.common.flueOverlayMaskShape
 import com.flue.launcher.ui.common.glassSurface
 import com.flue.launcher.ui.common.rememberFlueElasticScrollState
 import com.flue.launcher.ui.common.rememberPressedState
@@ -136,7 +148,9 @@ import com.flue.launcher.ui.notification.notificationStackBackColor
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -164,8 +178,8 @@ private const val CONTROL_CENTER_DISMISS_DRAG_THRESHOLD_DP = 40f
 
 private data class ControlCenterMediaState(
     val controller: MediaController? = null,
-    val title: String = "未在播放",
-    val artist: String = "打开音乐应用后会显示控制",
+    val title: String = "",
+    val artist: String = "",
     val artwork: ImageBitmap? = null,
     val appIcon: ImageBitmap? = null,
     val customActions: List<ControlCenterMediaAction> = emptyList(),
@@ -208,6 +222,7 @@ fun ControlCenterLayer(
     showPowerButton: Boolean = false,
     onPowerClick: () -> Unit = {},
     glassHighlightEnabled: Boolean = true,
+    overlayMaskCornerRadiusDp: Int = DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -421,19 +436,13 @@ fun ControlCenterLayer(
             delay(250)
         }
     }
-    val greetingText = remember(timeText) { controlCenterGreeting() }
+    val greetingText = controlCenterGreeting()
 
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             // 圆屏整圆裁剪 + 半透明玻璃根底（表盘背衬透出即毛玻璃）。
-            .clip(
-                if (com.flue.launcher.ui.common.isFlueScreenRound()) {
-                    androidx.compose.foundation.shape.CircleShape
-                } else {
-                    RoundedCornerShape(40.dp)
-                },
-            )
+            .clip(flueOverlayMaskShape(overlayMaskCornerRadiusDp))
             .background(launcherStyle.screenBackground.copy(alpha = 0.62f))
     ) {
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
@@ -578,8 +587,8 @@ fun ControlCenterLayer(
                     ) {
                         if (showPowerButton) {
                             SystemSettingsButton(
-                                icon = Icons.Filled.PowerSettingsNew,
-                                contentDescription = "电源选项",
+                                icon = MiuixIcons.Reset,
+                                contentDescription = stringResource(R.string.cc_power_options),
                                 size = 28.dp,
                                 iconSize = 17.dp,
                                 onGestureLockChange = lockControlCenterGesture,
@@ -587,8 +596,8 @@ fun ControlCenterLayer(
                             )
                         }
                         SystemSettingsButton(
-                            icon = Icons.Outlined.SettingsIcon,
-                            contentDescription = "系统设置",
+                            icon = MiuixIcons.Settings,
+                            contentDescription = stringResource(R.string.cc_system_settings),
                             size = 28.dp,
                             iconSize = 17.dp,
                             onGestureLockChange = lockControlCenterGesture,
@@ -618,8 +627,8 @@ fun ControlCenterLayer(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             ControlToggle(
-                                icon = Icons.Filled.Wifi,
-                                label = "WiFi",
+                                icon = MiuixIcons.SearchDevice,
+                                label = stringResource(R.string.cc_wifi),
                                 active = connectivity.wifiActive,
                                 size = toggleSize,
                                 iconSize = toggleIconSize,
@@ -636,8 +645,8 @@ fun ControlCenterLayer(
                                 onLongClick = { openSettings(context, Settings.ACTION_WIFI_SETTINGS) }
                             )
                             ControlToggle(
-                                icon = Icons.Filled.Bluetooth,
-                                label = "蓝牙",
+                                icon = MiuixIcons.Link,
+                                label = stringResource(R.string.cc_bluetooth),
                                 active = bluetoothEnabled,
                                 size = toggleSize,
                                 iconSize = toggleIconSize,
@@ -655,8 +664,8 @@ fun ControlCenterLayer(
                                 onLongClick = { openSettings(context, Settings.ACTION_BLUETOOTH_SETTINGS) }
                             )
                             ControlToggle(
-                                icon = Icons.Filled.NetworkCell,
-                                label = "流量",
+                                icon = MiuixIcons.Carrier,
+                                label = stringResource(R.string.cc_mobile_data),
                                 active = connectivity.cellularActive,
                                 size = toggleSize,
                                 iconSize = toggleIconSize,
@@ -673,8 +682,8 @@ fun ControlCenterLayer(
                                 onLongClick = { openSettings(context, Settings.ACTION_WIRELESS_SETTINGS) }
                             )
                             ControlToggle(
-                                icon = Icons.Filled.DoNotDisturbOn,
-                                label = "勿扰",
+                                icon = MiuixIcons.Blocklist,
+                                label = stringResource(R.string.cc_dnd),
                                 active = dndEnabled,
                                 size = toggleSize,
                                 iconSize = toggleIconSize,
@@ -704,8 +713,8 @@ fun ControlCenterLayer(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 ControlToggle(
-                                    icon = Icons.Filled.Wifi,
-                                    label = "WiFi",
+                                    icon = MiuixIcons.SearchDevice,
+                                    label = stringResource(R.string.cc_wifi),
                                     active = connectivity.wifiActive,
                                     size = toggleSize,
                                     iconSize = toggleIconSize,
@@ -722,8 +731,8 @@ fun ControlCenterLayer(
                                     onLongClick = { openSettings(context, Settings.ACTION_WIFI_SETTINGS) }
                                 )
                                 ControlToggle(
-                                    icon = Icons.Filled.Bluetooth,
-                                    label = "蓝牙",
+                                    icon = MiuixIcons.Link,
+                                    label = stringResource(R.string.cc_bluetooth),
                                     active = bluetoothEnabled,
                                     size = toggleSize,
                                     iconSize = toggleIconSize,
@@ -741,8 +750,8 @@ fun ControlCenterLayer(
                                     onLongClick = { openSettings(context, Settings.ACTION_BLUETOOTH_SETTINGS) }
                                 )
                                 ControlToggle(
-                                    icon = Icons.Filled.NetworkCell,
-                                    label = "流量",
+                                    icon = MiuixIcons.Carrier,
+                                    label = stringResource(R.string.cc_mobile_data),
                                     active = connectivity.cellularActive,
                                     size = toggleSize,
                                     iconSize = toggleIconSize,
@@ -759,8 +768,8 @@ fun ControlCenterLayer(
                                     onLongClick = { openSettings(context, Settings.ACTION_WIRELESS_SETTINGS) }
                                 )
                                 ControlToggle(
-                                    icon = Icons.Filled.DoNotDisturbOn,
-                                    label = "勿扰",
+                                    icon = MiuixIcons.Blocklist,
+                                    label = stringResource(R.string.cc_dnd),
                                     active = dndEnabled,
                                     size = toggleSize,
                                     iconSize = toggleIconSize,
@@ -780,8 +789,8 @@ fun ControlCenterLayer(
                 }
 
                 ControlSliderCard(
-                    icon = Icons.Filled.VolumeUp,
-                    label = "音量",
+                    icon = MiuixIcons.VolumeUp,
+                    label = stringResource(R.string.cc_volume),
                     value = mediaVolume,
                     height = sliderHeight,
                     horizontalPadding = sliderHorizontalPadding,
@@ -792,8 +801,8 @@ fun ControlCenterLayer(
                     }
                 )
                 ControlSliderCard(
-                    icon = Icons.Filled.Brightness6,
-                    label = "亮度",
+                    icon = MiuixIcons.Theme,
+                    label = stringResource(R.string.cc_brightness),
                     value = brightness,
                     height = sliderHeight,
                     horizontalPadding = sliderHorizontalPadding,
@@ -807,6 +816,7 @@ fun ControlCenterLayer(
                     MediaControlCard(
                         mediaState = mediaState,
                         notificationAccessGranted = notificationAccessGranted,
+                        glassHighlightEnabled = glassHighlightEnabled,
                         musicTextSwitchAnimation = musicTextSwitchAnimation,
                         showCustomActions = showMediaCustomActions,
                         onGestureLockChange = lockControlCenterGesture,
@@ -850,6 +860,7 @@ fun CompactControlCenterMusicCard(
     notificationAccessGranted: Boolean,
     musicTextSwitchAnimation: String = MusicTextSwitchAnimations.DEFAULT_ID,
     showMediaCustomActions: Boolean = true,
+    glassHighlightEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -857,6 +868,7 @@ fun CompactControlCenterMusicCard(
     MediaControlCard(
         mediaState = mediaState,
         notificationAccessGranted = notificationAccessGranted,
+        glassHighlightEnabled = glassHighlightEnabled,
         musicTextSwitchAnimation = musicTextSwitchAnimation,
         showCustomActions = showMediaCustomActions,
         onGestureLockChange = {},
@@ -890,14 +902,16 @@ private fun ControlCenterNotificationPreviewCard(
     val leadEntry = leadGroup?.visiblePreviewEntries?.firstOrNull() ?: leadGroup?.entries?.firstOrNull()
     val count = notificationGroups.sumOf { it.entries.size }
     val title = when {
-        !notificationAccessGranted -> "需要通知使用权"
+        !notificationAccessGranted -> stringResource(R.string.cc_notification_permission_title)
         leadEntry != null -> leadEntry.title.ifBlank { leadGroup?.headerTitle.orEmpty() }.ifBlank { leadEntry.appLabel }
-        else -> "暂无通知"
+        else -> stringResource(R.string.cc_notification_empty_title)
     }
     val subtitle = when {
-        !notificationAccessGranted -> "点击进入通知授权页面"
-        leadEntry != null -> leadEntry.text.ifBlank { "${count.coerceAtLeast(1)} 条通知，点击查看全部" }
-        else -> "当前没有新的通知"
+        !notificationAccessGranted -> stringResource(R.string.cc_notification_permission_subtitle)
+        leadEntry != null -> leadEntry.text.ifBlank {
+            stringResource(R.string.cc_notification_count_subtitle, count.coerceAtLeast(1))
+        }
+        else -> stringResource(R.string.cc_notification_empty_subtitle)
     }
     val stackStrength by animateFloatAsState(
         targetValue = if (count > 1) 1f else 0f,
@@ -964,7 +978,7 @@ private fun ControlCenterNotificationPreviewCard(
                         contentScale = ContentScale.Fit
                     )
                 } else {
-                    Icon(Icons.Filled.Notifications, null, tint = launcherStyle.titleColor.copy(alpha = 0.74f))
+                    Icon(MiuixIcons.Messages, null, tint = launcherStyle.titleColor.copy(alpha = 0.74f))
                 }
             }
             Spacer(Modifier.width(12.dp))
@@ -1164,6 +1178,7 @@ private fun ControlSliderCard(
 private fun MediaControlCard(
     mediaState: ControlCenterMediaState,
     notificationAccessGranted: Boolean,
+    glassHighlightEnabled: Boolean,
     musicTextSwitchAnimation: String,
     showCustomActions: Boolean,
     onGestureLockChange: (Boolean) -> Unit,
@@ -1172,6 +1187,25 @@ private fun MediaControlCard(
     onOpenOutputSwitcherOrApp: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val launcherStyle = LauncherTheme.style
+    val resolvedMediaTitle = mediaState.title.ifBlank {
+        stringResource(R.string.cc_media_not_playing)
+    }
+    val resolvedMediaArtist = mediaState.artist.ifBlank {
+        stringResource(R.string.cc_media_open_app_hint)
+    }
+    val cardShape = launcherStyle.panelShape
+    val artworkSurfaceActive = notificationAccessGranted && mediaState.playing
+    val primaryContentColor = if (artworkSurfaceActive) Color.White else launcherStyle.titleColor
+    val secondaryContentColor = if (artworkSurfaceActive) {
+        Color.White.copy(alpha = 0.72f)
+    } else {
+        launcherStyle.secondaryTextColor
+    }
+    val controlContentColor = if (artworkSurfaceActive) Color.White else launcherStyle.bodyColor
+    val blurredArtwork = rememberBlurredMediaArtwork(
+        mediaState.artwork.takeIf { artworkSurfaceActive },
+    )
     val bgTarget = if (notificationAccessGranted) mediaState.artworkColor else Color(0xFF2F3B45)
     // 切歌时底色渐变过去，而不是硬跳 —— 让它的 420ms 盖住文字动画的中段，
     // 视觉上就是「同一件事」。
@@ -1180,16 +1214,17 @@ private fun MediaControlCard(
         animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing),
         label = "media_card_bg",
     )
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(156.dp)
-            // panelShape(30dp)：媒体卡是大块表面。内层封面 18dp = 30 − 12 padding，
-            // 同心圆角关系（内 = 外 − 间距）；旧的 32/24 组合会让封面的角
-            // 「胀」出外壳弧线约 4dp。
-            .clip(LauncherTheme.style.panelShape)
+    val playingEdgeAlpha by animateFloatAsState(
+        targetValue = if (artworkSurfaceActive && glassHighlightEnabled) 1f else 0f,
+        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+        label = "media_card_playing_edge",
+    )
+    val surfaceModifier = if (artworkSurfaceActive) {
+        Modifier
+            .clip(cardShape)
             .background(
-                // 135° 渐变代替纯色平铺：大色块立刻有质感。
+                // Keep the artwork-derived blurred colour field while media is
+                // playing; only the glass edge is layered on top of it.
                 Brush.linearGradient(
                     listOf(
                         bg.copy(alpha = 0.94f),
@@ -1197,13 +1232,71 @@ private fun MediaControlCard(
                     )
                 )
             )
+            .border(launcherStyle.glass.borderWidth, launcherStyle.glass.highlight, cardShape)
+    } else {
+        // No permission and no active playback use exactly the same thin glass
+        // recipe as the Smart Stack quick-launch dock.
+        Modifier.glassSurface(cardShape, launcherStyle.glass)
+    }
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(156.dp)
+            // panelShape(30dp)：媒体卡是大块表面。内层封面 18dp = 30 − 12 padding，
+            // 同心圆角关系（内 = 外 − 间距）；旧的 32/24 组合会让封面的角
+            // 「胀」出外壳弧线约 4dp。
+            .then(surfaceModifier)
             .clickable(onClick = if (notificationAccessGranted) onOpenApp else onOpenNotificationAccess)
-            .padding(12.dp)
     ) {
-        if (!notificationAccessGranted) {
-            MediaNotificationAccessPrompt()
-        } else {
-            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        if (artworkSurfaceActive && blurredArtwork != null) {
+            Image(
+                bitmap = blurredArtwork,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = 1.10f
+                        scaleY = 1.10f
+                        alpha = 0.72f
+                    },
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.12f)),
+            )
+        }
+        if (playingEdgeAlpha > 0.001f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = playingEdgeAlpha }
+                    .border(
+                        width = 1.25.dp,
+                        brush = Brush.verticalGradient(
+                            listOf(
+                                Color.White.copy(alpha = 0.58f),
+                                Color.White.copy(alpha = 0.10f),
+                            )
+                        ),
+                        shape = cardShape,
+                    )
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(12.dp)
+        ) {
+            if (!notificationAccessGranted) {
+                MediaNotificationAccessPrompt(
+                    primaryColor = primaryContentColor,
+                    secondaryColor = secondaryContentColor,
+                    controlColor = controlContentColor,
+                )
+            } else {
+                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val artworkGap = 12.dp
             val preferredArtworkSize = 132.dp
             val minArtworkSize = 96.dp
@@ -1224,7 +1317,7 @@ private fun MediaControlCard(
                     modifier = Modifier
                         .size(artworkSize)
                         .clip(artworkShape)
-                        .background(Color.Black.copy(alpha = 0.22f)),
+                        .background(controlContentColor.copy(alpha = 0.12f)),
                     contentAlignment = Alignment.Center
                 ) {
                     if (mediaState.artwork != null) {
@@ -1238,9 +1331,9 @@ private fun MediaControlCard(
                         )
                     } else {
                         Icon(
-                            painter = painterResource(R.drawable.ic_flue_music_round),
+                            imageVector = MiuixIcons.Music,
                             contentDescription = null,
-                            tint = Color.White,
+                            tint = controlContentColor,
                             modifier = Modifier.size(34.dp),
                         )
                     }
@@ -1265,15 +1358,15 @@ private fun MediaControlCard(
                                     .padding(end = titleEndPadding)
                             ) {
                                 AnimatedMusicText(
-                                    text = mediaState.title,
-                                    color = Color.White,
+                                    text = resolvedMediaTitle,
+                                    color = primaryContentColor,
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     animationStyleId = musicTextSwitchAnimation
                                 )
                                 AnimatedMusicText(
-                                    text = mediaState.artist,
-                                    color = Color.White.copy(alpha = 0.72f),
+                                    text = resolvedMediaArtist,
+                                    color = secondaryContentColor,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Normal,
                                     animationStyleId = musicTextSwitchAnimation
@@ -1294,23 +1387,51 @@ private fun MediaControlCard(
                     MediaProgressSection(
                         mediaState = mediaState,
                         onGestureLockChange = onGestureLockChange,
+                        foregroundColor = controlContentColor,
+                        secondaryTextColor = secondaryContentColor,
                         modifier = Modifier.fillMaxWidth()
                     )
                     MediaControlsRow(
                         mediaState = mediaState,
                         showCustomActions = showCustomActions,
                         onGestureLockChange = onGestureLockChange,
+                        foregroundColor = controlContentColor,
                         modifier = Modifier.fillMaxWidth()
                     )
+                }
                 }
             }
         }
     }
 }
+
 }
 
 @Composable
-private fun MediaNotificationAccessPrompt() {
+private fun rememberBlurredMediaArtwork(artwork: ImageBitmap?): ImageBitmap? {
+    return produceState<ImageBitmap?>(initialValue = null, key1 = artwork) {
+        value = artwork?.let { sourceImage ->
+            withContext(Dispatchers.Default) {
+                val source = sourceImage.asAndroidBitmap()
+                val sampleWidth = (source.width / 12).coerceIn(24, 48)
+                val sampleHeight = (source.height / 12).coerceIn(24, 48)
+                val sample = Bitmap.createScaledBitmap(source, sampleWidth, sampleHeight, true)
+                val outputWidth = source.width.coerceIn(128, 384)
+                val outputHeight = source.height.coerceIn(128, 384)
+                val output = Bitmap.createScaledBitmap(sample, outputWidth, outputHeight, true)
+                if (sample !== output && !sample.isRecycled) sample.recycle()
+                output.asImageBitmap()
+            }
+        }
+    }.value
+}
+
+@Composable
+private fun MediaNotificationAccessPrompt(
+    primaryColor: Color,
+    secondaryColor: Color,
+    controlColor: Color,
+) {
     Row(
         modifier = Modifier.fillMaxSize(),
         verticalAlignment = Alignment.CenterVertically
@@ -1319,13 +1440,13 @@ private fun MediaNotificationAccessPrompt() {
             modifier = Modifier
                 .size(132.dp)
                 .clip(RoundedCornerShape(24.dp))
-                .background(Color.Black.copy(alpha = 0.22f)),
+                .background(controlColor.copy(alpha = 0.12f)),
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                painter = painterResource(R.drawable.ic_flue_music_round),
+                imageVector = MiuixIcons.Music,
                 contentDescription = null,
-                tint = Color.White,
+                tint = controlColor,
                 modifier = Modifier.size(34.dp),
             )
         }
@@ -1335,15 +1456,15 @@ private fun MediaNotificationAccessPrompt() {
             verticalArrangement = Arrangement.Center
         ) {
             Text(
-                text = "需要通知使用权",
-                color = Color.White,
+                text = stringResource(R.string.cc_notification_permission_title),
+                color = primaryColor,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold
             )
             Spacer(Modifier.height(5.dp))
             Text(
-                text = "授权后显示音乐信息和控制",
-                color = Color.White.copy(alpha = 0.72f),
+                text = stringResource(R.string.cc_media_permission_subtitle),
+                color = secondaryColor,
                 fontSize = 11.sp,
                 lineHeight = 15.sp
             )
@@ -1351,12 +1472,12 @@ private fun MediaNotificationAccessPrompt() {
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(999.dp))
-                    .background(Color.White.copy(alpha = 0.18f))
+                    .background(controlColor.copy(alpha = 0.14f))
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
                 Text(
-                    text = "点击授权",
-                    color = Color.White,
+                    text = stringResource(R.string.cc_media_permission_action),
+                    color = controlColor,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -1409,6 +1530,7 @@ private fun MediaControlsRow(
     mediaState: ControlCenterMediaState,
     showCustomActions: Boolean,
     onGestureLockChange: (Boolean) -> Unit,
+    foregroundColor: Color,
     modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(modifier = modifier, contentAlignment = Alignment.Center) {
@@ -1445,6 +1567,7 @@ private fun MediaControlsRow(
                     action = customAction,
                     size = customButtonSize,
                     iconSize = customIconSize,
+                    foregroundColor = foregroundColor,
                     onGestureLockChange = onGestureLockChange
                 ) {
                     mediaState.controller?.transportControls?.sendCustomAction(
@@ -1454,30 +1577,29 @@ private fun MediaControlsRow(
                 }
             }
             MediaButton(
-                iconRes = R.drawable.ic_flue_media_previous_round,
+                icon = MiuixIcons.Back,
                 size = buttonSize,
                 iconSize = iconSize,
+                foregroundColor = foregroundColor,
                 onGestureLockChange = onGestureLockChange
             ) {
                 mediaState.controller?.transportControls?.skipToPrevious()
             }
             MediaButton(
-                iconRes = if (mediaState.playing) {
-                    R.drawable.ic_flue_media_pause_round
-                } else {
-                    R.drawable.ic_flue_media_play_round
-                },
+                icon = if (mediaState.playing) MiuixIcons.Pause else MiuixIcons.Play,
                 size = buttonSize,
                 iconSize = iconSize,
+                foregroundColor = foregroundColor,
                 onGestureLockChange = onGestureLockChange
             ) {
                 val controls = mediaState.controller?.transportControls
                 if (mediaState.playing) controls?.pause() else controls?.play()
             }
             MediaButton(
-                iconRes = R.drawable.ic_flue_media_next_round,
+                icon = MiuixIcons.Forward,
                 size = buttonSize,
                 iconSize = iconSize,
+                foregroundColor = foregroundColor,
                 onGestureLockChange = onGestureLockChange
             ) {
                 mediaState.controller?.transportControls?.skipToNext()
@@ -1487,6 +1609,7 @@ private fun MediaControlsRow(
                     action = customAction,
                     size = customButtonSize,
                     iconSize = customIconSize,
+                    foregroundColor = foregroundColor,
                     onGestureLockChange = onGestureLockChange
                 ) {
                     mediaState.controller?.transportControls?.sendCustomAction(
@@ -1504,6 +1627,7 @@ private fun MediaCustomActionButton(
     action: ControlCenterMediaAction,
     size: androidx.compose.ui.unit.Dp,
     iconSize: androidx.compose.ui.unit.Dp,
+    foregroundColor: Color,
     onGestureLockChange: (Boolean) -> Unit,
     onClick: () -> Unit
 ) {
@@ -1537,7 +1661,7 @@ private fun MediaCustomActionButton(
         } else {
             Text(
                 text = action.title.take(2).ifBlank { "..." },
-                color = Color.White.copy(alpha = contentAlpha),
+                color = foregroundColor.copy(alpha = contentAlpha),
                 fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1
@@ -1735,6 +1859,8 @@ private fun OneShotMarqueeText(
 private fun MediaProgressSection(
     mediaState: ControlCenterMediaState,
     onGestureLockChange: (Boolean) -> Unit,
+    foregroundColor: Color,
+    secondaryTextColor: Color,
     modifier: Modifier = Modifier
 ) {
     val currentMediaState by rememberUpdatedState(mediaState)
@@ -1826,20 +1952,33 @@ private fun MediaProgressSection(
                 },
             contentAlignment = Alignment.CenterStart
         ) {
-            Box(
+            Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(trackHeight.dp)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(Color.White.copy(alpha = 0.22f))
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(localProgress.coerceIn(0f, 1f))
-                    .height(trackHeight.dp)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(Color.White)
-            )
+            ) {
+                val radius = size.height / 2f
+                val corners = CornerRadius(radius, radius)
+                drawRoundRect(
+                    color = foregroundColor.copy(alpha = 0.22f),
+                    size = size,
+                    cornerRadius = corners,
+                )
+                val progress = localProgress.coerceIn(0f, 1f)
+                if (progress > 0f) {
+                    // A 1-2px layout produced by fillMaxWidth(progress) loses
+                    // its corner radius on old renderers. Keep the first visible
+                    // segment at least one track diameter so it is always a dot.
+                    val activeWidth = (size.width * progress)
+                        .coerceAtLeast(size.height)
+                        .coerceAtMost(size.width)
+                    drawRoundRect(
+                        color = foregroundColor,
+                        size = Size(activeWidth, size.height),
+                        cornerRadius = corners,
+                    )
+                }
+            }
         }
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1847,12 +1986,12 @@ private fun MediaProgressSection(
         ) {
             Text(
                 text = formatMediaTime((localProgress.coerceIn(0f, 1f) * mediaState.durationMs).toLong()),
-                color = Color.White.copy(alpha = 0.72f),
+                color = secondaryTextColor,
                 fontSize = 10.sp
             )
             Text(
                 text = formatMediaTime(mediaState.durationMs),
-                color = Color.White.copy(alpha = 0.72f),
+                color = secondaryTextColor,
                 fontSize = 10.sp
             )
         }
@@ -1861,9 +2000,10 @@ private fun MediaProgressSection(
 
 @Composable
 private fun MediaButton(
-    iconRes: Int,
+    icon: ImageVector,
     size: androidx.compose.ui.unit.Dp = 36.dp,
     iconSize: androidx.compose.ui.unit.Dp = 20.dp,
+    foregroundColor: Color,
     onGestureLockChange: (Boolean) -> Unit = {},
     onClick: () -> Unit
 ) {
@@ -1879,7 +2019,7 @@ private fun MediaButton(
                 scaleY = scale
             }
             .clip(CircleShape)
-            .background(Color.White.copy(alpha = backgroundAlpha))
+            .background(foregroundColor.copy(alpha = backgroundAlpha))
             .controlCenterPressGesture(
                 pressedState = pressedState,
                 onGestureLockChange = onGestureLockChange,
@@ -1888,9 +2028,9 @@ private fun MediaButton(
         contentAlignment = Alignment.Center
     ) {
         Icon(
-            painter = painterResource(iconRes),
+            imageVector = icon,
             contentDescription = null,
-            tint = Color.White,
+            tint = foregroundColor,
             modifier = Modifier.size(iconSize),
         )
     }
@@ -1929,12 +2069,13 @@ private fun Modifier.controlCenterPressGesture(
     }
 }
 
+@Composable
 private fun controlCenterGreeting(now: Calendar = Calendar.getInstance()): String {
     val hour = now.get(Calendar.HOUR_OF_DAY)
     return when (hour) {
-        in 5..10 -> "早好～"
-        in 11..16 -> "午好～"
-        else -> "晚好～"
+        in 5..10 -> stringResource(R.string.cc_greeting_morning)
+        in 11..16 -> stringResource(R.string.cc_greeting_afternoon)
+        else -> stringResource(R.string.cc_greeting_evening)
     }
 }
 
@@ -1990,7 +2131,7 @@ private fun readMediaState(context: Context): ControlCenterMediaState {
         controller = controller,
         title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE)
             ?: metadata?.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE)
-            ?: "未在播放",
+            ?: context.getString(R.string.cc_media_not_playing),
         artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST)
             ?: metadata?.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)
             ?: controller.packageName.substringAfterLast('.'),
@@ -2128,7 +2269,11 @@ private fun readBrightness(context: Context): Float {
 
 private fun setBrightness(context: Context, value: Float) {
     if (!Settings.System.canWrite(context)) {
-        Toast.makeText(context, "需要修改系统设置权限", Toast.LENGTH_SHORT).show()
+        Toast.makeText(
+            context,
+            context.getString(R.string.toast_write_settings_permission_required),
+            Toast.LENGTH_SHORT,
+        ).show()
         openSettings(
             context,
             Settings.ACTION_MANAGE_WRITE_SETTINGS,

@@ -23,7 +23,7 @@ data class WatchmakerWatchFaceScanResult(
 
 object WatchmakerWatchFaceStorage {
     private const val ROOT_DIRECTORY = "watchmaker_faces"
-    private const val MAXIMUM_IMPORT_BYTES = 96L * 1024L * 1024L
+    private const val MAXIMUM_IMPORT_BYTES = 500L * 1024L * 1024L
 
     fun rootDirectory(context: Context): File =
         File(context.filesDir, ROOT_DIRECTORY).apply {
@@ -49,7 +49,7 @@ object WatchmakerWatchFaceStorage {
                         if (copied > MAXIMUM_IMPORT_BYTES) {
                             throw WatchArchiveException(
                                 WatchArchiveFailureReason.ARCHIVE_TOO_LARGE,
-                                ".watch 表盘包超过 96MB 限制",
+                                ".watch 表盘包超过 500MB 限制",
                             )
                         }
                         output.write(buffer, 0, count)

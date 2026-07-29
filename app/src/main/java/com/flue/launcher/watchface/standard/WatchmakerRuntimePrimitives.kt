@@ -4,12 +4,30 @@ import java.time.YearMonth
 import java.util.Calendar
 import java.util.Locale
 import kotlin.math.floor
+import kotlin.math.round
+
+enum class WatchTextAnimationPhase { STATIC, HIDDEN, ENTERING, VISIBLE, EXITING }
+
+data class WatchTextAnimationFrame(
+    val phase: WatchTextAnimationPhase,
+    val alpha: Float = 1f,
+    val translationX: Float = 0f,
+    val translationY: Float = 0f,
+    val scale: Float = 1f,
+    val rotation: Float = 0f,
+) {
+    val visible: Boolean get() = phase != WatchTextAnimationPhase.HIDDEN && alpha > 0f
+}
 
 /** Deterministic frame selection for WatchMaker's backtick-separated GIF paths. */
 data class WatchGifFrame(val path: String, val index: Int)
 
-const val MAX_WATCH_GIF_PATH_INPUT_CHARS: Int = 4 * 1024
-const val MAX_WATCH_GIF_FRAME_PATHS: Int = 128
+// Keep long editor-produced video frame sequences intact. The archive
+// installer already caps a package at 2,048 entries, so matching that ceiling
+// here stays bounded while avoiding the old 128-frame/4 KiB silent truncation.
+const val MAX_WATCH_GIF_PATH_INPUT_CHARS: Int = 256 * 1024
+const val MAX_WATCH_GIF_FRAME_PATHS: Int = 2_048
+const val DEFAULT_WATCH_GALLERY_DURATION_SECONDS: Float = 5f
 
 fun parseWatchGifPaths(
     pathExpression: String?,
@@ -45,7 +63,7 @@ fun parseWatchGifPaths(
     return paths
 }
 
-fun watchGifFrameIndex(frameCount: Int, elapsedMs: Long, delayMs: Long = 100L): Int {
+fun watchGifFrameIndex(frameCount: Int, elapsedMs: Long, delayMs: Long = 50L): Int {
     if (frameCount <= 0) return -1
     val safeDelay = delayMs.coerceAtLeast(1L)
     return floor((elapsedMs.coerceAtLeast(0L) / safeDelay).toDouble())
@@ -54,11 +72,255 @@ fun watchGifFrameIndex(frameCount: Int, elapsedMs: Long, delayMs: Long = 100L): 
         .toInt()
 }
 
-fun selectWatchGifFrame(pathExpression: String?, elapsedMs: Long, delayMs: Long = 100L): WatchGifFrame? {
+fun selectWatchGifFrame(pathExpression: String?, elapsedMs: Long, delayMs: Long = 50L): WatchGifFrame? {
     val paths = parseWatchGifPaths(pathExpression)
     if (paths.isEmpty()) return null
     val index = watchGifFrameIndex(paths.size, elapsedMs, delayMs)
     return WatchGifFrame(paths[index], index)
+}
+
+/**
+ * GalleryProvider uses a pipe-delimited list, while Flue's editor stores the
+ * same image sequence with WatchMaker's backtick delimiter. Accept both forms
+ * so imported gallery_2d layers and newly edited faces share one renderer.
+ */
+fun parseWatchGalleryPaths(pathExpression: String?): List<String> =
+    parseWatchGifPaths(pathExpression?.replace('|', '`'))
+
+/** Reference gallery_2d timing: dur_on is seconds per photo and always loops. */
+fun watchGalleryFrameDurationMs(durationOnSeconds: Float): Long {
+    val seconds = durationOnSeconds
+        .takeIf { it.isFinite() && it > 0f }
+        ?: DEFAULT_WATCH_GALLERY_DURATION_SECONDS
+    return (seconds.coerceIn(0.05f, 3_600f) * 1_000f).toLong().coerceAtLeast(1L)
+}
+
+fun watchGalleryFrameIndex(
+    frameCount: Int,
+    elapsedMs: Long,
+    durationOnSeconds: Float = DEFAULT_WATCH_GALLERY_DURATION_SECONDS,
+): Int = watchGifFrameIndex(
+    frameCount = frameCount,
+    elapsedMs = elapsedMs,
+    delayMs = watchGalleryFrameDurationMs(durationOnSeconds),
+)
+
+/** Detects animated image/text layers even when an old face labels them as plain `image`. */
+fun watchLayerRequiresFrameTicks(type: String?, attributes: Map<String, String>): Boolean {
+    val normalizedType = type.orEmpty().trim().lowercase(Locale.ROOT)
+    val path = attributes["path"].orEmpty().trim().lowercase(Locale.ROOT)
+    val animatedImage = normalizedType == "gif" ||
+        normalizedType == "image_gif" ||
+        normalizedType == "gallery" ||
+        normalizedType == "gallery_2d" ||
+        (normalizedType in setOf("image", "image_tap", "image_cond") && (
+            '`' in path || path.substringBefore('?').endsWith(".gif")
+        ))
+    val animatedText = normalizedType.startsWith("text") && (
+        !attributes["anim_in"].isNullOrBlank() || !attributes["anim_out"].isNullOrBlank()
+    )
+    return animatedImage || animatedText
+}
+
+private data class WatchCounterSpec(
+    val from: Double,
+    val to: Double,
+    val durationSeconds: Double,
+    val mode: String,
+    val delaySeconds: Double,
+)
+
+private val WATCH_COUNTER_TAG = Regex(
+    "^c_(-?\\d+(?:\\.\\d+)?)_(-?\\d+(?:\\.\\d+)?)_(\\d+(?:\\.\\d+)?)_(st|sp|rt|rp|rv)(?:_(\\d+(?:\\.\\d+)?))?$",
+    RegexOption.IGNORE_CASE,
+)
+private val WATCH_COUNTER_REFERENCE = Regex(
+    "\\{\\s*c_(?:elapsed|-?\\d+(?:\\.\\d+)?_-?\\d+(?:\\.\\d+)?_\\d+(?:\\.\\d+)?_(?:st|sp|rt|rp|rv)(?:_\\d+(?:\\.\\d+)?)?)\\s*\\}",
+    RegexOption.IGNORE_CASE,
+)
+
+/** True for WatchMaker's load-relative animated counter vocabulary. */
+fun isWatchCounterTag(rawTag: String?): Boolean {
+    val tag = rawTag.orEmpty().trim()
+    return tag.equals("c_elapsed", ignoreCase = true) || WATCH_COUNTER_TAG.matches(tag)
+}
+
+/** Counter attributes must remain on the frame clock even when the layer itself is static. */
+fun watchCounterRequiresFrameTicks(raw: String?): Boolean =
+    WATCH_COUNTER_REFERENCE.containsMatchIn(raw.orEmpty())
+
+/**
+ * Resolve legacy WatchMaker counters against time elapsed since the face was
+ * loaded. `rp` repeats from start, `rv` ping-pongs forever, and stop modes hold
+ * their final value. Values are rounded to three decimal places like Studio.
+ */
+fun resolveWatchCounterTag(rawTag: String?, elapsedMs: Long): String? {
+    val tag = rawTag.orEmpty().trim().lowercase(Locale.ROOT)
+    if (tag == "c_elapsed") {
+        return renderWatchCounterNumber(elapsedMs.coerceAtLeast(0L) / 1_000.0)
+    }
+    val match = WATCH_COUNTER_TAG.matchEntire(tag) ?: return null
+    val spec = WatchCounterSpec(
+        from = match.groupValues[1].toDoubleOrNull()?.takeIf(Double::isFinite) ?: return null,
+        to = match.groupValues[2].toDoubleOrNull()?.takeIf(Double::isFinite) ?: return null,
+        durationSeconds = match.groupValues[3].toDoubleOrNull()
+            ?.takeIf(Double::isFinite)
+            ?.coerceIn(0.001, 3_600.0)
+            ?: return null,
+        mode = match.groupValues[4].lowercase(Locale.ROOT),
+        delaySeconds = match.groupValues.getOrNull(5)
+            ?.takeIf(String::isNotBlank)
+            ?.toDoubleOrNull()
+            ?.takeIf(Double::isFinite)
+            ?.coerceIn(0.0, 86_400.0)
+            ?: 0.0,
+    )
+    val elapsedSeconds = elapsedMs.coerceAtLeast(0L) / 1_000.0
+    if (elapsedSeconds <= spec.delaySeconds) return renderWatchCounterNumber(spec.from)
+    val activeSeconds = elapsedSeconds - spec.delaySeconds
+    val progress = when (spec.mode) {
+        "rp" -> (activeSeconds % spec.durationSeconds) / spec.durationSeconds
+        "rv" -> {
+            val cycleSeconds = spec.durationSeconds * 2.0
+            val cycleTime = activeSeconds % cycleSeconds
+            if (cycleTime <= spec.durationSeconds) {
+                cycleTime / spec.durationSeconds
+            } else {
+                1.0 - (cycleTime - spec.durationSeconds) / spec.durationSeconds
+            }
+        }
+        else -> (activeSeconds / spec.durationSeconds).coerceIn(0.0, 1.0)
+    }
+    return renderWatchCounterNumber(spec.from + (spec.to - spec.from) * progress)
+}
+
+private fun renderWatchCounterNumber(value: Double): String {
+    val safe = value.takeIf(Double::isFinite) ?: 0.0
+    val rounded = round(safe * 1_000.0) / 1_000.0
+    return if (rounded == rounded.toLong().toDouble()) rounded.toLong().toString() else rounded.toString()
+}
+
+/**
+ * Stateless WatchMaker text-animation timeline. The final requested cycle
+ * deliberately remains visible, matching the reference renderer; `-1` loops.
+ */
+fun watchTextAnimationFrame(
+    animIn: String?,
+    animOut: String?,
+    durationInSeconds: Float,
+    durationOnSeconds: Float,
+    durationOutSeconds: Float,
+    durationOffSeconds: Float,
+    delayStartSeconds: Float,
+    repeatCount: Int,
+    restartOnLoad: Boolean,
+    elapsedMs: Long,
+): WatchTextAnimationFrame {
+    val entryName = animIn.orEmpty().trim()
+    val exitName = animOut.orEmpty().trim()
+    if (!restartOnLoad || (entryName.isBlank() && exitName.isBlank())) {
+        return WatchTextAnimationFrame(WatchTextAnimationPhase.STATIC)
+    }
+
+    fun secondsToMs(value: Float): Long =
+        (value.takeIf(Float::isFinite) ?: 0f).coerceIn(0f, 60f).times(1_000f).toLong()
+
+    val delayMs = secondsToMs(delayStartSeconds)
+    var timelineMs = elapsedMs.coerceAtLeast(0L)
+    if (timelineMs < delayMs) return WatchTextAnimationFrame(WatchTextAnimationPhase.HIDDEN, alpha = 0f)
+    timelineMs -= delayMs
+
+    val inMs = if (entryName.isBlank()) 0L else secondsToMs(durationInSeconds).coerceAtLeast(1L)
+    val onMs = secondsToMs(durationOnSeconds)
+    val outMs = if (exitName.isBlank()) 0L else secondsToMs(durationOutSeconds).coerceAtLeast(1L)
+    val offMs = secondsToMs(durationOffSeconds)
+
+    // WatchMaker treats dur_on=0 as "stay forever" and never enters the exit phase.
+    if (timelineMs < inMs) {
+        return textAnimationTransform(entryName, timelineMs.toFloat() / inMs.coerceAtLeast(1L), entering = true)
+    }
+    if (onMs == 0L) return WatchTextAnimationFrame(WatchTextAnimationPhase.VISIBLE)
+
+    val cycleMs = (inMs + onMs + outMs + offMs).coerceAtLeast(1L)
+    val infinite = repeatCount == -1
+    val finiteCycles = repeatCount.coerceIn(1, 10_000)
+    if (!infinite) {
+        val finalCycleStart = cycleMs * (finiteCycles - 1L)
+        if (timelineMs >= finalCycleStart) {
+            val finalTime = timelineMs - finalCycleStart
+            if (finalTime < inMs) {
+                return textAnimationTransform(
+                    entryName,
+                    finalTime.toFloat() / inMs.coerceAtLeast(1L),
+                    entering = true,
+                )
+            }
+            return WatchTextAnimationFrame(WatchTextAnimationPhase.VISIBLE)
+        }
+    }
+
+    val cycleTime = timelineMs % cycleMs
+    if (cycleTime < inMs) {
+        return textAnimationTransform(entryName, cycleTime.toFloat() / inMs.coerceAtLeast(1L), entering = true)
+    }
+    if (cycleTime < inMs + onMs) return WatchTextAnimationFrame(WatchTextAnimationPhase.VISIBLE)
+    if (cycleTime < inMs + onMs + outMs) {
+        val progress = (cycleTime - inMs - onMs).toFloat() / outMs.coerceAtLeast(1L)
+        return textAnimationTransform(exitName, progress, entering = false)
+    }
+    return WatchTextAnimationFrame(WatchTextAnimationPhase.HIDDEN, alpha = 0f)
+}
+
+private fun textAnimationTransform(
+    rawName: String,
+    rawProgress: Float,
+    entering: Boolean,
+): WatchTextAnimationFrame {
+    val name = rawName.trim().lowercase(Locale.ROOT)
+    val progress = rawProgress.coerceIn(0f, 1f)
+    val eased = if (entering) 1f - (1f - progress) * (1f - progress) else progress * progress
+    val phase = if (entering) WatchTextAnimationPhase.ENTERING else WatchTextAnimationPhase.EXITING
+    val alpha = if (entering) (progress * 2f).coerceAtMost(1f) else (1f - progress * 2f).coerceAtLeast(0f)
+    val distance = 200f
+    return when (name) {
+        "slideleft" -> WatchTextAnimationFrame(
+            phase,
+            alpha,
+            translationX = if (entering) distance * (1f - eased) else -distance * eased,
+        )
+        "slideright" -> WatchTextAnimationFrame(
+            phase,
+            alpha,
+            translationX = if (entering) -distance * (1f - eased) else distance * eased,
+        )
+        "slideup" -> WatchTextAnimationFrame(
+            phase,
+            alpha,
+            translationY = if (entering) distance * (1f - eased) else -distance * eased,
+        )
+        "slidedown" -> WatchTextAnimationFrame(
+            phase,
+            alpha,
+            translationY = if (entering) -distance * (1f - eased) else distance * eased,
+        )
+        "zoomin" -> WatchTextAnimationFrame(
+            phase,
+            alpha,
+            scale = if (entering) 0.25f + 0.75f * eased else 1f + eased,
+        )
+        "zoomout" -> WatchTextAnimationFrame(
+            phase,
+            alpha,
+            scale = if (entering) 2f - eased else 1f - 0.75f * eased,
+        )
+        "spin" -> WatchTextAnimationFrame(
+            phase,
+            alpha,
+            rotation = if (entering) -360f * (1f - eased) else 360f * eased,
+        )
+        "fade", "" -> WatchTextAnimationFrame(phase, if (entering) progress else 1f - progress)
+        else -> WatchTextAnimationFrame(phase, if (entering) progress else 1f - progress)
+    }
 }
 
 /**

@@ -14,15 +14,15 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
 data class WatchArchiveLimits(
-    val maximumArchiveBytes: Long = 96L * 1024L * 1024L,
+    val maximumArchiveBytes: Long = 500L * 1024L * 1024L,
     val maximumEntryCount: Int = 2_048,
     val maximumEntryNameLength: Int = 240,
     val maximumXmlOrScriptBytes: Long = 4L * 1024L * 1024L,
-    val maximumFontBytes: Long = 64L * 1024L * 1024L,
-    val maximumImageBytes: Long = 64L * 1024L * 1024L,
-    val maximumMediaBytes: Long = 128L * 1024L * 1024L,
-    val maximumOtherFileBytes: Long = 64L * 1024L * 1024L,
-    val maximumExpandedBytes: Long = 256L * 1024L * 1024L,
+    val maximumFontBytes: Long = 450L * 1024L * 1024L,
+    val maximumImageBytes: Long = 450L * 1024L * 1024L,
+    val maximumMediaBytes: Long = 450L * 1024L * 1024L,
+    val maximumOtherFileBytes: Long = 450L * 1024L * 1024L,
+    val maximumExpandedBytes: Long = 500L * 1024L * 1024L,
     val maximumCompressionRatio: Double = 250.0,
 ) {
     init {

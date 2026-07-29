@@ -244,15 +244,14 @@ internal class NativeAppListAdapter(
         }
         val sourceRow = rows.firstOrNull { it.stableKey == source } ?: return false
         val targetRow = rows.firstOrNull { it.stableKey == target } ?: return false
-        // Preserve the row that will remain structurally authoritative. For
-        // app + app, keep the target as a short-lived migration proxy so the
-        // dragged overlay settles into a visible icon instead of an empty slot.
-        val removeSource =
-            sourceRow.entry.type != AppItemType.FOLDER ||
-                targetRow.entry.type == AppItemType.FOLDER
-        val removeTarget =
-            sourceRow.entry.type == AppItemType.FOLDER &&
-                targetRow.entry.type != AppItemType.FOLDER
+        // Preserve only an existing folder row that remains authoritative.
+        // app + app creates a brand-new folder stable key, so neither old app
+        // may stay as a migration proxy: keeping the target is the exact stale
+        // row users saw stuck beneath the newly-created folder icon.
+        val sourceIsFolder = sourceRow.entry.type == AppItemType.FOLDER
+        val targetIsFolder = targetRow.entry.type == AppItemType.FOLDER
+        val removeSource = !sourceIsFolder || targetIsFolder
+        val removeTarget = !targetIsFolder
         val nextRows = rows.filterNot { row ->
             (removeSource && row.stableKey == source) ||
                 (removeTarget && row.stableKey == target)

@@ -4,6 +4,7 @@ import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Outline
 import android.view.View
 import android.view.MotionEvent
 import android.view.InputDevice
@@ -1245,7 +1246,7 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
-    fun acceptedFolderCommitKeepsTargetAsMigrationProxyUntilFolderSnapshotArrives() {
+    fun acceptedFolderCommitRemovesBothAppsUntilNewFolderSnapshotArrives() {
         val adapter = NativeAppListAdapter(commandSink = {})
         val entries = listOf(appEntry("a"), appEntry("b"), appEntry("c"))
         adapter.submitContent(
@@ -1260,7 +1261,7 @@ class NativeAppListRowViewBehaviorTest {
         assertTrue(adapter.previewFolderCommit(AppItemKey("a"), AppItemKey("b")))
         shadowOf(android.os.Looper.getMainLooper()).idle()
 
-        assertEquals(listOf("b", "c"), adapter.currentKeysView().map { it.value })
+        assertEquals(listOf("c"), adapter.currentKeysView().map { it.value })
     }
 
     @Test
@@ -1614,7 +1615,7 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
-    fun iconShadowUsesPlatformElevationGatedByAlpha() {
+    fun iconShadowKeepsElevationStableAndFadesThroughOutlineAlpha() {
         // 阴影改走真平台高程（与 Compose 版 shadowElevation 同源机制），
         // 不再在自绘画布里画 BlurMaskFilter 近似（黑环来源）。
         val view = NativeAppListRowView(RuntimeEnvironment.getApplication())
@@ -1632,12 +1633,18 @@ class NativeAppListRowViewBehaviorTest {
 
         assertEquals(8f * density, view.elevation, 0.01f)
 
-        // View.alpha 不作用于高程阴影：行被鱼眼/入场动画隐去时必须清零，
-        // 否则"图标隐了阴影还在"。
+        // Alpha no longer switches elevation recipes at the transition edge.
+        // The outline alpha fades the platform shadow continuously instead.
         view.alpha = 0f
-        assertEquals(0f, view.elevation, 0.01f)
+        assertEquals(8f * density, view.elevation, 0.01f)
+        val hiddenOutline = Outline()
+        requireNotNull(view.outlineProvider).getOutline(view, hiddenOutline)
+        assertEquals(0f, hiddenOutline.alpha, 0.01f)
         view.alpha = 1f
         assertEquals(8f * density, view.elevation, 0.01f)
+        val visibleOutline = Outline()
+        requireNotNull(view.outlineProvider).getOutline(view, visibleOutline)
+        assertEquals(1f, visibleOutline.alpha, 0.01f)
 
         // 关闭开关时高程归零。
         view.applyConfig(
@@ -3198,6 +3205,59 @@ class NativeAppListRowViewBehaviorTest {
         assertEquals(0f, holder.itemView.translationX)
         assertEquals(0f, holder.itemView.translationY)
         assertEquals(0f, holder.itemView.rotation)
+    }
+
+    @Test
+    fun acceptedFolderRemovalStaysInvisibleUntilTheViewIsRebound() {
+        val row = NativeAppListRowView(RuntimeEnvironment.getApplication())
+        row.bind(boundRow(null, key = "component:source/.Main"), resolvedDrawingConfig())
+        row.alpha = 0.72f
+
+        row.setFolderRemovalPending(true)
+        assertEquals(0f, row.alpha, 0f)
+        row.setFolderRemovalPending(false)
+        assertEquals(0.72f, row.alpha, 0f)
+
+        row.setFolderRemovalPending(true)
+        row.commitFolderRemoval()
+        // RecyclerView may clear the same holder again after moving it into
+        // the disappearing/recycle layer; that must not resurrect its RenderNode.
+        row.clearBinding()
+        assertEquals(View.INVISIBLE, row.visibility)
+        assertEquals(0f, row.alpha, 0f)
+
+        row.bind(boundRow(null, key = "folder:new"), resolvedDrawingConfig())
+        assertEquals(View.VISIBLE, row.visibility)
+        assertEquals(1f, row.alpha, 0f)
+    }
+
+    @Test
+    fun pendingFolderRemovalRestoresImmediatelyWhenRecyclerReusesViewForNewFolder() {
+        val row = NativeAppListRowView(RuntimeEnvironment.getApplication())
+        row.bind(boundRow(null, key = "component:target/.Main"), resolvedDrawingConfig())
+        row.alpha = 0.64f
+
+        row.setFolderRemovalPending(true)
+        assertEquals(View.INVISIBLE, row.visibility)
+        assertEquals(0f, row.alpha, 0f)
+
+        // A same-frame edge/fisheye refresh must not resurrect the old target
+        // while RecyclerView is moving it into the disappearing-child layer.
+        row.setHostVisualAlpha(0.91f)
+        assertEquals(View.INVISIBLE, row.visibility)
+        assertEquals(0f, row.alpha, 0f)
+
+        // The repository callback can synchronously submit a Diff and reuse
+        // this exact holder before completeFolderDispatchVisuals() returns.
+        row.bind(boundRow(null, key = "folder:authoritative-new"), resolvedDrawingConfig())
+
+        assertEquals(AppItemKey("folder:authoritative-new"), row.boundStableKeyOrNull())
+        assertEquals(View.VISIBLE, row.visibility)
+        assertEquals(1f, row.alpha, 0f)
+        // A stale completion for the old key must now be a harmless no-op.
+        row.setFolderRemovalPending(false)
+        assertEquals(View.VISIBLE, row.visibility)
+        assertEquals(1f, row.alpha, 0f)
     }
 
     @Test

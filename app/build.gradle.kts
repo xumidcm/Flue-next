@@ -48,7 +48,7 @@ android {
         minSdk = 27
         targetSdk = 36
         versionCode = 20
-        versionName = "2.0.0"
+        versionName = "2.0.0 preview"
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
     }
 
@@ -120,6 +120,12 @@ dependencies {
     implementation(libs.compose.animation)
     implementation(libs.compose.cloudy)
     implementation(libs.graphics.shapes)
+    // miuix-icons 0.8.8 publishes its MiuixIcons receiver through a runtime
+    // dependency. Add the matching core module explicitly so Kotlin can
+    // resolve the official extension properties at compile time.
+    implementation(libs.miuix.core)
+    implementation(libs.miuix.icons)
+    implementation(libs.ffmpeg.kit.video)
 
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.compose.ui.tooling.preview)

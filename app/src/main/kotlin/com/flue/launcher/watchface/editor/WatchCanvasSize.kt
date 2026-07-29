@@ -101,23 +101,15 @@ data class WatchCanvasSize(
  * 表盘和当前设备 1:1 对应。[Preset] 是表盘市场上的常见规格。
  */
 sealed interface WatchCanvasPreset {
-    val label: String
-
     /** 跟随屏幕物理像素。尺寸在调用点用真实 DisplayMetrics 填。 */
-    data object FollowScreen : WatchCanvasPreset {
-        override val label: String get() = "跟随屏幕尺寸"
-    }
+    data object FollowScreen : WatchCanvasPreset
 
     data class Preset(
         val size: WatchCanvasSize,
-        val note: String,
-    ) : WatchCanvasPreset {
-        override val label: String get() = size.label
-    }
+        val note: WatchCanvasPresetNote,
+    ) : WatchCanvasPreset
 
-    data object Custom : WatchCanvasPreset {
-        override val label: String get() = "自定义"
-    }
+    data object Custom : WatchCanvasPreset
 
     companion object {
         /**
@@ -125,14 +117,25 @@ sealed interface WatchCanvasPreset {
          * 方屏 / 长方屏在后，最后是 WatchMaker 原生 512。
          */
         val MARKET_PRESETS: List<Preset> = listOf(
-            Preset(WatchCanvasSize(466, 466), "圆屏 AMOLED 常见"),
-            Preset(WatchCanvasSize(454, 454), "大圆屏"),
-            Preset(WatchCanvasSize(410, 410), "中圆屏"),
-            Preset(WatchCanvasSize(360, 360), "Wear OS 圆屏"),
-            Preset(WatchCanvasSize(240, 240), "小方屏"),
-            Preset(WatchCanvasSize(320, 385), "方屏竖向"),
-            Preset(WatchCanvasSize(368, 448), "长方屏"),
-            Preset(WatchCanvasSize(512, 512), "WatchMaker 原生"),
+            Preset(WatchCanvasSize(466, 466), WatchCanvasPresetNote.COMMON_ROUND_AMOLED),
+            Preset(WatchCanvasSize(454, 454), WatchCanvasPresetNote.LARGE_ROUND),
+            Preset(WatchCanvasSize(410, 410), WatchCanvasPresetNote.MEDIUM_ROUND),
+            Preset(WatchCanvasSize(360, 360), WatchCanvasPresetNote.WEAR_OS_ROUND),
+            Preset(WatchCanvasSize(240, 240), WatchCanvasPresetNote.SMALL_SQUARE),
+            Preset(WatchCanvasSize(320, 385), WatchCanvasPresetNote.PORTRAIT_SQUARE),
+            Preset(WatchCanvasSize(368, 448), WatchCanvasPresetNote.RECTANGULAR),
+            Preset(WatchCanvasSize(512, 512), WatchCanvasPresetNote.WATCHMAKER_NATIVE),
         )
     }
+}
+
+enum class WatchCanvasPresetNote {
+    COMMON_ROUND_AMOLED,
+    LARGE_ROUND,
+    MEDIUM_ROUND,
+    WEAR_OS_ROUND,
+    SMALL_SQUARE,
+    PORTRAIT_SQUARE,
+    RECTANGULAR,
+    WATCHMAKER_NATIVE,
 }

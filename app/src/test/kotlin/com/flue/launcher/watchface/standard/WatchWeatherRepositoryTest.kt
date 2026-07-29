@@ -6,7 +6,12 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [27], manifest = Config.NONE)
 class WatchWeatherRepositoryTest {
     @Test
     fun boundedUtf8ReaderAcceptsAResponseAtTheExactByteLimit() {
@@ -37,6 +42,24 @@ class WatchWeatherRepositoryTest {
 
         assertNull(readBoundedWeatherUtf8(input, maxBytes = 0))
         assertEquals(0, input.bytesRead)
+    }
+
+    @Test
+    fun locationSearchReturnsDistinctUserSelectableCandidates() {
+        val payload = """
+            {"results":[
+              {"name":"Springfield","admin1":"Illinois","country":"United States","latitude":39.80,"longitude":-89.64},
+              {"name":"Springfield","admin1":"Massachusetts","country":"United States","latitude":42.10,"longitude":-72.59},
+              {"name":"Duplicate","latitude":39.80,"longitude":-89.64},
+              {"name":"Invalid","latitude":999,"longitude":0}
+            ]}
+        """.trimIndent()
+
+        val results = parseWatchWeatherLocationSearch(payload, "Springfield", limit = 8)
+
+        assertEquals(2, results.size)
+        assertEquals("Springfield, Illinois, United States", results[0].label)
+        assertEquals(42.10, results[1].latitude, 0.0)
     }
 
     private class TrackingChunkedInputStream(

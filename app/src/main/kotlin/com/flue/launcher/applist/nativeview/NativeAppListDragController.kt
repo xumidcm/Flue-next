@@ -24,6 +24,10 @@ internal interface NativeAppListDragHost {
         target: AppItemKey,
         folderKey: AppItemKey?,
     ): Boolean = previewFolderCommit(source, target)
+    /** Blanks the exact source/target Views before a synchronous owner mutation. */
+    fun prepareFolderDispatchVisuals(source: AppItemKey, target: AppItemKey) = Unit
+    /** Restores a rejected preparation or permanently releases accepted rows. */
+    fun completeFolderDispatchVisuals(accepted: Boolean) = Unit
     /**
      * Dispatches a folder command and returns the authoritative folder key
      * when the command owner can provide it.  The default keeps old hosts and
@@ -286,7 +290,14 @@ internal class NativeAppListDragController(
                     if (allowFolderCreation()) {
                         val command = host.planFolder(effect.source, effect.target)
                         if (command != null) {
-                            val result = host.dispatchFolder(command)
+                            host.prepareFolderDispatchVisuals(effect.source, effect.target)
+                            val result = try {
+                                host.dispatchFolder(command)
+                            } catch (error: Throwable) {
+                                host.completeFolderDispatchVisuals(accepted = false)
+                                throw error
+                            }
+                            host.completeFolderDispatchVisuals(result.accepted)
                             if (result.accepted) {
                                 host.previewFolderCommit(
                                     effect.source,

@@ -1,37 +1,39 @@
 package com.flue.launcher.ui.controlcenter
 
+import androidx.annotation.StringRes
 import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FastOutSlowInEasing
+import com.flue.launcher.R
 
 object MusicTextSwitchAnimations {
     const val DEFAULT_ID = "fade_out_left_fade_in_up"
 
     val presets: List<MusicTextSwitchAnimationPreset> = listOf(
-        preset("fade_out_fade_in", "渐隐渐现", "文字原地渐隐后渐现", fade(300), fade(300)),
-        preset("fade_out_up_fade_in_up", "向上渐隐 & 向上渐现", "旧文字向上渐隐，新文字向上渐现", fadeUp(300), fadeUpIn(450)),
-        preset("fade_out_down_fade_in_down", "向下渐隐 & 向下渐现", "旧文字向下渐隐，新文字向下渐现", fadeDown(300), fadeDownIn(450)),
-        preset("fade_out_left_fade_in_right", "向左渐隐 & 右侧渐现", "旧文字向左渐隐，新文字从右侧渐现", fadeLeft(350), fadeRightIn(450)),
-        preset("fade_out_left_fade_in_up", "向左渐隐 & 向上渐现", "Flue 原本的音乐文字切换效果", fadeLeft(300), fadeUpIn(450)),
-        preset("fade_out_left_zoom_in", "向左渐隐 & 缩放渐现", "旧文字向左渐隐，新文字缩放渐现", fadeLeft(300), zoomIn(400)),
-        preset("fade_out_left_landing", "向左渐隐 & 柔缓着陆", "旧文字向左渐隐，新文字柔缓着陆", fadeLeft(300), landing(700)),
-        preset("fade_out_right_fade_in_left", "向右渐隐 & 左侧渐现", "旧文字向右渐隐，新文字从左侧渐现", fadeRight(300), fadeLeftIn(450)),
-        preset("fade_out_right_fade_in_up", "向右渐隐 & 向上渐现", "旧文字向右渐隐，新文字向上渐现", fadeRight(300), fadeUpIn(450)),
-        preset("fade_out_right_zoom_in", "向右渐隐 & 缩放渐现", "旧文字向右渐隐，新文字缩放渐现", fadeRight(200), zoomIn(400)),
-        preset("fade_out_right_landing", "向右渐隐 & 聚焦着陆", "旧文字向右渐隐，新文字聚焦着陆", fadeRight(300), landing(700)),
-        preset("slide_out_left_slide_in_right", "左侧滑出 & 右侧滑入", "旧文字从左侧滑出，新文字从右侧滑入", slideLeft(300), slideRightIn(450)),
-        preset("slide_out_left_fade_in_up", "左侧滑出 & 向上渐现", "旧文字从左侧滑出，新文字向上渐现", slideLeft(300), fadeUpIn(450)),
-        preset("slide_out_left_zoom_in", "左侧滑出 & 缩放渐现", "旧文字从左侧滑出，新文字缩放渐现", slideLeft(300), zoomIn(450)),
-        preset("slide_out_left_landing", "左侧滑出 & 柔缓着陆", "旧文字从左侧滑出，新文字柔缓着陆", slideLeft(300), landing(700)),
-        preset("slide_out_right_slide_in_left", "右侧滑出 & 左侧滑入", "旧文字从右侧滑出，新文字从左侧滑入", slideRight(300), slideLeftIn(450)),
-        preset("slide_out_right_fade_in_up", "右侧滑出 & 向上渐现", "旧文字从右侧滑出，新文字向上渐现", slideRight(300), fadeUpIn(450)),
-        preset("slide_out_right_zoom_in", "右侧滑出 & 缩放渐现", "旧文字从右侧滑出，新文字缩放渐现", slideRight(300), zoomIn(450)),
-        preset("slide_out_right_landing", "右侧滑出 & 柔缓着陆", "旧文字从右侧滑出，新文字柔缓着陆", slideRight(300), landing(700)),
-        preset("flip_out_x_flip_in_x", "X轴翻转", "沿 X 轴翻转切换", flipX(300), flipXIn(450)),
-        preset("flip_out_y_flip_in_y", "Y轴翻转", "沿 Y 轴翻转切换", flipY(300), flipYIn(450)),
-        preset("rotate_out_rotate_in", "旋转", "旧文字旋出，新文字旋入", rotate(200), rotateIn(600)),
-        preset("zoom_out_zoom_in", "缩放", "旧文字缩小，新文字放大", zoomOut(200), zoomIn(400)),
-        preset("fade_out_left_zoom_in_right", "向左渐隐 & 右侧缩放渐现", "旧文字向左渐隐，新文字从右侧缩放渐现", fadeLeft(250), zoomRightIn(600)),
-        preset("fade_out_right_zoom_in_left", "向右渐隐 & 左侧缩放渐现", "旧文字向右渐隐，新文字从左侧缩放渐现", fadeRight(250), zoomLeftIn(600))
+        preset("fade_out_fade_in", R.string.music_text_anim_fade_out_fade_in_label, R.string.music_text_anim_fade_out_fade_in_subtitle, fade(300), fade(300)),
+        preset("fade_out_up_fade_in_up", R.string.music_text_anim_fade_out_up_fade_in_up_label, R.string.music_text_anim_fade_out_up_fade_in_up_subtitle, fadeUp(300), fadeUpIn(450)),
+        preset("fade_out_down_fade_in_down", R.string.music_text_anim_fade_out_down_fade_in_down_label, R.string.music_text_anim_fade_out_down_fade_in_down_subtitle, fadeDown(300), fadeDownIn(450)),
+        preset("fade_out_left_fade_in_right", R.string.music_text_anim_fade_out_left_fade_in_right_label, R.string.music_text_anim_fade_out_left_fade_in_right_subtitle, fadeLeft(350), fadeRightIn(450)),
+        preset("fade_out_left_fade_in_up", R.string.music_text_anim_fade_out_left_fade_in_up_label, R.string.music_text_anim_fade_out_left_fade_in_up_subtitle, fadeLeft(300), fadeUpIn(450)),
+        preset("fade_out_left_zoom_in", R.string.music_text_anim_fade_out_left_zoom_in_label, R.string.music_text_anim_fade_out_left_zoom_in_subtitle, fadeLeft(300), zoomIn(400)),
+        preset("fade_out_left_landing", R.string.music_text_anim_fade_out_left_landing_label, R.string.music_text_anim_fade_out_left_landing_subtitle, fadeLeft(300), landing(700)),
+        preset("fade_out_right_fade_in_left", R.string.music_text_anim_fade_out_right_fade_in_left_label, R.string.music_text_anim_fade_out_right_fade_in_left_subtitle, fadeRight(300), fadeLeftIn(450)),
+        preset("fade_out_right_fade_in_up", R.string.music_text_anim_fade_out_right_fade_in_up_label, R.string.music_text_anim_fade_out_right_fade_in_up_subtitle, fadeRight(300), fadeUpIn(450)),
+        preset("fade_out_right_zoom_in", R.string.music_text_anim_fade_out_right_zoom_in_label, R.string.music_text_anim_fade_out_right_zoom_in_subtitle, fadeRight(200), zoomIn(400)),
+        preset("fade_out_right_landing", R.string.music_text_anim_fade_out_right_landing_label, R.string.music_text_anim_fade_out_right_landing_subtitle, fadeRight(300), landing(700)),
+        preset("slide_out_left_slide_in_right", R.string.music_text_anim_slide_out_left_slide_in_right_label, R.string.music_text_anim_slide_out_left_slide_in_right_subtitle, slideLeft(300), slideRightIn(450)),
+        preset("slide_out_left_fade_in_up", R.string.music_text_anim_slide_out_left_fade_in_up_label, R.string.music_text_anim_slide_out_left_fade_in_up_subtitle, slideLeft(300), fadeUpIn(450)),
+        preset("slide_out_left_zoom_in", R.string.music_text_anim_slide_out_left_zoom_in_label, R.string.music_text_anim_slide_out_left_zoom_in_subtitle, slideLeft(300), zoomIn(450)),
+        preset("slide_out_left_landing", R.string.music_text_anim_slide_out_left_landing_label, R.string.music_text_anim_slide_out_left_landing_subtitle, slideLeft(300), landing(700)),
+        preset("slide_out_right_slide_in_left", R.string.music_text_anim_slide_out_right_slide_in_left_label, R.string.music_text_anim_slide_out_right_slide_in_left_subtitle, slideRight(300), slideLeftIn(450)),
+        preset("slide_out_right_fade_in_up", R.string.music_text_anim_slide_out_right_fade_in_up_label, R.string.music_text_anim_slide_out_right_fade_in_up_subtitle, slideRight(300), fadeUpIn(450)),
+        preset("slide_out_right_zoom_in", R.string.music_text_anim_slide_out_right_zoom_in_label, R.string.music_text_anim_slide_out_right_zoom_in_subtitle, slideRight(300), zoomIn(450)),
+        preset("slide_out_right_landing", R.string.music_text_anim_slide_out_right_landing_label, R.string.music_text_anim_slide_out_right_landing_subtitle, slideRight(300), landing(700)),
+        preset("flip_out_x_flip_in_x", R.string.music_text_anim_flip_out_x_flip_in_x_label, R.string.music_text_anim_flip_out_x_flip_in_x_subtitle, flipX(300), flipXIn(450)),
+        preset("flip_out_y_flip_in_y", R.string.music_text_anim_flip_out_y_flip_in_y_label, R.string.music_text_anim_flip_out_y_flip_in_y_subtitle, flipY(300), flipYIn(450)),
+        preset("rotate_out_rotate_in", R.string.music_text_anim_rotate_out_rotate_in_label, R.string.music_text_anim_rotate_out_rotate_in_subtitle, rotate(200), rotateIn(600)),
+        preset("zoom_out_zoom_in", R.string.music_text_anim_zoom_out_zoom_in_label, R.string.music_text_anim_zoom_out_zoom_in_subtitle, zoomOut(200), zoomIn(400)),
+        preset("fade_out_left_zoom_in_right", R.string.music_text_anim_fade_out_left_zoom_in_right_label, R.string.music_text_anim_fade_out_left_zoom_in_right_subtitle, fadeLeft(250), zoomRightIn(600)),
+        preset("fade_out_right_zoom_in_left", R.string.music_text_anim_fade_out_right_zoom_in_left_label, R.string.music_text_anim_fade_out_right_zoom_in_left_subtitle, fadeRight(250), zoomLeftIn(600))
     )
 
     fun byId(id: String?): MusicTextSwitchAnimationPreset =
@@ -42,8 +44,8 @@ object MusicTextSwitchAnimations {
 
 data class MusicTextSwitchAnimationPreset(
     val id: String,
-    val label: String,
-    val subtitle: String,
+    @StringRes val labelRes: Int,
+    @StringRes val subtitleRes: Int,
     val outMotion: MusicTextSwitchMotion,
     val inMotion: MusicTextSwitchMotion
 )
@@ -105,12 +107,12 @@ fun MusicTextSwitchAnimationPreset.transform(
 
 private fun preset(
     id: String,
-    label: String,
-    subtitle: String,
+    @StringRes labelRes: Int,
+    @StringRes subtitleRes: Int,
     outMotion: MusicTextSwitchMotion,
     inMotion: MusicTextSwitchMotion
 ): MusicTextSwitchAnimationPreset {
-    return MusicTextSwitchAnimationPreset(id, label, subtitle, outMotion, inMotion)
+    return MusicTextSwitchAnimationPreset(id, labelRes, subtitleRes, outMotion, inMotion)
 }
 
 private fun fade(durationMs: Int) = MusicTextSwitchMotion(MusicTextSwitchMotionKind.Fade, durationMs)

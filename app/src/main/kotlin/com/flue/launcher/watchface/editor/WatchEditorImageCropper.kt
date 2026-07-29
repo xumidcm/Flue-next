@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.BitmapRegionDecoder
 import android.graphics.Rect
 import android.net.Uri
+import android.provider.OpenableColumns
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -23,6 +24,30 @@ object WatchEditorImageCropper {
     const val OUTPUT_MAX_DIMENSION = 1024
 
     data class SourceBounds(val width: Int, val height: Int)
+
+    /** Reads only metadata and a tiny signature prefix; the source is not decoded. */
+    fun inspectSource(resolver: ContentResolver, uri: Uri): WatchEditorImageSourceInfo {
+        val displayName = resolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            val column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else null
+        }?.takeIf(String::isNotBlank)
+            ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf(String::isNotBlank)
+            ?: "image"
+        val header = ByteArray(16)
+        val bytesRead = openStream(resolver, uri).use { input -> input.read(header) }.coerceAtLeast(0)
+        val mimeType = resolver.getType(uri)
+        return WatchEditorImageSourceInfo(
+            displayName = displayName,
+            mimeType = mimeType,
+            format = detectWatchEditorImageFormat(displayName, mimeType, header.copyOf(bytesRead)),
+        )
+    }
 
     fun readBounds(resolver: ContentResolver, uri: Uri): SourceBounds {
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }

@@ -390,24 +390,32 @@ class WatchEditorSession private constructor(
         directory: String = "images",
     ): String {
         ensureOpen()
-        val relativePath = uniqueResourcePath(requestedName, directory)
+        return mutate { importResourceDirect(input, requestedName, directory) }
+    }
+
+    /**
+     * Imports an FFmpeg-produced frame set and updates the target layer in one
+     * editor transaction. A failed frame copy rolls the whole sequence back,
+     * so the layer can never point at a partially imported video.
+     */
+    @Synchronized
+    fun importVideoFrameSequence(
+        key: WatchEditorLayerKey,
+        frameFiles: List<File>,
+        frameDelayMs: Int,
+    ): List<String> {
+        require(frameFiles.isNotEmpty()) { "视频帧序列不能为空" }
+        require(frameDelayMs > 0) { "视频帧间隔必须大于零" }
         return mutate {
-            val destination = resolveDraftPath(relativePath)
-            destination.parentFile?.mkdirs()
-            val temporaryDirectory = draftDirectory.parentFile ?: draftDirectory
-            val temporary = File.createTempFile(".resource-", ".tmp", temporaryDirectory)
-            try {
-                input.use { source ->
-                    copyBounded(source, temporary, limits.maxFileBytes, remainingBudget())
-                }
-                atomicMove(temporary, destination)
-                relativePath
-            } catch (error: Exception) {
-                temporary.delete()
-                throw WatchEditorException("无法导入资源：${error.message ?: error.javaClass.simpleName}", error)
-            } finally {
-                temporary.delete()
+            val paths = frameFiles.map { file ->
+                require(file.isFile && file.length() > 0L) { "视频帧不可用：${file.name}" }
+                importResourceDirect(file.inputStream(), file.name, "images")
             }
+            val layer = findLayer(key)
+            setOrRemoveAttribute(layer, "type", "image_gif")
+            setOrRemoveAttribute(layer, "path", paths.joinToString("`"))
+            setOrRemoveAttribute(layer, "gif_delay", frameDelayMs.toString())
+            paths
         }
     }
 
@@ -878,6 +886,30 @@ class WatchEditorSession private constructor(
             suffix++
         }
         return candidate
+    }
+
+    private fun importResourceDirect(
+        input: InputStream,
+        requestedName: String,
+        directory: String,
+    ): String {
+        val relativePath = uniqueResourcePath(requestedName, directory)
+        val destination = resolveDraftPath(relativePath)
+        destination.parentFile?.mkdirs()
+        val temporaryDirectory = draftDirectory.parentFile ?: draftDirectory
+        val temporary = File.createTempFile(".resource-", ".tmp", temporaryDirectory)
+        try {
+            input.use { source ->
+                copyBounded(source, temporary, limits.maxFileBytes, remainingBudget())
+            }
+            atomicMove(temporary, destination)
+            return relativePath
+        } catch (error: Exception) {
+            temporary.delete()
+            throw WatchEditorException("无法导入资源：${error.message ?: error.javaClass.simpleName}", error)
+        } finally {
+            temporary.delete()
+        }
     }
 
     private fun remainingBudget(): Long = limits.maxTotalBytes - draftByteCount()

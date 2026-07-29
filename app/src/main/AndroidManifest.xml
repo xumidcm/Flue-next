@@ -17,9 +17,8 @@
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <uses-permission android:name="android.permission.BODY_SENSORS" />
-    <!-- Weather uses an already-granted coarse last-known fix only; the app
-         never requests location permission implicitly. Manual city remains
-         the no-permission fallback. -->
+    <!-- Weather requests coarse location only after the user taps the system-location
+         setting. Manual city search remains the no-permission fallback. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.INTERNET" />
 
@@ -107,14 +106,14 @@
         <activity
             android:name=".WatchStoreActivity"
             android:exported="false"
-            android:label="表盘市场"
+            android:label="@string/watch_store_title"
             android:theme="@style/Theme.WatchLauncher"
             android:screenOrientation="portrait" />
 
         <activity
             android:name=".WatchEditorActivity"
             android:exported="false"
-            android:label=".watch 编辑器"
+            android:label="@string/watch_editor_title"
             android:theme="@style/Theme.WatchLauncher"
             android:screenOrientation="portrait" />
 

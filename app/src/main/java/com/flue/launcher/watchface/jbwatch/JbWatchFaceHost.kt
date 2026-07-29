@@ -6,10 +6,12 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas as AndroidCanvas
+import android.graphics.Movie
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.media.MediaPlayer
+import android.os.SystemClock
 import android.text.format.DateFormat
 import android.util.Base64
 import android.util.LruCache
@@ -39,9 +41,15 @@ import androidx.compose.ui.unit.sp
 import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.watchface.standard.WatchDataProvider
 import com.flue.launcher.watchface.standard.WatchDataSnapshot
+import com.flue.launcher.watchface.standard.WatchTagResolution
 import com.flue.launcher.watchface.standard.WatchmakerExpressionEvaluator
 import com.flue.launcher.watchface.standard.WatchmakerTagResolver
 import com.flue.launcher.watchface.standard.rememberWatchmakerWatchDataProvider
+import com.flue.launcher.watchface.standard.parseWatchGifPaths
+import com.flue.launcher.watchface.standard.resolveWatchCounterTag
+import com.flue.launcher.watchface.standard.watchGifFrameIndex
+import com.flue.launcher.watchface.standard.watchLayerRequiresFrameTicks
+import com.flue.launcher.watchface.standard.watchTextAnimationFrame
 import com.flue.launcher.watchface.standard.watchWeatherNightSpriteIndex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -58,10 +66,12 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 private const val JB_LAYOUT_CANVAS_WIDTH = 512
 private const val JB_LAYOUT_CANVAS_HEIGHT = 512
+private const val DEFAULT_JB_GIF_DURATION_MS = 1_000
 private val JB_PROTECTED_IMAGE_KEY = byteArrayOf(0x53, 0x57, 0x48, 0x6E, 0x2D)
 private const val JB_STANDARD_BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 private const val JB_CUSTOM_BASE64 = "ABCgEFGHIJK4MNOPQRSTUVWXYZabcdefDhijklmnopqrstuvwxyz0123L56789+/"
@@ -89,6 +99,8 @@ data class JbWatchLayer(
     val type: String,
     val x: Float = 0f,
     val y: Float = 0f,
+    val xExpression: String? = null,
+    val yExpression: String? = null,
     val gyro: Float = 0f,
     val rotation: String = "0",
     val skewX: Float = 0f,
@@ -102,6 +114,15 @@ data class JbWatchLayer(
     val display: String = "b",
     val text: String = "",
     val textSize: Float = 24f,
+    val animIn: String? = null,
+    val animOut: String? = null,
+    val durationInSeconds: Float = 0.5f,
+    val durationOnSeconds: Float = 0f,
+    val durationOutSeconds: Float = 0.5f,
+    val durationOffSeconds: Float = 0f,
+    val delayStartSeconds: Float = 0f,
+    val repeatCount: Int = 1,
+    val restartOnLoad: Boolean = false,
     val animScaleX: Float = 100f,
     val animScaleY: Float = 100f,
     val font: String? = null,
@@ -137,15 +158,11 @@ data class JbWatchFace(
     val xmlFile: File,
     val pxmlFile: File,
     val designWidth: Int,
-    val designHeight: Int
+    val designHeight: Int,
+    val assetRevision: Long,
+    val animationStartedAtUptimeMs: Long = 0L,
 ) {
-    val needsHighRefresh: Boolean = layers.any { layer ->
-        layer.type == "image_gif" ||
-            layer.tapAction?.startsWith("script:") == true ||
-            layer.rotation != "0" ||
-            WatchmakerTagResolver.requiresFastTicks(layer.text) ||
-            WatchmakerTagResolver.requiresFastTicks(layer.condValue.orEmpty())
-    }
+    val needsHighRefresh: Boolean = layers.any(::jbLayerRequiresFrameTicks)
 }
 
 object JbWatchParser {
@@ -155,6 +172,7 @@ object JbWatchParser {
         require(watchXml.isFile && pxmlFile.isFile) { "缺少 watch.xml / watch.pxml" }
         val root = parseRoot(watchXml)
         val layers = parseLayers(pxmlFile, rootDir)
+        val assetRevision = JbWatchAssetIndexCache.prepare(rootDir)
         return JbWatchFace(
             root = root,
             layers = layers,
@@ -162,8 +180,10 @@ object JbWatchParser {
             xmlFile = watchXml,
             pxmlFile = pxmlFile,
             designWidth = JB_LAYOUT_CANVAS_WIDTH,
-            designHeight = JB_LAYOUT_CANVAS_HEIGHT
-        )
+            designHeight = JB_LAYOUT_CANVAS_HEIGHT,
+            assetRevision = assetRevision,
+            animationStartedAtUptimeMs = SystemClock.uptimeMillis(),
+        ).also(::prewarmJbInitialVisualFrames)
     }
 
     private fun parseRoot(file: File): JbWatchRoot {
@@ -198,10 +218,14 @@ object JbWatchParser {
                 val element = layerNodes.item(index) as? Element ?: continue
                 add(
                     JbWatchLayer(
-                        type = element.getAttribute("type").ifBlank { "image" },
+                        type = element.getAttribute("type")
+                            .ifBlank { "image" }
+                            .lowercase(Locale.ROOT),
                         name = sanitizeVisibleText(element.getAttribute("name")).takeIf { it.isNotBlank() },
                         x = element.getAttribute("x").toFloatOrZero(),
                         y = element.getAttribute("y").toFloatOrZero(),
+                        xExpression = element.getAttribute("x").takeIf(String::isNotBlank),
+                        yExpression = element.getAttribute("y").takeIf(String::isNotBlank),
                         gyro = element.getAttribute("gyro").toFloatOrZero(),
                         rotation = element.getAttribute("rotation").ifBlank { "0" },
                         skewX = element.getAttribute("skew_x").toFloatOrZero(),
@@ -216,6 +240,19 @@ object JbWatchParser {
                         display = element.getAttribute("display").ifBlank { "b" },
                         text = sanitizeVisibleText(element.getAttribute("text")),
                         textSize = element.getAttribute("text_size").toFloatOrZero(default = 24f),
+                        animIn = sanitizeVisibleText(element.getAttribute("anim_in"))
+                            .takeIf(String::isNotBlank),
+                        animOut = sanitizeVisibleText(element.getAttribute("anim_out"))
+                            .takeIf(String::isNotBlank),
+                        durationInSeconds = element.getAttribute("dur_in").toFloatOrZero(default = 0.5f),
+                        durationOnSeconds = element.getAttribute("dur_on").toFloatOrZero(),
+                        durationOutSeconds = element.getAttribute("dur_out").toFloatOrZero(default = 0.5f),
+                        durationOffSeconds = element.getAttribute("dur_off").toFloatOrZero(),
+                        delayStartSeconds = element.getAttribute("delay_start").toFloatOrZero(),
+                        repeatCount = element.getAttribute("repeat_count").toIntOrZero(default = 1),
+                        restartOnLoad = element.getAttribute("restart_on_load").let { raw ->
+                            raw.equals("Y", ignoreCase = true) || raw.equals("true", ignoreCase = true)
+                        },
                         animScaleX = element.getAttribute("anim_scale_x").toFloatOrZero(default = 100f),
                         animScaleY = element.getAttribute("anim_scale_y").toFloatOrZero(default = 100f),
                         font = sanitizeVisibleText(element.getAttribute("font")).takeIf { it.isNotBlank() },
@@ -352,7 +389,7 @@ fun JbWatchFaceHost(
     LaunchedEffect(isFaceVisible, face?.needsHighRefresh, descriptor.stableKey, refreshToken) {
         while (isFaceVisible) {
             nowMillis = System.currentTimeMillis()
-            delay(if (face?.needsHighRefresh == true) 80L else 1_000L)
+            delay(if (face?.needsHighRefresh == true) 33L else 1_000L)
         }
     }
     Box(
@@ -427,8 +464,8 @@ private fun drawJbFace(
     canvas.save()
     canvas.translate(offsetX, offsetY)
     canvas.scale(scale, scale)
-    face.layers.forEach { layer ->
-        drawJbLayer(canvas, face, layer, nowMillis, dataSnapshot, is24Hour)
+    face.layers.forEachIndexed { layerIndex, layer ->
+        drawJbLayer(canvas, face, layerIndex, layer, nowMillis, dataSnapshot, is24Hour)
     }
     canvas.restore()
 }
@@ -436,33 +473,93 @@ private fun drawJbFace(
 private fun drawJbLayer(
     canvas: AndroidCanvas,
     face: JbWatchFace,
+    layerIndex: Int,
     layer: JbWatchLayer,
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
     is24Hour: Boolean
 ) {
-    when (layer.type) {
-        "image", "image_gif", "image_cond" -> {
-            drawJbBitmapLayer(canvas, face, layer, nowMillis, dataSnapshot)
-        }
-        "text" -> drawJbTextLayer(canvas, face, layer, nowMillis, dataSnapshot, is24Hour)
-        "text_curved" -> drawJbCurvedTextLayer(canvas, face, layer, nowMillis, dataSnapshot, is24Hour)
-        "ring" -> drawJbRingLayer(canvas, face, layer, nowMillis, dataSnapshot)
-        "markers_hm" -> drawJbMarkersLayer(canvas, face, layer)
-        "shape" -> drawJbShapeLayer(canvas, face, layer)
+    val animationElapsedMs = (SystemClock.uptimeMillis() - face.animationStartedAtUptimeMs)
+        .coerceAtLeast(0L)
+    val animatedLayer = resolveJbAnimatedTransform(
+        layer = layer,
+        nowMillis = nowMillis,
+        dataSnapshot = dataSnapshot,
+        animationElapsedMs = animationElapsedMs,
+    )
+    val textAnimation = if (animatedLayer.type.startsWith("text") &&
+        (!animatedLayer.animIn.isNullOrBlank() || !animatedLayer.animOut.isNullOrBlank())
+    ) {
+        jbTextAnimationFrame(animatedLayer, animationElapsedMs)
+    } else {
+        null
     }
+    if (textAnimation?.visible == false) return
+    val drawableLayer = textAnimation?.let { frame ->
+        animatedLayer.copy(
+            x = animatedLayer.x + frame.translationX,
+            y = animatedLayer.y - frame.translationY,
+            opacity = (animatedLayer.opacity * frame.alpha).roundToInt(),
+        )
+    } ?: animatedLayer
+
+    val saveCount = canvas.save()
+    textAnimation?.let { frame ->
+        val pivot = jbLayerCenter(face, drawableLayer)
+        if (frame.scale != 1f) canvas.scale(frame.scale, frame.scale, pivot.x, pivot.y)
+        if (frame.rotation != 0f) canvas.rotate(frame.rotation, pivot.x, pivot.y)
+    }
+    when (drawableLayer.type) {
+        "image", "image_gif", "image_cond" -> {
+            drawJbBitmapLayer(
+                canvas = canvas,
+                face = face,
+                layerIndex = layerIndex,
+                layer = drawableLayer,
+                nowMillis = nowMillis,
+                dataSnapshot = dataSnapshot,
+                animationElapsedMs = animationElapsedMs,
+            )
+        }
+        "text" -> drawJbTextLayer(
+            canvas, face, drawableLayer, nowMillis, dataSnapshot, is24Hour, animationElapsedMs,
+        )
+        "text_curved" -> drawJbCurvedTextLayer(
+            canvas, face, drawableLayer, nowMillis, dataSnapshot, is24Hour, animationElapsedMs,
+        )
+        "ring" -> drawJbRingLayer(
+            canvas, face, drawableLayer, nowMillis, dataSnapshot, animationElapsedMs,
+        )
+        "markers_hm" -> drawJbMarkersLayer(canvas, face, drawableLayer)
+        "shape" -> drawJbShapeLayer(canvas, face, drawableLayer)
+    }
+    canvas.restoreToCount(saveCount)
 }
 
 private fun drawJbBitmapLayer(
     canvas: AndroidCanvas,
     face: JbWatchFace,
+    layerIndex: Int,
     layer: JbWatchLayer,
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
+    animationElapsedMs: Long,
 ) {
-    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot)) return
-    val dayFile = resolveJbWatchPath(face.rootDir, layer, nowMillis) ?: return
+    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot, animationElapsedMs)) return
+    val resolvedPathLayer = resolveJbDynamicPathLayer(
+        layer = layer,
+        nowMillis = nowMillis,
+        dataSnapshot = dataSnapshot,
+        animationElapsedMs = animationElapsedMs,
+    )
+    val dayFile = resolveJbWatchPath(
+        rootDir = face.rootDir,
+        layer = resolvedPathLayer,
+        nowMillis = animationElapsedMs,
+        assetRevision = face.assetRevision,
+    )
     val nightFile = if (
+        dayFile != null &&
         layer.type == "image_cond" &&
         layer.weatherNight.equals("Y", ignoreCase = true) &&
         isJbWeatherNight(dataSnapshot)
@@ -472,13 +569,21 @@ private fun drawJbBitmapLayer(
         null
     }
     val file = nightFile ?: dayFile
-    val bitmap = JbWatchBitmapCache.get(file) ?: return
-    val displaySize = resolveJbBitmapDisplaySize(layer, bitmap.width, bitmap.height)
+    val frameCacheKey = jbLastVisualFrameKey(face, layerIndex)
+    val decodedFrame = file?.let { JbWatchVisualFrame.decode(it) }
+    val frame = decodedFrame?.also { JbWatchLastVisualFrameCache.put(frameCacheKey, it) }
+        ?: JbWatchLastVisualFrameCache.get(frameCacheKey)
+        ?: return
+    val movie = frame.movie
+    val bitmap = frame.bitmap
+    val nativeWidth = frame.width
+    val nativeHeight = frame.height
+    val displaySize = resolveJbBitmapDisplaySize(layer, nativeWidth, nativeHeight)
     val rect = resolveJbRect(face, layer, displaySize.first, displaySize.second)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         alpha = resolveJbLayerOpacity(layer)
     }
-    if (layer.type == "image_cond" && !layer.condGrid.isNullOrBlank()) {
+    if (bitmap != null && layer.type == "image_cond" && !layer.condGrid.isNullOrBlank()) {
         val weatherCode = WatchmakerTagResolver.resolve("wci", Calendar.getInstance().apply {
             timeInMillis = nowMillis
         }, dataSnapshot).renderedValue
@@ -489,9 +594,18 @@ private fun drawJbBitmapLayer(
             dayIndex
         }
         drawConditionBitmap(canvas, bitmap, rect, layer.condGrid, index, paint)
-    } else {
+    } else if (movie != null) {
+        val durationMs = movie.duration().takeIf { it > 0 } ?: DEFAULT_JB_GIF_DURATION_MS
+        movie.setTime((animationElapsedMs % durationMs).toInt())
         canvas.save()
-        rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot)
+        rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot, animationElapsedMs)
+        canvas.translate(rect.left, rect.top)
+        canvas.scale(rect.width() / nativeWidth, rect.height() / nativeHeight)
+        movie.draw(canvas, 0f, 0f, paint)
+        canvas.restore()
+    } else if (bitmap != null) {
+        canvas.save()
+        rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot, animationElapsedMs)
         canvas.drawBitmap(bitmap, null, rect, paint)
         canvas.restore()
     }
@@ -525,10 +639,11 @@ private fun drawJbTextLayer(
     layer: JbWatchLayer,
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
-    is24Hour: Boolean
+    is24Hour: Boolean,
+    animationElapsedMs: Long,
 ) {
-    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot)) return
-    val text = resolveJbText(layer.text, nowMillis, dataSnapshot, is24Hour)
+    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot, animationElapsedMs)) return
+    val text = resolveJbText(layer.text, nowMillis, dataSnapshot, is24Hour, animationElapsedMs)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = parseJbColor(layer.color)
         textSize = layer.textSize
@@ -538,7 +653,7 @@ private fun drawJbTextLayer(
             else -> Paint.Align.CENTER
         }
         alpha = resolveJbLayerOpacity(layer)
-        typeface = JbWatchTypefaceCache.get(face.rootDir, layer.font)
+        typeface = JbWatchTypefaceCache.get(face.rootDir, face.assetRevision, layer.font)
     }
     val textDisplaySize = resolveJbTextDisplaySize(layer, text, paint)
     val rect = resolveJbRect(
@@ -561,12 +676,12 @@ private fun drawJbTextLayer(
             alpha = ((layer.oOpacity.coerceIn(0, 100) / 100f) * 255).toInt()
         }
         canvas.save()
-        rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot)
+        rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot, animationElapsedMs)
         canvas.drawText(text, x, y, outlinePaint)
         canvas.restore()
     }
     canvas.save()
-    rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot)
+    rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot, animationElapsedMs)
     canvas.drawText(text, x, y, paint)
     canvas.restore()
 }
@@ -577,14 +692,20 @@ private fun drawJbCurvedTextLayer(
     layer: JbWatchLayer,
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
-    is24Hour: Boolean
+    is24Hour: Boolean,
+    animationElapsedMs: Long,
 ) {
-    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot)) return
-    val text = resolveJbText(layer.text, nowMillis, dataSnapshot, is24Hour)
+    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot, animationElapsedMs)) return
+    val text = resolveJbText(layer.text, nowMillis, dataSnapshot, is24Hour, animationElapsedMs)
     if (text.isBlank()) return
     val center = jbLayerCenter(face, layer)
     val radius = layer.radius.takeIf { it > 0f } ?: 180f
-    val angle = evaluateJbNumericExpression(layer.rotation, nowMillis, dataSnapshot)
+    val angle = evaluateJbNumericExpression(
+        layer.rotation,
+        nowMillis,
+        dataSnapshot,
+        animationElapsedMs,
+    )
     val radians = Math.toRadians((angle - 90f).toDouble())
     val x = center.x + cos(radians).toFloat() * radius
     val y = center.y + sin(radians).toFloat() * radius
@@ -597,7 +718,7 @@ private fun drawJbCurvedTextLayer(
             else -> Paint.Align.CENTER
         }
         alpha = resolveJbLayerOpacity(layer)
-        typeface = JbWatchTypefaceCache.get(face.rootDir, layer.font)
+        typeface = JbWatchTypefaceCache.get(face.rootDir, face.assetRevision, layer.font)
     }
     canvas.save()
     canvas.rotate(angle + if (layer.curveDir.equals("Down", ignoreCase = true)) 180f else 0f, x, y)
@@ -611,18 +732,24 @@ private fun drawJbRingLayer(
     layer: JbWatchLayer,
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
+    animationElapsedMs: Long,
 ) {
-    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot)) return
+    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot, animationElapsedMs)) return
     val center = jbLayerCenter(face, layer)
     val outer = layer.radiusOuter.takeIf { it > 0f } ?: layer.radius.takeIf { it > 0f } ?: 210f
     val inner = layer.radiusInner.takeIf { it > 0f } ?: (outer - 14f)
     val stroke = (outer - inner).coerceAtLeast(1f)
     val radius = inner + stroke / 2f
-    val sweep = evaluateJbNumericExpression(layer.angle, nowMillis, dataSnapshot)
+    val sweep = evaluateJbNumericExpression(layer.angle, nowMillis, dataSnapshot, animationElapsedMs)
         .takeIf { it > 0f }
         ?: layer.angleTotal.takeIf { it > 0f }
         ?: 360f
-    val start = evaluateJbNumericExpression(layer.rotation, nowMillis, dataSnapshot) - 90f
+    val start = evaluateJbNumericExpression(
+        layer.rotation,
+        nowMillis,
+        dataSnapshot,
+        animationElapsedMs,
+    ) - 90f
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
@@ -678,6 +805,7 @@ private fun resolveJbText(
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
     is24Hour: Boolean,
+    animationElapsedMs: Long,
 ): String {
     val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
     // EEE / MMM 在部分 locale 会带尾句号（es "lun."、de "Mo."），
@@ -690,10 +818,11 @@ private fun resolveJbText(
         .replace("{ddm}", "__JB_DDM__")
         .replace("{dmm}", "__JB_DMM__")
     val interpolated = JB_DYNAMIC_TAG_PATTERN.replace(source) { match ->
-        WatchmakerTagResolver.resolve(
+        resolveJbTag(
             tag = match.groupValues[1],
             now = calendar,
-            snapshot = dataSnapshot,
+            dataSnapshot = dataSnapshot,
+            animationElapsedMs = animationElapsedMs,
         ).renderedValue
     }
     return interpolated
@@ -782,7 +911,12 @@ private fun resolveJbHitContentSize(
         val height = layer.height.takeIf { it > 0 }?.toFloat() ?: fallbackHeight.coerceAtLeast(1f)
         return applyJbLayerScale(layer, width, height)
     }
-    val bitmapBounds = resolveJbWatchPath(face.rootDir, layer, nowMillis)?.let(::readJbBitmapBounds)
+    val bitmapBounds = resolveJbWatchPath(
+        rootDir = face.rootDir,
+        layer = layer,
+        nowMillis = nowMillis,
+        assetRevision = face.assetRevision,
+    )?.let(::readJbBitmapBounds)
     return resolveJbBitmapDisplaySize(layer, bitmapBounds?.first ?: 64, bitmapBounds?.second ?: 64)
 }
 
@@ -816,8 +950,14 @@ private fun rotateJbLayer(
     rotationRaw: String,
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
+    animationElapsedMs: Long,
 ) {
-    val rotation = evaluateJbNumericExpression(rotationRaw, nowMillis, dataSnapshot)
+    val rotation = evaluateJbNumericExpression(
+        rotationRaw,
+        nowMillis,
+        dataSnapshot,
+        animationElapsedMs,
+    )
     if (rotation == 0f) return
     canvas.rotate(rotation, rect.centerX(), rect.centerY())
 }
@@ -826,14 +966,86 @@ private fun evaluateJbNumericExpression(
     raw: String,
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
+    animationElapsedMs: Long = 0L,
+    fallback: Float = 0f,
 ): Float {
     val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
     return WatchmakerExpressionEvaluator.evaluateNumber(
         raw = raw,
-        fallback = 0f,
+        fallback = fallback,
     ) { tag ->
-        WatchmakerTagResolver.resolve(tag, calendar, dataSnapshot)
+        resolveJbTag(tag, calendar, dataSnapshot, animationElapsedMs)
     }
+}
+
+/** Shared WatchMaker text timeline used by both standard and JB renderers. */
+internal fun jbTextAnimationFrame(layer: JbWatchLayer, elapsedMs: Long) =
+    watchTextAnimationFrame(
+        animIn = layer.animIn,
+        animOut = layer.animOut,
+        durationInSeconds = layer.durationInSeconds,
+        durationOnSeconds = layer.durationOnSeconds,
+        durationOutSeconds = layer.durationOutSeconds,
+        durationOffSeconds = layer.durationOffSeconds,
+        delayStartSeconds = layer.delayStartSeconds,
+        repeatCount = layer.repeatCount,
+        restartOnLoad = layer.restartOnLoad,
+        elapsedMs = elapsedMs,
+    )
+
+private fun resolveJbAnimatedTransform(
+    layer: JbWatchLayer,
+    nowMillis: Long,
+    dataSnapshot: WatchDataSnapshot,
+    animationElapsedMs: Long,
+): JbWatchLayer {
+    if (layer.xExpression.isNullOrBlank() && layer.yExpression.isNullOrBlank()) return layer
+    return layer.copy(
+        x = evaluateJbNumericExpression(
+            raw = layer.xExpression ?: layer.x.toString(),
+            nowMillis = nowMillis,
+            dataSnapshot = dataSnapshot,
+            animationElapsedMs = animationElapsedMs,
+            fallback = layer.x,
+        ),
+        y = evaluateJbNumericExpression(
+            raw = layer.yExpression ?: layer.y.toString(),
+            nowMillis = nowMillis,
+            dataSnapshot = dataSnapshot,
+            animationElapsedMs = animationElapsedMs,
+            fallback = layer.y,
+        ),
+    )
+}
+
+private fun resolveJbDynamicPathLayer(
+    layer: JbWatchLayer,
+    nowMillis: Long,
+    dataSnapshot: WatchDataSnapshot,
+    animationElapsedMs: Long,
+): JbWatchLayer {
+    val rawPath = layer.path?.takeIf(String::isNotBlank) ?: return layer
+    val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val resolvedPath = WatchmakerExpressionEvaluator.evaluateText(rawPath) { tag ->
+        resolveJbTag(tag, calendar, dataSnapshot, animationElapsedMs)
+    }.trim()
+    if (resolvedPath == rawPath && layer.pathFrames == parsePaths(resolvedPath)) return layer
+    return layer.copy(
+        path = resolvedPath,
+        pathFrames = parsePaths(resolvedPath),
+    )
+}
+
+private fun resolveJbTag(
+    tag: String,
+    now: Calendar,
+    dataSnapshot: WatchDataSnapshot,
+    animationElapsedMs: Long,
+): WatchTagResolution {
+    resolveWatchCounterTag(tag, animationElapsedMs)?.let { value ->
+        return WatchTagResolution.Resolved(value)
+    }
+    return WatchmakerTagResolver.resolve(tag, now, dataSnapshot)
 }
 
 private fun evaluateJbArithmetic(raw: String): Float {
@@ -869,43 +1081,178 @@ private fun readJbBitmapBounds(file: File): Pair<Int, Int>? {
     return JbWatchBitmapCache.bounds(file)
 }
 
-private fun resolveJbWatchPath(rootDir: File, rawPath: String?, nowMillis: Long): File? {
-    return resolveJbWatchPath(rootDir, JbWatchLayer(type = "image", path = rawPath), nowMillis)
+private data class JbWatchAssetIndex(
+    val revision: Long,
+    val byRelativePath: Map<String, File>,
+    val byBaseName: Map<String, File>,
+)
+
+/**
+ * Immutable per-parse file index. Dynamic paths are resolved from memory on
+ * every frame; a miss is therefore a cheap negative lookup instead of a
+ * walkTopDown() on the UI thread.
+ */
+private object JbWatchAssetIndexCache {
+    private const val MAX_INDEXES = 12
+    private const val MAX_INDEXED_FILES = 8_192
+    private val indexes = LruCache<String, JbWatchAssetIndex>(MAX_INDEXES)
+    private val latestRevisionByRoot = mutableMapOf<String, Long>()
+    private var nextRevision = 0L
+
+    fun prepare(rootDir: File): Long {
+        val canonicalRoot = runCatching { rootDir.canonicalFile }.getOrElse { rootDir.absoluteFile }
+        val files = runCatching {
+            canonicalRoot.walkTopDown()
+                .filter(File::isFile)
+                .take(MAX_INDEXED_FILES)
+                .mapNotNull { file ->
+                    val relative = runCatching { file.relativeTo(canonicalRoot).invariantSeparatorsPath }
+                        .getOrNull()
+                        ?: return@mapNotNull null
+                    normalizeJbAssetPath(relative)?.let { it to file }
+                }
+                .sortedBy { (relative, _) -> relative.length }
+                .toList()
+        }.getOrDefault(emptyList())
+        val byRelative = LinkedHashMap<String, File>(files.size)
+        val byBaseName = LinkedHashMap<String, File>(files.size)
+        files.forEach { (relative, file) ->
+            byRelative.putIfAbsent(relative, file)
+            byBaseName.putIfAbsent(relative.substringAfterLast('/'), file)
+        }
+        return synchronized(this) {
+            val revision = ++nextRevision
+            val rootKey = canonicalRoot.absolutePath
+            indexes.put(
+                indexKey(rootKey, revision),
+                JbWatchAssetIndex(revision, byRelative, byBaseName),
+            )
+            latestRevisionByRoot[rootKey] = revision
+            revision
+        }
+    }
+
+    fun latestRevision(rootDir: File): Long = synchronized(this) {
+        latestRevisionByRoot[rootDir.absoluteFile.path]
+            ?: latestRevisionByRoot[runCatching { rootDir.canonicalPath }.getOrDefault(rootDir.absolutePath)]
+            ?: 0L
+    }
+
+    fun find(rootDir: File, revision: Long, rawPath: String): File? {
+        val normalized = normalizeJbAssetPath(rawPath) ?: return null
+        val rootKey = runCatching { rootDir.canonicalPath }.getOrDefault(rootDir.absolutePath)
+        val index = synchronized(this) { indexes.get(indexKey(rootKey, revision)) } ?: return null
+        val withoutDot = normalized.removePrefix(".")
+        val variants = buildList {
+            add(normalized)
+            if (withoutDot != normalized) add(withoutDot)
+            if (!normalized.startsWith("images/")) add("images/$normalized")
+            if (!normalized.startsWith("fonts/")) add("fonts/$normalized")
+        }
+        variants.distinct().forEach { variant ->
+            index.byRelativePath[variant]?.takeIf(File::isFile)?.let { return it }
+        }
+        return index.byBaseName[normalized.substringAfterLast('/')]
+            ?.takeIf(File::isFile)
+            ?: index.byBaseName[withoutDot.substringAfterLast('/')]?.takeIf(File::isFile)
+    }
+
+    /**
+     * Finds one safe installed asset for a dynamic path template. This is used
+     * only during IO prewarm: the live frame still resolves the exact tag value.
+     */
+    fun findDynamicCandidate(rootDir: File, revision: Long, rawPattern: String): File? {
+        if ('{' !in rawPattern || '}' !in rawPattern || rawPattern.length > 1_024) return null
+        val normalized = normalizeJbAssetPath(rawPattern) ?: return null
+        val rootKey = runCatching { rootDir.canonicalPath }.getOrDefault(rootDir.absolutePath)
+        val index = synchronized(this) { indexes.get(indexKey(rootKey, revision)) } ?: return null
+        val withoutDot = normalized.removePrefix(".")
+        val patterns = linkedSetOf(normalized, withoutDot).apply {
+            if (!normalized.startsWith("images/")) add("images/$normalized")
+        }
+        patterns.forEach { pattern ->
+            val matcher = jbDynamicAssetPathRegex(pattern) ?: return@forEach
+            index.byRelativePath.entries.firstOrNull { (path, file) ->
+                file.isFile && matcher.matches(path)
+            }?.value?.let { return it }
+        }
+        val basenameMatcher = jbDynamicAssetPathRegex(withoutDot.substringAfterLast('/'))
+            ?: return null
+        return index.byBaseName.entries.firstOrNull { (name, file) ->
+            file.isFile && basenameMatcher.matches(name)
+        }?.value
+    }
+
+    private fun indexKey(rootPath: String, revision: Long): String = "$rootPath|$revision"
 }
 
-private fun resolveJbWatchPath(rootDir: File, layer: JbWatchLayer, nowMillis: Long): File? {
+private fun jbDynamicAssetPathRegex(normalizedPattern: String): Regex? {
+    val matches = JB_DYNAMIC_TAG_PATTERN.findAll(normalizedPattern).toList()
+    if (matches.isEmpty()) return null
+    val regex = StringBuilder("^")
+    var cursor = 0
+    matches.forEach { match ->
+        regex.append(Regex.escape(normalizedPattern.substring(cursor, match.range.first)))
+        regex.append("[^/]+")
+        cursor = match.range.last + 1
+    }
+    regex.append(Regex.escape(normalizedPattern.substring(cursor)))
+    regex.append('$')
+    return runCatching { Regex(regex.toString()) }.getOrNull()
+}
+
+private fun normalizeJbAssetPath(rawPath: String): String? {
+    val normalized = rawPath.trim()
+        .replace('\\', '/')
+        .removePrefix("./")
+        .trimStart('/')
+        .lowercase(Locale.ROOT)
+    if (normalized.isBlank()) return null
+    val segments = normalized.split('/')
+    if (segments.any { it == ".." }) return null
+    return segments.filter { it.isNotBlank() && it != "." }.joinToString("/")
+        .takeIf(String::isNotBlank)
+}
+
+private fun resolveJbWatchPath(
+    rootDir: File,
+    rawPath: String?,
+    nowMillis: Long,
+    assetRevision: Long = JbWatchAssetIndexCache.latestRevision(rootDir),
+): File? {
+    return resolveJbWatchPath(
+        rootDir,
+        JbWatchLayer(type = "image", path = rawPath),
+        nowMillis,
+        assetRevision,
+    )
+}
+
+private fun resolveJbWatchPath(
+    rootDir: File,
+    layer: JbWatchLayer,
+    nowMillis: Long,
+    assetRevision: Long = JbWatchAssetIndexCache.latestRevision(rootDir),
+): File? {
     val rawPath = layer.path
     val normalized = rawPath?.trim().orEmpty()
     if (normalized.isBlank()) return null
-    val candidates = if (layer.pathFrames.isNotEmpty()) {
-        val frameDelayMs = layer.gifDelay.takeIf { it > 0 } ?: 120
-        val frameStep = ((nowMillis / frameDelayMs).toInt()).coerceAtLeast(0)
-        listOf(layer.pathFrames[frameStep.mod(layer.pathFrames.size)])
+    val parsedPaths = parsePaths(normalized)
+    val candidates = if (parsedPaths.size > 1) {
+        val frameDelayMs = layer.gifDelay.takeIf { it > 0 } ?: 50
+        val frameIndex = jbAnimationFrameIndex(
+            frameCount = parsedPaths.size,
+            timelineMs = nowMillis,
+            delayMs = frameDelayMs.toLong(),
+        )
+        listOf(parsedPaths[frameIndex])
     } else {
-        normalized.split('`').map { it.trim() }.filter { it.isNotBlank() }
+        parsedPaths.ifEmpty { listOf(normalized) }
     }
     candidates.forEach { candidate ->
-        val normalizedCandidate = candidate.replace('\\', '/')
-        val candidateVariants = listOf(
-            normalizedCandidate,
-            normalizedCandidate.removePrefix(".")
-        ).distinct()
-        candidateVariants.forEach { variant ->
-            val direct = File(rootDir, variant)
-            if (direct.isFile) return direct
-            val inImages = File(rootDir, "images/$variant")
-            if (inImages.isFile) return inImages
-            val inFonts = File(rootDir, "fonts/$variant")
-            if (inFonts.isFile) return inFonts
-        }
+        JbWatchAssetIndexCache.find(rootDir, assetRevision, candidate)?.let { return it }
     }
-    return rootDir.walkTopDown().firstOrNull { file ->
-        val name = candidates.firstOrNull()?.substringAfterLast('/') ?: ""
-        file.isFile && (
-            file.name.equals(name, ignoreCase = true) ||
-                file.name.equals(name.removePrefix("."), ignoreCase = true)
-            )
-    }
+    return null
 }
 
 private fun parseJbColor(raw: String): Int {
@@ -917,11 +1264,12 @@ private fun shouldDisplayLayer(
     layer: JbWatchLayer,
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
+    animationElapsedMs: Long = 0L,
 ): Boolean {
     val expr = layer.condValue?.takeIf { it.isNotBlank() } ?: return true
     val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
     val result = WatchmakerExpressionEvaluator.evaluateNumber(expr, Float.NaN) { tag ->
-        WatchmakerTagResolver.resolve(tag, calendar, dataSnapshot)
+        resolveJbTag(tag, calendar, dataSnapshot, animationElapsedMs)
     }
     return result.isNaN() || result != 0f
 }
@@ -979,13 +1327,48 @@ private fun resolveJbLayerOpacity(layer: JbWatchLayer): Int {
 }
 
 private fun parsePaths(raw: String?): List<String> {
-    val normalized = raw?.trim().orEmpty()
-    if (normalized.isBlank()) return emptyList()
-    return normalized
-        .split('`', ',')
-        .map { it.trim() }
-        .filter { it.isNotBlank() }
+    return parseWatchGifPaths(raw)
 }
+
+/**
+ * JB exports sometimes keep a frame sequence on a plain `image` layer.  Treat
+ * the content as authoritative instead of relying only on the type label so
+ * those old faces keep receiving frame ticks after the face-switch transition
+ * has finished.
+ */
+internal fun jbLayerRequiresFrameTicks(layer: JbWatchLayer): Boolean {
+    if (layer.pathFrames.size > 1) return true
+    if (watchLayerRequiresFrameTicks(
+        type = layer.type,
+        attributes = mapOf(
+            "path" to layer.path.orEmpty(),
+            "anim_in" to layer.animIn.orEmpty(),
+            "anim_out" to layer.animOut.orEmpty(),
+        ),
+    )) return true
+    if (layer.tapAction?.startsWith("script:") == true) return true
+    return sequenceOf(
+        layer.text,
+        layer.condValue.orEmpty(),
+        layer.rotation,
+        layer.angle,
+        layer.xExpression.orEmpty(),
+        layer.yExpression.orEmpty(),
+        layer.path.orEmpty(),
+    ).any { value -> WatchmakerTagResolver.requiresFastTicks(value) }
+}
+
+/**
+ * Keep the division and modulo in Long space.  The previous JB implementation
+ * converted the epoch-sized frame counter to Int first; for a large range of
+ * gif_delay values it overflowed negative and was then clamped to zero, which
+ * locked the animation on its first frame for years at a time.
+ */
+internal fun jbAnimationFrameIndex(
+    frameCount: Int,
+    timelineMs: Long,
+    delayMs: Long,
+): Int = watchGifFrameIndex(frameCount, timelineMs, delayMs)
 
 private fun handleJbWatchTap(
     context: Context,
@@ -1005,15 +1388,23 @@ private fun handleJbWatchTap(
     val offsetY = (viewHeight - canvasHeight * scale) / 2f
     val localX = (point.x - offsetX) / scale
     val localY = (point.y - offsetY) / scale
+    val animationElapsedMs = (SystemClock.uptimeMillis() - face.animationStartedAtUptimeMs)
+        .coerceAtLeast(0L)
     face.layers
         .asReversed()
         .firstOrNull { layer ->
-            val hitSize = resolveJbHitContentSize(face, layer, nowMillis)
-                shouldDisplayLayer(layer, nowMillis, dataSnapshot) &&
-                !layer.tapAction.isNullOrBlank() &&
+            val animatedLayer = resolveJbAnimatedTransform(
+                layer,
+                nowMillis,
+                dataSnapshot,
+                animationElapsedMs,
+            )
+            val hitSize = resolveJbHitContentSize(face, animatedLayer, animationElapsedMs)
+            shouldDisplayLayer(animatedLayer, nowMillis, dataSnapshot, animationElapsedMs) &&
+                !animatedLayer.tapAction.isNullOrBlank() &&
                 resolveJbRect(
                     face = face,
-                    layer = layer,
+                    layer = animatedLayer,
                     contentWidth = hitSize.first,
                     contentHeight = hitSize.second
                 ).contains(localX, localY)
@@ -1142,6 +1533,103 @@ private fun playJbWatchScript(rootDir: File, script: String) {
     }
 }
 
+private data class JbWatchVisualFrame(
+    val bitmap: Bitmap?,
+    val movie: Movie?,
+) {
+    val width: Int = movie?.width() ?: bitmap?.width ?: 0
+    val height: Int = movie?.height() ?: bitmap?.height ?: 0
+
+    companion object {
+        fun decode(file: File): JbWatchVisualFrame? {
+            val movie = JbWatchMovieCache.get(file)
+            if (movie != null && movie.width() > 0 && movie.height() > 0) {
+                return JbWatchVisualFrame(bitmap = null, movie = movie)
+            }
+            val bitmap = JbWatchBitmapCache.get(file)
+                ?.takeIf { !it.isRecycled && it.width > 0 && it.height > 0 }
+                ?: return null
+            return JbWatchVisualFrame(bitmap = bitmap, movie = null)
+        }
+    }
+}
+
+/**
+ * Parser runs on Dispatchers.IO, so prime one valid frame per image layer
+ * before publishing the face. Dynamic templates resolve against the initial
+ * clock snapshot first, then fall back to one matching installed asset. Raw
+ * GIFs are decoded too; the UI receives a ready Movie instead of a black first
+ * frame while switching faces.
+ */
+private fun prewarmJbInitialVisualFrames(face: JbWatchFace) {
+    val nowMillis = System.currentTimeMillis()
+    val emptySnapshot = WatchDataSnapshot()
+    face.layers.forEachIndexed { layerIndex, layer ->
+        if (layer.type !in setOf("image", "image_gif", "image_cond")) return@forEachIndexed
+        val resolvedLayer = resolveJbDynamicPathLayer(
+            layer = layer,
+            nowMillis = nowMillis,
+            dataSnapshot = emptySnapshot,
+            animationElapsedMs = 0L,
+        )
+        val paths = linkedSetOf<String>().apply {
+            addAll(parsePaths(resolvedLayer.path))
+            addAll(parsePaths(layer.path))
+        }
+        paths.asSequence()
+            .mapNotNull { path ->
+                JbWatchAssetIndexCache.find(face.rootDir, face.assetRevision, path)
+                    ?: JbWatchAssetIndexCache.findDynamicCandidate(
+                        face.rootDir,
+                        face.assetRevision,
+                        path,
+                    )
+            }
+            .mapNotNull { file -> JbWatchVisualFrame.decode(file) }
+            .firstOrNull()
+            ?.let { frame ->
+                JbWatchLastVisualFrameCache.put(jbLastVisualFrameKey(face, layerIndex), frame)
+            }
+    }
+}
+
+private fun jbLastVisualFrameKey(face: JbWatchFace, layerIndex: Int): String = buildString {
+    append(face.rootDir.absolutePath)
+    append(':')
+    append(face.pxmlFile.lastModified())
+    append(':')
+    append(face.pxmlFile.length())
+    append(':')
+    append(face.assetRevision)
+    append(':')
+    append(layerIndex)
+}
+
+/**
+ * A dynamic JB path can briefly point at a frame that has not finished being
+ * extracted yet. Keep the last successfully decoded visual for that exact
+ * face/layer so the watch background never falls through to its black root
+ * colour between two valid frames.
+ */
+private object JbWatchLastVisualFrameCache {
+    private const val MAX_FRAMES = 48
+    private val cache = LruCache<String, JbWatchVisualFrame>(MAX_FRAMES)
+
+    fun get(key: String): JbWatchVisualFrame? = synchronized(cache) {
+        cache.get(key)?.takeIf { frame ->
+            frame.width > 0 &&
+                frame.height > 0 &&
+                (frame.bitmap?.isRecycled != true)
+        }
+    }
+
+    fun put(key: String, frame: JbWatchVisualFrame) {
+        synchronized(cache) {
+            cache.put(key, frame)
+        }
+    }
+}
+
 private object JbWatchBitmapCache {
     private const val MAX_CACHE_KB = 24 * 1024
     private val cache = object : LruCache<String, Bitmap>(MAX_CACHE_KB) {
@@ -1184,24 +1672,45 @@ private object JbWatchBitmapCache {
     }
 }
 
+private object JbWatchMovieCache {
+    private const val MAX_MOVIES = 8
+    private val cache = LruCache<String, Movie>(MAX_MOVIES)
+
+    @Synchronized
+    fun get(file: File): Movie? {
+        if (!file.isFile || !file.extension.equals("gif", ignoreCase = true)) return null
+        val key = "${file.absolutePath}:${file.lastModified()}:${file.length()}"
+        cache.get(key)?.let { return it }
+        val movie = runCatching { Movie.decodeFile(file.absolutePath) }.getOrNull() ?: return null
+        cache.put(key, movie)
+        return movie
+    }
+}
+
 private object JbWatchTypefaceCache {
     private val cache = mutableMapOf<String, android.graphics.Typeface?>()
 
-    fun get(rootDir: File, fontName: String?): android.graphics.Typeface? {
-        val key = fontName?.trim().orEmpty()
-        if (key.isBlank()) return android.graphics.Typeface.DEFAULT
+    fun get(rootDir: File, assetRevision: Long, fontName: String?): android.graphics.Typeface? {
+        val normalizedName = fontName?.trim().orEmpty()
+        if (normalizedName.isBlank()) return android.graphics.Typeface.DEFAULT
+        val key = "${rootDir.absolutePath}:$assetRevision:$normalizedName"
         synchronized(cache) {
             cache[key]?.let { return it }
             val candidates = listOf(
-                "fonts/$key",
-                key,
-                "fonts/$key.ttf",
-                "$key.ttf",
-                "fonts/$key.otf",
-                "$key.otf"
+                "fonts/$normalizedName",
+                normalizedName,
+                "fonts/$normalizedName.ttf",
+                "$normalizedName.ttf",
+                "fonts/$normalizedName.otf",
+                "$normalizedName.otf"
             )
             val file = candidates.firstNotNullOfOrNull { candidate ->
-                resolveJbWatchPath(rootDir, JbWatchLayer(type = "image", path = candidate), 0L)
+                resolveJbWatchPath(
+                    rootDir,
+                    JbWatchLayer(type = "image", path = candidate),
+                    0L,
+                    assetRevision,
+                )
             }
             val typeface = file?.takeIf { it.isFile }?.let { runCatching { android.graphics.Typeface.createFromFile(it) }.getOrNull() }
                 ?: android.graphics.Typeface.DEFAULT

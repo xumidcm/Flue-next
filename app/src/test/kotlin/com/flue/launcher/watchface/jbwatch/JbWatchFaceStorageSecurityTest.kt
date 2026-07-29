@@ -28,16 +28,23 @@ class JbWatchFaceStorageSecurityTest {
 
     @Test
     fun `zip bomb entry is rejected instead of filling the disk`() {
+        val oneMiB = 1024L * 1024L
+        val testLimits = JbWatchArchiveLimits(
+            maximumArchiveBytes = 4L * oneMiB,
+            maximumEntryCount = 32,
+            maximumSingleEntryBytes = oneMiB,
+            maximumExpandedBytes = 4L * oneMiB,
+        )
         val bomb = File.createTempFile("jbwatch_bomb_", ".watch", context.cacheDir)
         try {
             ZipOutputStream(bomb.outputStream()).use { zip ->
                 zip.putNextEntry(ZipEntry("watch.xml"))
                 zip.write("<Watch name=\"bomb\"/>".toByteArray())
                 zip.closeEntry()
-                // 70MB 的零字节：压缩后只有几十 KB，但超过单条目 64MB 上限。
+                // 2MB 的零字节：压缩后很小，但超过测试注入的单条目 1MB 上限。
                 zip.putNextEntry(ZipEntry("images/huge.bin"))
                 val zeros = ByteArray(1024 * 1024)
-                repeat(70) { zip.write(zeros) }
+                repeat(2) { zip.write(zeros) }
                 zip.closeEntry()
             }
             // 炸弹本体必须是小文件，否则测试测的是归档大小上限而不是展开上限。
@@ -47,7 +54,7 @@ class JbWatchFaceStorageSecurityTest {
             )
 
             val error = assertThrows(IllegalArgumentException::class.java) {
-                JbWatchFaceStorage.importArchiveFile(context, bomb)
+                JbWatchFaceStorage.importArchiveFile(context, bomb, testLimits)
             }
             assertTrue(
                 "拒绝原因应指向大小限制，实际：${error.message}",

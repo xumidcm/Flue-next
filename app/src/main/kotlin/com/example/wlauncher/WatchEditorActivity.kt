@@ -10,7 +10,9 @@ import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
+import androidx.annotation.StringRes
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -18,6 +20,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.activity.result.contract.ActivityResultContracts.CreateDocument
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
+import androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -77,6 +80,7 @@ import androidx.compose.material3.Button
 import com.flue.launcher.ui.settings.miuix.MiuixLoadingIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -85,23 +89,6 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowDownward
-import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.CloudUpload
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.FileOpen
-import androidx.compose.material.icons.filled.Redo
-import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.filled.Undo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -124,20 +111,43 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.min
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.delay
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Add
+import top.yukonga.miuix.kmp.icon.extended.Back
+import top.yukonga.miuix.kmp.icon.extended.Backup
+import top.yukonga.miuix.kmp.icon.extended.ChevronForward
+import top.yukonga.miuix.kmp.icon.extended.Close
+import top.yukonga.miuix.kmp.icon.extended.Copy
+import top.yukonga.miuix.kmp.icon.extended.Delete
+import top.yukonga.miuix.kmp.icon.extended.ExpandLess
+import top.yukonga.miuix.kmp.icon.extended.ExpandMore
+import top.yukonga.miuix.kmp.icon.extended.File
+import top.yukonga.miuix.kmp.icon.extended.Layers
+import top.yukonga.miuix.kmp.icon.extended.Ok
+import top.yukonga.miuix.kmp.icon.extended.Redo
+import top.yukonga.miuix.kmp.icon.extended.Tune
+import top.yukonga.miuix.kmp.icon.extended.Undo
+import top.yukonga.miuix.kmp.icon.extended.UploadCloud
+import top.yukonga.miuix.kmp.icon.extended.WorldClock
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchLauncherTheme
@@ -152,6 +162,7 @@ import com.flue.launcher.watchface.editor.WatchCanvasSize
 import com.flue.launcher.watchface.editor.rememberScreenCanvasSize
 import com.flue.launcher.watchface.editor.WatchEditorHandle
 import com.flue.launcher.watchface.editor.WatchEditorImageCropper
+import com.flue.launcher.watchface.editor.WatchEditorImageSourceInfo
 import com.flue.launcher.watchface.editor.WatchEditorLayer
 import com.flue.launcher.watchface.editor.WatchEditorLayerKey
 import com.flue.launcher.watchface.editor.WatchEditorLiveAttributeApplicator
@@ -165,6 +176,10 @@ import com.flue.launcher.watchface.editor.WatchEditorSnapshot
 import com.flue.launcher.watchface.editor.WatchEditorSourceRect
 import com.flue.launcher.watchface.editor.WatchEditorSnapping
 import com.flue.launcher.watchface.editor.WatchEditorTransform
+import com.flue.launcher.watchface.editor.WatchEditorVideoFrames
+import com.flue.launcher.watchface.editor.WatchEditorVideoImportOptions
+import com.flue.launcher.watchface.editor.WatchEditorVideoImporter
+import com.flue.launcher.watchface.editor.WatchEditorVideoInfo
 import com.flue.launcher.watchface.editor.applyWatchEditorHandleDrag
 import com.flue.launcher.watchface.editor.buildWatchEditorLayerGeometries
 import com.flue.launcher.watchface.editor.buildWatchEditorTreeRows
@@ -211,10 +226,13 @@ import java.io.File
 import java.io.FileInputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.math.hypot
+import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
 class WatchEditorActivity : FlueComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -264,6 +282,20 @@ class WatchEditorActivity : FlueComponentActivity() {
  */
 private const val PREVIEW_IMAGE_SIZE_PX = 512
 
+private data class EditorImageImportRequest(
+    val uri: Uri,
+    val sourceInfo: WatchEditorImageSourceInfo,
+    val session: WatchEditorSession,
+    val layerKey: WatchEditorLayerKey,
+)
+
+private data class EditorVideoImportRequest(
+    val uri: Uri,
+    val info: WatchEditorVideoInfo,
+    val session: WatchEditorSession,
+    val layerKey: WatchEditorLayerKey,
+)
+
 @Composable
 private fun WatchEditorRoute(
     watchFaceId: String?,
@@ -296,12 +328,19 @@ private fun WatchEditorRoute(
     // otherwise the next pointer-down can replace the session's active
     // gesture before the previous coroutine commits it.
     var transformCommitInFlight by remember(session) { mutableStateOf(false) }
+    // The renderer keeps the gesture's final live transform until the freshly
+    // written watch.xml has actually been parsed and installed. Clearing it at
+    // IO completion is one frame too early and exposes the old source geometry.
+    var pendingTransformRefreshToken by remember(session) { mutableStateOf<Int?>(null) }
     val transformGate = remember(session) { WatchEditorTransformGate() }
     // Bumped whenever attributes change from OUTSIDE the live property fields
     // (undo, canvas drag, image import…) so the drafts reset; live typing keeps
     // its own in-progress state.
     var propertyDraftRevision by remember { mutableIntStateOf(0) }
-    var cropRequest by remember { mutableStateOf<Uri?>(null) }
+    var cropRequest by remember { mutableStateOf<EditorImageImportRequest?>(null) }
+    var videoRequest by remember { mutableStateOf<EditorVideoImportRequest?>(null) }
+    var videoConversionJob by remember { mutableStateOf<Job?>(null) }
+    var videoConversionProgress by remember { mutableStateOf(0f) }
     // 画布渲染 View：保存 / 上传前用它离屏重渲 preview.jpg 写回草稿。
     var previewRenderer by remember { mutableStateOf<WatchmakerWatchFaceView?>(null) }
 
@@ -373,7 +412,7 @@ private fun WatchEditorRoute(
             // operation so undo/save observe what the user sees.
             liveApplicator?.flush(
                 onApplied = {},
-                onError = { errorMessage = it.message ?: "属性更新失败" },
+                onError = { errorMessage = it.message ?: context.getString(R.string.watch_editor_error_property_update) },
             )
             runCatching {
                 withContext(Dispatchers.IO) {
@@ -386,7 +425,7 @@ private fun WatchEditorRoute(
                 previewToken++
                 onComplete?.invoke()
             }.onFailure { error ->
-                errorMessage = error.message ?: "编辑操作失败"
+                errorMessage = context.localizedEditorError(R.string.watch_editor_error_operation, error)
             }
             busyMessage = null
         }
@@ -396,11 +435,11 @@ private fun WatchEditorRoute(
         val active = session
         if (uri != null && active != null) {
             scope.launch {
-                busyMessage = "正在导出 .watch"
+        busyMessage = context.getString(R.string.watch_editor_status_exporting)
                 errorMessage = null
                 liveApplicator?.flush(
                     onApplied = {},
-                    onError = { errorMessage = it.message ?: "属性更新失败" },
+            onError = { errorMessage = it.message ?: context.getString(R.string.watch_editor_error_property_update) },
                 )
                 val result = runCatching {
                     withContext(Dispatchers.IO) {
@@ -409,7 +448,7 @@ private fun WatchEditorRoute(
                             active.exportWatch(temporary)
                             context.contentResolver.openOutputStream(uri, "w")?.use { output ->
                                 temporary.inputStream().use { input -> input.copyTo(output) }
-                            } ?: error("无法写入导出位置")
+                } ?: error(context.getString(R.string.watch_editor_error_export_destination))
                             active.snapshot()
                         } finally {
                             temporary.delete()
@@ -418,20 +457,12 @@ private fun WatchEditorRoute(
                 }
                 result.onSuccess { next ->
                     updateSnapshot(next)
-                    Toast.makeText(context, "已导出 .watch", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.watch_editor_toast_exported), Toast.LENGTH_SHORT).show()
                 }.onFailure { error ->
-                    errorMessage = error.message ?: "导出失败"
+            errorMessage = context.localizedEditorError(R.string.watch_editor_error_export, error)
                 }
                 busyMessage = null
             }
-        }
-    }
-
-    val imagePicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
-        if (uri != null && session != null && selectedLayerKey != null) {
-            // The import continues in the crop overlay; nothing is written
-            // into the draft until the user confirms the crop.
-            cropRequest = uri
         }
     }
 
@@ -440,7 +471,7 @@ private fun WatchEditorRoute(
         val key = selectedLayerKey
         if (uri == null || active == null || key == null) return@rememberLauncherForActivityResult
         scope.launch {
-            busyMessage = "正在导入字体"
+        busyMessage = context.getString(R.string.watch_editor_status_importing_font)
             errorMessage = null
             runCatching {
                 withContext(Dispatchers.IO) {
@@ -450,7 +481,7 @@ private fun WatchEditorRoute(
                         ?: "font.ttf"
                     val fileName = if (rawName.contains('.')) rawName else "$rawName.ttf"
                     val stream = context.contentResolver.openInputStream(uri)
-                        ?: throw IllegalStateException("无法读取所选字体")
+                    ?: throw IllegalStateException(context.getString(R.string.watch_editor_error_read_font))
                     // 字体归档到 fonts/ 目录（与安装器/字体索引的分类一致），
                     // 图层 font 属性写 basename，渲染端 WatchFontIndex 会解析。
                     val resourcePath = active.importResource(stream, fileName, directory = "fonts")
@@ -462,33 +493,51 @@ private fun WatchEditorRoute(
                 updateSnapshot(next, key)
                 previewToken++
             }.onFailure { error ->
-                errorMessage = error.message ?: "字体导入失败"
+                errorMessage = context.localizedEditorError(R.string.watch_editor_error_font_import, error)
             }
             busyMessage = null
         }
     }
 
-    fun performCroppedImport(uri: Uri, sourceRect: WatchEditorSourceRect) {
-        val active = session ?: return
-        val key = selectedLayerKey ?: return
+    fun performImageImport(
+        request: EditorImageImportRequest,
+        sourceRect: WatchEditorSourceRect?,
+    ) {
+        val active = request.session
+        val key = request.layerKey
+        if (session !== active) {
+            cropRequest = null
+            return
+        }
         cropRequest = null
         scope.launch {
-            busyMessage = "正在导入图片"
+        busyMessage = context.getString(R.string.watch_editor_status_importing_image)
             errorMessage = null
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val bitmap = WatchEditorImageCropper.cropRegion(context.contentResolver, uri, sourceRect)
-                    val stream = try {
-                        WatchEditorImageCropper.toPngStream(bitmap)
-                    } finally {
-                        bitmap.recycle()
+                    val resourcePath = if (sourceRect == null) {
+                        val stream = context.contentResolver.openInputStream(request.uri)
+                    ?: throw IllegalStateException(context.getString(R.string.watch_editor_error_read_image))
+                        // Lossless path: raw GIFs always come here, as do static
+                        // images whose crop frame was never changed.
+                        active.importResource(stream, request.sourceInfo.importName)
+                    } else {
+                        val bitmap = WatchEditorImageCropper.cropRegion(
+                            context.contentResolver,
+                            request.uri,
+                            sourceRect,
+                        )
+                        val stream = try {
+                            WatchEditorImageCropper.toPngStream(bitmap)
+                        } finally {
+                            bitmap.recycle()
+                        }
+                        val stem = request.sourceInfo.displayName
+                            .substringBeforeLast('.')
+                            .takeIf(String::isNotBlank)
+                            ?: "image"
+                        active.importResource(stream, "$stem.png")
                     }
-                    val stem = uri.lastPathSegment
-                        ?.substringAfterLast('/')
-                        ?.substringBeforeLast('.')
-                        ?.takeIf(String::isNotBlank)
-                        ?: "image"
-                    val resourcePath = active.importResource(stream, "$stem.png")
                     active.updateLayerAttribute(key, "path", resourcePath)
                     active.flushDraftForPreview()
                     active.snapshot()
@@ -497,16 +546,163 @@ private fun WatchEditorRoute(
                 updateSnapshot(next, key)
                 previewToken++
             }.onFailure { error ->
-                errorMessage = error.message ?: "图片导入失败"
+                errorMessage = context.localizedEditorError(R.string.watch_editor_error_image_import, error)
             }
             busyMessage = null
+        }
+    }
+
+    val imagePicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+        val active = session
+        val key = selectedLayerKey
+        if (uri == null || active == null || key == null) return@rememberLauncherForActivityResult
+        scope.launch {
+        busyMessage = context.getString(R.string.watch_editor_status_reading_image)
+            errorMessage = null
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    WatchEditorImageCropper.inspectSource(context.contentResolver, uri)
+                }
+            }.onSuccess { sourceInfo ->
+                if (session !== active) {
+                    busyMessage = null
+                    return@onSuccess
+                }
+                val request = EditorImageImportRequest(uri, sourceInfo, active, key)
+                busyMessage = null
+                if (sourceInfo.isGif) {
+                    // A GIF must never enter the bitmap cropper: doing so would
+                    // flatten it to a single PNG frame.
+                    performImageImport(request, sourceRect = null)
+                } else {
+                    cropRequest = request
+                }
+            }.onFailure { error ->
+            errorMessage = context.localizedEditorError(R.string.watch_editor_error_read_image, error)
+                busyMessage = null
+            }
+        }
+    }
+
+    val imageSequencePicker = rememberLauncherForActivityResult(OpenMultipleDocuments()) { uris ->
+        val active = session
+        val key = selectedLayerKey
+        if (uris.isEmpty() || active == null || key == null) return@rememberLauncherForActivityResult
+        scope.launch {
+        busyMessage = context.getString(R.string.watch_editor_status_importing_sequence)
+            errorMessage = null
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val paths = uris.map { uri ->
+                        val sourceInfo = WatchEditorImageCropper.inspectSource(context.contentResolver, uri)
+                        val stream = context.contentResolver.openInputStream(uri)
+                        ?: throw IllegalStateException(context.getString(R.string.watch_editor_error_read_image))
+                        // A frame sequence is intentionally lossless. The
+                        // runtime understands mixed PNG/JPEG/WebP and raw GIF.
+                        active.importResource(stream, sourceInfo.importName)
+                    }
+                    active.updateLayerAttributes(
+                        key,
+                        mapOf(
+                            "type" to "image_gif",
+                            "path" to paths.joinToString("`"),
+                            "gif_delay" to active.snapshot().layers
+                                .firstOrNull { it.key == key }
+                                ?.attributes
+                                ?.get("gif_delay")
+                                .orEmpty()
+                                .ifBlank { "100" },
+                        ),
+                    )
+                    active.flushDraftForPreview()
+                    active.snapshot()
+                }
+            }.onSuccess { next ->
+                updateSnapshot(next, key)
+                previewToken++
+            }.onFailure { error ->
+                errorMessage = context.localizedEditorError(R.string.watch_editor_error_sequence_import, error)
+            }
+            busyMessage = null
+        }
+    }
+
+    val videoPicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+        val active = session
+        val key = selectedLayerKey
+        if (uri == null || active == null || key == null) return@rememberLauncherForActivityResult
+        scope.launch {
+        busyMessage = context.getString(R.string.watch_editor_status_reading_video)
+            errorMessage = null
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    if (!WatchEditorVideoImporter.isRuntimeSupported()) {
+                    throw IllegalStateException(context.getString(R.string.watch_editor_error_ffmpeg_unsupported))
+                    }
+                    WatchEditorVideoImporter.inspect(context, uri)
+                }
+            }.onSuccess { info ->
+                if (session === active) {
+                    videoRequest = EditorVideoImportRequest(uri, info, active, key)
+                }
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+            errorMessage = context.localizedEditorError(R.string.watch_editor_error_read_video, error)
+            }
+            busyMessage = null
+        }
+    }
+
+    fun beginVideoImport(request: EditorVideoImportRequest, options: WatchEditorVideoImportOptions) {
+        if (videoConversionJob != null || session !== request.session) return
+        videoRequest = null
+        videoConversionProgress = 0f
+        videoConversionJob = scope.launch {
+        busyMessage = context.getString(R.string.watch_editor_status_converting_video_fmt, 0)
+            errorMessage = null
+            var converted: WatchEditorVideoFrames? = null
+            try {
+                converted = WatchEditorVideoImporter.convertToFrames(
+                    context = context,
+                    uri = request.uri,
+                    options = options,
+                    onProgress = { progress ->
+                        videoConversionProgress = progress.fraction
+                    busyMessage = context.getString(
+                        R.string.watch_editor_status_converting_video_fmt,
+                        (progress.fraction * 100f).roundToInt(),
+                    )
+                    },
+                )
+                val next = withContext(Dispatchers.IO) {
+                    request.session.importVideoFrameSequence(
+                        key = request.layerKey,
+                        frameFiles = converted.frameFiles,
+                        frameDelayMs = converted.frameDelayMs,
+                    )
+                    request.session.flushDraftForPreview()
+                    request.session.snapshot()
+                }
+                if (session === request.session) {
+                    updateSnapshot(next, request.layerKey)
+                    previewToken++
+                }
+            } catch (cancelled: CancellationException) {
+                // User cancellation leaves both the draft and selected layer untouched.
+            } catch (error: Throwable) {
+                errorMessage = context.localizedEditorError(R.string.watch_editor_error_video_import, error)
+            } finally {
+                withContext(Dispatchers.IO) { converted?.deleteTemporaryFiles() }
+                busyMessage = null
+                videoConversionJob = null
+            }
         }
     }
 
     val watchArchivePicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
             scope.launch {
-                busyMessage = "正在导入 .watch"
+        busyMessage = context.getString(R.string.watch_editor_status_importing_watch)
                 errorMessage = null
                 val previous = session
                 runCatching {
@@ -515,7 +711,7 @@ private fun WatchEditorRoute(
                         try {
                             context.contentResolver.openInputStream(uri)?.use { input ->
                                 temporary.outputStream().use { output -> input.copyTo(output) }
-                            } ?: error("无法读取所选文件")
+                    } ?: error(context.getString(R.string.watch_editor_error_read_file))
                             val descriptor = vm.importWatchmakerWatchFaceFile(temporary).getOrThrow()
                             val opened = WatchEditorSession.open(context, descriptor)
                             Triple(descriptor, opened, opened.snapshot())
@@ -531,9 +727,13 @@ private fun WatchEditorRoute(
                         Dispatchers.IO.dispatch(EmptyCoroutineContext) { runCatching { old.close() } }
                     }
                     onInstalled(descriptor)
-                    Toast.makeText(context, "已导入 ${descriptor.displayName}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.watch_editor_toast_imported_fmt, descriptor.displayName),
+                        Toast.LENGTH_SHORT,
+                    ).show()
                 }.onFailure { error ->
-                    errorMessage = error.message ?: "导入 .watch 失败"
+                    errorMessage = context.localizedEditorError(R.string.watch_editor_error_watch_import, error)
                 }
                 busyMessage = null
             }
@@ -543,7 +743,7 @@ private fun WatchEditorRoute(
     val conversionPicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
             scope.launch {
-                busyMessage = "正在识别并转换表盘"
+                busyMessage = context.getString(R.string.watch_editor_status_converting_watch)
                 errorMessage = null
                 val previous = session
                 var conversionSummary = ""
@@ -554,35 +754,55 @@ private fun WatchEditorRoute(
                         try {
                             context.contentResolver.openInputStream(uri)?.use { source ->
                                 input.outputStream().use { target -> source.copyTo(target) }
-                            } ?: error("无法读取所选文件")
+                            } ?: error(context.getString(R.string.watch_editor_error_read_file))
                             when (val conversion = WatchFormatConverter().convert(input, output)) {
                                 is WatchConversionResult.Failure -> error(
                                     buildString {
                                         append(conversion.message)
                                         val unsupported = conversion.report.unsupportedFeatures
                                         if (unsupported.isNotEmpty()) {
-                                            append("；兼容报告：未支持 ")
-                                            append(unsupported.distinct().joinToString("、"))
+                                            append(
+                                                context.getString(
+                                                    R.string.watch_editor_report_unsupported_fmt,
+                                                    unsupported.distinct().joinToString(),
+                                                ),
+                                            )
                                         }
                                         conversion.report.warnings.firstOrNull()?.let {
-                                            append("；警告：")
-                                            append(it)
+                                            append(
+                                                context.getString(
+                                                    R.string.watch_editor_report_warning_fmt,
+                                                    it,
+                                                ),
+                                            )
                                         }
                                     },
                                 )
                                 is WatchConversionResult.Success -> {
                                     conversionSummary = buildString {
-                                        append("图层 ${conversion.report.convertedLayerCount}")
+                                        append(
+                                            context.getString(
+                                                R.string.watch_editor_report_layers_fmt,
+                                                conversion.report.convertedLayerCount,
+                                            ),
+                                        )
                                         if (conversion.report.unsupportedFeatures.isNotEmpty()) {
-                                            append("；未支持 ")
                                             append(
-                                                conversion.report.unsupportedFeatures
-                                                    .distinct()
-                                                    .joinToString("、"),
+                                                context.getString(
+                                                    R.string.watch_editor_report_summary_unsupported_fmt,
+                                                    conversion.report.unsupportedFeatures
+                                                        .distinct()
+                                                        .joinToString(),
+                                                ),
                                             )
                                         }
                                         if (conversion.report.warnings.isNotEmpty()) {
-                                            append("；警告 ${conversion.report.warnings.size} 条")
+                                            append(
+                                                context.getString(
+                                                    R.string.watch_editor_report_warning_count_fmt,
+                                                    conversion.report.warnings.size,
+                                                ),
+                                            )
                                         }
                                     }
                                     val descriptor = vm.importWatchmakerWatchFaceFile(
@@ -607,11 +827,15 @@ private fun WatchEditorRoute(
                     onInstalled(descriptor)
                     Toast.makeText(
                         context,
-                        "已转换并导入 ${descriptor.displayName}（$conversionSummary）",
+                        context.getString(
+                            R.string.watch_editor_toast_converted_fmt,
+                            descriptor.displayName,
+                            conversionSummary,
+                        ),
                         Toast.LENGTH_SHORT,
                     ).show()
                 }.onFailure { error ->
-                    errorMessage = error.message ?: "表盘转换失败"
+                    errorMessage = context.localizedEditorError(R.string.watch_editor_error_conversion, error)
                 }
                 busyMessage = null
             }
@@ -644,7 +868,7 @@ private fun WatchEditorRoute(
                 } else {
                     val descriptor = WatchmakerWatchFaceStorage.scan(context)
                         .firstOrNull { it.id == watchFaceId }
-                        ?: error("找不到要编辑的标准 .watch 表盘")
+                        ?: error(context.getString(R.string.watch_editor_error_face_not_found))
                     WatchEditorSession.open(context, descriptor)
                 }
                 opened to opened.snapshot()
@@ -654,7 +878,7 @@ private fun WatchEditorRoute(
             updateSnapshot(initialSnapshot)
             previewToken++
         }.onFailure { error ->
-            errorMessage = error.message ?: "无法打开表盘编辑器"
+            errorMessage = context.localizedEditorError(R.string.watch_editor_error_open, error)
         }
         loading = false
     }
@@ -681,7 +905,7 @@ private fun WatchEditorRoute(
         CanvasSizePickerDialog(
             current = blankCanvasSize ?: screenCanvasSize,
             screenSize = screenCanvasSize,
-            confirmLabel = "开始设计",
+                confirmLabel = stringResource(R.string.watch_editor_start_design),
             // 直接关掉不该把编辑器留在空转的加载页：按跟随屏幕建草稿。
             onDismiss = {
                 showBlankCanvasPicker = false
@@ -697,16 +921,18 @@ private fun WatchEditorRoute(
     if (showDiscardDialog) {
         AlertDialog(
             onDismissRequest = { showDiscardDialog = false },
-            title = { Text("放弃草稿？") },
-            text = { Text("尚未另存或导出的修改会被删除，已安装的原表盘不会受到影响。") },
+                title = { Text(stringResource(R.string.watch_editor_discard_title)) },
+                text = { Text(stringResource(R.string.watch_editor_discard_message)) },
             confirmButton = {
                 TextButton(onClick = {
                     showDiscardDialog = false
                     onClose()
-                }) { Text("放弃") }
+                    }) { Text(stringResource(R.string.watch_editor_discard)) }
             },
             dismissButton = {
-                TextButton(onClick = { showDiscardDialog = false }) { Text("继续编辑") }
+                    TextButton(onClick = { showDiscardDialog = false }) {
+                        Text(stringResource(R.string.watch_editor_continue))
+                    }
             },
         )
     }
@@ -714,13 +940,20 @@ private fun WatchEditorRoute(
     if (showSaveDialog) {
         AlertDialog(
             onDismissRequest = { showSaveDialog = false },
-            title = { Text(if (saveAsMode) "另存为新表盘" else "保存表盘") },
+                title = {
+                    Text(
+                        stringResource(
+                            if (saveAsMode) R.string.watch_editor_save_as_title
+                            else R.string.watch_editor_save_title,
+                        ),
+                    )
+                },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = pendingSaveName,
                         onValueChange = { pendingSaveName = it.take(80) },
-                        label = { Text("表盘名称") },
+                        label = { Text(stringResource(R.string.watch_editor_face_name)) },
                         singleLine = true,
                     )
                     OutlinedTextField(
@@ -729,8 +962,8 @@ private fun WatchEditorRoute(
                             pendingSaveAuthor = it.take(80)
                             pendingAuthorModified = true
                         },
-                        label = { Text("作者") },
-                        placeholder = { Text("留空则保留原作者") },
+                        label = { Text(stringResource(R.string.watch_editor_author)) },
+                        placeholder = { Text(stringResource(R.string.watch_editor_author_hint)) },
                         singleLine = true,
                     )
                 }
@@ -749,11 +982,14 @@ private fun WatchEditorRoute(
                         val createNewLogicalId = saveAsMode || !active.canSaveCurrentRevision
                         showSaveDialog = false
                         scope.launch {
-                            busyMessage = if (createNewLogicalId) "正在另存为新表盘" else "正在保存当前修订"
+                                busyMessage = context.getString(
+                                    if (createNewLogicalId) R.string.watch_editor_status_saving_as
+                                    else R.string.watch_editor_status_saving_revision,
+                                )
                             errorMessage = null
                             liveApplicator?.flush(
                                 onApplied = {},
-                                onError = { errorMessage = it.message ?: "属性更新失败" },
+                                    onError = { errorMessage = it.message ?: context.getString(R.string.watch_editor_error_property_update) },
                             )
                             // 先把当前画布重渲成 preview.jpg 写回草稿，再落盘：
                             // 否则 saveCurrentRevision / exportWatch 打包进去的
@@ -780,7 +1016,7 @@ private fun WatchEditorRoute(
                                         active.saveCurrentRevision()
                                         val descriptor = WatchmakerWatchFaceStorage.scan(context)
                                             .firstOrNull { it.id == active.logicalId }
-                                            ?: error("保存成功但未能重新扫描原 logicalId")
+                                                ?: error(context.getString(R.string.watch_editor_error_rescan_revision))
                                         EditorSaveResult(
                                             descriptor = descriptor,
                                             openedSession = null,
@@ -826,31 +1062,49 @@ private fun WatchEditorRoute(
                                 Toast.makeText(
                                     context,
                                     if (createNewLogicalId) {
-                                        "已另存为 ${saved.descriptor.displayName}"
+                                        context.getString(
+                                            R.string.watch_editor_toast_saved_as_fmt,
+                                            saved.descriptor.displayName,
+                                        )
                                     } else {
-                                        "已保存 ${saved.descriptor.displayName}（原 logicalId）"
+                                        context.getString(
+                                            R.string.watch_editor_toast_saved_fmt,
+                                            saved.descriptor.displayName,
+                                        )
                                     },
                                     Toast.LENGTH_SHORT,
                                 ).show()
                             }.onFailure { error ->
-                                errorMessage = error.message ?: "保存编辑后的表盘失败"
+                                    errorMessage = context.localizedEditorError(R.string.watch_editor_error_save, error)
                             }
                             busyMessage = null
                         }
                     },
-                ) { Text(if (saveAsMode) "另存并安装" else "保存") }
+                    ) {
+                        Text(
+                            stringResource(
+                                if (saveAsMode) R.string.watch_editor_save_and_install
+                                else R.string.watch_editor_save,
+                            ),
+                        )
+                    }
             },
             dismissButton = {
-                TextButton(onClick = { showSaveDialog = false }) { Text("取消") }
+                    TextButton(onClick = { showSaveDialog = false }) {
+                        Text(stringResource(R.string.watch_editor_cancel))
+                    }
             },
         )
     }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         when {
-            loading -> CenteredStatus("正在创建安全草稿", showProgress = true)
+        loading -> CenteredStatus(
+            stringResource(R.string.watch_editor_status_creating_draft),
+            showProgress = true,
+        )
             session == null || snapshot == null -> ErrorPage(
-                message = errorMessage ?: "编辑器初始化失败",
+            message = errorMessage ?: stringResource(R.string.watch_editor_error_init),
                 onClose = onClose,
             )
             else -> {
@@ -871,7 +1125,7 @@ private fun WatchEditorRoute(
                     WatchEditorScreen(
                         snapshot = current,
                         selectedLayer = selected,
-                        previewDescriptor = draftDescriptor(active, current),
+                        previewDescriptor = draftDescriptor(context, active, current),
                         previewToken = previewToken,
                         transformPreview = transformPreview,
                         propertyDraftRevision = propertyDraftRevision,
@@ -887,6 +1141,8 @@ private fun WatchEditorRoute(
                                 null
                             } else {
                                 runCatching {
+                                    pendingTransformRefreshToken = null
+                                    previewRenderer?.cancelLiveLayerTransformHandoff()
                                     // Un-applied typed edits must not fire mid-gesture:
                                     // apply them synchronously before the transaction.
                                     liveApplicator?.consumePendingChanges()?.let { (pendingKey, changes) ->
@@ -897,7 +1153,7 @@ private fun WatchEditorRoute(
                                     initial
                                 }.onFailure { error ->
                                     transformGate.cancelGesture()
-                                    errorMessage = error.message ?: "无法开始画布手势"
+                                    errorMessage = context.localizedEditorError(R.string.watch_editor_error_begin_gesture, error)
                                 }.getOrNull()
                             }
                         },
@@ -938,14 +1194,27 @@ private fun WatchEditorRoute(
                                             )
                                         ) key else selectedLayerKey
                                         updateSnapshot(next, preferredSelection)
-                                        // 新快照已含手势终值：此刻清预览零跳变。
-                                        transformPreview = null
-                                        previewToken++
+                                        if (cancelled) {
+                                            transformPreview = null
+                                            pendingTransformRefreshToken = null
+                                        } else {
+                                            // Keep the native renderer on the
+                                            // release transform until its new
+                                            // XML source reports ready. A
+                                            // snapshot object alone does not
+                                            // mean the async View reload has
+                                            // completed.
+                                            val nextRefreshToken = previewToken + 1
+                                            previewRenderer
+                                                ?.handoffLiveLayerTransformOnSourceReady(nextRefreshToken)
+                                            pendingTransformRefreshToken = nextRefreshToken
+                                            previewToken = nextRefreshToken
+                                        }
                                         } catch (cancelledError: CancellationException) {
                                             throw cancelledError
                                         } catch (error: Throwable) {
                                             transformPreview = null
-                                            errorMessage = error.message ?: "画布手势提交失败"
+                                            errorMessage = context.localizedEditorError(R.string.watch_editor_error_commit_gesture, error)
                                         } finally {
                                             transformGate.finishCommit()
                                             transformCommitInFlight = false
@@ -960,55 +1229,72 @@ private fun WatchEditorRoute(
                             }
                         },
                         onUndo = {
-                            runSessionOperation("正在撤销", operation = { editor ->
+                            runSessionOperation(context.getString(R.string.watch_editor_status_undo), operation = { editor ->
                                 editor.undo()
                                 selectedLayerKey
                             })
                         },
                         onRedo = {
-                            runSessionOperation("正在重做", operation = { editor ->
+                            runSessionOperation(context.getString(R.string.watch_editor_status_redo), operation = { editor ->
                                 editor.redo()
                                 selectedLayerKey
                             })
                         },
                         onAddLayer = { type ->
-                            runSessionOperation("正在添加图层", operation = { editor ->
+                            runSessionOperation(context.getString(R.string.watch_editor_status_add_layer), operation = { editor ->
                                 editor.addLayer(type, defaultAttributes(type))
                             })
                         },
                         onMoveLayer = { key, target ->
-                            runSessionOperation("正在调整图层顺序", operation = { editor ->
+                            runSessionOperation(context.getString(R.string.watch_editor_status_reorder_layer), operation = { editor ->
                                 editor.reorderLayer(key, target)
                                 key
                             })
                         },
                         onDuplicateLayer = { key ->
-                            runSessionOperation("正在复制图层", operation = { editor ->
+                            runSessionOperation(context.getString(R.string.watch_editor_status_duplicate_layer), operation = { editor ->
                                 editor.duplicateLayer(key)
                             })
                         },
                         onDeleteLayer = { key ->
-                            runSessionOperation("正在删除图层", operation = { editor ->
+                            runSessionOperation(context.getString(R.string.watch_editor_status_delete_layer), operation = { editor ->
                                 editor.deleteLayer(key)
                                 null
                             })
                         },
                         onLiveAttributeChange = { key, changes ->
+                            val attributeStartSelectionGeneration = selectionGeneration
                             liveApplicator?.submit(
                                 scope = scope,
                                 key = key,
                                 changes = changes,
                                 onApplied = { next ->
-                                    updateSnapshot(next, key, resetPropertyDrafts = false)
+                                    val preferredSelection = if (
+                                        shouldKeepWatchEditorSelectionForAsyncCommit(
+                                            commitStartSelectionGeneration = attributeStartSelectionGeneration,
+                                            currentSelectionGeneration = selectionGeneration,
+                                        )
+                                    ) key else selectedLayerKey
+                                    updateSnapshot(
+                                        next,
+                                        preferredSelection,
+                                        resetPropertyDrafts = false,
+                                    )
                                     previewToken++
                                 },
                                 onError = { error ->
-                                    errorMessage = error.message ?: "属性更新失败"
+                                    errorMessage = context.localizedEditorError(R.string.watch_editor_error_property_update, error)
                                 },
                             )
                         },
                         onImportImage = {
                             imagePicker.launch(arrayOf("image/*"))
+                        },
+                        onImportImageSequence = {
+                            imageSequencePicker.launch(arrayOf("image/*"))
+                        },
+                        onImportVideo = {
+                            videoPicker.launch(arrayOf("video/*"))
                         },
                         onImportFont = {
                             fontPicker.launch(
@@ -1023,7 +1309,7 @@ private fun WatchEditorRoute(
                         onSaveAsNew = {
                             saveAsMode = true
                             pendingSaveName = current.rootAttributes["name"].orEmpty()
-                                .ifBlank { "Flue Edited Watch" }
+                                .ifBlank { context.getString(R.string.watch_editor_default_watch_name) }
                             pendingSaveAuthor = current.designerName()
                             pendingAuthorModified = false
                             showSaveDialog = true
@@ -1031,7 +1317,7 @@ private fun WatchEditorRoute(
                         onSave = {
                             saveAsMode = false
                             pendingSaveName = current.rootAttributes["name"].orEmpty()
-                                .ifBlank { "Flue Watch" }
+                                .ifBlank { context.getString(R.string.watch_editor_default_watch_name) }
                             pendingSaveAuthor = current.designerName()
                             pendingAuthorModified = false
                             showSaveDialog = true
@@ -1039,7 +1325,7 @@ private fun WatchEditorRoute(
                         onRename = {
                             saveAsMode = false
                             pendingSaveName = current.rootAttributes["name"].orEmpty()
-                                .ifBlank { "Flue Watch" }
+                                .ifBlank { context.getString(R.string.watch_editor_default_watch_name) }
                             pendingSaveAuthor = current.designerName()
                             pendingAuthorModified = false
                             showSaveDialog = true
@@ -1049,14 +1335,14 @@ private fun WatchEditorRoute(
                             exportDocument.launch("$name.watch")
                         },
                         onUpdateShape = { shapeCode ->
-                            runSessionOperation("正在更新表盘形状", operation = { editor ->
+                            runSessionOperation(context.getString(R.string.watch_editor_status_update_shape), operation = { editor ->
                                 editor.updateRootAttribute("shape", shapeCode)
                                 selectedLayerKey
                             })
                         },
                         onUpdateCanvasSize = { size ->
                             // 宽高一次提交：分两次写会在撤销栈里留下半改状态。
-                            runSessionOperation("正在更新画布尺寸", operation = { editor ->
+                            runSessionOperation(context.getString(R.string.watch_editor_status_update_canvas), operation = { editor ->
                                 editor.updateRootAttributes(
                                     mapOf(
                                         "width" to size.width.toString(),
@@ -1073,14 +1359,14 @@ private fun WatchEditorRoute(
                                     // the draft before it is exported for upload.
                                     liveApplicator?.flush(
                                         onApplied = {},
-                                        onError = { errorMessage = it.message ?: "属性更新失败" },
+                            onError = { errorMessage = it.message ?: context.getString(R.string.watch_editor_error_property_update) },
                                     )
                                     // 上传前自动保存一次（老师指定）：上传的就是这一版。
                                     // 这里不再补作者——账户名由上传覆层在真正提交
                                     // 时写入，保存动作本身不改署名。
                                     val activeSession = session
                                     if (activeSession != null && current.dirty) {
-                                        busyMessage = "正在保存表盘"
+                                    busyMessage = context.getString(R.string.watch_editor_status_saving)
                                         // 上传的包里必须带新预览图，否则商店里
                                         // 显示的还是原作者那张。
                                         refreshDraftPreview(activeSession)
@@ -1097,7 +1383,7 @@ private fun WatchEditorRoute(
                                             updateSnapshot(next)
                                             previewToken++
                                         }.onFailure { error ->
-                                            errorMessage = error.message ?: "上传前自动保存失败"
+                                        errorMessage = context.localizedEditorError(R.string.watch_editor_error_upload_autosave, error)
                                         }
                                         busyMessage = null
                                     }
@@ -1119,17 +1405,46 @@ private fun WatchEditorRoute(
                                 arrayOf(
                                     "application/zip",
                                     "application/octet-stream",
-                                    "application/vnd.android.package-archive",
                                 ),
                             )
                         },
                         onPreviewRendererChanged = { previewRenderer = it },
+                        onPreviewRefreshReady = { loadedToken ->
+                            if (pendingTransformRefreshToken == loadedToken) {
+                                pendingTransformRefreshToken = null
+                                transformPreview = null
+                            }
+                        },
+                        onPreviewRefreshFailed = { failedToken ->
+                            if (pendingTransformRefreshToken == failedToken) {
+                                pendingTransformRefreshToken = null
+                                transformPreview = null
+                            }
+                        },
                     )
-                    cropRequest?.let { uri ->
+                    cropRequest?.let { request ->
                         EditorImageCropOverlay(
-                            uri = uri,
+                            uri = request.uri,
                             onCancel = { cropRequest = null },
-                            onConfirm = { sourceRect -> performCroppedImport(uri, sourceRect) },
+                            onConfirm = { sourceRect, preserveOriginal ->
+                                performImageImport(
+                                    request,
+                                    sourceRect = sourceRect.takeUnless { preserveOriginal },
+                                )
+                            },
+                        )
+                    }
+                    videoRequest?.let { request ->
+                        EditorVideoImportDialog(
+                            info = request.info,
+                            onDismiss = { videoRequest = null },
+                            onConfirm = { options -> beginVideoImport(request, options) },
+                        )
+                    }
+                    if (videoConversionJob != null) {
+                        EditorVideoConversionProgressDialog(
+                            progress = videoConversionProgress,
+                            onCancel = { videoConversionJob?.cancel() },
                         )
                     }
                     if (showStoreUpload) {
@@ -1235,6 +1550,8 @@ private fun WatchEditorScreen(
     onDeleteLayer: (WatchEditorLayerKey) -> Unit,
     onLiveAttributeChange: (WatchEditorLayerKey, Map<String, String?>) -> Unit,
     onImportImage: () -> Unit,
+    onImportImageSequence: () -> Unit,
+    onImportVideo: () -> Unit,
     onImportFont: () -> Unit,
     onSaveAsNew: () -> Unit,
     onSave: () -> Unit,
@@ -1245,6 +1562,8 @@ private fun WatchEditorScreen(
     onUploadToStore: () -> Unit,
     onImportWatch: () -> Unit,
     onConvertWatch: () -> Unit,
+    onPreviewRefreshReady: (Int) -> Unit = {},
+    onPreviewRefreshFailed: (Int) -> Unit = {},
     /**
      * 把画布用的渲染 View 上抛给 Route：保存 / 上传前要用它离屏重渲一张
      * preview.jpg 写回草稿，否则列表和商店永远显示原作者那张预览图。
@@ -1292,6 +1611,13 @@ private fun WatchEditorScreen(
     var showCanvasSizePicker by remember { mutableStateOf(false) }
     // 图层缩略图渲染器：直接借预览的 WatchmakerWatchFaceView（同一资源缓存）。
     var thumbnailRenderer by remember { mutableStateOf<WatchmakerWatchFaceView?>(null) }
+    var textThumbnailClockTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(thumbnailRenderer) {
+        while (thumbnailRenderer != null) {
+            delay(1_000L)
+            textThumbnailClockTick++
+        }
+    }
     val treeRows = remember(snapshot.layers, collapsedLayerKeys) {
         buildWatchEditorTreeRows(layers = snapshot.layers, collapsedKeys = collapsedLayerKeys)
     }
@@ -1329,8 +1655,6 @@ private fun WatchEditorScreen(
                         scrollToLayerRequest =
                             (scrollToLayerRequest?.first ?: 0) + 1 to key.value
                     }
-                } else if (!previewFullscreen) {
-                    onSelectLayer(null)
                 }
             },
             onBeginTransform = onBeginTransform,
@@ -1341,6 +1665,8 @@ private fun WatchEditorScreen(
                 thumbnailRenderer = it
                 onPreviewRendererChanged(it)
             },
+            onRefreshReady = onPreviewRefreshReady,
+            onRefreshFailed = onPreviewRefreshFailed,
             designExtentWidth = canvasSize.designExtentWidth,
             designExtentHeight = canvasSize.designExtentHeight,
         )
@@ -1391,19 +1717,30 @@ private fun WatchEditorScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(onClick = onBack, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(
+                            MiuixIcons.Back,
+                            contentDescription = stringResource(R.string.watch_editor_back),
+                        )
                     }
                     Column(
                         modifier = Modifier.weight(1f),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Text(
-                            snapshot.rootAttributes["name"].orEmpty().ifBlank { ".watch 编辑器" },
+                            snapshot.rootAttributes["name"].orEmpty().ifBlank {
+                                stringResource(R.string.watch_editor_title)
+                            },
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 1,
                         )
                         Text(
-                            if (snapshot.dirty) "草稿有修改" else "草稿已同步",
+                            stringResource(
+                                if (snapshot.dirty) {
+                                    R.string.watch_editor_draft_dirty
+                                } else {
+                                    R.string.watch_editor_draft_synced
+                                },
+                            ),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1412,27 +1749,39 @@ private fun WatchEditorScreen(
                         onClick = { editorLayout = WatchEditorLayout.CANVAS_FULL },
                         modifier = Modifier.size(36.dp),
                     ) {
-                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "画布全屏（上）")
+                        Icon(
+                            MiuixIcons.ExpandLess,
+                            contentDescription = stringResource(R.string.watch_editor_canvas_fullscreen),
+                        )
                     }
                     IconButton(
                         onClick = { editorLayout = WatchEditorLayout.PANEL_FULL },
                         modifier = Modifier.size(36.dp),
                     ) {
-                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "面板全屏（下）")
+                        Icon(
+                            MiuixIcons.ExpandMore,
+                            contentDescription = stringResource(R.string.watch_editor_panel_fullscreen),
+                        )
                     }
                     IconButton(
                         onClick = onUndo,
                         enabled = snapshot.canUndo && busyMessage == null,
                         modifier = Modifier.size(36.dp),
                     ) {
-                        Icon(Icons.Default.Undo, contentDescription = "撤销")
+                        Icon(
+                            MiuixIcons.Undo,
+                            contentDescription = stringResource(R.string.watch_editor_undo),
+                        )
                     }
                     IconButton(
                         onClick = onRedo,
                         enabled = snapshot.canRedo && busyMessage == null,
                         modifier = Modifier.size(36.dp),
                     ) {
-                        Icon(Icons.Default.Redo, contentDescription = "重做")
+                        Icon(
+                            MiuixIcons.Redo,
+                            contentDescription = stringResource(R.string.watch_editor_redo),
+                        )
                     }
                 }
             }
@@ -1488,7 +1837,10 @@ private fun WatchEditorScreen(
                         onClick = { editorLayout = WatchEditorLayout.SPLIT },
                         modifier = Modifier.size(32.dp),
                     ) {
-                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "返回分屏")
+                        Icon(
+                            MiuixIcons.ExpandLess,
+                            contentDescription = stringResource(R.string.watch_editor_return_split),
+                        )
                     }
                 }
             }
@@ -1505,7 +1857,17 @@ private fun WatchEditorScreen(
                         Tab(
                             selected = panel == candidate,
                             onClick = { panel = candidate },
-                            text = { Text(candidate.label, maxLines = 1) },
+                            icon = {
+                                Icon(
+                                    imageVector = when (candidate) {
+                                        WatchEditorPanel.LAYERS -> MiuixIcons.Layers
+                                        WatchEditorPanel.PROPERTIES -> MiuixIcons.Tune
+                                        WatchEditorPanel.WATCH -> MiuixIcons.WorldClock
+                                    },
+                                    contentDescription = null,
+                                )
+                            },
+                            text = { Text(stringResource(candidate.labelRes), maxLines = 1) },
                         )
                     }
                 }
@@ -1550,14 +1912,14 @@ private fun WatchEditorScreen(
                             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            BASIC_LAYER_TYPES.forEach { (type, label) ->
+                            BASIC_LAYER_TYPES.forEach { (type, labelRes) ->
                                 OutlinedButton(
                                     onClick = { onAddLayer(type) },
                                     enabled = busyMessage == null,
                                 ) {
-                                    Icon(Icons.Default.Add, contentDescription = null, Modifier.size(16.dp))
+                                    Icon(MiuixIcons.Add, contentDescription = null, Modifier.size(16.dp))
                                     Spacer(Modifier.width(4.dp))
-                                    Text(label)
+                                    Text(stringResource(labelRes))
                                 }
                             }
                         }
@@ -1565,7 +1927,7 @@ private fun WatchEditorScreen(
                     if (snapshot.layers.isEmpty()) {
                         item("layers_empty") {
                             Text(
-                                "当前没有图层",
+                                stringResource(R.string.watch_editor_no_layers),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodySmall,
                             )
@@ -1592,9 +1954,44 @@ private fun WatchEditorScreen(
                                     sizePx = thumbSizePx,
                                 )
                             }
+                            val textThumbnail = remember(
+                                thumbnailRenderer,
+                                layer.order,
+                                layer.attributes,
+                                previewToken,
+                                textThumbnailClockTick,
+                            ) {
+                                if (layer.type.lowercase(Locale.ROOT).contains("text")) {
+                                    thumbnailRenderer?.resolveTextLayerPreview(layer.order)
+                                        ?: layer.attributes["text"].orEmpty()
+                                            .ifBlank { layer.attributes["value"].orEmpty() }
+                                            .takeUnless { it.contains('{') || it.contains('}') }
+                                } else {
+                                    null
+                                }
+                            }
+                            val renderedTextThumbnail = remember(
+                                thumbnailRenderer,
+                                layer.order,
+                                layer.attributes,
+                                previewToken,
+                                textThumbnailClockTick,
+                                thumbSizePx,
+                            ) {
+                                if (layer.type.lowercase(Locale.ROOT) in
+                                    setOf("text", "text_curved", "text_ring")
+                                ) {
+                                    thumbnailRenderer
+                                        ?.renderTextLayerThumbnail(layer.order, thumbSizePx)
+                                        ?.asImageBitmap()
+                                } else {
+                                    null
+                                }
+                            }
                             EditorLayerRow(
                                 layer = layer,
-                                thumbnail = thumbnail,
+                                thumbnail = renderedTextThumbnail ?: thumbnail,
+                                textThumbnail = textThumbnail,
                                 selected = layer.key == selectedLayer?.key,
                                 layerCount = snapshot.layers.size,
                                 depth = row.depth,
@@ -1633,7 +2030,7 @@ private fun WatchEditorScreen(
                     if (selectedLayer == null) {
                         item("no_selection") {
                             Text(
-                                "请先选择一个图层",
+                                stringResource(R.string.watch_editor_select_layer_first),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -1653,6 +2050,8 @@ private fun WatchEditorScreen(
                                     onLiveAttributeChange(selectedLayer.key, changes)
                                 },
                                 onImportImage = onImportImage,
+                                onImportImageSequence = onImportImageSequence,
+                                onImportVideo = onImportVideo,
                                 onImportFont = onImportFont,
                             )
                         }
@@ -1671,11 +2070,17 @@ private fun WatchEditorScreen(
                     item("watch_summary") {
                         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             Text(
-                                snapshot.rootAttributes["name"].orEmpty().ifBlank { "未命名表盘" },
+                                snapshot.rootAttributes["name"].orEmpty().ifBlank {
+                                    stringResource(R.string.watch_editor_unnamed_face)
+                                },
                                 fontWeight = FontWeight.SemiBold,
                             )
                             Text(
-                                "${snapshot.layers.size} 个图层 · ${snapshot.resourcePaths.size} 个资源",
+                                stringResource(
+                                    R.string.watch_editor_layer_resource_count_fmt,
+                                    snapshot.layers.size,
+                                    snapshot.resourcePaths.size,
+                                ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -1706,13 +2111,18 @@ private fun WatchEditorScreen(
                                 modifier = Modifier.fillMaxWidth().padding(12.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Text("实时表盘数据", fontWeight = FontWeight.SemiBold)
                                 Text(
-                                    if (bodySensorsPermissionGranted) {
-                                        "身体传感器已授权，预览可读取设备提供的心率数据。"
-                                    } else {
-                                        "心率默认保持不可用；只有点击下方按钮后才会向系统申请权限。"
-                                    },
+                                    stringResource(R.string.watch_editor_live_data),
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    stringResource(
+                                        if (bodySensorsPermissionGranted) {
+                                            R.string.watch_editor_sensor_granted
+                                        } else {
+                                            R.string.watch_editor_sensor_not_granted
+                                        },
+                                    ),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -1725,7 +2135,7 @@ private fun WatchEditorScreen(
                                         },
                                         modifier = Modifier.fillMaxWidth(),
                                     ) {
-                                        Text("授权身体传感器")
+                                        Text(stringResource(R.string.watch_editor_grant_sensor))
                                     }
                                 }
                             }
@@ -1738,63 +2148,63 @@ private fun WatchEditorScreen(
                                 enabled = busyMessage == null,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Icon(Icons.Default.Save, contentDescription = null)
+                                Icon(MiuixIcons.Backup, contentDescription = null)
                                 Spacer(Modifier.width(6.dp))
-                                Text("另存为新表盘")
+                                Text(stringResource(R.string.watch_editor_save_as))
                             }
                             OutlinedButton(
                                 onClick = onSave,
                                 enabled = busyMessage == null,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Icon(Icons.Default.Save, contentDescription = null)
+                                Icon(MiuixIcons.Backup, contentDescription = null)
                                 Spacer(Modifier.width(6.dp))
-                                Text("保存当前表盘")
+                                Text(stringResource(R.string.watch_editor_save_current))
                             }
                             OutlinedButton(
                                 onClick = onRename,
                                 enabled = busyMessage == null,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Text("重命名")
+                                Text(stringResource(R.string.watch_editor_rename))
                             }
                             OutlinedButton(
                                 onClick = onImportWatch,
                                 enabled = busyMessage == null,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Icon(Icons.Default.FileOpen, contentDescription = null)
+                                Icon(MiuixIcons.File, contentDescription = null)
                                 Spacer(Modifier.width(6.dp))
-                                Text("导入 .watch")
+                                Text(stringResource(R.string.watch_editor_import_watch))
                             }
                             OutlinedButton(
                                 onClick = onConvertWatch,
                                 enabled = busyMessage == null,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Icon(Icons.Default.FileOpen, contentDescription = null)
+                                Icon(MiuixIcons.File, contentDescription = null)
                                 Spacer(Modifier.width(6.dp))
-                                Text("导入并转换 HSC / WFF")
+                                Text(stringResource(R.string.watch_editor_import_wff))
                             }
                             OutlinedButton(
                                 onClick = onExport,
                                 enabled = busyMessage == null,
                                 modifier = Modifier.fillMaxWidth(),
-                            ) { Text("导出 .watch") }
+                            ) { Text(stringResource(R.string.watch_editor_export_watch)) }
                             OutlinedButton(
                                 onClick = onUploadToStore,
                                 enabled = busyMessage == null,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Icon(Icons.Default.CloudUpload, contentDescription = null)
+                                Icon(MiuixIcons.UploadCloud, contentDescription = null)
                                 Spacer(Modifier.width(6.dp))
-                                Text("上传到商店")
+                                Text(stringResource(R.string.watch_editor_upload_store))
                             }
                         }
                     }
                     item("safety_note") {
                         Text(
-                            "未知 XML 属性和节点会原样保留。",
+                            stringResource(R.string.watch_editor_preserve_unknown),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
                         )
@@ -1814,8 +2224,8 @@ private fun WatchEditorScreen(
         ) {
             IconButton(onClick = { editorLayout = WatchEditorLayout.SPLIT }) {
                 Icon(
-                    Icons.Default.KeyboardArrowDown,
-                    contentDescription = "退出全屏预览",
+                    MiuixIcons.ExpandMore,
+                    contentDescription = stringResource(R.string.watch_editor_exit_fullscreen),
                     tint = Color.White,
                 )
             }
@@ -1826,7 +2236,7 @@ private fun WatchEditorScreen(
         CanvasSizePickerDialog(
             current = canvasSize,
             screenSize = screenCanvasSize,
-            confirmLabel = "应用",
+            confirmLabel = stringResource(R.string.watch_editor_apply),
             onDismiss = { showCanvasSizePicker = false },
             onConfirm = { size ->
                 showCanvasSizePicker = false
@@ -1836,10 +2246,10 @@ private fun WatchEditorScreen(
     }
 }
 
-private enum class WatchEditorPanel(val label: String) {
-    LAYERS("图层"),
-    PROPERTIES("属性"),
-    WATCH("表盘"),
+private enum class WatchEditorPanel(@StringRes val labelRes: Int) {
+    LAYERS(R.string.watch_editor_panel_layers),
+    PROPERTIES(R.string.watch_editor_panel_properties),
+    WATCH(R.string.watch_editor_panel_watch),
 }
 
 /** 编辑器三档布局：画布全屏 / 分屏 / 面板全屏。 */
@@ -1857,6 +2267,12 @@ internal fun shouldKeepWatchEditorSelectionForTransformCommit(
     transformStartSelectionGeneration: Int,
     currentSelectionGeneration: Int,
 ): Boolean = transformStartSelectionGeneration == currentSelectionGeneration
+
+/** Delayed property writes must never resurrect the layer that launched them. */
+internal fun shouldKeepWatchEditorSelectionForAsyncCommit(
+    commitStartSelectionGeneration: Int,
+    currentSelectionGeneration: Int,
+): Boolean = commitStartSelectionGeneration == currentSelectionGeneration
 
 internal enum class WatchEditorGestureEnd {
     COMMIT,
@@ -2019,6 +2435,8 @@ private fun WatchEditorPreview(
     onBeginTransform: (WatchEditorLayerKey) -> WatchEditorTransform?,
     onUpdateTransform: (WatchEditorLayerKey, WatchEditorTransform) -> Unit,
     onEndTransform: (WatchEditorLayerKey, Boolean) -> Unit,
+    onRefreshReady: (Int) -> Unit,
+    onRefreshFailed: (Int) -> Unit,
     modifier: Modifier = Modifier,
     onFaceViewChanged: (WatchmakerWatchFaceView?) -> Unit = {},
     /**
@@ -2028,6 +2446,7 @@ private fun WatchEditorPreview(
     designExtentWidth: Float = WatchmakerGeometry.DESIGN_SIZE,
     designExtentHeight: Float = WatchmakerGeometry.DESIGN_SIZE,
 ) {
+    val context = LocalContext.current
     var loadError by remember(descriptor.stableKey, refreshToken) { mutableStateOf<String?>(null) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     val transformOverrides = transformPreview?.let { mapOf(it.key to it.transform) } ?: emptyMap()
@@ -2075,7 +2494,11 @@ private fun WatchEditorPreview(
                     isFaceVisible = true,
                     onLongPress = null,
                     onDoubleTap = null,
-                    onLoadFailure = { _, error -> loadError = error.message ?: "预览加载失败" },
+                    onLoadFailure = { _, error ->
+                        loadError = context.localizedEditorError(R.string.watch_editor_error_preview_load, error)
+                        onRefreshFailed(refreshToken)
+                    },
+                    onSourceReady = onRefreshReady,
                 )
             },
             onRelease = { view ->
@@ -2244,28 +2667,49 @@ private fun WatchEditorPreview(
                         }
 
                         val key = targetKey ?: return@awaitEachGesture
-                        // A stale key (layer deleted in the same frame) must
-                        // not crash the pointer pipeline.
-                        val startTransform = runCatching { latestBegin.value(key) }.getOrNull()
-                            ?: return@awaitEachGesture
+                        // DOWN only records the tap/drag candidate. The
+                        // transform transaction starts after touch slop is
+                        // crossed; otherwise a tiny finger wobble during a tap
+                        // can write x/y/scale and enqueue an async commit.
+                        var startTransform: WatchEditorTransform? = null
                         var current: WatchEditorTransform? = null
                         try {
-                            current = startTransform
-                            lifecycle.begin()
                             down.consume()
                             // 真实累积位置：必须和「吸附后用于显示的位置」分开记。
                             // 早先直接拿上一帧吸附结果当基准累加，吸住之后每帧
                             // 都是「吸附点 + 小增量」，仍落在阈值内又被锁回原点，
                             // 于是元素彻底拖不动（老师报的粘住）。
-                            var rawAccumX = startTransform.x
-                            var rawAccumY = startTransform.y
+                            var rawAccumX = 0f
+                            var rawAccumY = 0f
                             val snapState = WatchEditorSnapping.GestureState()
                             while (true) {
                                 val event = awaitPointerEvent()
                                 if (event.changes.any { it.isConsumed }) break
 
+                                if (!moved) {
+                                    moved = event.changes.any { change ->
+                                        hypot(
+                                            change.position.x - down.position.x,
+                                            change.position.y - down.position.y,
+                                        ) > touchSlop
+                                    }
+                                }
+                                if (moved && startTransform == null) {
+                                    // A stale key (for example a layer deleted
+                                    // in this frame) simply abandons the drag.
+                                    val initial = runCatching {
+                                        latestBegin.value(key)
+                                    }.getOrNull() ?: break
+                                    startTransform = initial
+                                    current = initial
+                                    rawAccumX = initial.x
+                                    rawAccumY = initial.y
+                                    lifecycle.begin()
+                                }
+
                                 val base = current
-                                when (mode) {
+                                val gestureStart = startTransform
+                                if (gestureStart != null) when (mode) {
                                     EditorCanvasGestureMode.BODY -> {
                                         val pan = event.calculatePan()
                                         val zoom = event.calculateZoom()
@@ -2327,7 +2771,7 @@ private fun WatchEditorPreview(
                                             val next = applyWatchEditorHandleDrag(
                                                 handle = grabbed,
                                                 box = frame,
-                                                startTransform = startTransform,
+                                                startTransform = gestureStart,
                                                 startX = downDesignX,
                                                 startY = downDesignY,
                                                 currentX = mapping.designX(change.position.x),
@@ -2342,15 +2786,6 @@ private fun WatchEditorPreview(
                                     EditorCanvasGestureMode.NONE -> Unit
                                 }
                                 event.changes.forEach { change ->
-                                    if (
-                                        !moved &&
-                                        hypot(
-                                            change.position.x - down.position.x,
-                                            change.position.y - down.position.y,
-                                        ) > touchSlop
-                                    ) {
-                                        moved = true
-                                    }
                                     change.consume()
                                 }
                                 if (event.changes.none { it.pressed }) {
@@ -2387,7 +2822,15 @@ private fun WatchEditorPreview(
                 },
         )
         val selectedGeometryIndex = geometries.indexOfFirst { it.key == selectedLayer?.key }
-        if (enabled && selectedGeometryIndex >= 0 && canvasSize.width > 0) {
+        // Pointer input is briefly disabled while the DOM is flushed, but the
+        // release-frame outline must stay visible with the live transform. If
+        // it vanished here, scaling/rotation would still look like a one-frame
+        // snap even though the native layer pixels no longer roll back.
+        if (
+            (enabled || transformPreview != null) &&
+            selectedGeometryIndex >= 0 &&
+            canvasSize.width > 0
+        ) {
             val matrices = remember(geometries) { buildWatchEditorWorldMatrices(geometries) }
             EditorSelectionOverlay(
                 box = watchEditorSelectionBox(
@@ -2503,7 +2946,7 @@ private fun EditorSelectionOverlay(
 private fun EditorImageCropOverlay(
     uri: Uri,
     onCancel: () -> Unit,
-    onConfirm: (WatchEditorSourceRect) -> Unit,
+    onConfirm: (WatchEditorSourceRect, preserveOriginal: Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     val isRound = isFlueScreenRound()
@@ -2513,6 +2956,7 @@ private fun EditorImageCropOverlay(
     var aspect by remember(uri) { mutableStateOf(WatchEditorCropAspect.FREE) }
     var areaSize by remember { mutableStateOf(IntSize.Zero) }
     var cropRect by remember(uri) { mutableStateOf<WatchEditorCropRect?>(null) }
+    var cropModified by remember(uri) { mutableStateOf(false) }
     val displayMetrics = context.resources.displayMetrics
     val aspectRatioValue = watchEditorCropAspectRatio(
         aspect,
@@ -2531,7 +2975,7 @@ private fun EditorImageCropOverlay(
             sourceSize = IntSize(bounds.width, bounds.height)
             preview = bitmap
         }.onFailure { error ->
-            decodeError = error.message ?: "图片解码失败"
+            decodeError = context.localizedEditorError(R.string.watch_editor_error_decode_image, error)
         }
     }
     // The preview bitmap is intentionally left to the GC: recycling it while a
@@ -2585,7 +3029,7 @@ private fun EditorImageCropOverlay(
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(
-            "裁剪图片",
+            stringResource(R.string.watch_editor_crop_image),
             modifier = Modifier.align(Alignment.CenterHorizontally),
             fontWeight = FontWeight.SemiBold,
         )
@@ -2659,7 +3103,10 @@ private fun EditorImageCropOverlay(
                                                 ratio = ratio,
                                             )
                                         }
-                                        if (next != currentRect) cropRect = next
+                                        if (next != currentRect) {
+                                            cropModified = true
+                                            cropRect = next
+                                        }
                                         event.changes.forEach { it.consume() }
                                         if (event.changes.none { it.pressed }) break
                                     }
@@ -2719,10 +3166,16 @@ private fun EditorImageCropOverlay(
         ) {
             WatchEditorCropAspect.entries.forEach { candidate ->
                 val selected = aspect == candidate
+                val label = stringResource(watchEditorCropAspectLabel(candidate))
                 if (selected) {
-                    Button(onClick = {}, enabled = true) { Text(candidate.label) }
+                    Button(onClick = {}, enabled = true) { Text(label) }
                 } else {
-                    OutlinedButton(onClick = { aspect = candidate }) { Text(candidate.label) }
+                    OutlinedButton(
+                        onClick = {
+                            cropModified = true
+                            aspect = candidate
+                        },
+                    ) { Text(label) }
                 }
             }
         }
@@ -2733,9 +3186,9 @@ private fun EditorImageCropOverlay(
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
         ) {
             OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Default.Close, contentDescription = null, Modifier.size(16.dp))
+                Icon(MiuixIcons.Close, contentDescription = null, Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("取消")
+                Text(stringResource(R.string.watch_editor_cancel))
             }
             Button(
                 onClick = {
@@ -2745,18 +3198,220 @@ private fun EditorImageCropOverlay(
                     if (rect != null && bounds != null && source != null) {
                         onConfirm(
                             mapWatchEditorCropToSource(rect, bounds, source.width, source.height),
+                            !cropModified,
                         )
                     }
                 },
                 enabled = cropRect != null && fit != null && sourceSize != null,
                 modifier = Modifier.weight(1f),
             ) {
-                Icon(Icons.Default.Check, contentDescription = null, Modifier.size(16.dp))
+                Icon(MiuixIcons.Ok, contentDescription = null, Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("裁剪导入")
+                Text(
+                    stringResource(
+                        if (cropModified) {
+                            R.string.watch_editor_import_cropped
+                        } else {
+                            R.string.watch_editor_import_original
+                        },
+                    ),
+                )
             }
         }
     }
+}
+
+@Composable
+private fun EditorVideoImportDialog(
+    info: WatchEditorVideoInfo,
+    onDismiss: () -> Unit,
+    onConfirm: (WatchEditorVideoImportOptions) -> Unit,
+) {
+    val defaultSize = remember(info) { defaultEditorVideoSize(info) }
+    var startSeconds by remember(info) { mutableStateOf("0") }
+    var endSeconds by remember(info) {
+        mutableStateOf(formatEditorVideoSeconds(info.durationMs))
+    }
+    var width by remember(info) { mutableStateOf(defaultSize.first.toString()) }
+    var height by remember(info) { mutableStateOf(defaultSize.second.toString()) }
+    var frameRate by remember(info) { mutableStateOf("10") }
+    var bitrate by remember(info) { mutableStateOf("1800") }
+
+    val options = remember(startSeconds, endSeconds, width, height, frameRate, bitrate, info) {
+        runCatching {
+            val startMs = ((startSeconds.toDoubleOrNull() ?: error("start")) * 1_000.0)
+                .roundToLong()
+            val endMs = ((endSeconds.toDoubleOrNull() ?: error("end")) * 1_000.0)
+                .roundToLong()
+            require(startMs >= 0L && endMs <= info.durationMs && endMs > startMs)
+            WatchEditorVideoImportOptions(
+                startMs = startMs,
+                endMs = endMs,
+                maxWidth = width.toIntOrNull() ?: error("width"),
+                maxHeight = height.toIntOrNull() ?: error("height"),
+                frameRate = frameRate.toFloatOrNull() ?: error("fps"),
+                bitrateKbps = bitrate.toIntOrNull() ?: error("bitrate"),
+            )
+        }.getOrNull()
+    }
+    val estimatedFrames = options?.let {
+        (it.durationMs / 1_000.0 * it.frameRate).roundToInt().coerceAtLeast(1)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.watch_editor_import_video)) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 430.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    stringResource(
+                        R.string.watch_editor_video_source_fmt,
+                        info.width,
+                        info.height,
+                        formatEditorVideoSeconds(info.durationMs),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = startSeconds,
+                        onValueChange = { startSeconds = it },
+                        label = { Text(stringResource(R.string.watch_editor_video_start_seconds)) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = endSeconds,
+                        onValueChange = { endSeconds = it },
+                        label = { Text(stringResource(R.string.watch_editor_video_end_seconds)) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Text(
+                    stringResource(R.string.watch_editor_video_max_resolution),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = width,
+                        onValueChange = { width = it.filter(Char::isDigit) },
+                        label = { Text(stringResource(R.string.watch_editor_width)) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = height,
+                        onValueChange = { height = it.filter(Char::isDigit) },
+                        label = { Text(stringResource(R.string.watch_editor_height)) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = frameRate,
+                        onValueChange = { frameRate = it },
+                        label = { Text(stringResource(R.string.watch_editor_video_frame_rate)) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedTextField(
+                        value = bitrate,
+                        onValueChange = { bitrate = it.filter(Char::isDigit) },
+                        label = { Text(stringResource(R.string.watch_editor_video_bitrate)) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Text(
+                    if (options == null) {
+                        stringResource(R.string.watch_editor_video_invalid_options)
+                    } else {
+                        stringResource(
+                            R.string.watch_editor_video_estimated_frames_fmt,
+                            estimatedFrames ?: 0,
+                        )
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (options == null) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { options?.let(onConfirm) },
+                enabled = options != null,
+            ) { Text(stringResource(R.string.watch_editor_start_conversion)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.watch_editor_cancel)) }
+        },
+    )
+}
+
+@Composable
+private fun EditorVideoConversionProgressDialog(
+    progress: Float,
+    onCancel: () -> Unit,
+) {
+    val safeProgress = progress.coerceIn(0f, 1f)
+    AlertDialog(
+        onDismissRequest = {},
+        title = { Text(stringResource(R.string.watch_editor_converting_video)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                LinearProgressIndicator(
+                    progress = { safeProgress },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text("${(safeProgress * 100f).roundToInt()}%")
+                Text(
+                    stringResource(R.string.watch_editor_video_conversion_message),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onCancel) {
+                Text(stringResource(R.string.watch_editor_cancel_conversion))
+            }
+        },
+    )
+}
+
+private fun defaultEditorVideoSize(info: WatchEditorVideoInfo, maximum: Int = 512): Pair<Int, Int> {
+    val scale = minOf(1f, maximum.toFloat() / maxOf(info.width, info.height).coerceAtLeast(1))
+    fun even(value: Int): Int = value.coerceIn(16, 4096).let { it - it % 2 }
+    return even((info.width * scale).roundToInt()) to even((info.height * scale).roundToInt())
+}
+
+private fun formatEditorVideoSeconds(milliseconds: Long): String =
+    String.format(Locale.US, "%.3f", milliseconds / 1_000.0).trimEnd('0').trimEnd('.')
+
+@StringRes
+private fun watchEditorCropAspectLabel(aspect: WatchEditorCropAspect): Int = when (aspect) {
+    WatchEditorCropAspect.FREE -> R.string.watch_editor_crop_free
+    WatchEditorCropAspect.SQUARE -> R.string.watch_editor_crop_square
+    WatchEditorCropAspect.SCREEN -> R.string.watch_editor_crop_screen
 }
 
 @Composable
@@ -2765,6 +3420,7 @@ private fun EditorLayerRow(
     selected: Boolean,
     layerCount: Int,
     thumbnail: androidx.compose.ui.graphics.ImageBitmap? = null,
+    textThumbnail: String? = null,
     depth: Int,
     hasChildren: Boolean,
     expanded: Boolean,
@@ -2775,6 +3431,7 @@ private fun EditorLayerRow(
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val localizedLayerType = watchEditorLayerTypeLabel(layer.type)
     val container = if (selected) {
         MaterialTheme.colorScheme.secondaryContainer
     } else {
@@ -2801,14 +3458,20 @@ private fun EditorLayerRow(
                     modifier = Modifier.size(40.dp),
                 ) {
                     Icon(
-                        if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
-                        contentDescription = if (expanded) "折叠子图层" else "展开子图层",
+                        if (expanded) MiuixIcons.ExpandMore else MiuixIcons.ChevronForward,
+                        contentDescription = stringResource(
+                            if (expanded) {
+                                R.string.watch_editor_collapse_child_layers
+                            } else {
+                                R.string.watch_editor_expand_child_layers
+                            },
+                        ),
                     )
                 }
             } else {
                 Spacer(Modifier.size(8.dp))
             }
-            // 元素预览缩略图：主渲染管线渲出的真实样子（含祖先组变换）。
+            // 素材缩略图；文字则使用运行时解析值单独居中排版，不继承画布位置。
             Box(
                 modifier = Modifier
                     .size(40.dp)
@@ -2826,13 +3489,15 @@ private fun EditorLayerRow(
                     val type = layer.type.lowercase(Locale.ROOT)
                     when {
                         type.contains("text") -> {
-                            val displayText = layer.attributes["text"].orEmpty()
-                                .ifBlank { layer.attributes["value"].orEmpty() }
                             Text(
-                                text = displayText.take(2).ifBlank { "T" },
+                                text = textThumbnail.orEmpty().ifBlank { "T" },
                                 color = Color.White,
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
+                                fontSize = 8.sp,
+                                lineHeight = 9.sp,
+                                textAlign = TextAlign.Center,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(3.dp),
                             )
                         }
                         type.contains("shape") || type.contains("rounded") -> {
@@ -2847,21 +3512,24 @@ private fun EditorLayerRow(
                             )
                         }
                         else -> Icon(
-                            Icons.Default.FileOpen,
-                            contentDescription = "${layer.type} 图层缩略图",
+                            MiuixIcons.File,
+                            contentDescription = stringResource(
+                                R.string.watch_editor_layer_thumbnail_fmt,
+                                localizedLayerType,
+                            ),
                             tint = Color.White,
                         )
                     }
                 }
             }
             Column(modifier = Modifier.weight(1f)) {
-                Text("${layer.order + 1}. ${layer.type}", fontWeight = FontWeight.Medium)
+                Text("${layer.order + 1}. $localizedLayerType", fontWeight = FontWeight.Medium)
                 layer.id?.let {
                     Text(it, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                 }
                 layer.parentId?.let {
                     Text(
-                        "父级：$it",
+                        stringResource(R.string.watch_editor_parent_layer_fmt, it),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -2875,20 +3543,32 @@ private fun EditorLayerRow(
                 enabled = enabled && layer.order > 0,
                 modifier = Modifier.size(48.dp),
             ) {
-                Icon(Icons.Default.ArrowUpward, contentDescription = "上移")
+                Icon(
+                    MiuixIcons.ExpandLess,
+                    contentDescription = stringResource(R.string.watch_editor_move_up),
+                )
             }
             IconButton(
                 onClick = { onMove(layer.order + 1) },
                 enabled = enabled && layer.order < layerCount - 1,
                 modifier = Modifier.size(48.dp),
             ) {
-                Icon(Icons.Default.ArrowDownward, contentDescription = "下移")
+                Icon(
+                    MiuixIcons.ExpandMore,
+                    contentDescription = stringResource(R.string.watch_editor_move_down),
+                )
             }
             IconButton(onClick = onDuplicate, enabled = enabled, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Default.ContentCopy, contentDescription = "复制")
+                Icon(
+                    MiuixIcons.Copy,
+                    contentDescription = stringResource(R.string.watch_editor_duplicate),
+                )
             }
             IconButton(onClick = onDelete, enabled = enabled, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Default.Delete, contentDescription = "删除")
+                Icon(
+                    MiuixIcons.Delete,
+                    contentDescription = stringResource(R.string.watch_editor_delete),
+                )
             }
         }
     }
@@ -2906,14 +3586,18 @@ private fun LayerPropertiesEditor(
     enabled: Boolean,
     onLiveChange: (Map<String, String?>) -> Unit,
     onImportImage: () -> Unit,
+    onImportImageSequence: () -> Unit,
+    onImportVideo: () -> Unit,
     fontOptions: List<String> = emptyList(),
     onImportFont: (() -> Unit)? = null,
 ) {
+    val localizedLayerType = watchEditorLayerTypeLabel(layer.type)
+    val editableAttributes = remember(layer.type) { editableAttributesFor(layer.type) }
     // Drafts survive live applies (draftResetKey stays put) but reset whenever
     // the attributes change from the outside: undo, canvas drags, imports.
     var drafts by remember(layer.key, draftResetKey) {
         mutableStateOf(
-            EDITABLE_ATTRIBUTES.associateWith { attribute ->
+            editableAttributes.associateWith { attribute ->
                 val text = layer.attributes[attribute].orEmpty()
                 TextFieldValue(text, TextRange(text.length))
             },
@@ -2925,8 +3609,11 @@ private fun LayerPropertiesEditor(
         if (value.isEmpty() && name != "text") null else value
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("${layer.type} 属性", fontWeight = FontWeight.SemiBold)
-        EDITABLE_ATTRIBUTES.forEach { attribute ->
+        Text(
+            stringResource(R.string.watch_editor_layer_properties_fmt, localizedLayerType),
+            fontWeight = FontWeight.SemiBold,
+        )
+        editableAttributes.forEach { attribute ->
             OutlinedTextField(
                 value = drafts[attribute] ?: TextFieldValue(""),
                 onValueChange = { value ->
@@ -2945,7 +3632,7 @@ private fun LayerPropertiesEditor(
                         if (state.isFocused) lastFocusedAttribute = attribute
                     },
                 enabled = enabled,
-                label = { Text(attributeLabel(attribute)) },
+                label = { Text(stringResource(attributeLabelRes(attribute))) },
                 singleLine = attribute != "text",
                 minLines = if (attribute == "text") 2 else 1,
                 keyboardOptions = KeyboardOptions(
@@ -2957,8 +3644,61 @@ private fun LayerPropertiesEditor(
                 ),
             )
         }
+        val supportsAnimatedImageImport = layer.type.equals("image", ignoreCase = true) ||
+            layer.type.equals("image_gif", ignoreCase = true) ||
+            layer.type.equals("gif", ignoreCase = true)
         if (layer.type.equals("image", ignoreCase = true)) {
-            OutlinedButton(onClick = onImportImage, enabled = enabled) { Text("导入图片并写入 path") }
+            OutlinedButton(onClick = onImportImage, enabled = enabled) {
+                Text(stringResource(R.string.watch_editor_import_image_path))
+            }
+        }
+        if (supportsAnimatedImageImport) {
+            OutlinedButton(onClick = onImportImageSequence, enabled = enabled) {
+                Text(stringResource(R.string.watch_editor_import_image_sequence))
+            }
+            OutlinedButton(onClick = onImportVideo, enabled = enabled) {
+                Text(stringResource(R.string.watch_editor_import_video_frames))
+            }
+        }
+        if (layer.type.equals("text", ignoreCase = true) ||
+            layer.type.equals("text_curved", ignoreCase = true)
+        ) {
+            Text(
+                stringResource(R.string.watch_editor_text_entry_animation),
+                style = MaterialTheme.typography.labelMedium,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                TEXT_ENTRY_ANIMATION_OPTIONS.forEach { (value, labelRes) ->
+                    val selected = drafts["anim_in"]?.text.orEmpty() == value
+                    if (selected) {
+                        Button(onClick = {}, enabled = enabled) { Text(stringResource(labelRes)) }
+                    } else {
+                        OutlinedButton(
+                            onClick = {
+                                val animationValue = TextFieldValue(value, TextRange(value.length))
+                                val restartValue = if (value.isBlank()) "N" else "Y"
+                                drafts = drafts + mapOf(
+                                    "anim_in" to animationValue,
+                                    "restart_on_load" to TextFieldValue(
+                                        restartValue,
+                                        TextRange(restartValue.length),
+                                    ),
+                                )
+                                onLiveChange(
+                                    mapOf(
+                                        "anim_in" to value.ifBlank { null },
+                                        "restart_on_load" to restartValue,
+                                    ),
+                                )
+                            },
+                            enabled = enabled,
+                        ) { Text(stringResource(labelRes)) }
+                    }
+                }
+            }
         }
         // 颜色取色盘：与颜色文本框同源（写回同一个 draft + live 通道）。
         EditorColorPickerRow(
@@ -3037,13 +3777,15 @@ private fun LayerPropertiesEditor(
                 }
                 AlertDialog(
                     onDismissRequest = { showAppPicker = false; appPickerQuery = "" },
-                    title = { Text("选择要启动的应用") },
+                    title = { Text(stringResource(R.string.watch_editor_select_app_title)) },
                     text = {
                         Column {
                             androidx.compose.material3.OutlinedTextField(
                                 value = appPickerQuery,
                                 onValueChange = { appPickerQuery = it },
-                                placeholder = { Text("搜索应用名或包名") },
+                                placeholder = {
+                                    Text(stringResource(R.string.watch_editor_search_app_hint))
+                                },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true,
                             )
@@ -3078,7 +3820,7 @@ private fun LayerPropertiesEditor(
                     },
                     confirmButton = {
                         TextButton(onClick = { showAppPicker = false; appPickerQuery = "" }) {
-                            Text("取消")
+                            Text(stringResource(R.string.watch_editor_cancel))
                         }
                     },
                 )
@@ -3094,7 +3836,10 @@ private fun LayerPropertiesEditor(
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Text("点击动作", style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        stringResource(R.string.watch_editor_tap_action),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
                     OutlinedTextField(
                         value = tapActionText,
                         onValueChange = { v ->
@@ -3103,28 +3848,28 @@ private fun LayerPropertiesEditor(
                         },
                         modifier = Modifier.fillMaxWidth(),
                         enabled = enabled,
-                        label = { Text("tap_action") },
-                        placeholder = { Text("w_app:com.example.pkg") },
+                        label = { Text(stringResource(R.string.watch_editor_tap_action)) },
+                        placeholder = { Text(stringResource(R.string.watch_editor_tap_action_example)) },
                         singleLine = true,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         OutlinedButton(
                             onClick = { showAppPicker = true },
                             enabled = enabled,
-                        ) { Text("选择应用") }
+                        ) { Text(stringResource(R.string.watch_editor_select_app)) }
                         OutlinedButton(
                             onClick = { applyAction("widget_calendar") },
                             enabled = enabled,
-                        ) { Text("日历") }
+                        ) { Text(stringResource(R.string.watch_editor_calendar)) }
                         OutlinedButton(
                             onClick = { applyAction("widget_weather") },
                             enabled = enabled,
-                        ) { Text("天气") }
+                        ) { Text(stringResource(R.string.watch_editor_weather)) }
                         if (currentRaw.isNotBlank()) {
                             OutlinedButton(
                                 onClick = { applyAction("") },
                                 enabled = enabled,
-                            ) { Text("清除") }
+                            ) { Text(stringResource(R.string.watch_editor_clear)) }
                         }
                     }
                 }
@@ -3151,10 +3896,13 @@ private fun LayerPropertiesEditor(
         )
         if (layer.attributes.keys.any { it !in EDITABLE_ATTRIBUTES && it != "type" }) {
             Text(
-                "其他属性已保留：" + layer.attributes.keys
-                    .filter { it !in EDITABLE_ATTRIBUTES && it != "type" }
-                    .sorted()
-                    .joinToString(", "),
+                stringResource(
+                    R.string.watch_editor_preserved_attributes_fmt,
+                    layer.attributes.keys
+                        .filter { it !in EDITABLE_ATTRIBUTES && it != "type" }
+                        .sorted()
+                        .joinToString(", "),
+                ),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
             )
@@ -3185,19 +3933,25 @@ private fun ExpressionReferencePanel(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "表达式参考",
+                    stringResource(R.string.watch_editor_expression_reference),
                     modifier = Modifier.weight(1f),
                     fontWeight = FontWeight.SemiBold,
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Icon(
-                    if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
-                    contentDescription = if (expanded) "折叠表达式参考" else "展开表达式参考",
+                    if (expanded) MiuixIcons.ExpandMore else MiuixIcons.ChevronForward,
+                    contentDescription = stringResource(
+                        if (expanded) {
+                            R.string.watch_editor_collapse_expression_reference
+                        } else {
+                            R.string.watch_editor_expand_expression_reference
+                        },
+                    ),
                 )
             }
             if (expanded) {
                 Text(
-                    "点击任意条目，插入到当前聚焦的属性输入框光标处。",
+                    stringResource(R.string.watch_editor_expression_reference_hint),
                     modifier = Modifier.padding(horizontal = 12.dp),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -3212,7 +3966,7 @@ private fun ExpressionReferencePanel(
                     ) {
                         WATCH_EDITOR_EXPRESSION_GROUPS.forEach { group ->
                             Text(
-                                group.title,
+                                stringResource(group.titleRes),
                                 modifier = Modifier.padding(start = 6.dp, top = 6.dp, bottom = 2.dp),
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.SemiBold,
@@ -3238,7 +3992,7 @@ private fun ExpressionReferencePanel(
                                                 fontWeight = FontWeight.Medium,
                                             )
                                             Text(
-                                                entry.description,
+                                                stringResource(entry.descriptionRes),
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             )
@@ -3272,6 +4026,7 @@ private fun EditorWatchShapeCard(
 ) {
     val style = LauncherTheme.style
     val currentShape = watchFaceShape(rawShape)
+    val notSetLabel = stringResource(R.string.watch_editor_not_set)
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(14.dp),
@@ -3280,9 +4035,9 @@ private fun EditorWatchShapeCard(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("表盘形状", fontWeight = FontWeight.SemiBold)
+            Text(stringResource(R.string.watch_editor_watch_shape), fontWeight = FontWeight.SemiBold)
             Text(
-                "圆形表盘渲染时会按圆形裁剪；方形表盘保留完整方形画布。",
+                stringResource(R.string.watch_editor_watch_shape_description),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -3290,7 +4045,7 @@ private fun EditorWatchShapeCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                WATCH_SHAPE_OPTIONS.forEach { (code, label) ->
+                WATCH_SHAPE_OPTIONS.forEach { (code, labelRes) ->
                     val selected = when (code) {
                         "R" -> currentShape == WatchFaceShape.ROUND
                         else -> currentShape == WatchFaceShape.SQUARE
@@ -3300,19 +4055,22 @@ private fun EditorWatchShapeCard(
                             onClick = {},
                             enabled = true,
                             modifier = Modifier.weight(1f),
-                        ) { Text(label) }
+                        ) { Text(stringResource(labelRes)) }
                     } else {
                         OutlinedButton(
                             onClick = { onUpdateShape(code) },
                             enabled = enabled,
                             modifier = Modifier.weight(1f),
-                        ) { Text(label) }
+                        ) { Text(stringResource(labelRes)) }
                     }
                 }
             }
             if (currentShape != WatchFaceShape.ROUND && currentShape != WatchFaceShape.SQUARE) {
                 Text(
-                    "当前 shape=\"${rawShape.orEmpty().ifBlank { "未设置" }}\"，点击上方按钮即可改为圆形或方形。",
+                    stringResource(
+                        R.string.watch_editor_unknown_shape_fmt,
+                        rawShape.orEmpty().ifBlank { notSetLabel },
+                    ),
                     style = MaterialTheme.typography.labelSmall,
                     color = style.secondaryTextColor,
                 )
@@ -3334,6 +4092,8 @@ private fun EditorWatchCanvasSizeCard(
     onEdit: () -> Unit,
 ) {
     val style = LauncherTheme.style
+    val undeclaredSuffix = stringResource(R.string.watch_editor_canvas_undeclared_suffix)
+    val matchesScreenSuffix = stringResource(R.string.watch_editor_canvas_matches_screen_suffix)
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(14.dp),
@@ -3342,18 +4102,18 @@ private fun EditorWatchCanvasSizeCard(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("画布尺寸", fontWeight = FontWeight.SemiBold)
+            Text(stringResource(R.string.watch_editor_canvas_size), fontWeight = FontWeight.SemiBold)
             Text(
                 buildString {
                     append(canvasSize.label)
-                    if (!declared) append("（未声明，按默认画布）")
-                    if (canvasSize == screenSize) append(" · 与本机屏幕一致")
+                    if (!declared) append(undeclaredSuffix)
+                    if (canvasSize == screenSize) append(matchesScreenSuffix)
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                "图层坐标以画布中心为原点；改画布尺寸不会移动已有图层，只改变设计空间大小。",
+                stringResource(R.string.watch_editor_canvas_size_description),
                 style = MaterialTheme.typography.labelSmall,
                 color = style.secondaryTextColor,
             )
@@ -3361,7 +4121,7 @@ private fun EditorWatchCanvasSizeCard(
                 onClick = onEdit,
                 enabled = enabled,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("修改画布尺寸") }
+            ) { Text(stringResource(R.string.watch_editor_change_canvas_size)) }
         }
     }
 }
@@ -3397,7 +4157,11 @@ private fun EditorStoreUploadOverlay(
     var formError by remember { mutableStateOf<String?>(null) }
     var uploadPercent by remember { mutableStateOf<Int?>(null) }
     var name by remember {
-        mutableStateOf(snapshot.rootAttributes["name"].orEmpty().ifBlank { "Flue Watch" }.take(100))
+        mutableStateOf(
+            snapshot.rootAttributes["name"].orEmpty()
+                .ifBlank { context.getString(R.string.watch_editor_default_watch_name) }
+                .take(100),
+        )
     }
     // 作者（老师指定）：上传到商店时这一栏填已登录账户名。表盘文件里原有的
     // designer_name 不参与预填——上传者就是署名人；用户仍可手改这一栏。
@@ -3450,19 +4214,21 @@ private fun EditorStoreUploadOverlay(
             }
             .onFailure { error ->
                 if (error is CancellationException) throw error
-                categoriesError = watchStoreUploadErrorMessage(error)
+                categoriesError = watchStoreUploadErrorMessage(context, error)
             }
     }
 
     fun authenticate(register: Boolean) {
         if (busy != null) return
         val cleanUsername = username.trim()
-        val inputError = watchStoreAuthInputError(cleanUsername, password)
+        val inputError = watchStoreAuthInputError(context, cleanUsername, password)
         if (inputError != null) {
             formError = inputError
             return
         }
-        busy = if (register) "正在注册" else "正在登录"
+        busy = context.getString(
+            if (register) R.string.watch_store_status_registering else R.string.watch_store_status_logging_in,
+        )
         formError = null
         scope.launch {
             runCatching {
@@ -3483,7 +4249,7 @@ private fun EditorStoreUploadOverlay(
                 if (!authorEdited) author = stored.username
             }.onFailure { error ->
                 if (error is CancellationException) throw error
-                formError = watchStoreAuthErrorMessage(error, register)
+                formError = watchStoreAuthErrorMessage(context, error, register)
             }
             busy = null
         }
@@ -3494,21 +4260,21 @@ private fun EditorStoreUploadOverlay(
         val activeAuth = auth ?: return
         val trimmedName = name.trim()
         if (trimmedName.isEmpty()) {
-            formError = "请填写表盘名称"
+            formError = context.getString(R.string.watch_store_error_name_required)
             return
         }
         if (description.isBlank()) {
-            formError = "请填写表盘描述"
+            formError = context.getString(R.string.watch_store_error_description_required)
             return
         }
         val categoryId = selectedCategoryId
         if (categoryId == null) {
-            formError = "请选择一个分类"
+            formError = context.getString(R.string.watch_store_error_category_required)
             return
         }
         // 作者留空就退回账户名，再退回 "flue"：上传出去的包一定带作者。
         val effectiveAuthor = author.trim().ifBlank { activeAuth.username }.ifBlank { "flue" }
-        busy = "正在导出表盘包"
+        busy = context.getString(R.string.watch_store_status_exporting_package)
         formError = null
         uploadPercent = null
         scope.launch {
@@ -3532,7 +4298,7 @@ private fun EditorStoreUploadOverlay(
                         if (archive.length() > HttpWatchStoreApi.MAX_UPLOAD_BYTES) {
                             throw WatchStorePayloadTooLargeException(HttpWatchStoreApi.MAX_UPLOAD_BYTES)
                         }
-                        busy = "正在上传"
+                        busy = context.getString(R.string.watch_store_status_uploading)
                         api.uploadWatchFace(
                             token = activeAuth.token,
                             file = archive,
@@ -3553,7 +4319,11 @@ private fun EditorStoreUploadOverlay(
                 }
             }.onSuccess { refreshed ->
                 onSnapshotRefreshed(refreshed)
-                Toast.makeText(context, "已上传到表盘商店", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.watch_store_upload_success),
+                    Toast.LENGTH_SHORT,
+                ).show()
                 onDismiss()
             }.onFailure { error ->
                 if (error is CancellationException) throw error
@@ -3561,9 +4331,9 @@ private fun EditorStoreUploadOverlay(
                     // 服务器判定令牌失效比本地过期时间更权威：清掉并回到登录页。
                     authStore.clear()
                     auth = null
-                    formError = "登录已过期，请重新登录后再上传"
+                    formError = context.getString(R.string.watch_store_error_auth_expired_upload)
                 } else {
-                    formError = watchStoreUploadErrorMessage(error)
+                    formError = watchStoreUploadErrorMessage(context, error)
                 }
             }
             busy = null
@@ -3602,10 +4372,13 @@ private fun EditorStoreUploadOverlay(
                 onClick = { if (busy == null) onDismiss() },
                 modifier = Modifier.size(40.dp),
             ) {
-                Icon(Icons.Default.Close, contentDescription = "关闭上传")
+                Icon(
+                    MiuixIcons.Close,
+                    contentDescription = stringResource(R.string.watch_store_close_upload),
+                )
             }
             Text(
-                "上传到商店",
+                stringResource(R.string.watch_editor_upload_store),
                 modifier = Modifier.weight(1f),
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -3646,7 +4419,7 @@ private fun EditorStoreUploadOverlay(
             val activeAuth = auth
             when {
                 !authChecked -> Text(
-                    "正在检查登录状态…",
+                    stringResource(R.string.watch_store_status_checking_login),
                     style = MaterialTheme.typography.bodySmall,
                     color = style.secondaryTextColor,
                 )
@@ -3671,7 +4444,7 @@ private fun EditorStoreUploadOverlay(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            "已登录：${activeAuth.username}",
+                            stringResource(R.string.watch_store_logged_in_fmt, activeAuth.username),
                             modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodySmall,
                             color = style.secondaryTextColor,
@@ -3687,12 +4460,17 @@ private fun EditorStoreUploadOverlay(
                                     scope.launch(Dispatchers.IO) { credentialStore.clear() }
                                 }
                             },
-                        ) { Text("退出登录", color = style.accentColor) }
+                        ) {
+                            Text(
+                                stringResource(R.string.watch_store_logout),
+                                color = style.accentColor,
+                            )
+                        }
                     }
                     OutlinedTextField(
                         value = name,
                         onValueChange = { name = it.take(100) },
-                        label = { Text("表盘名称（必填）") },
+                        label = { Text(stringResource(R.string.watch_store_watch_name_required)) },
                         singleLine = true,
                         enabled = busy == null,
                         modifier = Modifier.fillMaxWidth(),
@@ -3703,8 +4481,8 @@ private fun EditorStoreUploadOverlay(
                             author = it.take(80)
                             authorEdited = true
                         },
-                        label = { Text("作者") },
-                        placeholder = { Text("留空自动填账户名") },
+                        label = { Text(stringResource(R.string.watch_editor_author)) },
+                        placeholder = { Text(stringResource(R.string.watch_store_author_account_hint)) },
                         singleLine = true,
                         enabled = busy == null,
                         modifier = Modifier.fillMaxWidth(),
@@ -3712,30 +4490,38 @@ private fun EditorStoreUploadOverlay(
                     OutlinedTextField(
                         value = description,
                         onValueChange = { description = it.take(2000) },
-                        label = { Text("描述（必填）") },
+                        label = { Text(stringResource(R.string.watch_store_description_required)) },
                         minLines = 2,
                         enabled = busy == null,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Text("屏幕形状", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        stringResource(R.string.watch_store_screen_shape),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        STORE_SCREEN_TYPE_OPTIONS.forEach { (candidate, label) ->
+                        STORE_SCREEN_TYPE_OPTIONS.forEach { (candidate, labelRes) ->
                             if (screenType == candidate) {
-                                Button(onClick = {}, enabled = true) { Text(label) }
+                                Button(onClick = {}, enabled = true) { Text(stringResource(labelRes)) }
                             } else {
                                 OutlinedButton(
                                     onClick = { screenType = candidate },
                                     enabled = busy == null,
-                                ) { Text(label) }
+                                ) { Text(stringResource(labelRes)) }
                             }
                         }
                     }
-                    Text("分类", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        stringResource(R.string.watch_store_category),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                     when {
                         categoriesError != null -> {
                             Text(
@@ -3746,7 +4532,7 @@ private fun EditorStoreUploadOverlay(
                             OutlinedButton(
                                 onClick = { categoriesRetryToken++ },
                                 enabled = busy == null,
-                            ) { Text("重新加载分类") }
+                            ) { Text(stringResource(R.string.watch_store_reload_categories)) }
                         }
                         categories == null -> Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -3754,13 +4540,13 @@ private fun EditorStoreUploadOverlay(
                         ) {
                             MiuixLoadingIndicator(size = 16.dp)
                             Text(
-                                "正在加载分类…",
+                                stringResource(R.string.watch_store_status_loading_categories),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = style.secondaryTextColor,
                             )
                         }
                         categories.orEmpty().isEmpty() -> Text(
-                            "商店暂时没有可用分类，稍后再试。",
+                            stringResource(R.string.watch_store_no_categories),
                             style = MaterialTheme.typography.bodySmall,
                             color = style.secondaryTextColor,
                         )
@@ -3787,7 +4573,7 @@ private fun EditorStoreUploadOverlay(
                                 )
                                 if (selected) {
                                     Icon(
-                                        Icons.Default.Check,
+                                        MiuixIcons.Ok,
                                         contentDescription = null,
                                         tint = style.accentColor,
                                         modifier = Modifier.size(16.dp),
@@ -3804,12 +4590,12 @@ private fun EditorStoreUploadOverlay(
                             selectedCategoryId != null,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Icon(Icons.Default.CloudUpload, contentDescription = null)
+                        Icon(MiuixIcons.UploadCloud, contentDescription = null)
                         Spacer(Modifier.width(6.dp))
-                        Text("上传当前表盘")
+                        Text(stringResource(R.string.watch_store_upload_current))
                     }
                     Text(
-                        "上传前会自动导出当前草稿为 .watch（上限 50MB）；预览图由商店从表盘包中自动生成。",
+                        stringResource(R.string.watch_store_upload_note),
                         style = MaterialTheme.typography.labelSmall,
                         color = style.secondaryTextColor,
                     )
@@ -3841,18 +4627,21 @@ private fun ErrorPage(message: String, onClose: () -> Unit) {
     ) {
         Text(message, color = MaterialTheme.colorScheme.error)
         Spacer(Modifier.height(12.dp))
-        Button(onClick = onClose) { Text("返回") }
+        Button(onClick = onClose) { Text(stringResource(R.string.watch_editor_back)) }
     }
 }
 
 private fun draftDescriptor(
+    context: Context,
     session: WatchEditorSession,
     snapshot: WatchEditorSnapshot,
 ): WatchFaceDescriptor = WatchFaceDescriptor(
     id = "${WATCHMAKER_ID_PREFIX}editor-draft",
     type = WatchFaceType.WATCHMAKER,
-    displayName = snapshot.rootAttributes["name"].orEmpty().ifBlank { "Editor draft" },
-    summary = "编辑预览 · ${snapshot.layers.size} 个图层",
+    displayName = snapshot.rootAttributes["name"].orEmpty().ifBlank {
+        context.getString(R.string.watch_editor_draft_display_name)
+    },
+    summary = context.getString(R.string.watch_editor_preview_summary_fmt, snapshot.layers.size),
     sourceDirPath = session.draftDirectory.absolutePath,
 )
 
@@ -3873,6 +4662,12 @@ private fun defaultAttributes(type: String): Map<String, String> = when (type) {
         "y" to "0",
     )
     "image" -> mapOf("x" to "0", "y" to "0", "opacity" to "100")
+    "image_gif" -> mapOf(
+        "x" to "0",
+        "y" to "0",
+        "opacity" to "100",
+        "gif_delay" to "100",
+    )
     "ring" -> mapOf(
         "radius" to "120",
         "width" to "12",
@@ -3894,22 +4689,44 @@ private fun defaultAttributes(type: String): Map<String, String> = when (type) {
     "anim_scale_y" to "100",
 )
 
-private fun attributeLabel(name: String): String = when (name) {
-    "x" -> "X 坐标"
-    "y" -> "Y 坐标"
-    "rotation" -> "旋转角度"
-    "opacity" -> "不透明度"
-    "anim_scale_x" -> "横向缩放（%）"
-    "anim_scale_y" -> "纵向缩放（%）"
-    "text" -> "文字 / Watchmaker 表达式"
-    "text_size" -> "字号"
-    "font" -> "字体"
-    "font2" -> "第二字体"
-    "alignment" -> "对齐"
-    "color" -> "颜色"
-    "path" -> "资源路径"
-    else -> name
+@StringRes
+private fun attributeLabelRes(name: String): Int = when (name) {
+    "x" -> R.string.watch_editor_attribute_x
+    "y" -> R.string.watch_editor_attribute_y
+    "rotation" -> R.string.watch_editor_attribute_rotation
+    "opacity" -> R.string.watch_editor_attribute_opacity
+    "anim_scale_x" -> R.string.watch_editor_attribute_scale_x
+    "anim_scale_y" -> R.string.watch_editor_attribute_scale_y
+    "text" -> R.string.watch_editor_attribute_text
+    "text_size" -> R.string.watch_editor_attribute_text_size
+    "font" -> R.string.watch_editor_attribute_font
+    "font2" -> R.string.watch_editor_attribute_font_secondary
+    "alignment" -> R.string.watch_editor_attribute_alignment
+    "color" -> R.string.watch_editor_attribute_color
+    "path" -> R.string.watch_editor_attribute_path
+    "gif_delay" -> R.string.watch_editor_attribute_frame_duration
+    "anim_in" -> R.string.watch_editor_attribute_anim_in
+    "anim_out" -> R.string.watch_editor_attribute_anim_out
+    "dur_in" -> R.string.watch_editor_attribute_duration_in
+    "dur_on" -> R.string.watch_editor_attribute_duration_on
+    "dur_out" -> R.string.watch_editor_attribute_duration_out
+    "dur_off" -> R.string.watch_editor_attribute_duration_off
+    "delay_start" -> R.string.watch_editor_attribute_start_delay
+    "repeat_count" -> R.string.watch_editor_attribute_repeat_count
+    "restart_on_load" -> R.string.watch_editor_attribute_restart_on_load
+    else -> R.string.watch_editor_attribute_unknown
 }
+
+private fun Context.localizedEditorError(
+    @StringRes messageRes: Int,
+    error: Throwable,
+): String {
+    val localizedMessage = getString(messageRes)
+    Log.e(WATCH_EDITOR_LOG_TAG, localizedMessage, error)
+    return localizedMessage
+}
+
+private const val WATCH_EDITOR_LOG_TAG = "WatchEditor"
 
 /** 颜色行：色板预览 + 打开取色盘。写回与颜色文本框同一个通道。 */
 @Composable
@@ -3931,7 +4748,7 @@ private fun EditorColorPickerRow(
                 .background(parsedColor ?: Color.DarkGray),
         )
         OutlinedButton(onClick = { dialogVisible = true }, enabled = enabled) {
-            Text("取色盘")
+            Text(stringResource(R.string.watch_editor_color_picker))
         }
     }
     if (dialogVisible) {
@@ -3966,7 +4783,7 @@ private fun EditorColorPickerDialog(
     )
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("取色盘") },
+        title = { Text(stringResource(R.string.watch_editor_color_picker)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Box(
@@ -3981,19 +4798,24 @@ private fun EditorColorPickerDialog(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Text("色相", style = MaterialTheme.typography.labelSmall)
+                Text(stringResource(R.string.watch_editor_hue), style = MaterialTheme.typography.labelSmall)
                 Slider(value = hue, onValueChange = { hue = it }, valueRange = 0f..360f)
-                Text("饱和度", style = MaterialTheme.typography.labelSmall)
+                Text(
+                    stringResource(R.string.watch_editor_saturation),
+                    style = MaterialTheme.typography.labelSmall,
+                )
                 Slider(value = saturation, onValueChange = { saturation = it }, valueRange = 0f..1f)
-                Text("明度", style = MaterialTheme.typography.labelSmall)
+                Text(stringResource(R.string.watch_editor_brightness), style = MaterialTheme.typography.labelSmall)
                 Slider(value = value, onValueChange = { value = it }, valueRange = 0f..1f)
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(currentColor) }) { Text("使用") }
+            TextButton(onClick = { onConfirm(currentColor) }) {
+                Text(stringResource(R.string.watch_editor_use))
+            }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.watch_editor_cancel)) }
         },
     )
 }
@@ -4029,16 +4851,16 @@ private fun EditorOutlineSection(
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("字体边框（描边）", fontWeight = FontWeight.SemiBold)
+        Text(stringResource(R.string.watch_editor_font_outline), fontWeight = FontWeight.SemiBold)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            EDITOR_OUTLINE_MODE_OPTIONS.forEach { (candidate, label) ->
+            EDITOR_OUTLINE_MODE_OPTIONS.forEach { (candidate, labelRes) ->
                 EditorFontChip(
-                    label = label,
+                    label = stringResource(labelRes),
                     selected = mode == candidate,
                     enabled = enabled,
                     onClick = {
@@ -4087,7 +4909,14 @@ private fun EditorOutlineSection(
                 },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = enabled,
-                label = { Text("描边宽度（0-${formatEditorOutlineSize(MAX_WATCH_OUTLINE_SIZE)}）") },
+                label = {
+                    Text(
+                        stringResource(
+                            R.string.watch_editor_outline_width_fmt,
+                            formatEditorOutlineSize(MAX_WATCH_OUTLINE_SIZE),
+                        ),
+                    )
+                },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             )
@@ -4102,12 +4931,12 @@ private fun EditorOutlineSection(
                 },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = enabled,
-                label = { Text("描边不透明度（0-100）") },
+                label = { Text(stringResource(R.string.watch_editor_outline_opacity)) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             )
             Text(
-                "描边颜色",
+                stringResource(R.string.watch_editor_outline_color),
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -4128,9 +4957,9 @@ private fun formatEditorOutlineSize(value: Float): String =
     if (value % 1f == 0f) value.toInt().toString() else value.toString()
 
 private val EDITOR_OUTLINE_MODE_OPTIONS = listOf(
-    WatchOutlineMode.NONE to "无",
-    WatchOutlineMode.OUTLINE to "描边",
-    WatchOutlineMode.GLOW to "发光",
+    WatchOutlineMode.NONE to R.string.watch_editor_none,
+    WatchOutlineMode.OUTLINE to R.string.watch_editor_outline,
+    WatchOutlineMode.GLOW to R.string.watch_editor_glow,
 )
 
 /** 字体选择：默认 + 表盘包内字体资源横向 chips + 自定义导入。 */
@@ -4143,7 +4972,7 @@ private fun EditorFontSelector(
     onImportFont: (() -> Unit)?,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("字体", fontWeight = FontWeight.SemiBold)
+        Text(stringResource(R.string.watch_editor_font), fontWeight = FontWeight.SemiBold)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -4154,7 +4983,7 @@ private fun EditorFontSelector(
             val defaultSelected = currentName.isBlank() ||
                 currentName.equals("Roboto-Regular", ignoreCase = true)
             EditorFontChip(
-                label = "默认",
+                label = stringResource(R.string.watch_editor_default),
                 selected = defaultSelected,
                 enabled = enabled,
                 onClick = { onSelect("") },
@@ -4171,9 +5000,9 @@ private fun EditorFontSelector(
         }
         if (onImportFont != null) {
             OutlinedButton(onClick = onImportFont, enabled = enabled) {
-                Icon(Icons.Default.FileOpen, contentDescription = null, Modifier.size(16.dp))
+                Icon(MiuixIcons.File, contentDescription = null, Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("导入字体 (TTF/OTF)")
+                Text(stringResource(R.string.watch_editor_import_font_formats))
             }
         }
     }
@@ -4249,23 +5078,32 @@ private fun hasEditorBodySensorsPermission(context: Context): Boolean =
     ) == PackageManager.PERMISSION_GRANTED
 
 private val BASIC_LAYER_TYPES = listOf(
-    "text" to "文字",
-    "shape" to "形状",
-    "image" to "图片",
-    "ring" to "圆环",
-    "progress" to "进度",
+    "text" to R.string.watch_editor_layer_text,
+    "shape" to R.string.watch_editor_layer_shape,
+    "image" to R.string.watch_editor_layer_image,
+    "image_gif" to R.string.watch_editor_layer_looping_background,
+    "ring" to R.string.watch_editor_layer_ring,
+    "progress" to R.string.watch_editor_layer_progress,
 )
+
+@Composable
+private fun watchEditorLayerTypeLabel(type: String): String {
+    val labelRes = BASIC_LAYER_TYPES.firstOrNull { (code, _) ->
+        code.equals(type, ignoreCase = true)
+    }?.second
+    return labelRes?.let { stringResource(it) } ?: type
+}
 
 /** 根节点 shape 属性的两个可写值；解析端把 R/S 归一化为圆形/方形。 */
 private val WATCH_SHAPE_OPTIONS = listOf(
-    "R" to "圆形",
-    "S" to "方形",
+    "R" to R.string.watch_editor_shape_round,
+    "S" to R.string.watch_editor_shape_square,
 )
 
 private val STORE_SCREEN_TYPE_OPTIONS = listOf(
-    WatchStoreScreenType.ROUND to "圆形",
-    WatchStoreScreenType.SQUARE to "方形",
-    WatchStoreScreenType.RECTANGULAR to "长方形",
+    WatchStoreScreenType.ROUND to R.string.watch_store_screen_round,
+    WatchStoreScreenType.SQUARE to R.string.watch_store_screen_square,
+    WatchStoreScreenType.RECTANGULAR to R.string.watch_store_screen_rectangular,
 )
 
 private val EDITABLE_ATTRIBUTES = listOf(
@@ -4281,6 +5119,38 @@ private val EDITABLE_ATTRIBUTES = listOf(
     "path",
 )
 
+private val TEXT_ANIMATION_ATTRIBUTES = listOf(
+    "anim_in",
+    "anim_out",
+    "dur_in",
+    "dur_on",
+    "dur_out",
+    "dur_off",
+    "delay_start",
+    "repeat_count",
+    "restart_on_load",
+)
+
+private val TEXT_ENTRY_ANIMATION_OPTIONS = listOf(
+    "" to R.string.watch_editor_none,
+    "SlideLeft" to R.string.watch_editor_animation_slide_left,
+    "SlideRight" to R.string.watch_editor_animation_slide_right,
+    "SlideUp" to R.string.watch_editor_animation_slide_up,
+    "SlideDown" to R.string.watch_editor_animation_slide_down,
+    "Fade" to R.string.watch_editor_animation_fade,
+    "ZoomIn" to R.string.watch_editor_animation_zoom_in,
+    "ZoomOut" to R.string.watch_editor_animation_zoom_out,
+    "Spin" to R.string.watch_editor_animation_spin,
+)
+
+private fun editableAttributesFor(type: String): List<String> = buildList {
+    addAll(EDITABLE_ATTRIBUTES)
+    when (type.lowercase(Locale.ROOT)) {
+        "gif", "image_gif" -> add("gif_delay")
+        "text", "text_curved" -> addAll(TEXT_ANIMATION_ATTRIBUTES)
+    }
+}
+
 private val NUMERIC_ATTRIBUTES = setOf(
     "x",
     "y",
@@ -4289,6 +5159,13 @@ private val NUMERIC_ATTRIBUTES = setOf(
     "anim_scale_x",
     "anim_scale_y",
     "text_size",
+    "gif_delay",
+    "dur_in",
+    "dur_on",
+    "dur_out",
+    "dur_off",
+    "delay_start",
+    "repeat_count",
 )
 
 /** 有文字渲染路径、应展示字体选择器的图层类型。 */

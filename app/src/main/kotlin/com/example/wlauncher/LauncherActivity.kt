@@ -51,6 +51,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -89,6 +91,8 @@ import com.flue.launcher.ui.anim.LayerAnimValues
 import com.flue.launcher.ui.anim.LayerFrameSnapshot
 import com.flue.launcher.ui.anim.flueBackdropFill
 import com.flue.launcher.ui.anim.flueLegacyBlur
+import com.flue.launcher.ui.anim.rememberLegacyWatchFaceBackdropFrames
+import com.flue.launcher.ui.anim.rememberLegacyWatchFacePixelCopyFrame
 import com.flue.launcher.ui.anim.shouldRenderLayerBlur
 import com.flue.launcher.ui.anim.systemBlurEffectForRadiusPx
 import androidx.compose.runtime.derivedStateOf
@@ -266,6 +270,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appListFisheyeStrengthPercent by vm.appListFisheyeStrengthPercent.collectAsStateWithLifecycle()
     val appListEdgeSpacingCompressionEnabled by vm.appListEdgeSpacingCompressionEnabled.collectAsStateWithLifecycle()
     val appListScalePercent by vm.appListScalePercent.collectAsStateWithLifecycle()
+    val overlayMaskCornerRadiusDp by vm.overlayMaskCornerRadiusDp.collectAsStateWithLifecycle()
     val appListRowBorderEnabled by vm.appListRowBorderEnabled.collectAsStateWithLifecycle()
     val appListFoldersEnabled by vm.appListFoldersEnabled.collectAsStateWithLifecycle()
     val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
@@ -389,6 +394,26 @@ fun LauncherScreen(vm: LauncherViewModel) {
         md3eMinuteHandColorArgb = builtInVideoMd3eMinuteColorArgb,
         md3eSecondHandColorArgb = builtInVideoMd3eSecondColorArgb
     )
+    // PixelCopy 的缓存身份必须包含所有会改变桌面实际合成帧的设置。只使用
+    // descriptor/refreshToken 会让内置表盘选项变化后仍沿用上一张预制模糊。
+    val legacyWatchFaceVisualKey = listOf(
+        selectedWatchFace.stableKey,
+        selectedWatchFaceId,
+        watchFaceRefreshToken,
+        builtInPhotoPath,
+        builtInVideoPath,
+        photoWatchOptions,
+        videoWatchOptions,
+        uiStyle,
+        effectiveDarkMode,
+        watchFaceChargingPowerText,
+        watchFaceStatusIndicators,
+        watchFaceBottomFadeEnabled,
+        watchmakerForceFill,
+        honeycombBottomFade,
+        honeycombEdgeBlurRadius,
+        edgeBlurEnabled,
+    ).joinToString(separator = "|")
     val appListThemeColor = rememberAppListSeedColor(
         watchFaceId = selectedWatchFaceId,
         photoPath = builtInPhotoPath,
@@ -454,9 +479,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 vibrateHaptic(context)
             } else {
                 if (FlueAccessibilityService.isEnabled(context)) {
-                    Toast.makeText(context, "Flue 无障碍服务连接中，请稍后重试", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.toast_accessibility_connecting),
+                        Toast.LENGTH_SHORT,
+                    ).show()
                 } else {
-                    Toast.makeText(context, "请先授权 Flue 无障碍服务", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.toast_grant_accessibility),
+                        Toast.LENGTH_SHORT,
+                    ).show()
                     openAccessibilitySettings()
                 }
             }
@@ -466,9 +499,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
         {
             if (!FlueAccessibilityService.openPowerDialog()) {
                 if (FlueAccessibilityService.isEnabled(context)) {
-                    Toast.makeText(context, "Flue 无障碍服务连接中，请稍后重试", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.toast_accessibility_connecting),
+                        Toast.LENGTH_SHORT,
+                    ).show()
                 } else {
-                    Toast.makeText(context, "请先授权 Flue 无障碍服务", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.toast_grant_accessibility),
+                        Toast.LENGTH_SHORT,
+                    ).show()
                     openAccessibilitySettings()
                 }
             }
@@ -967,13 +1008,23 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val screenHeightPx = with(density) { maxHeight.toPx() }
         val notificationProgress = notificationGestureProgress.coerceIn(0f, 1f)
         val keepNotificationLayer = notificationProgress > 0.001f || notificationSceneActive || notificationGestureActive
-        // 覆层进度改 Animatable：打开侧由 GestureHost 逐帧 snapTo（全程跟手），
-        // 抬手按位置+投影速度定向，settle 用带初速度的 spring 收尾。以前的
-        // 「80px 阈值 → 固定 tween」既不跟手、拖一半松手还会弹到底。
+        // 拖动阶段直接写一个同步 FloatState，不再为每个 pointer frame 启动
+        // snapTo 协程。旧设备上那些排队协程会在手指后面追赶，既卡顿又让
+        // 预制模糊混合滞后；Animatable 只负责抬手后的单次 spring 收尾。
         val sidePageAnim = remember { Animatable(0f) }
         val widgetPageAnim = remember { Animatable(0f) }
         val controlCenterAnim = remember { Animatable(0f) }
-        var overlayGestureTarget by remember { mutableStateOf<OverlayGestureTarget?>(null) }
+        // Mount latches change only at gesture/settle boundaries. Reading the
+        // per-frame progress in composition caused the entire Launcher scene
+        // to recompose for every pointer event on API 27-30; layer blocks below
+        // now sample progress directly on the render path instead.
+        var sidePageMounted by remember { mutableStateOf(false) }
+        var widgetPageMounted by remember { mutableStateOf(false) }
+        var controlCenterMounted by remember { mutableStateOf(false) }
+        val overlayGestureTargetState = remember { mutableStateOf<OverlayGestureTarget?>(null) }
+        var overlayGestureTarget by overlayGestureTargetState
+        val overlayGestureProgress = remember { mutableFloatStateOf(0f) }
+        var overlayGestureGeneration by remember { mutableStateOf(0L) }
         // 抬手初速度必须按目标分开存。以前是一个共享变量：控制中心下拉松手
         // 写进速度后，三个 settle 的 LaunchedEffect 都因 overlayGestureTarget
         // 归 null 而重启，谁先跑谁就把这个速度抢走灌进自己的 Animatable——
@@ -998,35 +1049,80 @@ fun LauncherScreen(vm: LauncherViewModel) {
         ) 1f else 0f
         LaunchedEffect(sidePageTarget, overlayGestureTarget) {
             if (overlayGestureTarget != OverlayGestureTarget.Stack) {
+                if (sidePageTarget > 0f || sidePageAnim.value > 0.001f) {
+                    sidePageMounted = true
+                }
                 val initialVelocity =
                     overlayReleaseVelocities.remove(OverlayGestureTarget.Stack) ?: 0f
                 sidePageAnim.animateTo(sidePageTarget, overlaySettleSpec, initialVelocity)
+                if (sidePageTarget <= 0f && overlayGestureTarget != OverlayGestureTarget.Stack) {
+                    sidePageMounted = false
+                }
             }
         }
         LaunchedEffect(widgetPageTarget, overlayGestureTarget) {
             if (overlayGestureTarget != OverlayGestureTarget.Widgets) {
+                if (widgetPageTarget > 0f || widgetPageAnim.value > 0.001f) {
+                    widgetPageMounted = true
+                }
                 val initialVelocity =
                     overlayReleaseVelocities.remove(OverlayGestureTarget.Widgets) ?: 0f
                 widgetPageAnim.animateTo(widgetPageTarget, overlaySettleSpec, initialVelocity)
+                if (widgetPageTarget <= 0f && overlayGestureTarget != OverlayGestureTarget.Widgets) {
+                    widgetPageMounted = false
+                }
             }
         }
         LaunchedEffect(controlCenterTarget, overlayGestureTarget) {
             if (overlayGestureTarget != OverlayGestureTarget.ControlCenter) {
+                if (controlCenterTarget > 0f || controlCenterAnim.value > 0.001f) {
+                    controlCenterMounted = true
+                }
                 val initialVelocity =
                     overlayReleaseVelocities.remove(OverlayGestureTarget.ControlCenter) ?: 0f
                 controlCenterAnim.animateTo(controlCenterTarget, overlaySettleSpec, initialVelocity)
+                if (
+                    controlCenterTarget <= 0f &&
+                    overlayGestureTarget != OverlayGestureTarget.ControlCenter
+                ) {
+                    controlCenterMounted = false
+                }
             }
         }
-        val sidePageProgress = sidePageAnim.value
-        val widgetPageProgress = widgetPageAnim.value
-        val controlCenterProgress = controlCenterAnim.value
+        val sidePageProgressProvider = remember {
+            {
+                if (overlayGestureTargetState.value == OverlayGestureTarget.Stack) {
+                    overlayGestureProgress.floatValue
+                } else {
+                    sidePageAnim.value
+                }
+            }
+        }
+        val widgetPageProgressProvider = remember {
+            {
+                if (overlayGestureTargetState.value == OverlayGestureTarget.Widgets) {
+                    overlayGestureProgress.floatValue
+                } else {
+                    widgetPageAnim.value
+                }
+            }
+        }
+        val controlCenterProgressProvider = remember {
+            {
+                if (overlayGestureTargetState.value == OverlayGestureTarget.ControlCenter) {
+                    overlayGestureProgress.floatValue
+                } else {
+                    controlCenterAnim.value
+                }
+            }
+        }
         // 表盘背衬统一进度：四个覆层里最强的一个驱动表盘下压与镜像外扩。
         val overlayBackdropProgress = remember {
             {
                 maxOf(
-                    sidePageAnim.value,
-                    widgetPageAnim.value,
-                    controlCenterAnim.value,
+                    sidePageProgressProvider(),
+                    widgetPageProgressProvider(),
+                    controlCenterProgressProvider(),
                     notificationGestureProgress,
                 ).coerceIn(0f, 1f)
             }
@@ -1046,9 +1142,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val overlayBackdropActive by remember {
             derivedStateOf {
                 maxOf(
-                    sidePageAnim.value,
-                    widgetPageAnim.value,
-                    controlCenterAnim.value,
+                    sidePageProgressProvider(),
+                    widgetPageProgressProvider(),
+                    controlCenterProgressProvider(),
                     notificationGestureProgress,
                 ) > 0.001f
             }
@@ -1065,9 +1161,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val faceBackdropProvider = remember(faceReturnShrinkEnabled) {
             {
                 val p = maxOf(
-                    sidePageAnim.value,
-                    widgetPageAnim.value,
-                    controlCenterAnim.value,
+                    sidePageProgressProvider(),
+                    widgetPageProgressProvider(),
+                    controlCenterProgressProvider(),
                     notificationGestureProgress,
                 ).coerceIn(0f, 1f)
                 // p=0 必须精确等于表盘静止态（外部时钟撤走零跳变）。
@@ -1134,9 +1230,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 }
             }
         }
-        val sideScreenVisible = sidePageProgress > 0.001f || screenState == ScreenState.Stack || screenState == ScreenState.Notifications
-        val widgetPageVisible = widgetPageProgress > 0.001f || screenState == ScreenState.Widgets
-        val controlCenterVisible = controlCenterProgress > 0.001f || screenState == ScreenState.ControlCenter
+        val sideScreenVisible = sidePageMounted ||
+            overlayGestureTarget == OverlayGestureTarget.Stack ||
+            screenState == ScreenState.Stack ||
+            screenState == ScreenState.Notifications
+        val widgetPageVisible = widgetPageMounted ||
+            overlayGestureTarget == OverlayGestureTarget.Widgets ||
+            screenState == ScreenState.Widgets
+        val controlCenterVisible = controlCenterMounted ||
+            overlayGestureTarget == OverlayGestureTarget.ControlCenter ||
+            screenState == ScreenState.ControlCenter
         val sideSceneOverlayActive = sideScreenVisible || widgetPageVisible || controlCenterVisible
         val appListLayerRaised = screenState == ScreenState.Apps ||
             // 打断转场时补位：prevState 尚未回写的那一帧靠它顶住 zIndex，
@@ -1147,6 +1250,36 @@ fun LauncherScreen(vm: LauncherViewModel) {
             isReturningFromApp ||
             appListLayerReleaseHold ||
             (screenState == ScreenState.App && launchSourceState == ScreenState.Apps && showLaunchBackdrop)
+        var legacyWatchFaceBounds by remember(legacyWatchFaceVisualKey) {
+            mutableStateOf<android.graphics.Rect?>(null)
+        }
+        val legacyCaptureAllowed =
+            Build.VERSION.SDK_INT in Build.VERSION_CODES.O until Build.VERSION_CODES.S &&
+                launcherInteractive &&
+                screenState == ScreenState.Face &&
+                watchFaceSelectionReady &&
+                openFolder == null &&
+                !sideSceneOverlayActive &&
+                !overlayBackdropActive &&
+                !notificationGestureActive &&
+                !appListLayerRaised &&
+                !showLaunchBackdrop &&
+                !directLaunchBackdropVisible
+        val legacyCapturedWatchFace = rememberLegacyWatchFacePixelCopyFrame(
+            visualKey = legacyWatchFaceVisualKey,
+            sourceBoundsInWindow = legacyWatchFaceBounds,
+            captureAllowed = legacyCaptureAllowed,
+        )
+        val legacyWatchFaceBackdropFrames = rememberLegacyWatchFaceBackdropFrames(
+            descriptor = selectedWatchFace,
+            builtInPhotoPath = builtInPhotoPath,
+            builtInVideoPath = builtInVideoPath,
+            refreshToken = watchFaceRefreshToken,
+            fallbackColor = launcherStyle.screenBackground,
+            builtInMaterialStyle = uiStyle.isMaterial,
+            visualKey = legacyWatchFaceVisualKey,
+            capturedFrame = legacyCapturedWatchFace,
+        )
         // API 31+ 不再在转场期间降档行级模糊：settle 帧把 OFF→SYSTEM 的
         // RenderEffect 全量装回（applyConfigToAttachedRows 逐行 reapply）正是
         // 「打开/返回最后一帧图标模糊集中弹入 + 抽帧」的主力。老设备保留降档。
@@ -1172,13 +1305,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
             showControlCenter = showControlCenter,
             widgetsBackGestureLocked = widgetPageEditGestureLocked,
             onOverlayDrag = { target, progress ->
+                overlayGestureGeneration++
                 overlayGestureTarget = target
-                launcherScope.launch {
-                    when (target) {
-                        OverlayGestureTarget.Stack -> sidePageAnim.snapTo(progress)
-                        OverlayGestureTarget.Widgets -> widgetPageAnim.snapTo(progress)
-                        OverlayGestureTarget.ControlCenter -> controlCenterAnim.snapTo(progress)
-                    }
+                overlayGestureProgress.floatValue = progress.coerceIn(0f, 1f)
+                when (target) {
+                    OverlayGestureTarget.Stack -> sidePageMounted = true
+                    OverlayGestureTarget.Widgets -> widgetPageMounted = true
+                    OverlayGestureTarget.ControlCenter -> controlCenterMounted = true
                 }
             },
             onOverlayRelease = { target, progress, velocity ->
@@ -1186,7 +1319,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 val open = progress > 0.42f || velocity > 1.6f
                 // 只给刚被拖的那个覆层留初速度，其余两个照常从 0 收尾。
                 overlayReleaseVelocities[target] = velocity
-                overlayGestureTarget = null
+                val handoff = progress.coerceIn(0f, 1f)
+                val handoffGeneration = ++overlayGestureGeneration
                 val overlayState = when (target) {
                     OverlayGestureTarget.Stack -> ScreenState.Stack
                     OverlayGestureTarget.Widgets -> ScreenState.Widgets
@@ -1198,6 +1332,19 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     // 关闭侧跟手收尾：没过阈值就退回表盘。以前这里什么都不做，
                     // 覆层已经被拖到接近 0 却仍停在打开状态。
                     vm.setState(ScreenState.Face)
+                }
+                // 先把对应 Animatable 播种到手指最后一帧，再撤掉同步手势
+                // 状态；这样交给 LaunchedEffect 的 spring 时像素位置和预制
+                // 模糊混合比例都连续，且整个 release 只创建一个协程。
+                launcherScope.launch {
+                    when (target) {
+                        OverlayGestureTarget.Stack -> sidePageAnim.snapTo(handoff)
+                        OverlayGestureTarget.Widgets -> widgetPageAnim.snapTo(handoff)
+                        OverlayGestureTarget.ControlCenter -> controlCenterAnim.snapTo(handoff)
+                    }
+                    if (handoffGeneration == overlayGestureGeneration) {
+                        overlayGestureTarget = null
+                    }
                 }
             },
             modifier = Modifier.fillMaxSize()
@@ -1249,6 +1396,20 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .onGloballyPositioned { coordinates ->
+                        val bounds = coordinates.boundsInWindow()
+                        if (bounds.width > 1f && bounds.height > 1f) {
+                            val resolved = android.graphics.Rect(
+                                bounds.left.roundToInt(),
+                                bounds.top.roundToInt(),
+                                bounds.right.roundToInt(),
+                                bounds.bottom.roundToInt(),
+                            )
+                            if (legacyWatchFaceBounds != resolved) {
+                                legacyWatchFaceBounds = resolved
+                            }
+                        }
+                    }
                     // 转场未收尾（appListLayerRaised）期间表盘必须让位：立刻抢回
                     // 3f 会把还在收尾的列表层压在身下——「最后一帧闪现」的另一半。
                     .zIndex(
@@ -1269,6 +1430,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         progress = faceBackdropFillProgress,
                         enabled = true,
                         fallbackColor = launcherStyle.screenBackground,
+                        legacyFrames = legacyWatchFaceBackdropFrames,
+                        legacyDarkMode = effectiveDarkMode,
                         // 背衬的中心矩形必须和表盘 graphicsLayer 使用同一帧的
                         // scale/translation；矩形外再由 flueBackdropFill 做四边
                         // 与四角镜像，避免只放大中心副本造成粘滞/黑缝。
@@ -1724,8 +1887,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             // 屏幕左侧留下一道边——打开控制中心时看到的「负一屏
                             // 边边」就是它。
                             val offscreen = size.width.coerceAtLeast(screenWidthPx)
-                            translationX = (sidePageProgress - 1f) * offscreen
-                            alpha = if (sidePageProgress > 0.001f) 1f else 0f
+                            val pageProgress = sidePageProgressProvider()
+                            translationX = (pageProgress - 1f) * offscreen
+                            alpha = if (pageProgress > 0.001f) 1f else 0f
                             val blurP = sidePageNotificationBlurProgress()
                             val radiusPx = with(density) { (24f * blurP).dp.toPx() }
                                 .roundToInt()
@@ -1749,6 +1913,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         showMusicCard = showMusicControls && swapMusicNotificationComponents,
                         showMediaCustomActions = showMediaCustomActions,
                         musicTextSwitchAnimation = musicTextSwitchAnimation,
+                        glassHighlightEnabled = glassHighlightEnabled,
+                        overlayMaskCornerRadiusDp = overlayMaskCornerRadiusDp,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         notificationsEnabled = notificationsEnabled,
                         notificationAccessGranted = notificationAccessGranted,
@@ -1802,8 +1968,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             // 同上：用测量宽度而不是 configuration 屏宽，否则
                             // 收起态会在屏幕右侧留下一道小组件页的边。
                             val offscreen = size.width.coerceAtLeast(screenWidthPx)
-                            translationX = (1f - widgetPageProgress) * offscreen
-                            alpha = if (widgetPageProgress > 0.001f) 1f else 0f
+                            val pageProgress = widgetPageProgressProvider()
+                            translationX = (1f - pageProgress) * offscreen
+                            alpha = if (pageProgress > 0.001f) 1f else 0f
                         }
                 ) {
                     val sideScreenWidgetSlots by vm.sideScreenWidgetSlots.collectAsStateWithLifecycle()
@@ -1814,7 +1981,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onSetWidget = vm::setWidgetSlot,
                         onSwapWidget = vm::swapWidgetSlots,
                         onRemoveWidget = vm::removeWidgetSlot,
-                        onEditModeChange = { widgetPageEditGestureLocked = it }
+                        onEditModeChange = { widgetPageEditGestureLocked = it },
+                        overlayMaskCornerRadiusDp = overlayMaskCornerRadiusDp,
                     )
                 }
             }
@@ -1826,8 +1994,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         .zIndex(4.4f)
                         .graphicsLayer {
                             val offscreen = size.height.coerceAtLeast(screenHeightPx)
-                            translationY = (controlCenterProgress - 1f) * offscreen
-                            alpha = if (controlCenterProgress > 0.001f) 1f else 0f
+                            val pageProgress = controlCenterProgressProvider()
+                            translationY = (pageProgress - 1f) * offscreen
+                            alpha = if (pageProgress > 0.001f) 1f else 0f
                         }
                 ) {
                     ControlCenterLayer(
@@ -1843,6 +2012,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         showPowerButton = powerMenuButtonEnabled,
                         onPowerClick = openPowerDialogWithAccessibility,
                         glassHighlightEnabled = glassHighlightEnabled,
+                        overlayMaskCornerRadiusDp = overlayMaskCornerRadiusDp,
                     )
                 }
             }

@@ -70,12 +70,12 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.flue.launcher.ui.common.FrostedHeader
 import com.flue.launcher.ui.common.glassSurface
 import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.rememberPressedState
@@ -594,7 +594,7 @@ fun NotificationLayer(
                             ) {
                                 ActionDock {
                                     DockActionButton(
-                                        text = "全部清除",
+                                        text = stringResource(R.string.notification_clear_all),
                                         onClick = onDismissAllNotifications
                                     )
                                 }
@@ -604,20 +604,6 @@ fun NotificationLayer(
                 }
             }
         }
-        // 顶部模糊头（§8）：通知列表顶部行的模糊背衬。作为覆层叠在列表上方，
-        // 不参与布局与手势（无 pointerInput，命中测试直接穿透到列表）；
-        // 滚动量取自 listState —— 列表离开顶部后，滚过的卡片在头部区域被
-        // 模糊 + 渐隐「压下去」。
-        FrostedHeader(
-            scrollProvider = {
-                if (listState.firstVisibleItemIndex > 0) {
-                    Float.MAX_VALUE
-                } else {
-                    listState.firstVisibleItemScrollOffset.toFloat()
-                }
-            },
-            modifier = Modifier.align(Alignment.TopCenter)
-        ) {}
     }
 }
 
@@ -725,14 +711,18 @@ private fun NotificationRowContainer(
 
 @Composable
 private fun PermissionCard(width: androidx.compose.ui.unit.Dp, onClick: () -> Unit) {
-    val fake = NotificationEntryUi("perm", "", null, "开启通知访问", "开启通知访问", "完成授权后这里会显示真实通知", 0L, null, false, false, false, false)
-    NotificationCard(width, fake, "完成授权后这里会显示真实通知", "", onClick = { onClick() })
+    val title = stringResource(R.string.notification_permission_title)
+    val subtitle = stringResource(R.string.notification_permission_subtitle)
+    val fake = NotificationEntryUi("perm", "", null, title, title, subtitle, 0L, null, false, false, false, false)
+    NotificationCard(width, fake, subtitle, "", onClick = { onClick() })
 }
 
 @Composable
 private fun EmptyCard(width: androidx.compose.ui.unit.Dp) {
-    val fake = NotificationEntryUi("empty", "", null, "暂无通知", "暂无通知", "有新消息时会显示在这里", 0L, null, false, false, false, false)
-    NotificationCard(width, fake, "有新消息时会显示在这里", "", onClick = {})
+    val title = stringResource(R.string.notification_empty_title)
+    val subtitle = stringResource(R.string.notification_empty_subtitle)
+    val fake = NotificationEntryUi("empty", "", null, title, title, subtitle, 0L, null, false, false, false, false)
+    NotificationCard(width, fake, subtitle, "", onClick = {})
 }
 
 @Composable
@@ -763,7 +753,12 @@ private fun GroupHeader(
         Text(title, color = launcherStyle.titleColor, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
         if (showMeta) {
             Spacer(Modifier.weight(1f))
-            Text("${count}条通知", color = launcherStyle.titleColor, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                stringResource(R.string.notification_count_fmt, count),
+                color = launcherStyle.titleColor,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
             Spacer(Modifier.width(10.dp))
             // 箭头跟着容器高度动画一起转，不再抢跑瞬翻。
             val arrowRotation by animateFloatAsState(
@@ -826,7 +821,12 @@ private fun CollapsedStackCard(
                     }
                 }
             )
-            Text("+${hiddenCount}条新消息", color = WatchColors.TextTertiary, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
+            Text(
+                stringResource(R.string.notification_hidden_messages_fmt, hiddenCount),
+                color = WatchColors.TextTertiary,
+                fontSize = 12.sp,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            )
         }
     }
 }

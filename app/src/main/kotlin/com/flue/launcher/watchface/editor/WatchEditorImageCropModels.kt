@@ -28,11 +28,7 @@ data class WatchEditorCropRect(
 }
 
 /** Crop aspect presets: free, 1:1, and the physical watch screen ratio. */
-enum class WatchEditorCropAspect(val label: String) {
-    FREE("自由"),
-    SQUARE("1:1"),
-    SCREEN("屏幕"),
-}
+enum class WatchEditorCropAspect { FREE, SQUARE, SCREEN }
 
 /** Resolves the preset to a width/height ratio, or null for free cropping. */
 fun watchEditorCropAspectRatio(

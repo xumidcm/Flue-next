@@ -22,6 +22,22 @@ class WatchEditorLayoutPolicyTest {
     }
 
     @Test
+    fun stalePropertyCommitDoesNotRestoreAnOlderSelection() {
+        assertTrue(
+            !shouldKeepWatchEditorSelectionForAsyncCommit(
+                commitStartSelectionGeneration = 8,
+                currentSelectionGeneration = 9,
+            ),
+        )
+        assertTrue(
+            shouldKeepWatchEditorSelectionForAsyncCommit(
+                commitStartSelectionGeneration = 9,
+                currentSelectionGeneration = 9,
+            ),
+        )
+    }
+
+    @Test
     fun compactWatchKeepsCanvasLargeEnoughForDirectManipulation() {
         val preview = watchEditorPreviewSizeDp(maxWidthDp = 240f, maxHeightDp = 280f)
 

@@ -69,6 +69,18 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private var disposed = false
     private var source: PreparedSource? = null
     private var descriptorKey: String? = null
+    private var loadedDescriptorKey: String? = null
+    private var loadedRefreshToken: Int? = null
+    /**
+     * Full outgoing frame used for an atomic cross-watch hand-off. The new
+     * source is allowed to start decoding underneath it; the snapshot is
+     * removed only after that generation has no pending visual asset loads.
+     */
+    private var sourceTransitionFrame: Bitmap? = null
+    private var sourceTransitionGeneration = -1L
+    private var sourceTransitionStartedAtUptimeMs = 0L
+    private var trackTransitionAssetReadiness = false
+    private var transitionFrameHasUnreadyVisualAsset = false
     private var faceVisible = false
     private var refreshToken = 0
     private var longPressAction: (() -> Unit)? = null
@@ -88,6 +100,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private var liveTransformRotation = 0f
     private var liveTransformScaleX = 1f
     private var liveTransformScaleY = 1f
+    private val liveTransformHandoff = WatchLiveTransformHandoff()
 
     /**
      * 编辑器手势期间逐帧调用：被拖图层的表盘像素立即跟随手指渲染，
@@ -110,11 +123,49 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         invalidate()
     }
 
+    /** Called when a new pointer gesture takes ownership of the live override. */
+    fun cancelLiveLayerTransformHandoff() {
+        liveTransformHandoff.cancel()
+    }
+
     /** 手势结束（提交/取消）后清除覆盖，回到以 XML 为准的渲染。 */
     fun clearLiveLayerTransform() {
+        liveTransformHandoff.cancel()
+        if (clearLiveLayerTransformInternal()) invalidate()
+    }
+
+    /**
+     * Keeps the release-frame transform visible until [refreshToken] has been
+     * parsed and published. The actual clear happens inside [bind], in the same
+     * main-thread transaction that swaps [source], so no old-geometry frame can
+     * appear between pointer-up and the committed renderer state.
+     */
+    fun handoffLiveLayerTransformOnSourceReady(refreshToken: Int) {
         if (liveTransformLayerIndex == -1) return
+        val key = descriptorKey ?: return
+        liveTransformHandoff.arm(key, refreshToken)
+        if (
+            loadedDescriptorKey == key &&
+            loadedRefreshToken == refreshToken &&
+            liveTransformHandoff.consumeIfReady(key, refreshToken)
+        ) {
+            if (clearLiveLayerTransformInternal()) invalidate()
+        }
+    }
+
+    private fun clearLiveLayerTransformInternal(): Boolean {
+        if (liveTransformLayerIndex == -1) return false
         liveTransformLayerIndex = -1
-        invalidate()
+        return true
+    }
+
+    private fun completeLiveTransformHandoffIfReady(
+        descriptorKey: String,
+        refreshToken: Int,
+    ) {
+        if (liveTransformHandoff.consumeIfReady(descriptorKey, refreshToken)) {
+            clearLiveLayerTransformInternal()
+        }
     }
 
     /**
@@ -133,6 +184,124 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         canvas.translate(DESIGN_SIZE / 2f, DESIGN_SIZE / 2f)
         runCatching { drawRenderItem(canvas, item, prepared) }
         return bitmap
+    }
+
+    /**
+     * Resolves a text layer exactly like the live face, but returns only its
+     * current textual content. The editor uses this to build an independent,
+     * centered thumbnail without inheriting the layer's x/y/rotation/scale.
+     */
+    fun resolveTextLayerPreview(layerIndex: Int): String? {
+        if (disposed) return null
+        val prepared = source ?: return null
+        val layer = prepared.definition.layers.getOrNull(layerIndex) ?: return null
+        if (!layer.type.lowercase(Locale.ROOT).contains("text")) return null
+        val raw = layer.attributes["text"].orEmpty()
+            .ifBlank { layer.attributes["value"].orEmpty() }
+        if (raw.isBlank()) return null
+        calendar.timeInMillis = System.currentTimeMillis()
+        frameDataSnapshot = runCatching { dataProvider.snapshot(calendar.timeInMillis) }
+            .getOrDefault(WatchDataSnapshot())
+        val resolved = evaluateText(raw, prepared)
+        return when (layer.attributes["transform"].orEmpty().lowercase(Locale.ROOT)) {
+            "uc", "uppercase" -> resolved.uppercase(Locale.getDefault())
+            "lc", "lowercase" -> resolved.lowercase(Locale.getDefault())
+            else -> resolved
+        }.takeIf(String::isNotBlank)
+    }
+
+    /**
+     * Renders one plain text layer as an independent, tightly-fitted thumbnail.
+     *
+     * The live renderer supplies the expression result, font (including BMFont),
+     * colour, outline and alignment. We intentionally do not apply the layer's
+     * x/y/rotation/scale or ancestor transforms: the layer list needs a readable
+     * material preview, not a crop of its position on the watch canvas.
+     */
+    fun renderTextLayerThumbnail(layerIndex: Int, sizePx: Int): Bitmap? {
+        if (disposed || sizePx <= 0) return null
+        val prepared = source ?: return null
+        val layer = prepared.definition.layers.getOrNull(layerIndex) ?: return null
+        val normalizedType = layer.type.lowercase(Locale.ROOT)
+        if (normalizedType !in setOf("text", "text_curved", "text_ring")) return null
+        val raw = layer.attributes["text"].orEmpty()
+            .ifBlank { layer.attributes["value"].orEmpty() }
+        if (raw.isBlank()) return null
+        val thumbnailAttributes = if (layer.attributes["text"].isNullOrBlank()) {
+            layer.attributes + ("text" to raw)
+        } else {
+            layer.attributes
+        }
+
+        calendar.timeInMillis = System.currentTimeMillis()
+        frameDataSnapshot = runCatching { dataProvider.snapshot(calendar.timeInMillis) }
+            .getOrDefault(WatchDataSnapshot())
+
+        // Render once in the canonical design space so even small text retains
+        // enough antialiasing detail before it is fitted into the 40dp row tile.
+        val workingSize = DESIGN_SIZE.roundToInt().coerceAtLeast(1)
+        val working = Bitmap.createBitmap(workingSize, workingSize, Bitmap.Config.ARGB_8888)
+        val workingCanvas = Canvas(working)
+        val designScale = workingSize / DESIGN_SIZE
+        workingCanvas.scale(designScale, designScale)
+        workingCanvas.translate(DESIGN_SIZE / 2f, DESIGN_SIZE / 2f)
+        runCatching {
+            when (normalizedType) {
+                "text_curved" -> drawCurvedText(workingCanvas, thumbnailAttributes, 1f, prepared)
+                "text_ring" -> drawTextRing(workingCanvas, thumbnailAttributes, 1f, prepared)
+                else -> drawText(workingCanvas, thumbnailAttributes, 1f, prepared)
+            }
+        }
+
+        val pixels = IntArray(workingSize * workingSize)
+        working.getPixels(pixels, 0, workingSize, 0, 0, workingSize, workingSize)
+        var left = workingSize
+        var top = workingSize
+        var right = -1
+        var bottom = -1
+        pixels.forEachIndexed { index, color ->
+            if (color ushr 24 == 0) return@forEachIndexed
+            val x = index % workingSize
+            val y = index / workingSize
+            if (x < left) left = x
+            if (x > right) right = x
+            if (y < top) top = y
+            if (y > bottom) bottom = y
+        }
+        if (right < left || bottom < top) {
+            working.recycle()
+            return null
+        }
+
+        val sourcePadding = 3
+        val sourceRect = Rect(
+            (left - sourcePadding).coerceAtLeast(0),
+            (top - sourcePadding).coerceAtLeast(0),
+            (right + sourcePadding + 1).coerceAtMost(workingSize),
+            (bottom + sourcePadding + 1).coerceAtMost(workingSize),
+        )
+        val available = (sizePx - 6).coerceAtLeast(1).toFloat()
+        val fitScale = min(
+            available / sourceRect.width().coerceAtLeast(1),
+            available / sourceRect.height().coerceAtLeast(1),
+        )
+        val drawnWidth = (sourceRect.width() * fitScale).coerceAtLeast(1f)
+        val drawnHeight = (sourceRect.height() * fitScale).coerceAtLeast(1f)
+        val destination = RectF(
+            (sizePx - drawnWidth) / 2f,
+            (sizePx - drawnHeight) / 2f,
+            (sizePx + drawnWidth) / 2f,
+            (sizePx + drawnHeight) / 2f,
+        )
+        val output = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+        Canvas(output).drawBitmap(
+            working,
+            sourceRect,
+            destination,
+            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG),
+        )
+        working.recycle()
+        return output
     }
 
     /**
@@ -195,6 +364,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
      * 只在主线程的 onDraw 里读写，不需要 cacheLock。
      */
     private val lastDrawnFrameByLayer = LinkedHashMap<String, Bitmap>(8, 0.75f, true)
+    /** Raw GIF equivalent of [lastDrawnFrameByLayer], used while a replacement Movie decodes. */
+    private val lastDrawnMovieByLayer = LinkedHashMap<String, Movie>(4, 0.75f, true)
     private var bitmapCacheBytes = 0L
     private val activeAssetLoads = HashSet<AssetLoadClaim>(MAX_CONCURRENT_ASSET_LOADS)
     /** Asset key -> bind generation which owns the in-flight decode. */
@@ -216,6 +387,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG)
     private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val sourceTransitionPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     /** 描边通道专用；绝不复用 textPaint/shapePaint，避免污染其 style/strokeWidth。 */
     private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG)
     /** 位图字体描边副本专用（带 SRC_IN 滤色把字形染成描边色）。 */
@@ -258,6 +430,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         onDoubleTap: (() -> Unit)?,
         onLoadFailure: (WatchFaceDescriptor, Throwable) -> Unit,
         onTapAction: ((WatchTapAction) -> Unit)? = null,
+        onSourceReady: ((Int) -> Unit)? = null,
     ) {
         if (disposed) return
         require(descriptor.isWatchmaker) { "Watchmaker view requires a standard .watch descriptor" }
@@ -267,9 +440,22 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         this.tapActionHandler = onTapAction
         if (descriptorKey == descriptor.stableKey && this.refreshToken == refreshToken) {
             if (faceVisible) scheduleTicks() else cancelTicks()
+            if (
+                loadedDescriptorKey == descriptor.stableKey &&
+                loadedRefreshToken == refreshToken
+            ) {
+                completeLiveTransformHandoffIfReady(descriptor.stableKey, refreshToken)
+            }
             invalidate()
+            if (
+                loadedDescriptorKey == descriptor.stableKey &&
+                loadedRefreshToken == refreshToken
+            ) {
+                onSourceReady?.invoke(refreshToken)
+            }
             return
         }
+        val previousDescriptorKey = loadedDescriptorKey
         val reloadMode = watchSourceReloadMode(
             currentDescriptorKey = descriptorKey,
             nextDescriptorKey = descriptor.stableKey,
@@ -320,9 +506,23 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                     it.rootCacheKey == prepared.rootCacheKey &&
                         it.definitionRevision == prepared.definitionRevision
                 } ?: prepared
+                if (
+                    replacement !== current &&
+                    current != null &&
+                    previousDescriptorKey != null &&
+                    previousDescriptorKey != descriptor.stableKey
+                ) {
+                    installSourceTransitionFrame(
+                        frame = capturePreparedFrame(current),
+                        generation = generation,
+                    )
+                }
                 if (replacement !== current) current?.clearRuntimeCaches()
                 source = replacement
-                if (replacement !== current && reloadMode == WatchSourceReloadMode.CLEAR_BEFORE_LOAD) {
+                loadedDescriptorKey = descriptor.stableKey
+                loadedRefreshToken = refreshToken
+                completeLiveTransformHandoffIfReady(descriptor.stableKey, refreshToken)
+                if (replacement !== current && previousDescriptorKey != descriptor.stableKey) {
                     // 不同表盘切换：重置 GIF / 帧序列计时，从第0帧开始播。
                     // 同表盘刷新（reloadMode == KEEP_CURRENT_UNTIL_READY）时保留
                     // 旧计时器，GIF 从中断处继续，不出现疯狂闪烁。
@@ -330,6 +530,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 }
                 scheduleTicks()
                 invalidate()
+                onSourceReady?.invoke(refreshToken)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
@@ -364,6 +565,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         disposed = true
         bindGeneration++
         descriptorKey = null
+        loadedDescriptorKey = null
+        loadedRefreshToken = null
+        liveTransformHandoff.cancel()
+        clearLiveLayerTransformInternal()
         faceVisible = false
         loadJob?.cancel()
         loadJob = null
@@ -390,6 +595,12 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         consumeCurrentGesture = false
         source?.clearRuntimeCaches()
         source = null
+        sourceTransitionFrame?.let { frame ->
+            if (!frame.isRecycled) frame.recycle()
+        }
+        sourceTransitionFrame = null
+        sourceTransitionGeneration = -1L
+        sourceTransitionStartedAtUptimeMs = 0L
     }
 
     override fun onAttachedToWindow() {
@@ -425,13 +636,76 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             canvas.drawColor(Color.BLACK)
             return
         }
+        val transition = sourceTransitionFrame?.takeIf { !it.isRecycled }
+        trackTransitionAssetReadiness =
+            transition != null && sourceTransitionGeneration == bindGeneration
+        transitionFrameHasUnreadyVisualAsset = false
+        drawPreparedSource(canvas, prepared, width.toFloat(), height.toFloat())
+        trackTransitionAssetReadiness = false
+
+        if (transition != null) {
+            canvas.drawBitmap(transition, null, Rect(0, 0, width, height), sourceTransitionPaint)
+            val transitionStillLoading = synchronized(cacheLock) {
+                activeAssetLoads.any { claim -> claim.generation == sourceTransitionGeneration }
+            }
+            val transitionTimedOut =
+                SystemClock.uptimeMillis() - sourceTransitionStartedAtUptimeMs >=
+                    SOURCE_TRANSITION_MAX_HOLD_MS
+            val canRevealReplacement =
+                !transitionStillLoading && !transitionFrameHasUnreadyVisualAsset
+            if (
+                sourceTransitionGeneration != bindGeneration ||
+                transitionTimedOut ||
+                canRevealReplacement
+            ) {
+                sourceTransitionFrame = null
+                sourceTransitionGeneration = -1L
+                sourceTransitionStartedAtUptimeMs = 0L
+                // Do not recycle here. A hardware display list may still refer
+                // to this bitmap after onDraw returns; dropping our reference
+                // lets the runtime reclaim it safely once that frame retires.
+                invalidate()
+            } else if (!transitionStillLoading) {
+                // A cancelled older generation can briefly occupy all decode
+                // slots. Retry on the next frame instead of revealing a face
+                // whose first image request has not even entered the queue yet.
+                postInvalidateOnAnimation()
+            }
+        }
+    }
+
+    private fun capturePreparedFrame(prepared: PreparedSource): Bitmap? {
+        if (width <= 0 || height <= 0) return null
+        return runCatching {
+            Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { bitmap ->
+                drawPreparedSource(Canvas(bitmap), prepared, width.toFloat(), height.toFloat())
+            }
+        }.getOrNull()
+    }
+
+    private fun installSourceTransitionFrame(frame: Bitmap?, generation: Long) {
+        val previous = sourceTransitionFrame
+        sourceTransitionFrame = frame
+        sourceTransitionGeneration = if (frame == null) -1L else generation
+        sourceTransitionStartedAtUptimeMs =
+            if (frame == null) 0L else SystemClock.uptimeMillis()
+        // As above, an outgoing hardware display list may still own [previous].
+        // Releasing the Kotlin reference is safer than eager recycle().
+    }
+
+    private fun drawPreparedSource(
+        canvas: Canvas,
+        prepared: PreparedSource,
+        targetWidth: Float,
+        targetHeight: Float,
+    ) {
         // 设计空间跟随表盘自己声明的画布比例（基准边恒 512）。方形声明算出来
         // 就是 512×512，所以这里对存量表盘是恒等变换。
         val extentW = prepared.designExtentWidth
         val extentH = prepared.designExtentHeight
         val transform = watchCanvasTransform(
-            viewWidth = width.toFloat(),
-            viewHeight = height.toFloat(),
+            viewWidth = targetWidth,
+            viewHeight = targetHeight,
             forceFill = forceFill,
             designWidth = extentW,
             designHeight = extentH,
@@ -485,7 +759,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 .coerceIn(0f, 100f) / 100f
             if (alpha <= 0f || !isDisplayed(attributes["display"], source)) return
             applyTransform(canvas, attributes, source, item.layerIndex)
-            drawPrimitive(canvas, layer, alpha, source)
+            drawPrimitive(canvas, layer, item.layerIndex, alpha, source)
         } finally {
             canvas.restoreToCount(saveCount)
         }
@@ -536,13 +810,49 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
     }
 
-    private fun drawPrimitive(canvas: Canvas, layer: WatchmakerLayer, alpha: Float, source: PreparedSource) {
+    private fun drawPrimitive(
+        canvas: Canvas,
+        layer: WatchmakerLayer,
+        layerIndex: Int,
+        alpha: Float,
+        source: PreparedSource,
+    ) {
         val attrs = layer.attributes
-        when (layer.type.lowercase(Locale.ROOT)) {
-            "image", "gif", "image_gif" -> drawImage(canvas, attrs, alpha, source)
-            "image_tap" -> drawImage(canvas, attrs, alpha, source, tapAction = true)
-            "image_cond" -> drawImage(canvas, attrs, alpha, source, sprite = true)
-            "text" -> drawText(canvas, attrs, alpha, source)
+        val normalizedType = layer.type.lowercase(Locale.ROOT)
+        var animatedAlpha = alpha
+        if (normalizedType.startsWith("text") &&
+            (!attrs["anim_in"].isNullOrBlank() || !attrs["anim_out"].isNullOrBlank())
+        ) {
+            val animation = watchTextAnimationFrame(
+                animIn = attrs["anim_in"],
+                animOut = attrs["anim_out"],
+                durationInSeconds = dynamicNumber(attrs["dur_in"], 0.5f, source),
+                durationOnSeconds = dynamicNumber(attrs["dur_on"], 0f, source),
+                durationOutSeconds = dynamicNumber(attrs["dur_out"], 0.5f, source),
+                durationOffSeconds = dynamicNumber(attrs["dur_off"], 0f, source),
+                delayStartSeconds = dynamicNumber(attrs["delay_start"], 0f, source),
+                repeatCount = dynamicNumber(attrs["repeat_count"], 1f, source).roundToInt(),
+                restartOnLoad = attrs["restart_on_load"].equals("Y", ignoreCase = true) ||
+                    attrs["restart_on_load"].equals("true", ignoreCase = true),
+                elapsedMs = SystemClock.uptimeMillis() - source.animationStartedAtUptimeMs,
+            )
+            if (!animation.visible) return
+            canvas.translate(animation.translationX, animation.translationY)
+            if (animation.scale != 1f) canvas.scale(animation.scale, animation.scale)
+            if (animation.rotation != 0f) canvas.rotate(animation.rotation)
+            animatedAlpha *= animation.alpha
+        }
+        val layerCacheKey = buildString {
+            append(source.rootCacheKey)
+            append('\u0000')
+            append(layer.id?.takeIf(String::isNotBlank) ?: layerIndex)
+        }
+        when (normalizedType) {
+            "image", "gif", "image_gif" -> drawImage(canvas, attrs, animatedAlpha, source, layerCacheKey)
+            "image_tap" -> drawImage(canvas, attrs, animatedAlpha, source, layerCacheKey, tapAction = true)
+            "image_cond" -> drawImage(canvas, attrs, animatedAlpha, source, layerCacheKey, sprite = true)
+            "gallery", "gallery_2d" -> drawGallery2d(canvas, attrs, animatedAlpha, source, layerCacheKey)
+            "text" -> drawText(canvas, attrs, animatedAlpha, source)
             "series" -> drawSeries(canvas, attrs, alpha, source)
             "calendar" -> drawCalendar(canvas, attrs, alpha, source)
             "ring" -> drawRing(canvas, attrs, alpha, source)
@@ -551,16 +861,50 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             "rounded" -> drawRounded(canvas, attrs, alpha, source)
             "markers" -> drawMarkers(canvas, attrs, alpha, source)
             "markers_hm" -> drawHourMinuteMarkers(canvas, attrs, alpha, source)
-            "text_curved" -> drawCurvedText(canvas, attrs, alpha, source)
-            "text_ring" -> drawTextRing(canvas, attrs, alpha, source)
+            "text_curved" -> drawCurvedText(canvas, attrs, animatedAlpha, source)
+            "text_ring" -> drawTextRing(canvas, attrs, animatedAlpha, source)
             "chart" -> drawChart(canvas, attrs, alpha, source)
             "svg" -> drawSvg(canvas, attrs, alpha, source)
             // These families need a MediaPlayer/live map bridge.  If an
             // exporter points them at a static image, drawing that image is a
             // useful bounded fallback; otherwise leave the region transparent
             // and keep the capability in compatibilityReport.
-            "video", "map" -> drawStaticMediaFallback(canvas, attrs, alpha, source)
+            "video", "map" -> drawStaticMediaFallback(canvas, attrs, alpha, source, layerCacheKey)
         }
+    }
+
+    private fun drawGallery2d(
+        canvas: Canvas,
+        attrs: Map<String, String>,
+        alpha: Float,
+        source: PreparedSource,
+        layerCacheKey: String,
+    ) {
+        val rawPaths = sequenceOf(
+            attrs["path"],
+            attrs["paths"],
+            attrs["images"],
+            attrs["source"],
+        ).firstOrNull { !it.isNullOrBlank() }
+        val evaluatedPaths = rawPaths?.let { evaluateText(it, source) }
+        val galleryPaths = parseWatchGalleryPaths(evaluatedPaths)
+            .ifEmpty { source.galleryAssetPaths }
+        if (galleryPaths.isEmpty()) return
+
+        val durationOnSeconds = dynamicNumber(
+            attrs["dur_on"],
+            DEFAULT_WATCH_GALLERY_DURATION_SECONDS,
+            source,
+        )
+        drawImage(
+            canvas = canvas,
+            attrs = attrs,
+            alpha = alpha,
+            source = source,
+            layerCacheKey = layerCacheKey,
+            pathExpressionOverride = galleryPaths.joinToString("`"),
+            frameDelayMsOverride = watchGalleryFrameDurationMs(durationOnSeconds),
+        )
     }
 
     private fun drawImage(
@@ -568,17 +912,22 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         attrs: Map<String, String>,
         alpha: Float,
         source: PreparedSource,
+        layerCacheKey: String,
         sprite: Boolean = false,
         tapAction: Boolean = false,
+        pathExpressionOverride: String? = null,
+        frameDelayMsOverride: Long? = null,
     ) {
-        val pathExpression = evaluateText(attrs["path"].orEmpty(), source)
+        val pathExpression = pathExpressionOverride
+            ?: evaluateText(attrs["path"].orEmpty(), source)
         val framePaths = source.gifPathCache.getOrPut(pathExpression) {
             parseWatchGifPaths(pathExpression)
         }.orEmpty()
         val frameIndex = watchGifFrameIndex(
             framePaths.size,
             SystemClock.uptimeMillis() - frameStartedAtUptimeMs,
-            dynamicNumber(attrs["gif_delay"], 100f, source).roundToInt().toLong(),
+            frameDelayMsOverride
+                ?: dynamicNumber(attrs["gif_delay"], 50f, source).roundToInt().toLong(),
         )
         val path = framePaths.getOrNull(frameIndex) ?: pathExpression.substringBefore('`').trim()
         val wantsNightWeatherSheet = sprite &&
@@ -590,28 +939,62 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
         val usingNightWeatherSheet = nightResolved != null
         val selectedPath = if (usingNightWeatherSheet) nightPath.orEmpty() else path
+        // A dynamic expression can briefly resolve to an empty/missing path at
+        // the exact frame where it switches. Do not turn that transient lookup
+        // miss into a transparent frame: the per-layer fallback below remains
+        // authoritative until a new asset is ready.
         val resolved = nightResolved
             ?: resolveAsset(path, source, conventionalDirectory = "images")
-            ?: return
         val sharedSize = attrs["size"]
-        val movie = if (resolved.file.extension.equals("gif", true)) requestMovie(resolved, source) else null
-        val requestedBitmap = if (movie == null) requestBitmap(selectedPath, source) else null
-        // 帧序列预取：解码是异步的，而每帧只在真正要画的那一刻才请求，
-        // 于是切帧必然未命中。提前把下一帧排进解码队列，等索引推进时
-        // 通常已经在缓存里，兜底路径就很少被用到。
-        if (movie == null && framePaths.size > 1) {
-            val rawNextPath = framePaths[(frameIndex + 1) % framePaths.size]
-            val nextPath = if (usingNightWeatherSheet) {
-                watchWeatherNightAssetReference(rawNextPath)
-            } else {
-                rawNextPath
+        val requestedMovie = resolved
+            ?.takeIf { it.file.extension.equals("gif", true) }
+            ?.let { requestMovie(it, source) }
+        var movie = requestedMovie
+        if (requestedMovie != null) {
+            lastDrawnMovieByLayer[layerCacheKey] = requestedMovie
+            while (lastDrawnMovieByLayer.size > MAX_LAST_MOVIE_ENTRIES) {
+                val iterator = lastDrawnMovieByLayer.entries.iterator()
+                if (!iterator.hasNext()) break
+                iterator.next()
+                iterator.remove()
             }
-            if (nextPath != selectedPath) requestBitmap(nextPath, source)
+        }
+        val requestedBitmap = if (requestedMovie == null && resolved != null) {
+            requestBitmap(selectedPath, source)
+        } else {
+            null
+        }
+        // 帧序列 / gallery_2d 预取：当前帧两侧都提前进入解码队列，向前播放
+        // 或时间轴跳变都能直接命中；切换期间仍由每图层最后成功帧托底。
+        if (requestedMovie == null && framePaths.size > 1) {
+            linkedSetOf(
+                (frameIndex + 1) % framePaths.size,
+                if (frameIndex == 0) framePaths.lastIndex else frameIndex - 1,
+            ).forEach { adjacentIndex ->
+                val rawAdjacentPath = framePaths[adjacentIndex]
+                val preferredPath = if (usingNightWeatherSheet) {
+                    watchWeatherNightAssetReference(rawAdjacentPath)
+                } else {
+                    rawAdjacentPath
+                }
+                if (preferredPath == selectedPath) return@forEach
+                val adjacentAsset = resolveAsset(
+                    preferredPath,
+                    source,
+                    conventionalDirectory = "images",
+                ) ?: resolveAsset(rawAdjacentPath, source, conventionalDirectory = "images")
+                    ?: return@forEach
+                if (adjacentAsset.file.extension.equals("gif", ignoreCase = true)) {
+                    requestMovie(adjacentAsset, source)
+                } else {
+                    requestBitmap(adjacentAsset.key, source)
+                }
+            }
         }
         // 跨帧兜底：新帧还没解码好就继续画这一层上次画成的那张。
         var drawingNightWeatherSheet = usingNightWeatherSheet
-        val bitmap = if (movie == null) {
-            val fallbackKey = "$pathExpression\u0000${if (usingNightWeatherSheet) "night" else "day"}"
+        val fallbackKey = "$layerCacheKey\u0000${if (usingNightWeatherSheet) "night" else "day"}"
+        val bitmap = if (requestedMovie == null) {
             val usable = requestedBitmap?.takeIf { !it.isRecycled }
             if (usable != null) {
                 lastDrawnFrameByLayer[fallbackKey] = usable
@@ -629,7 +1012,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                         // 日夜切换时夜图也走异步解码；准备好之前沿用白天最后一帧，
                         // 避免条件图标短暂透明。
                         drawingNightWeatherSheet = false
-                        lastDrawnFrameByLayer["$pathExpression\u0000day"]
+                        lastDrawnFrameByLayer["$layerCacheKey\u0000day"]
                             ?.takeIf { !it.isRecycled }
                     } else {
                         null
@@ -637,6 +1020,19 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             }
         } else {
             null
+        }
+        if (movie == null && bitmap == null) {
+            // Switching a dynamic path from/to a raw GIF must retain the old
+            // Movie until the new resource is decoded, just like bitmap frames.
+            movie = lastDrawnMovieByLayer[layerCacheKey]
+        }
+        if (
+            trackTransitionAssetReadiness &&
+            resolved != null &&
+            movie == null &&
+            bitmap == null
+        ) {
+            transitionFrameHasUnreadyVisualAsset = true
         }
         val nativeWidth = movie?.width()?.toFloat() ?: bitmap?.width?.toFloat() ?: return
         val nativeHeight = movie?.height()?.toFloat() ?: bitmap?.height?.toFloat() ?: return
@@ -678,7 +1074,12 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         imagePaint.colorFilter = tintFilter(resolveColor(attrs["color"], Color.WHITE, source))
         if (movie != null) {
             val elapsed = (SystemClock.uptimeMillis() - frameStartedAtUptimeMs).coerceAtLeast(0L)
-            movie.setTime((elapsed % movie.duration().coerceAtLeast(1)).toInt())
+            // Movie.duration() is allowed to return 0 for GIFs without a
+            // reliable duration header. Treating that as 1 ms pins setTime()
+            // to frame zero forever; Android's own Movie sample uses a
+            // one-second fallback so the decoder can still advance and loop.
+            val durationMs = movie.duration().takeIf { it > 0 } ?: DEFAULT_MOVIE_DURATION_MS
+            movie.setTime((elapsed % durationMs).toInt())
             canvas.save()
             canvas.translate(dst.left, dst.top)
             canvas.scale(width / nativeWidth, height / nativeHeight)
@@ -1417,12 +1818,13 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         attrs: Map<String, String>,
         alpha: Float,
         source: PreparedSource,
+        layerCacheKey: String,
     ) {
         val path = evaluateText(attrs["path"] ?: attrs["source"] ?: "", source)
         val resolved = resolveAsset(path, source, conventionalDirectory = "images") ?: return
         val extension = resolved.file.extension.lowercase(Locale.ROOT)
         if (extension in setOf("png", "jpg", "jpeg", "webp", "bmp", "gif")) {
-            drawImage(canvas, attrs + ("path" to path), alpha, source)
+            drawImage(canvas, attrs + ("path" to path), alpha, source, layerCacheKey)
         }
     }
 
@@ -1543,8 +1945,21 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 }
             }
         val definitionRevision = sourceDigest.digest().joinToString("") { "%02x".format(it) }
+        val galleryAssetPaths = exact.keys.asSequence()
+            .filter { relative ->
+                val extension = relative.substringAfterLast('.', "").lowercase(Locale.ROOT)
+                extension in WATCH_GALLERY_IMAGE_EXTENSIONS && (
+                    relative.startsWith("gallery/") ||
+                        relative.startsWith("images/gallery/") ||
+                        "/gallery/" in relative
+                    )
+            }
+            .sorted()
+            .take(MAX_WATCH_GIF_FRAME_PATHS)
+            .toList()
         return PreparedSource(
             sourceGeneration = sourceGeneration,
+            animationStartedAtUptimeMs = SystemClock.uptimeMillis(),
             root = canonicalRoot,
             rootCacheKey = rootCacheKey,
             definitionRevision = definitionRevision,
@@ -1552,6 +1967,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             definition = definition,
             exactFiles = exact,
             uniqueBasenames = basename,
+            galleryAssetPaths = galleryAssetPaths,
             revisionByAbsolutePath = revisionByAbsolutePath,
             fontIndex = WatchFontIndex.build(canonicalRoot, files),
             bitmapFonts = bitmapFonts,
@@ -1563,7 +1979,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 .take(MAX_WATCH_LAYER_COUNT)
                 .any { layer ->
                     val type = layer.type.lowercase(Locale.ROOT)
-                    type == "gif" || type == "image_gif" ||
+                    watchLayerRequiresFrameTicks(type, layer.attributes) ||
                         (type == "chart" && layer.attributes.values.any { value ->
                             DYNAMIC_TAG_PATTERN.containsMatchIn(value)
                         }) ||
@@ -1903,6 +2319,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             }
             activeAssetLoads.remove(claim)
         }
+        if (!disposed && claim.generation == sourceTransitionGeneration) {
+            postInvalidateOnAnimation()
+        }
     }
 
     /** Caller must hold [cacheLock]. */
@@ -1930,6 +2349,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // 先松手，否则 map 里留着一堆已回收引用（画的时候有 isRecycled 守卫，
         // 但没必要留悬垂引用占着）。
         lastDrawnFrameByLayer.clear()
+        lastDrawnMovieByLayer.clear()
         synchronized(cacheLock) {
             bitmapCache.values.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
             bitmapCache.clear()
@@ -1977,6 +2397,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         source: PreparedSource,
     ): WatchTagResolution {
         val normalized = tag.trim().lowercase(Locale.ROOT)
+        resolveWatchCounterTag(
+            rawTag = normalized,
+            elapsedMs = SystemClock.uptimeMillis() - source.animationStartedAtUptimeMs,
+        )?.let { value -> return WatchTagResolution.Resolved(value) }
         return WatchmakerTagResolver.resolve(
             tag = normalized,
             now = now,
@@ -2158,6 +2582,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     private data class PreparedSource(
         val sourceGeneration: Long,
+        val animationStartedAtUptimeMs: Long,
         val root: File,
         val rootCacheKey: String,
         val definitionRevision: String,
@@ -2165,6 +2590,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val definition: WatchmakerDefinition,
         val exactFiles: Map<String, ResolvedAsset>,
         val uniqueBasenames: Map<String, ResolvedAsset?>,
+        val galleryAssetPaths: List<String>,
         val revisionByAbsolutePath: Map<String, String>,
         val fontIndex: WatchFontIndex,
         val bitmapFonts: Map<String, PreparedBitmapFont?>,
@@ -2259,6 +2685,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         private const val MAX_MOVIE_CACHE_ENTRIES = 4
         /** 帧序列兜底图上限：一块表盘同时有几个 GIF 图层已属极端情况。 */
         private const val MAX_LAST_FRAME_ENTRIES = 8
+        private const val MAX_LAST_MOVIE_ENTRIES = 4
         private const val MAX_TYPEFACE_CACHE_ENTRIES = 16
         private const val MAX_BITMAP_FAILURE_ENTRIES = 64
         private const val MAX_MOVIE_FAILURE_ENTRIES = 16
@@ -2278,6 +2705,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         private const val MAX_INITIAL_SCRIPT_BYTES = 256L * 1024L
         private const val MAX_BMFONT_DEFINITION_BYTES = 1L * 1024L * 1024L
         private const val BITMAP_FAILURE_RETRY_MS = 30_000L
+        private const val DEFAULT_MOVIE_DURATION_MS = 1_000
+        private const val SOURCE_TRANSITION_MAX_HOLD_MS = 8_000L
+        private val WATCH_GALLERY_IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "bmp", "gif")
         private val WINDOWS_ABSOLUTE_PATH = Regex("^[a-zA-Z]:[/\\\\].*")
         private val TEXT_RING_LABELS = (1..12).map(Int::toString)
 

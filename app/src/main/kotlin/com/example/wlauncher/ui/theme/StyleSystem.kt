@@ -62,34 +62,35 @@ enum class GlassTier { Thin, Thick }
  * `#F2F2F6` @0.88，同样一字未改，只是从写死搬进了令牌 —— 留在原地
  * 就等于在统一配方之外另开一份私有配方，下次调玻璃必然漏掉它。
  *
- * 浅色模式的薄档镜像成黑并略收：同 alpha 的黑 veil 在浅底上视觉重量
- * 比白 veil 更沉。
+ * 浅色模式的填充层镜像成黑并略收；边缘高光始终是白色。高光若也跟着
+ * 镜像成黑，浅色主题里的玻璃会读成普通描边卡片，而不是受光的透明边缘。
  */
 fun flueGlassTokens(
     darkMode: Boolean,
     tier: GlassTier = GlassTier.Thin,
 ): GlassSurfaceTokens {
-    val tint = if (darkMode) Color.White else Color.Black
+    val fillTint = if (darkMode) Color.White else Color.Black
+    val highlightTint = Color.White
     // 高光描边两档共用一份配方：厚档底子虽然接近不透明，但那圈亮边是
     // 「玻璃」的读法所在，去掉就变成一块普通的深色药丸了。
     val highlight = Brush.verticalGradient(
         listOf(
-            tint.copy(alpha = if (darkMode) 0.18f else 0.14f),
-            tint.copy(alpha = if (darkMode) 0.04f else 0.03f),
+            highlightTint.copy(alpha = if (darkMode) 0.18f else 0.32f),
+            highlightTint.copy(alpha = if (darkMode) 0.04f else 0.08f),
         )
     )
     return when (tier) {
         GlassTier.Thin -> GlassSurfaceTokens(
             fill = Brush.verticalGradient(
                 listOf(
-                    tint.copy(alpha = if (darkMode) 0.13f else 0.10f),
-                    tint.copy(alpha = if (darkMode) 0.06f else 0.045f),
+                    fillTint.copy(alpha = if (darkMode) 0.13f else 0.10f),
+                    fillTint.copy(alpha = if (darkMode) 0.06f else 0.045f),
                 )
             ),
             highlight = highlight,
             borderWidth = 0.8.dp,
             // 比 fill 顶色再浓一点：堆叠层只露出 6dp 左右的边，太淡就看不出层数。
-            baseColor = tint.copy(alpha = if (darkMode) 0.16f else 0.11f),
+            baseColor = fillTint.copy(alpha = if (darkMode) 0.16f else 0.11f),
         )
         GlassTier.Thick -> {
             // 厚档保持平铺而不做渐变：操作栏只有 30dp 高，渐变在这个高度上

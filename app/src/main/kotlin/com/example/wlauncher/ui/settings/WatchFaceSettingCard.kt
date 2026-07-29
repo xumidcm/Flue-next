@@ -16,10 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.animation.core.animateFloatAsState
@@ -48,6 +44,10 @@ import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.watchface.WatchFaceDescriptors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Delete
+import top.yukonga.miuix.kmp.icon.extended.Ok
+import top.yukonga.miuix.kmp.icon.extended.Settings
 
 @Composable
 fun WatchFaceSettingCard(
@@ -198,7 +198,7 @@ fun WatchFaceSettingCard(
                             .padding(8.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Filled.Delete, contentDescription = null, tint = Color(0xFFFF6B6B))
+                        Icon(MiuixIcons.Delete, contentDescription = null, tint = Color(0xFFFF6B6B))
                     }
                 } else if (onOpenSettings != null && descriptor.supportsSettings) {
                     Box(
@@ -209,11 +209,11 @@ fun WatchFaceSettingCard(
                             .padding(8.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Filled.Settings, contentDescription = null, tint = launcherStyle.accentColor)
+                        Icon(MiuixIcons.Settings, contentDescription = null, tint = launcherStyle.accentColor)
                     }
                 }
                 if (selected) {
-                    Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = launcherStyle.accentColor)
+                    Icon(MiuixIcons.Ok, contentDescription = null, tint = launcherStyle.accentColor)
                 }
             }
         }

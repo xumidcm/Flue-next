@@ -17,37 +17,6 @@ import org.robolectric.annotation.Config
 @Config(sdk = [28])
 class WatchFormatConverterTest {
     @Test
-    fun convertsHscTextAndReportsUnknownDrawpointTypes() = withTempDir { root ->
-        val source = File(root, "sample.hsc.zip")
-        zip(
-            source,
-            "dial.json" to """
-                {
-                  "title":"HSC demo",
-                  "width":480,
-                  "height":480,
-                  "drawpoints":[
-                    {"pointType":"TIME_HHMM","startX":240,"startY":240,"font":{"textSize":42,"color":-1}},
-                    {"pointType":"GRAPHICS_FUTURE","startX":1,"startY":2}
-                  ]
-                }
-            """.trimIndent(),
-        )
-        val output = File(root, "converted.watch")
-        val result = WatchFormatConverter().convert(source, output)
-        assertTrue("conversion result: $result", result is WatchConversionResult.Success)
-        val success = result as WatchConversionResult.Success
-        assertEquals(1, success.report.convertedLayerCount)
-        assertTrue("GRAPHICS_FUTURE" in success.report.unsupportedFeatures)
-        ZipFile(output).use { archive ->
-            val xml = archive.getInputStream(archive.getEntry("watch.xml"))
-                .use { it.readBytes().toString(StandardCharsets.UTF_8) }
-            assertTrue(xml.contains("name=\"HSC demo\""))
-            assertTrue(xml.contains("'{dh23z}:{dmz}'"))
-        }
-    }
-
-    @Test
     fun convertsWffTextWithoutInventingUnsupportedLayers() = withTempDir { root ->
         val source = File(root, "sample.wff")
         zip(

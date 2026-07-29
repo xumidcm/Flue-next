@@ -1,5 +1,8 @@
 package com.flue.launcher.watchface.editor
 
+import androidx.annotation.StringRes
+import com.flue.launcher.R
+
 /**
  * Curated Watchmaker tag quick-reference for the editor's properties panel.
  * The tag list and semantics follow the upstream `WM_TAGS.md` specification;
@@ -7,92 +10,92 @@ package com.flue.launcher.watchface.editor
  */
 data class WatchEditorExpressionEntry(
     val tag: String,
-    val description: String,
+    @StringRes val descriptionRes: Int,
 )
 
 data class WatchEditorExpressionGroup(
-    val title: String,
+    @StringRes val titleRes: Int,
     val entries: List<WatchEditorExpressionEntry>,
 )
 
 val WATCH_EDITOR_EXPRESSION_GROUPS: List<WatchEditorExpressionGroup> = listOf(
     WatchEditorExpressionGroup(
-        title = "时间",
+        titleRes = R.string.watch_editor_expression_group_time,
         entries = listOf(
-            WatchEditorExpressionEntry("{dh}", "时（12 小时制）"),
-            WatchEditorExpressionEntry("{dhz}", "时（12 小时制，补零）"),
-            WatchEditorExpressionEntry("{dh23}", "时（24 小时制）"),
-            WatchEditorExpressionEntry("{dh23z}", "时（24 小时制，补零）"),
-            WatchEditorExpressionEntry("{dm}", "分"),
-            WatchEditorExpressionEntry("{dmz}", "分（补零）"),
-            WatchEditorExpressionEntry("{ds}", "秒"),
-            WatchEditorExpressionEntry("{dsz}", "秒（补零）"),
-            WatchEditorExpressionEntry("{da}", "上午 / 下午（AM/PM）"),
+            WatchEditorExpressionEntry("{dh}", R.string.watch_editor_expression_dh),
+            WatchEditorExpressionEntry("{dhz}", R.string.watch_editor_expression_dhz),
+            WatchEditorExpressionEntry("{dh23}", R.string.watch_editor_expression_dh23),
+            WatchEditorExpressionEntry("{dh23z}", R.string.watch_editor_expression_dh23z),
+            WatchEditorExpressionEntry("{dm}", R.string.watch_editor_expression_dm),
+            WatchEditorExpressionEntry("{dmz}", R.string.watch_editor_expression_dmz),
+            WatchEditorExpressionEntry("{ds}", R.string.watch_editor_expression_ds),
+            WatchEditorExpressionEntry("{dsz}", R.string.watch_editor_expression_dsz),
+            WatchEditorExpressionEntry("{da}", R.string.watch_editor_expression_da),
         ),
     ),
     WatchEditorExpressionGroup(
-        title = "指针角度",
+        titleRes = R.string.watch_editor_expression_group_angles,
         entries = listOf(
-            WatchEditorExpressionEntry("{drh}", "时针角度（随分钟平滑）"),
-            WatchEditorExpressionEntry("{drm}", "分针角度（平滑）"),
-            WatchEditorExpressionEntry("{drs}", "秒针角度（每秒 6°）"),
-            WatchEditorExpressionEntry("{drss}", "秒针角度（亚秒平滑）"),
+            WatchEditorExpressionEntry("{drh}", R.string.watch_editor_expression_drh),
+            WatchEditorExpressionEntry("{drm}", R.string.watch_editor_expression_drm),
+            WatchEditorExpressionEntry("{drs}", R.string.watch_editor_expression_drs),
+            WatchEditorExpressionEntry("{drss}", R.string.watch_editor_expression_drss),
         ),
     ),
     WatchEditorExpressionGroup(
-        title = "日期",
+        titleRes = R.string.watch_editor_expression_group_date,
         entries = listOf(
-            WatchEditorExpressionEntry("{dd}", "日（1–31）"),
-            WatchEditorExpressionEntry("{ddz}", "日（补零）"),
-            WatchEditorExpressionEntry("{dn}", "月（1–12）"),
-            WatchEditorExpressionEntry("{dnn}", "月（补零）"),
-            WatchEditorExpressionEntry("{dnnn}", "月份英文缩写（Jan–Dec）"),
-            WatchEditorExpressionEntry("{dyy}", "年（4 位）"),
-            WatchEditorExpressionEntry("{dy}", "年（末 2 位）"),
-            WatchEditorExpressionEntry("{ddw}", "星期英文缩写（Mon–Sun）"),
-            WatchEditorExpressionEntry("{ddww}", "星期英文全称"),
+            WatchEditorExpressionEntry("{dd}", R.string.watch_editor_expression_dd),
+            WatchEditorExpressionEntry("{ddz}", R.string.watch_editor_expression_ddz),
+            WatchEditorExpressionEntry("{dn}", R.string.watch_editor_expression_dn),
+            WatchEditorExpressionEntry("{dnn}", R.string.watch_editor_expression_dnn),
+            WatchEditorExpressionEntry("{dnnn}", R.string.watch_editor_expression_dnnn),
+            WatchEditorExpressionEntry("{dyy}", R.string.watch_editor_expression_dyy),
+            WatchEditorExpressionEntry("{dy}", R.string.watch_editor_expression_dy),
+            WatchEditorExpressionEntry("{ddw}", R.string.watch_editor_expression_ddw),
+            WatchEditorExpressionEntry("{ddww}", R.string.watch_editor_expression_ddww),
         ),
     ),
     WatchEditorExpressionGroup(
-        title = "电量",
+        titleRes = R.string.watch_editor_expression_group_battery,
         entries = listOf(
-            WatchEditorExpressionEntry("{bl}", "手表电量（0–100）"),
-            WatchEditorExpressionEntry("{blp}", "手表电量（带 % 号）"),
-            WatchEditorExpressionEntry("{bc}", "充电状态"),
-            WatchEditorExpressionEntry("{br}", "电量旋转角（3.6°/％）"),
+            WatchEditorExpressionEntry("{bl}", R.string.watch_editor_expression_bl),
+            WatchEditorExpressionEntry("{blp}", R.string.watch_editor_expression_blp),
+            WatchEditorExpressionEntry("{bc}", R.string.watch_editor_expression_bc),
+            WatchEditorExpressionEntry("{br}", R.string.watch_editor_expression_br),
         ),
     ),
     WatchEditorExpressionGroup(
-        title = "健康",
+        titleRes = R.string.watch_editor_expression_group_health,
         entries = listOf(
-            WatchEditorExpressionEntry("{shr}", "当前心率（BPM）"),
-            WatchEditorExpressionEntry("{ssc}", "今日步数"),
-            WatchEditorExpressionEntry("{sscp}", "步数目标完成度（%）"),
-            WatchEditorExpressionEntry("{scal}", "消耗卡路里（kCal）"),
+            WatchEditorExpressionEntry("{shr}", R.string.watch_editor_expression_shr),
+            WatchEditorExpressionEntry("{ssc}", R.string.watch_editor_expression_ssc),
+            WatchEditorExpressionEntry("{sscp}", R.string.watch_editor_expression_sscp),
+            WatchEditorExpressionEntry("{scal}", R.string.watch_editor_expression_scal),
         ),
     ),
     WatchEditorExpressionGroup(
-        title = "天气",
+        titleRes = R.string.watch_editor_expression_group_weather,
         entries = listOf(
-            WatchEditorExpressionEntry("{wm}", "温度单位（C / F）"),
-            WatchEditorExpressionEntry("{wt}", "当前温度"),
-            WatchEditorExpressionEntry("{wtd}", "当前温度（带单位）"),
-            WatchEditorExpressionEntry("{wth}", "今日最高温度"),
-            WatchEditorExpressionEntry("{wthd}", "今日最高温度（带单位）"),
-            WatchEditorExpressionEntry("{wtl}", "今日最低温度"),
-            WatchEditorExpressionEntry("{wtld}", "今日最低温度（带单位）"),
-            WatchEditorExpressionEntry("{wct}", "当前天气状况"),
-            WatchEditorExpressionEntry("{wci}", "天气条件图标代码"),
-            WatchEditorExpressionEntry("{wl}", "天气位置"),
-            WatchEditorExpressionEntry("{wcl}", "云量（0–1）"),
-            WatchEditorExpressionEntry("{wh}", "湿度（0–100）"),
-            WatchEditorExpressionEntry("{whp}", "湿度（带 %）"),
-            WatchEditorExpressionEntry("{wml}", "手动天气位置"),
-            WatchEditorExpressionEntry("{wisday}", "是否为白天（true / false）"),
-            WatchEditorExpressionEntry("{wlu}", "天气更新时间"),
-            WatchEditorExpressionEntry("{wf0dt}", "今天预报温度"),
-            WatchEditorExpressionEntry("{wf1dth}", "明天预报最高温度"),
-            WatchEditorExpressionEntry("{wf1ht}", "下一小时预报温度"),
+            WatchEditorExpressionEntry("{wm}", R.string.watch_editor_expression_wm),
+            WatchEditorExpressionEntry("{wt}", R.string.watch_editor_expression_wt),
+            WatchEditorExpressionEntry("{wtd}", R.string.watch_editor_expression_wtd),
+            WatchEditorExpressionEntry("{wth}", R.string.watch_editor_expression_wth),
+            WatchEditorExpressionEntry("{wthd}", R.string.watch_editor_expression_wthd),
+            WatchEditorExpressionEntry("{wtl}", R.string.watch_editor_expression_wtl),
+            WatchEditorExpressionEntry("{wtld}", R.string.watch_editor_expression_wtld),
+            WatchEditorExpressionEntry("{wct}", R.string.watch_editor_expression_wct),
+            WatchEditorExpressionEntry("{wci}", R.string.watch_editor_expression_wci),
+            WatchEditorExpressionEntry("{wl}", R.string.watch_editor_expression_wl),
+            WatchEditorExpressionEntry("{wcl}", R.string.watch_editor_expression_wcl),
+            WatchEditorExpressionEntry("{wh}", R.string.watch_editor_expression_wh),
+            WatchEditorExpressionEntry("{whp}", R.string.watch_editor_expression_whp),
+            WatchEditorExpressionEntry("{wml}", R.string.watch_editor_expression_wml),
+            WatchEditorExpressionEntry("{wisday}", R.string.watch_editor_expression_wisday),
+            WatchEditorExpressionEntry("{wlu}", R.string.watch_editor_expression_wlu),
+            WatchEditorExpressionEntry("{wf0dt}", R.string.watch_editor_expression_wf0dt),
+            WatchEditorExpressionEntry("{wf1dth}", R.string.watch_editor_expression_wf1dth),
+            WatchEditorExpressionEntry("{wf1ht}", R.string.watch_editor_expression_wf1ht),
         ),
     ),
 )

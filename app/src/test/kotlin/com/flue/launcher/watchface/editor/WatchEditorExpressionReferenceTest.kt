@@ -12,11 +12,11 @@ class WatchEditorExpressionReferenceTest {
         val tagPattern = Regex("^\\{[a-z0-9_]+\\}$")
         entries.forEach { entry ->
             assertTrue("malformed tag: ${entry.tag}", tagPattern.matches(entry.tag))
-            assertTrue("blank description for ${entry.tag}", entry.description.isNotBlank())
+            assertTrue("missing description resource for ${entry.tag}", entry.descriptionRes != 0)
         }
         assertEquals(entries.size, entries.map { it.tag }.distinct().size)
         WATCH_EDITOR_EXPRESSION_GROUPS.forEach { group ->
-            assertTrue(group.title.isNotBlank())
+            assertTrue(group.titleRes != 0)
             assertTrue(group.entries.isNotEmpty())
         }
     }

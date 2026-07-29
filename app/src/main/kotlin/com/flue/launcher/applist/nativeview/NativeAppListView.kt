@@ -116,8 +116,17 @@ class NativeAppListView @JvmOverloads constructor(
             applyChildVisual(view)
             val key = (getChildViewHolder(view) as?
                 NativeAppListAdapter.AppItemViewHolder)?.boundKeyOrNull()
-            (view as? NativeAppListRowView)?.setFolderHoverState(key == folderHoverKey)
-            (view as? NativeAppListRowView)?.setGlidePressedState(key == glidePressedKey)
+            (view as? NativeAppListRowView)?.let { row ->
+                val shouldShowFolderHover = key == folderHoverKey
+                row.setFolderHoverState(shouldShowFolderHover)
+                if (shouldShowFolderHover) {
+                    folderHoverView
+                        ?.takeIf { it !== row }
+                        ?.setFolderHoverState(false)
+                    folderHoverView = row
+                }
+                row.setGlidePressedState(key == glidePressedKey)
+            }
             if (key == draggedSourceKey) view.alpha = 0f
             if (dragPreviewOrder.isNotEmpty()) {
                 // Only place the row that just attached. Re-running the full
@@ -132,8 +141,11 @@ class NativeAppListView @JvmOverloads constructor(
         }
 
         override fun onChildViewDetachedFromWindow(view: View) {
-            (view as? NativeAppListRowView)?.setFolderHoverState(false)
-            (view as? NativeAppListRowView)?.setGlidePressedState(false)
+            (view as? NativeAppListRowView)?.let { row ->
+                row.setFolderHoverState(false)
+                if (folderHoverView === row) folderHoverView = null
+                row.setGlidePressedState(false)
+            }
         }
     }
     private var released = false
@@ -163,6 +175,10 @@ class NativeAppListView @JvmOverloads constructor(
     private var draggedPointerY = 0f
     private var draggedPointerX = 0f
     private var folderHoverKey: AppItemKey? = null
+    /** The actual row carrying the hover transform, including remove-animation children. */
+    private var folderHoverView: NativeAppListRowView? = null
+    /** Exact rows blanked before a possibly synchronous folder repository update. */
+    private val pendingFolderRemovalViews = linkedMapOf<AppItemKey, NativeAppListRowView>()
     private var glidePressedKey: AppItemKey? = null
     private var autoScrollRemainder = 0f
     private var folderSettleCenterX = Float.NaN
@@ -390,6 +406,10 @@ class NativeAppListView @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
+        // A synchronous owner update can detach the list before the folder
+        // dispatch completion returns. Never leave rows blank across a later
+        // re-attach; the stable-key guard prevents touching a recycled View.
+        completePendingFolderRemovalVisuals(accepted = false)
         cancelActiveDrag()
         cancelDragSettle(removeOverlay = true)
         springEdgeEffects.endGesture(terminalUp = false)
@@ -922,6 +942,7 @@ class NativeAppListView @JvmOverloads constructor(
 
     fun release() {
         if (released) return
+        completePendingFolderRemovalVisuals(accepted = false)
         cancelActiveDrag()
         cancelDragSettle(removeOverlay = true)
         dragPreviewAnimationGeneration++
@@ -1461,9 +1482,35 @@ class NativeAppListView @JvmOverloads constructor(
             }
         }
 
+        override fun prepareFolderDispatchVisuals(source: AppItemKey, target: AppItemKey) {
+            completePendingFolderRemovalVisuals(accepted = false)
+            val sourceIsFolder = nativeAdapter.rowForKey(source)?.entry?.type ==
+                com.flue.launcher.applist.model.AppItemType.FOLDER
+            val targetIsFolder = nativeAdapter.rowForKey(target)?.entry?.type ==
+                com.flue.launcher.applist.model.AppItemType.FOLDER
+            val removedKeys = buildList {
+                if (!sourceIsFolder || targetIsFolder) add(source)
+                if (!targetIsFolder) add(target)
+            }
+            removedKeys.forEach { key ->
+                val row = holderForKey(key)?.itemView as? NativeAppListRowView
+                    ?: return@forEach
+                pendingFolderRemovalViews[key] = row
+                row.setFolderRemovalPending(true)
+            }
+        }
+
+        override fun completeFolderDispatchVisuals(accepted: Boolean) {
+            completePendingFolderRemovalVisuals(accepted)
+        }
+
         override fun dispatchFolder(
             command: AppListCommand.CreateFolder,
         ): NativeFolderDispatchResult {
+            // onCreateFolder may synchronously submit a Diff that moves the target
+            // holder into RecyclerView's remove-animation layer. Clear the actual
+            // transformed View before that happens, not only its old stable key.
+            clearFolderHoverVisual()
             val createFolder = onCreateFolder
             if (createFolder != null) {
                 val folderKey = createFolder(command)
@@ -1586,19 +1633,30 @@ class NativeAppListView @JvmOverloads constructor(
         }
 
         override fun setFolderHover(key: AppItemKey?) {
-            if (folderHoverKey == key) return
-            folderHoverKey?.let { previous ->
-                (holderForKey(previous)?.itemView as? NativeAppListRowView)
-                    ?.setFolderHoverState(false)
+            if (folderHoverKey == key) {
+                if (key == null) {
+                    clearFolderHoverVisual()
+                } else {
+                    val currentRow = holderForKey(key)?.itemView as? NativeAppListRowView
+                    if (folderHoverView !== currentRow) {
+                        folderHoverView?.setFolderHoverState(false)
+                        folderHoverView = currentRow
+                        currentRow?.setFolderHoverState(true)
+                    }
+                }
+                return
             }
+            clearFolderHoverVisual()
             if (key != null) {
                 // dwell 武装瞬间给一次触觉确认：用户知道松手会建文件夹。
                 performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
             }
             folderHoverKey = key
             key?.let { next ->
-                (holderForKey(next)?.itemView as? NativeAppListRowView)
-                    ?.setFolderHoverState(true)
+                (holderForKey(next)?.itemView as? NativeAppListRowView)?.let { row ->
+                    folderHoverView = row
+                    row.setFolderHoverState(true)
+                }
             }
         }
 
@@ -1762,19 +1820,36 @@ class NativeAppListView @JvmOverloads constructor(
         folderSettleCenterX = Float.NaN
         folderSettleCenterY = Float.NaN
         folderSettleTargetKey = null
-        // 必须清 folderHoverKey：不清的话，权威快照到达、目标行被移除后，
-        // 那个 key 仍然留在这里。如果对应 holder 还没回收、仍在屏幕上，
-        // applyChildVisual 和 attach listener 会因为 key == folderHoverKey
-        // 而重新给它打上 hover 状态，变成粘在背景上的幽灵图标。
-        val previousHoverKey = folderHoverKey
-        folderHoverKey = null
-        previousHoverKey?.let { key ->
-            (holderForKey(key)?.itemView as? NativeAppListRowView)
-                ?.setFolderHoverState(false)
-        }
+        clearFolderHoverVisual()
         sourceKey?.let(::holderForKey)?.itemView?.isPressed = false
         (layoutManager as? NativeSpatialAppListLayoutManager)?.reapplyChildVisuals()
         applyAttachedChildVisuals()
+    }
+
+    /** Clears both the indexed holder and any View already moved to the remove layer. */
+    private fun clearFolderHoverVisual() {
+        val previousView = folderHoverView
+        val previousKey = folderHoverKey
+        previousView?.setFolderHoverState(false)
+        previousKey?.let { key ->
+            (holderForKey(key)?.itemView as? NativeAppListRowView)
+                ?.takeIf { it !== previousView }
+                ?.setFolderHoverState(false)
+        }
+        folderHoverView = null
+        folderHoverKey = null
+    }
+
+    private fun completePendingFolderRemovalVisuals(accepted: Boolean) {
+        pendingFolderRemovalViews.forEach { (expectedKey, row) ->
+            // RecyclerView may synchronously reuse the old source/target View
+            // for the newly-created folder before this callback runs. Clearing
+            // by View identity alone would then erase the new folder and leave
+            // the old icon looking pasted into the remove-animation layer.
+            if (row.boundStableKeyOrNull() != expectedKey) return@forEach
+            if (accepted) row.commitFolderRemoval() else row.setFolderRemovalPending(false)
+        }
+        pendingFolderRemovalViews.clear()
     }
 
     private fun applyAttachedChildVisuals() {
@@ -1845,7 +1920,11 @@ class NativeAppListView @JvmOverloads constructor(
                 child.translationY = visual.translationY
             }
         }
-        if (child.alpha != visual.alpha) child.alpha = visual.alpha
+        if (rowView != null) {
+            rowView.setHostVisualAlpha(visual.alpha)
+        } else if (child.alpha != visual.alpha) {
+            child.alpha = visual.alpha
+        }
         rowView?.setIconBlurRadiusPx(
             radiusPx = visual.blurRadiusPx,
             tier = effectiveIconBlurTier(),
@@ -1904,8 +1983,9 @@ class NativeAppListView @JvmOverloads constructor(
     private fun resetChildVisual(child: View) {
         if (child.scaleX != 1f) child.scaleX = 1f
         if (child.scaleY != 1f) child.scaleY = 1f
-        if (child.alpha != 1f) child.alpha = 1f
-        (child as? NativeAppListRowView)?.apply {
+        val row = child as? NativeAppListRowView
+        if (row != null) row.setHostVisualAlpha(1f) else if (child.alpha != 1f) child.alpha = 1f
+        row?.apply {
             setVisualScale(1f)
             setFlowTranslation(0f, 0f)
             setContentTranslationY(pullOffsetPx)

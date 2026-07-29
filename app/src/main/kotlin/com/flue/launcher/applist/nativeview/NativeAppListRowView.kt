@@ -64,6 +64,16 @@ internal class NativeAppListRowView(
     private var config = NativeAppListConfig()
     private val iconRenderOwner = NativeAppListIconRenderOwner()
     private var boundRow: NativeAppListBoundRow<Bitmap>? = null
+    private var folderRemovalPending = false
+    private var folderRemovalAlphaBeforePending = 1f
+    /**
+     * Accepted source/target rows can remain in RecyclerView's disappearing
+     * child layer after their binding has been cleared. Keep the RenderNode
+     * itself invisible until this View is genuinely rebound; relying on a new
+     * empty onDraw display list races with that removal hand-off and can expose
+     * the cached old icon as a background ghost.
+     */
+    private var committedFolderRemovalHidden = false
     private var label: String = ""
     private var geometryDirty = true
     private var folderHover = false
@@ -99,8 +109,15 @@ internal class NativeAppListRowView(
         // clipToOutline 保持 false，绘制内容不受轮廓裁剪。
         outlineProvider = object : android.view.ViewOutlineProvider() {
             override fun getOutline(view: android.view.View, outline: android.graphics.Outline) {
+                if (folderRemovalPending || boundRow == null) {
+                    outline.setEmpty()
+                    return
+                }
                 ensureGeometry()
-                if (iconBounds.isEmpty) return
+                if (iconBounds.isEmpty) {
+                    outline.setEmpty()
+                    return
+                }
                 when (effectiveIconShape()) {
                     NativeAppListIconShape.CIRCLE -> outline.setOval(
                         iconBounds.left.toInt(),
@@ -118,7 +135,10 @@ internal class NativeAppListRowView(
                         ),
                     )
                 }
-                outline.alpha = 1f
+                // Keep elevation geometrically stable and fade only its
+                // opacity. Toggling elevation at alpha ~= 0 produces a
+                // different platform shadow on the final return frame.
+                outline.alpha = view.alpha.coerceIn(0f, 1f)
             }
         }
         clipToOutline = false
@@ -139,15 +159,15 @@ internal class NativeAppListRowView(
         }
 
     /**
-     * View.alpha 不作用于高程阴影：行被鱼眼 / 入场动画隐去时阴影会单独留在
-     * 屏上。Compose 版在 HoneycombScreen 用 `itemAlpha > 0.001f` 门控
-     * shadowElevation，这里是同一规则的原生版。拖拽浮层抬到 12/18dp，
-     * 对齐 Compose 版的浮层高程。
+     * Elevation is a stable geometry property. Shadow opacity follows the
+     * outline's alpha above, so return/fisheye fades remain continuous without
+     * an 8dp -> 0dp hard switch at the final frame. Drag overlays still use
+     * their higher 12/18dp elevation.
      */
     private fun syncShadowElevation() {
         val density = resources.displayMetrics.density
         val targetDp = when {
-            !config.iconShadowEnabled || alpha <= 0.001f -> 0f
+            !config.iconShadowEnabled -> 0f
             dragVisual -> if (config.presentation == NativeAppListPresentation.LINEAR) 18f else 12f
             else -> 8f
         }
@@ -157,13 +177,30 @@ internal class NativeAppListRowView(
 
     override fun setAlpha(alpha: Float) {
         super.setAlpha(alpha)
-        syncShadowElevation()
+        // Outline.alpha, unlike View.alpha alone, is applied to the platform
+        // ambient/spot shadow. Updating the outline fades it on the same clock
+        // while preserving one elevation recipe through the whole transition.
+        invalidateOutline()
     }
 
     fun bind(
         row: NativeAppListBoundRow<Bitmap>,
         config: NativeAppListResolvedConfig,
     ) {
+        // RecyclerView may synchronously reuse a source/target View for the new
+        // folder while the folder-dispatch callback is still on the stack. A
+        // pending row was made alpha=0 before the owner mutation, so a genuine
+        // rebind must restore every RenderNode visibility property atomically.
+        // Merely clearing folderRemovalPending here leaves the newly-bound
+        // folder transparent and makes completion skip it because its stable
+        // key has already changed.
+        if (committedFolderRemovalHidden || folderRemovalPending) {
+            committedFolderRemovalHidden = false
+            folderRemovalPending = false
+            folderRemovalAlphaBeforePending = 1f
+            visibility = VISIBLE
+            alpha = 1f
+        }
         applyConfig(config)
         boundRow = row
         iconRenderOwner.bind(row.icon)
@@ -171,6 +208,63 @@ internal class NativeAppListRowView(
         label = row.entry.label
         contentDescription = row.entry.label
         isClickable = true
+        invalidateOutline()
+        invalidate()
+    }
+
+    /**
+     * Temporarily blanks a row without throwing away its binding. Folder
+     * dispatch can synchronously move the View into RecyclerView's hidden
+     * remove layer; keeping the binding lets a rejected command restore it.
+     */
+    fun setFolderRemovalPending(pending: Boolean) {
+        if (folderRemovalPending == pending) return
+        if (pending) {
+            folderRemovalAlphaBeforePending = alpha
+            // Alpha is a RenderNode property and takes effect even when the
+            // old icon display list has already moved to RecyclerView's
+            // disappearing layer. This closes the one-frame/stuck-icon race.
+            alpha = 0f
+            // Alpha alone is not authoritative here: the host's edge/fisheye
+            // visual pass can run synchronously while the repository publishes
+            // the new folder and write its computed alpha back onto this old
+            // source/target View. INVISIBLE keeps the disappearing RecyclerView
+            // child blank even during that same-frame pass.
+            visibility = INVISIBLE
+        }
+        folderRemovalPending = pending
+        if (pending) {
+            iconEffectRenderer?.discardContent()
+        } else {
+            if (!committedFolderRemovalHidden) {
+                visibility = VISIBLE
+                alpha = folderRemovalAlphaBeforePending
+            }
+            folderRemovalAlphaBeforePending = 1f
+            iconEffectRenderer?.invalidateContent()
+        }
+        invalidateOutline()
+        invalidate()
+    }
+
+    /** Applies host edge/fisheye alpha without reviving a folder-removal row. */
+    fun setHostVisualAlpha(value: Float) {
+        if (folderRemovalPending || committedFolderRemovalHidden) {
+            if (visibility != INVISIBLE) visibility = INVISIBLE
+            if (alpha != 0f) alpha = 0f
+            return
+        }
+        if (visibility != VISIBLE) visibility = VISIBLE
+        if (alpha != value) alpha = value
+    }
+
+    /** Permanently hides an accepted folder source/target until holder rebind. */
+    fun commitFolderRemoval() {
+        committedFolderRemovalHidden = true
+        clearBinding()
+        visibility = INVISIBLE
+        alpha = 0f
+        invalidateOutline()
         invalidate()
     }
 
@@ -202,6 +296,9 @@ internal class NativeAppListRowView(
     }
 
     fun clearBinding() {
+        val keepCommittedRemovalHidden = committedFolderRemovalHidden
+        folderRemovalPending = false
+        folderRemovalAlphaBeforePending = 1f
         iconRenderOwner.clear()
         boundRow = null
         iconEffectRenderer?.discardContent()
@@ -233,7 +330,8 @@ internal class NativeAppListRowView(
         interactionScale = 1f
         scaleX = 1f
         scaleY = 1f
-        alpha = 1f
+        alpha = if (keepCommittedRemovalHidden) 0f else 1f
+        visibility = if (keepCommittedRemovalHidden) INVISIBLE else VISIBLE
         translationX = 0f
         translationY = 0f
         moveTranslationX = 0f
@@ -248,6 +346,7 @@ internal class NativeAppListRowView(
         rotation = 0f
         setIconBlurRadiusPx(0f, NativeBlurTier.OFF)
         setIconSaturation(1f)
+        invalidateOutline()
         invalidate()
     }
 
@@ -297,6 +396,10 @@ internal class NativeAppListRowView(
     fun iconBlurRadiusForOverlay(): Float = iconBlurRadiusBucketPx.toFloat()
 
     fun boundRowForOverlay(): NativeAppListBoundRow<Bitmap>? = boundRow
+
+    /** Stable identity currently owned by this View, used to guard recycle races. */
+    fun boundStableKeyOrNull(): com.flue.launcher.applist.model.AppItemKey? =
+        boundRow?.stableKey
 
     fun setDragVisualState(enabled: Boolean) {
         if (dragVisual == enabled) return
@@ -548,6 +651,7 @@ internal class NativeAppListRowView(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if (folderRemovalPending) return
         ensureGeometry()
 
         if (config.palette.rowBackgroundColorArgb ushr 24 != 0L) {

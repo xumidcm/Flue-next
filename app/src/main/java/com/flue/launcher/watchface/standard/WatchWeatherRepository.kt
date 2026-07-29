@@ -3,8 +3,14 @@ package com.flue.launcher.watchface.standard
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.location.Geocoder
+import android.location.Location
+import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
+import android.os.Bundle
+import android.os.CancellationSignal
+import android.os.Looper
 import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
@@ -14,8 +20,13 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.abs
 
 /** A location input used by the weather repository; no permission is requested here. */
 data class WatchWeatherLocation(
@@ -71,6 +82,12 @@ class WatchWeatherRepository(
     private var manualCityValue: String? = readManualCity()
 
     @Volatile
+    private var systemLocationValue: WatchWeatherLocation? = readSystemLocation()
+
+    @Volatile
+    private var systemLocationLabelValue: String? = systemLocationValue?.label
+
+    @Volatile
     private var temperatureUnitValue: WatchTemperatureUnit = readTemperatureUnit()
 
     init {
@@ -111,6 +128,8 @@ class WatchWeatherRepository(
     fun setManualLocation(location: WatchWeatherLocation?) {
         manualLocation = location
         manualCityValue = null
+        systemLocationValue = null
+        systemLocationLabelValue = null
         val editor = preferences.edit()
         if (location == null) {
             editor.remove(KEY_LABEL).remove(KEY_LATITUDE).remove(KEY_LONGITUDE).remove(KEY_CITY)
@@ -120,6 +139,9 @@ class WatchWeatherRepository(
                 .putString(KEY_LONGITUDE, location.longitude.toString())
                 .remove(KEY_CITY)
         }
+        editor.remove(KEY_SYSTEM_LOCATION_LABEL)
+            .remove(KEY_SYSTEM_LATITUDE)
+            .remove(KEY_SYSTEM_LONGITUDE)
         editor.apply()
         requestRefresh()
     }
@@ -133,6 +155,8 @@ class WatchWeatherRepository(
         val normalized = city?.trim()?.takeIf(String::isNotEmpty)?.take(120)
         manualCityValue = normalized
         manualLocation = null
+        systemLocationValue = null
+        systemLocationLabelValue = null
         preferences.edit()
             .remove(KEY_LABEL)
             .remove(KEY_LATITUDE)
@@ -140,11 +164,73 @@ class WatchWeatherRepository(
             .apply {
                 if (normalized == null) remove(KEY_CITY) else putString(KEY_CITY, normalized)
             }
+            .remove(KEY_SYSTEM_LOCATION_LABEL)
+            .remove(KEY_SYSTEM_LATITUDE)
+            .remove(KEY_SYSTEM_LONGITUDE)
             .apply()
         requestRefresh()
     }
 
     fun manualCity(): String? = manualCityValue
+
+    /** Label shown in settings for either a selected candidate or system location. */
+    fun activeLocationLabel(): String? =
+        manualLocation?.label ?: manualCityValue ?: systemLocationLabelValue
+
+    fun isUsingSystemLocation(): Boolean = manualLocation == null && manualCityValue == null
+
+    /**
+     * Resolves multiple forward-geocoding candidates. This method performs IO;
+     * callers must invoke it off the main thread and persist only a chosen item.
+     */
+    fun searchLocations(query: String, limit: Int = 8): List<WatchWeatherLocation> {
+        val normalized = query.trim().take(120)
+        if (normalized.isBlank()) return emptyList()
+        val safeLimit = limit.coerceIn(1, 10)
+        val encoded = URLEncoder.encode(normalized, Charsets.UTF_8.name())
+        val language = Locale.getDefault().language.takeIf(String::isNotBlank) ?: "en"
+        val url = "https://geocoding-api.open-meteo.com/v1/search" +
+            "?name=$encoded&count=$safeLimit&language=$language&format=json"
+        val response = transport.get(url, USER_AGENT) ?: return emptyList()
+        return parseWatchWeatherLocationSearch(response, normalized, safeLimit)
+    }
+
+    /** Requests a fresh coarse location, then falls back to the newest cached fix. */
+    fun resolveSystemLocation(): WatchWeatherLocation? {
+        val raw = locationSource?.current()
+            ?: readCurrentLocation()
+            ?: readLastKnownLocation()
+            ?: systemLocationValue
+            ?: return null
+        if (!raw.label.isNullOrBlank()) return raw
+        val label = matchingPersistedSystemLabel(raw) ?: reverseGeocodeLabel(raw)
+        return raw.copy(label = label)
+    }
+
+    /** Switches the repository to system location after UI-side resolution succeeds. */
+    fun useSystemLocation(location: WatchWeatherLocation) {
+        manualLocation = null
+        manualCityValue = null
+        val normalized = location.copy(
+            label = location.label?.trim()?.takeIf(String::isNotEmpty),
+        )
+        systemLocationValue = normalized
+        systemLocationLabelValue = normalized.label
+        preferences.edit()
+            .remove(KEY_LABEL)
+            .remove(KEY_LATITUDE)
+            .remove(KEY_LONGITUDE)
+            .remove(KEY_CITY)
+            .apply {
+                val label = systemLocationLabelValue
+                if (label == null) remove(KEY_SYSTEM_LOCATION_LABEL)
+                else putString(KEY_SYSTEM_LOCATION_LABEL, label)
+            }
+            .putString(KEY_SYSTEM_LATITUDE, normalized.latitude.toString())
+            .putString(KEY_SYSTEM_LONGITUDE, normalized.longitude.toString())
+            .apply()
+        requestRefresh()
+    }
 
     fun clearCache() {
         cache.clear()
@@ -165,7 +251,11 @@ class WatchWeatherRepository(
                 val city = manualCityValue
                 val location = manualLocation
                     ?: if (city != null) geocodeManualCity(city) else {
-                        locationSource?.current() ?: readLastKnownLocation()
+                        val raw = locationSource?.current()
+                            ?: readCurrentLocation()
+                            ?: readLastKnownLocation()
+                            ?: systemLocationValue
+                        raw?.let(::refreshSystemLocationIdentity)
                     }
                 if (location == null) return@execute
                 val met = runCatching { fetchMetNo(location, nowEpochMs) }.getOrNull()
@@ -224,11 +314,128 @@ class WatchWeatherRepository(
             ?.let { location -> WatchWeatherLocation(location.latitude, location.longitude) }
     }
 
+    /**
+     * Requests one fresh fix on every enabled coarse-capable provider and uses
+     * the first valid result. The settings caller runs this blocking boundary
+     * on Dispatchers.IO, so neither the renderer nor the main thread waits.
+     * API 27-29 use requestSingleUpdate; API 30+ use getCurrentLocation.
+     */
+    @SuppressLint("MissingPermission")
+    @Suppress("DEPRECATION")
+    private fun readCurrentLocation(): WatchWeatherLocation? {
+        if (!hasLocationPermission()) return null
+        val manager = appContext.getSystemService(LocationManager::class.java) ?: return null
+        val providers = buildList {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) add(LocationManager.FUSED_PROVIDER)
+            add(LocationManager.NETWORK_PROVIDER)
+            add(LocationManager.GPS_PROVIDER)
+        }.distinct().filter { provider ->
+            runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false)
+        }
+        if (providers.isEmpty()) return null
+
+        val result = AtomicReference<Location?>(null)
+        val delivered = CountDownLatch(1)
+        fun publish(location: Location?) {
+            if (location == null || !location.latitude.isFinite() || !location.longitude.isFinite()) return
+            if (result.compareAndSet(null, location)) delivered.countDown()
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val cancellations = providers.mapNotNull { provider ->
+                runCatching {
+                    CancellationSignal().also { signal ->
+                        manager.getCurrentLocation(
+                            provider,
+                            signal,
+                            DirectWeatherExecutor,
+                            ::publish,
+                        )
+                    }
+                }.getOrNull()
+            }
+            if (cancellations.isEmpty()) return null
+            runCatching { delivered.await(CURRENT_LOCATION_TIMEOUT_MS, TimeUnit.MILLISECONDS) }
+            cancellations.forEach { signal -> runCatching { signal.cancel() } }
+        } else {
+            val listener = object : LocationListener {
+                override fun onLocationChanged(location: Location) = publish(location)
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
+                override fun onProviderEnabled(provider: String) = Unit
+                override fun onProviderDisabled(provider: String) = Unit
+            }
+            var registered = false
+            providers.forEach { provider ->
+                val accepted = runCatching {
+                    manager.requestSingleUpdate(provider, listener, Looper.getMainLooper())
+                    true
+                }.getOrDefault(false)
+                registered = registered || accepted
+            }
+            if (!registered) return null
+            runCatching { delivered.await(CURRENT_LOCATION_TIMEOUT_MS, TimeUnit.MILLISECONDS) }
+            runCatching { manager.removeUpdates(listener) }
+        }
+        return result.get()?.let { location ->
+            WatchWeatherLocation(location.latitude, location.longitude)
+        }
+    }
+
     private fun hasLocationPermission(): Boolean =
         ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_COARSE_LOCATION) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    @Suppress("DEPRECATION")
+    private fun reverseGeocodeLabel(location: WatchWeatherLocation): String? {
+        val platformLabel = if (Geocoder.isPresent()) {
+            runCatching {
+                Geocoder(appContext, Locale.getDefault())
+                    .getFromLocation(location.latitude, location.longitude, 1)
+                    ?.firstOrNull()
+            }.getOrNull()?.let { address ->
+                listOf(
+                    address.locality,
+                    address.subAdminArea,
+                    address.adminArea,
+                    address.countryName,
+                ).mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) }
+                    .distinct()
+                    .joinToString(", ")
+                    .takeIf(String::isNotBlank)
+            }
+        } else {
+            null
+        }
+        return platformLabel ?: reverseGeocodeLabelFromNetwork(location)
+    }
+
+    /** Fallback for older devices whose system Geocoder backend is absent. */
+    private fun reverseGeocodeLabelFromNetwork(location: WatchWeatherLocation): String? {
+        val latitude = String.format(Locale.US, "%.6f", location.latitude)
+        val longitude = String.format(Locale.US, "%.6f", location.longitude)
+        val language = URLEncoder.encode(
+            Locale.getDefault().toLanguageTag().ifBlank { "en" },
+            Charsets.UTF_8.name(),
+        )
+        val url = "https://nominatim.openstreetmap.org/reverse" +
+            "?format=jsonv2&lat=$latitude&lon=$longitude&zoom=10&addressdetails=1" +
+            "&accept-language=$language"
+        val root = transport.get(url, USER_AGENT)
+            ?.let { raw -> runCatching { JSONObject(raw) }.getOrNull() }
+            ?: return null
+        val address = root.optJSONObject("address")
+        val locality = listOf("city", "town", "village", "municipality", "county")
+            .firstNotNullOfOrNull { key ->
+                address?.optString(key)?.trim()?.takeIf(String::isNotEmpty)
+            }
+        return listOf(
+            locality,
+            address?.optString("state")?.trim()?.takeIf(String::isNotEmpty),
+            address?.optString("country")?.trim()?.takeIf(String::isNotEmpty),
+        ).filterNotNull().distinct().joinToString(", ").takeIf(String::isNotBlank)
+    }
 
     private fun readManualLocation(): WatchWeatherLocation? {
         val latitude = preferences.getString(KEY_LATITUDE, null)?.toDoubleOrNull() ?: return null
@@ -236,6 +443,47 @@ class WatchWeatherRepository(
         return runCatching {
             WatchWeatherLocation(latitude, longitude, preferences.getString(KEY_LABEL, null))
         }.getOrNull()
+    }
+
+    private fun readSystemLocation(): WatchWeatherLocation? {
+        val latitude = preferences.getString(KEY_SYSTEM_LATITUDE, null)?.toDoubleOrNull()
+            ?: return null
+        val longitude = preferences.getString(KEY_SYSTEM_LONGITUDE, null)?.toDoubleOrNull()
+            ?: return null
+        val label = preferences.getString(KEY_SYSTEM_LOCATION_LABEL, null)
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+        return runCatching { WatchWeatherLocation(latitude, longitude, label) }.getOrNull()
+    }
+
+    private fun matchingPersistedSystemLabel(location: WatchWeatherLocation): String? {
+        val persisted = systemLocationValue ?: return null
+        if (
+            abs(persisted.latitude - location.latitude) > SYSTEM_LOCATION_LABEL_TOLERANCE_DEGREES ||
+            abs(persisted.longitude - location.longitude) > SYSTEM_LOCATION_LABEL_TOLERANCE_DEGREES
+        ) return null
+        return persisted.label?.trim()?.takeIf(String::isNotEmpty)
+    }
+
+    /** Keeps a city label tied to the coordinates it was actually resolved for. */
+    private fun refreshSystemLocationIdentity(raw: WatchWeatherLocation): WatchWeatherLocation {
+        val normalized = if (!raw.label.isNullOrBlank()) {
+            raw.copy(label = raw.label.trim())
+        } else {
+            raw.copy(label = matchingPersistedSystemLabel(raw) ?: reverseGeocodeLabel(raw))
+        }
+        systemLocationValue = normalized
+        systemLocationLabelValue = normalized.label
+        preferences.edit()
+            .putString(KEY_SYSTEM_LATITUDE, normalized.latitude.toString())
+            .putString(KEY_SYSTEM_LONGITUDE, normalized.longitude.toString())
+            .apply {
+                val label = normalized.label
+                if (label.isNullOrBlank()) remove(KEY_SYSTEM_LOCATION_LABEL)
+                else putString(KEY_SYSTEM_LOCATION_LABEL, label)
+            }
+            .apply()
+        return normalized
     }
 
     private fun readManualCity(): String? =
@@ -358,21 +606,7 @@ class WatchWeatherRepository(
     }
 
     private fun geocodeManualCity(city: String): WatchWeatherLocation? {
-        val encoded = URLEncoder.encode(city, Charsets.UTF_8.name())
-        val language = Locale.getDefault().language.takeIf(String::isNotBlank) ?: "en"
-        val url = "https://geocoding-api.open-meteo.com/v1/search" +
-            "?name=$encoded&count=1&language=$language&format=json"
-        val root = JSONObject(transport.get(url, USER_AGENT) ?: return null)
-        val result = root.optJSONArray("results")?.optJSONObject(0) ?: return null
-        val latitude = result.optDoubleOrNull("latitude") ?: return null
-        val longitude = result.optDoubleOrNull("longitude") ?: return null
-        val label = listOf(
-            result.optString("name").takeIf(String::isNotBlank),
-            result.optString("admin1").takeIf(String::isNotBlank),
-            result.optString("country").takeIf(String::isNotBlank),
-        ).filterNotNull().distinct().joinToString(", ").ifBlank { city }
-        val resolved = runCatching { WatchWeatherLocation(latitude, longitude, label) }.getOrNull()
-            ?: return null
+        val resolved = searchLocations(city, limit = 1).firstOrNull() ?: return null
         manualLocation = resolved
         appContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
             .putString(KEY_LABEL, resolved.label)
@@ -547,12 +781,17 @@ class WatchWeatherRepository(
         const val KEY_CITY = "manual_city"
         const val KEY_LATITUDE = "manual_latitude"
         const val KEY_LONGITUDE = "manual_longitude"
+        const val KEY_SYSTEM_LOCATION_LABEL = "system_location_label"
+        const val KEY_SYSTEM_LATITUDE = "system_latitude"
+        const val KEY_SYSTEM_LONGITUDE = "system_longitude"
         const val KEY_CACHE_RECEIVED_AT = "cache_received_at"
         const val KEY_CACHE_JSON = "cache_json"
         const val KEY_TEMPERATURE_UNIT = "temperature_unit"
         const val DEFAULT_SOFT_TTL_MS = 15L * 60L * 1_000L
         const val MAX_CACHE_AGE_MS = 6L * 60L * 60L * 1_000L
         const val USER_AGENT = "FlueNext/2.0 (weather; https://github.com/xumidcm/Flue)"
+        private const val CURRENT_LOCATION_TIMEOUT_MS = 6_000L
+        private const val SYSTEM_LOCATION_LABEL_TOLERANCE_DEGREES = 0.005
 
         @Volatile
         private var defaultInstance: WatchWeatherRepository? = null
@@ -561,6 +800,36 @@ class WatchWeatherRepository(
             defaultInstance ?: WatchWeatherRepository(context.applicationContext).also { defaultInstance = it }
         }
     }
+}
+
+private object DirectWeatherExecutor : Executor {
+    override fun execute(command: Runnable) = command.run()
+}
+
+internal fun parseWatchWeatherLocationSearch(
+    payload: String,
+    fallbackLabel: String,
+    limit: Int,
+): List<WatchWeatherLocation> {
+    val results = runCatching { JSONObject(payload).optJSONArray("results") }.getOrNull()
+        ?: return emptyList()
+    val parsed = ArrayList<WatchWeatherLocation>(limit.coerceAtLeast(0))
+    val seen = HashSet<Pair<Double, Double>>()
+    for (index in 0 until minOf(results.length(), limit.coerceAtLeast(0))) {
+        val result = results.optJSONObject(index) ?: continue
+        val latitude = result.optDoubleOrNull("latitude") ?: continue
+        val longitude = result.optDoubleOrNull("longitude") ?: continue
+        if (!seen.add(latitude to longitude)) continue
+        val label = listOf(
+            result.optString("name").takeIf(String::isNotBlank),
+            result.optString("admin1").takeIf(String::isNotBlank),
+            result.optString("country").takeIf(String::isNotBlank),
+        ).filterNotNull().distinct().joinToString(", ").ifBlank { fallbackLabel }
+        runCatching { WatchWeatherLocation(latitude, longitude, label) }
+            .getOrNull()
+            ?.let(parsed::add)
+    }
+    return parsed
 }
 
 private object DefaultWatchWeatherHttpTransport : WatchWeatherHttpTransport {

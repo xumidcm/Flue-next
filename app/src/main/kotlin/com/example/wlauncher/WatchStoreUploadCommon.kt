@@ -1,5 +1,6 @@
 package com.flue.launcher
 
+import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +17,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -35,51 +37,61 @@ import kotlinx.coroutines.withContext
  */
 
 /** 把商店写接口的失败翻译成给用户看的人话。 */
-internal fun watchStoreUploadErrorMessage(error: Throwable): String = when {
+internal fun watchStoreUploadErrorMessage(context: Context, error: Throwable): String = when {
     error is WatchStoreHttpException && error.statusCode == 401 ->
-        "登录已过期，请重新登录"
+        context.getString(R.string.watch_store_error_auth_expired)
     error is WatchStoreHttpException && error.statusCode == 400 ->
-        error.detail?.let { "内容被服务器拒绝：$it" }
-            ?: "内容被服务器拒绝，请检查名称、描述和分类"
+        error.detail?.let { context.getString(R.string.watch_store_error_rejected_detail_fmt, it) }
+            ?: context.getString(R.string.watch_store_error_rejected)
     error is WatchStoreHttpException && error.statusCode == 413 ->
-        "表盘包超过 50MB 上限，请压缩图片资源后再试"
+        context.getString(R.string.watch_store_error_package_too_large)
     error is WatchStoreHttpException && error.statusCode == 429 ->
-        "操作太频繁，请等一分钟后再试"
+        context.getString(R.string.watch_store_error_rate_limited)
     error is WatchStoreHttpException ->
-        "商店服务返回了错误（${error.statusCode}）" +
-            (error.detail?.let { "：$it" } ?: "，请稍后再试")
+        error.detail?.let {
+            context.getString(R.string.watch_store_error_service_detail_fmt, error.statusCode, it)
+        } ?: context.getString(R.string.watch_store_error_service_fmt, error.statusCode)
     error is WatchStorePayloadTooLargeException ->
-        "表盘包超过 50MB 上限，请压缩图片资源后再试"
+        context.getString(R.string.watch_store_error_package_too_large)
     error is IllegalArgumentException || error is IllegalStateException ->
-        error.message ?: "上传失败"
+        error.message ?: context.getString(R.string.watch_store_error_upload)
     else ->
-        error.message?.takeIf(String::isNotBlank)?.let { "网络请求失败：$it" }
-            ?: "网络请求失败，请检查网络后重试"
+        error.message?.takeIf(String::isNotBlank)?.let {
+            context.getString(R.string.watch_store_error_network_detail_fmt, it)
+        } ?: context.getString(R.string.watch_store_error_network)
 }
 
-internal fun watchStoreAuthErrorMessage(error: Throwable, register: Boolean): String = when {
+internal fun watchStoreAuthErrorMessage(
+    context: Context,
+    error: Throwable,
+    register: Boolean,
+): String = when {
     error is WatchStoreHttpException && error.statusCode == 401 ->
-        "用户名或密码不正确"
+        context.getString(R.string.watch_store_error_invalid_credentials)
     error is WatchStoreHttpException && error.statusCode == 400 ->
-        error.detail?.let { "服务器拒绝了提交：$it" }
+        error.detail?.let { context.getString(R.string.watch_store_error_auth_rejected_detail_fmt, it) }
             ?: if (register) {
-                "用户名或密码不符合要求（用户名 3-50 位字母数字下划线，密码至少 6 位）"
+                context.getString(R.string.watch_store_error_auth_requirements)
             } else {
-                "用户名或密码不正确"
+                context.getString(R.string.watch_store_error_invalid_credentials)
             }
     error is WatchStoreHttpException && error.statusCode == 409 ->
-        "该用户名已被注册，换一个试试"
+        context.getString(R.string.watch_store_error_username_taken)
     error is WatchStoreHttpException && error.statusCode == 429 ->
-        "尝试太频繁，请等一分钟后再试"
-    else -> watchStoreUploadErrorMessage(error)
+        context.getString(R.string.watch_store_error_auth_rate_limited)
+    else -> watchStoreUploadErrorMessage(context, error)
 }
 
 /** 提交前的本地校验；返回 null 表示可以提交。 */
-internal fun watchStoreAuthInputError(username: String, password: String): String? {
+internal fun watchStoreAuthInputError(
+    context: Context,
+    username: String,
+    password: String,
+): String? {
     if (!username.trim().matches(WATCH_STORE_USERNAME_PATTERN)) {
-        return "用户名需要 3-50 位字母、数字或下划线"
+        return context.getString(R.string.watch_store_error_username_format)
     }
-    if (password.length < 6) return "密码至少需要 6 位"
+    if (password.length < 6) return context.getString(R.string.watch_store_error_password_length)
     return null
 }
 
@@ -140,7 +152,7 @@ internal fun WatchStoreLoginSection(
         OutlinedTextField(
             value = username,
             onValueChange = { onUsernameChange(it.take(50)) },
-            label = { Text("用户名") },
+            label = { Text(stringResource(R.string.watch_store_username)) },
             singleLine = true,
             enabled = enabled,
             modifier = Modifier.fillMaxWidth(),
@@ -148,7 +160,7 @@ internal fun WatchStoreLoginSection(
         OutlinedTextField(
             value = password,
             onValueChange = { onPasswordChange(it.take(128)) },
-            label = { Text("密码") },
+            label = { Text(stringResource(R.string.watch_store_password)) },
             singleLine = true,
             enabled = enabled,
             visualTransformation = PasswordVisualTransformation(),
@@ -163,7 +175,11 @@ internal fun WatchStoreLoginSection(
                 },
                 enabled = enabled,
             )
-            Text("记住账号", style = MaterialTheme.typography.bodySmall, color = style.titleColor)
+            Text(
+                stringResource(R.string.watch_store_remember_username),
+                style = MaterialTheme.typography.bodySmall,
+                color = style.titleColor,
+            )
             Spacer(Modifier.width(10.dp))
             Checkbox(
                 checked = rememberPassword,
@@ -172,7 +188,11 @@ internal fun WatchStoreLoginSection(
                 },
                 enabled = enabled,
             )
-            Text("记住密码", style = MaterialTheme.typography.bodySmall, color = style.titleColor)
+            Text(
+                stringResource(R.string.watch_store_remember_password),
+                style = MaterialTheme.typography.bodySmall,
+                color = style.titleColor,
+            )
         }
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -182,17 +202,15 @@ internal fun WatchStoreLoginSection(
                 onClick = onLogin,
                 enabled = enabled,
                 modifier = Modifier.weight(1f),
-            ) { Text("登录") }
+            ) { Text(stringResource(R.string.watch_store_login)) }
             OutlinedButton(
                 onClick = onRegister,
                 enabled = enabled,
                 modifier = Modifier.weight(1f),
-            ) { Text("注册") }
+            ) { Text(stringResource(R.string.watch_store_register)) }
         }
         Text(
-            "注册即创建表盘商店账号（用户名 3-50 位字母数字下划线，密码至少 6 位）。" +
-                "勾选「记住密码」后，密码会经 Android 密钥库加密保存在本机；" +
-                "未勾选时密码只用于本次登录，不会保存。",
+            stringResource(R.string.watch_store_auth_security_note),
             style = MaterialTheme.typography.labelSmall,
             color = style.secondaryTextColor,
         )

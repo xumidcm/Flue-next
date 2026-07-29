@@ -148,10 +148,10 @@ internal class NativeDragGestureMachine(
             it == currentFolderTargetKey && it != source
         }
         val effects = mutableListOf<NativeDragEffect>()
+        if (armedFolderTarget != null) effects += NativeDragEffect.FolderHoverChanged(null)
         if (source != null && folderTarget != null) {
             effects += NativeDragEffect.CreateFolder(source, folderTarget)
         }
-        if (armedFolderTarget != null) effects += NativeDragEffect.FolderHoverChanged(null)
         if (source != null && wasDragging && folderTarget == null) {
             currentReorderTargetKey
                 ?.takeIf { it != source && it != lastMoveTarget }

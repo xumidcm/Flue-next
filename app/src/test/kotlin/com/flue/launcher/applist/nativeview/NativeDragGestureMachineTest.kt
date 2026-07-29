@@ -88,8 +88,8 @@ class NativeDragGestureMachineTest {
         )
         assertEquals(
             listOf(
-                NativeDragEffect.CreateFolder(key("a"), key("b")),
                 NativeDragEffect.FolderHoverChanged(null),
+                NativeDragEffect.CreateFolder(key("a"), key("b")),
                 NativeDragEffect.CommitDrag,
             ),
             machine.onUp(currentFolderTargetKey = key("b")),
