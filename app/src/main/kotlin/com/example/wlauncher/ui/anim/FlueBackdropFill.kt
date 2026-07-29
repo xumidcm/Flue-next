@@ -66,8 +66,22 @@ internal fun legacyBackdropBlend(progress: Float): LegacyBackdropBlend {
     // (at p=.5: 25% fallback), causing the visible dark/white pulse. Keep the
     // clear frame opaque and fade the opaque blurred frame over it instead:
     // result = clear*(1-p) + blurred*p with no backdrop contribution.
-    return LegacyBackdropBlend(clearAlpha = 1f, blurredAlpha = p)
+    // Bring the blur in a little earlier without introducing a non-zero floor:
+    // p=0 remains the untouched live face, p=1 remains the prepared blur, and
+    // the middle is only mildly ahead of a linear cross-fade.
+    val earlyBlurAlpha = when (p) {
+        0f -> 0f
+        1f -> 1f
+        else -> p * (1.18f - 0.18f * p)
+    }
+    return LegacyBackdropBlend(clearAlpha = 1f, blurredAlpha = earlyBlurAlpha)
 }
+
+internal fun legacyBackdropViewportMatches(
+    viewportWidth: Int,
+    viewportHeight: Int,
+    layerSize: IntSize,
+): Boolean = viewportWidth == layerSize.width && viewportHeight == layerSize.height
 
 /** API 27-30 transition hot path: one cached bitmap draw, with no recording. */
 private fun DrawScope.drawLegacyBackdropCover(
@@ -177,35 +191,50 @@ fun Modifier.flueBackdropFill(
             // Old Android never enters the display-list recording path. The
             // selected watch face has already prepared these frames off the UI
             // thread, so a drag frame is exactly two bitmap draws + one veil.
-            val fallback = legacyFrames?.let { Color(it.fallbackArgb) } ?: Color(0xFF10151D)
+            // Never stretch a cache prepared for a different measured layer.
+            // The live face remains available while the correctly-sized blur
+            // triplet is rebuilt in the background.
+            val matchingFrames = legacyFrames?.takeIf {
+                legacyBackdropViewportMatches(it.viewportWidth, it.viewportHeight, layerSize)
+            }
+            val fallback = matchingFrames?.let { Color(it.fallbackArgb) } ?: Color(0xFF10151D)
             drawRect(fallback.copy(alpha = 1f))
-            if (legacyFrames != null) {
+            if (matchingFrames != null) {
                 val blend = legacyBackdropBlend(p)
                 val legacyScale = (contentScale?.invoke() ?: (1f - 0.08f * p))
                     .coerceIn(0.01f, 1f)
                 val legacyTranslationY =
                     (contentTranslationYFraction?.invoke() ?: (0.03f * p)) * size.height
+                val blurredFrame = if (legacyDarkMode) {
+                    matchingFrames.darkBlurred
+                } else {
+                    matchingFrames.lightBlurred
+                }
+                // The prepared blur is the opaque edge fill behind the
+                // shrinking live face. It never substitutes for the clear
+                // watch face itself.
                 drawLegacyBackdropCover(
-                    image = legacyFrames.clear,
-                    frames = legacyFrames,
+                    image = blurredFrame,
+                    frames = matchingFrames,
                     layerSize = layerSize,
                     contentScale = legacyScale,
                     translationYPx = legacyTranslationY,
                     alpha = blend.clearAlpha,
                 )
+            }
+            // Keep the real rendered watch face as the clear layer on every
+            // API 27-30 frame, then cross-fade only the prepared blur over it.
+            drawContent()
+            if (matchingFrames != null) {
                 drawLegacyBackdropCover(
-                    image = if (legacyDarkMode) legacyFrames.darkBlurred else legacyFrames.lightBlurred,
-                    frames = legacyFrames,
+                    image = if (legacyDarkMode) matchingFrames.darkBlurred else matchingFrames.lightBlurred,
+                    frames = matchingFrames,
                     layerSize = layerSize,
-                    contentScale = legacyScale,
-                    translationYPx = legacyTranslationY,
-                    alpha = blend.blurredAlpha,
+                    contentScale = (contentScale?.invoke() ?: (1f - 0.08f * p)).coerceIn(0.01f, 1f),
+                    translationYPx =
+                        (contentTranslationYFraction?.invoke() ?: (0.03f * p)) * size.height,
+                    alpha = legacyBackdropBlend(p).blurredAlpha,
                 )
-            } else {
-                // Cache generation normally completes while the face is idle.
-                // If a user opens an overlay immediately after switching faces,
-                // preserve the live face instead of exposing a white Window.
-                drawContent()
             }
             drawRect(
                 if (legacyDarkMode) {
@@ -214,6 +243,47 @@ fun Modifier.flueBackdropFill(
                     Color.White.copy(alpha = 0.06f * p)
                 }
             )
+            return@drawWithContent
+        }
+
+        // AndroidView/Surface-backed external faces can produce an empty or
+        // opaque-black Compose GraphicsLayer on recent Android versions. For
+        // those faces rememberLegacyWatchFaceBackdropFrames supplies a real
+        // preview source. Render it through the current hardware blur, then
+        // draw the live face above it; this preserves the Android 12+ blur
+        // quality while guaranteeing the shrunken edge is never black.
+        val preparedHardwareFrames = legacyFrames?.takeIf {
+            legacyBackdropViewportMatches(it.viewportWidth, it.viewportHeight, layerSize)
+        }
+        if (preparedHardwareFrames != null) {
+            val preparedScale = (contentScale?.invoke() ?: (1f - 0.08f * p))
+                .coerceIn(0.01f, 1f)
+            val preparedTranslationY =
+                (contentTranslationYFraction?.invoke() ?: (0.03f * p)) * size.height
+            drawRect(Color(preparedHardwareFrames.fallbackArgb))
+            magnifiedLayer.record(this, layoutDirection, layerSize) {
+                drawLegacyBackdropCover(
+                    image = preparedHardwareFrames.clear,
+                    frames = preparedHardwareFrames,
+                    layerSize = layerSize,
+                    contentScale = preparedScale,
+                    translationYPx = preparedTranslationY,
+                    alpha = 1f,
+                )
+            }
+            val preparedBlurRadius = quantizeBackdropBlurRadiusPx(p)
+            magnifiedLayer.renderEffect = if (preparedBlurRadius > 0) {
+                BackdropBlurEffectCache.get(preparedBlurRadius)
+            } else {
+                null
+            }
+            magnifiedLayer.alpha = 1f
+            clipRect { drawLayer(magnifiedLayer) }
+            drawContent()
+            // Apply the veil to both the mirrored fill and the live face. When
+            // it sat below drawContent, the top mirrored strip was visibly
+            // darker than the face on Android 12+ and formed a colour seam.
+            drawRect(Color.Black.copy(alpha = 0.20f * p))
             return@drawWithContent
         }
 
@@ -350,7 +420,9 @@ fun Modifier.flueBackdropFill(
         }
         // 所有效果从 p=0 连续起步；中断后只要同一个时钟反向，就会沿原路径
         // 消失，不会在接近 0 时因固定 0.08 alpha 突然跳一帧。
-        drawRect(Color.Black.copy(alpha = 0.20f * p))
         drawContent()
+        // Uniform tint after both layers keeps the mirrored top edge and the
+        // scaled live canvas in the same colour space.
+        drawRect(Color.Black.copy(alpha = 0.20f * p))
     }
 }

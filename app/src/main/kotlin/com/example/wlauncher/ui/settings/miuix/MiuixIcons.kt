@@ -20,7 +20,8 @@ import androidx.compose.ui.unit.dp
  * 包含图标：
  * [Back]、[Forward]、[Check]、[Close]、[Add]、[Remove]、[Search]、
  * [Settings]、[Info]、[Warning]、[Refresh]、[Delete]、[Wifi]、[Bluetooth]、
- * [Battery]、[Notification]、[Brightness]、[Clock]、[Grid]。
+ * [Battery]、[Notification]、[Brightness]、[Clock]、[Grid]、[MobileData]、
+ * [DoNotDisturb]、[SkipPrevious]、[SkipNext]、[ArrowUp]、[ArrowDown]。
  */
 object MiuixIcons {
 
@@ -39,6 +40,91 @@ object MiuixIcons {
             moveTo(9.5f, 5.5f)
             lineTo(16f, 12f)
             lineTo(9.5f, 18.5f)
+        }
+    }
+
+    /** 明确的上移箭头；带竖杆，避免和折叠/展开图标混淆。 */
+    val ArrowUp: ImageVector by lazyIcon("ArrowUp") {
+        stroke {
+            moveTo(12f, 19f)
+            verticalLineTo(5f)
+        }
+        stroke {
+            moveTo(6.6f, 10.4f)
+            lineTo(12f, 5f)
+            lineTo(17.4f, 10.4f)
+        }
+    }
+
+    /** 明确的下移箭头；带竖杆，避免和折叠/展开图标混淆。 */
+    val ArrowDown: ImageVector by lazyIcon("ArrowDown") {
+        stroke {
+            moveTo(12f, 5f)
+            verticalLineTo(19f)
+        }
+        stroke {
+            moveTo(6.6f, 13.6f)
+            lineTo(12f, 19f)
+            lineTo(17.4f, 13.6f)
+        }
+    }
+
+    /** 上一首：左侧定位杆 + 向左播放三角。 */
+    val SkipPrevious: ImageVector by lazyIcon("SkipPrevious") {
+        stroke {
+            moveTo(6.5f, 6f)
+            verticalLineTo(18f)
+        }
+        stroke {
+            moveTo(17.5f, 6.5f)
+            lineTo(9.5f, 12f)
+            lineTo(17.5f, 17.5f)
+            close()
+        }
+    }
+
+    /** 下一首：右侧定位杆 + 向右播放三角。 */
+    val SkipNext: ImageVector by lazyIcon("SkipNext") {
+        stroke {
+            moveTo(17.5f, 6f)
+            verticalLineTo(18f)
+        }
+        stroke {
+            moveTo(6.5f, 6.5f)
+            lineTo(14.5f, 12f)
+            lineTo(6.5f, 17.5f)
+            close()
+        }
+    }
+
+    /** 移动数据：上下行双箭头。 */
+    val MobileData: ImageVector by lazyIcon("MobileData") {
+        stroke {
+            moveTo(8.5f, 18.5f)
+            verticalLineTo(6f)
+        }
+        stroke {
+            moveTo(5.2f, 9.3f)
+            lineTo(8.5f, 6f)
+            lineTo(11.8f, 9.3f)
+        }
+        stroke {
+            moveTo(15.5f, 5.5f)
+            verticalLineTo(18f)
+        }
+        stroke {
+            moveTo(12.2f, 14.7f)
+            lineTo(15.5f, 18f)
+            lineTo(18.8f, 14.7f)
+        }
+    }
+
+    /** 勿扰：圆形状态标记内的减号。 */
+    val DoNotDisturb: ImageVector by lazyIcon("DoNotDisturb") {
+        stroke { circle(12f, 12f, 8.2f) }
+        stroke {
+            moveTo(7.6f, 12f)
+            horizontalLineTo(16.4f)
         }
     }
 
@@ -205,14 +291,42 @@ object MiuixIcons {
     /** WLAN。 */
     val Wifi: ImageVector by lazyIcon("Wifi") {
         stroke {
-            moveTo(5.78f, 13.28f)
-            arcTo(8.8f, 8.8f, 0f, isMoreThanHalf = false, isPositiveArc = true, x1 = 18.22f, y1 = 13.28f)
+            moveTo(3.9f, 10.7f)
+            arcTo(11.45f, 11.45f, 0f, isMoreThanHalf = false, isPositiveArc = true, x1 = 20.1f, y1 = 10.7f)
         }
         stroke {
-            moveTo(8.04f, 15.54f)
-            arcTo(5.6f, 5.6f, 0f, isMoreThanHalf = false, isPositiveArc = true, x1 = 15.96f, y1 = 15.54f)
+            moveTo(6.7f, 13.7f)
+            arcTo(7.5f, 7.5f, 0f, isMoreThanHalf = false, isPositiveArc = true, x1 = 17.3f, y1 = 13.7f)
         }
-        dot(12f, 18.6f, 1.15f)
+        stroke {
+            moveTo(9.45f, 16.65f)
+            arcTo(3.6f, 3.6f, 0f, isMoreThanHalf = false, isPositiveArc = true, x1 = 14.55f, y1 = 16.65f)
+        }
+        dot(12f, 19.65f, 1.05f)
+    }
+
+    /** 退出画布全屏：四角向中心收拢的 MIUIX 细线缩小图标。 */
+    val Minimize: ImageVector by lazyIcon("Minimize") {
+        stroke {
+            moveTo(4.5f, 9.2f)
+            horizontalLineTo(9.2f)
+            verticalLineTo(4.5f)
+        }
+        stroke {
+            moveTo(19.5f, 9.2f)
+            horizontalLineTo(14.8f)
+            verticalLineTo(4.5f)
+        }
+        stroke {
+            moveTo(4.5f, 14.8f)
+            horizontalLineTo(9.2f)
+            verticalLineTo(19.5f)
+        }
+        stroke {
+            moveTo(19.5f, 14.8f)
+            horizontalLineTo(14.8f)
+            verticalLineTo(19.5f)
+        }
     }
 
     /** 蓝牙。 */

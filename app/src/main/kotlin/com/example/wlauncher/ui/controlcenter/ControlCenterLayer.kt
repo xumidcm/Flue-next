@@ -34,6 +34,7 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -58,6 +59,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
@@ -67,6 +69,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -80,7 +84,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -116,19 +119,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.sp
 import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.extended.Blocklist
-import top.yukonga.miuix.kmp.icon.extended.Back
-import top.yukonga.miuix.kmp.icon.extended.Carrier
-import top.yukonga.miuix.kmp.icon.extended.Forward
-import top.yukonga.miuix.kmp.icon.extended.Link
 import top.yukonga.miuix.kmp.icon.extended.Messages
 import top.yukonga.miuix.kmp.icon.extended.Music
 import top.yukonga.miuix.kmp.icon.extended.Pause
 import top.yukonga.miuix.kmp.icon.extended.Play
 import top.yukonga.miuix.kmp.icon.extended.Reset
-import top.yukonga.miuix.kmp.icon.extended.SearchDevice
 import top.yukonga.miuix.kmp.icon.extended.Settings
-import top.yukonga.miuix.kmp.icon.extended.Theme
 import top.yukonga.miuix.kmp.icon.extended.VolumeUp
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
@@ -145,6 +141,7 @@ import com.flue.launcher.ui.common.rememberFlueElasticScrollState
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.notification.NotificationGroupUi
 import com.flue.launcher.ui.notification.notificationStackBackColor
+import com.flue.launcher.ui.settings.miuix.MiuixIcons as FlueMiuixIcons
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.delay
@@ -166,21 +163,21 @@ private const val MEDIA_PROGRESS_EXPANDED_HEIGHT_DP = 8f
 private const val MEDIA_PROGRESS_HIT_HEIGHT_DP = 24f
 private const val MEDIA_PROGRESS_SEEK_SYNC_HOLD_MS = 1200L
 private const val MUSIC_TEXT_MARQUEE_INITIAL_DELAY_MS = 650L
+private const val MUSIC_TEXT_MARQUEE_END_HOLD_MS = 3_000L
 private const val MUSIC_TEXT_MARQUEE_SPEED_DP_PER_SECOND = 34f
 private const val CONTROL_NOTIFICATION_STACK_TRANSLATION_DP = 7f
 private const val CONTROL_NOTIFICATION_STACK_HORIZONTAL_INSET_DP = 8f
 private const val MUSIC_TEXT_FADE_EDGE_DP = 18f
 private const val MUSIC_TEXT_FADE_TRANSITION_MS = 80
 private const val MUSIC_TEXT_MARQUEE_SIDE_PADDING_DP = 8f
-// Keep the close threshold below the shared 48dp spring cap so a single
-// high-velocity pull can actually reach it on mdpi/low-density watches.
-private const val CONTROL_CENTER_DISMISS_DRAG_THRESHOLD_DP = 40f
 
 private data class ControlCenterMediaState(
     val controller: MediaController? = null,
     val title: String = "",
     val artist: String = "",
     val artwork: ImageBitmap? = null,
+    /** Stable metadata identity; prevents a new ImageBitmap wrapper every poll from restarting Crossfade. */
+    val artworkIdentity: String? = null,
     val appIcon: ImageBitmap? = null,
     val customActions: List<ControlCenterMediaAction> = emptyList(),
     val artworkColor: Color = Color(0xFF2F3B45),
@@ -218,7 +215,8 @@ fun ControlCenterLayer(
     showNotificationCard: Boolean = false,
     notificationGroups: List<NotificationGroupUi> = emptyList(),
     onOpenNotifications: () -> Unit = {},
-    onDismissToFace: () -> Unit,
+    onDismissProgressChange: (Float) -> Unit,
+    onDismissRelease: (Float, Float, Boolean) -> Unit,
     showPowerButton: Boolean = false,
     onPowerClick: () -> Unit = {},
     glassHighlightEnabled: Boolean = true,
@@ -226,6 +224,8 @@ fun ControlCenterLayer(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val currentOnDismissProgressChange by rememberUpdatedState(onDismissProgressChange)
+    val currentOnDismissRelease by rememberUpdatedState(onDismissRelease)
     val launcherStyle = LauncherTheme.style
     val audioManager = remember(context) { context.getSystemService(AudioManager::class.java) }
     var mediaVolume by remember(context) {
@@ -252,14 +252,22 @@ fun ControlCenterLayer(
     // dismiss gesture, where there is no child ScrollState to report
     // unconsumed deltas.
     val sharedVerticalElasticState = rememberFlueElasticScrollState(verticalScrollState)
-    var fullScreenDismissTriggered by remember { mutableStateOf(false) }
     var controlCenterGestureLocked by remember { mutableStateOf(false) }
-    val dismissDragThresholdPx = with(density) { CONTROL_CENTER_DISMISS_DRAG_THRESHOLD_DP.dp.toPx() }
+    var scrollDismissDragPx by remember { mutableFloatStateOf(0f) }
+    var scrollDismissActive by remember { mutableStateOf(false) }
+    var fullScreenDragX by remember { mutableFloatStateOf(0f) }
+    var fullScreenDragY by remember { mutableFloatStateOf(0f) }
+    var fullScreenVelocityY by remember { mutableFloatStateOf(0f) }
+    var fullScreenLastEventUptime by remember { mutableStateOf(0L) }
+    var fullScreenDismissActive by remember { mutableStateOf(false) }
+    var controlCenterViewportHeightPx by remember { mutableIntStateOf(1) }
     val lockControlCenterGesture: (Boolean) -> Unit = remember {
         { locked ->
             controlCenterGestureLocked = locked
             if (locked) {
-                fullScreenDismissTriggered = false
+                scrollDismissDragPx = 0f
+                scrollDismissActive = false
+                fullScreenDismissActive = false
             }
         }
     }
@@ -267,15 +275,13 @@ fun ControlCenterLayer(
         verticalScrollState,
         sharedVerticalElasticState,
         controlCenterGestureLocked,
-        dismissDragThresholdPx,
+        controlCenterViewportHeightPx,
     ) {
         object : NestedScrollConnection {
-            fun dismissThresholdReached(): Boolean {
-                val maximum = sharedVerticalElasticState.maximumOffsetPx
-                if (maximum <= 0f) return false
-                val threshold = dismissDragThresholdPx.coerceAtMost(maximum * 0.82f)
-                return sharedVerticalElasticState.offsetPx <= -threshold
-            }
+            fun dismissProgress(): Float =
+                (1f + scrollDismissDragPx /
+                    (controlCenterViewportHeightPx.coerceAtLeast(1) * 0.8f))
+                    .coerceIn(0f, 1f)
 
             override fun onPreScroll(
                 available: androidx.compose.ui.geometry.Offset,
@@ -285,6 +291,11 @@ fun ControlCenterLayer(
                     return androidx.compose.ui.geometry.Offset.Zero
                 }
                 if (controlCenterGestureLocked) {
+                    return androidx.compose.ui.geometry.Offset(0f, available.y)
+                }
+                if (scrollDismissActive) {
+                    scrollDismissDragPx = (scrollDismissDragPx + available.y).coerceAtMost(0f)
+                    currentOnDismissProgressChange(dismissProgress())
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 // Let the shared controller first consume a previously
@@ -301,36 +312,34 @@ fun ControlCenterLayer(
                 if (controlCenterGestureLocked) {
                     return androidx.compose.ui.geometry.Offset.Zero
                 }
-                val sharedConsumed = sharedVerticalElasticState.connection.onPostScroll(
+                if (
+                    source == NestedScrollSource.UserInput &&
+                    available.y < 0f
+                ) {
+                    scrollDismissActive = true
+                    scrollDismissDragPx = (scrollDismissDragPx + available.y).coerceAtMost(0f)
+                    currentOnDismissProgressChange(dismissProgress())
+                    return androidx.compose.ui.geometry.Offset(0f, available.y)
+                }
+                return sharedVerticalElasticState.connection.onPostScroll(
                     consumed = consumed,
                     available = available,
                     source = source,
                 )
-                // Closing the control center is a pull-to-face action, not a
-                // second gesture. It starts only once the shared spring has
-                // reached the configured threshold.
-                if (
-                    source == NestedScrollSource.UserInput &&
-                    dismissThresholdReached() &&
-                    !fullScreenDismissTriggered
-                ) {
-                    fullScreenDismissTriggered = true
-                    onDismissToFace()
-                }
-                return sharedConsumed
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (controlCenterGestureLocked) return available
+                if (scrollDismissActive) {
+                    val progress = dismissProgress()
+                    val velocity = available.y /
+                        (controlCenterViewportHeightPx.coerceAtLeast(1) * 0.8f)
+                    scrollDismissActive = false
+                    scrollDismissDragPx = 0f
+                    currentOnDismissRelease(progress, velocity, false)
+                    return available
+                }
                 if (sharedVerticalElasticState.offsetPx != 0f) {
-                    if (
-                        dismissThresholdReached() &&
-                        !fullScreenDismissTriggered
-                    ) {
-                        fullScreenDismissTriggered = true
-                        onDismissToFace()
-                        return available
-                    }
                     return sharedVerticalElasticState.connection.onPreFling(available)
                 }
                 return Velocity.Zero
@@ -338,15 +347,7 @@ fun ControlCenterLayer(
 
             override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
                 if (controlCenterGestureLocked) return available
-                val sharedConsumed = sharedVerticalElasticState.connection.onPostFling(consumed, available)
-                if (
-                    dismissThresholdReached() &&
-                    !fullScreenDismissTriggered
-                ) {
-                    fullScreenDismissTriggered = true
-                    onDismissToFace()
-                }
-                return sharedConsumed
+                return sharedVerticalElasticState.connection.onPostFling(consumed, available)
             }
         }
     }
@@ -482,11 +483,14 @@ fun ControlCenterLayer(
             verticalOverscroll.snapTo(0f)
             toggleOverscroll.snapTo(0f)
             sharedVerticalElasticState.reset()
-            fullScreenDismissTriggered = false
+            scrollDismissDragPx = 0f
+            scrollDismissActive = false
+            fullScreenDismissActive = false
         }
         val verticalElasticModifier = Modifier
             .fillMaxSize()
             .onSizeChanged { size ->
+                controlCenterViewportHeightPx = size.height.coerceAtLeast(1)
                 if (verticalScrollEnabled) {
                     sharedVerticalElasticState.setViewportHeight(size.height)
                 }
@@ -504,17 +508,50 @@ fun ControlCenterLayer(
                 .nestedScroll(verticalElasticScroll)
                 .verticalScroll(verticalScrollState)
         } else {
-            verticalElasticModifier.pointerInput(controlCenterGestureLocked) {
+            verticalElasticModifier.pointerInput(
+                controlCenterGestureLocked,
+            ) {
                 detectDragGestures(
                     onDragStart = {
-                        fullScreenDismissTriggered = false
+                        fullScreenDragX = 0f
+                        fullScreenDragY = 0f
+                        fullScreenVelocityY = 0f
+                        fullScreenLastEventUptime = 0L
+                        fullScreenDismissActive = false
                     },
                     onDrag = { change, dragAmount ->
                         if (controlCenterGestureLocked) {
                             change.consume()
                             return@detectDragGestures
                         }
-                        if (abs(dragAmount.y) >= abs(dragAmount.x)) {
+                        if (fullScreenLastEventUptime != 0L) {
+                            val deltaMs =
+                                (change.uptimeMillis - fullScreenLastEventUptime).coerceAtLeast(1L)
+                            val instantVelocityY = dragAmount.y / deltaMs * 1000f
+                            fullScreenVelocityY = if (fullScreenVelocityY == 0f) {
+                                instantVelocityY
+                            } else {
+                                fullScreenVelocityY * 0.35f + instantVelocityY * 0.65f
+                            }
+                        }
+                        fullScreenLastEventUptime = change.uptimeMillis
+                        fullScreenDragX += dragAmount.x
+                        fullScreenDragY += dragAmount.y
+                        val closing = fullScreenDismissActive ||
+                            (
+                                verticalOverscroll.value <= 0f &&
+                                    fullScreenDragY < -18f &&
+                                    abs(fullScreenDragY) > abs(fullScreenDragX)
+                                )
+                        if (closing) {
+                            fullScreenDismissActive = true
+                            change.consume()
+                            currentOnDismissProgressChange(
+                                (1f + fullScreenDragY /
+                                    (controlCenterViewportHeightPx.coerceAtLeast(1) * 0.8f))
+                                    .coerceIn(0f, 1f)
+                            )
+                        } else if (abs(dragAmount.y) >= abs(dragAmount.x)) {
                             change.consume()
                             overscrollScope.launch {
                                 val next = when {
@@ -523,13 +560,7 @@ fun ControlCenterLayer(
                                     dragAmount.y > 0f ->
                                         (verticalOverscroll.value + dragAmount.y * CONTROL_CENTER_OVERSCROLL_RESISTANCE)
                                             .coerceAtMost(CONTROL_CENTER_OVERSCROLL_LIMIT)
-                                    dragAmount.y < 0f -> if (!fullScreenDismissTriggered) {
-                                        fullScreenDismissTriggered = true
-                                        onDismissToFace()
-                                        verticalOverscroll.value
-                                    } else {
-                                        verticalOverscroll.value
-                                    }
+                                    dragAmount.y < 0f -> verticalOverscroll.value
                                     else -> verticalOverscroll.value
                                 }
                                 verticalOverscroll.snapTo(next)
@@ -537,7 +568,17 @@ fun ControlCenterLayer(
                         }
                     },
                     onDragEnd = {
-                        fullScreenDismissTriggered = false
+                        if (fullScreenDismissActive) {
+                            currentOnDismissRelease(
+                                (1f + fullScreenDragY /
+                                    (controlCenterViewportHeightPx.coerceAtLeast(1) * 0.8f))
+                                    .coerceIn(0f, 1f),
+                                fullScreenVelocityY /
+                                    (controlCenterViewportHeightPx.coerceAtLeast(1) * 0.8f),
+                                false,
+                            )
+                        }
+                        fullScreenDismissActive = false
                         overscrollScope.launch {
                             if (verticalOverscroll.value != 0f) {
                                 verticalOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
@@ -545,7 +586,16 @@ fun ControlCenterLayer(
                         }
                     },
                     onDragCancel = {
-                        fullScreenDismissTriggered = false
+                        if (fullScreenDismissActive) {
+                            currentOnDismissRelease(
+                                (1f + fullScreenDragY /
+                                    (controlCenterViewportHeightPx.coerceAtLeast(1) * 0.8f))
+                                    .coerceIn(0f, 1f),
+                                0f,
+                                true,
+                            )
+                        }
+                        fullScreenDismissActive = false
                         overscrollScope.launch {
                             if (verticalOverscroll.value != 0f) {
                                 verticalOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
@@ -627,7 +677,7 @@ fun ControlCenterLayer(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             ControlToggle(
-                                icon = MiuixIcons.SearchDevice,
+                                icon = FlueMiuixIcons.Wifi,
                                 label = stringResource(R.string.cc_wifi),
                                 active = connectivity.wifiActive,
                                 size = toggleSize,
@@ -645,7 +695,7 @@ fun ControlCenterLayer(
                                 onLongClick = { openSettings(context, Settings.ACTION_WIFI_SETTINGS) }
                             )
                             ControlToggle(
-                                icon = MiuixIcons.Link,
+                                icon = FlueMiuixIcons.Bluetooth,
                                 label = stringResource(R.string.cc_bluetooth),
                                 active = bluetoothEnabled,
                                 size = toggleSize,
@@ -664,7 +714,7 @@ fun ControlCenterLayer(
                                 onLongClick = { openSettings(context, Settings.ACTION_BLUETOOTH_SETTINGS) }
                             )
                             ControlToggle(
-                                icon = MiuixIcons.Carrier,
+                                icon = FlueMiuixIcons.MobileData,
                                 label = stringResource(R.string.cc_mobile_data),
                                 active = connectivity.cellularActive,
                                 size = toggleSize,
@@ -682,7 +732,7 @@ fun ControlCenterLayer(
                                 onLongClick = { openSettings(context, Settings.ACTION_WIRELESS_SETTINGS) }
                             )
                             ControlToggle(
-                                icon = MiuixIcons.Blocklist,
+                                icon = FlueMiuixIcons.DoNotDisturb,
                                 label = stringResource(R.string.cc_dnd),
                                 active = dndEnabled,
                                 size = toggleSize,
@@ -713,7 +763,7 @@ fun ControlCenterLayer(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 ControlToggle(
-                                    icon = MiuixIcons.SearchDevice,
+                                    icon = FlueMiuixIcons.Wifi,
                                     label = stringResource(R.string.cc_wifi),
                                     active = connectivity.wifiActive,
                                     size = toggleSize,
@@ -731,7 +781,7 @@ fun ControlCenterLayer(
                                     onLongClick = { openSettings(context, Settings.ACTION_WIFI_SETTINGS) }
                                 )
                                 ControlToggle(
-                                    icon = MiuixIcons.Link,
+                                    icon = FlueMiuixIcons.Bluetooth,
                                     label = stringResource(R.string.cc_bluetooth),
                                     active = bluetoothEnabled,
                                     size = toggleSize,
@@ -750,7 +800,7 @@ fun ControlCenterLayer(
                                     onLongClick = { openSettings(context, Settings.ACTION_BLUETOOTH_SETTINGS) }
                                 )
                                 ControlToggle(
-                                    icon = MiuixIcons.Carrier,
+                                    icon = FlueMiuixIcons.MobileData,
                                     label = stringResource(R.string.cc_mobile_data),
                                     active = connectivity.cellularActive,
                                     size = toggleSize,
@@ -768,7 +818,7 @@ fun ControlCenterLayer(
                                     onLongClick = { openSettings(context, Settings.ACTION_WIRELESS_SETTINGS) }
                                 )
                                 ControlToggle(
-                                    icon = MiuixIcons.Blocklist,
+                                    icon = FlueMiuixIcons.DoNotDisturb,
                                     label = stringResource(R.string.cc_dnd),
                                     active = dndEnabled,
                                     size = toggleSize,
@@ -801,7 +851,7 @@ fun ControlCenterLayer(
                     }
                 )
                 ControlSliderCard(
-                    icon = MiuixIcons.Theme,
+                    icon = Icons.Filled.BrightnessHigh,
                     label = stringResource(R.string.cc_brightness),
                     value = brightness,
                     height = sliderHeight,
@@ -1161,15 +1211,56 @@ private fun ControlSliderCard(
         Spacer(Modifier.width(9.dp))
         Text(label, color = launcherStyle.bodyColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.width(8.dp))
+        RelativeDragSlider(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/**
+ * 相对拖动滑块：按下点只决定手势从哪里开始，数值始终以按下瞬间的原值为
+ * 起点。这样手指按到轨道任意位置时不会瞬移，只有后续位移才改变音量/亮度。
+ */
+@Composable
+private fun RelativeDragSlider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val currentValue by rememberUpdatedState(value.coerceIn(0f, 1f))
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+    Box(
+        modifier = modifier.pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                down.consume()
+                val startX = down.position.x
+                val startValue = currentValue
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val change = event.changes.firstOrNull() ?: break
+                    if (!change.pressed) break
+                    change.consume()
+                    currentOnValueChange(
+                        (startValue + (change.position.x - startX) / size.width.coerceAtLeast(1))
+                            .coerceIn(0f, 1f),
+                    )
+                }
+            }
+        },
+    ) {
         Slider(
             value = value.coerceIn(0f, 1f),
-            onValueChange = onValueChange,
+            onValueChange = {},
+            enabled = false,
             colors = SliderDefaults.colors(
-                thumbColor = Color.White,
-                activeTrackColor = Color.White,
-                inactiveTrackColor = Color.White.copy(alpha = 0.22f)
+                disabledThumbColor = Color.White,
+                disabledActiveTrackColor = Color.White,
+                disabledInactiveTrackColor = Color.White.copy(alpha = 0.22f),
             ),
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }
@@ -1195,16 +1286,38 @@ private fun MediaControlCard(
         stringResource(R.string.cc_media_open_app_hint)
     }
     val cardShape = launcherStyle.panelShape
-    val artworkSurfaceActive = notificationAccessGranted && mediaState.playing
-    val primaryContentColor = if (artworkSurfaceActive) Color.White else launcherStyle.titleColor
-    val secondaryContentColor = if (artworkSurfaceActive) {
+    val artworkSurfaceActive = notificationAccessGranted &&
+        mediaState.playing &&
+        mediaState.artwork != null
+    val primaryTarget = if (artworkSurfaceActive) Color.White else launcherStyle.titleColor
+    val secondaryTarget = if (artworkSurfaceActive) {
         Color.White.copy(alpha = 0.72f)
     } else {
         launcherStyle.secondaryTextColor
     }
-    val controlContentColor = if (artworkSurfaceActive) Color.White else launcherStyle.bodyColor
+    val controlTarget = if (artworkSurfaceActive) Color.White else launcherStyle.bodyColor
+    val primaryContentColor by animateColorAsState(
+        targetValue = primaryTarget,
+        animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
+        label = "media_primary_content",
+    )
+    val secondaryContentColor by animateColorAsState(
+        targetValue = secondaryTarget,
+        animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
+        label = "media_secondary_content",
+    )
+    val controlContentColor by animateColorAsState(
+        targetValue = controlTarget,
+        animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
+        label = "media_control_content",
+    )
     val blurredArtwork = rememberBlurredMediaArtwork(
-        mediaState.artwork.takeIf { artworkSurfaceActive },
+        mediaState.artwork.takeIf { notificationAccessGranted },
+    )
+    val artworkSurfaceAlpha by animateFloatAsState(
+        targetValue = if (artworkSurfaceActive && blurredArtwork != null) 1f else 0f,
+        animationSpec = tween(durationMillis = 360, easing = FastOutSlowInEasing),
+        label = "media_artwork_surface",
     )
     val bgTarget = if (notificationAccessGranted) mediaState.artworkColor else Color(0xFF2F3B45)
     // 切歌时底色渐变过去，而不是硬跳 —— 让它的 420ms 盖住文字动画的中段，
@@ -1219,25 +1332,6 @@ private fun MediaControlCard(
         animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
         label = "media_card_playing_edge",
     )
-    val surfaceModifier = if (artworkSurfaceActive) {
-        Modifier
-            .clip(cardShape)
-            .background(
-                // Keep the artwork-derived blurred colour field while media is
-                // playing; only the glass edge is layered on top of it.
-                Brush.linearGradient(
-                    listOf(
-                        bg.copy(alpha = 0.94f),
-                        Color(bg.red * 0.86f, bg.green * 0.86f, bg.blue * 0.86f, 0.96f),
-                    )
-                )
-            )
-            .border(launcherStyle.glass.borderWidth, launcherStyle.glass.highlight, cardShape)
-    } else {
-        // No permission and no active playback use exactly the same thin glass
-        // recipe as the Smart Stack quick-launch dock.
-        Modifier.glassSurface(cardShape, launcherStyle.glass)
-    }
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -1245,28 +1339,49 @@ private fun MediaControlCard(
             // panelShape(30dp)：媒体卡是大块表面。内层封面 18dp = 30 − 12 padding，
             // 同心圆角关系（内 = 外 − 间距）；旧的 32/24 组合会让封面的角
             // 「胀」出外壳弧线约 4dp。
-            .then(surfaceModifier)
+            .glassSurface(cardShape, launcherStyle.glass)
             .clickable(onClick = if (notificationAccessGranted) onOpenApp else onOpenNotificationAccess)
     ) {
-        if (artworkSurfaceActive && blurredArtwork != null) {
-            Image(
-                bitmap = blurredArtwork,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        scaleX = 1.10f
-                        scaleY = 1.10f
-                        alpha = 0.72f
-                    },
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.12f)),
-            )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = artworkSurfaceAlpha }
+                .background(
+                    Brush.linearGradient(
+                        listOf(
+                            bg.copy(alpha = 0.92f),
+                            Color(bg.red * 0.86f, bg.green * 0.86f, bg.blue * 0.86f, 0.94f),
+                        )
+                    )
+                ),
+        )
+        Crossfade(
+            targetState = blurredArtwork,
+            animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing),
+            label = "media_blurred_artwork_crossfade",
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = 1.08f
+                    scaleY = 1.08f
+                    alpha = artworkSurfaceAlpha * 0.68f
+                },
+        ) { artwork ->
+            if (artwork != null) {
+                Image(
+                    bitmap = artwork,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = artworkSurfaceAlpha }
+                .background(Color.Black.copy(alpha = 0.10f)),
+        )
         if (playingEdgeAlpha > 0.001f) {
             Box(
                 modifier = Modifier
@@ -1320,22 +1435,33 @@ private fun MediaControlCard(
                         .background(controlContentColor.copy(alpha = 0.12f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (mediaState.artwork != null) {
-                        Image(
-                            bitmap = mediaState.artwork,
-                            contentDescription = null,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(artworkShape),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else {
-                        Icon(
-                            imageVector = MiuixIcons.Music,
-                            contentDescription = null,
-                            tint = controlContentColor,
-                            modifier = Modifier.size(34.dp),
-                        )
+                    Crossfade(
+                        targetState = mediaState.artwork,
+                        animationSpec = tween(durationMillis = 360, easing = FastOutSlowInEasing),
+                        label = "media_cover_crossfade",
+                        modifier = Modifier.fillMaxSize(),
+                    ) { artwork ->
+                        if (artwork != null) {
+                            Image(
+                                bitmap = artwork,
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(artworkShape),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = MiuixIcons.Music,
+                                    contentDescription = null,
+                                    tint = controlContentColor,
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .offset(x = (-2).dp),
+                                )
+                            }
+                        }
                     }
                 }
                 Spacer(Modifier.width(artworkGap))
@@ -1409,21 +1535,109 @@ private fun MediaControlCard(
 
 @Composable
 private fun rememberBlurredMediaArtwork(artwork: ImageBitmap?): ImageBitmap? {
-    return produceState<ImageBitmap?>(initialValue = null, key1 = artwork) {
-        value = artwork?.let { sourceImage ->
-            withContext(Dispatchers.Default) {
-                val source = sourceImage.asAndroidBitmap()
-                val sampleWidth = (source.width / 12).coerceIn(24, 48)
-                val sampleHeight = (source.height / 12).coerceIn(24, 48)
-                val sample = Bitmap.createScaledBitmap(source, sampleWidth, sampleHeight, true)
-                val outputWidth = source.width.coerceIn(128, 384)
-                val outputHeight = source.height.coerceIn(128, 384)
-                val output = Bitmap.createScaledBitmap(sample, outputWidth, outputHeight, true)
-                if (sample !== output && !sample.isRecycled) sample.recycle()
-                output.asImageBitmap()
+    var blurred by remember { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(artwork) {
+        if (artwork == null) {
+            blurred = null
+        } else {
+            // Keep the previous field visible while the next cover is processed,
+            // then Crossfade swaps the two. This avoids a blank flash between songs.
+            blurred = withContext(Dispatchers.Default) {
+                createMediumBlurredMediaArtwork(artwork)
             }
         }
-    }.value
+    }
+    return blurred
+}
+
+/**
+ * Cross-version medium blur for the music card. A software box blur is used on
+ * every API level so Android 27-30 and Android 12+ keep the same visual weight.
+ * Working at a 160px long edge is smooth enough for a card without turning the
+ * cover into the blocky 24-48px enlarged thumbnail used by the old path.
+ */
+private fun createMediumBlurredMediaArtwork(sourceImage: ImageBitmap): ImageBitmap {
+    val source = sourceImage.asAndroidBitmap()
+    val sourceLongEdge = maxOf(source.width, source.height).coerceAtLeast(1)
+    val targetLongEdge = sourceLongEdge.coerceIn(64, 160)
+    val scale = targetLongEdge.toFloat() / sourceLongEdge
+    val width = (source.width * scale).roundToInt().coerceAtLeast(1)
+    val height = (source.height * scale).roundToInt().coerceAtLeast(1)
+    val working = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    android.graphics.Canvas(working).drawBitmap(
+        source,
+        null,
+        android.graphics.Rect(0, 0, width, height),
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG or android.graphics.Paint.FILTER_BITMAP_FLAG),
+    )
+    val pixels = IntArray(width * height)
+    val scratch = IntArray(pixels.size)
+    working.getPixels(pixels, 0, width, 0, 0, width, height)
+    repeat(3) {
+        mediaBoxBlurHorizontal(pixels, scratch, width, height, radius = 5)
+        mediaBoxBlurVertical(scratch, pixels, width, height, radius = 5)
+    }
+    working.setPixels(pixels, 0, width, 0, 0, width, height)
+    return working.asImageBitmap()
+}
+
+private fun mediaBoxBlurHorizontal(
+    input: IntArray,
+    output: IntArray,
+    width: Int,
+    height: Int,
+    radius: Int,
+) {
+    val diameter = radius * 2 + 1
+    for (y in 0 until height) {
+        val row = y * width
+        var red = 0
+        var green = 0
+        var blue = 0
+        for (offset in -radius..radius) {
+            val color = input[row + offset.coerceIn(0, width - 1)]
+            red += color shr 16 and 0xFF
+            green += color shr 8 and 0xFF
+            blue += color and 0xFF
+        }
+        for (x in 0 until width) {
+            output[row + x] = android.graphics.Color.rgb(red / diameter, green / diameter, blue / diameter)
+            val outgoing = input[row + (x - radius).coerceIn(0, width - 1)]
+            val incoming = input[row + (x + radius + 1).coerceIn(0, width - 1)]
+            red += (incoming shr 16 and 0xFF) - (outgoing shr 16 and 0xFF)
+            green += (incoming shr 8 and 0xFF) - (outgoing shr 8 and 0xFF)
+            blue += (incoming and 0xFF) - (outgoing and 0xFF)
+        }
+    }
+}
+
+private fun mediaBoxBlurVertical(
+    input: IntArray,
+    output: IntArray,
+    width: Int,
+    height: Int,
+    radius: Int,
+) {
+    val diameter = radius * 2 + 1
+    for (x in 0 until width) {
+        var red = 0
+        var green = 0
+        var blue = 0
+        for (offset in -radius..radius) {
+            val color = input[offset.coerceIn(0, height - 1) * width + x]
+            red += color shr 16 and 0xFF
+            green += color shr 8 and 0xFF
+            blue += color and 0xFF
+        }
+        for (y in 0 until height) {
+            output[y * width + x] = android.graphics.Color.rgb(red / diameter, green / diameter, blue / diameter)
+            val outgoing = input[(y - radius).coerceIn(0, height - 1) * width + x]
+            val incoming = input[(y + radius + 1).coerceIn(0, height - 1) * width + x]
+            red += (incoming shr 16 and 0xFF) - (outgoing shr 16 and 0xFF)
+            green += (incoming shr 8 and 0xFF) - (outgoing shr 8 and 0xFF)
+            blue += (incoming and 0xFF) - (outgoing and 0xFF)
+        }
+    }
 }
 
 @Composable
@@ -1577,7 +1791,7 @@ private fun MediaControlsRow(
                 }
             }
             MediaButton(
-                icon = MiuixIcons.Back,
+                icon = FlueMiuixIcons.SkipPrevious,
                 size = buttonSize,
                 iconSize = iconSize,
                 foregroundColor = foregroundColor,
@@ -1589,6 +1803,9 @@ private fun MediaControlsRow(
                 icon = if (mediaState.playing) MiuixIcons.Pause else MiuixIcons.Play,
                 size = buttonSize,
                 iconSize = iconSize,
+                // The requested optical alignment nudges only the play triangle right;
+                // pause remains mathematically centred.
+                iconOffsetX = if (mediaState.playing) 0.dp else 0.8.dp,
                 foregroundColor = foregroundColor,
                 onGestureLockChange = onGestureLockChange
             ) {
@@ -1596,7 +1813,7 @@ private fun MediaControlsRow(
                 if (mediaState.playing) controls?.pause() else controls?.play()
             }
             MediaButton(
-                icon = MiuixIcons.Forward,
+                icon = FlueMiuixIcons.SkipNext,
                 size = buttonSize,
                 iconSize = iconSize,
                 foregroundColor = foregroundColor,
@@ -1757,31 +1974,106 @@ private fun OneShotMarqueeText(
     val hasOverflow = containerWidthPx > 0 &&
         rawTextWidthPx > 0 &&
         rawTextWidthPx + sidePaddingPx > containerWidthPx.toFloat()
-    val contentLayoutReady = !hasOverflow ||
-        contentWidthPx.toFloat() >= rawTextWidthPx + sidePaddingPx - 1f
+    val contentLayoutReady = !hasOverflow || contentWidthPx.toFloat() >=
+        (rawTextWidthPx + sidePaddingPx + containerWidthPx) * 2f - 1f
     val marqueeScrollState = rememberScrollState()
-    val scrollTargetPx = if (hasOverflow && contentLayoutReady) {
-        (contentWidthPx - containerWidthPx).coerceAtLeast(0)
+    val restingTargetPx = if (hasOverflow && contentLayoutReady) {
+        (rawTextWidthPx + sidePaddingPx - containerWidthPx).roundToInt().coerceAtLeast(0)
     } else {
         0
     }
+    val exitTargetPx = if (hasOverflow && contentLayoutReady) {
+        (rawTextWidthPx + sidePaddingPx).roundToInt().coerceAtLeast(restingTargetPx)
+    } else {
+        0
+    }
+    val repeatCyclePx = if (hasOverflow && contentLayoutReady) {
+        (rawTextWidthPx + sidePaddingPx + containerWidthPx).roundToInt()
+    } else {
+        0
+    }
+    val repeatRestingTargetPx = repeatCyclePx + restingTargetPx
+    val repeatExitTargetPx = repeatCyclePx + exitTargetPx
 
-    LaunchedEffect(text, hasOverflow, scrollTargetPx, density.density) {
+    LaunchedEffect(
+        text,
+        hasOverflow,
+        restingTargetPx,
+        exitTargetPx,
+        repeatRestingTargetPx,
+        repeatExitTargetPx,
+        density.density,
+    ) {
         marqueeScrollState.scrollTo(0)
-        if (hasOverflow && scrollTargetPx > 0) {
+        if (
+            hasOverflow &&
+            restingTargetPx > 0 &&
+            exitTargetPx > restingTargetPx &&
+            repeatExitTargetPx > repeatRestingTargetPx
+        ) {
             delay(MUSIC_TEXT_MARQUEE_INITIAL_DELAY_MS)
-            val durationMs = ((scrollTargetPx / density.density) / MUSIC_TEXT_MARQUEE_SPEED_DP_PER_SECOND * 1000f)
-                .roundToInt()
-                .coerceAtLeast(900)
+            val firstDurationMs = marqueeDurationMs(restingTargetPx, density.density, minimumMs = 900)
             marqueeScrollState.animateScrollTo(
-                value = scrollTargetPx,
-                animationSpec = tween(durationMillis = durationMs, easing = LinearEasing)
+                value = restingTargetPx,
+                animationSpec = tween(durationMillis = firstDurationMs, easing = LinearEasing),
             )
+            delay(MUSIC_TEXT_MARQUEE_END_HOLD_MS)
+            val exitDurationMs = marqueeDurationMs(
+                exitTargetPx - restingTargetPx,
+                density.density,
+                minimumMs = 420,
+            )
+            marqueeScrollState.animateScrollTo(
+                value = exitTargetPx,
+                animationSpec = tween(durationMillis = exitDurationMs, easing = LinearEasing),
+            )
+
+            while (true) {
+                val reentryDurationMs = marqueeDurationMs(
+                    repeatCyclePx - exitTargetPx,
+                    density.density,
+                    minimumMs = 420,
+                )
+                marqueeScrollState.animateScrollTo(
+                    value = repeatCyclePx,
+                    animationSpec = tween(durationMillis = reentryDurationMs, easing = LinearEasing),
+                )
+                delay(MUSIC_TEXT_MARQUEE_END_HOLD_MS)
+                val repeatScrollDurationMs = marqueeDurationMs(
+                    repeatRestingTargetPx - repeatCyclePx,
+                    density.density,
+                    minimumMs = 900,
+                )
+                marqueeScrollState.animateScrollTo(
+                    value = repeatRestingTargetPx,
+                    animationSpec = tween(durationMillis = repeatScrollDurationMs, easing = LinearEasing),
+                )
+                delay(MUSIC_TEXT_MARQUEE_END_HOLD_MS)
+                val repeatExitDurationMs = marqueeDurationMs(
+                    repeatExitTargetPx - repeatRestingTargetPx,
+                    density.density,
+                    minimumMs = 420,
+                )
+                marqueeScrollState.animateScrollTo(
+                    value = repeatExitTargetPx,
+                    animationSpec = tween(durationMillis = repeatExitDurationMs, easing = LinearEasing),
+                )
+                // Both positions are visually empty: the previous copy has left the viewport and
+                // the next copy is exactly outside the right edge. Rewind there, never to x = 0.
+                marqueeScrollState.scrollTo(exitTargetPx)
+            }
         }
     }
 
     val scrollOffsetPx = marqueeScrollState.value.toFloat()
-    val remainingScrollPx = (scrollTargetPx - marqueeScrollState.value).coerceAtLeast(0).toFloat()
+    val currentRestingTargetPx = if (marqueeScrollState.value <= exitTargetPx) {
+        restingTargetPx
+    } else {
+        repeatRestingTargetPx
+    }
+    val remainingScrollPx = (currentRestingTargetPx - marqueeScrollState.value)
+        .coerceAtLeast(0)
+        .toFloat()
     val leftFadeTarget = if (hasOverflow && fadeEdgePx > 0f) {
         if (scrollOffsetPx > 0.5f) 1f else 0f
     } else {
@@ -1850,10 +2142,30 @@ private fun OneShotMarqueeText(
             )
             if (hasOverflow) {
                 Spacer(Modifier.width(sidePadding))
+                // A full viewport gap lets one copy leave to the left exactly as the next copy
+                // reaches the right edge, so repeated entrance remains continuous.
+                Spacer(Modifier.width((containerWidthPx / density.density).dp))
+                Text(
+                    text = text,
+                    color = color,
+                    fontSize = fontSize,
+                    fontWeight = fontWeight,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
+                )
+                Spacer(Modifier.width(sidePadding))
+                Spacer(Modifier.width((containerWidthPx / density.density).dp))
             }
         }
     }
 }
+
+private fun marqueeDurationMs(distancePx: Int, density: Float, minimumMs: Int): Int =
+    ((distancePx.coerceAtLeast(1) / density.coerceAtLeast(0.1f)) /
+        MUSIC_TEXT_MARQUEE_SPEED_DP_PER_SECOND * 1_000f)
+        .roundToInt()
+        .coerceAtLeast(minimumMs)
 
 @Composable
 private fun MediaProgressSection(
@@ -2003,6 +2315,7 @@ private fun MediaButton(
     icon: ImageVector,
     size: androidx.compose.ui.unit.Dp = 36.dp,
     iconSize: androidx.compose.ui.unit.Dp = 20.dp,
+    iconOffsetX: androidx.compose.ui.unit.Dp = 0.dp,
     foregroundColor: Color,
     onGestureLockChange: (Boolean) -> Unit = {},
     onClick: () -> Unit
@@ -2020,6 +2333,16 @@ private fun MediaButton(
             }
             .clip(CircleShape)
             .background(foregroundColor.copy(alpha = backgroundAlpha))
+            .border(
+                width = 0.8.dp,
+                brush = Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = if (pressed) 0.52f else 0.38f),
+                        Color.White.copy(alpha = 0.08f),
+                    )
+                ),
+                shape = CircleShape,
+            )
             .controlCenterPressGesture(
                 pressedState = pressedState,
                 onGestureLockChange = onGestureLockChange,
@@ -2031,7 +2354,9 @@ private fun MediaButton(
             imageVector = icon,
             contentDescription = null,
             tint = foregroundColor,
-            modifier = Modifier.size(iconSize),
+            modifier = Modifier
+                .size(iconSize)
+                .offset(x = iconOffsetX),
         )
     }
 }
@@ -2082,14 +2407,92 @@ private fun controlCenterGreeting(now: Calendar = Calendar.getInstance()): Strin
 @Composable
 private fun rememberMediaState(context: Context): ControlCenterMediaState {
     var state by remember(context) { mutableStateOf(ControlCenterMediaState()) }
+    var retainedArtwork by remember(context) { mutableStateOf<ImageBitmap?>(null) }
+    var retainedArtworkColor by remember(context) { mutableStateOf(Color(0xFF2F3B45)) }
+    var retainedArtworkPackage by remember(context) { mutableStateOf<String?>(null) }
+    var retainedArtworkIdentity by remember(context) { mutableStateOf<String?>(null) }
+    var retainedAppIcon by remember(context) { mutableStateOf<ImageBitmap?>(null) }
+    var retainedAppIconPackage by remember(context) { mutableStateOf<String?>(null) }
     LaunchedEffect(context) {
         while (true) {
-            state = readMediaState(context)
+            val next = readMediaState(context)
+            state = when {
+                next.controller == null -> {
+                    retainedArtwork = null
+                    retainedArtworkPackage = null
+                    retainedArtworkIdentity = null
+                    retainedAppIcon = null
+                    retainedAppIconPackage = null
+                    next
+                }
+                next.artwork != null &&
+                    next.appPackage == retainedArtworkPackage &&
+                    next.artworkIdentity == retainedArtworkIdentity &&
+                    retainedArtwork != null -> {
+                    // MediaSession frequently returns a new ImageBitmap wrapper for the
+                    // same cover on every 500 ms progress poll. Keep the stable instance,
+                    // otherwise both cover and blurred-background Crossfade restart forever.
+                    next.copy(
+                        artwork = retainedArtwork,
+                        artworkColor = retainedArtworkColor,
+                        appIcon = stableMediaAppIcon(
+                            next = next,
+                            retained = retainedAppIcon,
+                            retainedPackage = retainedAppIconPackage,
+                        ),
+                    )
+                }
+                next.artwork != null -> {
+                    retainedArtwork = next.artwork
+                    retainedArtworkColor = next.artworkColor
+                    retainedArtworkPackage = next.appPackage
+                    retainedArtworkIdentity = next.artworkIdentity
+                    val stableIcon = stableMediaAppIcon(
+                        next = next,
+                        retained = retainedAppIcon,
+                        retainedPackage = retainedAppIconPackage,
+                    )
+                    if (next.appPackage != retainedAppIconPackage || retainedAppIcon == null) {
+                        retainedAppIcon = next.appIcon
+                        retainedAppIconPackage = next.appPackage
+                    }
+                    next.copy(appIcon = stableIcon)
+                }
+                retainedArtwork != null && next.appPackage == retainedArtworkPackage -> {
+                    // 切歌时 metadata 往往先更新文字、稍后才补封面。保持上一张
+                    // 封面，待新封面到达后再由 Crossfade 交换。
+                    next.copy(
+                        artwork = retainedArtwork,
+                        artworkIdentity = retainedArtworkIdentity,
+                        artworkColor = retainedArtworkColor,
+                        appIcon = stableMediaAppIcon(
+                            next = next,
+                            retained = retainedAppIcon,
+                            retainedPackage = retainedAppIconPackage,
+                        ),
+                    )
+                }
+                else -> {
+                    retainedAppIcon = next.appIcon
+                    retainedAppIconPackage = next.appPackage
+                    next
+                }
+            }
+            if (next.appPackage != retainedAppIconPackage || retainedAppIcon == null) {
+                retainedAppIcon = next.appIcon
+                retainedAppIconPackage = next.appPackage
+            }
             delay(500)
         }
     }
     return state
 }
+
+private fun stableMediaAppIcon(
+    next: ControlCenterMediaState,
+    retained: ImageBitmap?,
+    retainedPackage: String?,
+): ImageBitmap? = if (next.appPackage == retainedPackage && retained != null) retained else next.appIcon
 
 private fun readMediaState(context: Context): ControlCenterMediaState {
     val manager = context.getSystemService(MediaSessionManager::class.java) ?: return ControlCenterMediaState()
@@ -2103,6 +2506,19 @@ private fun readMediaState(context: Context): ControlCenterMediaState {
     val artworkBitmap = metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
         ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
         ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
+    val artworkIdentity = artworkBitmap?.let {
+        listOf(
+            controller.packageName,
+            metadata?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID),
+            metadata?.getString(MediaMetadata.METADATA_KEY_TITLE),
+            metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM),
+            metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST),
+            metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI),
+            metadata?.getString(MediaMetadata.METADATA_KEY_ART_URI),
+            metadata?.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI),
+            "${it.width}x${it.height}",
+        ).joinToString("\u0000")
+    }
     val customActions = playbackState?.customActions.orEmpty().mapNotNull { action ->
         val title = action.name?.toString().orEmpty()
         val actionIcon = loadCustomActionIconBitmap(context, controller.packageName, action.icon)
@@ -2135,10 +2551,13 @@ private fun readMediaState(context: Context): ControlCenterMediaState {
         artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST)
             ?: metadata?.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)
             ?: controller.packageName.substringAfterLast('.'),
-        artwork = (artworkBitmap ?: appIconBitmap)?.asImageBitmap(),
+        // 应用图标只保留为右上角的来源按钮，不能冒充音乐封面。没有任何
+        // 历史封面时让 UI 显示默认“未在播放”图标。
+        artwork = artworkBitmap?.asImageBitmap(),
+        artworkIdentity = artworkIdentity,
         appIcon = appIconBitmap?.asImageBitmap(),
         customActions = customActions,
-        artworkColor = (artworkBitmap ?: appIconBitmap)?.let(::averageBitmapColor) ?: Color(0xFF2F3B45),
+        artworkColor = artworkBitmap?.let(::averageBitmapColor) ?: Color(0xFF2F3B45),
         playing = playbackState?.state == PlaybackState.STATE_PLAYING,
         progress = progress,
         positionMs = position,

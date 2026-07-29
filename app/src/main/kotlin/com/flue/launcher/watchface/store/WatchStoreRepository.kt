@@ -158,6 +158,9 @@ class WatchStoreRepository(
 
     suspend fun readCatalog(): WatchFaceCatalogSnapshot = withContext(ioDispatcher) { catalog.read() }
 
+    suspend fun detachEditedMarketInstall(launcherId: String): WatchFaceCatalogSnapshot =
+        withContext(ioDispatcher) { catalog.detachEditedMarketInstall(launcherId) }
+
     suspend fun restoreCatalogFromInstalledFaces(
         repairCorruptCatalog: Boolean = false,
     ): WatchStoreCatalogRestore = withContext(ioDispatcher) {
@@ -397,6 +400,18 @@ class WatchStoreRepository(
             // Do not recycle: a visible UI may still hold a shared bitmap.
             previewMemoryCache.clear()
             previewMemoryBytes = 0L
+        }
+    }
+
+    /** Clears only public-store cover images, leaving downloads and installed faces untouched. */
+    suspend fun clearPreviewCache(): Int = withContext(ioDispatcher) {
+        clearPreviewMemoryCache()
+        synchronized(cleanupLock) {
+            var removed = 0
+            previewDirectory.listFiles().orEmpty().forEach { file ->
+                if (file.isFile && file.delete()) removed++
+            }
+            removed
         }
     }
 

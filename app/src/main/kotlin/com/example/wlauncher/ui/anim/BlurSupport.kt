@@ -44,6 +44,7 @@ private val SystemBlurRadiusBucketsDp = floatArrayOf(
     8f,
     12f,
     16f,
+    20f,
 )
 
 internal fun quantizeSystemBlurRadiusDp(radiusDp: Float): Float {

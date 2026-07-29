@@ -168,6 +168,31 @@ class WatchStoreRepositoryRecoveryTest {
         }
     }
 
+    @Test
+    fun `clear preview cache removes covers but keeps downloaded archives`() = runBlocking {
+        val root = Files.createTempDirectory("flue-watch-store-cache-").toFile()
+        try {
+            val cacheRoot = root.resolve("cache")
+            val previews = cacheRoot.resolve("previews").apply { mkdirs() }
+            val downloads = cacheRoot.resolve("downloads").apply { mkdirs() }
+            previews.resolve("cover-a.img").writeBytes(byteArrayOf(1, 2, 3))
+            previews.resolve("preview-b.part").writeBytes(byteArrayOf(4, 5))
+            val archive = downloads.resolve("download.watch").apply { writeBytes(byteArrayOf(6)) }
+            val repository = repository(
+                root = root,
+                catalogFile = root.resolve("watch-face-catalog.json"),
+                journalFile = root.resolve("watch-face-install-journal.json"),
+                installed = emptyList(),
+            )
+
+            assertEquals(2, repository.clearPreviewCache())
+            assertTrue(previews.listFiles().orEmpty().isEmpty())
+            assertTrue(archive.isFile)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     private fun repository(
         root: File,
         catalogFile: File,

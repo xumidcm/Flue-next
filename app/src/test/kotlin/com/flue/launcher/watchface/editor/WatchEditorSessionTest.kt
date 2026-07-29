@@ -193,6 +193,50 @@ class WatchEditorSessionTest {
         }
 
     @Test
+    fun exportRootOverridesChangeArchiveWithoutMutatingDraftOrInstalledFace() =
+        withTemporaryDirectory { root ->
+            val installed = File(root, "installed").apply { mkdirs() }
+            val installedXml = File(installed, "watch.xml").apply {
+                writeText(
+                    SOURCE_XML.replace(
+                        "build_source=\"studio\"",
+                        "build_source=\"studio\" designer_name=\"Original Designer\" " +
+                            "author=\"Original Author\"",
+                    ),
+                )
+            }
+            val originalInstalledBytes = installedXml.readBytes()
+
+            WatchEditorSession.openInstalled(installed, File(root, "cache")).use { session ->
+                val output = File(root, "upload.watch")
+                session.exportWatch(
+                    output,
+                    rootAttributeOverrides = mapOf(
+                        "designer_name" to "Upload Designer",
+                        "author" to "Upload Author",
+                    ),
+                )
+
+                ZipFile(output).use { zip ->
+                    val xml = zip.getInputStream(zip.getEntry("watch.xml"))
+                        .use { it.readBytes().toString(StandardCharsets.UTF_8) }
+                    assertTrue(xml.contains("designer_name=\"Upload Designer\""))
+                    assertTrue(xml.contains("author=\"Upload Author\""))
+                    assertFalse(xml.contains("designer_name=\"Original Designer\""))
+                    assertFalse(xml.contains("author=\"Original Author\""))
+                }
+
+                val snapshot = session.snapshot()
+                assertEquals("Original Designer", snapshot.rootAttributes["designer_name"])
+                assertEquals("Original Author", snapshot.rootAttributes["author"])
+                val draftXml = session.watchXmlFile.readText()
+                assertTrue(draftXml.contains("designer_name=\"Original Designer\""))
+                assertTrue(draftXml.contains("author=\"Original Author\""))
+                assertTrue(originalInstalledBytes.contentEquals(installedXml.readBytes()))
+            }
+        }
+
+    @Test
     fun historyIsBoundedToThirtyTwoSteps() = withTemporaryDirectory { root ->
         WatchEditorSession.createBlank(File(root, "cache")).use { session ->
             repeat(40) { index -> session.updateRootAttribute("revision", index.toString()) }
@@ -260,6 +304,26 @@ class WatchEditorSessionTest {
                 assertTrue(session.redo())
                 assertTrue(File(session.draftDirectory, resource).isFile)
                 assertEquals(byteArrayOf(1).toList(), File(session.draftDirectory, resource).readBytes().toList())
+            }
+        }
+
+    @Test
+    fun deletingLoopingBackgroundRemovesFramesButUndoRestoresThem() =
+        withTemporaryDirectory { root ->
+            WatchEditorSession.createBlank(File(root, "cache")).use { session ->
+                val layer = session.addLayer("image_gif", mapOf("id" to "loop"))
+                val sourceFrames = (1..3).map { index ->
+                    File(root, "frame_$index.jpg").apply { writeBytes(ByteArray(16) { index.toByte() }) }
+                }
+                val imported = session.importVideoFrameSequence(layer, sourceFrames, frameDelayMs = 50)
+                assertTrue(imported.all { File(session.draftDirectory, it).isFile })
+
+                assertTrue(session.deleteLayer(layer))
+                assertTrue(imported.none { File(session.draftDirectory, it).exists() })
+
+                assertTrue(session.undo())
+                assertTrue(imported.all { File(session.draftDirectory, it).isFile })
+                assertEquals(layer, session.snapshot().layers.single().key)
             }
         }
 

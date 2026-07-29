@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Flue Next</string>
+    <string name="watchface_builtin_default_name">默认表盘</string>
+    <string name="watchface_builtin_photo_name">图片表盘</string>
+    <string name="watchface_builtin_video_name">视频表盘</string>
+    <string name="watchface_builtin_summary">内置表盘</string>
     <string name="shortcut_settings">桌面设置</string>
     <string name="settings_title">桌面设置</string>
     <string name="internal_watchface_config_title">内置表盘设置</string>
@@ -378,6 +382,11 @@
     <string name="settings_watchface_heart_rate">表盘心率数据</string>
     <string name="settings_watchface_heart_rate_on">已授权身体传感器；支持的 .watch 标签可读取心率</string>
     <string name="settings_watchface_heart_rate_off">未授权时心率保持不可用；点击后由系统询问授权</string>
+    <string name="toast_body_sensors_permission_denied">系统未授予心率权限，可再次点击重试</string>
+    <string name="toast_body_sensors_permission_settings">系统未显示授权窗口，正在打开应用权限设置</string>
+    <string name="heart_rate_permission_rationale_title">心率数据与隐私</string>
+    <string name="heart_rate_permission_rationale_body">Flue 仅在表盘显示或预览期间读取设备心率传感器，用于在本机表盘上显示当前心率。心率数据不会上传到服务器，也不会写入表盘文件；退出相关表盘后会停止传感器监听。</string>
+    <string name="heart_rate_permission_rationale_close">返回</string>
     <string name="settings_watch_weather">表盘天气</string>
     <string name="settings_watch_weather_sub">设置标准与 JB 表盘共用的天气位置和温度单位</string>
     <string name="settings_watch_weather_city">手动城市</string>
@@ -413,6 +422,8 @@
     <string name="settings_watchface_font_default">系统默认字体</string>
     <string name="settings_watchface_font_clear">恢复默认字体</string>
     <string name="settings_watchface_font_clear_sub">清除已保存的表盘字体</string>
+    <string name="settings_watchface_text_entry_animation">表盘文字飞入动画</string>
+    <string name="settings_watchface_text_entry_animation_sub">每次进入表盘时重播文字进入动画；关闭后文字直接显示</string>
 
     <!-- About 与 Donate -->
     <string name="settings_about_title">关于</string>
@@ -448,9 +459,6 @@
     <string name="settings_section_launch">启动</string>
     <string name="settings_splash">启动遮罩</string>
     <string name="settings_splash_sub">打开应用时显示图标过渡</string>
-    <string name="settings_glass_highlight">玻璃高光</string>
-    <string name="settings_glass_highlight_on">控制中心使用 iOS 风格垂直 Pill 滑块与半透明高光效果</string>
-    <string name="settings_glass_highlight_off">控制中心使用经典横向滑块</string>
     <string name="settings_splash_delay">遮罩时长</string>
 
     <!-- 性能与动画页 -->
@@ -552,6 +560,10 @@
     <string name="settings_backup_menu_sub">选择备份项目、导入项目和表盘资源</string>
     <string name="settings_export_log">导出日志</string>
     <string name="settings_export_log_sub">导出 Flue 摘要、崩溃文件和最近 500 行系统日志</string>
+    <string name="settings_clear_watch_store_cache">清理表盘市场封面缓存</string>
+    <string name="settings_clear_watch_store_cache_sub">删除已缓存的表盘封面，不影响已下载或正在使用的表盘</string>
+    <string name="settings_clear_watch_store_cache_done">已清理 %1$d 个表盘封面缓存文件</string>
+    <string name="settings_clear_watch_store_cache_failed">清理表盘封面缓存失败</string>
     <string name="settings_diagnostic_logging">诊断日志模式</string>
     <string name="settings_diagnostic_logging_on">已开启，5 分钟后自动关闭</string>
     <string name="settings_diagnostic_logging_off">默认关闭，开启后临时允许 release 输出诊断日志</string>
@@ -595,6 +607,7 @@
     <string name="dialog_delete_imported_fmt">删除 %s？这个导入表盘会从 Flue 私有目录移除。</string>
     <string name="settings_overlay_mask_corner_radius">遮罩圆角</string>
     <string name="settings_overlay_mask_corner_radius_sub_fmt">负一屏、控制中心和小组件页 · %1$d dp</string>
+    <string name="search_d_overlay_mask_corner_radius">调整负一屏、通知中心、控制中心和小组件页的遮罩圆角</string>
     <string name="dialog_overlay_mask_corner_title">需要调整</string>
     <string name="dialog_overlay_mask_corner_subtitle">需要手动调整遮罩圆角以获得最佳观感。</string>
     <string name="dialog_overlay_mask_corner_value_fmt">当前圆角：%1$d dp</string>
@@ -664,7 +677,7 @@
     <string name="watch_editor_status_importing_sequence">正在导入动态图片</string>
     <string name="watch_editor_error_sequence_import">动态图片导入失败</string>
     <string name="watch_editor_status_reading_video">正在读取视频信息</string>
-    <string name="watch_editor_error_ffmpeg_unsupported">当前设备架构暂不支持 FFmpeg 视频导入</string>
+    <string name="watch_editor_error_ffmpeg_unsupported">当前设备为 32 位；现有 FFmpeg 不提供 32 位版本，暂不支持视频导入</string>
     <string name="watch_editor_error_read_video">无法读取所选视频</string>
     <string name="watch_editor_status_converting_video_fmt">正在转换视频 %1$d%%</string>
     <string name="watch_editor_error_video_import">视频导入失败</string>
@@ -754,7 +767,16 @@
     <string name="watch_editor_import_cropped">裁剪导入</string>
     <string name="watch_editor_import_original">导入原图</string>
     <string name="watch_editor_import_video">导入视频</string>
+    <string name="watch_editor_video_crop_title">裁剪视频</string>
+    <string name="watch_editor_video_encoding_title">视频输出设置</string>
     <string name="watch_editor_video_source_fmt">原视频 %1$d×%2$d · %3$s 秒</string>
+    <string name="watch_editor_video_trim_fmt">片段 %1$s – %2$s</string>
+    <string name="watch_editor_video_play">预览</string>
+    <string name="watch_editor_video_pause">暂停</string>
+    <string name="watch_editor_video_next">下一步</string>
+    <string name="watch_editor_video_back">上一步</string>
+    <string name="watch_editor_video_original">原画</string>
+    <string name="watch_editor_video_output_fmt">输出 %1$d×%2$d · 预计 %3$d 帧</string>
     <string name="watch_editor_video_start_seconds">开始（秒）</string>
     <string name="watch_editor_video_end_seconds">结束（秒）</string>
     <string name="watch_editor_video_max_resolution">输出最大分辨率（保持原比例，不裁剪）</string>
@@ -777,6 +799,7 @@
     <string name="watch_editor_duplicate">复制</string>
     <string name="watch_editor_delete">删除</string>
     <string name="watch_editor_layer_properties_fmt">%1$s 属性</string>
+    <string name="watch_editor_current_watch_size_fmt">当前表盘大小：%1$s</string>
     <string name="watch_editor_import_image_path">导入图片并写入 path</string>
     <string name="watch_editor_import_image_sequence">导入多张图片作为循环背景</string>
     <string name="watch_editor_import_video_frames">导入视频并转换为循环帧</string>
@@ -869,6 +892,10 @@
     <string name="watch_store_login">登录</string>
     <string name="watch_store_register">注册</string>
     <string name="watch_store_auth_security_note">注册即创建表盘商店账号（用户名 3-50 位字母数字下划线，密码至少 6 位）。勾选“记住密码”后，密码会经 Android 密钥库加密保存在本机；未勾选时密码只用于本次登录，不会保存。</string>
+    <string name="watch_store_login_security_note">登录表盘商店账号。勾选“记住密码”后，密码会经 Android 密钥库加密保存在本机；未勾选时只用于本次登录。</string>
+    <string name="watch_store_register_security_note">创建新的表盘商店账号。用户名需为 3-50 位字母、数字或下划线，密码至少 6 位。</string>
+    <string name="watch_store_go_to_register">创建新账号</string>
+    <string name="watch_store_back_to_login">返回登录</string>
     <string name="watch_store_error_auth_expired">登录已过期，请重新登录</string>
     <string name="watch_store_error_rejected_detail_fmt">内容被服务器拒绝：%1$s</string>
     <string name="watch_store_error_rejected">内容被服务器拒绝，请检查名称、描述和分类</string>
@@ -1139,4 +1166,18 @@
     <string name="file_manager_unknown_time">未知时间</string>
     <string name="file_manager_unnamed_file">未命名文件</string>
     <string name="file_manager_unknown_path">未知路径</string>
+    <string name="internal_file_browser_permission_title">允许浏览设备文件</string>
+    <string name="internal_file_browser_permission_message">Wear OS 通常没有系统文件选择器。要使用 Flue 内置文件浏览器，请允许 Flue 管理设备中的文件。Flue 只会在您主动选择文件时读取内容。</string>
+    <string name="internal_file_browser_grant">前往授权</string>
+    <string name="internal_file_browser_back">返回上一级</string>
+    <string name="internal_file_browser_loading">正在读取文件…</string>
+    <string name="internal_file_browser_read_failed">无法读取这个目录</string>
+    <string name="internal_file_browser_empty">这里没有符合条件的文件</string>
+    <string name="internal_file_browser_import_selected_fmt">导入所选的 %1$d 个文件</string>
+    <string name="internal_file_browser_pick_watch">选择 .watch 表盘</string>
+    <string name="internal_file_browser_pick_image">选择图片</string>
+    <string name="internal_file_browser_pick_images">选择多张图片</string>
+    <string name="internal_file_browser_pick_video">选择视频</string>
+    <string name="internal_file_browser_pick_font">选择字体</string>
+    <string name="internal_file_browser_pick_conversion">选择要转换的表盘</string>
 </resources>

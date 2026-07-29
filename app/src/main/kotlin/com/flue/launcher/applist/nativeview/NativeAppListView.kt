@@ -219,6 +219,13 @@ class NativeAppListView @JvmOverloads constructor(
     private fun onNativeAdapterListCommitted(itemCount: Int) {
         (layoutManager as? NativeSpatialAppListLayoutManager)
             ?.onAdapterItemCountCommitted(itemCount)
+        refreshAttachedCompositedContent()
+        invalidate()
+        postOnAnimation {
+            if (released) return@postOnAnimation
+            refreshAttachedCompositedContent()
+            invalidate()
+        }
     }
 
     private fun onDragPreviewOrderChanged(
@@ -804,6 +811,19 @@ class NativeAppListView @JvmOverloads constructor(
         ) {
             return false
         }
+        // The repository snapshot is authoritative. Blank attached rows whose
+        // keys disappeared before AsyncListDiffer starts its layout hand-off;
+        // otherwise their old display lists can survive in RecyclerView's
+        // disappearing/hardware layer (notably a dissolved folder icon).
+        val nextKeys = content.rows.asSequence().map { it.stableKey }.toHashSet()
+        nativeAdapter.currentKeysView()
+            .asSequence()
+            .filterNot(nextKeys::contains)
+            .forEach { removedKey ->
+                (holderForKey(removedKey)?.itemView as? NativeAppListRowView)
+                    ?.commitFolderRemoval()
+            }
+        invalidate()
         nativeAdapter.submitContent(content, dragController::reconcileCurrentKeys)
         return true
     }
@@ -823,6 +843,7 @@ class NativeAppListView @JvmOverloads constructor(
             next = next.value,
         )
         val rowRenderingChanged = hasDifferentNativeRowRendering(previous, next.value)
+        val activeChanged = previous.active != next.value.active
         val edgeFadeChanged = hasDifferentNativeEdgeFade(previous, next.value)
         val contentOverlayEffectChanged =
             hasDifferentNativeContentOverlayEffect(previous, next.value)
@@ -894,6 +915,17 @@ class NativeAppListView @JvmOverloads constructor(
             cancelActiveDrag(externalChange = true)
         }
         nativeAdapter.setConfig(next)
+        if (activeChanged || shouldStartEntryAnimation) {
+            // A move animator can be paused while the Apps screen is outside
+            // the composition. Reset it before reusing attached stable-id rows;
+            // otherwise an entire translated row may reappear on the backdrop.
+            // The same reset is needed for a fresh entry token while active
+            // remains true: Compose keeps this host mounted between transitions.
+            itemAnimator?.endAnimations()
+            resetAttachedChildVisuals()
+            refreshAttachedCompositedContent()
+            invalidate()
+        }
         if (rowRenderingChanged) {
             applyConfigToAttachedRows(next)
             dragOverlayView?.applyConfig(next)
@@ -2014,6 +2046,12 @@ class NativeAppListView @JvmOverloads constructor(
         if (installedContentOverlayBlurBucketPx == bucket) return
         installedContentOverlayBlurBucketPx = bucket
         setRenderEffect(bucket.takeIf { it > 0 }?.let(NativeSystemBlurEffectCache::get))
+    }
+
+    private fun refreshAttachedCompositedContent() {
+        for (index in 0 until childCount) {
+            (getChildAt(index) as? NativeAppListRowView)?.refreshCompositedContent()
+        }
     }
 
     private fun updateEdgeFadeShaders() {

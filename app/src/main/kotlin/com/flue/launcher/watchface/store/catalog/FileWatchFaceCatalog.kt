@@ -88,6 +88,19 @@ class FileWatchFaceCatalog(
         }
     }
 
+    /**
+     * An edited installed revision is no longer byte-for-byte the store item.
+     * Drop only its market association so the remote entry becomes downloadable
+     * again; reconciliation will retain the installed face as a local legacy item.
+     */
+    fun detachEditedMarketInstall(launcherId: String): WatchFaceCatalogSnapshot = mutate { current ->
+        current.filterNot { record ->
+            record.source is WatchFaceInstallSource.Market &&
+                (record.activeLauncherId.equals(launcherId, ignoreCase = true) ||
+                    record.legacyIds.any { it.equals(launcherId, ignoreCase = true) })
+        }
+    }
+
     fun rename(logicalId: String, displayNameOverride: String?): WatchFaceCatalogSnapshot = mutate { current ->
         val normalized = displayNameOverride?.trim()?.takeIf(String::isNotEmpty)
         current.map { record ->

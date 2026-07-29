@@ -356,6 +356,7 @@ fun JbWatchFaceHost(
     onLongPress: (() -> Unit)? = null,
     onDoubleTap: (() -> Unit)? = null,
     dataProvider: WatchDataProvider? = null,
+    textEntryAnimationEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -376,6 +377,17 @@ fun JbWatchFaceHost(
         loadError?.let { onLoadFailure(descriptor, it) }
     }
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    var textAnimationStartedAtUptimeMs by remember(descriptor.stableKey, refreshToken) {
+        mutableStateOf(SystemClock.uptimeMillis())
+    }
+    LaunchedEffect(isFaceVisible, face, textEntryAnimationEnabled) {
+        if (isFaceVisible && textEntryAnimationEnabled) {
+            textAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
+        }
+    }
+    val renderFace = remember(face, textAnimationStartedAtUptimeMs) {
+        face?.copy(animationStartedAtUptimeMs = textAnimationStartedAtUptimeMs)
+    }
     val ownedDataProvider = rememberWatchmakerWatchDataProvider(
         active = dataProvider == null && isFaceVisible,
     )
@@ -418,9 +430,9 @@ fun JbWatchFaceHost(
         contentAlignment = Alignment.Center
     ) {
         when {
-            face != null -> {
+            renderFace != null -> {
                 val backgroundColor = runCatching {
-                    android.graphics.Color.parseColor("#${face!!.root.bgColor.trim().ifBlank { "000000" }}")
+                    android.graphics.Color.parseColor("#${renderFace.root.bgColor.trim().ifBlank { "000000" }}")
                 }.getOrDefault(android.graphics.Color.BLACK)
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     drawIntoCanvas { canvas ->
@@ -428,12 +440,13 @@ fun JbWatchFaceHost(
                         native.drawColor(backgroundColor)
                         drawJbFace(
                             canvas = native,
-                            face = face!!,
+                            face = renderFace,
                             nowMillis = nowMillis,
                             dataSnapshot = dataSnapshot,
                             width = size.width.toInt(),
                             height = size.height.toInt(),
-                            is24Hour = is24Hour
+                            is24Hour = is24Hour,
+                            textEntryAnimationEnabled = textEntryAnimationEnabled,
                         )
                     }
                 }
@@ -452,7 +465,8 @@ private fun drawJbFace(
     dataSnapshot: WatchDataSnapshot,
     width: Int,
     height: Int,
-    is24Hour: Boolean
+    is24Hour: Boolean,
+    textEntryAnimationEnabled: Boolean,
 ) {
     val canvasWidth = face.designWidth.coerceAtLeast(1)
     val canvasHeight = face.designHeight.coerceAtLeast(1)
@@ -465,7 +479,16 @@ private fun drawJbFace(
     canvas.translate(offsetX, offsetY)
     canvas.scale(scale, scale)
     face.layers.forEachIndexed { layerIndex, layer ->
-        drawJbLayer(canvas, face, layerIndex, layer, nowMillis, dataSnapshot, is24Hour)
+        drawJbLayer(
+            canvas,
+            face,
+            layerIndex,
+            layer,
+            nowMillis,
+            dataSnapshot,
+            is24Hour,
+            textEntryAnimationEnabled,
+        )
     }
     canvas.restore()
 }
@@ -477,7 +500,8 @@ private fun drawJbLayer(
     layer: JbWatchLayer,
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
-    is24Hour: Boolean
+    is24Hour: Boolean,
+    textEntryAnimationEnabled: Boolean,
 ) {
     val animationElapsedMs = (SystemClock.uptimeMillis() - face.animationStartedAtUptimeMs)
         .coerceAtLeast(0L)
@@ -487,7 +511,7 @@ private fun drawJbLayer(
         dataSnapshot = dataSnapshot,
         animationElapsedMs = animationElapsedMs,
     )
-    val textAnimation = if (animatedLayer.type.startsWith("text") &&
+    val textAnimation = if (textEntryAnimationEnabled && animatedLayer.type.startsWith("text") &&
         (!animatedLayer.animIn.isNullOrBlank() || !animatedLayer.animOut.isNullOrBlank())
     ) {
         jbTextAnimationFrame(animatedLayer, animationElapsedMs)

@@ -12,7 +12,9 @@ class BlurSupportPolicyTest {
         assertEquals(1f, quantizeSystemBlurRadiusDp(1.9f))
         assertEquals(4f, quantizeSystemBlurRadiusDp(5f))
         assertEquals(8f, quantizeSystemBlurRadiusDp(9.9f))
-        assertEquals(16f, quantizeSystemBlurRadiusDp(100f))
+        assertEquals(16f, quantizeSystemBlurRadiusDp(19.9f))
+        assertEquals(20f, quantizeSystemBlurRadiusDp(20f))
+        assertEquals(20f, quantizeSystemBlurRadiusDp(100f))
     }
 
     @Test

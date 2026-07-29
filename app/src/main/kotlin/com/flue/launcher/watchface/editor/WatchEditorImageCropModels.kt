@@ -86,11 +86,19 @@ fun constrainWatchEditorCropRect(
     minSize: Float,
     ratio: Float?,
 ): WatchEditorCropRect {
-    val boundsWidth = bounds.width.coerceAtLeast(1f)
-    val boundsHeight = bounds.height.coerceAtLeast(1f)
-    val minimum = minSize.coerceIn(1f, min(boundsWidth, boundsHeight))
-    var width = candidate.width.coerceIn(minimum, boundsWidth)
-    var height = candidate.height.coerceIn(minimum, boundsHeight)
+    val boundsWidth = bounds.width.coerceAtLeast(0f)
+    val boundsHeight = bounds.height.coerceAtLeast(0f)
+    if (boundsWidth <= 0f || boundsHeight <= 0f) {
+        return WatchEditorCropRect(bounds.left, bounds.top, bounds.left, bounds.top)
+    }
+    val requestedMinimum = if (minSize.isFinite()) max(1f, minSize) else 1f
+    val minimum = min(requestedMinimum, min(boundsWidth, boundsHeight))
+    var width = candidate.width.takeIf { it.isFinite() }
+        ?.coerceIn(minimum, boundsWidth)
+        ?: minimum
+    var height = candidate.height.takeIf { it.isFinite() }
+        ?.coerceIn(minimum, boundsHeight)
+        ?: minimum
     if (ratio != null && ratio > 0f) {
         // Fit the ratio inside the bounds, preferring the candidate's area.
         width = min(width, boundsWidth)
@@ -112,9 +120,18 @@ fun constrainWatchEditorCropRect(
     }
     var left = candidate.centerX - width / 2f
     var top = candidate.centerY - height / 2f
-    left = left.coerceIn(bounds.left, bounds.right - width)
-    top = top.coerceIn(bounds.top, bounds.bottom - height)
-    return WatchEditorCropRect(left, top, left + width, top + height)
+    // Float subtraction is not reversible: for a crop exactly as wide as its
+    // bounds, `bounds.right - width` can round a few ULPs below `bounds.left`.
+    // Kotlin's coerceIn rejects that empty range, which used to crash video
+    // import while Compose was initialising the crop frame.
+    left = clampWatchEditorCoordinate(left, bounds.left, bounds.right - width)
+    top = clampWatchEditorCoordinate(top, bounds.top, bounds.bottom - height)
+    return WatchEditorCropRect(
+        left = left,
+        top = top,
+        right = min(bounds.right, left + width),
+        bottom = min(bounds.bottom, top + height),
+    )
 }
 
 /** Moves the crop frame by a drag delta, staying inside [bounds]. */
@@ -124,9 +141,31 @@ fun moveWatchEditorCropRect(
     deltaY: Float,
     bounds: WatchEditorCropRect,
 ): WatchEditorCropRect {
-    val left = (rect.left + deltaX).coerceIn(bounds.left, bounds.right - rect.width)
-    val top = (rect.top + deltaY).coerceIn(bounds.top, bounds.bottom - rect.height)
-    return WatchEditorCropRect(left, top, left + rect.width, top + rect.height)
+    val boundsWidth = bounds.width.coerceAtLeast(0f)
+    val boundsHeight = bounds.height.coerceAtLeast(0f)
+    if (boundsWidth <= 0f || boundsHeight <= 0f) {
+        return WatchEditorCropRect(bounds.left, bounds.top, bounds.left, bounds.top)
+    }
+    val width = rect.width.takeIf { it.isFinite() }
+        ?.coerceIn(0f, boundsWidth)
+        ?: 0f
+    val height = rect.height.takeIf { it.isFinite() }
+        ?.coerceIn(0f, boundsHeight)
+        ?: 0f
+    val left = clampWatchEditorCoordinate(rect.left + deltaX, bounds.left, bounds.right - width)
+    val top = clampWatchEditorCoordinate(rect.top + deltaY, bounds.top, bounds.bottom - height)
+    return WatchEditorCropRect(
+        left = left,
+        top = top,
+        right = min(bounds.right, left + width),
+        bottom = min(bounds.bottom, top + height),
+    )
+}
+
+/** Clamps without constructing an invalid range when Float rounding flips its endpoints. */
+private fun clampWatchEditorCoordinate(value: Float, minimum: Float, maximum: Float): Float {
+    if (!value.isFinite() || maximum <= minimum) return minimum
+    return value.coerceIn(minimum, maximum)
 }
 
 /** Scales the crop frame around its center (pinch), staying inside [bounds]. */
@@ -147,9 +186,18 @@ fun scaleWatchEditorCropRect(
     return constrainWatchEditorCropRect(candidate, bounds, minSize, ratio)
 }
 
-enum class WatchEditorCropHandle { TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT }
+enum class WatchEditorCropHandle {
+    TOP_LEFT,
+    TOP,
+    TOP_RIGHT,
+    RIGHT,
+    BOTTOM_RIGHT,
+    BOTTOM,
+    BOTTOM_LEFT,
+    LEFT,
+}
 
-/** Returns the corner handle within [touchRadius] of the pointer, or null. */
+/** Returns the nearest corner or edge handle within [touchRadius], or null. */
 fun resolveWatchEditorCropHandle(
     rect: WatchEditorCropRect,
     x: Float,
@@ -158,19 +206,25 @@ fun resolveWatchEditorCropHandle(
 ): WatchEditorCropHandle? {
     fun near(cornerX: Float, cornerY: Float): Boolean =
         abs(x - cornerX) <= touchRadius && abs(y - cornerY) <= touchRadius
+    val withinHorizontalEdge = x >= rect.left - touchRadius && x <= rect.right + touchRadius
+    val withinVerticalEdge = y >= rect.top - touchRadius && y <= rect.bottom + touchRadius
     return when {
+        // Corners win where their touch targets overlap an edge target.
         near(rect.left, rect.top) -> WatchEditorCropHandle.TOP_LEFT
         near(rect.right, rect.top) -> WatchEditorCropHandle.TOP_RIGHT
         near(rect.left, rect.bottom) -> WatchEditorCropHandle.BOTTOM_LEFT
         near(rect.right, rect.bottom) -> WatchEditorCropHandle.BOTTOM_RIGHT
+        withinHorizontalEdge && abs(y - rect.top) <= touchRadius -> WatchEditorCropHandle.TOP
+        withinVerticalEdge && abs(x - rect.right) <= touchRadius -> WatchEditorCropHandle.RIGHT
+        withinHorizontalEdge && abs(y - rect.bottom) <= touchRadius -> WatchEditorCropHandle.BOTTOM
+        withinVerticalEdge && abs(x - rect.left) <= touchRadius -> WatchEditorCropHandle.LEFT
         else -> null
     }
 }
 
 /**
- * Resizes the frame by dragging one corner. The opposite corner stays fixed;
- * aspect-locked presets resolve the final rect through
- * [constrainWatchEditorCropRect] anchored on that fixed corner.
+ * Resizes the frame by dragging one corner or edge. Opposite corners/edges stay
+ * fixed; aspect-locked edge drags grow around the perpendicular centre.
  */
 fun resizeWatchEditorCropRect(
     rect: WatchEditorCropRect,
@@ -190,30 +244,43 @@ fun resizeWatchEditorCropRect(
             left += deltaX
             top += deltaY
         }
+        WatchEditorCropHandle.TOP -> top += deltaY
         WatchEditorCropHandle.TOP_RIGHT -> {
             right += deltaX
             top += deltaY
         }
+        WatchEditorCropHandle.RIGHT -> right += deltaX
         WatchEditorCropHandle.BOTTOM_LEFT -> {
             left += deltaX
             bottom += deltaY
         }
+        WatchEditorCropHandle.LEFT -> left += deltaX
         WatchEditorCropHandle.BOTTOM_RIGHT -> {
             right += deltaX
             bottom += deltaY
         }
+        WatchEditorCropHandle.BOTTOM -> bottom += deltaY
     }
     left = left.coerceIn(bounds.left, bounds.right)
     top = top.coerceIn(bounds.top, bounds.bottom)
     right = right.coerceIn(bounds.left, bounds.right)
     bottom = bottom.coerceIn(bounds.top, bounds.bottom)
-    val boundsLimit = min(bounds.width, bounds.height).coerceAtLeast(1f)
-    val minimum = minSize.coerceIn(1f, boundsLimit)
+    val boundsLimit = min(bounds.width, bounds.height).coerceAtLeast(0f)
+    val requestedMinimum = if (minSize.isFinite()) max(1f, minSize) else 1f
+    val minimum = min(requestedMinimum, boundsLimit)
     var width = (right - left).coerceAtLeast(minimum)
     var height = (bottom - top).coerceAtLeast(minimum)
     if (ratio != null && ratio > 0f) {
-        // Preserve the dominant drag axis, derive the other from the ratio.
-        if (abs(deltaX) >= abs(deltaY)) height = width / ratio else width = height * ratio
+        when (handle) {
+            WatchEditorCropHandle.LEFT,
+            WatchEditorCropHandle.RIGHT -> height = width / ratio
+            WatchEditorCropHandle.TOP,
+            WatchEditorCropHandle.BOTTOM -> width = height * ratio
+            else -> {
+                // Corner drags preserve their dominant axis.
+                if (abs(deltaX) >= abs(deltaY)) height = width / ratio else width = height * ratio
+            }
+        }
     }
     // Re-anchor on the fixed corner so resizing never teleports the frame.
     val anchoredLeft: Float
@@ -223,16 +290,32 @@ fun resizeWatchEditorCropRect(
             anchoredLeft = rect.right - width
             anchoredTop = rect.bottom - height
         }
+        WatchEditorCropHandle.TOP -> {
+            anchoredLeft = rect.centerX - width / 2f
+            anchoredTop = rect.bottom - height
+        }
         WatchEditorCropHandle.TOP_RIGHT -> {
             anchoredLeft = rect.left
             anchoredTop = rect.bottom - height
+        }
+        WatchEditorCropHandle.RIGHT -> {
+            anchoredLeft = rect.left
+            anchoredTop = rect.centerY - height / 2f
         }
         WatchEditorCropHandle.BOTTOM_LEFT -> {
             anchoredLeft = rect.right - width
             anchoredTop = rect.top
         }
+        WatchEditorCropHandle.LEFT -> {
+            anchoredLeft = rect.right - width
+            anchoredTop = rect.centerY - height / 2f
+        }
         WatchEditorCropHandle.BOTTOM_RIGHT -> {
             anchoredLeft = rect.left
+            anchoredTop = rect.top
+        }
+        WatchEditorCropHandle.BOTTOM -> {
+            anchoredLeft = rect.centerX - width / 2f
             anchoredTop = rect.top
         }
     }

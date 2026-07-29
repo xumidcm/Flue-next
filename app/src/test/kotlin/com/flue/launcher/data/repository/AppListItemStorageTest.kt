@@ -129,6 +129,32 @@ class AppListItemStorageTest {
     }
 
     @Test
+    fun `moving a child out immediately removes it from the persisted folder preview`() {
+        val folder = storage.createFolder("app.a/A", "app.b/B", "现有")!!
+        storage.addItemsToFolder(folder.componentKey, listOf("app.c/C"))
+
+        val result = storage.moveItemOutOfFolder(folder.componentKey, "app.a/A")
+
+        assertTrue(result.succeeded)
+        assertEquals(listOf("app.b/B", "app.c/C"), result.itemKeys)
+        assertEquals(
+            listOf("app.b/B", "app.c/C"),
+            storage.loadFolders().single().itemKeys,
+        )
+    }
+
+    @Test
+    fun `moving from a two item folder dissolves it and returns the surviving child`() {
+        val folder = storage.createFolder("app.a/A", "app.b/B", "现有")!!
+
+        val result = storage.moveItemOutOfFolder(folder.componentKey, "app.a/A")
+
+        assertTrue(result.succeeded)
+        assertEquals(listOf("app.b/B"), result.itemKeys)
+        assertTrue(storage.loadFolders().isEmpty())
+    }
+
+    @Test
     fun `concurrent storage instances do not lose separate folder mutations`() {
         val first = AppListItemStorage(context)
         val second = AppListItemStorage(context)

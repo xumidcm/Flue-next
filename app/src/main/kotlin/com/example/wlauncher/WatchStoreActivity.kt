@@ -18,11 +18,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -161,6 +163,7 @@ import com.flue.launcher.watchface.store.catalog.WatchFaceCatalogSnapshot
 import com.flue.launcher.watchface.store.catalog.WatchFaceInstallSource
 import com.flue.launcher.watchface.store.catalog.WatchFaceRecord
 import com.flue.launcher.watchface.store.commitMarketInstallCatalog
+import com.flue.launcher.watchface.store.installAsRound
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -232,8 +235,8 @@ class WatchStoreActivity : FlueComponentActivity() {
                         uiPreferences = uiPreferences,
                         reconcileToken = resumeToken,
                         onBack = ::finish,
-                        installArchive = { archive ->
-                            val installed = launcherViewModel.installWatchStoreArchive(archive)
+                        installArchive = { archive, installAsRound ->
+                            val installed = launcherViewModel.installWatchStoreArchive(archive, installAsRound)
                             val failure = installed.exceptionOrNull()
                             if (failure != null) {
                                 Result.failure(failure)
@@ -323,7 +326,7 @@ private fun WatchStoreScreen(
     uiPreferences: WatchStoreUiPreferences,
     reconcileToken: Int,
     onBack: () -> Unit,
-    installArchive: suspend (java.io.File) -> Result<InstalledStoreWatchFace>,
+    installArchive: suspend (java.io.File, installAsRound: Boolean) -> Result<InstalledStoreWatchFace>,
     useInstalled: (launcherId: String) -> Unit,
     editInstalled: (launcherId: String) -> Unit,
     exportInstalled: (launcherId: String) -> Unit,
@@ -626,7 +629,7 @@ private fun WatchStoreScreen(
         detailLoading = false
     }
 
-    fun download(id: String) {
+    fun download(id: String, screenType: WatchStoreScreenType) {
         val current = downloadStates[id]?.value
         if (current is WatchStoreInstallState.Downloading ||
             current is WatchStoreInstallState.Validating ||
@@ -666,7 +669,10 @@ private fun WatchStoreScreen(
                         val revision = repository.computeRevisionSha256(archive)
                         repository.beginMarketInstallTransaction(id, revision)
                         state.value = WatchStoreInstallState.Installing(firstState.attempt)
-                        val descriptor = installArchive(archive).getOrThrow()
+                        val descriptor = installArchive(
+                            archive,
+                            screenType.installAsRound(),
+                        ).getOrThrow()
                         val descriptorWasInstalled = installedFacesById.containsKey(descriptor.id)
                         val pendingInstall = PendingMarketCatalogInstall(
                             revisionSha256 = revision,
@@ -828,6 +834,24 @@ private fun WatchStoreScreen(
         }
     }
 
+    // Match the settings hierarchy transition exactly: when a child page is
+    // pushed, the preserved browse page moves left by 1/6 and fades away. On
+    // return it comes back from that same position, retaining both lazy states.
+    val browseCovered = selectedId != null || uploadVisible || myUploadsVisible
+    val browseHierarchyOffset by animateFloatAsState(
+        targetValue = if (browseCovered) 1f else 0f,
+        animationSpec = tween(
+            durationMillis = if (browseCovered) 240 else 260,
+            easing = FastOutSlowInEasing,
+        ),
+        label = "watch_store_browse_hierarchy_offset",
+    )
+    val browseHierarchyAlpha by animateFloatAsState(
+        targetValue = if (browseCovered) 0f else 1f,
+        animationSpec = tween(durationMillis = if (browseCovered) 140 else 200),
+        label = "watch_store_browse_hierarchy_alpha",
+    )
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -836,6 +860,10 @@ private fun WatchStoreScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .graphicsLayer {
+                    translationX = -size.width / 6f * browseHierarchyOffset
+                    alpha = browseHierarchyAlpha
+                }
                 .padding(
                     horizontal = if (isScreenRound) 16.dp else 10.dp,
                     vertical = if (isScreenRound) 10.dp else 6.dp,
@@ -1071,7 +1099,7 @@ private fun WatchStoreScreen(
                                 item = item,
                                 downloadState = transientState ?: persistentInstallState(item.id),
                                 onOpen = { openDetail(item.id) },
-                                onDownload = { download(item.id) },
+                                onDownload = { download(item.id, item.screenType) },
                                 onCancelDownload = { cancelDownload(item.id) },
                             )
                         }
@@ -1097,7 +1125,7 @@ private fun WatchStoreScreen(
                                 item = item,
                                 downloadState = transientState ?: persistentInstallState(item.id),
                                 onOpen = { openDetail(item.id) },
-                                onDownload = { download(item.id) },
+                                onDownload = { download(item.id, item.screenType) },
                                 onCancelDownload = { cancelDownload(item.id) },
                             )
                         }
@@ -1111,17 +1139,19 @@ private fun WatchStoreScreen(
             }
         }
 
-        // 详情做成列表之上的覆层：列表始终保持在组合树里，返回时滚动位置
-        // 不会丢；入场/退场用 pageMotionSpec 令牌做 fade + 0.96 scale。
+        // 表盘市场的层级切换统一使用设置页的 MIUIX / HyperOS 推拉动效；
+        // 列表仍留在组合树中，因此返回时不会丢失滚动位置。
         AnimatedVisibility(
             visible = selectedId != null,
             modifier = Modifier
                 .fillMaxSize()
                 .zIndex(1f),
-            enter = fadeIn(animationSpec = style.pageMotionSpec) +
-                scaleIn(initialScale = 0.96f, animationSpec = style.pageMotionSpec),
-            exit = fadeOut(animationSpec = style.pageMotionSpec) +
-                scaleOut(targetScale = 0.96f, animationSpec = style.pageMotionSpec),
+            enter = slideInHorizontally(
+                animationSpec = tween(260, easing = FastOutSlowInEasing),
+            ) { fullWidth -> fullWidth / 4 } + fadeIn(tween(200)),
+            exit = slideOutHorizontally(
+                animationSpec = tween(240, easing = FastOutSlowInEasing),
+            ) { fullWidth -> fullWidth / 4 } + fadeOut(tween(140)),
         ) {
             val overlayId = selectedId ?: lastDetailId
             if (overlayId != null) {
@@ -1151,7 +1181,14 @@ private fun WatchStoreScreen(
                         detailLoading = true
                         detailReloadToken++
                     },
-                    onDownload = { download(overlayId) },
+                    onDownload = {
+                        download(
+                            overlayId,
+                            selectedDetail?.screenType
+                                ?: entries.firstOrNull { it.id == overlayId }?.screenType
+                                ?: WatchStoreScreenType.UNKNOWN,
+                        )
+                    },
                     onCancelDownload = { cancelDownload(overlayId) },
                     onUse = { record -> record.activeLauncherIdOrNull()?.let(useInstalled) },
                     onEdit = { record -> record.activeLauncherIdOrNull()?.let(editInstalled) },
@@ -1169,10 +1206,12 @@ private fun WatchStoreScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .zIndex(2f),
-            enter = fadeIn(animationSpec = style.pageMotionSpec) +
-                scaleIn(initialScale = 0.96f, animationSpec = style.pageMotionSpec),
-            exit = fadeOut(animationSpec = style.pageMotionSpec) +
-                scaleOut(targetScale = 0.96f, animationSpec = style.pageMotionSpec),
+            enter = slideInHorizontally(
+                animationSpec = tween(260, easing = FastOutSlowInEasing),
+            ) { fullWidth -> fullWidth / 4 } + fadeIn(tween(200)),
+            exit = slideOutHorizontally(
+                animationSpec = tween(240, easing = FastOutSlowInEasing),
+            ) { fullWidth -> fullWidth / 4 } + fadeOut(tween(140)),
         ) {
             StoreUploadOverlay(
                 repository = repository,
@@ -1188,10 +1227,12 @@ private fun WatchStoreScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .zIndex(3f),
-            enter = fadeIn(animationSpec = style.pageMotionSpec) +
-                scaleIn(initialScale = 0.96f, animationSpec = style.pageMotionSpec),
-            exit = fadeOut(animationSpec = style.pageMotionSpec) +
-                scaleOut(targetScale = 0.96f, animationSpec = style.pageMotionSpec),
+            enter = slideInHorizontally(
+                animationSpec = tween(260, easing = FastOutSlowInEasing),
+            ) { fullWidth -> fullWidth / 4 } + fadeIn(tween(200)),
+            exit = slideOutHorizontally(
+                animationSpec = tween(240, easing = FastOutSlowInEasing),
+            ) { fullWidth -> fullWidth / 4 } + fadeOut(tween(140)),
         ) {
             MyUploadsOverlay(
                 repository = repository,
@@ -2077,8 +2118,17 @@ private fun WatchFaceDetailPage(
  * 已上传表盘管理覆层。
  *
  * 从 GET /api/my/watchfaces 加载当前账号上传的全部表盘，支持删除（DELETE）。
- * 未登录时显示提示，无需重定向到登录流。
+ * 未登录时可在当前覆层完成登录，不会绕到上传流程。
  */
+private enum class MyUploadsContentState {
+    LOGIN_PROMPT,
+    LOGIN_FORM,
+    LOADING,
+    ERROR,
+    EMPTY,
+    LIST,
+}
+
 @Composable
 private fun MyUploadsOverlay(
     repository: WatchStoreRepository,
@@ -2089,7 +2139,8 @@ private fun MyUploadsOverlay(
     val scope = rememberCoroutineScope()
     val api = remember { HttpWatchStoreApi() }
     val authStore = remember { WatchStoreAuthStore(context) }
-    val session = remember { authStore.read() }
+    val credentialStore = remember { WatchStoreCredentialStore(context) }
+    var session by remember { mutableStateOf(authStore.read()) }
 
     var entries by remember { mutableStateOf<List<MyWatchFaceEntry>>(emptyList()) }
     var loading by remember { mutableStateOf(session != null) }
@@ -2097,6 +2148,23 @@ private fun MyUploadsOverlay(
     var deleteTarget by remember { mutableStateOf<MyWatchFaceEntry?>(null) }
     var deleteInProgress by remember { mutableStateOf(false) }
     var deleteError by remember { mutableStateOf<String?>(null) }
+    var loginFormVisible by remember { mutableStateOf(false) }
+    var username by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var rememberUsername by remember { mutableStateOf(false) }
+    var rememberPassword by remember { mutableStateOf(false) }
+    var authAction by remember { mutableStateOf<WatchStoreAuthAction?>(null) }
+    var authPage by remember { mutableStateOf(WatchStoreAuthPage.LOGIN) }
+    var authError by remember { mutableStateOf<String?>(null) }
+    val authBusy = authAction != null
+
+    LaunchedEffect(Unit) {
+        val saved = withContext(Dispatchers.IO) { credentialStore.read() }
+        saved.username?.let { username = it }
+        saved.password?.let { password = it }
+        rememberUsername = saved.rememberUsername
+        rememberPassword = saved.rememberPassword
+    }
 
     LaunchedEffect(session?.token) {
         val token = session?.token ?: return@LaunchedEffect
@@ -2113,12 +2181,74 @@ private fun MyUploadsOverlay(
         loading = false
     }
 
-    BackHandler(onBack = onDismiss)
+    fun authenticate(register: Boolean) {
+        if (authBusy) return
+        val cleanUsername = username.trim()
+        val inputError = watchStoreAuthInputError(context, cleanUsername, password)
+        if (inputError != null) {
+            authError = inputError
+            return
+        }
+        authAction = if (register) WatchStoreAuthAction.REGISTER else WatchStoreAuthAction.LOGIN
+        authError = null
+        scope.launch {
+            try {
+                runCatching {
+                    watchStoreLoginOrRegister(
+                        api = api,
+                        authStore = authStore,
+                        credentialStore = credentialStore,
+                        username = cleanUsername,
+                        password = password,
+                        register = register,
+                        rememberUsername = rememberUsername,
+                        rememberPassword = rememberPassword,
+                    )
+                }.onSuccess { stored ->
+                    // Avoid a one-frame empty-state flash before the token effect
+                    // begins loading the user's uploads.
+                    loading = true
+                    session = stored
+                    password = ""
+                    loginFormVisible = false
+                    authPage = WatchStoreAuthPage.LOGIN
+                }.onFailure { error ->
+                    error.throwIfCancellation()
+                    authError = watchStoreAuthErrorMessage(context, error, register)
+                }
+            } finally {
+                authAction = null
+            }
+        }
+    }
+
+    BackHandler {
+        if (loginFormVisible && session == null && authPage == WatchStoreAuthPage.REGISTER && !authBusy) {
+            authPage = WatchStoreAuthPage.LOGIN
+            authError = null
+        } else if (loginFormVisible && session == null && !authBusy) {
+            loginFormVisible = false
+            authError = null
+        } else {
+            onDismiss()
+        }
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(style.screenBackground),
+            .background(style.screenBackground)
+            // Give the full-screen overlay a pointer hit target so taps in its
+            // empty area cannot reach the market search field underneath.
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.changes.none { it.pressed }) break
+                    }
+                }
+            },
     ) {
         Column(
             modifier = Modifier
@@ -2144,61 +2274,164 @@ private fun MyUploadsOverlay(
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
                     )
-                    if (session != null) {
-                        Text(session.username, color = style.secondaryTextColor, fontSize = 10.sp)
+                    session?.username?.let { username ->
+                        Text(username, color = style.secondaryTextColor, fontSize = 10.sp)
                     }
                 }
             }
             Spacer(Modifier.height(4.dp))
 
-            when {
-                session == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            MiuixIcons.Folder,
-                            contentDescription = null,
-                            tint = style.secondaryTextColor,
-                            modifier = Modifier.size(40.dp),
+            val contentState = when {
+                session == null && !loginFormVisible -> MyUploadsContentState.LOGIN_PROMPT
+                session == null -> MyUploadsContentState.LOGIN_FORM
+                loading -> MyUploadsContentState.LOADING
+                loadError != null -> MyUploadsContentState.ERROR
+                entries.isEmpty() -> MyUploadsContentState.EMPTY
+                else -> MyUploadsContentState.LIST
+            }
+            Crossfade(
+                targetState = contentState,
+                animationSpec = tween(180),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                label = "my_uploads_content",
+            ) { state ->
+                when (state) {
+                    MyUploadsContentState.LOGIN_PROMPT -> Box(
+                        Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(horizontal = 22.dp),
+                        ) {
+                            Icon(
+                                MiuixIcons.Folder,
+                                contentDescription = null,
+                                tint = style.secondaryTextColor,
+                                modifier = Modifier.size(40.dp),
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                stringResource(R.string.watch_store_login_to_view_uploads),
+                                color = style.secondaryTextColor,
+                                fontSize = 14.sp,
+                                textAlign = TextAlign.Center,
+                            )
+                            Spacer(Modifier.height(14.dp))
+                            StorePrimaryButton(
+                                label = stringResource(R.string.watch_store_login),
+                                onClick = {
+                                    authPage = WatchStoreAuthPage.LOGIN
+                                    loginFormVisible = true
+                                },
+                            )
+                        }
+                    }
+
+                    MyUploadsContentState.LOGIN_FORM -> Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 6.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        AnimatedVisibility(
+                            visible = authError != null,
+                            enter = fadeIn(tween(160)),
+                            exit = fadeOut(tween(120)),
+                        ) {
+                            Text(
+                                authError.orEmpty(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp)
+                                    .background(WatchColors.ActiveRed.copy(alpha = 0.16f), style.rowShape)
+                                    .padding(10.dp),
+                                color = WatchColors.ActiveRed,
+                                fontSize = 12.sp,
+                            )
+                        }
+                        WatchStoreLoginSection(
+                            username = username,
+                            onUsernameChange = { username = it },
+                            password = password,
+                            onPasswordChange = { password = it },
+                            rememberUsername = rememberUsername,
+                            rememberPassword = rememberPassword,
+                            onRememberChange = { keepUsername, keepPassword ->
+                                rememberUsername = keepUsername
+                                rememberPassword = keepPassword
+                            },
+                            authPage = authPage,
+                            onAuthPageChange = { page ->
+                                authPage = page
+                                authError = null
+                            },
+                            enabled = !authBusy,
+                            loadingAction = authAction,
+                            onLogin = { authenticate(register = false) },
+                            onRegister = { authenticate(register = true) },
                         )
-                        Spacer(Modifier.height(12.dp))
+                    }
+
+                    MyUploadsContentState.LOADING -> Box(
+                        Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        MiuixLoadingIndicator(
+                            Modifier.size(28.dp),
+                            strokeWidth = 2.dp,
+                            color = style.accentColor,
+                        )
+                    }
+
+                    MyUploadsContentState.ERROR -> Box(
+                        Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(horizontal = 24.dp),
+                        ) {
+                            Icon(
+                                MiuixIcons.Info,
+                                contentDescription = null,
+                                tint = style.accentColor,
+                                modifier = Modifier.size(32.dp),
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                loadError.orEmpty(),
+                                color = style.bodyColor,
+                                fontSize = 13.sp,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                    }
+
+                    MyUploadsContentState.EMPTY -> Box(
+                        Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
                         Text(
-                            stringResource(R.string.watch_store_login_to_view_uploads),
+                            stringResource(R.string.watch_store_no_uploads),
                             color = style.secondaryTextColor,
                             fontSize = 14.sp,
                         )
                     }
-                }
-                loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    MiuixLoadingIndicator(
-                        Modifier.size(28.dp),
-                        strokeWidth = 2.dp,
-                        color = style.accentColor,
-                    )
-                }
-                loadError != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(horizontal = 24.dp),
+
+                    MyUploadsContentState.LIST -> LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Icon(MiuixIcons.Info, contentDescription = null, tint = style.accentColor, modifier = Modifier.size(32.dp))
-                        Spacer(Modifier.height(8.dp))
-                        Text(loadError!!, color = style.bodyColor, fontSize = 13.sp, textAlign = TextAlign.Center)
-                    }
-                }
-                entries.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        stringResource(R.string.watch_store_no_uploads),
-                        color = style.secondaryTextColor,
-                        fontSize = 14.sp,
-                    )
-                }
-                else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(entries, key = { it.id }) { entry ->
-                        MyUploadEntryRow(
-                            entry = entry,
-                            repository = repository,
-                            onDeleteRequest = { deleteTarget = it },
-                        )
+                        items(entries, key = { it.id }) { entry ->
+                            MyUploadEntryRow(
+                                entry = entry,
+                                repository = repository,
+                                onDeleteRequest = { deleteTarget = it },
+                            )
+                        }
                     }
                 }
             }
@@ -2384,12 +2617,16 @@ private fun StoreUploadOverlay(
     var rememberUsername by remember { mutableStateOf(false) }
     var rememberPassword by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf<String?>(null) }
+    var authAction by remember { mutableStateOf<WatchStoreAuthAction?>(null) }
+    var authPage by remember { mutableStateOf(WatchStoreAuthPage.LOGIN) }
     var formError by remember { mutableStateOf<String?>(null) }
     var uploadPercent by remember { mutableStateOf<Int?>(null) }
     var selectedDescriptorId by remember { mutableStateOf<String?>(null) }
     var pickedFileUri by remember { mutableStateOf<Uri?>(null) }
     var pickedFileName by remember { mutableStateOf<String?>(null) }
     var name by remember { mutableStateOf("") }
+    var author by remember { mutableStateOf("") }
+    var authorEdited by remember { mutableStateOf(false) }
     var description by remember { mutableStateOf("") }
     var categories by remember { mutableStateOf<List<WatchStoreCategory>?>(null) }
     var categoriesError by remember { mutableStateOf<String?>(null) }
@@ -2433,6 +2670,11 @@ private fun StoreUploadOverlay(
         savedCredentials.password?.let { password = it }
         rememberUsername = savedCredentials.rememberUsername
         rememberPassword = savedCredentials.rememberPassword
+        if (!authorEdited) {
+            author = storedAuth?.username.orEmpty().ifBlank {
+                savedCredentials.username.orEmpty()
+            }
+        }
         authChecked = true
     }
 
@@ -2462,27 +2704,33 @@ private fun StoreUploadOverlay(
             if (register) R.string.watch_store_status_registering
             else R.string.watch_store_status_logging_in,
         )
+        authAction = if (register) WatchStoreAuthAction.REGISTER else WatchStoreAuthAction.LOGIN
         formError = null
         scope.launch {
-            runCatching {
-                watchStoreLoginOrRegister(
-                    api = api,
-                    authStore = authStore,
-                    credentialStore = credentialStore,
-                    username = cleanUsername,
-                    password = password,
-                    register = register,
-                    rememberUsername = rememberUsername,
-                    rememberPassword = rememberPassword,
-                )
-            }.onSuccess { stored ->
-                password = ""
-                auth = stored
-            }.onFailure { error ->
-                if (error is CancellationException) throw error
-                formError = watchStoreAuthErrorMessage(context, error, register)
+            try {
+                runCatching {
+                    watchStoreLoginOrRegister(
+                        api = api,
+                        authStore = authStore,
+                        credentialStore = credentialStore,
+                        username = cleanUsername,
+                        password = password,
+                        register = register,
+                        rememberUsername = rememberUsername,
+                        rememberPassword = rememberPassword,
+                    )
+                }.onSuccess { stored ->
+                    password = ""
+                    auth = stored
+                    if (!authorEdited) author = stored.username
+                }.onFailure { error ->
+                    if (error is CancellationException) throw error
+                    formError = watchStoreAuthErrorMessage(context, error, register)
+                }
+            } finally {
+                busy = null
+                authAction = null
             }
-            busy = null
         }
     }
 
@@ -2509,6 +2757,7 @@ private fun StoreUploadOverlay(
             formError = context.getString(R.string.watch_store_error_source_required)
             return
         }
+        val effectiveAuthor = author.trim().ifBlank { activeAuth.username }.ifBlank { "flue" }
         busy = context.getString(R.string.watch_store_status_exporting_package)
         formError = null
         uploadPercent = null
@@ -2519,7 +2768,13 @@ private fun StoreUploadOverlay(
                     try {
                         if (descriptor != null) {
                             WatchEditorSession.open(context, descriptor).use { session ->
-                                session.exportWatch(archive)
+                                session.exportWatch(
+                                    archive,
+                                    rootAttributeOverrides = mapOf(
+                                        "designer_name" to effectiveAuthor,
+                                        "author" to effectiveAuthor,
+                                    ),
+                                )
                             }
                         } else {
                             copyPickedWatchArchive(context, requireNotNull(fileUri), archive)
@@ -2601,7 +2856,7 @@ private fun StoreUploadOverlay(
                 modifier = Modifier.size(40.dp),
             ) {
                 Icon(
-                    MiuixIcons.Clear,
+                    MiuixIcons.Back,
                     contentDescription = stringResource(R.string.watch_store_close_upload),
                     tint = style.titleColor,
                 )
@@ -2667,7 +2922,13 @@ private fun StoreUploadOverlay(
                         rememberUsername = keepUsername
                         rememberPassword = keepPassword
                     },
+                    authPage = authPage,
+                    onAuthPageChange = { page ->
+                        authPage = page
+                        formError = null
+                    },
                     enabled = busy == null,
+                    loadingAction = authAction,
                     onLogin = { authenticate(register = false) },
                     onRegister = { authenticate(register = true) },
                 )
@@ -2756,6 +3017,7 @@ private fun StoreUploadOverlay(
                                             pickedFileUri = null
                                             pickedFileName = null
                                             if (name.isBlank()) name = descriptor.displayName.take(100)
+                                            if (!authorEdited && author.isBlank()) author = activeAuth.username
                                         }
                                         .padding(horizontal = 12.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically,
@@ -2793,6 +3055,29 @@ private fun StoreUploadOverlay(
                                 unfocusedTextColor = style.bodyColor,
                             ),
                         )
+                        if (selectedDescriptor != null) {
+                            OutlinedTextField(
+                                value = author,
+                                onValueChange = {
+                                    author = it.take(80)
+                                    authorEdited = true
+                                },
+                                label = { Text(stringResource(R.string.watch_editor_author)) },
+                                placeholder = {
+                                    Text(stringResource(R.string.watch_store_author_account_hint))
+                                },
+                                singleLine = true,
+                                enabled = busy == null,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = style.accentColor,
+                                    unfocusedBorderColor = style.outlineColor,
+                                    cursorColor = style.accentColor,
+                                    focusedTextColor = style.bodyColor,
+                                    unfocusedTextColor = style.bodyColor,
+                                ),
+                            )
+                        }
                         OutlinedTextField(
                             value = description,
                             onValueChange = { description = it.take(2000) },
@@ -3232,8 +3517,7 @@ private enum class WatchPreviewState { LOADING, FAILED, READY }
 /**
  * 下拉刷新指示器。外观走 style token，三套 UiStyle 各自成立。
  *
- * 未越阈值时画一个跟随进度收拢的箭头刷新图标，越过阈值或正在刷新时换成
- * MiuixLoadingIndicator，与商店里其它加载态同源。
+ * 松手前始终保留原刷新图标；只有 onRefresh 真正触发后才切换为加载态。
  */
 @Composable
 private fun PullRefreshIndicator(
@@ -3260,7 +3544,7 @@ private fun PullRefreshIndicator(
             .background(style.cardColor),
         contentAlignment = Alignment.Center,
     ) {
-        if (refreshing || state.willRefresh) {
+        if (refreshing) {
             MiuixLoadingIndicator(
                 Modifier.size(17.dp),
                 strokeWidth = 2.dp,

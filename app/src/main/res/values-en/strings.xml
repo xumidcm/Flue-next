@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Flue Next</string>
+    <string name="watchface_builtin_default_name">Default Watch Face</string>
+    <string name="watchface_builtin_photo_name">Photo Watch Face</string>
+    <string name="watchface_builtin_video_name">Video Watch Face</string>
+    <string name="watchface_builtin_summary">Built-in Watch Face</string>
     <string name="shortcut_settings">Launcher Settings</string>
     <string name="settings_title">Launcher Settings</string>
     <string name="internal_watchface_config_title">Built-in Watch Face Settings</string>
@@ -413,6 +417,8 @@
     <string name="settings_watchface_font_default">System default font</string>
     <string name="settings_watchface_font_clear">Restore default font</string>
     <string name="settings_watchface_font_clear_sub">Clear the saved watch face font</string>
+    <string name="settings_watchface_text_entry_animation">Watch face text fly-in</string>
+    <string name="settings_watchface_text_entry_animation_sub">Replay text entry animations whenever the watch face is entered; text appears immediately when disabled</string>
 
     <!-- About and Donate -->
     <string name="settings_about_title">About</string>
@@ -450,9 +456,6 @@
     <string name="settings_section_launch">Launch</string>
     <string name="settings_splash">Launch overlay</string>
     <string name="settings_splash_sub">Show icon transition when opening an app</string>
-    <string name="settings_glass_highlight">Glass highlight</string>
-    <string name="settings_glass_highlight_on">Control center uses iOS-style vertical Pill sliders with a translucent highlight</string>
-    <string name="settings_glass_highlight_off">Control center uses classic horizontal sliders</string>
     <string name="settings_splash_delay">Overlay duration</string>
 
     <!-- Performance and animation -->
@@ -611,7 +614,7 @@
     <string name="cc_bluetooth">Bluetooth</string>
     <string name="cc_wifi">Wi-Fi</string>
     <string name="cc_mobile_data">Mobile data</string>
-    <string name="cc_dnd">Do Not Disturb</string>
+    <string name="cc_dnd">DND</string>
     <string name="cc_volume">Volume</string>
     <string name="cc_brightness">Brightness</string>
     <string name="cc_notification_permission_title">Notification access required</string>
@@ -779,6 +782,7 @@
     <string name="watch_editor_duplicate">Duplicate</string>
     <string name="watch_editor_delete">Delete</string>
     <string name="watch_editor_layer_properties_fmt">%1$s properties</string>
+    <string name="watch_editor_current_watch_size_fmt">Current watch face size: %1$s</string>
     <string name="watch_editor_import_image_path">Import image into path</string>
     <string name="watch_editor_import_image_sequence">Import images as a looping background</string>
     <string name="watch_editor_import_video_frames">Import video as looping frames</string>
@@ -869,6 +873,10 @@
     <string name="watch_store_login">Log in</string>
     <string name="watch_store_register">Register</string>
     <string name="watch_store_auth_security_note">Registering creates a watch-store account (username: 3-50 letters, numbers, or underscores; password: at least 6 characters). If Remember password is selected, Android Keystore encrypts it on this device. Otherwise it is used only for this login and is not saved.</string>
+    <string name="watch_store_login_security_note">Log in to your watch-store account. If Remember password is selected, Android Keystore encrypts it on this device; otherwise it is used only for this login.</string>
+    <string name="watch_store_register_security_note">Create a new watch-store account. Use 3-50 letters, numbers, or underscores for the username and at least 6 characters for the password.</string>
+    <string name="watch_store_go_to_register">Create an account</string>
+    <string name="watch_store_back_to_login">Back to log in</string>
     <string name="watch_store_error_auth_expired">Your login expired. Log in again.</string>
     <string name="watch_store_error_rejected_detail_fmt">The server rejected this content: %1$s</string>
     <string name="watch_store_error_rejected">The server rejected this content. Check the name, description, and category.</string>
@@ -1139,4 +1147,18 @@
     <string name="file_manager_unknown_time">Unknown time</string>
     <string name="file_manager_unnamed_file">Unnamed file</string>
     <string name="file_manager_unknown_path">Unknown path</string>
+    <string name="internal_file_browser_permission_title">Allow device file browsing</string>
+    <string name="internal_file_browser_permission_message">Wear OS often has no system file picker. To use Flue’s built-in browser, allow Flue to manage files on this device. Flue reads a file only when you choose it.</string>
+    <string name="internal_file_browser_grant">Open permission</string>
+    <string name="internal_file_browser_back">Go up</string>
+    <string name="internal_file_browser_loading">Reading files…</string>
+    <string name="internal_file_browser_read_failed">This folder cannot be read</string>
+    <string name="internal_file_browser_empty">No matching files here</string>
+    <string name="internal_file_browser_import_selected_fmt">Import %1$d selected files</string>
+    <string name="internal_file_browser_pick_watch">Choose a .watch face</string>
+    <string name="internal_file_browser_pick_image">Choose an image</string>
+    <string name="internal_file_browser_pick_images">Choose images</string>
+    <string name="internal_file_browser_pick_video">Choose a video</string>
+    <string name="internal_file_browser_pick_font">Choose a font</string>
+    <string name="internal_file_browser_pick_conversion">Choose a watch face to convert</string>
 </resources>

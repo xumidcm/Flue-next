@@ -32,13 +32,18 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
+import com.flue.launcher.R
 import com.flue.launcher.ui.home.BuiltInWatchFacePreview
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.WatchColors
+import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
+import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
+import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.watchface.WatchFaceDescriptors
@@ -48,6 +53,12 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.icon.extended.Ok
 import top.yukonga.miuix.kmp.icon.extended.Settings
+
+private val BUILT_IN_WATCHFACE_IDS = setOf(
+    BUILT_IN_WATCHFACE_ID,
+    BUILT_IN_PHOTO_WATCHFACE_ID,
+    BUILT_IN_VIDEO_WATCHFACE_ID,
+)
 
 @Composable
 fun WatchFaceSettingCard(
@@ -77,6 +88,19 @@ fun WatchFaceSettingCard(
         label = "watchface_card_press_scale"
     )
     val launcherStyle = LauncherTheme.style
+    // 表盘管理属于 Activity 的本地化界面。内置项不能沿用由
+    // Application/ViewModel 缓存的 displayName，否则应用内切换语言后仍会显示旧语言。
+    val localizedDisplayName = when (descriptor.id) {
+        BUILT_IN_WATCHFACE_ID -> stringResource(R.string.watchface_builtin_default_name)
+        BUILT_IN_PHOTO_WATCHFACE_ID -> stringResource(R.string.watchface_builtin_photo_name)
+        BUILT_IN_VIDEO_WATCHFACE_ID -> stringResource(R.string.watchface_builtin_video_name)
+        else -> descriptor.displayName
+    }
+    val localizedSummary = if (descriptor.id in BUILT_IN_WATCHFACE_IDS) {
+        stringResource(R.string.watchface_builtin_summary)
+    } else {
+        descriptor.summary
+    }
 
     Row(
         modifier = Modifier
@@ -160,11 +184,11 @@ fun WatchFaceSettingCard(
             contentAlignment = Alignment.CenterStart
         ) {
             Column(modifier = Modifier.padding(end = 56.dp)) {
-                Text(descriptor.displayName, fontSize = 14.sp, color = launcherStyle.titleColor)
+                Text(localizedDisplayName, fontSize = 14.sp, color = launcherStyle.titleColor)
                 Spacer(modifier = Modifier.height(2.dp))
-                if (descriptor.summary.isNotBlank()) {
+                if (localizedSummary.isNotBlank()) {
                     Text(
-                        descriptor.summary,
+                        localizedSummary,
                         fontSize = 11.sp,
                         color = launcherStyle.secondaryTextColor
                     )

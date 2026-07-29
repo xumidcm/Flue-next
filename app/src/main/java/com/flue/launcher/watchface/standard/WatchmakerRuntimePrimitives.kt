@@ -3,6 +3,7 @@ package com.flue.launcher.watchface.standard
 import java.time.YearMonth
 import java.util.Calendar
 import java.util.Locale
+import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.round
 
@@ -466,6 +467,42 @@ data class WatchBitmapGlyph(
     val xAdvance: Int,
     val page: Int,
 )
+
+data class WatchBitmapSourceRect(
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int,
+)
+
+/**
+ * Maps a BMFont glyph from the atlas dimensions declared in the `.fnt` file
+ * to the bitmap dimensions that Android actually decoded. Large atlas pages
+ * may be sampled down to stay within the renderer's bitmap memory limit; the
+ * glyph's destination size remains in the original BMFont design space.
+ */
+fun mapWatchBitmapGlyphSourceRect(
+    glyph: WatchBitmapGlyph,
+    atlasWidth: Int,
+    atlasHeight: Int,
+    bitmapWidth: Int,
+    bitmapHeight: Int,
+): WatchBitmapSourceRect? {
+    if (atlasWidth <= 0 || atlasHeight <= 0 || bitmapWidth <= 0 || bitmapHeight <= 0) return null
+    if (glyph.x < 0 || glyph.y < 0 || glyph.width <= 0 || glyph.height <= 0) return null
+    val logicalRight = glyph.x.toLong() + glyph.width
+    val logicalBottom = glyph.y.toLong() + glyph.height
+    if (logicalRight > atlasWidth || logicalBottom > atlasHeight) return null
+
+    val scaleX = bitmapWidth.toDouble() / atlasWidth.toDouble()
+    val scaleY = bitmapHeight.toDouble() / atlasHeight.toDouble()
+    val left = floor(glyph.x * scaleX).toInt().coerceIn(0, bitmapWidth)
+    val top = floor(glyph.y * scaleY).toInt().coerceIn(0, bitmapHeight)
+    val right = ceil(logicalRight * scaleX).toInt().coerceIn(0, bitmapWidth)
+    val bottom = ceil(logicalBottom * scaleY).toInt().coerceIn(0, bitmapHeight)
+    if (right <= left || bottom <= top) return null
+    return WatchBitmapSourceRect(left, top, right, bottom)
+}
 
 data class WatchBitmapFont(
     val face: String,

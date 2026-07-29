@@ -11,6 +11,21 @@ import kotlin.math.abs
 /** 表盘上可跟手拉出的覆层。 */
 enum class OverlayGestureTarget { Stack, Widgets, ControlCenter }
 
+internal fun resolveOverlaySettleOpen(
+    progress: Float,
+    velocity: Float,
+    currentlyOpen: Boolean,
+    cancelled: Boolean,
+): Boolean {
+    if (cancelled) return currentlyOpen
+    val safeVelocity = velocity.takeIf(Float::isFinite) ?: 0f
+    return when {
+        safeVelocity >= 1.6f -> true
+        safeVelocity <= -1.6f -> false
+        else -> (progress.takeIf(Float::isFinite) ?: if (currentlyOpen) 1f else 0f) > 0.42f
+    }
+}
+
 /**
  * 全局导航手势宿主。
  *
@@ -29,8 +44,10 @@ fun GestureHost(
     showWidgetPage: Boolean = true,
     showControlCenter: Boolean = false,
     widgetsBackGestureLocked: Boolean = false,
+    stackDismissHandledByContent: Boolean = false,
+    controlCenterDismissHandledByContent: Boolean = false,
     onOverlayDrag: ((OverlayGestureTarget, Float) -> Unit)? = null,
-    onOverlayRelease: ((OverlayGestureTarget, Float, Float) -> Unit)? = null,
+    onOverlayRelease: ((OverlayGestureTarget, Float, Float, Boolean) -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
     var totalDx by remember { mutableFloatStateOf(0f) }
@@ -45,10 +62,11 @@ fun GestureHost(
     // requestDisallowIntercept 保护不生效，手势被偷走就是「到顶继续滑没有
     // 反馈且卡死 / 偶发滑不动」的第二个独立病灶（诊断日志里成串的 a=3）。
     val hostGestureNeeded = when (screenState) {
-        ScreenState.Face, ScreenState.Widgets, ScreenState.Stack -> true
+        ScreenState.Face, ScreenState.Widgets -> true
+        ScreenState.Stack -> !stackDismissHandledByContent
         // 控制中心以前不在这份名单里：覆层一打开手势宿主就整体卸载，
         // 于是「拉出跟手、返回不跟手」。它的关闭方向要走同一条跟手链路。
-        ScreenState.ControlCenter -> true
+        ScreenState.ControlCenter -> !controlCenterDismissHandledByContent
         else -> false
     }
     // 覆层已经打开时，这一次拖拽是「往回收」：进度基准是 1，手指反向移动
@@ -58,13 +76,23 @@ fun GestureHost(
     // 小组件页被编辑手势锁住时不认领，把关闭交还给下面的 80px 兜底分支。
     val closingOverlay: OverlayGestureTarget? = when (screenState) {
         ScreenState.ControlCenter -> OverlayGestureTarget.ControlCenter
+            .takeIf { !controlCenterDismissHandledByContent }
         ScreenState.Stack -> OverlayGestureTarget.Stack
+            .takeIf { !stackDismissHandledByContent }
         ScreenState.Widgets -> OverlayGestureTarget.Widgets.takeIf { !widgetsBackGestureLocked }
         else -> null
     }
     Box(
         modifier = modifier
-            .pointerInput(hostGestureNeeded, screenState, sideScreenEnabled, showWidgetPage, showControlCenter, widgetsBackGestureLocked, closingOverlay) {
+            .pointerInput(
+                hostGestureNeeded,
+                screenState,
+                sideScreenEnabled,
+                showWidgetPage,
+                showControlCenter,
+                widgetsBackGestureLocked,
+                closingOverlay,
+            ) {
                 if (!hostGestureNeeded) return@pointerInput
                 val widthPx = size.width.coerceAtLeast(1).toFloat()
                 val heightPx = size.height.coerceAtLeast(1).toFloat()
@@ -214,13 +242,14 @@ fun GestureHost(
                                 target,
                                 overlayProgress(target),
                                 overlayVelocity(target),
+                                false,
                             )
                         }
                         overlayTarget = null
                     },
                     onDragCancel = {
                         overlayTarget?.let { target ->
-                            onOverlayRelease?.invoke(target, overlayProgress(target), 0f)
+                            onOverlayRelease?.invoke(target, overlayProgress(target), 0f, true)
                         }
                         overlayTarget = null
                     },

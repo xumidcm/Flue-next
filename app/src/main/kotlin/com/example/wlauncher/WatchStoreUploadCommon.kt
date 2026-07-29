@@ -1,27 +1,42 @@
 package com.flue.launcher
 
 import android.content.Context
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.settings.miuix.MiuixLoadingIndicator
 import com.flue.launcher.watchface.store.HttpWatchStoreApi
 import com.flue.launcher.watchface.store.WatchStoreAuthSession
 import com.flue.launcher.watchface.store.WatchStoreAuthStore
@@ -97,6 +112,16 @@ internal fun watchStoreAuthInputError(
 
 private val WATCH_STORE_USERNAME_PATTERN = Regex("^[A-Za-z0-9_]{3,50}$")
 
+internal enum class WatchStoreAuthAction {
+    LOGIN,
+    REGISTER,
+}
+
+internal enum class WatchStoreAuthPage {
+    LOGIN,
+    REGISTER,
+}
+
 /**
  * 在 IO 上完成登录/注册、令牌落盘与「记住账号/记住密码」的持久化。
  * 失败抛异常，由调用方经 [watchStoreAuthErrorMessage] 转成文案。
@@ -140,79 +165,168 @@ internal fun WatchStoreLoginSection(
     rememberUsername: Boolean,
     rememberPassword: Boolean,
     onRememberChange: (rememberUsername: Boolean, rememberPassword: Boolean) -> Unit,
+    authPage: WatchStoreAuthPage,
+    onAuthPageChange: (WatchStoreAuthPage) -> Unit,
     enabled: Boolean,
+    loadingAction: WatchStoreAuthAction? = null,
     onLogin: () -> Unit,
     onRegister: () -> Unit,
 ) {
     val style = LauncherTheme.style
+    val accentContentColor = if (style.accentColor.luminance() > 0.55f) Color.Black else Color.White
     Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(style.cardShape)
+            .background(style.cardColor)
+            .border(1.dp, style.outlineColor, style.cardShape)
+            .padding(horizontal = 14.dp, vertical = 16.dp),
     ) {
-        OutlinedTextField(
-            value = username,
-            onValueChange = { onUsernameChange(it.take(50)) },
-            label = { Text(stringResource(R.string.watch_store_username)) },
-            singleLine = true,
-            enabled = enabled,
+        Crossfade(
+            targetState = authPage,
+            animationSpec = tween(180),
             modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = password,
-            onValueChange = { onPasswordChange(it.take(128)) },
-            label = { Text(stringResource(R.string.watch_store_password)) },
-            singleLine = true,
-            enabled = enabled,
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(
-                checked = rememberUsername,
-                onCheckedChange = { checked ->
-                    onRememberChange(checked, if (checked) rememberPassword else false)
-                },
-                enabled = enabled,
-            )
-            Text(
-                stringResource(R.string.watch_store_remember_username),
-                style = MaterialTheme.typography.bodySmall,
-                color = style.titleColor,
-            )
-            Spacer(Modifier.width(10.dp))
-            Checkbox(
-                checked = rememberPassword,
-                onCheckedChange = { checked ->
-                    onRememberChange(if (checked) true else rememberUsername, checked)
-                },
-                enabled = enabled,
-            )
-            Text(
-                stringResource(R.string.watch_store_remember_password),
-                style = MaterialTheme.typography.bodySmall,
-                color = style.titleColor,
-            )
+            label = "watch_store_auth_page",
+        ) { page ->
+            val isRegister = page == WatchStoreAuthPage.REGISTER
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = stringResource(
+                        if (isRegister) R.string.watch_store_register else R.string.watch_store_login,
+                    ),
+                    color = style.titleColor,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = stringResource(
+                        if (isRegister) {
+                            R.string.watch_store_register_security_note
+                        } else {
+                            R.string.watch_store_login_security_note
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = style.secondaryTextColor,
+                )
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { onUsernameChange(it.take(50)) },
+                    label = { Text(stringResource(R.string.watch_store_username)) },
+                    singleLine = true,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = style.rowShape,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = style.accentColor,
+                        unfocusedBorderColor = style.outlineColor,
+                        focusedContainerColor = style.screenBackground,
+                        unfocusedContainerColor = style.screenBackground,
+                        cursorColor = style.accentColor,
+                        focusedTextColor = style.bodyColor,
+                        unfocusedTextColor = style.bodyColor,
+                    ),
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { onPasswordChange(it.take(128)) },
+                    label = { Text(stringResource(R.string.watch_store_password)) },
+                    singleLine = true,
+                    enabled = enabled,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = style.rowShape,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = style.accentColor,
+                        unfocusedBorderColor = style.outlineColor,
+                        focusedContainerColor = style.screenBackground,
+                        unfocusedContainerColor = style.screenBackground,
+                        cursorColor = style.accentColor,
+                        focusedTextColor = style.bodyColor,
+                        unfocusedTextColor = style.bodyColor,
+                    ),
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = rememberUsername,
+                        onCheckedChange = { checked ->
+                            onRememberChange(checked, if (checked) rememberPassword else false)
+                        },
+                        enabled = enabled,
+                        colors = CheckboxDefaults.colors(checkedColor = style.accentColor),
+                    )
+                    Text(
+                        stringResource(R.string.watch_store_remember_username),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = style.titleColor,
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = rememberPassword,
+                        onCheckedChange = { checked ->
+                            onRememberChange(if (checked) true else rememberUsername, checked)
+                        },
+                        enabled = enabled,
+                        colors = CheckboxDefaults.colors(checkedColor = style.accentColor),
+                    )
+                    Text(
+                        stringResource(R.string.watch_store_remember_password),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = style.titleColor,
+                    )
+                }
+                val expectedAction = if (isRegister) {
+                    WatchStoreAuthAction.REGISTER
+                } else {
+                    WatchStoreAuthAction.LOGIN
+                }
+                Button(
+                    onClick = if (isRegister) onRegister else onLogin,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = style.rowShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = style.accentColor,
+                        contentColor = accentContentColor,
+                    ),
+                ) {
+                    if (loadingAction == expectedAction) {
+                        MiuixLoadingIndicator(
+                            Modifier.size(17.dp),
+                            strokeWidth = 2.dp,
+                            color = accentContentColor,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(
+                        stringResource(
+                            if (isRegister) R.string.watch_store_register else R.string.watch_store_login,
+                        ),
+                    )
+                }
+                TextButton(
+                    onClick = {
+                        onAuthPageChange(
+                            if (isRegister) WatchStoreAuthPage.LOGIN else WatchStoreAuthPage.REGISTER,
+                        )
+                    },
+                    enabled = enabled,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                ) {
+                    Text(
+                        stringResource(
+                            if (isRegister) {
+                                R.string.watch_store_back_to_login
+                            } else {
+                                R.string.watch_store_go_to_register
+                            },
+                        ),
+                        color = style.accentColor,
+                    )
+                }
+            }
         }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Button(
-                onClick = onLogin,
-                enabled = enabled,
-                modifier = Modifier.weight(1f),
-            ) { Text(stringResource(R.string.watch_store_login)) }
-            OutlinedButton(
-                onClick = onRegister,
-                enabled = enabled,
-                modifier = Modifier.weight(1f),
-            ) { Text(stringResource(R.string.watch_store_register)) }
-        }
-        Text(
-            stringResource(R.string.watch_store_auth_security_note),
-            style = MaterialTheme.typography.labelSmall,
-            color = style.secondaryTextColor,
-        )
     }
 }

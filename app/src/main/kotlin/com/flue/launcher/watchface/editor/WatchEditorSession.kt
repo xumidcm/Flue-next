@@ -27,6 +27,7 @@ import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.ArrayDeque
+import java.util.Locale
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -288,8 +289,10 @@ class WatchEditorSession private constructor(
         if (position < 0) return false
         mutate {
             val element = topLevelLayerElements()[position]
+            val obsoleteLoopResources = loopingImageResources(element)
             element.parentNode?.removeChild(element)
             layerKeys.removeAt(position)
+            stashUnreferencedResources(obsoleteLoopResources)
             true
         }
         return true
@@ -407,11 +410,25 @@ class WatchEditorSession private constructor(
         require(frameFiles.isNotEmpty()) { "视频帧序列不能为空" }
         require(frameDelayMs > 0) { "视频帧间隔必须大于零" }
         return mutate {
+            val layer = findLayer(key)
+            val obsoleteLoopResources = loopingImageResources(layer)
+            // Remove the old reference first so its files can leave the draft
+            // before the replacement batch is budgeted. Undo keeps them in the
+            // bounded resource stash and restores them atomically if needed.
+            setOrRemoveAttribute(layer, "path", null)
+            stashUnreferencedResources(obsoleteLoopResources)
+            var remainingBytes = remainingBudget()
             val paths = frameFiles.map { file ->
                 require(file.isFile && file.length() > 0L) { "视频帧不可用：${file.name}" }
-                importResourceDirect(file.inputStream(), file.name, "images")
+                val path = importResourceDirect(
+                    input = file.inputStream(),
+                    requestedName = file.name,
+                    directory = "images",
+                    totalBudget = remainingBytes,
+                )
+                remainingBytes -= resolveDraftPath(path).length()
+                path
             }
-            val layer = findLayer(key)
             setOrRemoveAttribute(layer, "type", "image_gif")
             setOrRemoveAttribute(layer, "path", paths.joinToString("`"))
             setOrRemoveAttribute(layer, "gif_delay", frameDelayMs.toString())
@@ -558,17 +575,40 @@ class WatchEditorSession private constructor(
         if (dim.isFile) writeAtomically(dim, bytes)
     }
 
-    /** Saves the current XML and atomically exports the complete draft as .watch. */
+    /**
+     * Saves the draft and atomically exports it as `.watch`.
+     * [rootAttributeOverrides] affect only the exported archive, which lets the
+     * store attach upload-only author metadata without mutating the installed face.
+     */
     @Synchronized
-    fun exportWatch(outputFile: File): WatchEditorExportResult {
+    fun exportWatch(
+        outputFile: File,
+        rootAttributeOverrides: Map<String, String?> = emptyMap(),
+    ): WatchEditorExportResult {
         ensureOpen()
         cancelActiveTransformGesture()
         require(!isWithin(outputFile.canonicalFile, draftDirectory.canonicalFile)) {
             "导出文件不能位于编辑草稿目录内"
         }
         validateDocument()
-        val xmlBytes = serializeDocument(document)
-        writeAtomically(watchXmlFile, xmlBytes)
+        val draftXmlBytes = serializeDocument(document)
+        writeAtomically(watchXmlFile, draftXmlBytes)
+        val exportXmlBytes = if (rootAttributeOverrides.isEmpty()) {
+            draftXmlBytes
+        } else {
+            // Android's DOM implementation cannot clone a DOCUMENT_NODE and
+            // throws "Cannot copy node of type 9". Create a fresh document and
+            // import only the root element instead; upload-only metadata stays
+            // isolated from the live editor document exactly as before.
+            val exportDocument = document.implementation.createDocument(null, null, null)
+            exportDocument.appendChild(
+                exportDocument.importNode(document.documentElement, true),
+            )
+            rootAttributeOverrides.forEach { (name, value) ->
+                setOrRemoveAttribute(exportDocument.documentElement, name, value)
+            }
+            serializeDocument(exportDocument)
+        }
         val output = outputFile.canonicalFile
         output.parentFile?.let { if (!it.exists() && !it.mkdirs()) error("无法创建导出目录") }
         val temporary = File(output.parentFile, ".${output.name}.${UUID.randomUUID()}.tmp")
@@ -580,7 +620,11 @@ class WatchEditorSession private constructor(
                     validateRelativePath(relative)
                     val entry = ZipEntry(relative)
                     zip.putNextEntry(entry)
-                    FileInputStream(file).use { input -> input.copyTo(zip, DEFAULT_BUFFER_SIZE) }
+                    if (relative == watchXmlRelativePath) {
+                        zip.write(exportXmlBytes)
+                    } else {
+                        FileInputStream(file).use { input -> input.copyTo(zip, DEFAULT_BUFFER_SIZE) }
+                    }
                     zip.closeEntry()
                     entryCount++
                 }
@@ -589,7 +633,7 @@ class WatchEditorSession private constructor(
             // succeeds, WatchArchiveInstaller can consume the archive directly.
             WatchArchiveValidator().inspect(temporary)
             atomicMove(temporary, output)
-            savedXml = xmlBytes
+            savedXml = draftXmlBytes
             savedResourcePaths = resourcePathsInternal().toSet()
             return WatchEditorExportResult(output, output.length(), entryCount)
         } catch (error: Exception) {
@@ -892,6 +936,7 @@ class WatchEditorSession private constructor(
         input: InputStream,
         requestedName: String,
         directory: String,
+        totalBudget: Long? = null,
     ): String {
         val relativePath = uniqueResourcePath(requestedName, directory)
         val destination = resolveDraftPath(relativePath)
@@ -900,7 +945,12 @@ class WatchEditorSession private constructor(
         val temporary = File.createTempFile(".resource-", ".tmp", temporaryDirectory)
         try {
             input.use { source ->
-                copyBounded(source, temporary, limits.maxFileBytes, remainingBudget())
+                copyBounded(
+                    source,
+                    temporary,
+                    limits.maxFileBytes,
+                    totalBudget ?: remainingBudget(),
+                )
             }
             atomicMove(temporary, destination)
             return relativePath
@@ -913,6 +963,48 @@ class WatchEditorSession private constructor(
     }
 
     private fun remainingBudget(): Long = limits.maxTotalBytes - draftByteCount()
+
+    private fun loopingImageResources(layer: Element): Set<String> {
+        val type = layer.getAttribute("type").lowercase(Locale.ROOT)
+        val rawPath = layer.getAttribute("path")
+        if (type !in setOf("gif", "image_gif") && '`' !in rawPath) return emptySet()
+        return rawPath.split('`')
+            .asSequence()
+            .map { it.trim().replace('\\', '/') }
+            .filter(String::isNotBlank)
+            .mapNotNull { path -> runCatching { validateRelativePath(path) }.getOrNull() }
+            .toSet()
+    }
+
+    private fun stashUnreferencedResources(candidates: Set<String>) {
+        if (candidates.isEmpty()) return
+        val referenced = topLevelLayerElements()
+            .asSequence()
+            .flatMap { layer ->
+                layer.getAttribute("path")
+                    .split('`')
+                    .asSequence()
+                    .map { it.trim().replace('\\', '/') }
+            }
+            .filter(String::isNotBlank)
+            .toSet()
+        candidates.filterNot(referenced::contains).forEach { path ->
+            val source = resolveDraftPath(path)
+            if (!source.isFile) return@forEach
+            if (!historyDirectory.exists() && !historyDirectory.mkdirs()) {
+                throw WatchEditorException("无法创建撤销资源缓存")
+            }
+            val stash = File(historyDirectory, UUID.randomUUID().toString())
+            atomicMove(source, stash)
+            resourceStash.remove(path)?.delete()
+            resourceStash[path] = stash
+            var parent = source.parentFile
+            while (parent != null && parent != draftDirectory && parent.list().isNullOrEmpty()) {
+                if (!parent.delete()) break
+                parent = parent.parentFile
+            }
+        }
+    }
 
     private fun draftByteCount(): Long = draftFiles().sumOf { it.length() }
 

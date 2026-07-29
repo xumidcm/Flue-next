@@ -24,8 +24,11 @@ import androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDoc
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.material3.Slider
 import androidx.compose.ui.graphics.toArgb
 import java.util.Locale
@@ -34,6 +37,8 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateRotation
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -78,6 +83,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import com.flue.launcher.ui.settings.miuix.MiuixLoadingIndicator
+import com.flue.launcher.ui.settings.miuix.MiuixIcons as FlueMiuixIcons
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -95,6 +101,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
@@ -104,6 +111,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -126,6 +134,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.content.ContextCompat
@@ -153,6 +162,8 @@ import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.ui.common.flueElasticNestedScroll
 import com.flue.launcher.ui.common.isFlueScreenRound
+import com.flue.launcher.ui.common.InternalFileBrowserHost
+import com.flue.launcher.ui.common.InternalFileBrowserRequest
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.watchface.WatchFaceType
@@ -210,7 +221,9 @@ import com.flue.launcher.watchface.standard.WatchOutlineMode
 import com.flue.launcher.watchface.standard.WatchmakerGeometry
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStorage
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceView
+import com.flue.launcher.watchface.standard.hasHeartRatePermission
 import com.flue.launcher.watchface.standard.rememberWatchmakerWatchDataProvider
+import com.flue.launcher.watchface.standard.requiredHeartRatePermission
 import com.flue.launcher.watchface.standard.watchOutlineDefaultSize
 import com.flue.launcher.watchface.standard.watchOutlineMode
 import com.flue.launcher.watchface.standard.watchFaceShape
@@ -222,11 +235,13 @@ import com.flue.launcher.watchface.store.WatchStoreCredentialStore
 import com.flue.launcher.watchface.store.WatchStoreHttpException
 import com.flue.launcher.watchface.store.WatchStorePayloadTooLargeException
 import com.flue.launcher.watchface.store.WatchStoreScreenType
+import com.flue.launcher.watchface.store.WatchStoreRepository
 import java.io.File
 import java.io.FileInputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -296,6 +311,15 @@ private data class EditorVideoImportRequest(
     val layerKey: WatchEditorLayerKey,
 )
 
+private enum class EditorInternalImportKind {
+    IMAGE,
+    IMAGE_SEQUENCE,
+    VIDEO,
+    FONT,
+    WATCH,
+    CONVERSION,
+}
+
 @Composable
 private fun WatchEditorRoute(
     watchFaceId: String?,
@@ -341,6 +365,7 @@ private fun WatchEditorRoute(
     var videoRequest by remember { mutableStateOf<EditorVideoImportRequest?>(null) }
     var videoConversionJob by remember { mutableStateOf<Job?>(null) }
     var videoConversionProgress by remember { mutableStateOf(0f) }
+    var internalFileBrowserRequest by remember { mutableStateOf<InternalFileBrowserRequest?>(null) }
     // 画布渲染 View：保存 / 上传前用它离屏重渲 preview.jpg 写回草稿。
     var previewRenderer by remember { mutableStateOf<WatchmakerWatchFaceView?>(null) }
 
@@ -466,10 +491,10 @@ private fun WatchEditorRoute(
         }
     }
 
-    val fontPicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+    fun handleFontUri(uri: Uri?) {
         val active = session
         val key = selectedLayerKey
-        if (uri == null || active == null || key == null) return@rememberLauncherForActivityResult
+        if (uri == null || active == null || key == null) return
         scope.launch {
         busyMessage = context.getString(R.string.watch_editor_status_importing_font)
             errorMessage = null
@@ -551,11 +576,12 @@ private fun WatchEditorRoute(
             busyMessage = null
         }
     }
+    val fontPicker = rememberLauncherForActivityResult(OpenDocument()) { handleFontUri(it) }
 
-    val imagePicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+    fun handleImageUri(uri: Uri?) {
         val active = session
         val key = selectedLayerKey
-        if (uri == null || active == null || key == null) return@rememberLauncherForActivityResult
+        if (uri == null || active == null || key == null) return
         scope.launch {
         busyMessage = context.getString(R.string.watch_editor_status_reading_image)
             errorMessage = null
@@ -583,11 +609,12 @@ private fun WatchEditorRoute(
             }
         }
     }
+    val imagePicker = rememberLauncherForActivityResult(OpenDocument()) { handleImageUri(it) }
 
-    val imageSequencePicker = rememberLauncherForActivityResult(OpenMultipleDocuments()) { uris ->
+    fun handleImageSequenceUris(uris: List<Uri>) {
         val active = session
         val key = selectedLayerKey
-        if (uris.isEmpty() || active == null || key == null) return@rememberLauncherForActivityResult
+        if (uris.isEmpty() || active == null || key == null) return
         scope.launch {
         busyMessage = context.getString(R.string.watch_editor_status_importing_sequence)
             errorMessage = null
@@ -626,11 +653,14 @@ private fun WatchEditorRoute(
             busyMessage = null
         }
     }
+    val imageSequencePicker = rememberLauncherForActivityResult(OpenMultipleDocuments()) {
+        handleImageSequenceUris(it)
+    }
 
-    val videoPicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+    fun handleVideoUri(uri: Uri?) {
         val active = session
         val key = selectedLayerKey
-        if (uri == null || active == null || key == null) return@rememberLauncherForActivityResult
+        if (uri == null || active == null || key == null) return
         scope.launch {
         busyMessage = context.getString(R.string.watch_editor_status_reading_video)
             errorMessage = null
@@ -652,6 +682,7 @@ private fun WatchEditorRoute(
             busyMessage = null
         }
     }
+    val videoPicker = rememberLauncherForActivityResult(OpenDocument()) { handleVideoUri(it) }
 
     fun beginVideoImport(request: EditorVideoImportRequest, options: WatchEditorVideoImportOptions) {
         if (videoConversionJob != null || session !== request.session) return
@@ -667,10 +698,15 @@ private fun WatchEditorRoute(
                     uri = request.uri,
                     options = options,
                     onProgress = { progress ->
-                        videoConversionProgress = progress.fraction
+                        // FFmpeg can report its final timestamp before the
+                        // process exits and before frames are copied into the
+                        // draft. Never leave the dialog apparently stuck at
+                        // 100%; it closes only after the import is committed.
+                        val visibleProgress = progress.fraction.coerceAtMost(0.99f)
+                        videoConversionProgress = visibleProgress
                     busyMessage = context.getString(
                         R.string.watch_editor_status_converting_video_fmt,
-                        (progress.fraction * 100f).roundToInt(),
+                        (visibleProgress * 100f).roundToInt(),
                     )
                     },
                 )
@@ -690,16 +726,22 @@ private fun WatchEditorRoute(
             } catch (cancelled: CancellationException) {
                 // User cancellation leaves both the draft and selected layer untouched.
             } catch (error: Throwable) {
-                errorMessage = context.localizedEditorError(R.string.watch_editor_error_video_import, error)
+                errorMessage = context.localizedEditorError(
+                    R.string.watch_editor_error_video_import,
+                    error,
+                    includeDetails = true,
+                )
             } finally {
-                withContext(Dispatchers.IO) { converted?.deleteTemporaryFiles() }
                 busyMessage = null
                 videoConversionJob = null
+                // The draft owns its copies now. Hide the modal first, then
+                // delete the potentially large FFmpeg cache off the UI path.
+                withContext(Dispatchers.IO + NonCancellable) { converted?.deleteTemporaryFiles() }
             }
         }
     }
 
-    val watchArchivePicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+    fun handleWatchArchiveUri(uri: Uri?) {
         if (uri != null) {
             scope.launch {
         busyMessage = context.getString(R.string.watch_editor_status_importing_watch)
@@ -739,8 +781,11 @@ private fun WatchEditorRoute(
             }
         }
     }
+    val watchArchivePicker = rememberLauncherForActivityResult(OpenDocument()) {
+        handleWatchArchiveUri(it)
+    }
 
-    val conversionPicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+    fun handleConversionUri(uri: Uri?) {
         if (uri != null) {
             scope.launch {
                 busyMessage = context.getString(R.string.watch_editor_status_converting_watch)
@@ -840,6 +885,49 @@ private fun WatchEditorRoute(
                 busyMessage = null
             }
         }
+    }
+    val conversionPicker = rememberLauncherForActivityResult(OpenDocument()) {
+        handleConversionUri(it)
+    }
+
+    fun openInternalFileBrowser(kind: EditorInternalImportKind) {
+        if (kind == EditorInternalImportKind.VIDEO && !WatchEditorVideoImporter.isRuntimeSupported()) {
+            errorMessage = context.getString(R.string.watch_editor_error_ffmpeg_unsupported)
+            return
+        }
+        val title = context.getString(
+            when (kind) {
+                EditorInternalImportKind.IMAGE -> R.string.internal_file_browser_pick_image
+                EditorInternalImportKind.IMAGE_SEQUENCE -> R.string.internal_file_browser_pick_images
+                EditorInternalImportKind.VIDEO -> R.string.internal_file_browser_pick_video
+                EditorInternalImportKind.FONT -> R.string.internal_file_browser_pick_font
+                EditorInternalImportKind.WATCH -> R.string.internal_file_browser_pick_watch
+                EditorInternalImportKind.CONVERSION -> R.string.internal_file_browser_pick_conversion
+            },
+        )
+        val extensions = when (kind) {
+            EditorInternalImportKind.IMAGE,
+            EditorInternalImportKind.IMAGE_SEQUENCE -> EDITOR_INTERNAL_IMAGE_EXTENSIONS
+            EditorInternalImportKind.VIDEO -> EDITOR_INTERNAL_VIDEO_EXTENSIONS
+            EditorInternalImportKind.FONT -> EDITOR_FONT_EXTENSIONS
+            EditorInternalImportKind.WATCH -> setOf("watch")
+            EditorInternalImportKind.CONVERSION -> setOf("wff", "zip")
+        }
+        internalFileBrowserRequest = InternalFileBrowserRequest(
+            title = title,
+            extensions = extensions,
+            allowMultiple = kind == EditorInternalImportKind.IMAGE_SEQUENCE,
+            onSelected = { uris ->
+                when (kind) {
+                    EditorInternalImportKind.IMAGE -> handleImageUri(uris.firstOrNull())
+                    EditorInternalImportKind.IMAGE_SEQUENCE -> handleImageSequenceUris(uris)
+                    EditorInternalImportKind.VIDEO -> handleVideoUri(uris.firstOrNull())
+                    EditorInternalImportKind.FONT -> handleFontUri(uris.firstOrNull())
+                    EditorInternalImportKind.WATCH -> handleWatchArchiveUri(uris.firstOrNull())
+                    EditorInternalImportKind.CONVERSION -> handleConversionUri(uris.firstOrNull())
+                }
+            },
+        )
     }
 
     val blankFaceIsRound = isFlueScreenRound()
@@ -1014,6 +1102,10 @@ private fun WatchEditorRoute(
                                     active.flushDraftForPreview()
                                     if (!createNewLogicalId) {
                                         active.saveCurrentRevision()
+                                        active.logicalId?.let { launcherId ->
+                                            WatchStoreRepository(context)
+                                                .detachEditedMarketInstall(launcherId)
+                                        }
                                         val descriptor = WatchmakerWatchFaceStorage.scan(context)
                                             .firstOrNull { it.id == active.logicalId }
                                                 ?: error(context.getString(R.string.watch_editor_error_rescan_revision))
@@ -1290,11 +1382,26 @@ private fun WatchEditorRoute(
                         onImportImage = {
                             imagePicker.launch(arrayOf("image/*"))
                         },
+                        onImportImageLong = {
+                            openInternalFileBrowser(EditorInternalImportKind.IMAGE)
+                        },
                         onImportImageSequence = {
                             imageSequencePicker.launch(arrayOf("image/*"))
                         },
+                        onImportImageSequenceLong = {
+                            openInternalFileBrowser(EditorInternalImportKind.IMAGE_SEQUENCE)
+                        },
                         onImportVideo = {
-                            videoPicker.launch(arrayOf("video/*"))
+                            if (WatchEditorVideoImporter.isRuntimeSupported()) {
+                                videoPicker.launch(arrayOf("video/*"))
+                            } else {
+                                errorMessage = context.getString(
+                                    R.string.watch_editor_error_ffmpeg_unsupported,
+                                )
+                            }
+                        },
+                        onImportVideoLong = {
+                            openInternalFileBrowser(EditorInternalImportKind.VIDEO)
                         },
                         onImportFont = {
                             fontPicker.launch(
@@ -1305,6 +1412,9 @@ private fun WatchEditorRoute(
                                     "application/octet-stream",
                                 ),
                             )
+                        },
+                        onImportFontLong = {
+                            openInternalFileBrowser(EditorInternalImportKind.FONT)
                         },
                         onSaveAsNew = {
                             saveAsMode = true
@@ -1361,9 +1471,8 @@ private fun WatchEditorRoute(
                                         onApplied = {},
                             onError = { errorMessage = it.message ?: context.getString(R.string.watch_editor_error_property_update) },
                                     )
-                                    // 上传前自动保存一次（老师指定）：上传的就是这一版。
-                                    // 这里不再补作者——账户名由上传覆层在真正提交
-                                    // 时写入，保存动作本身不改署名。
+                                    // 上传前只保存编辑草稿，不提交回已安装目录；上传
+                                    // 作者等元数据也只进入随后导出的上传包。
                                     val activeSession = session
                                     if (activeSession != null && current.dirty) {
                                     busyMessage = context.getString(R.string.watch_editor_status_saving)
@@ -1372,11 +1481,7 @@ private fun WatchEditorRoute(
                                         refreshDraftPreview(activeSession)
                                         runCatching {
                                             withContext(Dispatchers.IO) {
-                                                if (activeSession.canSaveCurrentRevision) {
-                                                    activeSession.saveCurrentRevision()
-                                                } else {
-                                                    activeSession.save()
-                                                }
+                                                activeSession.save()
                                                 activeSession.snapshot()
                                             }
                                         }.onSuccess { next ->
@@ -1400,6 +1505,9 @@ private fun WatchEditorRoute(
                                 ),
                             )
                         },
+                        onImportWatchLong = {
+                            openInternalFileBrowser(EditorInternalImportKind.WATCH)
+                        },
                         onConvertWatch = {
                             conversionPicker.launch(
                                 arrayOf(
@@ -1407,6 +1515,9 @@ private fun WatchEditorRoute(
                                     "application/octet-stream",
                                 ),
                             )
+                        },
+                        onConvertWatchLong = {
+                            openInternalFileBrowser(EditorInternalImportKind.CONVERSION)
                         },
                         onPreviewRendererChanged = { previewRenderer = it },
                         onPreviewRefreshReady = { loadedToken ->
@@ -1435,7 +1546,8 @@ private fun WatchEditorRoute(
                         )
                     }
                     videoRequest?.let { request ->
-                        EditorVideoImportDialog(
+                        EditorVideoImportFlow(
+                            uri = request.uri,
                             info = request.info,
                             onDismiss = { videoRequest = null },
                             onConfirm = { options -> beginVideoImport(request, options) },
@@ -1455,6 +1567,10 @@ private fun WatchEditorRoute(
                             onDismiss = { showStoreUpload = false },
                         )
                     }
+                    InternalFileBrowserHost(
+                        request = internalFileBrowserRequest,
+                        onDismiss = { internalFileBrowserRequest = null },
+                    )
                 }
             }
         }
@@ -1550,9 +1666,13 @@ private fun WatchEditorScreen(
     onDeleteLayer: (WatchEditorLayerKey) -> Unit,
     onLiveAttributeChange: (WatchEditorLayerKey, Map<String, String?>) -> Unit,
     onImportImage: () -> Unit,
+    onImportImageLong: () -> Unit,
     onImportImageSequence: () -> Unit,
+    onImportImageSequenceLong: () -> Unit,
     onImportVideo: () -> Unit,
+    onImportVideoLong: () -> Unit,
     onImportFont: () -> Unit,
+    onImportFontLong: () -> Unit,
     onSaveAsNew: () -> Unit,
     onSave: () -> Unit,
     onRename: () -> Unit,
@@ -1561,7 +1681,9 @@ private fun WatchEditorScreen(
     onUpdateCanvasSize: (WatchCanvasSize) -> Unit,
     onUploadToStore: () -> Unit,
     onImportWatch: () -> Unit,
+    onImportWatchLong: () -> Unit,
     onConvertWatch: () -> Unit,
+    onConvertWatchLong: () -> Unit,
     onPreviewRefreshReady: (Int) -> Unit = {},
     onPreviewRefreshFailed: (Int) -> Unit = {},
     /**
@@ -1617,6 +1739,19 @@ private fun WatchEditorScreen(
             delay(1_000L)
             textThumbnailClockTick++
         }
+    }
+    val layerDragScope = rememberCoroutineScope()
+    val layerDragDensity = LocalDensity.current
+    var draggedLayerKey by remember { mutableStateOf<WatchEditorLayerKey?>(null) }
+    var draggedLayerOffsetY by remember { mutableStateOf(0f) }
+    var draggedLayerTargetOrder by remember { mutableStateOf<Int?>(null) }
+    val draftSizeBytes by produceState(
+        initialValue = 0L,
+        key1 = draftDirectory,
+        key2 = snapshot.resourcePaths,
+        key3 = previewToken,
+    ) {
+        value = withContext(Dispatchers.IO) { editorDirectorySizeBytes(draftDirectory) }
     }
     val treeRows = remember(snapshot.layers, collapsedLayerKeys) {
         buildWatchEditorTreeRows(layers = snapshot.layers, collapsedKeys = collapsedLayerKeys)
@@ -1750,7 +1885,7 @@ private fun WatchEditorScreen(
                         modifier = Modifier.size(36.dp),
                     ) {
                         Icon(
-                            MiuixIcons.ExpandLess,
+                            FlueMiuixIcons.ArrowUp,
                             contentDescription = stringResource(R.string.watch_editor_canvas_fullscreen),
                         )
                     }
@@ -1759,7 +1894,7 @@ private fun WatchEditorScreen(
                         modifier = Modifier.size(36.dp),
                     ) {
                         Icon(
-                            MiuixIcons.ExpandMore,
+                            FlueMiuixIcons.ArrowDown,
                             contentDescription = stringResource(R.string.watch_editor_panel_fullscreen),
                         )
                     }
@@ -1838,7 +1973,7 @@ private fun WatchEditorScreen(
                         modifier = Modifier.size(32.dp),
                     ) {
                         Icon(
-                            MiuixIcons.ExpandLess,
+                            FlueMiuixIcons.ArrowUp,
                             contentDescription = stringResource(R.string.watch_editor_return_split),
                         )
                     }
@@ -1998,6 +2133,8 @@ private fun WatchEditorScreen(
                                 hasChildren = row.hasChildren,
                                 expanded = row.expanded,
                                 enabled = busyMessage == null,
+                                dragging = draggedLayerKey == layer.key,
+                                dragOffsetY = if (draggedLayerKey == layer.key) draggedLayerOffsetY else 0f,
                                 onSelect = {
                                     onSelectLayer(layer.key)
                                     panel = WatchEditorPanel.PROPERTIES
@@ -2009,6 +2146,69 @@ private fun WatchEditorScreen(
                                     } else {
                                         collapsedLayerKeys + key
                                     }
+                                },
+                                onDragStart = {
+                                    draggedLayerKey = layer.key
+                                    draggedLayerOffsetY = 0f
+                                    draggedLayerTargetOrder = layer.order
+                                    onSelectLayer(layer.key)
+                                },
+                                onDrag = { deltaY ->
+                                    if (draggedLayerKey == layer.key) {
+                                        draggedLayerOffsetY += deltaY
+                                        val layout = layerListState.layoutInfo
+                                        val draggedInfo = layout.visibleItemsInfo.firstOrNull {
+                                            it.key == layer.key.value
+                                        }
+                                        if (draggedInfo != null) {
+                                            val draggedCenter = draggedInfo.offset +
+                                                draggedInfo.size / 2f + draggedLayerOffsetY
+                                            layout.visibleItemsInfo
+                                                .asSequence()
+                                                .mapNotNull { info ->
+                                                    val key = info.key as? String ?: return@mapNotNull null
+                                                    val rowLayer = treeRows.firstOrNull {
+                                                        it.layer.key.value == key
+                                                    }?.layer ?: return@mapNotNull null
+                                                    rowLayer.order to kotlin.math.abs(
+                                                        info.offset + info.size / 2f - draggedCenter,
+                                                    )
+                                                }
+                                                .minByOrNull { it.second }
+                                                ?.first
+                                                ?.let { draggedLayerTargetOrder = it }
+
+                                            val edgePx = with(layerDragDensity) { 48.dp.toPx() }
+                                            val stepPx = with(layerDragDensity) { 18.dp.toPx() }
+                                            val scrollDelta = when {
+                                                draggedCenter < layout.viewportStartOffset + edgePx -> -stepPx
+                                                draggedCenter > layout.viewportEndOffset - edgePx -> stepPx
+                                                else -> 0f
+                                            }
+                                            if (scrollDelta != 0f) {
+                                                val activeKey = layer.key
+                                                layerDragScope.launch {
+                                                    val consumed = layerListState.scrollBy(scrollDelta)
+                                                    if (draggedLayerKey == activeKey) {
+                                                        // Compensate the row translation so it remains under the finger.
+                                                        draggedLayerOffsetY += consumed
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                onDragEnd = {
+                                    val target = draggedLayerTargetOrder
+                                    draggedLayerKey = null
+                                    draggedLayerOffsetY = 0f
+                                    draggedLayerTargetOrder = null
+                                    if (target != null && target != layer.order) onMoveLayer(layer.key, target)
+                                },
+                                onDragCancel = {
+                                    draggedLayerKey = null
+                                    draggedLayerOffsetY = 0f
+                                    draggedLayerTargetOrder = null
                                 },
                                 onMove = { onMoveLayer(layer.key, it) },
                                 onDuplicate = { onDuplicateLayer(layer.key) },
@@ -2050,11 +2250,26 @@ private fun WatchEditorScreen(
                                     onLiveAttributeChange(selectedLayer.key, changes)
                                 },
                                 onImportImage = onImportImage,
+                                onImportImageLong = onImportImageLong,
                                 onImportImageSequence = onImportImageSequence,
+                                onImportImageSequenceLong = onImportImageSequenceLong,
                                 onImportVideo = onImportVideo,
+                                onImportVideoLong = onImportVideoLong,
                                 onImportFont = onImportFont,
+                                onImportFontLong = onImportFontLong,
                             )
                         }
+                    }
+                    item("current_watch_size") {
+                        Text(
+                            text = stringResource(
+                                R.string.watch_editor_current_watch_size_fmt,
+                                formatEditorFileSize(draftSizeBytes),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        )
                     }
                 }
 
@@ -2130,7 +2345,7 @@ private fun WatchEditorScreen(
                                     OutlinedButton(
                                         onClick = {
                                             bodySensorsPermissionLauncher.launch(
-                                                Manifest.permission.BODY_SENSORS,
+                                                requiredHeartRatePermission(),
                                             )
                                         },
                                         modifier = Modifier.fillMaxWidth(),
@@ -2168,24 +2383,22 @@ private fun WatchEditorScreen(
                             ) {
                                 Text(stringResource(R.string.watch_editor_rename))
                             }
-                            OutlinedButton(
+                            EditorLongPressImportButton(
+                                label = stringResource(R.string.watch_editor_import_watch),
+                                enabled = busyMessage == null,
                                 onClick = onImportWatch,
-                                enabled = busyMessage == null,
+                                onLongClick = onImportWatchLong,
+                                showIcon = true,
                                 modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Icon(MiuixIcons.File, contentDescription = null)
-                                Spacer(Modifier.width(6.dp))
-                                Text(stringResource(R.string.watch_editor_import_watch))
-                            }
-                            OutlinedButton(
+                            )
+                            EditorLongPressImportButton(
+                                label = stringResource(R.string.watch_editor_import_wff),
+                                enabled = busyMessage == null,
                                 onClick = onConvertWatch,
-                                enabled = busyMessage == null,
+                                onLongClick = onConvertWatchLong,
+                                showIcon = true,
                                 modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Icon(MiuixIcons.File, contentDescription = null)
-                                Spacer(Modifier.width(6.dp))
-                                Text(stringResource(R.string.watch_editor_import_wff))
-                            }
+                            )
                             OutlinedButton(
                                 onClick = onExport,
                                 enabled = busyMessage == null,
@@ -2224,9 +2437,10 @@ private fun WatchEditorScreen(
         ) {
             IconButton(onClick = { editorLayout = WatchEditorLayout.SPLIT }) {
                 Icon(
-                    MiuixIcons.ExpandMore,
+                    FlueMiuixIcons.Minimize,
                     contentDescription = stringResource(R.string.watch_editor_exit_fullscreen),
                     tint = Color.White,
+                    modifier = Modifier.size(20.dp),
                 )
             }
         }
@@ -2462,6 +2676,13 @@ private fun WatchEditorPreview(
     val latestBegin = rememberUpdatedState(onBeginTransform)
     val latestUpdate = rememberUpdatedState(onUpdateTransform)
     val latestEnd = rememberUpdatedState(onEndTransform)
+    val animatedPreviewLayerIndex = selectedLayer
+        ?.takeIf { layer ->
+            layer.type.equals("gif", ignoreCase = true) ||
+                layer.type.equals("image_gif", ignoreCase = true) ||
+                '`' in layer.attributes["path"].orEmpty()
+        }
+        ?.order
     val dataProvider = rememberWatchmakerWatchDataProvider(
         active = true,
         permissionRevision = bodySensorsPermissionGranted,
@@ -2488,6 +2709,7 @@ private fun WatchEditorPreview(
             },
             update = { view ->
                 view.setWatchDataProvider(dataProvider)
+                view.setEditorAnimatedImageLayer(animatedPreviewLayerIndex)
                 view.bind(
                     descriptor = descriptor,
                     refreshToken = refreshToken,
@@ -2499,6 +2721,7 @@ private fun WatchEditorPreview(
                         onRefreshFailed(refreshToken)
                     },
                     onSourceReady = onRefreshReady,
+                    textEntryAnimationEnabled = false,
                 )
             },
             onRelease = { view ->
@@ -2939,7 +3162,7 @@ private fun EditorSelectionOverlay(
 /**
  * Full-screen crop step between picking an image and writing it into the
  * draft. Free-form by default with 1:1 and physical-screen presets; the frame
- * can be moved, corner-resized and pinch-scaled. Decoding is downsampled so a
+ * can be moved, edge/corner-resized and pinch-scaled. Decoding is downsampled so a
  * large camera picture never materialises at full resolution.
  */
 @Composable
@@ -3222,152 +3445,6 @@ private fun EditorImageCropOverlay(
 }
 
 @Composable
-private fun EditorVideoImportDialog(
-    info: WatchEditorVideoInfo,
-    onDismiss: () -> Unit,
-    onConfirm: (WatchEditorVideoImportOptions) -> Unit,
-) {
-    val defaultSize = remember(info) { defaultEditorVideoSize(info) }
-    var startSeconds by remember(info) { mutableStateOf("0") }
-    var endSeconds by remember(info) {
-        mutableStateOf(formatEditorVideoSeconds(info.durationMs))
-    }
-    var width by remember(info) { mutableStateOf(defaultSize.first.toString()) }
-    var height by remember(info) { mutableStateOf(defaultSize.second.toString()) }
-    var frameRate by remember(info) { mutableStateOf("10") }
-    var bitrate by remember(info) { mutableStateOf("1800") }
-
-    val options = remember(startSeconds, endSeconds, width, height, frameRate, bitrate, info) {
-        runCatching {
-            val startMs = ((startSeconds.toDoubleOrNull() ?: error("start")) * 1_000.0)
-                .roundToLong()
-            val endMs = ((endSeconds.toDoubleOrNull() ?: error("end")) * 1_000.0)
-                .roundToLong()
-            require(startMs >= 0L && endMs <= info.durationMs && endMs > startMs)
-            WatchEditorVideoImportOptions(
-                startMs = startMs,
-                endMs = endMs,
-                maxWidth = width.toIntOrNull() ?: error("width"),
-                maxHeight = height.toIntOrNull() ?: error("height"),
-                frameRate = frameRate.toFloatOrNull() ?: error("fps"),
-                bitrateKbps = bitrate.toIntOrNull() ?: error("bitrate"),
-            )
-        }.getOrNull()
-    }
-    val estimatedFrames = options?.let {
-        (it.durationMs / 1_000.0 * it.frameRate).roundToInt().coerceAtLeast(1)
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.watch_editor_import_video)) },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 430.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    stringResource(
-                        R.string.watch_editor_video_source_fmt,
-                        info.width,
-                        info.height,
-                        formatEditorVideoSeconds(info.durationMs),
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = startSeconds,
-                        onValueChange = { startSeconds = it },
-                        label = { Text(stringResource(R.string.watch_editor_video_start_seconds)) },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedTextField(
-                        value = endSeconds,
-                        onValueChange = { endSeconds = it },
-                        label = { Text(stringResource(R.string.watch_editor_video_end_seconds)) },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                Text(
-                    stringResource(R.string.watch_editor_video_max_resolution),
-                    style = MaterialTheme.typography.labelMedium,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = width,
-                        onValueChange = { width = it.filter(Char::isDigit) },
-                        label = { Text(stringResource(R.string.watch_editor_width)) },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedTextField(
-                        value = height,
-                        onValueChange = { height = it.filter(Char::isDigit) },
-                        label = { Text(stringResource(R.string.watch_editor_height)) },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = frameRate,
-                        onValueChange = { frameRate = it },
-                        label = { Text(stringResource(R.string.watch_editor_video_frame_rate)) },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    OutlinedTextField(
-                        value = bitrate,
-                        onValueChange = { bitrate = it.filter(Char::isDigit) },
-                        label = { Text(stringResource(R.string.watch_editor_video_bitrate)) },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                Text(
-                    if (options == null) {
-                        stringResource(R.string.watch_editor_video_invalid_options)
-                    } else {
-                        stringResource(
-                            R.string.watch_editor_video_estimated_frames_fmt,
-                            estimatedFrames ?: 0,
-                        )
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (options == null) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { options?.let(onConfirm) },
-                enabled = options != null,
-            ) { Text(stringResource(R.string.watch_editor_start_conversion)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.watch_editor_cancel)) }
-        },
-    )
-}
-
-@Composable
 private fun EditorVideoConversionProgressDialog(
     progress: Float,
     onCancel: () -> Unit,
@@ -3398,15 +3475,6 @@ private fun EditorVideoConversionProgressDialog(
     )
 }
 
-private fun defaultEditorVideoSize(info: WatchEditorVideoInfo, maximum: Int = 512): Pair<Int, Int> {
-    val scale = minOf(1f, maximum.toFloat() / maxOf(info.width, info.height).coerceAtLeast(1))
-    fun even(value: Int): Int = value.coerceIn(16, 4096).let { it - it % 2 }
-    return even((info.width * scale).roundToInt()) to even((info.height * scale).roundToInt())
-}
-
-private fun formatEditorVideoSeconds(milliseconds: Long): String =
-    String.format(Locale.US, "%.3f", milliseconds / 1_000.0).trimEnd('0').trimEnd('.')
-
 @StringRes
 private fun watchEditorCropAspectLabel(aspect: WatchEditorCropAspect): Int = when (aspect) {
     WatchEditorCropAspect.FREE -> R.string.watch_editor_crop_free
@@ -3425,8 +3493,14 @@ private fun EditorLayerRow(
     hasChildren: Boolean,
     expanded: Boolean,
     enabled: Boolean,
+    dragging: Boolean,
+    dragOffsetY: Float,
     onSelect: () -> Unit,
     onToggleExpanded: () -> Unit,
+    onDragStart: () -> Unit,
+    onDrag: (Float) -> Unit,
+    onDragEnd: () -> Unit,
+    onDragCancel: () -> Unit,
     onMove: (Int) -> Unit,
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
@@ -3440,9 +3514,26 @@ private fun EditorLayerRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .zIndex(if (dragging) 2f else 0f)
+            .graphicsLayer {
+                translationY = dragOffsetY
+                shadowElevation = if (dragging) 10.dp.toPx() else 0f
+            }
             .heightIn(min = 64.dp)
             .background(container, RoundedCornerShape(8.dp))
             .clickable(enabled = enabled, onClick = onSelect)
+            .pointerInput(layer.key, enabled) {
+                if (!enabled) return@pointerInput
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { onDragStart() },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        onDrag(dragAmount.y)
+                    },
+                    onDragEnd = onDragEnd,
+                    onDragCancel = onDragCancel,
+                )
+            }
             .padding(start = (10 + depth * 18).dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
         verticalArrangement = Arrangement.spacedBy(7.dp),
     ) {
@@ -3544,7 +3635,7 @@ private fun EditorLayerRow(
                 modifier = Modifier.size(48.dp),
             ) {
                 Icon(
-                    MiuixIcons.ExpandLess,
+                    FlueMiuixIcons.ArrowUp,
                     contentDescription = stringResource(R.string.watch_editor_move_up),
                 )
             }
@@ -3554,7 +3645,7 @@ private fun EditorLayerRow(
                 modifier = Modifier.size(48.dp),
             ) {
                 Icon(
-                    MiuixIcons.ExpandMore,
+                    FlueMiuixIcons.ArrowDown,
                     contentDescription = stringResource(R.string.watch_editor_move_down),
                 )
             }
@@ -3574,6 +3665,46 @@ private fun EditorLayerRow(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun EditorLongPressImportButton(
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    showIcon: Boolean = false,
+) {
+    val contentColor = if (enabled) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    }
+    Surface(
+        modifier = modifier.combinedClickable(
+            enabled = enabled,
+            onClick = onClick,
+            onLongClick = onLongClick,
+        ),
+        color = MaterialTheme.colorScheme.surface,
+        contentColor = contentColor,
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, contentColor.copy(alpha = if (enabled) 1f else 0.5f)),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (showIcon) {
+                Icon(MiuixIcons.File, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(label)
+        }
+    }
+}
+
 /**
  * Properties editing with live preview: every keystroke lands in the session
  * through a debounced applier, so the canvas follows within ~150ms and no
@@ -3586,10 +3717,14 @@ private fun LayerPropertiesEditor(
     enabled: Boolean,
     onLiveChange: (Map<String, String?>) -> Unit,
     onImportImage: () -> Unit,
+    onImportImageLong: () -> Unit,
     onImportImageSequence: () -> Unit,
+    onImportImageSequenceLong: () -> Unit,
     onImportVideo: () -> Unit,
+    onImportVideoLong: () -> Unit,
     fontOptions: List<String> = emptyList(),
     onImportFont: (() -> Unit)? = null,
+    onImportFontLong: (() -> Unit)? = null,
 ) {
     val localizedLayerType = watchEditorLayerTypeLabel(layer.type)
     val editableAttributes = remember(layer.type) { editableAttributesFor(layer.type) }
@@ -3648,17 +3783,26 @@ private fun LayerPropertiesEditor(
             layer.type.equals("image_gif", ignoreCase = true) ||
             layer.type.equals("gif", ignoreCase = true)
         if (layer.type.equals("image", ignoreCase = true)) {
-            OutlinedButton(onClick = onImportImage, enabled = enabled) {
-                Text(stringResource(R.string.watch_editor_import_image_path))
-            }
+            EditorLongPressImportButton(
+                label = stringResource(R.string.watch_editor_import_image_path),
+                enabled = enabled,
+                onClick = onImportImage,
+                onLongClick = onImportImageLong,
+            )
         }
         if (supportsAnimatedImageImport) {
-            OutlinedButton(onClick = onImportImageSequence, enabled = enabled) {
-                Text(stringResource(R.string.watch_editor_import_image_sequence))
-            }
-            OutlinedButton(onClick = onImportVideo, enabled = enabled) {
-                Text(stringResource(R.string.watch_editor_import_video_frames))
-            }
+            EditorLongPressImportButton(
+                label = stringResource(R.string.watch_editor_import_image_sequence),
+                enabled = enabled,
+                onClick = onImportImageSequence,
+                onLongClick = onImportImageSequenceLong,
+            )
+            EditorLongPressImportButton(
+                label = stringResource(R.string.watch_editor_import_video_frames),
+                enabled = enabled,
+                onClick = onImportVideo,
+                onLongClick = onImportVideoLong,
+            )
         }
         if (layer.type.equals("text", ignoreCase = true) ||
             layer.type.equals("text_curved", ignoreCase = true)
@@ -3720,6 +3864,7 @@ private fun LayerPropertiesEditor(
                     onLiveChange(mapOf("font" to name.ifBlank { null }))
                 },
                 onImportFont = onImportFont,
+                onImportFontLong = onImportFontLong,
             )
             EditorOutlineSection(
                 layer = layer,
@@ -4154,6 +4299,8 @@ private fun EditorStoreUploadOverlay(
     var rememberUsername by remember { mutableStateOf(false) }
     var rememberPassword by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf<String?>(null) }
+    var authAction by remember { mutableStateOf<WatchStoreAuthAction?>(null) }
+    var authPage by remember { mutableStateOf(WatchStoreAuthPage.LOGIN) }
     var formError by remember { mutableStateOf<String?>(null) }
     var uploadPercent by remember { mutableStateOf<Int?>(null) }
     var name by remember {
@@ -4229,29 +4376,34 @@ private fun EditorStoreUploadOverlay(
         busy = context.getString(
             if (register) R.string.watch_store_status_registering else R.string.watch_store_status_logging_in,
         )
+        authAction = if (register) WatchStoreAuthAction.REGISTER else WatchStoreAuthAction.LOGIN
         formError = null
         scope.launch {
-            runCatching {
-                watchStoreLoginOrRegister(
-                    api = api,
-                    authStore = authStore,
-                    credentialStore = credentialStore,
-                    username = cleanUsername,
-                    password = password,
-                    register = register,
-                    rememberUsername = rememberUsername,
-                    rememberPassword = rememberPassword,
-                )
-            }.onSuccess { stored ->
-                password = ""
-                auth = stored
-                // 刚登录 / 注册完：用户没手改过就填成这个账户名。
-                if (!authorEdited) author = stored.username
-            }.onFailure { error ->
-                if (error is CancellationException) throw error
-                formError = watchStoreAuthErrorMessage(context, error, register)
+            try {
+                runCatching {
+                    watchStoreLoginOrRegister(
+                        api = api,
+                        authStore = authStore,
+                        credentialStore = credentialStore,
+                        username = cleanUsername,
+                        password = password,
+                        register = register,
+                        rememberUsername = rememberUsername,
+                        rememberPassword = rememberPassword,
+                    )
+                }.onSuccess { stored ->
+                    password = ""
+                    auth = stored
+                    // 刚登录 / 注册完：用户没手改过就填成这个账户名。
+                    if (!authorEdited) author = stored.username
+                }.onFailure { error ->
+                    if (error is CancellationException) throw error
+                    formError = watchStoreAuthErrorMessage(context, error, register)
+                }
+            } finally {
+                busy = null
+                authAction = null
             }
-            busy = null
         }
     }
 
@@ -4282,19 +4434,13 @@ private fun EditorStoreUploadOverlay(
                 withContext(Dispatchers.IO) {
                     val archive = File.createTempFile("flue_store_upload_", ".watch", context.cacheDir)
                     try {
-                        // 作者写回草稿并落盘，再导出——上传包与本地存档同源。
-                        session.updateRootAttributes(
-                            mapOf(
+                        session.exportWatch(
+                            archive,
+                            rootAttributeOverrides = mapOf(
                                 "designer_name" to effectiveAuthor,
                                 "author" to effectiveAuthor,
                             ),
                         )
-                        if (session.canSaveCurrentRevision) {
-                            session.saveCurrentRevision()
-                        } else {
-                            session.save()
-                        }
-                        session.exportWatch(archive)
                         if (archive.length() > HttpWatchStoreApi.MAX_UPLOAD_BYTES) {
                             throw WatchStorePayloadTooLargeException(HttpWatchStoreApi.MAX_UPLOAD_BYTES)
                         }
@@ -4434,7 +4580,13 @@ private fun EditorStoreUploadOverlay(
                         rememberUsername = keepUsername
                         rememberPassword = keepPassword
                     },
+                    authPage = authPage,
+                    onAuthPageChange = { page ->
+                        authPage = page
+                        formError = null
+                    },
                     enabled = busy == null,
+                    loadingAction = authAction,
                     onLogin = { authenticate(register = false) },
                     onRegister = { authenticate(register = true) },
                 )
@@ -4720,13 +4872,21 @@ private fun attributeLabelRes(name: String): Int = when (name) {
 private fun Context.localizedEditorError(
     @StringRes messageRes: Int,
     error: Throwable,
+    includeDetails: Boolean = false,
 ): String {
     val localizedMessage = getString(messageRes)
     Log.e(WATCH_EDITOR_LOG_TAG, localizedMessage, error)
-    return localizedMessage
+    if (!includeDetails) return localizedMessage
+    val detail = error.message
+        ?.trim()
+        ?.takeIf(String::isNotBlank)
+        ?.take(MAX_EDITOR_ERROR_DETAIL_CHARS)
+        ?: error.javaClass.simpleName
+    return if (detail == localizedMessage) localizedMessage else "$localizedMessage\n\n$detail"
 }
 
 private const val WATCH_EDITOR_LOG_TAG = "WatchEditor"
+private const val MAX_EDITOR_ERROR_DETAIL_CHARS = 8_192
 
 /** 颜色行：色板预览 + 打开取色盘。写回与颜色文本框同一个通道。 */
 @Composable
@@ -4956,6 +5116,18 @@ private fun EditorOutlineSection(
 private fun formatEditorOutlineSize(value: Float): String =
     if (value % 1f == 0f) value.toInt().toString() else value.toString()
 
+private fun editorDirectorySizeBytes(directory: File): Long = runCatching {
+    directory.walkTopDown()
+        .filter(File::isFile)
+        .sumOf(File::length)
+}.getOrDefault(0L)
+
+private fun formatEditorFileSize(bytes: Long): String = when {
+    bytes >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+    bytes >= 1024L -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+    else -> "$bytes B"
+}
+
 private val EDITOR_OUTLINE_MODE_OPTIONS = listOf(
     WatchOutlineMode.NONE to R.string.watch_editor_none,
     WatchOutlineMode.OUTLINE to R.string.watch_editor_outline,
@@ -4970,6 +5142,7 @@ private fun EditorFontSelector(
     enabled: Boolean,
     onSelect: (String) -> Unit,
     onImportFont: (() -> Unit)?,
+    onImportFontLong: (() -> Unit)?,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(stringResource(R.string.watch_editor_font), fontWeight = FontWeight.SemiBold)
@@ -4998,12 +5171,14 @@ private fun EditorFontSelector(
                 )
             }
         }
-        if (onImportFont != null) {
-            OutlinedButton(onClick = onImportFont, enabled = enabled) {
-                Icon(MiuixIcons.File, contentDescription = null, Modifier.size(16.dp))
-                Spacer(Modifier.width(4.dp))
-                Text(stringResource(R.string.watch_editor_import_font_formats))
-            }
+        if (onImportFont != null && onImportFontLong != null) {
+            EditorLongPressImportButton(
+                label = stringResource(R.string.watch_editor_import_font_formats),
+                enabled = enabled,
+                onClick = onImportFont,
+                onLongClick = onImportFontLong,
+                showIcon = true,
+            )
         }
     }
 }
@@ -5072,10 +5247,7 @@ private fun safeWatchFileName(raw: String?): String {
 }
 
 private fun hasEditorBodySensorsPermission(context: Context): Boolean =
-    ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.BODY_SENSORS,
-    ) == PackageManager.PERMISSION_GRANTED
+    hasHeartRatePermission(context)
 
 private val BASIC_LAYER_TYPES = listOf(
     "text" to R.string.watch_editor_layer_text,
@@ -5179,3 +5351,7 @@ private val FONT_CAPABLE_LAYER_TYPES = setOf(
 
 /** 字体资源扩展名（矢量 + 位图字体索引）。 */
 private val EDITOR_FONT_EXTENSIONS = setOf("ttf", "otf", "ttc")
+private val EDITOR_INTERNAL_IMAGE_EXTENSIONS =
+    setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "heic", "heif")
+private val EDITOR_INTERNAL_VIDEO_EXTENSIONS =
+    setOf("mp4", "mkv", "webm", "mov", "avi", "m4v", "3gp")

@@ -77,6 +77,7 @@ import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.watchface.WatchFaceDescriptors
 import com.flue.launcher.watchface.jbwatch.JBWATCH_ID_PREFIX
 import com.flue.launcher.watchface.jbwatch.JbWatchFaceStorage
+import com.flue.launcher.watchface.editor.WatchEditorSession
 import com.flue.launcher.watchface.standard.WATCHMAKER_ID_PREFIX
 import com.flue.launcher.watchface.standard.WatchDateLocale
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStorage
@@ -176,6 +177,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_DOUBLE_TAP_LOCK_SCREEN = booleanPreferencesKey("double_tap_lock_screen_enabled")
         val KEY_POWER_MENU_BUTTON = booleanPreferencesKey("power_menu_button_enabled")
         val KEY_WATCHFACE_CHARGING_POWER_TEXT = booleanPreferencesKey("watchface_charging_power_text")
+        val KEY_WATCHFACE_TEXT_ENTRY_ANIMATION = booleanPreferencesKey("watchface_text_entry_animation")
         val KEY_WATCHFACE_STATUS_INDICATORS = booleanPreferencesKey("watchface_status_indicators")
         val KEY_WATCHFACE_BOTTOM_FADE = booleanPreferencesKey("watchface_bottom_fade_enabled")
         val KEY_WATCHMAKER_FORCE_FILL = booleanPreferencesKey("watchmaker_force_fill")
@@ -411,7 +413,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val appListWatchFaceColors: StateFlow<Boolean> = _appListWatchFaceColors.asStateFlow()
     private val _appListRowBorderEnabled = MutableStateFlow(false)
     val appListRowBorderEnabled: StateFlow<Boolean> = _appListRowBorderEnabled.asStateFlow()
-    private val _appListFoldersEnabled = MutableStateFlow(true)
+    private val _appListFoldersEnabled = MutableStateFlow(false)
     val appListFoldersEnabled: StateFlow<Boolean> = _appListFoldersEnabled.asStateFlow()
     private val _musicTextSwitchAnimation = MutableStateFlow(MusicTextSwitchAnimations.DEFAULT_ID)
     val musicTextSwitchAnimation: StateFlow<String> = _musicTextSwitchAnimation.asStateFlow()
@@ -470,6 +472,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val powerMenuButtonEnabled: StateFlow<Boolean> = _powerMenuButtonEnabled.asStateFlow()
     private val _watchFaceChargingPowerText = MutableStateFlow(true)
     val watchFaceChargingPowerText: StateFlow<Boolean> = _watchFaceChargingPowerText.asStateFlow()
+    private val _watchFaceTextEntryAnimation = MutableStateFlow(true)
+    val watchFaceTextEntryAnimation: StateFlow<Boolean> = _watchFaceTextEntryAnimation.asStateFlow()
     private val _watchFaceStatusIndicators = MutableStateFlow(true)
     val watchFaceStatusIndicators: StateFlow<Boolean> = _watchFaceStatusIndicators.asStateFlow()
     // 表盘底部渐隐遮罩默认关闭；用户可在“更多表盘选项”里手动开启。
@@ -504,13 +508,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _selectedIconPackPackage = MutableStateFlow<String?>(null)
     val selectedIconPackPackage: StateFlow<String?> = _selectedIconPackPackage.asStateFlow()
 
-    private val _availableWatchFaces = MutableStateFlow(cachedWatchFaces ?: WatchFaceDescriptors.builtInDescriptors())
+    private val _availableWatchFaces = MutableStateFlow(
+        cachedWatchFaces?.let { WatchFaceDescriptors.localizeBuiltIns(application, it) }
+            ?: WatchFaceDescriptors.builtInDescriptors(application),
+    )
     val availableWatchFaces: StateFlow<List<WatchFaceDescriptor>> = _availableWatchFaces.asStateFlow()
 
     private val _selectedWatchFaceId = MutableStateFlow(BUILT_IN_WATCHFACE_ID)
     val selectedWatchFaceId: StateFlow<String> = _selectedWatchFaceId.asStateFlow()
 
-    private val _selectedWatchFace = MutableStateFlow(WatchFaceDescriptors.builtInDescriptor(BUILT_IN_WATCHFACE_ID))
+    private val _selectedWatchFace = MutableStateFlow(
+        WatchFaceDescriptors.builtInDescriptor(application, BUILT_IN_WATCHFACE_ID),
+    )
     val selectedWatchFace: StateFlow<WatchFaceDescriptor> = _selectedWatchFace.asStateFlow()
 
     private val _watchFaceSelectionReady = MutableStateFlow(false)
@@ -912,10 +921,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListRowBorderEnabled.value = loadedAppListRowBorder
                 }
 
-                // Native folder creation is a supported baseline capability.
-                // A stored false remains authoritative for existing users;
-                // only installs without the legacy key receive the new default.
-                val loadedAppListFoldersEnabled = prefs[KEY_APP_LIST_FOLDERS_ENABLED] ?: true
+                // Existing users keep their explicit preference. Fresh installs
+                // default synthetic folder creation to off.
+                val loadedAppListFoldersEnabled = prefs[KEY_APP_LIST_FOLDERS_ENABLED] ?: false
                 if (_appListFoldersEnabled.value != loadedAppListFoldersEnabled) {
                     _appListFoldersEnabled.value = loadedAppListFoldersEnabled
                 }
@@ -1008,6 +1016,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedWatchFaceChargingPowerText = prefs[KEY_WATCHFACE_CHARGING_POWER_TEXT] ?: true
                 if (_watchFaceChargingPowerText.value != loadedWatchFaceChargingPowerText) {
                     _watchFaceChargingPowerText.value = loadedWatchFaceChargingPowerText
+                }
+
+                val loadedWatchFaceTextEntryAnimation = prefs[KEY_WATCHFACE_TEXT_ENTRY_ANIMATION] ?: true
+                if (_watchFaceTextEntryAnimation.value != loadedWatchFaceTextEntryAnimation) {
+                    _watchFaceTextEntryAnimation.value = loadedWatchFaceTextEntryAnimation
                 }
 
                 val loadedWatchFaceStatusIndicators = prefs[KEY_WATCHFACE_STATUS_INDICATORS] ?: true
@@ -1842,13 +1855,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun moveItemOutOfFolder(folder: AppInfo, item: AppInfo) {
         if (!folder.isFolder) return
+        // Capture the authoritative pre-mutation position. The repository now
+        // publishes the moved item synchronously so the closing overlay cannot
+        // reveal the stale folder preview underneath; reading apps afterwards
+        // would lose the old folder slot and append the item in the wrong place.
+        val currentOrder = apps.value.map { it.componentKey }.toMutableList()
+        val folderIndex = currentOrder.indexOf(folder.componentKey).takeIf { it >= 0 }
+            ?: currentOrder.size
         val mutation = appRepository.moveItemOutOfFolder(folder.componentKey, item.componentKey)
         if (!mutation.succeeded) return
         val remainingKeys = mutation.itemKeys
         val remainingItems = appRepository.itemsForKeys(remainingKeys)
         val dissolvesFolder = remainingKeys.size <= 1
-        val currentOrder = apps.value.map { it.componentKey }.toMutableList()
-        val folderIndex = currentOrder.indexOf(folder.componentKey).takeIf { it >= 0 } ?: currentOrder.size
         if (dissolvesFolder) {
             currentOrder.remove(folder.componentKey)
             val insertAt = folderIndex.coerceIn(0, currentOrder.size)
@@ -1864,11 +1882,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             currentOrder.add((insertAt + offset).coerceIn(0, currentOrder.size), item.componentKey)
         }
         setAppOrder(currentOrder)
-        if (dissolvesFolder) {
-            closeFolder()
-        } else {
-            _openFolderItems.value = remainingItems
-        }
+        // The overlay owns its 180 ms exit animation and calls closeFolder()
+        // afterwards. Clearing openFolder here unmounted it in the same frame,
+        // leaving the stale composed folder preview visible in the backdrop.
+        _openFolderItems.value = remainingItems
     }
 
     fun addItemsToFolder(folder: AppInfo, items: List<AppInfo>) {
@@ -2277,6 +2294,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_WATCHFACE_CHARGING_POWER_TEXT] = enabled } }
     }
 
+    fun setWatchFaceTextEntryAnimationEnabled(enabled: Boolean) {
+        _watchFaceTextEntryAnimation.value = enabled
+        persist { store.edit { it[KEY_WATCHFACE_TEXT_ENTRY_ANIMATION] = enabled } }
+    }
+
     fun setWatchFaceStatusIndicatorsEnabled(enabled: Boolean) {
         _watchFaceStatusIndicators.value = enabled
         persist { store.edit { it[KEY_WATCHFACE_STATUS_INDICATORS] = enabled } }
@@ -2495,12 +2517,22 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     /** Installs a community-store download through the standard .watch path. */
-    suspend fun installWatchStoreArchive(archive: File): Result<WatchFaceDescriptor> {
+    suspend fun installWatchStoreArchive(
+        archive: File,
+        installAsRound: Boolean,
+    ): Result<WatchFaceDescriptor> {
         return runCatching {
             watchFaceRefreshJob?.cancel()
             require(archive.isFile) { "市场下载的 .watch 文件不存在" }
             val descriptor = withContext(Dispatchers.IO) {
-                WatchmakerWatchFaceStorage.importArchiveFile(getApplication(), archive)
+                val imported = WatchmakerWatchFaceStorage.importArchiveFile(getApplication(), archive)
+                WatchEditorSession.open(getApplication(), imported).use { editor ->
+                    editor.updateRootAttribute("shape", if (installAsRound) "R" else "S")
+                    editor.saveCurrentRevision()
+                }
+                WatchmakerWatchFaceStorage.scan(getApplication())
+                    .firstOrNull { it.id == imported.id }
+                    ?: imported
             }
             finishImportedWatchFaceImport(descriptor)
         }
@@ -2654,7 +2686,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private fun scanAllWatchFaces(): List<WatchFaceDescriptor> {
         val context = getApplication<Application>()
-        return WatchFaceDescriptors.builtInDescriptors() +
+        return WatchFaceDescriptors.builtInDescriptors(context) +
             JbWatchFaceStorage.scan(context) +
             WatchmakerWatchFaceStorage.scan(context)
     }
@@ -3135,6 +3167,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _doubleTapLockScreenEnabled.value = false
         _powerMenuButtonEnabled.value = false
         _watchFaceChargingPowerText.value = true
+        _watchFaceTextEntryAnimation.value = true
         _watchFaceStatusIndicators.value = true
         _watchFaceBottomFadeEnabled.value = false
         _watchmakerForceFill.value = false
@@ -3143,7 +3176,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _hiddenApps.value = emptySet()
         _selectedIconPackPackage.value = null
         _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
-        _selectedWatchFace.value = WatchFaceDescriptors.builtInDescriptor(BUILT_IN_WATCHFACE_ID)
+        _selectedWatchFace.value = WatchFaceDescriptors.builtInDescriptor(
+            getApplication<Application>(),
+            BUILT_IN_WATCHFACE_ID,
+        )
         _watchFaceLastError.value = null
         _builtInPhotoClockPosition.value = WatchClockPosition.CENTER
         _builtInVideoClockPosition.value = WatchClockPosition.CENTER
@@ -3218,7 +3254,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_OVERLAY_MASK_CORNER_RADIUS_DP] = DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP
                 it[KEY_APP_LIST_WATCHFACE_COLORS] = false
                 it[KEY_APP_LIST_ROW_BORDER] = false
-                it[KEY_APP_LIST_FOLDERS_ENABLED] = true
+                it[KEY_APP_LIST_FOLDERS_ENABLED] = false
                 it.remove(KEY_REMOVED_FAST_FLOW_ANIMATION)
                 it[KEY_MUSIC_TEXT_SWITCH_ANIMATION] = MusicTextSwitchAnimations.DEFAULT_ID
                 it[KEY_TWO_TONE_ICONS] = false
@@ -3246,6 +3282,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_DOUBLE_TAP_LOCK_SCREEN] = false
                 it[KEY_POWER_MENU_BUTTON] = false
                 it[KEY_WATCHFACE_CHARGING_POWER_TEXT] = true
+                it[KEY_WATCHFACE_TEXT_ENTRY_ANIMATION] = true
                 it[KEY_WATCHFACE_STATUS_INDICATORS] = true
                 it[KEY_WATCHFACE_BOTTOM_FADE] = false
                 it[KEY_WATCHMAKER_FORCE_FILL] = false
@@ -3351,7 +3388,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             watchFaceScanHydrated -> {
                 val fallback = available.firstOrNull { it.id == BUILT_IN_WATCHFACE_ID }
                     ?: available.firstOrNull()
-                    ?: WatchFaceDescriptors.builtInDescriptor(BUILT_IN_WATCHFACE_ID)
+                    ?: WatchFaceDescriptors.builtInDescriptor(
+                        getApplication<Application>(),
+                        BUILT_IN_WATCHFACE_ID,
+                    )
                 _selectedWatchFace.value = fallback
                 _selectedWatchFaceId.value = fallback.id
                 if (watchFacePrefsHydrated && requestedId != fallback.id) {
@@ -3361,7 +3401,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 }
             }
             else -> {
-                _selectedWatchFace.value = WatchFaceDescriptors.builtInDescriptor(BUILT_IN_WATCHFACE_ID)
+                _selectedWatchFace.value = WatchFaceDescriptors.builtInDescriptor(
+                    getApplication<Application>(),
+                    BUILT_IN_WATCHFACE_ID,
+                )
             }
         }
 

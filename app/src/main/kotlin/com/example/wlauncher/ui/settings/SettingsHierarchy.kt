@@ -190,6 +190,12 @@ object SettingsHierarchy {
                 prefKey = "watchface_bottom_fade_enabled"
             ),
             SettingsEntry.Toggle(
+                id = "watchface_text_entry_animation",
+                title = "表盘文字飞入动画",
+                prefKey = "watchface_text_entry_animation",
+                subtitle = "每次进入表盘时重播文字进入动画"
+            ),
+            SettingsEntry.Toggle(
                 id = "watchface_status_indicators",
                 title = "表盘状态提示",
                 prefKey = "watchface_status_indicators",

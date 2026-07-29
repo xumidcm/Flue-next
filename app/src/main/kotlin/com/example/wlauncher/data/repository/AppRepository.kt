@@ -73,7 +73,9 @@ class AppRepository(private val context: Context) {
         // 版本 4：自适应图标改为自绘抗锯齿裁剪，旧缓存位图带黑色锯齿边，必须整体重建。
         // 版本 5：文件夹合成底板从 0.24 圆角矩形改为整圆，旧缓存里那张方底板
         //         不会自己刷新，必须靠版本号顶掉。
-        private const val APP_LIST_CACHE_VERSION = 5
+        // 版本 6：仅文件夹未打开时的四宫格预览子图标增加 MIUIX 圆角裁切；
+        //         已缓存的旧直角预览必须重建，文件夹弹层内的真实图标不受影响。
+        private const val APP_LIST_CACHE_VERSION = 6
 
         /** 自适应图标图层与可见区域的比例（108/72）。 */
         private const val ADAPTIVE_ICON_LAYER_SCALE = 108f / 72f
@@ -353,7 +355,10 @@ class AppRepository(private val context: Context) {
      *
      * 前提是已经有过一次完整扫描（[freshScanPublished]）；否则回落全量刷新。
      */
-    private fun refreshFolderCompositionOnly(iconSize: Int = currentIconSize) {
+    private fun refreshFolderCompositionOnly(
+        iconSize: Int = currentIconSize,
+        persistCachedSnapshot: Boolean = true,
+    ) {
         if (!freshScanPublished) {
             refreshAsync(iconSize)
             return
@@ -363,7 +368,10 @@ class AppRepository(private val context: Context) {
         // 依据就是 isCurrentRefresh()。不推进 generation 的话，一个在文件夹
         // 写盘之前就读过 loadFolders() 的全量刷新会在我们发布之后，带着「还
         // 没有这个文件夹」的旧快照覆盖回来——文件夹刚出现又消失。
-        synchronized(this) { refreshGeneration += 1 }
+        val generation = synchronized(this) {
+            refreshGeneration += 1
+            refreshGeneration
+        }
         val useTwoToneIconsSnapshot = useTwoToneIcons
         // 只取真实条目：itemCatalog 里也混着上一轮合成的文件夹条目，
         // 拿它们当子项会套娃。
@@ -388,6 +396,11 @@ class AppRepository(private val context: Context) {
         topLevelItems += catalogItems.filterNot { it.componentKey in folderChildKeys }
         topLevelItems += folderEntries
 
+        // A newer folder mutation or full refresh started while icons were being
+        // composed. It owns publication; letting this older snapshot through
+        // would briefly resurrect a child that has already been moved out.
+        if (synchronized(this) { generation != refreshGeneration }) return
+
         itemCatalog = catalogMap + folderEntries.associateBy { it.componentKey }
         folderCatalog = storedFolders
         synchronized(customOrderMonitor) {
@@ -396,7 +409,7 @@ class AppRepository(private val context: Context) {
             _allApps.value = sortApps(topLevelItems, orderSnapshot)
             applyFilters()
         }
-        saveCachedSnapshot(catalogItems)
+        if (persistCachedSnapshot) saveCachedSnapshot(catalogItems)
     }
 
     /** 文件夹类改动的异步轻量刷新，避免在拖动收尾的主线程上做合成。 */
@@ -405,6 +418,20 @@ class AppRepository(private val context: Context) {
             refreshJob?.cancel()
             refreshJob = scope.launch { refreshFolderCompositionOnly() }
         }
+    }
+
+    /**
+     * Publishes a move-out before the folder overlay starts fading away. The
+     * operation only rebuilds stored folder composition; it never scans
+     * PackageManager. Skipping the unchanged app snapshot write keeps this
+     * small synchronous hand-off suitable for the UI thread.
+     */
+    private fun refreshFolderCompositionImmediately() {
+        synchronized(refreshMonitor) {
+            refreshJob?.cancel()
+            refreshJob = null
+        }
+        refreshFolderCompositionOnly(persistCachedSnapshot = false)
     }
 
     fun launchApp(appInfo: AppInfo): Boolean {
@@ -590,7 +617,7 @@ class AppRepository(private val context: Context) {
 
     fun moveItemOutOfFolder(folderKey: String, itemKey: String): FolderMutationResult {
         val result = itemStorage.moveItemOutOfFolder(folderKey, itemKey)
-        if (result.succeeded) refreshFolderCompositionAsync()
+        if (result.succeeded) refreshFolderCompositionImmediately()
         return result
     }
 
@@ -1422,18 +1449,39 @@ class AppRepository(private val context: Context) {
         val childSize = size * 0.30f
         val gap = size * 0.08f
         val start = (size - childSize * 2f - gap) / 2f
+        val childCornerRadius = childSize * 0.24f
+        val childSurfacePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0x18FFFFFF
+        }
         childItems.take(4).forEachIndexed { index, app ->
             val row = index / 2
             val col = index % 2
             val left = start + col * (childSize + gap)
             val top = start + row * (childSize + gap)
             val childBitmap = (app.cachedPlainIcon ?: app.cachedIcon).asAndroidBitmap()
+            val childRect = RectF(left, top, left + childSize, top + childSize)
+            // 只修饰文件夹未打开时的四宫格预览子图标。外层文件夹底板、
+            // 文件夹弹层里的真实图标都不受这里影响。MIUIX 的小尺寸图标使用
+            // 约 24% 圆角，先画一层极轻的玻璃底，再抗锯齿裁切原始位图，
+            // 避免本地图标在缩到 2x2 网格后仍呈现生硬的直角矩形。
+            canvas.drawRoundRect(
+                childRect,
+                childCornerRadius,
+                childCornerRadius,
+                childSurfacePaint,
+            )
+            val checkpoint = canvas.save()
+            val childClip = Path().apply {
+                addRoundRect(childRect, childCornerRadius, childCornerRadius, Path.Direction.CW)
+            }
+            canvas.clipPath(childClip)
             canvas.drawBitmap(
                 childBitmap,
                 null,
-                RectF(left, top, left + childSize, top + childSize),
+                childRect,
                 paint
             )
+            canvas.restoreToCount(checkpoint)
         }
         return output
     }

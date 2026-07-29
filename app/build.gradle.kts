@@ -126,6 +126,9 @@ dependencies {
     implementation(libs.miuix.core)
     implementation(libs.miuix.icons)
     implementation(libs.ffmpeg.kit.video)
+    // ffmpeg-kit-maintained 8.1.7 publishes an empty dependency POM even though
+    // its Java API still calls com.arthenica.smartexception.java.Exceptions.
+    implementation(libs.smart.exception.java)
 
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.compose.ui.tooling.preview)

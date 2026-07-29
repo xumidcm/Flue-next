@@ -206,6 +206,20 @@ class WatchFaceCatalogTest {
     }
 
     @Test
+    fun `editing installed launcher detaches its market association`() = withCatalog { _, catalog ->
+        val launcherId = "watchmaker:watch_${"8".repeat(32)}"
+        catalog.upsert(
+            marketRecord("market:edited", "8".repeat(64), 800L, "wf-edited")
+                .copy(activeLauncherId = launcherId, legacyIds = setOf(launcherId)),
+        )
+
+        val edited = catalog.detachEditedMarketInstall(launcherId)
+
+        assertNull(edited.findMarketInstall(STORE_ID, "wf-edited"))
+        assertTrue(edited.records.isEmpty())
+    }
+
+    @Test
     fun `corrupt catalog degrades to empty snapshot and preserves diagnostic copy`() =
         withCatalog { file, catalog ->
             file.writeText("{not-json", Charsets.UTF_8)

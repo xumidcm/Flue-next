@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
@@ -80,7 +79,9 @@ fun WatchBatteryPill(
     )
     val shellColor = style.titleColor.copy(alpha = 0.35f)
     val shellShape = RoundedCornerShape(height * 0.3f)
-    val fillShape = RoundedCornerShape(height * 0.3f - 1.dp)
+    // 保留原来的圆角矩形比例。百分比圆角会随低电量的小宽度一起收敛，
+    // 不会被系统钳制成胶囊，也不会退化成直角。
+    val fillShape = RoundedCornerShape(24)
 
     Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier) {
         Box(Modifier.size(width, height), contentAlignment = Alignment.CenterStart) {
@@ -95,8 +96,9 @@ fun WatchBatteryPill(
                 Modifier
                     .padding(2.dp)
                     .fillMaxHeight()
-                    // 填充宽度不小于自身高度：低电量永远是完整圆角块而不是尖角。
-                    .width((innerMax * animLevel).coerceAtLeast(innerHeight))
+                    // 宽度严格跟随真实电量；圆角由 CircleShape 独立保证，不能
+                    // 再用“至少一个高度”兜底，否则 18% 会看起来接近半格。
+                    .width((innerMax * animLevel).coerceAtLeast(1.dp))
                     .clip(fillShape)
                     .background(fill)
             )

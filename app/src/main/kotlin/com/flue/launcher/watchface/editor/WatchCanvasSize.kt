@@ -118,12 +118,14 @@ sealed interface WatchCanvasPreset {
          */
         val MARKET_PRESETS: List<Preset> = listOf(
             Preset(WatchCanvasSize(466, 466), WatchCanvasPresetNote.COMMON_ROUND_AMOLED),
+            Preset(WatchCanvasSize(480, 480), WatchCanvasPresetNote.COMMON_ROUND_AMOLED),
             Preset(WatchCanvasSize(454, 454), WatchCanvasPresetNote.LARGE_ROUND),
             Preset(WatchCanvasSize(410, 410), WatchCanvasPresetNote.MEDIUM_ROUND),
             Preset(WatchCanvasSize(360, 360), WatchCanvasPresetNote.WEAR_OS_ROUND),
             Preset(WatchCanvasSize(240, 240), WatchCanvasPresetNote.SMALL_SQUARE),
             Preset(WatchCanvasSize(320, 385), WatchCanvasPresetNote.PORTRAIT_SQUARE),
             Preset(WatchCanvasSize(368, 448), WatchCanvasPresetNote.RECTANGULAR),
+            Preset(WatchCanvasSize(410, 502), WatchCanvasPresetNote.RECTANGULAR),
             Preset(WatchCanvasSize(512, 512), WatchCanvasPresetNote.WATCHMAKER_NATIVE),
         )
     }

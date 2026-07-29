@@ -128,7 +128,7 @@ internal class AndroidWatchDataProvider(
         } else {
             steps = null
         }
-        if (hasPermission(Manifest.permission.BODY_SENSORS)) {
+        if (hasHeartRatePermission(appContext)) {
             registerSensor(Sensor.TYPE_HEART_RATE)
         }
         registerSensor(Sensor.TYPE_GYROSCOPE)
@@ -194,7 +194,7 @@ internal class AndroidWatchDataProvider(
         refreshBluetoothState()
         (weatherSource as? WatchWeatherRepository)?.requestRefresh()
             ?: runCatching { weatherSource.snapshot(System.currentTimeMillis()) }
-        if (hasPermission(Manifest.permission.BODY_SENSORS)) {
+        if (hasHeartRatePermission(appContext)) {
             // 很多手表的心率传感器只在（重新）注册监听时才开始一次新的测量，
             // 所以点按心率组件时重新武装传感器来触发刷新。这也覆盖了
             // “先启动、后授权”的场景：授权后的第一次点按会把传感器接上。

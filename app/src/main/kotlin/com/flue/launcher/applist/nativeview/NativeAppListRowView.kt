@@ -638,6 +638,18 @@ internal class NativeAppListRowView(
         iconEffectRenderer?.invalidateContent()
     }
 
+    /**
+     * Re-records the icon RenderNode after the RecyclerView host itself was
+     * hidden, blurred, or reactivated. Scrolling used to be the only operation
+     * that forced these cached rows to refresh, leaving a stale row of icons on
+     * the background until the user traversed the whole list.
+     */
+    fun refreshCompositedContent() {
+        iconEffectRenderer?.invalidateContent()
+        invalidateOutline()
+        invalidate()
+    }
+
     private fun ensureCenteredTransformPivot() {
         if (width > 0) {
             val centerX = width / 2f

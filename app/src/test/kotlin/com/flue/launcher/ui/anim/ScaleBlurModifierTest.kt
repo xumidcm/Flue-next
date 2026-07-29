@@ -1,12 +1,20 @@
 package com.flue.launcher.ui.anim
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.IntSize
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ScaleBlurModifierTest {
+    @Test
+    fun legacyPreparedBlurUsesReducedThreePassPolicy() {
+        assertEquals(12, LEGACY_BACKDROP_BLUR_DOWNSAMPLE_DIVISOR)
+        assertEquals(3, LEGACY_BACKDROP_BLUR_PASSES)
+        assertEquals(6, LEGACY_BACKDROP_BLUR_RADIUS)
+    }
+
     @Test
     fun backdropBlurProgressUsesStableTwoPixelBuckets() {
         assertEquals(0, quantizeBackdropBlurRadiusPx(Float.NaN))
@@ -22,15 +30,28 @@ class ScaleBlurModifierTest {
     fun legacyBackdropCrossfadesClearAndPreblurredFramesWithoutAlphaJump() {
         assertEquals(LegacyBackdropBlend(1f, 0f), legacyBackdropBlend(Float.NaN))
         assertEquals(LegacyBackdropBlend(1f, 0f), legacyBackdropBlend(0f))
-        assertEquals(LegacyBackdropBlend(1f, 0.25f), legacyBackdropBlend(0.25f))
+        assertEquals(0.28375f, legacyBackdropBlend(0.25f).blurredAlpha, 0.0001f)
+        assertEquals(0.545f, legacyBackdropBlend(0.5f).blurredAlpha, 0.0001f)
         assertEquals(LegacyBackdropBlend(1f, 1f), legacyBackdropBlend(1f))
         assertEquals(LegacyBackdropBlend(1f, 1f), legacyBackdropBlend(2f))
 
         for (step in 0..20) {
             val blend = legacyBackdropBlend(step / 20f)
             assertEquals(1f, blend.clearAlpha, 0.0001f)
-            assertEquals(step / 20f, blend.blurredAlpha, 0.0001f)
+            val p = step / 20f
+            val expected = p * (1.18f - 0.18f * p)
+            assertEquals(expected, blend.blurredAlpha, 0.0001f)
+            if (p in 0.0001f..0.9999f) {
+                assertTrue(blend.blurredAlpha > p)
+            }
         }
+    }
+
+    @Test
+    fun legacyBackdropRejectsCacheFromDifferentMeasuredViewport() {
+        assertTrue(legacyBackdropViewportMatches(454, 454, IntSize(454, 454)))
+        assertFalse(legacyBackdropViewportMatches(454, 454, IntSize(450, 454)))
+        assertFalse(legacyBackdropViewportMatches(454, 454, IntSize(454, 450)))
     }
 
     @Test

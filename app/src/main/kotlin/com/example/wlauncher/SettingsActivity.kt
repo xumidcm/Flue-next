@@ -37,8 +37,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.spring
 import com.flue.launcher.ui.settings.miuix.MiuixLoadingIndicator
@@ -150,6 +148,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.core.content.ContextCompat
+import androidx.core.app.ActivityCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -165,6 +164,8 @@ import com.flue.launcher.ui.common.bottomFisheyeScale
 import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.ui.common.normalizeOverlayMaskCornerRadiusDp
 import com.flue.launcher.ui.common.flueElasticNestedScroll
+import com.flue.launcher.ui.common.InternalFileBrowserHost
+import com.flue.launcher.ui.common.InternalFileBrowserRequest
 import com.flue.launcher.motion.LocalFlueMotionProfile
 import com.flue.launcher.motion.FlueMotionProfile
 import com.flue.launcher.motion.FlueMotionProfiles
@@ -198,9 +199,13 @@ import com.flue.launcher.watchface.standard.WatchDateLocale
 import com.flue.launcher.watchface.standard.WatchTemperatureUnit
 import com.flue.launcher.watchface.standard.WatchWeatherLocation
 import com.flue.launcher.watchface.standard.WatchWeatherRepository
+import com.flue.launcher.watchface.standard.hasHeartRatePermission
+import com.flue.launcher.watchface.standard.requiredHeartRatePermission
 import com.flue.launcher.watchface.store.WatchStoreRepository
 import top.yukonga.miuix.kmp.icon.MiuixIcons as OfficialMiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Add as OfficialAdd
+import top.yukonga.miuix.kmp.icon.extended.Carrier as OfficialCarrier
+import top.yukonga.miuix.kmp.icon.extended.Folder as OfficialFolder
 import top.yukonga.miuix.kmp.icon.extended.Refresh as OfficialRefresh
 import top.yukonga.miuix.kmp.icon.extended.Settings as OfficialSettings
 import top.yukonga.miuix.kmp.icon.extended.Ok as OfficialOk
@@ -432,6 +437,7 @@ private fun SettingsRootScreen(
     var weatherCityCandidates by remember { mutableStateOf<List<WatchWeatherLocation>>(emptyList()) }
     var weatherCitySearching by remember { mutableStateOf(false) }
     var weatherCitySearchError by remember { mutableStateOf<String?>(null) }
+    var internalFileBrowserRequest by remember { mutableStateOf<InternalFileBrowserRequest?>(null) }
     val rawWatchFaces by vm.availableWatchFaces.collectAsStateWithLifecycle()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsStateWithLifecycle()
     val rawSelectedWatchFace by vm.selectedWatchFace.collectAsStateWithLifecycle()
@@ -561,12 +567,12 @@ private fun SettingsRootScreen(
     val doubleTapLockScreenEnabled by vm.doubleTapLockScreenEnabled.collectAsStateWithLifecycle()
     val powerMenuButtonEnabled by vm.powerMenuButtonEnabled.collectAsStateWithLifecycle()
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
+    val watchFaceTextEntryAnimation by vm.watchFaceTextEntryAnimation.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val watchmakerForceFill by vm.watchmakerForceFill.collectAsStateWithLifecycle()
     val watchfaceDateLocale by vm.watchfaceDateLocale.collectAsStateWithLifecycle()
     val appLanguage by vm.appLanguage.collectAsStateWithLifecycle()
-    val glassHighlightEnabled by vm.glassHighlightEnabled.collectAsStateWithLifecycle()
     // 表盘保存会原地覆盖 preview.jpg：令牌自增时列表缩略图重读文件。
     val watchFaceRefreshToken by vm.watchFaceRefreshToken.collectAsStateWithLifecycle()
     val accessibilityServiceConnected by FlueAccessibilityService.connected.collectAsStateWithLifecycle()
@@ -584,8 +590,30 @@ private fun SettingsRootScreen(
     var bodySensorsPermissionGranted by remember(context) {
         mutableStateOf(hasBodySensorsPermission(context))
     }
-    val bodySensorsPermissionLauncher = rememberLauncherForActivityResult(RequestPermission()) {
-        bodySensorsPermissionGranted = hasBodySensorsPermission(context)
+    val bodySensorsPermissionLauncher = rememberLauncherForActivityResult(RequestPermission()) { granted ->
+        bodySensorsPermissionGranted = granted || hasBodySensorsPermission(context)
+        if (!bodySensorsPermissionGranted) {
+            val canAskAgain = (context as? Activity)?.let { activity ->
+                ActivityCompat.shouldShowRequestPermissionRationale(
+                    activity,
+                    requiredHeartRatePermission(),
+                )
+            } == true
+            if (canAskAgain) {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.toast_body_sensors_permission_denied),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            } else {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.toast_body_sensors_permission_settings),
+                    Toast.LENGTH_LONG,
+                ).show()
+                openHeartRatePermissionSettings(context)
+            }
+        }
     }
     var coarseLocationPermissionGranted by remember(context) {
         mutableStateOf(
@@ -649,7 +677,7 @@ private fun SettingsRootScreen(
             }
         }
     }
-    val watchFaceArchivePicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+    fun handleWatchFaceArchiveUri(uri: Uri?) {
         if (uri != null) {
             settingsScope.launch {
                 backupBusy = true
@@ -681,6 +709,9 @@ private fun SettingsRootScreen(
                 backupBusy = false
             }
         }
+    }
+    val watchFaceArchivePicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+        handleWatchFaceArchiveUri(uri)
     }
     val backupCreatePicker = rememberLauncherForActivityResult(CreateDocument("application/zip")) { uri ->
         val options = pendingBackupExportOptions
@@ -870,6 +901,11 @@ private fun SettingsRootScreen(
             onShare = { state.shareUri?.let { shareBackupUri(context, it) } }
         )
     }
+
+    InternalFileBrowserHost(
+        request = internalFileBrowserRequest,
+        onDismiss = { internalFileBrowserRequest = null },
+    )
 
     LaunchedEffect(hiddenApps) {
         if (!hiddenAppsDirty) {
@@ -1089,10 +1125,8 @@ private fun SettingsRootScreen(
                 targetState = destination,
                 modifier = Modifier.fillMaxSize(),
                 transitionSpec = {
-                if (uiStyle == UiStyle.MIUIX) {
-                    // MIUIX / HyperOS 式层级推拉：进子页新页从右 1/4 滑入 +
-                    // 淡入、旧页左移 1/6 让位；返回反向。方向由层级深度判定，
-                    // 返回键与手势走同一套。
+                    // 所有界面风格统一使用 MIUIX / HyperOS 式层级推拉：进子页
+                    // 新页从右 1/4 滑入、旧页左移 1/6；返回时方向相反。
                     val forward = targetState.depth >= initialState.depth
                     (
                         slideInHorizontally(
@@ -1105,18 +1139,6 @@ private fun SettingsRootScreen(
                         ) { fullWidth -> if (forward) -fullWidth / 6 else fullWidth / 4 } +
                             fadeOut(tween(140))
                         )
-                } else {
-                    (fadeIn(animationSpec = launcherStyle.pageMotionSpec) +
-                        scaleIn(
-                            initialScale = if (uiStyle == UiStyle.MATERIAL_3) 0.98f else 0.985f,
-                            animationSpec = launcherStyle.pageMotionSpec
-                        )) togetherWith
-                        (fadeOut(animationSpec = tween(140)) +
-                            scaleOut(
-                                targetScale = if (uiStyle == UiStyle.MATERIAL_3) 0.995f else 0.985f,
-                                animationSpec = tween(140)
-                            ))
-                }
                 },
                 label = "settings_destination"
             ) { currentDestination ->
@@ -1465,7 +1487,12 @@ private fun SettingsRootScreen(
                     title = stringResource(R.string.settings_watchface_import),
                     subtitle = stringResource(R.string.settings_watchface_import_sub),
                     scale = itemFisheye(listState, "watchface_import_archive", screenCenterY, screenHeightPx),
-                    icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialAdd, miuix = OfficialMiuixIcons.OfficialAdd) },
+                    icon = {
+                        SettingsIcon(
+                            material = OfficialMiuixIcons.OfficialFolder,
+                            miuix = OfficialMiuixIcons.OfficialFolder,
+                        )
+                    },
                     onClick = {
                         watchFaceArchivePicker.launch(
                             arrayOf(
@@ -1476,7 +1503,14 @@ private fun SettingsRootScreen(
                                 "*/*"
                             )
                         )
-                    }
+                    },
+                    onLongPress = {
+                        internalFileBrowserRequest = InternalFileBrowserRequest(
+                            title = context.getString(R.string.internal_file_browser_pick_watch),
+                            extensions = setOf("watch"),
+                            onSelected = { uris -> handleWatchFaceArchiveUri(uris.firstOrNull()) },
+                        )
+                    },
                 )
             }
             item("watchface_store") {
@@ -1484,7 +1518,12 @@ private fun SettingsRootScreen(
                     title = stringResource(R.string.settings_watchface_store),
                     subtitle = stringResource(R.string.settings_watchface_store_sub),
                     scale = itemFisheye(listState, "watchface_store", screenCenterY, screenHeightPx),
-                    icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialRefresh, miuix = OfficialMiuixIcons.OfficialRefresh) },
+                    icon = {
+                        SettingsIcon(
+                            material = OfficialMiuixIcons.OfficialCarrier,
+                            miuix = OfficialMiuixIcons.OfficialCarrier,
+                        )
+                    },
                     onClick = {
                         context.startActivity(Intent(context, WatchStoreActivity::class.java))
                     }
@@ -1696,21 +1735,21 @@ private fun SettingsRootScreen(
                             screenHeightPx,
                         ),
                         icon = {
-                            Icon(
-                                if (bodySensorsPermissionGranted) {
+                            val statusIcon = if (bodySensorsPermissionGranted) {
                                     OfficialMiuixIcons.OfficialOk
                                 } else {
                                     OfficialMiuixIcons.OfficialSettings
-                                },
-                                contentDescription = null,
-                                tint = WatchColors.ActiveCyan,
+                                }
+                            SettingsIcon(
+                                material = statusIcon,
+                                miuix = statusIcon,
                             )
                         },
                         onClick = {
                             if (bodySensorsPermissionGranted) {
                                 Toast.makeText(context, context.getString(R.string.toast_body_sensors_granted), Toast.LENGTH_SHORT).show()
                             } else {
-                                bodySensorsPermissionLauncher.launch(Manifest.permission.BODY_SENSORS)
+                                bodySensorsPermissionLauncher.launch(requiredHeartRatePermission())
                             }
                         },
                     )
@@ -1760,6 +1799,15 @@ private fun SettingsRootScreen(
                     checked = watchFaceBottomFadeEnabled,
                     onToggle = vm::setWatchFaceBottomFadeEnabled,
                     scale = itemFisheye(listState, "watchface_bottom_fade", screenCenterY, screenHeightPx)
+                )
+            }
+            item("watchface_text_entry_animation") {
+                SettingsSwitchRow(
+                    title = stringResource(R.string.settings_watchface_text_entry_animation),
+                    subtitle = stringResource(R.string.settings_watchface_text_entry_animation_sub),
+                    checked = watchFaceTextEntryAnimation,
+                    onToggle = vm::setWatchFaceTextEntryAnimationEnabled,
+                    scale = itemFisheye(listState, "watchface_text_entry_animation", screenCenterY, screenHeightPx)
                 )
             }
             item("watchface_date_locale_header") {
@@ -2054,18 +2102,6 @@ private fun SettingsRootScreen(
                     checked = directLaunchAppListEnabled,
                     onToggle = vm::setDirectLaunchAppListEnabled,
                     scale = itemFisheye(listState, "direct_launch_app_list", screenCenterY, screenHeightPx)
-                )
-            }
-            item("glass_highlight") {
-                SettingsSwitchRow(
-                    title = stringResource(R.string.settings_glass_highlight),
-                    subtitle = if (glassHighlightEnabled)
-                        stringResource(R.string.settings_glass_highlight_on)
-                    else
-                        stringResource(R.string.settings_glass_highlight_off),
-                    checked = glassHighlightEnabled,
-                    onToggle = vm::setGlassHighlightEnabled,
-                    scale = itemFisheye(listState, "glass_highlight", screenCenterY, screenHeightPx)
                 )
             }
             if (splashIcon) {
@@ -2963,6 +2999,32 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "export_log", screenCenterY, screenHeightPx)
                 )
             }
+            item("watch_store_preview_cache") {
+                ActionCard(
+                    title = stringResource(R.string.settings_clear_watch_store_cache),
+                    subtitle = stringResource(R.string.settings_clear_watch_store_cache_sub),
+                    onClick = {
+                        settingsScope.launch {
+                            val message = runCatching { watchCatalogRepository.clearPreviewCache() }
+                                .fold(
+                                    onSuccess = { removed ->
+                                        context.getString(R.string.settings_clear_watch_store_cache_done, removed)
+                                    },
+                                    onFailure = {
+                                        context.getString(R.string.settings_clear_watch_store_cache_failed)
+                                    },
+                                )
+                            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    scale = itemFisheye(
+                        listState,
+                        "watch_store_preview_cache",
+                        screenCenterY,
+                        screenHeightPx,
+                    )
+                )
+            }
             item("diagnostic_logging") {
                 SettingsSwitchRow(
                     title = stringResource(R.string.settings_diagnostic_logging),
@@ -3421,6 +3483,7 @@ private fun restartFlueProcess(context: android.content.Context) {
                 android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK,
         )
     }
+
     runCatching {
         context.startActivity(launchIntent)
         // CLEAR_TASK already removes this Activity in the normal path; finish is
@@ -4316,9 +4379,10 @@ private fun AboutCard(
                         bitmap = appIconBitmap,
                         contentDescription = null,
                         modifier = Modifier
-                            .size(76.dp)
-                            .clip(RoundedCornerShape(22.dp)),
-                        contentScale = ContentScale.Crop
+                            .size(76.dp),
+                        // PackageManager 已按当前系统遮罩渲染 AdaptiveIconDrawable，
+                        // 这里不再二次裁圆角，避免前景被重复缩小或截边。
+                        contentScale = ContentScale.Fit
                     )
                 } else {
                     Text(stringResource(R.string.app_name), color = launcherStyle.titleColor, fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -4478,6 +4542,9 @@ private fun OverlayMaskCornerRadiusDialog(
     onSave: (Int) -> Unit,
 ) {
     val launcherStyle = LauncherTheme.style
+    val dialogSurface = MaterialTheme.colorScheme.surface
+    val dialogOnSurface = MaterialTheme.colorScheme.onSurface
+    val dialogOnSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
     var localRadiusDp by remember(currentRadiusDp) {
         mutableFloatStateOf(currentRadiusDp.toFloat())
     }
@@ -4506,7 +4573,10 @@ private fun OverlayMaskCornerRadiusDialog(
                     .fillMaxWidth()
                     .shadow(24.dp, dialogShape, clip = false)
                     .clip(dialogShape)
-                    .background(launcherStyle.cardColor.copy(alpha = 0.98f))
+                    // MaterialTheme owns the actual light/dark mode. Apple Watch
+                    // style card tokens intentionally contrast the page and must
+                    // not be reused as a modal surface or its text becomes inverted.
+                    .background(dialogSurface)
                     // High-light and panel use exactly the same animated shape,
                     // so the white glass edge follows the slider without lag.
                     .border(
@@ -4531,13 +4601,13 @@ private fun OverlayMaskCornerRadiusDialog(
                             .align(Alignment.BottomEnd)
                             .clip(RoundedCornerShape(12.dp))
                             .background(launcherStyle.accentColor)
-                            .border(3.dp, launcherStyle.cardColor, RoundedCornerShape(12.dp)),
+                            .border(3.dp, dialogSurface, RoundedCornerShape(12.dp)),
                     )
                 }
                 Spacer(Modifier.height(12.dp))
                 Text(
                     text = stringResource(R.string.dialog_overlay_mask_corner_title),
-                    color = launcherStyle.titleColor,
+                    color = dialogOnSurface,
                     fontSize = 25.sp,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center,
@@ -4545,7 +4615,7 @@ private fun OverlayMaskCornerRadiusDialog(
                 Spacer(Modifier.height(8.dp))
                 Text(
                     text = stringResource(R.string.dialog_overlay_mask_corner_subtitle),
-                    color = launcherStyle.secondaryTextColor,
+                    color = dialogOnSurfaceVariant,
                     fontSize = 14.sp,
                     textAlign = TextAlign.Center,
                 )
@@ -4554,7 +4624,7 @@ private fun OverlayMaskCornerRadiusDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(launcherStyle.compactShape)
-                        .background(launcherStyle.titleColor.copy(alpha = 0.055f))
+                        .background(dialogOnSurface.copy(alpha = 0.055f))
                         .padding(horizontal = 8.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -4570,7 +4640,7 @@ private fun OverlayMaskCornerRadiusDialog(
                             },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text("−", color = launcherStyle.secondaryTextColor, fontSize = 30.sp)
+                        Text("−", color = dialogOnSurfaceVariant, fontSize = 30.sp)
                     }
                     Slider(
                         value = localRadiusDp,
@@ -4584,7 +4654,7 @@ private fun OverlayMaskCornerRadiusDialog(
                         colors = SliderDefaults.colors(
                             thumbColor = launcherStyle.accentColor,
                             activeTrackColor = launcherStyle.accentColor,
-                            inactiveTrackColor = launcherStyle.secondaryTextColor.copy(alpha = 0.28f),
+                            inactiveTrackColor = dialogOnSurfaceVariant.copy(alpha = 0.28f),
                         ),
                         modifier = Modifier.weight(1f),
                     )
@@ -4601,7 +4671,7 @@ private fun OverlayMaskCornerRadiusDialog(
                             },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text("+", color = launcherStyle.secondaryTextColor, fontSize = 30.sp)
+                        Text("+", color = dialogOnSurfaceVariant, fontSize = 30.sp)
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -4610,14 +4680,14 @@ private fun OverlayMaskCornerRadiusDialog(
                         R.string.dialog_overlay_mask_corner_value_fmt,
                         localRadiusDp.roundToInt(),
                     ),
-                    color = launcherStyle.bodyColor,
+                    color = dialogOnSurface,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
                     text = stringResource(R.string.dialog_overlay_mask_corner_hint),
-                    color = launcherStyle.secondaryTextColor,
+                    color = dialogOnSurfaceVariant,
                     fontSize = 12.sp,
                     textAlign = TextAlign.Center,
                 )
@@ -5085,10 +5155,18 @@ private suspend fun exportLog(context: android.content.Context) {
 }
 
 private fun hasBodySensorsPermission(context: Context): Boolean =
-    ContextCompat.checkSelfPermission(
-        context,
-        Manifest.permission.BODY_SENSORS,
-    ) == PackageManager.PERMISSION_GRANTED
+    hasHeartRatePermission(context)
+
+private fun openHeartRatePermissionSettings(context: Context) {
+    runCatching {
+        context.startActivity(
+            Intent(
+                AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:${context.packageName}"),
+            )
+        )
+    }
+}
 
 @Composable
 private fun rememberSettingsHeaderTime(): String {
@@ -5130,6 +5208,7 @@ private fun buildSettingsSearchIndex(context: Context): List<SettingsSearchEntry
     SettingsSearchEntry("APPEARANCE", "theme_mode_light", s(R.string.settings_theme_light), s(R.string.search_d_theme_mode), listOf("qsms", "light", "qianse")),
     SettingsSearchEntry("APPEARANCE", "ui_style_header", s(R.string.settings_ui_style_header), s(R.string.search_d_ui_style), listOf("jmfg", "style", "miuix", "md3")),
     SettingsSearchEntry("APPEARANCE", "screen_shape_header", s(R.string.settings_screen_shape_header), s(R.string.search_d_screen_shape), listOf("pmxz", "round", "yuanping", "fangping")),
+    SettingsSearchEntry("APPEARANCE", "overlay_mask_corner_radius", s(R.string.settings_overlay_mask_corner_radius), s(R.string.search_d_overlay_mask_corner_radius), listOf("zzj", "zhezhao yuanjiao", "mask corner", "corner radius", "yuanjiao")),
     SettingsSearchEntry("APPEARANCE", "blur_toggle", s(R.string.settings_blur), s(R.string.search_d_blur), listOf("gjcz", "blur", "mohu", "boli")),
     SettingsSearchEntry("APPEARANCE", "edge_blur_toggle", s(R.string.search_t_edge_blur), s(R.string.search_d_edge_blur), listOf("bymh", "edge blur")),
     SettingsSearchEntry("APPEARANCE", "edge_blur_radius", s(R.string.settings_edge_blur_radius), s(R.string.search_d_edge_blur_radius), listOf("bymhbj", "blur radius", "banjing")),
@@ -5161,6 +5240,7 @@ private fun buildSettingsSearchIndex(context: Context): List<SettingsSearchEntry
     SettingsSearchEntry("WATCH_FACE_MORE", "watchmaker_body_sensors", s(R.string.settings_watchface_heart_rate), s(R.string.search_d_heart_rate), listOf("bpxl", "heart rate", "xinlv")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_font", s(R.string.settings_watchface_font), s(R.string.search_d_watchface_font), listOf("bpzt", "font", "ziti")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_bottom_fade", s(R.string.settings_watchface_bottom_fade), s(R.string.search_d_watchface_bottom_fade), listOf("bpdb", "bottom fade")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_text_entry_animation", s(R.string.settings_watchface_text_entry_animation), s(R.string.settings_watchface_text_entry_animation_sub), listOf("bpwz", "text animation", "fly in")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_status_indicators", s(R.string.settings_watchface_status), s(R.string.search_d_watchface_status), listOf("ztts", "indicator")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_charging_power_text", s(R.string.settings_watchface_charging_power), s(R.string.search_d_charging_power), listOf("cdgl", "charging", "wattage")),
     SettingsSearchEntry("ICON_PACKS", null, s(R.string.settings_icon_packs), s(R.string.search_d_icon_packs), listOf("tbb", "icon pack")),
@@ -5206,6 +5286,7 @@ private fun buildSettingsSearchIndex(context: Context): List<SettingsSearchEntry
     SettingsSearchEntry("MUSIC_TEXT_ANIMATION", null, s(R.string.search_t_music_text_anim), s(R.string.search_d_music_text), listOf("yywz", "music text")),
     SettingsSearchEntry("TOOLS", null, s(R.string.settings_tools), s(R.string.search_d_tools), listOf("gj", "tools", "beifen")),
     SettingsSearchEntry("TOOLS", "export_log", s(R.string.settings_export_log), s(R.string.search_d_export_log), listOf("dcrz", "export log", "rizhi")),
+    SettingsSearchEntry("TOOLS", "watch_store_preview_cache", s(R.string.settings_clear_watch_store_cache), s(R.string.settings_clear_watch_store_cache_sub), listOf("qlhc", "cache", "fengmian", "biaopan shichang")),
     SettingsSearchEntry("TOOLS", "diagnostic_logging", s(R.string.settings_diagnostic_logging), s(R.string.search_d_diagnostic), listOf("zdrz", "diagnostic")),
     SettingsSearchEntry("TOOLS", "reset_defaults", s(R.string.settings_reset_defaults), s(R.string.search_d_reset), listOf("hfmr", "reset", "moren")),
     SettingsSearchEntry("BACKUP", null, s(R.string.search_t_backup), s(R.string.search_d_backup), listOf("bfyf", "backup")),

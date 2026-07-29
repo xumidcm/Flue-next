@@ -22,6 +22,9 @@ enum class WatchStoreScreenType(val apiValue: String) {
     }
 }
 
+/** Store installs are square unless the server explicitly labels them round. */
+fun WatchStoreScreenType.installAsRound(): Boolean = this == WatchStoreScreenType.ROUND
+
 data class WatchStoreQuery(
     val page: Int = 1,
     val limit: Int = 20,

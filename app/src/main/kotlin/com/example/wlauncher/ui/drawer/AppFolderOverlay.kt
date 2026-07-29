@@ -127,6 +127,8 @@ fun AppFolderOverlay(
      * LauncherActivity 拦截返回键后递增此值，文件夹自己调 requestDismiss()。
      */
     dismissRequestToken: Int = 0,
+    /** Let the launch transition consume Back before the folder overlay does. */
+    backHandlerEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -323,7 +325,7 @@ fun AppFolderOverlay(
             cancelMoveOutJob()
         }
     }
-    BackHandler(enabled = true) { requestDismiss() }
+    BackHandler(enabled = backHandlerEnabled) { requestDismiss() }
 
     fun gridAtTop(): Boolean {
         return gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset == 0

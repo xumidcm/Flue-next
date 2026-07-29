@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -237,71 +238,77 @@ fun NativeListDrawerScreen(
                 isRoundDevice = isRoundDevice,
             ),
         )
-        NativeAppListHost(
-            content = projection.content,
-            config = config,
-            onCreateFolder = { command ->
-                onCreateFolder(command)?.let(::AppItemKey)
-            },
-            onCommand = { command ->
-                val app = projection.appsByKey[command.keyOrNull()]
-                when (command) {
-                    is AppListCommand.Open -> app?.let {
-                        onAppClick(it, Offset(command.origin.x, command.origin.y))
-                        true
-                    } ?: false
-                    is AppListCommand.ShowActions -> app?.let {
-                        actionAppKey = command.key.value
-                        onLongClick(it)
-                        true
-                    } ?: false
-                    AppListCommand.DismissActions -> {
-                        actionAppKey = null
-                        true
+        // RecyclerView rows and LayoutParams are presentation-specific. Reusing
+        // the honeycomb host for a linear list leaves sampled icon transforms
+        // and spatial layout params attached until process restart. Recreate the
+        // native host atomically whenever the presentation changes.
+        key(presentation) {
+            NativeAppListHost(
+                content = projection.content,
+                config = config,
+                onCreateFolder = { command ->
+                    onCreateFolder(command)?.let(::AppItemKey)
+                },
+                onCommand = { command ->
+                    val app = projection.appsByKey[command.keyOrNull()]
+                    when (command) {
+                        is AppListCommand.Open -> app?.let {
+                            onAppClick(it, Offset(command.origin.x, command.origin.y))
+                            true
+                        } ?: false
+                        is AppListCommand.ShowActions -> app?.let {
+                            actionAppKey = command.key.value
+                            onLongClick(it)
+                            true
+                        } ?: false
+                        AppListCommand.DismissActions -> {
+                            actionAppKey = null
+                            true
+                        }
+                        is AppListCommand.Move -> onReorder(command)
+                        // Folder creation uses NativeAppListHost's typed result
+                        // callback above so the exact repository stable key can
+                        // drive the overlay settle destination.
+                        is AppListCommand.CreateFolder -> false
+                        is AppListCommand.Hide -> app?.let {
+                            onExcludeApp(it)
+                            true
+                        } ?: false
+                        is AppListCommand.RemoveShortcut -> app?.let {
+                            onRemoveShortcut(it)
+                            true
+                        } ?: false
+                        is AppListCommand.RenameFolder -> app?.let {
+                            onRenameFolder(it, command.name)
+                            true
+                        } ?: false
+                        is AppListCommand.DissolveFolder -> app?.let {
+                            onDissolveFolder(it)
+                            true
+                        } ?: false
                     }
-                    is AppListCommand.Move -> onReorder(command)
-                    // Folder creation uses NativeAppListHost's typed result
-                    // callback above so the exact repository stable key can
-                    // drive the overlay settle destination.
-                    is AppListCommand.CreateFolder -> false
-                    is AppListCommand.Hide -> app?.let {
-                        onExcludeApp(it)
-                        true
-                    } ?: false
-                    is AppListCommand.RemoveShortcut -> app?.let {
-                        onRemoveShortcut(it)
-                        true
-                    } ?: false
-                    is AppListCommand.RenameFolder -> app?.let {
-                        onRenameFolder(it, command.name)
-                        true
-                    } ?: false
-                    is AppListCommand.DissolveFolder -> app?.let {
-                        onDissolveFolder(it)
-                        true
-                    } ?: false
-                }
-            },
-            onScrollToTop = onScrollToTop,
-            layoutStrategy = when (presentation) {
-                NativeAppListPresentation.HONEYCOMB -> HoneycombNativeAppListLayoutStrategy
-                NativeAppListPresentation.DENSE_GRID -> DenseGridNativeAppListLayoutStrategy
-                NativeAppListPresentation.LINEAR -> LinearNativeAppListLayoutStrategy
-            },
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    palette.background.copy(
-                        alpha = when {
-                            // 背板接管期间层内底色必须为 0：两层同色叠加时
-                            // 缩放的那一层就是「跟着缩的黑底」。
-                            backgroundHandledByPlate -> 0f
-                            uiStyle == UiStyle.APPLE_WATCH -> 1f
-                            else -> entryProgress.coerceIn(0f, 1f)
-                        },
+                },
+                onScrollToTop = onScrollToTop,
+                layoutStrategy = when (presentation) {
+                    NativeAppListPresentation.HONEYCOMB -> HoneycombNativeAppListLayoutStrategy
+                    NativeAppListPresentation.DENSE_GRID -> DenseGridNativeAppListLayoutStrategy
+                    NativeAppListPresentation.LINEAR -> LinearNativeAppListLayoutStrategy
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        palette.background.copy(
+                            alpha = when {
+                                // 背板接管期间层内底色必须为 0：两层同色叠加时
+                                // 缩放的那一层就是「跟着缩的黑底」。
+                                backgroundHandledByPlate -> 0f
+                                uiStyle == UiStyle.APPLE_WATCH -> 1f
+                                else -> entryProgress.coerceIn(0f, 1f)
+                            },
+                        ),
                     ),
-                ),
-        )
+            )
+        }
         actionApp?.let { app ->
             AppShortcutOverlay(
                 app = app,

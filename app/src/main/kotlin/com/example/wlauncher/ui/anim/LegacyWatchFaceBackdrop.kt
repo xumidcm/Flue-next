@@ -33,11 +33,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntSize
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
@@ -55,12 +53,15 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
+internal const val LEGACY_BACKDROP_BLUR_DOWNSAMPLE_DIVISOR = 12
+internal const val LEGACY_BACKDROP_BLUR_PASSES = 3
+internal const val LEGACY_BACKDROP_BLUR_RADIUS = 6
+
 /**
  * API 27-30 的表盘背衬缓存。
  *
- * 三张图都在用户开始拖动之前于 IO 线程生成：一张清晰封面，以及同一张封面
- * 的浅色/深色强模糊版本。手势绘制阶段只会读取 [ImageBitmap] 并改变 alpha，
- * 不再录制实时表盘、不再解码媒体，也不再计算模糊。
+ * 两张模糊图都在用户开始拖动之前于 IO 线程生成。清晰层始终由真实表盘
+ * 绘制，缓存只用于边缘填充和模糊覆盖；手势阶段不再解码媒体或计算模糊。
  */
 data class LegacyWatchFaceBackdropFrames(
     val clear: ImageBitmap,
@@ -266,18 +267,26 @@ internal fun rememberLegacyWatchFaceBackdropFrames(
     builtInMaterialStyle: Boolean,
     visualKey: String,
     capturedFrame: LegacyWatchFaceCapturedFrame?,
+    viewportSize: IntSize?,
 ): LegacyWatchFaceBackdropFrames? {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) return null
+    // AndroidView-backed Watchmaker/JB faces are not reliably captured by a
+    // Compose GraphicsLayer on newer Android releases. Keep a prepared clear
+    // source for those faces so hardware blur can still fill the shrinking
+    // edge instead of exposing the black window background.
+    val needsPreparedFrames = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+        descriptor.isWatchmaker || descriptor.isJbWatch
+    if (!needsPreparedFrames) return null
+
+    val measuredViewport = viewportSize?.takeIf { it.width > 0 && it.height > 0 }
+        ?: return null
 
     val context = LocalContext.current.applicationContext
-    val configuration = LocalConfiguration.current
-    val density = LocalDensity.current
-    val targetWidth = with(density) {
-        configuration.screenWidthDp.dp.roundToPx().coerceIn(64, 1_024)
-    }
-    val targetHeight = with(density) {
-        configuration.screenHeightDp.dp.roundToPx().coerceIn(64, 1_024)
-    }
+    // The backdrop is composited into the measured watch-face layer, not the
+    // Configuration screen size. Insets, round-screen adaptation and window
+    // metrics can all make those differ; caching the latter was what allowed a
+    // clear cached frame to be stretched on the first overlay frame.
+    val targetWidth = measuredViewport.width
+    val targetHeight = measuredViewport.height
     val fallbackArgb = fallbackColor.toArgb() or (0xFF shl 24)
     val source = legacyBackdropSource(
         descriptor = descriptor,
@@ -584,15 +593,30 @@ private fun createGeneratedWatchFaceCover(
  * 在缓存生成时执行一次。
  */
 private fun createStrongBlur(source: Bitmap): Bitmap {
-    val smallWidth = (source.width / 12).coerceAtLeast(28)
-    val smallHeight = (source.height / 12).coerceAtLeast(28)
+    val smallWidth = (source.width / LEGACY_BACKDROP_BLUR_DOWNSAMPLE_DIVISOR).coerceAtLeast(28)
+    val smallHeight = (source.height / LEGACY_BACKDROP_BLUR_DOWNSAMPLE_DIVISOR).coerceAtLeast(28)
     val small = Bitmap.createScaledBitmap(source, smallWidth, smallHeight, true)
     val pixels = IntArray(smallWidth * smallHeight)
     val scratch = IntArray(pixels.size)
     small.getPixels(pixels, 0, smallWidth, 0, 0, smallWidth, smallHeight)
-    repeat(4) {
-        boxBlurHorizontal(pixels, scratch, smallWidth, smallHeight, radius = 7)
-        boxBlurVertical(scratch, pixels, smallWidth, smallHeight, radius = 7)
+    // Previous policy used four radius-7 passes. Three radius-6 passes lower
+    // the effective blur spread by roughly one fifth while retaining enough
+    // diffusion to hide mirrored seams on API 27-30.
+    repeat(LEGACY_BACKDROP_BLUR_PASSES) {
+        boxBlurHorizontal(
+            pixels,
+            scratch,
+            smallWidth,
+            smallHeight,
+            radius = LEGACY_BACKDROP_BLUR_RADIUS,
+        )
+        boxBlurVertical(
+            scratch,
+            pixels,
+            smallWidth,
+            smallHeight,
+            radius = LEGACY_BACKDROP_BLUR_RADIUS,
+        )
     }
     small.setPixels(pixels, 0, smallWidth, 0, 0, smallWidth, smallHeight)
     val enlarged = Bitmap.createScaledBitmap(small, source.width, source.height, true)

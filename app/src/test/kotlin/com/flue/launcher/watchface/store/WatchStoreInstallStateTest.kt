@@ -7,6 +7,14 @@ import org.junit.Test
 
 class WatchStoreInstallStateTest {
     @Test
+    fun storeInstallUsesRoundShapeOnlyForExplicitRoundLabel() {
+        assertEquals(true, WatchStoreScreenType.ROUND.installAsRound())
+        assertEquals(false, WatchStoreScreenType.SQUARE.installAsRound())
+        assertEquals(false, WatchStoreScreenType.RECTANGULAR.installAsRound())
+        assertEquals(false, WatchStoreScreenType.UNKNOWN.installAsRound())
+    }
+
+    @Test
     fun `failed install keeps retry context and retry starts a new download attempt`() {
         val failure = WatchStoreInstallState.Failed(
             message = "网络断开",

@@ -264,6 +264,67 @@ class WatchmakerRuntimePrimitivesTest {
     }
 
     @Test
+    fun bitmapFontGlyphSourceRectTracksDecodedAtlasSampling() {
+        val finalGlyph = WatchBitmapGlyph(
+            id = 45,
+            x = 1_860,
+            y = 0,
+            width = 124,
+            height = 180,
+            xOffset = 0,
+            yOffset = 0,
+            xAdvance = 124,
+            page = 0,
+        )
+
+        assertEquals(
+            WatchBitmapSourceRect(left = 930, top = 0, right = 992, bottom = 90),
+            mapWatchBitmapGlyphSourceRect(
+                glyph = finalGlyph,
+                atlasWidth = 1_984,
+                atlasHeight = 180,
+                bitmapWidth = 992,
+                bitmapHeight = 90,
+            ),
+        )
+        assertEquals(
+            WatchBitmapSourceRect(left = 1_860, top = 0, right = 1_984, bottom = 180),
+            mapWatchBitmapGlyphSourceRect(
+                glyph = finalGlyph,
+                atlasWidth = 1_984,
+                atlasHeight = 180,
+                bitmapWidth = 1_984,
+                bitmapHeight = 180,
+            ),
+        )
+    }
+
+    @Test
+    fun bitmapFontGlyphSourceRectRejectsInvalidAtlasBounds() {
+        val invalidGlyph = WatchBitmapGlyph(
+            id = 48,
+            x = 1_900,
+            y = 0,
+            width = 124,
+            height = 180,
+            xOffset = 0,
+            yOffset = 0,
+            xAdvance = 124,
+            page = 0,
+        )
+
+        assertNull(
+            mapWatchBitmapGlyphSourceRect(
+                glyph = invalidGlyph,
+                atlasWidth = 1_984,
+                atlasHeight = 180,
+                bitmapWidth = 992,
+                bitmapHeight = 90,
+            ),
+        )
+    }
+
+    @Test
     fun svgSubsetRejectsActiveContentAndCapsPaths() {
         val safe = parseWatchSvgDocument(
             """

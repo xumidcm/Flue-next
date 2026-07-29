@@ -77,6 +77,7 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.ui.common.glassSurface
+import com.flue.launcher.ui.common.flueOverlayMaskShape
 import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.common.FlueElasticOffsetController
@@ -124,6 +125,7 @@ fun NotificationLayer(
     onDismissAllNotifications: () -> Unit,
     onRunNotificationAction: (String) -> Boolean,
     onOpenNotification: (String, Offset) -> Boolean,
+    overlayMaskCornerRadiusDp: Int,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -390,13 +392,7 @@ fun NotificationLayer(
         modifier = modifier
             .fillMaxSize()
             // 圆屏整圆裁剪 + 半透明玻璃根底（表盘背衬透出即毛玻璃）。
-            .clip(
-                if (com.flue.launcher.ui.common.isFlueScreenRound()) {
-                    androidx.compose.foundation.shape.CircleShape
-                } else {
-                    RoundedCornerShape(40.dp)
-                },
-            )
+            .clip(flueOverlayMaskShape(overlayMaskCornerRadiusDp))
             .background(launcherStyle.screenBackground.copy(alpha = 0.62f))
             .nestedScroll(nestedScroll)
     ) {

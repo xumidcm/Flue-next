@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Flue Next</string>
+    <string name="watchface_builtin_default_name">デフォルト文字盤</string>
+    <string name="watchface_builtin_photo_name">写真文字盤</string>
+    <string name="watchface_builtin_video_name">動画文字盤</string>
+    <string name="watchface_builtin_summary">内蔵文字盤</string>
     <string name="shortcut_settings">ランチャー設定</string>
     <string name="settings_title">ランチャー設定</string>
     <string name="internal_watchface_config_title">内蔵文字盤設定</string>
@@ -413,6 +417,8 @@
     <string name="settings_watchface_font_default">システム標準フォント</string>
     <string name="settings_watchface_font_clear">標準フォントに戻す</string>
     <string name="settings_watchface_font_clear_sub">保存された文字盤フォントを消去</string>
+    <string name="settings_watchface_text_entry_animation">文字盤テキストのフライイン</string>
+    <string name="settings_watchface_text_entry_animation_sub">文字盤に戻るたびに文字の登場アニメーションを再生します。オフでは文字をすぐ表示します</string>
 
     <!-- このアプリについて・寄付 -->
     <string name="settings_about_title">このアプリについて</string>
@@ -450,9 +456,6 @@
     <string name="settings_section_launch">起動</string>
     <string name="settings_splash">起動オーバーレイ</string>
     <string name="settings_splash_sub">アプリを開くときにアイコンのトランジションを表示</string>
-    <string name="settings_glass_highlight">グラスハイライト</string>
-    <string name="settings_glass_highlight_on">コントロールセンターで iOS 風の縦型 Pill スライダーと半透明ハイライトを使用</string>
-    <string name="settings_glass_highlight_off">コントロールセンターで従来の横型スライダーを使用</string>
     <string name="settings_splash_delay">オーバーレイの表示時間</string>
 
     <!-- パフォーマンスとアニメーション -->
@@ -611,7 +614,7 @@
     <string name="cc_bluetooth">Bluetooth</string>
     <string name="cc_wifi">Wi-Fi</string>
     <string name="cc_mobile_data">モバイル通信</string>
-    <string name="cc_dnd">おやすみモード</string>
+    <string name="cc_dnd">DND</string>
     <string name="cc_volume">音量</string>
     <string name="cc_brightness">明るさ</string>
     <string name="cc_notification_permission_title">通知へのアクセスが必要です</string>
@@ -779,6 +782,7 @@
     <string name="watch_editor_duplicate">複製</string>
     <string name="watch_editor_delete">削除</string>
     <string name="watch_editor_layer_properties_fmt">%1$s のプロパティ</string>
+    <string name="watch_editor_current_watch_size_fmt">現在の文字盤サイズ：%1$s</string>
     <string name="watch_editor_import_image_path">画像を path に読み込む</string>
     <string name="watch_editor_import_image_sequence">複数画像をループ背景として読み込む</string>
     <string name="watch_editor_import_video_frames">動画をループフレームとして読み込む</string>
@@ -869,6 +873,10 @@
     <string name="watch_store_login">ログイン</string>
     <string name="watch_store_register">登録</string>
     <string name="watch_store_auth_security_note">登録すると文字盤ストアのアカウントを作成します（ユーザー名は英数字とアンダースコア 3～50 文字、パスワードは 6 文字以上）。“パスワードを記憶”を選ぶと Android Keystore で暗号化して端末に保存します。未選択なら今回のログインだけに使用し、保存しません。</string>
+    <string name="watch_store_login_security_note">文字盤ストアのアカウントにログインします。「パスワードを記憶」を選ぶと Android Keystore で暗号化して端末に保存し、未選択なら今回のみ使用します。</string>
+    <string name="watch_store_register_security_note">新しい文字盤ストアのアカウントを作成します。ユーザー名は英数字とアンダースコア 3～50 文字、パスワードは 6 文字以上です。</string>
+    <string name="watch_store_go_to_register">新規アカウントを作成</string>
+    <string name="watch_store_back_to_login">ログインに戻る</string>
     <string name="watch_store_error_auth_expired">ログインの有効期限が切れました。もう一度ログインしてください。</string>
     <string name="watch_store_error_rejected_detail_fmt">サーバーが内容を拒否しました：%1$s</string>
     <string name="watch_store_error_rejected">サーバーが内容を拒否しました。名前、説明、カテゴリを確認してください。</string>
@@ -1139,4 +1147,18 @@
     <string name="file_manager_unknown_time">時刻不明</string>
     <string name="file_manager_unnamed_file">名前のないファイル</string>
     <string name="file_manager_unknown_path">パス不明</string>
+    <string name="internal_file_browser_permission_title">デバイスのファイル閲覧を許可</string>
+    <string name="internal_file_browser_permission_message">Wear OS にはシステムのファイル選択画面がない場合があります。Flue 内蔵ブラウザーを使うには、デバイス内ファイルの管理を許可してください。Flue は選択したファイルのみ読み取ります。</string>
+    <string name="internal_file_browser_grant">権限を開く</string>
+    <string name="internal_file_browser_back">上の階層へ</string>
+    <string name="internal_file_browser_loading">ファイルを読み込み中…</string>
+    <string name="internal_file_browser_read_failed">このフォルダーを読み取れません</string>
+    <string name="internal_file_browser_empty">条件に一致するファイルがありません</string>
+    <string name="internal_file_browser_import_selected_fmt">選択した %1$d 件を読み込む</string>
+    <string name="internal_file_browser_pick_watch">.watch 文字盤を選択</string>
+    <string name="internal_file_browser_pick_image">画像を選択</string>
+    <string name="internal_file_browser_pick_images">複数の画像を選択</string>
+    <string name="internal_file_browser_pick_video">動画を選択</string>
+    <string name="internal_file_browser_pick_font">フォントを選択</string>
+    <string name="internal_file_browser_pick_conversion">変換する文字盤を選択</string>
 </resources>

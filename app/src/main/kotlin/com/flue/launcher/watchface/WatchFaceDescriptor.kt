@@ -38,31 +38,45 @@ data class WatchFaceDescriptor(
 }
 
 object WatchFaceDescriptors {
-    fun builtInDescriptors(): List<WatchFaceDescriptor> = listOf(
+    fun builtInDescriptors(context: Context): List<WatchFaceDescriptor> = listOf(
         WatchFaceDescriptor(
             id = BUILT_IN_WATCHFACE_ID,
             type = WatchFaceType.BUILTIN,
-            displayName = "星野 深蓝",
-            summary = "内置表盘",
+            displayName = context.getString(R.string.watchface_builtin_default_name),
+            summary = context.getString(R.string.watchface_builtin_summary),
         ),
         WatchFaceDescriptor(
             id = BUILT_IN_PHOTO_WATCHFACE_ID,
             type = WatchFaceType.BUILTIN,
-            displayName = "图片表盘",
-            summary = "Flue Next 内置表盘",
+            displayName = context.getString(R.string.watchface_builtin_photo_name),
+            summary = context.getString(R.string.watchface_builtin_summary),
             supportsSettings = true,
         ),
         WatchFaceDescriptor(
             id = BUILT_IN_VIDEO_WATCHFACE_ID,
             type = WatchFaceType.BUILTIN,
-            displayName = "视频表盘",
-            summary = "Flue Next 内置表盘",
+            displayName = context.getString(R.string.watchface_builtin_video_name),
+            summary = context.getString(R.string.watchface_builtin_summary),
             supportsSettings = true,
         ),
     )
 
-    fun builtInDescriptor(id: String = BUILT_IN_WATCHFACE_ID): WatchFaceDescriptor =
-        builtInDescriptors().firstOrNull { it.id == id } ?: builtInDescriptors().first()
+    fun builtInDescriptor(
+        context: Context,
+        id: String = BUILT_IN_WATCHFACE_ID,
+    ): WatchFaceDescriptor {
+        val descriptors = builtInDescriptors(context)
+        return descriptors.firstOrNull { it.id == id } ?: descriptors.first()
+    }
+
+    /** Re-localises cached built-ins after an in-process language switch. */
+    fun localizeBuiltIns(
+        context: Context,
+        descriptors: List<WatchFaceDescriptor>,
+    ): List<WatchFaceDescriptor> {
+        val localized = builtInDescriptors(context).associateBy(WatchFaceDescriptor::id)
+        return descriptors.map { descriptor -> localized[descriptor.id] ?: descriptor }
+    }
 
     fun loadPreviewDrawable(context: Context, descriptor: WatchFaceDescriptor): Drawable? {
         descriptor.previewFilePath?.let { previewPath ->

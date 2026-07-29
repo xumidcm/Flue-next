@@ -94,6 +94,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -185,7 +186,6 @@ import kotlin.math.floor
 import kotlin.math.roundToInt
 
 private const val SIDE_SCREEN_CONTENT_WIDTH_RATIO = 0.90f
-private const val SIDE_SCREEN_DISMISS_THRESHOLD = 86f
 private const val SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_RATIO = 0.78f
 private const val SIDE_SCREEN_NOTIFICATION_DRAG_RANGE_MIN = 300f
 private const val SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS = 0.6f
@@ -529,11 +529,14 @@ fun SmartStackLayer(
     onSetShowNotification: (Boolean) -> Unit,
     onDismissGroup: (String) -> Unit,
     onDismissNotification: (String) -> Unit,
-    onDismissToFace: () -> Unit,
+    onDismissProgressChange: (Float) -> Unit,
+    onDismissRelease: (Float, Float, Boolean) -> Unit,
     showSteps: Boolean,
     modifier: Modifier = Modifier
 ) {
     val clock = rememberClockSnapshot()
+    val currentOnDismissProgressChange by rememberUpdatedState(onDismissProgressChange)
+    val currentOnDismissRelease by rememberUpdatedState(onDismissRelease)
     val battery = rememberBatterySnapshot()
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
@@ -566,7 +569,9 @@ fun SmartStackLayer(
     var modalState by remember { mutableStateOf<SideScreenModalState>(SideScreenModalState.None) }
     var dragDx by remember { mutableFloatStateOf(0f) }
     var dragDy by remember { mutableFloatStateOf(0f) }
+    var dragVelocityX by remember { mutableFloatStateOf(0f) }
     var dragVelocityY by remember { mutableFloatStateOf(0f) }
+    var dismissGestureActive by remember { mutableStateOf(false) }
     var lastDragEventUptime by remember { mutableStateOf(0L) }
     var transitionInFlight by remember { mutableStateOf(false) }
     val sideOverscroll = remember { Animatable(0f) }
@@ -601,7 +606,9 @@ fun SmartStackLayer(
         sideOverscroll.snapTo(0f)
         dragDx = 0f
         dragDy = 0f
+        dragVelocityX = 0f
         dragVelocityY = 0f
+        dismissGestureActive = false
         lastDragEventUptime = 0L
         transitionInFlight = false
     }
@@ -620,7 +627,9 @@ fun SmartStackLayer(
                     onDragStart = {
                         dragDx = 0f
                         dragDy = 0f
+                        dragVelocityX = 0f
                         dragVelocityY = 0f
+                        dismissGestureActive = false
                         lastDragEventUptime = 0L
                     },
                     onDrag = { change, dragAmount ->
@@ -628,7 +637,13 @@ fun SmartStackLayer(
                         val listAtBottom = true
                         if (lastDragEventUptime != 0L) {
                             val deltaMs = (change.uptimeMillis - lastDragEventUptime).coerceAtLeast(1L)
+                            val instantVelocityX = dragAmount.x / deltaMs * 1000f
                             val instantVelocityY = dragAmount.y / deltaMs * 1000f
+                            dragVelocityX = if (dragVelocityX == 0f) {
+                                instantVelocityX
+                            } else {
+                                dragVelocityX * 0.35f + instantVelocityX * 0.65f
+                            }
                             dragVelocityY = if (dragVelocityY == 0f) {
                                 instantVelocityY
                             } else {
@@ -638,8 +653,18 @@ fun SmartStackLayer(
                         lastDragEventUptime = change.uptimeMillis
                         dragDx += dragAmount.x
                         dragDy += dragAmount.y
-                        if (abs(dragDx) > abs(dragDy)) {
-                            if (dragDx < 0f) change.consume()
+                        if (
+                            dismissGestureActive ||
+                            (dragDx < -18f && abs(dragDx) > abs(dragDy))
+                        ) {
+                            dismissGestureActive = true
+                            change.consume()
+                            currentOnDismissProgressChange(
+                                (1f + dragDx / (size.width.coerceAtLeast(1) * 0.8f))
+                                    .coerceIn(0f, 1f)
+                            )
+                        } else if (abs(dragDx) > abs(dragDy)) {
+                            Unit
                         } else if (sideOverscroll.value != 0f) {
                             change.consume()
                             applySideOverscroll(dragAmount.y)
@@ -663,7 +688,6 @@ fun SmartStackLayer(
                     onDragEnd = {
                         val verticalIntent = abs(dragDy) > abs(dragDx) ||
                             abs(dragVelocityY) > SIDE_SCREEN_NOTIFICATION_FLING_VELOCITY
-                        val dismissToFace = dragDx < -SIDE_SCREEN_DISMISS_THRESHOLD && abs(dragDx) > abs(dragDy)
                         val openNotifications = canOpenNotificationsFromSide &&
                             verticalIntent &&
                             (
@@ -673,19 +697,27 @@ fun SmartStackLayer(
                                 )
 
                         when {
-                            dismissToFace -> {
+                            dismissGestureActive -> {
+                                val progress =
+                                    (1f + dragDx / (size.width.coerceAtLeast(1) * 0.8f))
+                                        .coerceIn(0f, 1f)
+                                val velocity =
+                                    dragVelocityX / (size.width.coerceAtLeast(1) * 0.8f)
                                 dragDx = 0f
                                 dragDy = 0f
+                                dragVelocityX = 0f
                                 dragVelocityY = 0f
+                                dismissGestureActive = false
                                 lastDragEventUptime = 0L
                                 onNotificationTransitionRelease(false)
                                 onRevealTargetChange(null)
                                 releaseSideOverscroll()
-                                onDismissToFace()
+                                currentOnDismissRelease(progress, velocity, false)
                             }
                             openNotifications -> {
                                 dragDx = 0f
                                 dragDy = 0f
+                                dragVelocityX = 0f
                                 dragVelocityY = 0f
                                 lastDragEventUptime = 0L
                                 onRevealTargetChange(null)
@@ -695,6 +727,7 @@ fun SmartStackLayer(
                             else -> {
                                 dragDx = 0f
                                 dragDy = 0f
+                                dragVelocityX = 0f
                                 dragVelocityY = 0f
                                 lastDragEventUptime = 0L
                                 releaseSideOverscroll()
@@ -703,9 +736,17 @@ fun SmartStackLayer(
                         }
                     },
                     onDragCancel = {
+                        if (dismissGestureActive) {
+                            val progress =
+                                (1f + dragDx / (size.width.coerceAtLeast(1) * 0.8f))
+                                    .coerceIn(0f, 1f)
+                            currentOnDismissRelease(progress, 0f, true)
+                        }
                         dragDx = 0f
                         dragDy = 0f
+                        dragVelocityX = 0f
                         dragVelocityY = 0f
+                        dismissGestureActive = false
                         lastDragEventUptime = 0L
                         releaseSideOverscroll()
                         onNotificationTransitionRelease(false)
@@ -2198,7 +2239,9 @@ private fun WidgetCard(
                 Text(
                     text = stringResource(R.string.widget_unavailable),
                     color = WatchColors.TextSecondary,
-                    fontSize = 13.sp
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 20.dp),
                 )
             }
         }
@@ -2219,7 +2262,9 @@ private fun EmptyWidgetCard(width: Dp) {
         Text(
             text = stringResource(R.string.widget_empty),
             color = WatchColors.TextSecondary,
-            fontSize = 13.sp
+            fontSize = 13.sp,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 20.dp),
         )
     }
 }

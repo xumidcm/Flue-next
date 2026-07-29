@@ -18,6 +18,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import kotlin.math.roundToInt
+
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -56,6 +57,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.zIndex
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.launchsession.ExternalLaunchState
@@ -87,6 +89,7 @@ import com.flue.launcher.ui.navigation.GestureHost
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.navigation.OverlayGestureTarget
 import com.flue.launcher.ui.navigation.ScreenState
+import com.flue.launcher.ui.navigation.resolveOverlaySettleOpen
 import com.flue.launcher.ui.anim.LayerAnimValues
 import com.flue.launcher.ui.anim.LayerFrameSnapshot
 import com.flue.launcher.ui.anim.flueBackdropFill
@@ -124,6 +127,19 @@ import kotlin.math.abs
 private const val SIDE_SCREEN_TRANSITION_MS = 260
 private const val NOTIFICATION_TRANSITION_MS = 240
 private const val APP_RETURN_MAINTENANCE_DELAY_MS = 260L
+
+internal fun notificationUnderlayBlurProgress(
+    notificationReturnState: ScreenState,
+    underlayState: ScreenState,
+    transitionProgress: Float,
+): Float {
+    if (
+        underlayState != ScreenState.Stack &&
+        underlayState != ScreenState.ControlCenter
+    ) return 0f
+    if (notificationReturnState != underlayState) return 0f
+    return transitionProgress.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 0f
+}
 
 /**
  * The tracker is the source of truth for a launch transition.  Keeping these
@@ -292,6 +308,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val showWidgetPage by vm.showWidgetPage.collectAsStateWithLifecycle()
     val showControlCenter by vm.showControlCenter.collectAsStateWithLifecycle()
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
+    val watchFaceTextEntryAnimation by vm.watchFaceTextEntryAnimation.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val watchmakerForceFill by vm.watchmakerForceFill.collectAsStateWithLifecycle()
@@ -407,6 +424,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         uiStyle,
         effectiveDarkMode,
         watchFaceChargingPowerText,
+        watchFaceTextEntryAnimation,
         watchFaceStatusIndicators,
         watchFaceBottomFadeEnabled,
         watchmakerForceFill,
@@ -1152,7 +1170,22 @@ fun LauncherScreen(vm: LauncherViewModel) {
         // 通知中心压在负一屏上时，负一屏自己的模糊进度。只跟通知的进度走，
         // 不跟 sidePageAnim——负一屏滑入本身不该把自己糊掉。
         val sidePageNotificationBlurProgress = remember {
-            { notificationGestureProgress.coerceIn(0f, 1f) }
+            {
+                notificationUnderlayBlurProgress(
+                    notificationReturnState = notificationReturnState,
+                    underlayState = ScreenState.Stack,
+                    transitionProgress = notificationGestureProgress,
+                )
+            }
+        }
+        val controlCenterNotificationBlurProgress = remember {
+            {
+                notificationUnderlayBlurProgress(
+                    notificationReturnState = notificationReturnState,
+                    underlayState = ScreenState.ControlCenter,
+                    transitionProgress = notificationGestureProgress,
+                )
+            }
         }
         // 「表盘收缩动画」关掉后，覆层拉出时表盘也不再缩放下沉——只留模糊
         // 与轻微压暗。这个 provider 是覆层拖动期间真正生效的逐帧值（外部时钟），
@@ -1168,13 +1201,20 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 ).coerceIn(0f, 1f)
                 // p=0 必须精确等于表盘静止态（外部时钟撤走零跳变）。
                 // alpha 只轻降：表盘变透明会露出纯黑底、还削弱镜像背衬的
-                // 亮度；压暗交给覆层玻璃自己的底色。模糊加深到 24dp。
+                // 亮度；压暗交给覆层玻璃自己的底色。Android 12+ 的三个
+                // 页面背衬使用实际 20dp；通知页维持原来的 16dp 观感。
                 // 缩放收到 0.08：下压幅度太大时表盘明显「缩成一小块」，
                 // 边缘让出的像素全靠背衬副本硬撑。让位靠模糊 + 轻微下压表达，
                 // 让出的那一圈由 flueBackdropFill 向外延展填充。
+                val pageProgress = maxOf(
+                    sidePageProgressProvider(),
+                    widgetPageProgressProvider(),
+                    controlCenterProgressProvider(),
+                ).coerceIn(0f, 1f)
+                val notificationProgress = notificationGestureProgress.coerceIn(0f, 1f)
                 LayerAnimValues(
                     scale = if (faceReturnShrinkEnabled) 1f - 0.08f * p else 1f,
-                    blur = 24f * p,
+                    blur = maxOf(20f * pageProgress, 16f * notificationProgress),
                     alpha = 1f - 0.15f * p,
                     translationY = if (faceReturnShrinkEnabled) 0.030f * p else 0f,
                 )
@@ -1279,6 +1319,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
             builtInMaterialStyle = uiStyle.isMaterial,
             visualKey = legacyWatchFaceVisualKey,
             capturedFrame = legacyCapturedWatchFace,
+            viewportSize = legacyWatchFaceBounds?.let { bounds ->
+                IntSize(bounds.width(), bounds.height())
+            },
         )
         // API 31+ 不再在转场期间降档行级模糊：settle 帧把 OFF→SYSTEM 的
         // RenderEffect 全量装回（applyConfigToAttachedRows 逐行 reapply）正是
@@ -1296,46 +1339,38 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         )
                     )
 
-        GestureHost(
-            screenState = screenState,
-            onStateChange = { vm.setState(it) },
-            sideScreenEnabled = sideScreenEnabled,
-            showNotification = false,
-            showWidgetPage = showWidgetPage,
-            showControlCenter = showControlCenter,
-            widgetsBackGestureLocked = widgetPageEditGestureLocked,
-            onOverlayDrag = { target, progress ->
-                overlayGestureGeneration++
-                overlayGestureTarget = target
-                overlayGestureProgress.floatValue = progress.coerceIn(0f, 1f)
-                when (target) {
-                    OverlayGestureTarget.Stack -> sidePageMounted = true
-                    OverlayGestureTarget.Widgets -> widgetPageMounted = true
-                    OverlayGestureTarget.ControlCenter -> controlCenterMounted = true
-                }
-            },
-            onOverlayRelease = { target, progress, velocity ->
-                // 位置 + 投影速度共同定向：拖过 42% 或快甩都算开。
-                val open = progress > 0.42f || velocity > 1.6f
-                // 只给刚被拖的那个覆层留初速度，其余两个照常从 0 收尾。
-                overlayReleaseVelocities[target] = velocity
-                val handoff = progress.coerceIn(0f, 1f)
-                val handoffGeneration = ++overlayGestureGeneration
+        val updateOverlayGesture: (OverlayGestureTarget, Float) -> Unit = { target, progress ->
+            overlayGestureGeneration++
+            overlayGestureTarget = target
+            overlayGestureProgress.floatValue = progress.coerceIn(0f, 1f)
+            when (target) {
+                OverlayGestureTarget.Stack -> sidePageMounted = true
+                OverlayGestureTarget.Widgets -> widgetPageMounted = true
+                OverlayGestureTarget.ControlCenter -> controlCenterMounted = true
+            }
+        }
+        val releaseOverlayGesture: (OverlayGestureTarget, Float, Float, Boolean) -> Unit =
+            { target, progress, velocity, cancelled ->
                 val overlayState = when (target) {
                     OverlayGestureTarget.Stack -> ScreenState.Stack
                     OverlayGestureTarget.Widgets -> ScreenState.Widgets
                     OverlayGestureTarget.ControlCenter -> ScreenState.ControlCenter
                 }
+                val wasOpen = screenState == overlayState
+                val open = resolveOverlaySettleOpen(
+                    progress = progress,
+                    velocity = velocity,
+                    currentlyOpen = wasOpen,
+                    cancelled = cancelled,
+                )
+                overlayReleaseVelocities[target] = if (cancelled) 0f else velocity
+                val handoff = progress.coerceIn(0f, 1f)
+                val handoffGeneration = ++overlayGestureGeneration
                 if (open) {
                     vm.setState(overlayState)
-                } else if (screenState == overlayState) {
-                    // 关闭侧跟手收尾：没过阈值就退回表盘。以前这里什么都不做，
-                    // 覆层已经被拖到接近 0 却仍停在打开状态。
+                } else if (wasOpen) {
                     vm.setState(ScreenState.Face)
                 }
-                // 先把对应 Animatable 播种到手指最后一帧，再撤掉同步手势
-                // 状态；这样交给 LaunchedEffect 的 spring 时像素位置和预制
-                // 模糊混合比例都连续，且整个 release 只创建一个协程。
                 launcherScope.launch {
                     when (target) {
                         OverlayGestureTarget.Stack -> sidePageAnim.snapTo(handoff)
@@ -1346,7 +1381,20 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         overlayGestureTarget = null
                     }
                 }
-            },
+            }
+
+        GestureHost(
+            screenState = screenState,
+            onStateChange = { vm.setState(it) },
+            sideScreenEnabled = sideScreenEnabled,
+            showNotification = false,
+            showWidgetPage = showWidgetPage,
+            showControlCenter = showControlCenter,
+            widgetsBackGestureLocked = widgetPageEditGestureLocked,
+            stackDismissHandledByContent = true,
+            controlCenterDismissHandledByContent = true,
+            onOverlayDrag = updateOverlayGesture,
+            onOverlayRelease = releaseOverlayGesture,
             modifier = Modifier.fillMaxSize()
         ) {
             if (directLaunchBackdropVisible) {
@@ -1541,6 +1589,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 },
                                 dataProvider = watchmakerDataProvider,
                                 forceFill = watchmakerForceFill,
+                                textEntryAnimationEnabled = watchFaceTextEntryAnimation,
                             )
                             if (watchFaceBottomFadeEnabled) {
                                 WatchFaceBottomFadeOverlay(
@@ -1566,7 +1615,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 onLoadFailure = { descriptor, error ->
                                     val rootCause = generateSequence(error) { it.cause }.last()
                                     vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
-                                }
+                                },
+                                textEntryAnimationEnabled = watchFaceTextEntryAnimation,
                             )
                             if (watchFaceBottomFadeEnabled) {
                                 WatchFaceBottomFadeOverlay(
@@ -1830,6 +1880,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     onDismiss = vm::closeFolder,
                     onTransitionProgress = { folderOverlayProgress = it },
                     dismissRequestToken = folderDismissToken,
+                    // During app-launch mask entry, Back cancels that transition
+                    // through LauncherViewModel instead of dismissing the folder.
+                    backHandlerEnabled = screenState != ScreenState.App && !showLaunchBackdrop,
                     modifier = Modifier.zIndex(5.4f)
                 )
             }
@@ -1953,7 +2006,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onSetShowNotification = vm::setShowNotification,
                         onDismissGroup = vm::dismissNotificationGroup,
                         onDismissNotification = vm::dismissNotification,
-                        onDismissToFace = { vm.setState(ScreenState.Face) },
+                        onDismissProgressChange = { progress ->
+                            updateOverlayGesture(OverlayGestureTarget.Stack, progress)
+                        },
+                        onDismissRelease = { progress, velocity, cancelled ->
+                            releaseOverlayGesture(
+                                OverlayGestureTarget.Stack,
+                                progress,
+                                velocity,
+                                cancelled,
+                            )
+                        },
                         showSteps = showStepCount,
                     )
                 }
@@ -1992,11 +2055,29 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     modifier = Modifier
                         .fillMaxSize()
                         .zIndex(4.4f)
+                        .flueLegacyBlur(
+                            progress = controlCenterNotificationBlurProgress,
+                            enabled = true,
+                        )
                         .graphicsLayer {
                             val offscreen = size.height.coerceAtLeast(screenHeightPx)
                             val pageProgress = controlCenterProgressProvider()
                             translationY = (pageProgress - 1f) * offscreen
                             alpha = if (pageProgress > 0.001f) 1f else 0f
+                            val blurP = controlCenterNotificationBlurProgress()
+                            val radiusPx = with(density) { (24f * blurP).dp.toPx() }
+                                .roundToInt()
+                                .coerceAtLeast(0)
+                            renderEffect = if (
+                                shouldRenderLayerBlur(
+                                    sdkInt = Build.VERSION.SDK_INT,
+                                    blurEnabled = true,
+                                    alpha = alpha,
+                                    radiusPx = radiusPx,
+                                )
+                            ) {
+                                systemBlurEffectForRadiusPx(radiusPx)
+                            } else null
                         }
                 ) {
                     ControlCenterLayer(
@@ -2008,7 +2089,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         showNotificationCard = showNotification && swapMusicNotificationComponents,
                         notificationGroups = sideScreenPreviewGroups,
                         onOpenNotifications = { openNotificationsFrom(ScreenState.ControlCenter) },
-                        onDismissToFace = { vm.setState(ScreenState.Face) },
+                        onDismissProgressChange = { progress ->
+                            updateOverlayGesture(OverlayGestureTarget.ControlCenter, progress)
+                        },
+                        onDismissRelease = { progress, velocity, cancelled ->
+                            releaseOverlayGesture(
+                                OverlayGestureTarget.ControlCenter,
+                                progress,
+                                velocity,
+                                cancelled,
+                            )
+                        },
                         showPowerButton = powerMenuButtonEnabled,
                         onPowerClick = openPowerDialogWithAccessibility,
                         glassHighlightEnabled = glassHighlightEnabled,
@@ -2062,6 +2153,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 }
                             )
                         },
+                        overlayMaskCornerRadiusDp = overlayMaskCornerRadiusDp,
                     )
                     }
                 }
