@@ -17,6 +17,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -394,6 +396,17 @@ fun NotificationLayer(
             // 圆屏整圆裁剪 + 半透明玻璃根底（表盘背衬透出即毛玻璃）。
             .clip(flueOverlayMaskShape(overlayMaskCornerRadiusDp))
             .background(launcherStyle.screenBackground.copy(alpha = 0.62f))
+            // 顶部安全间距也必须属于通知页的命中区域；只观察指针，不抢
+            // LazyColumn / 下拉关闭手势，但不再把这 22dp 传到底层控制中心。
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.changes.none { it.pressed }) break
+                    }
+                }
+            }
             .nestedScroll(nestedScroll)
     ) {
         val contentWidth = maxWidth * NOTIFICATION_CARD_WIDTH_RATIO

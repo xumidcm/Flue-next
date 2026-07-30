@@ -41,6 +41,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.CompositionLocalProvider
@@ -90,8 +91,10 @@ import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.navigation.OverlayGestureTarget
 import com.flue.launcher.ui.navigation.ScreenState
 import com.flue.launcher.ui.navigation.resolveOverlaySettleOpen
+import com.flue.launcher.ui.navigation.resolveAppListSettleOpen
 import com.flue.launcher.ui.anim.LayerAnimValues
 import com.flue.launcher.ui.anim.LayerFrameSnapshot
+import com.flue.launcher.ui.anim.lerpLayerAnimValues
 import com.flue.launcher.ui.anim.flueBackdropFill
 import com.flue.launcher.ui.anim.flueLegacyBlur
 import com.flue.launcher.ui.anim.rememberLegacyWatchFaceBackdropFrames
@@ -112,6 +115,7 @@ import com.flue.launcher.ui.theme.isMaterial
 import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
+import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.jbwatch.JbWatchFaceHost
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceHost
@@ -119,6 +123,7 @@ import com.flue.launcher.watchface.standard.rememberWatchmakerWatchDataProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
@@ -548,6 +553,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     // owns all per-frame entry motion so Compose never drives AndroidView
     // updates at animation cadence.
     var appListEntryAnimationToken by remember { mutableStateOf(0L) }
+    var suppressNextAppListEntryAnimation by remember { mutableStateOf(false) }
     var appListLayerReleaseHold by remember { mutableStateOf(false) }
     // Bumped by the app-list layer's scaleBlurAlpha once its springs actually
     // reach their targets; the release effect below suspends on it.
@@ -727,6 +733,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val cameFrom = entryTokenLastState
         entryTokenLastState = screenState
         if (screenState != ScreenState.Apps) return@LaunchedEffect
+        if (suppressNextAppListEntryAnimation) {
+            // 手势阶段列表本体已经随手指完整显现；抬手后再把原生列表重置到
+            // 逐行入场第 0 帧，会造成一次消失/重播。
+            suppressNextAppListEntryAnimation = false
+            return@LaunchedEffect
+        }
         // 从应用返回时默认不重播逐行上浮入场——重播会把 runtimeEntryProgress
         // 打回 0，所有行先整体消失再逐行浮起（「刚退回时上下的图标直接不见」）。
         // 只有用户显式打开「返回时图标上浮」开关才重播。
@@ -1033,6 +1045,28 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val sidePageAnim = remember { Animatable(0f) }
         val widgetPageAnim = remember { Animatable(0f) }
         val controlCenterAnim = remember { Animatable(0f) }
+        // 表盘上滑进入应用列表的单一跟手时钟。拖动阶段直接写 FloatState，
+        // 抬手后才交给 Animatable；列表、表盘、底板和边缘遮罩都读取它。
+        val appListGestureProgress = remember { mutableFloatStateOf(0f) }
+        val appListGestureActiveState = remember { mutableStateOf(false) }
+        var appListGestureActive by appListGestureActiveState
+        val appListGestureSettlingState = remember { mutableStateOf(false) }
+        var appListGestureSettling by appListGestureSettlingState
+        val appListGestureAnim = remember { Animatable(0f) }
+        var appListGestureGeneration by remember { mutableStateOf(0L) }
+        var appListGestureSettleJob by remember { mutableStateOf<Job?>(null) }
+        val appListGestureProgressProvider = remember {
+            { appListGestureProgress.floatValue.coerceIn(0f, 1f) }
+        }
+        val appListGestureDriven = appListGestureActive || appListGestureSettling
+        val watchFaceCaptureRequestToken = remember { mutableStateOf(0L) }
+        val requestCurrentWatchFaceFrame = remember {
+            {
+                watchFaceCaptureRequestToken.value =
+                    if (watchFaceCaptureRequestToken.value == Long.MAX_VALUE) 0L
+                    else watchFaceCaptureRequestToken.value + 1L
+            }
+        }
         // Mount latches change only at gesture/settle boundaries. Reading the
         // per-frame progress in composition caused the entire Launcher scene
         // to recompose for every pointer event on API 27-30; layer blocks below
@@ -1150,12 +1184,33 @@ fun LauncherScreen(vm: LauncherViewModel) {
         // It captures the actual spring/external-clock frame, so Apps/Settings
         // and all side overlays use the same reversible edge-fill geometry.
         val faceLayerFrame = remember { LayerFrameSnapshot() }
-        val faceBackdropFillProgress = remember {
+        val faceBackdropFillProgress = remember(
+            screenState,
+            appListGestureDriven,
+            isClosingAppListToFace,
+            appListLayerReleaseHold,
+            appListTouchedLastFrame,
+        ) {
             {
-                maxOf(
-                    overlayBackdropProgress(),
-                    faceLayerFrame.backdropProgress(),
-                ).coerceIn(0f, 1f)
+                val overlayProgress = overlayBackdropProgress()
+                // 回到稳定 Face 后，frameSnapshot 仍可能短暂保留 Apps 的上一帧。
+                // 此时强制归零，避免反向回填偶发永久粘在表盘后面。
+                if (
+                    screenState == ScreenState.Face &&
+                    overlayProgress <= 0.001f &&
+                    !appListGestureDriven &&
+                    !isClosingAppListToFace &&
+                    !appListLayerReleaseHold &&
+                    !appListTouchedLastFrame
+                ) {
+                    0f
+                } else {
+                    maxOf(
+                        overlayProgress,
+                        if (appListGestureDriven) appListGestureProgressProvider() else 0f,
+                        faceLayerFrame.backdropProgress(),
+                    ).coerceIn(0f, 1f)
+                }
             }
         }
         val overlayBackdropActive by remember {
@@ -1221,6 +1276,92 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 )
             }
         }
+        val appListGestureFaceProvider = remember(
+            uiStyle,
+            faceReturnShrinkEnabled,
+            legacyAppListTransitionEnabled,
+        ) {
+            val start = faceLayerValues(
+                ScreenState.Face,
+                uiStyle,
+                shrinkOnFaceReturn = faceReturnShrinkEnabled,
+                legacyTransition = legacyAppListTransitionEnabled,
+            )
+            val end = faceLayerValues(
+                ScreenState.Apps,
+                uiStyle,
+                shrinkOnFaceReturn = faceReturnShrinkEnabled,
+                legacyTransition = legacyAppListTransitionEnabled,
+            )
+            val provider: () -> LayerAnimValues = {
+                lerpLayerAnimValues(start, end, appListGestureProgressProvider())
+            }
+            provider
+        }
+        val faceTransitionProvider = remember(
+            faceBackdropProvider,
+            appListGestureFaceProvider,
+            appListGestureActiveState,
+            appListGestureSettlingState,
+            screenState,
+        ) {
+            {
+                if (
+                    appListGestureActiveState.value ||
+                    appListGestureSettlingState.value ||
+                    (screenState == ScreenState.Apps && appListGestureProgressProvider() >= 0.999f)
+                ) {
+                    appListGestureFaceProvider()
+                } else {
+                    faceBackdropProvider()
+                }
+            }
+        }
+        val faceExternallyDriven = overlayBackdropActive || appListGestureDriven
+        val appListGestureLayerProvider = remember(
+            uiStyle,
+            appListReturnShrinkEnabled,
+            faceReturnShrinkEnabled,
+            legacyAppListTransitionEnabled,
+        ) {
+            val start = appListLayerValues(
+                ScreenState.Face,
+                uiStyle,
+                shrinkOnAppReturn = appListReturnShrinkEnabled,
+                shrinkOnFaceReturn = faceReturnShrinkEnabled,
+                legacyTransition = legacyAppListTransitionEnabled,
+            )
+            val end = appListLayerValues(
+                ScreenState.Apps,
+                uiStyle,
+                shrinkOnAppReturn = appListReturnShrinkEnabled,
+                shrinkOnFaceReturn = faceReturnShrinkEnabled,
+                legacyTransition = legacyAppListTransitionEnabled,
+            )
+            val provider: () -> LayerAnimValues = {
+                lerpLayerAnimValues(start, end, appListGestureProgressProvider())
+            }
+            provider
+        }
+        val appListGesturePlateProvider = remember(appListGestureLayerProvider) {
+            {
+                appListGestureLayerProvider().copy(
+                    scale = 1f,
+                    blur = 0f,
+                    translationX = 0f,
+                    translationY = 0f,
+                )
+            }
+        }
+        val appListGestureFadeProvider = remember(appListGestureLayerProvider) {
+            {
+                appListGestureLayerProvider().copy(
+                    scale = 1f,
+                    translationX = 0f,
+                    translationY = 0f,
+                )
+            }
+        }
         val faceAnimState = screenState
         val updateNotificationTransitionProgress: (Float) -> Unit = { progress ->
             // 同步写状态，不经过协程——协程调度那一帧的延迟就是首帧跳跃的来源。
@@ -1283,6 +1424,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             screenState == ScreenState.ControlCenter
         val sideSceneOverlayActive = sideScreenVisible || widgetPageVisible || controlCenterVisible
         val appListLayerRaised = screenState == ScreenState.Apps ||
+            appListGestureDriven ||
             // 打断转场时补位：prevState 尚未回写的那一帧靠它顶住 zIndex，
             // 否则列表层会瞬间掉到表盘背后闪一下。
             appListTouchedLastFrame ||
@@ -1291,11 +1433,18 @@ fun LauncherScreen(vm: LauncherViewModel) {
             isReturningFromApp ||
             appListLayerReleaseHold ||
             (screenState == ScreenState.App && launchSourceState == ScreenState.Apps && showLaunchBackdrop)
+        // API 31+ 的回填层已经把“中心 + 镜像边缘”作为一张完整画面统一模糊。
+        // 内层真实表盘仍需绘制来推进动画状态，但必须关闭它自己的 RenderEffect，
+        // 否则 GPU 上仍然会做两次模糊（即使下面那层最终被覆盖）。旧系统不改。
+        val renderFaceLayerBlur = faceLayerBlurEnabled && !(
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                (faceExternallyDriven || appListLayerRaised || screenState != ScreenState.Face)
+            )
         var legacyWatchFaceBounds by remember(legacyWatchFaceVisualKey) {
             mutableStateOf<android.graphics.Rect?>(null)
         }
         val legacyCaptureAllowed =
-            Build.VERSION.SDK_INT in Build.VERSION_CODES.O until Build.VERSION_CODES.S &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
                 launcherInteractive &&
                 screenState == ScreenState.Face &&
                 watchFaceSelectionReady &&
@@ -1306,10 +1455,37 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 !appListLayerRaised &&
                 !showLaunchBackdrop &&
                 !directLaunchBackdropVisible
+        LaunchedEffect(legacyCaptureAllowed, legacyWatchFaceVisualKey) {
+            if (legacyCaptureAllowed) requestCurrentWatchFaceFrame()
+        }
+        val latestLegacyCaptureAllowed = rememberUpdatedState(legacyCaptureAllowed)
+        val requestCleanWatchFaceFrame = remember(
+            requestCurrentWatchFaceFrame,
+            faceBackdropFillProgress,
+            overlayGestureTargetState,
+            appListGestureActiveState,
+            appListGestureSettlingState,
+        ) {
+            {
+                // 第二次手势可能在上一次覆层的 settle 尚未完全归零时按下。
+                // 此时绝不能再触发 PixelCopy，否则会把那一点残影连同表盘一起
+                // 捕进下一轮模糊；复用上一张已确认干净的静止帧更稳定。
+                if (
+                    latestLegacyCaptureAllowed.value &&
+                    faceBackdropFillProgress() <= 0.001f &&
+                    overlayGestureTargetState.value == null &&
+                    !appListGestureActiveState.value &&
+                    !appListGestureSettlingState.value
+                ) {
+                    requestCurrentWatchFaceFrame()
+                }
+            }
+        }
         val legacyCapturedWatchFace = rememberLegacyWatchFacePixelCopyFrame(
             visualKey = legacyWatchFaceVisualKey,
             sourceBoundsInWindow = legacyWatchFaceBounds,
             captureAllowed = legacyCaptureAllowed,
+            captureRequestToken = watchFaceCaptureRequestToken.value,
         )
         val legacyWatchFaceBackdropFrames = rememberLegacyWatchFaceBackdropFrames(
             descriptor = selectedWatchFace,
@@ -1350,6 +1526,48 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 OverlayGestureTarget.ControlCenter -> controlCenterMounted = true
             }
         }
+        val updateAppListGesture: (Float) -> Unit = { progress ->
+            if (!appListGestureActive) {
+                appListGestureGeneration++
+                appListGestureSettleJob?.cancel()
+                appListGestureSettling = false
+                appListGestureActive = true
+            }
+            appListGestureProgress.floatValue = progress.coerceIn(0f, 1f)
+        }
+        val releaseAppListGesture: (Float, Float, Boolean) -> Unit =
+            { progress, velocity, cancelled ->
+                val handoff = progress.coerceIn(0f, 1f)
+                val safeVelocity = velocity.takeIf(Float::isFinite) ?: 0f
+                val open = resolveAppListSettleOpen(handoff, safeVelocity, cancelled)
+                val target = if (open) 1f else 0f
+                val generation = ++appListGestureGeneration
+                appListGestureSettleJob?.cancel()
+                appListGestureProgress.floatValue = handoff
+                appListGestureActive = false
+                appListGestureSettling = true
+                if (open) {
+                    suppressNextAppListEntryAnimation = true
+                    vm.setState(ScreenState.Apps)
+                }
+                appListGestureSettleJob = launcherScope.launch {
+                    try {
+                        appListGestureAnim.snapTo(handoff)
+                        appListGestureAnim.animateTo(
+                            targetValue = target,
+                            animationSpec = appListMotionSpec,
+                            initialVelocity = safeVelocity,
+                        ) {
+                            appListGestureProgress.floatValue = value.coerceIn(0f, 1f)
+                        }
+                    } finally {
+                        if (generation == appListGestureGeneration) {
+                            appListGestureProgress.floatValue = target
+                            appListGestureSettling = false
+                        }
+                    }
+                }
+            }
         val releaseOverlayGesture: (OverlayGestureTarget, Float, Float, Boolean) -> Unit =
             { target, progress, velocity, cancelled ->
                 val overlayState = when (target) {
@@ -1396,6 +1614,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
             controlCenterDismissHandledByContent = true,
             onOverlayDrag = updateOverlayGesture,
             onOverlayRelease = releaseOverlayGesture,
+            onAppListDrag = updateAppListGesture,
+            onAppListRelease = releaseAppListGesture,
+            onBackdropCaptureRequested = requestCleanWatchFaceFrame,
             modifier = Modifier.fillMaxSize()
         ) {
             if (directLaunchBackdropVisible) {
@@ -1417,26 +1638,44 @@ fun LauncherScreen(vm: LauncherViewModel) {
             }
             // watchOS 三段式的 B 段：表盘压暗（A）之后由这层渐变到纯黑，图标
             // 再从黑底上飞入（C）。它只在应用列表转场期间存在。
+            val appListScrimEnabled = !uiStyle.isMaterial && !legacyAppListTransitionEnabled
             val appListScrimTarget = if (
-                !uiStyle.isMaterial &&
-                !legacyAppListTransitionEnabled &&
+                appListScrimEnabled &&
                 (screenState == ScreenState.Apps ||
                     (screenState == ScreenState.App && launchSourceState == ScreenState.Apps))
             ) 1f else 0f
-            val appListScrimAlpha by animateFloatAsState(
-                targetValue = appListScrimTarget,
-                animationSpec = appListAlphaSpec,
-                label = "app_list_scrim",
-            )
-            if (appListScrimAlpha > 0.001f) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .zIndex(2f)
-                        .graphicsLayer { alpha = appListScrimAlpha }
-                        .background(appListColors.background)
-                )
+            val appListGestureScrimProvider = remember(
+                appListScrimEnabled,
+                appListGestureProgressProvider,
+            ) {
+                {
+                    LayerAnimValues(
+                        alpha = if (appListScrimEnabled) {
+                            appListGestureProgressProvider()
+                        } else {
+                            0f
+                        },
+                    )
+                }
             }
+            // 黑底也读取和列表、底板、边缘遮罩完全相同的手势时钟。
+            // 条件挂载或独立 animateFloat 会在取消/抬手交接的一帧补闪完整黑底。
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(2f)
+                    .scaleBlurAlpha(
+                        targetValues = LayerAnimValues(alpha = appListScrimTarget),
+                        blurEnabled = false,
+                        scaleSpec = appListMotionSpec,
+                        alphaSpec = appListAlphaSpec,
+                        blurSpec = appListBlurSpec,
+                        translationSpec = appListMotionSpec,
+                        valuesProvider = appListGestureScrimProvider,
+                        externallyDriven = appListGestureDriven,
+                    )
+                    .background(appListColors.background),
+            )
             var folderOverlayProgress by remember { mutableFloatStateOf(0f) }
             LaunchedEffect(openFolder?.componentKey) {
                 if (openFolder == null) folderOverlayProgress = 0f
@@ -1485,26 +1724,31 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         // scale/translation；矩形外再由 flueBackdropFill 做四边
                         // 与四角镜像，避免只放大中心副本造成粘滞/黑缝。
                         contentScale = {
-                            if (overlayBackdropActive) {
-                                faceBackdropProvider().scale
+                            if (faceExternallyDriven) {
+                                faceTransitionProvider().scale
                             } else {
                                 faceLayerFrame.scale
                             }
                         },
                         contentTranslationYFraction = {
-                            if (overlayBackdropActive) {
-                                faceBackdropProvider().translationY
+                            if (faceExternallyDriven) {
+                                faceTransitionProvider().translationY
                             } else {
                                 faceLayerFrame.translationY
                             }
                         },
                         contentBlurRadiusDp = {
-                            if (overlayBackdropActive) {
-                                faceBackdropProvider().blur
+                            if (faceExternallyDriven) {
+                                faceTransitionProvider().blur
                             } else {
                                 faceLayerFrame.blur
                             }
                         },
+                        hardwareCapturedFrame = legacyCapturedWatchFace,
+                        // Android 12+ 全部表盘统一使用窗口当前帧。内置 Compose
+                        // 表盘的 GraphicsLayer 在部分设备上会录到空层，表现为下拉
+                        // 时直接变黑；PixelCopy 同时让内置图片/视频也不再切缩略图。
+                        hardwareCaptureRequired = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
                     )
                     // API 31+ 由 scaleBlurAlpha / RenderEffect 实时模糊；
                     // API 27-30 的清晰/预制模糊帧混合已由 flueBackdropFill 处理。
@@ -1516,10 +1760,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             legacyTransition = legacyAppListTransitionEnabled,
                         ),
                         screenHeight = screenHeightPx,
-                        blurEnabled = faceLayerBlurEnabled,
+                        blurEnabled = renderFaceLayerBlur,
                         origin = LayerPivot.Center,
-                        valuesProvider = faceBackdropProvider,
-                        externallyDriven = overlayBackdropActive,
+                        valuesProvider = faceTransitionProvider,
+                        externallyDriven = faceExternallyDriven,
                         frameSnapshot = faceLayerFrame,
                     )
             ) {
@@ -1709,8 +1953,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         alphaSpec = appListAlphaSpec,
                         blurSpec = appListBlurSpec,
                         translationSpec = appListMotionSpec,
-                        valuesProvider = appListLaunchPlateProvider,
-                        externallyDriven = appListLaunchDriven,
+                        valuesProvider = if (appListGestureDriven) {
+                            appListGesturePlateProvider
+                        } else {
+                            appListLaunchPlateProvider
+                        },
+                        externallyDriven = appListLaunchDriven || appListGestureDriven,
                     )
                     .background(appListColors.background),
             )
@@ -1736,8 +1984,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         blurSpec = appListBlurSpec,
                         translationSpec = appListMotionSpec,
                         onSettled = { appListLayerSettleCount += 1 },
-                        valuesProvider = appListLaunchValuesProvider,
-                        externallyDriven = appListLaunchDriven,
+                        valuesProvider = if (appListGestureDriven) {
+                            appListGestureLayerProvider
+                        } else {
+                            appListLaunchValuesProvider
+                        },
+                        externallyDriven = appListLaunchDriven || appListGestureDriven,
                     )
             ) {
                 when (val backend = activeAppListBackend) {
@@ -1754,7 +2006,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         bottomBlurRadiusDp = honeycombEdgeBlurRadius,
                         drawEdgeFadeMaskInNativeView = false,
                         rotaryHapticsEnabled = rotaryHapticsEnabled,
-                        active = screenState == ScreenState.Apps,
+                        active = screenState == ScreenState.Apps || appListGestureDriven,
                         initialScrollResetKey = directLaunchInitialScrollResetKey,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
                         appListScalePercent = appListScalePercent,
@@ -1804,6 +2056,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             // state switch cannot remove it one frame too early.
             val nativeEdgeFadeVisible =
                 screenState == ScreenState.Apps ||
+                    appListGestureDriven ||
                     // 与 appListLayerRaised 用同一个补位项：打断转场那一帧
                     // 上面五项可能同时为假，遮罩会在列表还在淡出时整体卸载，
                     // 正是上面注释说的「提前一帧移除就会闪」。
@@ -1841,8 +2094,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         alphaSpec = appListAlphaSpec,
                         blurSpec = appListBlurSpec,
                         translationSpec = appListMotionSpec,
-                        valuesProvider = appListLaunchFadeProvider,
-                        externallyDriven = appListLaunchDriven,
+                        valuesProvider = if (appListGestureDriven) {
+                            appListGestureFadeProvider
+                        } else {
+                            appListLaunchFadeProvider
+                        },
+                        externallyDriven = appListLaunchDriven || appListGestureDriven,
                     ),
             )
 
@@ -2208,6 +2465,15 @@ private fun LaunchBackdropContent(
     Box(
         modifier = modifier
             .fillMaxSize()
+            // 启动与返回遮罩整个生命周期都独占交互；返回途中状态已经切回
+            // Apps/Stack 时也不能点到下面的应用或快捷控件。
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent().changes.forEach { it.consume() }
+                    }
+                }
+            }
             .graphicsLayer {
                 // 1.6 倍斜率：p≈0.62 就完全不透明。列表层的 alpha 用 1.8 倍
                 // 斜率提前淡出（appListLaunchValues），两条曲线共用同一个

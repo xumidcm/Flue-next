@@ -5,6 +5,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
@@ -49,22 +50,24 @@ internal class LayerPivotLatch(
 /**
  * Draw-phase snapshot of the values that are actually installed on a layer.
  *
- * This is deliberately plain mutable state rather than Compose state: the
- * backdrop reads it from its draw modifier and must not recompose the launcher
- * at animation cadence. It also gives the backdrop the spring's real frame,
- * instead of trying to reproduce the same motion with a second clock.
+ * These are snapshot float states read only from the backdrop's draw lambdas.
+ * A graphicsLayer-only change does not necessarily invalidate an outer
+ * drawWithContent on old Android; draw-observed state makes that outer blend
+ * redraw every spring frame without recomposing the launcher. It also gives
+ * the backdrop the spring's real frame instead of a second animation clock.
  */
 internal class LayerFrameSnapshot {
-    var scale: Float = 1f
-        private set
-    var blur: Float = 0f
-        private set
-    var alpha: Float = 1f
-        private set
-    var translationX: Float = 0f
-        private set
-    var translationY: Float = 0f
-        private set
+    private val scaleState = mutableFloatStateOf(1f)
+    private val blurState = mutableFloatStateOf(0f)
+    private val alphaState = mutableFloatStateOf(1f)
+    private val translationXState = mutableFloatStateOf(0f)
+    private val translationYState = mutableFloatStateOf(0f)
+
+    val scale: Float get() = scaleState.floatValue
+    val blur: Float get() = blurState.floatValue
+    val alpha: Float get() = alphaState.floatValue
+    val translationX: Float get() = translationXState.floatValue
+    val translationY: Float get() = translationYState.floatValue
 
     fun update(
         scale: Float,
@@ -73,11 +76,11 @@ internal class LayerFrameSnapshot {
         translationX: Float,
         translationY: Float,
     ) {
-        this.scale = scale
-        this.blur = blur
-        this.alpha = alpha
-        this.translationX = translationX
-        this.translationY = translationY
+        scaleState.floatValue = scale
+        blurState.floatValue = blur
+        alphaState.floatValue = alpha
+        translationXState.floatValue = translationX
+        translationYState.floatValue = translationY
     }
 
     /**
@@ -170,6 +173,10 @@ internal fun Modifier.scaleBlurAlpha(
     val latestProvider = rememberUpdatedState(valuesProvider)
     val latestDriven = rememberUpdatedState(externallyDriven)
     val wasExternallyDriven = remember { androidx.compose.runtime.mutableStateOf(false) }
+    // valuesProvider 往往会在手势结束的同一次重组里切回另一条 provider。
+    // 保存“最后真正画到屏幕上的外部帧”，交接时只能从它播种内部弹簧；
+    // 重新调用已经换掉的 provider 会让列表/底部按钮补闪完整态一帧。
+    val lastExternalFrame = remember { LayerAnimValueHolder() }
 
     // Specs are part of the key: swapping the motion phase mid-transition used
     // to be silently ignored because only targetValues restarted the effect.
@@ -177,20 +184,25 @@ internal fun Modifier.scaleBlurAlpha(
         if (externallyDriven) {
             // The external clock owns the frame values; the springs stay parked
             // so the hand-back below starts from the provider's end point.
+            // A very short/cancelled gesture can begin and end before the first
+            // graphicsLayer draw. Seed here as well so it never reuses a frame
+            // left by an older gesture in that edge case.
+            latestProvider.value?.invoke()?.let { lastExternalFrame.value = it }
             wasExternallyDriven.value = true
             return@LaunchedEffect
         }
         if (wasExternallyDriven.value) {
-            wasExternallyDriven.value = false
             // Seamless hand-back: seed the springs with the external clock's
             // final frame before resuming normal target pursuit.
-            latestProvider.value?.invoke()?.let { seed ->
+            (lastExternalFrame.value ?: latestProvider.value?.invoke())?.let { seed ->
                 animScale.snapTo(seed.scale)
                 animAlpha.snapTo(seed.alpha)
                 animBlur.snapTo(seed.blur)
                 animTransX.snapTo(seed.translationX)
                 animTransY.snapTo(seed.translationY)
             }
+            // 五个 Animatable 都已落到同一终帧后才允许 draw 阶段改读内部值。
+            wasExternallyDriven.value = false
         }
         val jobs = listOf(
             launch { animScale.animateTo(targetValues.scale, scaleSpec) },
@@ -215,7 +227,13 @@ internal fun Modifier.scaleBlurAlpha(
 
     return this
         .graphicsLayer {
-            val external = if (latestDriven.value) latestProvider.value?.invoke() else null
+            val external = when {
+                latestDriven.value -> latestProvider.value?.invoke()?.also {
+                    lastExternalFrame.value = it
+                }
+                wasExternallyDriven.value -> lastExternalFrame.value
+                else -> null
+            }
             val frameScale = external?.scale ?: animScale.value
             val frameAlpha = external?.alpha ?: animAlpha.value
             val frameBlur = external?.blur ?: animBlur.value
@@ -249,4 +267,9 @@ internal fun Modifier.scaleBlurAlpha(
                 systemBlurEffectForRadiusPx(radiusPx)
             } else null
         }
+}
+
+/** Draw-thread holder; intentionally not snapshot state, so sampling a frame cannot recompose. */
+private class LayerAnimValueHolder {
+    var value: LayerAnimValues? = null
 }

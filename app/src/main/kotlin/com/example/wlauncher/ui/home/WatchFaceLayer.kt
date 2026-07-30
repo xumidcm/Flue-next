@@ -279,7 +279,7 @@ fun BuiltInWatchFacePreview(
     playVideo: Boolean = true,
     showChargingPowerText: Boolean = true,
     showStatusIndicators: Boolean = false,
-    showBottomFade: Boolean = true,
+    showBottomFade: Boolean = false,
     bottomFadeColor: Color? = null,
     bottomFadeHeightDp: Int = 84,
     bottomFadeBlurRadiusDp: Float = 4f,

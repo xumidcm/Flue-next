@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.RenderEffect
 import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -130,6 +131,7 @@ private class BackdropCaptureState {
     var wasActive: Boolean = false
     var lastCaptureUptimeMs: Long = Long.MIN_VALUE
     var capturedSize: IntSize = IntSize.Zero
+    var capturedPixelCopyGeneration: Long = Long.MIN_VALUE
 }
 
 /**
@@ -152,7 +154,7 @@ private class BackdropCaptureState {
  * TextureView 也不会再因为 GraphicsLayer 录制为空而露出浅色 Window 背景。
  */
 @Composable
-fun Modifier.flueBackdropFill(
+internal fun Modifier.flueBackdropFill(
     progress: () -> Float,
     enabled: Boolean,
     fallbackColor: Color = Color(0xFF141820),
@@ -162,29 +164,79 @@ fun Modifier.flueBackdropFill(
     contentTranslationYFraction: (() -> Float)? = null,
     /** Same dp blur clock installed on the live face layer for API 31+. */
     contentBlurRadiusDp: (() -> Float)? = null,
+    /** Actual window-composited frame for AndroidView / TextureView watch faces. */
+    hardwareCapturedFrame: LegacyWatchFaceCapturedFrame? = null,
+    /** Never fall back to preview/Compose recording when the face needs PixelCopy. */
+    hardwareCaptureRequired: Boolean = false,
 ): Modifier {
     if (!enabled) return this
     val backdropLayer = rememberGraphicsLayer()
     val magnifiedLayer = rememberGraphicsLayer()
-    val captureState = remember { BackdropCaptureState() }
+    val captureState = remember(hardwareCaptureRequired, hardwareCapturedFrame?.visualKey) {
+        BackdropCaptureState()
+    }
     val canHardwareBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val hardwareCapturedImage = remember(hardwareCapturedFrame?.generation) {
+        hardwareCapturedFrame
+            ?.bitmap
+            ?.takeUnless { it.isRecycled }
+            ?.asImageBitmap()
+    }
     return this.drawWithContent {
         val rawProgress = progress()
         val p = if (rawProgress.isFinite()) rawProgress.coerceIn(0f, 1f) else 0f
         val layerSize = size.toIntSize()
+        fun recordPixelCopyFrameIfAvailable(): Boolean {
+            val frame = hardwareCapturedFrame ?: return false
+            val image = hardwareCapturedImage ?: return false
+            if (
+                frame.bitmap.isRecycled ||
+                image.width != layerSize.width ||
+                image.height != layerSize.height
+            ) return false
+            if (
+                captureState.hasFrame &&
+                captureState.capturedSize == layerSize &&
+                captureState.capturedPixelCopyGeneration == frame.generation
+            ) return true
+            backdropLayer.record(this, layoutDirection, layerSize) {
+                drawImage(
+                    image = image,
+                    dstOffset = IntOffset.Zero,
+                    dstSize = layerSize,
+                    filterQuality = FilterQuality.Medium,
+                )
+            }
+            captureState.hasFrame = true
+            captureState.capturedSize = layerSize
+            captureState.capturedPixelCopyGeneration = frame.generation
+            captureState.lastCaptureUptimeMs = SystemClock.uptimeMillis()
+            return true
+        }
         if (p <= 0.001f) {
             if (canHardwareBlur) {
-                val now = SystemClock.uptimeMillis()
-                val sizeChanged = captureState.capturedSize != layerSize
-                val captureDue = now - captureState.lastCaptureUptimeMs >= BACKDROP_CAPTURE_INTERVAL_MS
-                if (!captureState.hasFrame || captureState.wasActive || sizeChanged || captureDue) {
-                    backdropLayer.record(this, layoutDirection, layerSize) {
-                        this@drawWithContent.drawContent()
+                val hasPixelCopy = if (hardwareCaptureRequired) {
+                    recordPixelCopyFrameIfAvailable()
+                } else {
+                    false
+                }
+                if (!hardwareCaptureRequired || !hasPixelCopy) {
+                    val now = SystemClock.uptimeMillis()
+                    val sizeChanged = captureState.capturedSize != layerSize
+                    val captureDue = now - captureState.lastCaptureUptimeMs >= BACKDROP_CAPTURE_INTERVAL_MS
+                    if (!hardwareCaptureRequired && (
+                            !captureState.hasFrame || captureState.wasActive || sizeChanged || captureDue
+                        )
+                    ) {
+                        backdropLayer.record(this, layoutDirection, layerSize) {
+                            this@drawWithContent.drawContent()
+                        }
+                        captureState.hasFrame = true
+                        captureState.capturedPixelCopyGeneration = Long.MIN_VALUE
+                        captureState.wasActive = false
+                        captureState.lastCaptureUptimeMs = now
+                        captureState.capturedSize = layerSize
                     }
-                    captureState.hasFrame = true
-                    captureState.wasActive = false
-                    captureState.lastCaptureUptimeMs = now
-                    captureState.capturedSize = layerSize
                 }
             }
             drawContent()
@@ -250,12 +302,8 @@ fun Modifier.flueBackdropFill(
             return@drawWithContent
         }
 
-        // AndroidView/Surface-backed external faces can produce an empty or
-        // opaque-black Compose GraphicsLayer on recent Android versions. For
-        // those faces rememberLegacyWatchFaceBackdropFrames supplies a real
-        // preview source. Render it through the current hardware blur, then
-        // draw the live face above it; this preserves the Android 12+ blur
-        // quality while guaranteeing the shrunken edge is never black.
+        // 仅保留给 API 27-30 的预制帧兼容分支；API 31+ 外部/视频表盘走下面
+        // 的真实 PixelCopy 当前帧，不再允许 preview.jpg 或视频首帧插进来。
         val preparedHardwareFrames = legacyFrames?.takeIf {
             legacyBackdropViewportMatches(it.viewportWidth, it.viewportHeight, layerSize)
         }
@@ -291,30 +339,46 @@ fun Modifier.flueBackdropFill(
             }
             magnifiedLayer.alpha = 1f
             clipRect { drawLayer(magnifiedLayer) }
+            // Android 12 以下保持原有结构：预制帧只负责边缘和模糊混合，
+            // 上面的真实表盘仍实时绘制，不能被静态预览整张覆盖。
             drawContent()
-            // Apply the veil to both the mirrored fill and the live face. When
-            // it sat below drawContent, the top mirrored strip was visibly
-            // darker than the face on Android 12+ and formed a colour seam.
             drawRect(Color.Black.copy(alpha = 0.20f * p))
             return@drawWithContent
         }
 
         captureState.wasActive = true
+        if (hardwareCaptureRequired) {
+            recordPixelCopyFrameIfAvailable()
+        }
         // Activity 若一开始就在覆层状态，尚不存在静止帧；只在这一帧补录一次，
         // 后续动画始终复用它，避免视频/复杂表盘在每个动画帧被双重录制。
-        if (!captureState.hasFrame || captureState.capturedSize != layerSize) {
+        if (
+            !hardwareCaptureRequired &&
+            (!captureState.hasFrame || captureState.capturedSize != layerSize)
+        ) {
             backdropLayer.record(this, layoutDirection, layerSize) {
                 this@drawWithContent.drawContent()
             }
             captureState.hasFrame = true
+            captureState.capturedPixelCopyGeneration = Long.MIN_VALUE
             captureState.lastCaptureUptimeMs = SystemClock.uptimeMillis()
             captureState.capturedSize = layerSize
         }
+        if (!captureState.hasFrame || captureState.capturedSize != layerSize) {
+            // PixelCopy 尚未返回时不用缩略图，也不能用纯色整张盖住表盘造成
+            // 一次闪黑。先铺不透明边底，再保留当前实时表盘；捕获到达后才
+            // 切成完整的单层扩边画面。
+            drawRect(fallbackColor.copy(alpha = 1f))
+            drawContent()
+            drawRect(Color.Black.copy(alpha = 0.20f * p))
+            return@drawWithContent
+        }
+        // 真实内容只负责推进内部弹簧/时钟，随后被完整不透明的单层扩边画面
+        // 覆盖，不会再与回填层同时出现在屏幕上。
+        drawContent()
         backdropLayer.renderEffect = null
         backdropLayer.alpha = 1f
         backdropLayer.colorFilter = null
-        // 底色永远先铺满；即使 SurfaceView / 视频没有进入 GraphicsLayer
-        // 录制结果，整个背衬也保持不透明，不会从透明像素看到 Window 黑底。
         drawRect(fallbackColor.copy(alpha = 1f))
         // 和前景表盘使用同一份 scale / translation。中心副本只占前景表盘
         // 实际所在的矩形；矩形外不是再放大一份中心画面，而是继续采样相邻
@@ -438,11 +502,9 @@ fun Modifier.flueBackdropFill(
         clipRect {
             drawLayer(magnifiedLayer)
         }
-        // 所有效果从 p=0 连续起步；中断后只要同一个时钟反向，就会沿原路径
-        // 消失，不会在接近 0 时因固定 0.08 alpha 突然跳一帧。
-        drawContent()
-        // Uniform tint after both layers keeps the mirrored top edge and the
-        // scaled live canvas in the same colour space.
+        // Android 12+ 只画这张“中心 + 四边 + 四角”的完整扩边层。旧实现随后
+        // 又 drawContent() 一次，等于同一表盘上下各一层、各走一次模糊，正是
+        // 下沉时中心和回填割裂的来源。API 27-30 的预制帧分支保持原样。
         drawRect(Color.Black.copy(alpha = 0.20f * p))
     }
 }

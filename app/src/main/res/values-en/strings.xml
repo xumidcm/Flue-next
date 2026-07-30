@@ -741,6 +741,8 @@
     <string name="watch_editor_grant_sensor">Allow body sensors</string>
     <string name="watch_editor_save_as">Save as new watch face</string>
     <string name="watch_editor_save_current">Save current watch face</string>
+    <string name="watch_editor_upload_save_required_title">Save the watch face first</string>
+    <string name="watch_editor_upload_save_required_message">Before uploading to the watch face store, save the current changes or save them as a new watch face.</string>
     <string name="watch_editor_rename">Rename</string>
     <string name="watch_editor_import_watch">Import .watch</string>
     <string name="watch_editor_import_wff">Import and convert WFF</string>
@@ -970,6 +972,15 @@
     <string name="watch_store_use_face">Use this watch face</string>
     <string name="watch_store_apply_success">Watch face applied</string>
     <string name="watch_store_edit">Edit</string>
+    <string name="watch_store_edit_upload">Edit uploaded watch face</string>
+    <string name="watch_store_update_upload">Save changes</string>
+    <string name="watch_store_status_updating">Saving changes</string>
+    <string name="watch_store_update_success">Uploaded watch face updated</string>
+    <string name="watch_store_error_auth_expired_update">Your login expired. Log in again before editing.</string>
+    <string name="watch_store_replace_uploaded_file_optional">Replace watch face package (optional)</string>
+    <string name="watch_store_keep_uploaded_file">If you do not choose a new file, the existing package and preview are kept.</string>
+    <string name="watch_store_replace_selected_file_fmt">Replace with: %1$s</string>
+    <string name="watch_store_select_replacement_file">Choose a new .watch file</string>
     <string name="watch_store_export">Export</string>
     <string name="watch_store_custom_name">Custom name</string>
     <string name="watch_store_delete_installed">Delete installed watch face</string>

@@ -160,6 +160,7 @@ import top.yukonga.miuix.kmp.icon.extended.WorldClock
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchLauncherTheme
+import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.ui.common.flueElasticNestedScroll
 import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.ui.common.InternalFileBrowserHost
@@ -176,6 +177,7 @@ import com.flue.launcher.watchface.editor.WatchEditorImageCropper
 import com.flue.launcher.watchface.editor.WatchEditorImageSourceInfo
 import com.flue.launcher.watchface.editor.WatchEditorLayer
 import com.flue.launcher.watchface.editor.WatchEditorLayerKey
+import com.flue.launcher.watchface.editor.WatchEditorTreeRow
 import com.flue.launcher.watchface.editor.WatchEditorLiveAttributeApplicator
 import com.flue.launcher.watchface.editor.WatchEditorCanvasMapping
 import com.flue.launcher.watchface.editor.WatchEditorCropAspect
@@ -250,8 +252,16 @@ import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
 class WatchEditorActivity : FlueComponentActivity() {
+    private var restoreRecentsExclusionOnExit = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 仅在用户原本隐藏后台卡片时做临时覆盖；不写回偏好。原本就显示的
+        // 情况完全不动，退出编辑器后再恢复原来的隐藏状态。
+        if (RecentsVisibility.readPreference(applicationContext)) {
+            RecentsVisibility.apply(this, enabled = false)
+            restoreRecentsExclusionOnExit = true
+        }
         val watchFaceId = intent.getStringExtra(EXTRA_WATCH_FACE_ID)
         setContent {
             val vm: LauncherViewModel = viewModel()
@@ -281,6 +291,13 @@ class WatchEditorActivity : FlueComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        if (restoreRecentsExclusionOnExit) {
+            RecentsVisibility.apply(this, enabled = true)
+        }
+        super.onDestroy()
     }
 
     companion object {
@@ -341,6 +358,8 @@ private fun WatchEditorRoute(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showDiscardDialog by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf(false) }
+    var showUploadSaveRequiredDialog by remember { mutableStateOf(false) }
+    var openUploadAfterSave by remember { mutableStateOf(false) }
     var showStoreUpload by remember { mutableStateOf(false) }
     var pendingSaveName by remember { mutableStateOf("") }
     // 作者信息（老师指定）：保存时若用户没改过，自动填已登录账户名，
@@ -1062,6 +1081,18 @@ private fun WatchEditorRoute(
     fun requestClose() {
         if (snapshot?.dirty == true) showDiscardDialog = true else onClose()
     }
+
+    fun requestSave(saveAs: Boolean, uploadAfterSave: Boolean = false) {
+        val current = snapshot ?: return
+        saveAsMode = saveAs
+        pendingSaveName = current.rootAttributes["name"].orEmpty()
+            .ifBlank { context.getString(R.string.watch_editor_default_watch_name) }
+        pendingSaveAuthor = current.designerName()
+        pendingAuthorModified = false
+        openUploadAfterSave = uploadAfterSave
+        showSaveDialog = true
+    }
+
     BackHandler(onBack = ::requestClose)
 
     if (showBlankCanvasPicker) {
@@ -1102,7 +1133,10 @@ private fun WatchEditorRoute(
 
     if (showSaveDialog) {
         AlertDialog(
-            onDismissRequest = { showSaveDialog = false },
+            onDismissRequest = {
+                showSaveDialog = false
+                openUploadAfterSave = false
+            },
                 title = {
                     Text(
                         stringResource(
@@ -1241,8 +1275,13 @@ private fun WatchEditorRoute(
                                     },
                                     Toast.LENGTH_SHORT,
                                 ).show()
+                                if (openUploadAfterSave) {
+                                    openUploadAfterSave = false
+                                    showStoreUpload = true
+                                }
                             }.onFailure { error ->
-                                    errorMessage = context.localizedEditorError(R.string.watch_editor_error_save, error)
+                                openUploadAfterSave = false
+                                errorMessage = context.localizedEditorError(R.string.watch_editor_error_save, error)
                             }
                             busyMessage = null
                         }
@@ -1257,9 +1296,53 @@ private fun WatchEditorRoute(
                     }
             },
             dismissButton = {
-                    TextButton(onClick = { showSaveDialog = false }) {
+                    TextButton(onClick = {
+                        showSaveDialog = false
+                        openUploadAfterSave = false
+                    }) {
                         Text(stringResource(R.string.watch_editor_cancel))
                     }
+            },
+        )
+    }
+
+    if (showUploadSaveRequiredDialog) {
+        val canSaveCurrent = session?.canSaveCurrentRevision == true
+        AlertDialog(
+            onDismissRequest = { showUploadSaveRequiredDialog = false },
+            title = { Text(stringResource(R.string.watch_editor_upload_save_required_title)) },
+            text = { Text(stringResource(R.string.watch_editor_upload_save_required_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showUploadSaveRequiredDialog = false
+                        requestSave(saveAs = !canSaveCurrent, uploadAfterSave = true)
+                    },
+                ) {
+                    Text(
+                        stringResource(
+                            if (canSaveCurrent) R.string.watch_editor_save
+                            else R.string.watch_editor_save_as,
+                        ),
+                    )
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (canSaveCurrent) {
+                        TextButton(
+                            onClick = {
+                                showUploadSaveRequiredDialog = false
+                                requestSave(saveAs = true, uploadAfterSave = true)
+                            },
+                        ) {
+                            Text(stringResource(R.string.watch_editor_save_as))
+                        }
+                    }
+                    TextButton(onClick = { showUploadSaveRequiredDialog = false }) {
+                        Text(stringResource(R.string.watch_editor_cancel))
+                    }
+                }
             },
         )
     }
@@ -1494,28 +1577,13 @@ private fun WatchEditorRoute(
                         onImportBitmapFont = { bitmapFontPicker.launch(arrayOf("*/*")) },
                         onImportBitmapFontLong = { openInternalFileBrowser(EditorInternalImportKind.BITMAP_FONT) },
                         onSaveAsNew = {
-                            saveAsMode = true
-                            pendingSaveName = current.rootAttributes["name"].orEmpty()
-                                .ifBlank { context.getString(R.string.watch_editor_default_watch_name) }
-                            pendingSaveAuthor = current.designerName()
-                            pendingAuthorModified = false
-                            showSaveDialog = true
+                            requestSave(saveAs = true)
                         },
                         onSave = {
-                            saveAsMode = false
-                            pendingSaveName = current.rootAttributes["name"].orEmpty()
-                                .ifBlank { context.getString(R.string.watch_editor_default_watch_name) }
-                            pendingSaveAuthor = current.designerName()
-                            pendingAuthorModified = false
-                            showSaveDialog = true
+                            requestSave(saveAs = false)
                         },
                         onRename = {
-                            saveAsMode = false
-                            pendingSaveName = current.rootAttributes["name"].orEmpty()
-                                .ifBlank { context.getString(R.string.watch_editor_default_watch_name) }
-                            pendingSaveAuthor = current.designerName()
-                            pendingAuthorModified = false
-                            showSaveDialog = true
+                            requestSave(saveAs = false)
                         },
                         onExport = {
                             val name = safeWatchFileName(current.rootAttributes["name"])
@@ -1543,33 +1611,26 @@ private fun WatchEditorRoute(
                             if (busyMessage == null) {
                                 scope.launch {
                                     // Typed-but-unapplied property edits must land in
-                                    // the draft before it is exported for upload.
+                                    // the session before deciding whether this revision
+                                    // has actually been saved/installed.
+                                    var flushFailure: Throwable? = null
                                     liveApplicator?.flush(
-                                        onApplied = {},
-                            onError = { errorMessage = it.message ?: context.getString(R.string.watch_editor_error_property_update) },
+                                        onApplied = { next -> updateSnapshot(next) },
+                                        onError = { error ->
+                                            flushFailure = error
+                                            errorMessage = error.message
+                                                ?: context.getString(R.string.watch_editor_error_property_update)
+                                        },
                                     )
-                                    // 上传前只保存编辑草稿，不提交回已安装目录；上传
-                                    // 作者等元数据也只进入随后导出的上传包。
-                                    val activeSession = session
-                                    if (activeSession != null && current.dirty) {
-                                    busyMessage = context.getString(R.string.watch_editor_status_saving)
-                                        // 上传的包里必须带新预览图，否则商店里
-                                        // 显示的还是原作者那张。
-                                        refreshDraftPreview(activeSession)
-                                        runCatching {
-                                            withContext(Dispatchers.IO) {
-                                                activeSession.save()
-                                                activeSession.snapshot()
-                                            }
-                                        }.onSuccess { next ->
-                                            updateSnapshot(next)
-                                            previewToken++
-                                        }.onFailure { error ->
-                                        errorMessage = context.localizedEditorError(R.string.watch_editor_error_upload_autosave, error)
-                                        }
-                                        busyMessage = null
+                                    if (flushFailure != null) return@launch
+                                    val activeSession = session ?: return@launch
+                                    val latest = withContext(Dispatchers.IO) { activeSession.snapshot() }
+                                    updateSnapshot(latest)
+                                    if (latest.dirty || !activeSession.canSaveCurrentRevision) {
+                                        showUploadSaveRequiredDialog = true
+                                    } else {
+                                        showStoreUpload = true
                                     }
-                                    showStoreUpload = true
                                 }
                             }
                         },
@@ -1825,8 +1886,9 @@ private fun WatchEditorScreen(
     }
     val layerDragDensity = LocalDensity.current
     var draggedLayerKey by remember { mutableStateOf<WatchEditorLayerKey?>(null) }
-    var draggedLayerOffsetY by remember { mutableStateOf(0f) }
+    var draggedLayerRow by remember { mutableStateOf<WatchEditorTreeRow?>(null) }
     var draggedLayerPointerY by remember { mutableStateOf(0f) }
+    var draggedLayerTouchOffsetY by remember { mutableStateOf(0f) }
     var draggedLayerHeightPx by remember { mutableStateOf(0f) }
     var draggedLayerTargetOrder by remember { mutableStateOf<Int?>(null) }
     val draftSizeBytes by produceState(
@@ -1845,18 +1907,19 @@ private fun WatchEditorScreen(
             val layout = layerListState.layoutInfo
             val edgePx = with(layerDragDensity) { 52.dp.toPx() }
             val pointerY = draggedLayerPointerY
+            val viewportStart = 0f
+            val viewportEnd = layout.viewportSize.height.toFloat()
             val distanceIntoEdge = when {
-                pointerY < layout.viewportStartOffset + edgePx ->
-                    pointerY - (layout.viewportStartOffset + edgePx)
-                pointerY > layout.viewportEndOffset - edgePx ->
-                    pointerY - (layout.viewportEndOffset - edgePx)
+                pointerY < viewportStart + edgePx ->
+                    pointerY - (viewportStart + edgePx)
+                pointerY > viewportEnd - edgePx ->
+                    pointerY - (viewportEnd - edgePx)
                 else -> 0f
             }
             if (distanceIntoEdge != 0f) {
                 val requested = (distanceIntoEdge / edgePx).coerceIn(-1f, 1f) *
                     with(layerDragDensity) { 22.dp.toPx() }
-                val consumed = layerListState.scrollBy(requested)
-                draggedLayerOffsetY += consumed
+                layerListState.scrollBy(requested)
                 layerListState.layoutInfo.visibleItemsInfo
                     .asSequence()
                     .mapNotNull { info ->
@@ -2150,10 +2213,11 @@ private fun WatchEditorScreen(
                     .clipToBounds(),
             ) { activePanel ->
                 when (activePanel) {
-                WatchEditorPanel.LAYERS -> LazyColumn(
-                    state = layerListState,
-                    modifier = Modifier
-                        .fillMaxSize()
+                WatchEditorPanel.LAYERS -> Box(modifier = Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        state = layerListState,
+                        modifier = Modifier
+                            .fillMaxSize()
                         // 手势挂在稳定的列表容器上：被拖行滚出可见区并销毁时，
                         // pointer session 仍继续，直到抬手才提交一次层级变更。
                         .pointerInput(treeRows, busyMessage) {
@@ -2167,8 +2231,9 @@ private fun WatchEditorScreen(
                                     val row = treeRows.firstOrNull { it.layer.key.value == info.key }
                                         ?: return@detectDragGesturesAfterLongPress
                                     draggedLayerKey = row.layer.key
-                                    draggedLayerOffsetY = 0f
+                                    draggedLayerRow = row
                                     draggedLayerPointerY = position.y
+                                    draggedLayerTouchOffsetY = position.y - info.offset
                                     draggedLayerHeightPx = info.size.toFloat()
                                     draggedLayerTargetOrder = row.layer.order
                                     onSelectLayer(row.layer.key)
@@ -2177,7 +2242,6 @@ private fun WatchEditorScreen(
                                     val activeKey = draggedLayerKey ?: return@detectDragGesturesAfterLongPress
                                     change.consume()
                                     draggedLayerPointerY += dragAmount.y
-                                    draggedLayerOffsetY += dragAmount.y
                                     layerListState.layoutInfo.visibleItemsInfo
                                         .asSequence()
                                         .mapNotNull { info ->
@@ -2193,14 +2257,17 @@ private fun WatchEditorScreen(
                                         ?.let { draggedLayerTargetOrder = it }
                                     // Keep the captured key read so a deletion during drag
                                     // cancels safely instead of committing a stale row.
-                                    if (treeRows.none { it.layer.key == activeKey }) draggedLayerKey = null
+                                    if (treeRows.none { it.layer.key == activeKey }) {
+                                        draggedLayerKey = null
+                                        draggedLayerRow = null
+                                    }
                                 },
                                 onDragEnd = {
                                     val key = draggedLayerKey
                                     val originalOrder = treeRows.firstOrNull { it.layer.key == key }?.layer?.order
                                     val target = draggedLayerTargetOrder
                                     draggedLayerKey = null
-                                    draggedLayerOffsetY = 0f
+                                    draggedLayerRow = null
                                     draggedLayerTargetOrder = null
                                     if (key != null && target != null && target != originalOrder) {
                                         onMoveLayer(key, target)
@@ -2208,7 +2275,7 @@ private fun WatchEditorScreen(
                                 },
                                 onDragCancel = {
                                     draggedLayerKey = null
-                                    draggedLayerOffsetY = 0f
+                                    draggedLayerRow = null
                                     draggedLayerTargetOrder = null
                                 },
                             )
@@ -2322,8 +2389,11 @@ private fun WatchEditorScreen(
                                 hasChildren = row.hasChildren,
                                 expanded = row.expanded,
                                 enabled = busyMessage == null,
-                                dragging = draggedLayerKey == layer.key,
-                                dragOffsetY = if (draggedLayerKey == layer.key) draggedLayerOffsetY else 0f,
+                                modifier = Modifier.graphicsLayer {
+                                    alpha = if (draggedLayerKey == layer.key) 0f else 1f
+                                },
+                                dragging = false,
+                                dragOffsetY = 0f,
                                 avoidanceOffsetY = avoidanceOffsetY,
                                 onSelect = {
                                     onSelectLayer(layer.key)
@@ -2340,6 +2410,96 @@ private fun WatchEditorScreen(
                                 onMove = { onMoveLayer(layer.key, it) },
                                 onDuplicate = { onDuplicateLayer(layer.key) },
                                 onDelete = { onDeleteLayer(layer.key) },
+                            )
+                        }
+                    }
+                    }
+
+                    val overlayRow = draggedLayerRow
+                    if (overlayRow != null && draggedLayerKey == overlayRow.layer.key) {
+                        val overlayLayer = overlayRow.layer
+                        val overlayThumbSizePx = with(LocalDensity.current) { 40.dp.roundToPx() }
+                        val overlayThumbnail = remember(
+                            overlayLayer.attributes["path"],
+                            overlayLayer.type,
+                            previewToken,
+                        ) {
+                            resolveLayerAssetThumbnail(
+                                draftDirectory = draftDirectory,
+                                layer = overlayLayer,
+                                sizePx = overlayThumbSizePx,
+                            )
+                        }
+                        val overlayText = remember(
+                            thumbnailRenderer,
+                            overlayLayer.order,
+                            overlayLayer.attributes,
+                            previewToken,
+                            textThumbnailClockTick,
+                        ) {
+                            if (overlayLayer.type.lowercase(Locale.ROOT).contains("text")) {
+                                thumbnailRenderer?.resolveTextLayerPreview(overlayLayer.order)
+                                    ?: overlayLayer.attributes["text"].orEmpty()
+                                        .ifBlank { overlayLayer.attributes["value"].orEmpty() }
+                                        .takeUnless { it.contains('{') || it.contains('}') }
+                            } else {
+                                null
+                            }
+                        }
+                        val overlayRenderedText = remember(
+                            thumbnailRenderer,
+                            overlayLayer.order,
+                            overlayLayer.attributes,
+                            previewToken,
+                            textThumbnailClockTick,
+                            overlayThumbSizePx,
+                        ) {
+                            if (overlayLayer.type.lowercase(Locale.ROOT) in
+                                setOf("text", "text_curved", "text_ring")
+                            ) {
+                                thumbnailRenderer
+                                    ?.renderTextLayerThumbnail(overlayLayer.order, overlayThumbSizePx)
+                                    ?.asImageBitmap()
+                            } else {
+                                null
+                            }
+                        }
+                        // LazyList 的 viewportStartOffset 会包含负的 contentPadding，
+                        // 不能直接拿来限制浮层，否则第一行能被拖到面板裁剪线之外。
+                        // 指针与这个兄弟浮层都使用 Box 的物理坐标系。
+                        val viewportStart = 0f
+                        val viewportEnd =
+                            layerListState.layoutInfo.viewportSize.height.toFloat()
+                        val overlayTop = (draggedLayerPointerY - draggedLayerTouchOffsetY)
+                            .coerceIn(
+                                viewportStart,
+                                (viewportEnd - draggedLayerHeightPx).coerceAtLeast(viewportStart),
+                            )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = horizontalListPadding)
+                                .graphicsLayer { translationY = overlayTop }
+                                .zIndex(20f),
+                        ) {
+                            EditorLayerRow(
+                                layer = overlayLayer,
+                                thumbnail = overlayRenderedText ?: overlayThumbnail,
+                                textThumbnail = overlayText,
+                                selected = true,
+                                layerCount = snapshot.layers.size,
+                                depth = overlayRow.depth,
+                                hasChildren = overlayRow.hasChildren,
+                                expanded = overlayRow.expanded,
+                                enabled = false,
+                                dragging = true,
+                                dragOffsetY = 0f,
+                                avoidanceOffsetY = 0f,
+                                onSelect = {},
+                                onToggleExpanded = {},
+                                onMove = {},
+                                onDuplicate = {},
+                                onDelete = {},
                             )
                         }
                     }
@@ -2789,9 +2949,16 @@ private fun WatchEditorPreview(
     val context = LocalContext.current
     var loadError by remember(descriptor.stableKey, refreshToken) { mutableStateOf<String?>(null) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
-    val transformOverrides = transformPreview?.let { mapOf(it.key to it.transform) } ?: emptyMap()
-    val geometries = remember(layers, transformOverrides, imageSizeLookup) {
-        buildWatchEditorLayerGeometries(layers, imageSizeLookup, transformOverrides)
+    // 图层自身尺寸、父子关系和基础变换在一次手势里都不变。循环背景的 path
+    // 可能非常长，不能因为拖动坐标每帧变化就重新解析所有图层几何。
+    val baseGeometries = remember(layers, imageSizeLookup) {
+        buildWatchEditorLayerGeometries(layers, imageSizeLookup)
+    }
+    val geometries = remember(baseGeometries, transformPreview) {
+        val preview = transformPreview ?: return@remember baseGeometries
+        baseGeometries.map { geometry ->
+            if (geometry.key == preview.key) geometry.copy(transform = preview.transform) else geometry
+        }
     }
     val latestGeometries = rememberUpdatedState(geometries)
     val latestSelectedKey = rememberUpdatedState(selectedLayer?.key)
@@ -2836,6 +3003,9 @@ private fun WatchEditorPreview(
             update = { view ->
                 view.setWatchDataProvider(dataProvider)
                 view.setEditorAnimatedImageLayer(animatedPreviewLayerIndex)
+                // 拖动任意元素时都暂停循环素材；否则它的 30fps 解码/刷新仍会和
+                // 当前元素的跟手重绘竞争，即使拖动目标本身不是循环背景。
+                view.setEditorAnimationInteractionFrozen(transformPreview != null)
                 view.bind(
                     descriptor = descriptor,
                     refreshToken = refreshToken,
@@ -2864,15 +3034,18 @@ private fun WatchEditorPreview(
             val view = faceView ?: return@LaunchedEffect
             val preview = transformPreview
             if (preview == null) {
+                view.setEditorAnimationInteractionFrozen(false)
                 view.clearLiveLayerTransform()
                 return@LaunchedEffect
             }
             val index = layers.firstOrNull { it.key == preview.key }?.order
                 ?: layers.indexOfFirst { it.key == preview.key }
             if (index < 0) {
+                view.setEditorAnimationInteractionFrozen(false)
                 view.clearLiveLayerTransform()
                 return@LaunchedEffect
             }
+            view.setEditorAnimationInteractionFrozen(true)
             val transform = preview.transform
             view.setLiveLayerTransform(
                 layerIndex = index,
@@ -3642,6 +3815,7 @@ private fun EditorLayerRow(
     hasChildren: Boolean,
     expanded: Boolean,
     enabled: Boolean,
+    modifier: Modifier = Modifier,
     dragging: Boolean,
     dragOffsetY: Float,
     avoidanceOffsetY: Float,
@@ -3658,7 +3832,7 @@ private fun EditorLayerRow(
         MaterialTheme.colorScheme.surfaceVariant
     }
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .zIndex(if (dragging) 2f else 0f)
             .graphicsLayer {

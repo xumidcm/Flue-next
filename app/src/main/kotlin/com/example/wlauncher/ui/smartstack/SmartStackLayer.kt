@@ -169,6 +169,7 @@ import com.flue.launcher.ui.notification.SwipeRevealDeleteContainer
 import com.flue.launcher.ui.notification.notificationStackBackColor
 import com.flue.launcher.ui.notification.rememberNotificationStackBaseColor
 import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.WatchColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -792,7 +793,7 @@ fun SmartStackLayer(
                         clock.time,
                         color = launcherStyle.titleColor,
                         fontSize = 31.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -965,6 +966,7 @@ fun WidgetPageLayer(
     val activity = remember(context) { context.findActivity() }
     val density = LocalDensity.current
     val launcherStyle = LauncherTheme.style
+    val roundScreen = isFlueScreenRound()
     val widgetRepository = remember(context) { FlueApplication.repositories(context).widgetRepository }
     val appWidgetManager = remember(context) { AppWidgetManager.getInstance(context) }
     val appWidgetHost = remember(context) { AppWidgetHost(context, SIDE_SCREEN_APP_WIDGET_HOST_ID) }
@@ -1273,6 +1275,9 @@ fun WidgetPageLayer(
                     exit = fadeOut(tween(150))
                 ) {
                     val dragging = draggingWidgetKey == cardKey
+                    val dragOverlayReady = dragging &&
+                        dragFrozenTopLeft != null &&
+                        dragFrozenBounds[cardKey] != null
                     // 抬起/落位不再三元瞬跳：长按成立的那一帧突然放大+突现
                     // 22dp 阴影、松手瞬移回原位，是拖拽最生硬的两下。
                     val liftScale by animateFloatAsState(
@@ -1331,7 +1336,10 @@ fun WidgetPageLayer(
                                 translationX = if (dragging) draggingWidgetOffset.x + dragCorrection.x else 0f
                                 translationY = if (dragging) draggingWidgetOffset.y + dragCorrection.y else 0f
                                 shadowElevation = liftElevation.toPx()
-                                alpha = 1f
+                                // 拖动实体由列表外的根级预览接管，避免被 LazyColumn
+                                // item、相邻 AndroidView 或 section 容器裁掉。预览几何
+                                // 尚未冻结前保留原卡一帧，防止长按成立时闪空。
+                                alpha = if (dragOverlayReady) 0f else 1f
                                 scaleX = liftScale
                                 scaleY = liftScale
                             }
@@ -1340,33 +1348,41 @@ fun WidgetPageLayer(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(shellShape)
-                                // 非编辑态外壳完全透明（小组件卡片自带内容
-                                // 背景）；编辑态才显出极淡玻璃壳提示可编辑。
-                                .background(
-                                    if (editMode) {
-                                        Color.White.copy(alpha = 0.05f)
+                                // 编辑态与普通态共用同一层 MIUIX 玻璃壳，不能在
+                                // 退出编辑后退回纯白/透明塑料底。
+                                .then(
+                                    if (launcherStyle.uiStyle == UiStyle.MIUIX) {
+                                        Modifier.glassSurface(shellShape, launcherStyle.glass)
                                     } else {
-                                        Color.Transparent
+                                        Modifier.background(
+                                            if (editMode) Color.White.copy(alpha = 0.05f)
+                                            else Color.Transparent,
+                                            shellShape,
+                                        )
                                     },
                                 )
                                 .padding(4.dp)
                         ) {
-                            WidgetCard(
-                                widget = card.widget,
-                                layout = displayLayout,
-                                cardWidth = cardWidth,
-                                widgetRepository = widgetRepository,
-                                appWidgetHost = appWidgetHost,
-                                onLongPress = if (!editMode && !showPicker) {
-                                    {
-                                        editMode = true
-                                        editGestureLocked = true
-                                    }
-                                } else {
-                                    null
-                                },
-                                onMeasuredHeight = {}
-                            )
+                            // 根级拖动预览接管后卸载原位置的 AppWidgetHostView，
+                            // 避免同一个 widgetId 同时创建两个 HostView、互相抢更新。
+                            if (!dragOverlayReady) {
+                                WidgetCard(
+                                    widget = card.widget,
+                                    layout = displayLayout,
+                                    cardWidth = cardWidth,
+                                    widgetRepository = widgetRepository,
+                                    appWidgetHost = appWidgetHost,
+                                    onLongPress = if (!editMode && !showPicker) {
+                                        {
+                                            editMode = true
+                                            editGestureLocked = true
+                                        }
+                                    } else {
+                                        null
+                                    },
+                                    onMeasuredHeight = {}
+                                )
+                            }
                         }
                         if (jiggleActive) {
                             val blockerInteraction = remember { MutableInteractionSource() }
@@ -1621,32 +1637,65 @@ fun WidgetPageLayer(
             contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp)
         ) {
             item("widget_page_header") {
-                Row(
-                    modifier = Modifier.width(contentWidth),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = stringResource(R.string.widget_title),
-                        color = launcherStyle.titleColor,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        WidgetPageChip(
-                            label = stringResource(
-                                if (editMode) R.string.widget_done else R.string.widget_edit,
-                            ),
-                            onClick = { editMode = !editMode },
-                            enabled = widgetCards.isNotEmpty()
+                if (roundScreen) {
+                    Column(
+                        modifier = Modifier.width(contentWidth),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.widget_title),
+                            color = launcherStyle.titleColor,
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
                         )
-                        WidgetPageChip(
-                            label = stringResource(R.string.widget_add),
-                            onClick = {
-                                editMode = false
-                                showPicker = true
-                            }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            WidgetPageChip(
+                                label = stringResource(
+                                    if (editMode) R.string.widget_done else R.string.widget_edit,
+                                ),
+                                onClick = { editMode = !editMode },
+                                enabled = widgetCards.isNotEmpty(),
+                            )
+                            WidgetPageChip(
+                                label = stringResource(R.string.widget_add),
+                                onClick = {
+                                    editMode = false
+                                    showPicker = true
+                                },
+                            )
+                        }
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.width(contentWidth),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.widget_title),
+                            color = launcherStyle.titleColor,
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.SemiBold,
                         )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            WidgetPageChip(
+                                label = stringResource(
+                                    if (editMode) R.string.widget_done else R.string.widget_edit,
+                                ),
+                                onClick = { editMode = !editMode },
+                                enabled = widgetCards.isNotEmpty(),
+                            )
+                            WidgetPageChip(
+                                label = stringResource(R.string.widget_add),
+                                onClick = {
+                                    editMode = false
+                                    showPicker = true
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -1718,6 +1767,23 @@ fun WidgetPageLayer(
                         }
                     }
                 }
+            }
+        }
+        draggingWidgetKey?.let { draggingKey ->
+            val draggingCard = widgetCards.firstOrNull { it.stableKey() == draggingKey }
+            val frozenBounds = dragFrozenBounds[draggingKey]
+            if (draggingCard != null && frozenBounds != null) {
+                WidgetDragPreviewCard(
+                    preview = WidgetDragPreview(
+                        card = draggingCard,
+                        bounds = frozenBounds,
+                        offset = draggingWidgetOffset,
+                    ),
+                    rootOffset = widgetPageRootOffset,
+                    widgetRepository = widgetRepository,
+                    appWidgetHost = appWidgetHost,
+                    modifier = Modifier.zIndex(100f),
+                )
             }
         }
         if (showPicker) {
@@ -1879,6 +1945,7 @@ private fun WidgetDragPreviewCard(
     appWidgetHost: AppWidgetHost,
     modifier: Modifier = Modifier
 ) {
+    val launcherStyle = LauncherTheme.style
     val width = with(LocalDensity.current) { preview.bounds.width.toDp() }
     val height = with(LocalDensity.current) { preview.bounds.height.toDp() }
     val shape = RoundedCornerShape(28.dp)
@@ -1894,8 +1961,15 @@ private fun WidgetDragPreviewCard(
                 scaleX = 1.035f
                 scaleY = 1.035f
             }
-            .clip(shape)
-            .border(1.dp, Color.White.copy(alpha = 0.38f), shape)
+            .then(
+                if (launcherStyle.uiStyle == UiStyle.MIUIX) {
+                    Modifier.glassSurface(shape, launcherStyle.glassThick)
+                } else {
+                    Modifier
+                        .clip(shape)
+                        .border(1.dp, Color.White.copy(alpha = 0.38f), shape)
+                },
+            )
     ) {
         WidgetCard(
             widget = preview.card.widget,
@@ -2088,6 +2162,7 @@ private fun WidgetCard(
     onMeasuredHeight: (Int) -> Unit
 ) {
     val context = LocalContext.current
+    val launcherStyle = LauncherTheme.style
     val providerInfo = remember(widgetRepository, widget.widgetKey) {
         widgetRepository.findProviderInfo(widget.widgetKey)
     }
@@ -2117,7 +2192,13 @@ private fun WidgetCard(
                 shape = cardShape
                 clip = true
             }
-            .background(LauncherTheme.style.cardColor)
+            .then(
+                if (launcherStyle.uiStyle == UiStyle.MIUIX) {
+                    Modifier.glassSurface(cardShape, launcherStyle.glass)
+                } else {
+                    Modifier.background(launcherStyle.cardColor, cardShape)
+                },
+            )
     ) {
         if (providerInfo != null && widget.widgetId != -1) {
             val widgetBindTag = remember(widget.widgetId, providerInfo) {
@@ -2203,6 +2284,9 @@ private fun WidgetCard(
                     .graphicsLayer {
                         shape = cardShape
                         clip = true
+                        // 第三方 RemoteViews 常直接画不透明白底。MIUIX 下让
+                        // 宿主内容轻微透出后面的玻璃层，普通态与编辑态一致。
+                        alpha = if (launcherStyle.uiStyle == UiStyle.MIUIX) 0.84f else 1f
                     }
             )
         } else {
@@ -2222,7 +2306,13 @@ private fun WidgetCard(
                         scaleY = scale
                     }
                     .clip(cardShape)
-                    .background(LauncherTheme.style.cardColor)
+                    .then(
+                        if (launcherStyle.uiStyle == UiStyle.MIUIX) {
+                            Modifier.glassSurface(cardShape, launcherStyle.glass)
+                        } else {
+                            Modifier.background(launcherStyle.cardColor, cardShape)
+                        },
+                    )
                     .combinedClickable(
                         interactionSource = interactionSource,
                         indication = null,

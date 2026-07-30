@@ -403,6 +403,31 @@ class WatchStoreRepository(
         }
     }
 
+    /**
+     * Discards one server-owned cover after its uploaded archive was replaced.
+     * The next [loadPreview] call fetches the new preview without evicting
+     * unrelated market thumbnails.
+     */
+    suspend fun invalidatePreview(id: String) = withContext(ioDispatcher) {
+        val normalizedId = WatchStoreUrlPolicy.requireId(id)
+        val itemLock = previewLocks.computeIfAbsent(normalizedId) { Any() }
+        synchronized(itemLock) {
+            synchronized(memoryLock) {
+                val prefix = "$normalizedId:"
+                val iterator = previewMemoryCache.entries.iterator()
+                while (iterator.hasNext()) {
+                    val entry = iterator.next()
+                    if (entry.key.startsWith(prefix)) {
+                        previewMemoryBytes -= entry.value.safeByteCount()
+                        iterator.remove()
+                    }
+                }
+                previewMemoryBytes = previewMemoryBytes.coerceAtLeast(0L)
+            }
+            File(previewDirectory, "$normalizedId.img").delete()
+        }
+    }
+
     /** Clears only public-store cover images, leaving downloads and installed faces untouched. */
     suspend fun clearPreviewCache(): Int = withContext(ioDispatcher) {
         clearPreviewMemoryCache()

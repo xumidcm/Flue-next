@@ -116,7 +116,7 @@ fun WatchBatteryPill(
                     text = "$clamped",
                     fontSize = (height.value * 0.58f).sp,
                     lineHeight = (height.value * 0.58f).sp,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Bold,
                     // 半透明数字居中在图标内（半透明填充垫底，两种主题下都可读）。
                     color = style.titleColor.copy(alpha = 0.62f),
                     style = BatteryLabelStyle,

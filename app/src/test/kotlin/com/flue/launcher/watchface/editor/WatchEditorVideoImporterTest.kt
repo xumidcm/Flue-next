@@ -100,4 +100,19 @@ class WatchEditorVideoImporterTest {
             resolveVideoBitrateKbps(info, WatchEditorVideoResolutionPreset.P720, 1_800),
         )
     }
+
+    @Test
+    fun resolutionPresetsUseTheirCapsWithoutRaisingLowSourceBitrate() {
+        val high = WatchEditorVideoInfo(1_000L, 1920, 1080, bitrateKbps = 24_000)
+        assertEquals(20_000, defaultVideoBitrateKbps(high, WatchEditorVideoResolutionPreset.P1080))
+        assertEquals(15_000, defaultVideoBitrateKbps(high, WatchEditorVideoResolutionPreset.P720))
+        assertEquals(10_000, defaultVideoBitrateKbps(high, WatchEditorVideoResolutionPreset.P480))
+        assertEquals(10_000, defaultVideoBitrateKbps(high, WatchEditorVideoResolutionPreset.P360))
+        assertEquals(24_000, defaultVideoBitrateKbps(high, WatchEditorVideoResolutionPreset.ORIGINAL))
+
+        val low = high.copy(bitrateKbps = 820)
+        WatchEditorVideoResolutionPreset.entries.forEach { preset ->
+            assertEquals(820, defaultVideoBitrateKbps(low, preset))
+        }
+    }
 }

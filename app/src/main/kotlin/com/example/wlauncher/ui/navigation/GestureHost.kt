@@ -1,6 +1,8 @@
 package com.flue.launcher.ui.navigation
 
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -26,13 +28,24 @@ internal fun resolveOverlaySettleOpen(
     }
 }
 
+internal fun resolveAppListSettleOpen(
+    progress: Float,
+    velocity: Float,
+    cancelled: Boolean,
+): Boolean = resolveOverlaySettleOpen(
+    progress = progress,
+    velocity = velocity,
+    currentlyOpen = false,
+    cancelled = cancelled,
+)
+
 /**
  * 全局导航手势宿主。
  *
  * 覆层打开侧是全程跟手的：手指一动就通过 [onOverlayDrag] 逐帧上报归一化
  * 进度（0..1），抬手经 [onOverlayRelease] 上报终点进度与投影速度，由宿主
  * 决定开/关并带初速度收尾。以前的「80px 裸阈值 → 切状态 → 播固定 tween」
- * 只保留给进应用列表这一条（应用列表有自己的转场机）。
+ * 应用列表也使用独立的逐帧回调，但仍由它自己的转场机负责抬手收尾。
  */
 @Composable
 fun GestureHost(
@@ -48,12 +61,16 @@ fun GestureHost(
     controlCenterDismissHandledByContent: Boolean = false,
     onOverlayDrag: ((OverlayGestureTarget, Float) -> Unit)? = null,
     onOverlayRelease: ((OverlayGestureTarget, Float, Float, Boolean) -> Unit)? = null,
+    onAppListDrag: ((Float) -> Unit)? = null,
+    onAppListRelease: ((Float, Float, Boolean) -> Unit)? = null,
+    onBackdropCaptureRequested: (() -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
     var totalDx by remember { mutableFloatStateOf(0f) }
     var totalDy by remember { mutableFloatStateOf(0f) }
     var consumed by remember { mutableStateOf(false) }
     var overlayTarget by remember { mutableStateOf<OverlayGestureTarget?>(null) }
+    var appListGestureActive by remember { mutableStateOf(false) }
     val velocityTracker = remember { VelocityTracker() }
 
     // 宿主手势只在真正需要它的状态挂载。detectDragGestures 跨过 touch-slop
@@ -84,6 +101,21 @@ fun GestureHost(
     }
     Box(
         modifier = modifier
+            // 在 touch-slop 之前先取一张真实窗口合成帧。这个观察器不消费
+            // 指针；方向识别与原来的拖动宿主并行，横/纵手势都能复用该帧。
+            .pointerInput(screenState, onBackdropCaptureRequested) {
+                if (screenState != ScreenState.Face || onBackdropCaptureRequested == null) {
+                    return@pointerInput
+                }
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    onBackdropCaptureRequested.invoke()
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.changes.none { it.pressed }) break
+                    }
+                }
+            }
             .pointerInput(
                 hostGestureNeeded,
                 screenState,
@@ -119,12 +151,19 @@ fun GestureHost(
                     }
                 }
 
+                fun appListProgress(): Float =
+                    (-totalDy / (heightPx * 0.8f)).coerceIn(0f, 1f)
+
+                fun appListVelocity(): Float =
+                    -velocityTracker.calculateVelocity().y / (heightPx * 0.8f)
+
                 detectDragGestures(
                     onDragStart = {
                         totalDx = 0f
                         totalDy = 0f
                         consumed = false
                         overlayTarget = null
+                        appListGestureActive = false
                         velocityTracker.resetTracking()
                     },
                     onDrag = { change, dragAmount ->
@@ -135,6 +174,12 @@ fun GestureHost(
                         val activeOverlay = overlayTarget
                         if (activeOverlay != null) {
                             onOverlayDrag?.invoke(activeOverlay, overlayProgress(activeOverlay))
+                            change.consume()
+                            return@detectDragGestures
+                        }
+
+                        if (appListGestureActive) {
+                            onAppListDrag?.invoke(appListProgress())
                             change.consume()
                             return@detectDragGestures
                         }
@@ -172,6 +217,13 @@ fun GestureHost(
                             (abs(totalDx) > axisLockPx || abs(totalDy) > axisLockPx)
                         ) {
                             val isVertical = abs(totalDy) > abs(totalDx)
+                            if (isVertical && totalDy < 0f && onAppListDrag != null) {
+                                appListGestureActive = true
+                                consumed = true
+                                onAppListDrag.invoke(appListProgress())
+                                change.consume()
+                                return@detectDragGestures
+                            }
                             val candidate = when {
                                 !isVertical && totalDx > 0f && sideScreenEnabled ->
                                     OverlayGestureTarget.Stack
@@ -245,13 +297,25 @@ fun GestureHost(
                                 false,
                             )
                         }
+                        if (appListGestureActive) {
+                            onAppListRelease?.invoke(
+                                appListProgress(),
+                                appListVelocity(),
+                                false,
+                            )
+                        }
                         overlayTarget = null
+                        appListGestureActive = false
                     },
                     onDragCancel = {
                         overlayTarget?.let { target ->
                             onOverlayRelease?.invoke(target, overlayProgress(target), 0f, true)
                         }
+                        if (appListGestureActive) {
+                            onAppListRelease?.invoke(appListProgress(), 0f, true)
+                        }
                         overlayTarget = null
+                        appListGestureActive = false
                     },
                 )
             }

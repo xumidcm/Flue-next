@@ -24,4 +24,12 @@ class GestureHostPolicyTest {
         assertFalse(resolveOverlaySettleOpen(0.9f, 9f, currentlyOpen = false, cancelled = true))
         assertTrue(resolveOverlaySettleOpen(0.1f, -9f, currentlyOpen = true, cancelled = true))
     }
+
+    @Test
+    fun appListUsesTheSameProjectedSettlePolicy() {
+        assertFalse(resolveAppListSettleOpen(0.42f, 0f, cancelled = false))
+        assertTrue(resolveAppListSettleOpen(0.421f, 0f, cancelled = false))
+        assertTrue(resolveAppListSettleOpen(0.1f, 1.6f, cancelled = false))
+        assertFalse(resolveAppListSettleOpen(0.9f, 9f, cancelled = true))
+    }
 }

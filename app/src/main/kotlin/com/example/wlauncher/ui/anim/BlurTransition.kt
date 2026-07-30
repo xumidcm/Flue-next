@@ -19,6 +19,29 @@ data class LayerAnimValues(
 )
 
 /**
+ * 在两个完整图层状态之间按同一进度插值。
+ *
+ * 跟手手势不能分别启动 scale/blur/alpha 的弹簧，否则四个量会在抬手前就
+ * 彼此错相；应用列表与表盘都通过这个纯函数读取同一个手势时钟。
+ */
+internal fun lerpLayerAnimValues(
+    start: LayerAnimValues,
+    end: LayerAnimValues,
+    progress: Float,
+): LayerAnimValues {
+    val p = progress.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 0f
+    fun lerp(startValue: Float, endValue: Float): Float =
+        startValue + (endValue - startValue) * p
+    return LayerAnimValues(
+        scale = lerp(start.scale, end.scale),
+        blur = lerp(start.blur, end.blur),
+        alpha = lerp(start.alpha, end.alpha),
+        translationX = lerp(start.translationX, end.translationX),
+        translationY = lerp(start.translationY, end.translationY),
+    )
+}
+
+/**
  * 去掉缩放与位移行程，只保留 alpha / blur 过渡。
  */
 private fun LayerAnimValues.withoutShrink(): LayerAnimValues =

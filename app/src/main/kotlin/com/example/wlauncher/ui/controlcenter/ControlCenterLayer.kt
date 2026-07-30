@@ -472,9 +472,11 @@ fun ControlCenterLayer(
             sliderHeight +
             (if (showMusicControls) controlsSpacing + 156.dp else 0.dp) +
             (if (showNotificationCard) controlsSpacing + 108.dp else 0.dp)
-        // 顶部状态行 = FrostedHeader 32dp 内容区 + 16dp 渐隐过渡带。
+        val topStatusHeaderHeight = if (roundScreen) 96.dp else 32.dp
+        // 顶部状态行 = 内容区 + 16dp 渐隐过渡带。圆屏需要两行，不能再用
+        // 方屏的单行高度，否则电池与时间会被压进同一基线。
         val estimatedContentHeight = verticalPadding * 2f +
-            48.dp +
+            topStatusHeaderHeight + 16.dp +
             outerSpacing +
             estimatedControlsHeight +
             20.dp +
@@ -617,11 +619,12 @@ fun ControlCenterLayer(
             // 滚动关闭时恒为 0，头部保持全透明）。
             FrostedHeader(
                 scrollProvider = { verticalScrollState.value.toFloat() },
-                height = if (roundScreen) 56.dp else 32.dp
+                height = topStatusHeaderHeight
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .height(topStatusHeaderHeight)
                         .padding(horizontal = topStatusHorizontalInset)
                 ) {
                     WatchBatteryPill(
@@ -634,31 +637,38 @@ fun ControlCenterLayer(
                         )
                     )
                     if (roundScreen) {
-                        SystemSettingsButton(
-                            icon = MiuixIcons.Settings,
-                            contentDescription = stringResource(R.string.cc_system_settings),
-                            size = 28.dp,
-                            iconSize = 17.dp,
-                            onGestureLockChange = lockControlCenterGesture,
-                            onClick = { openSettings(context, Settings.ACTION_SETTINGS) },
-                            modifier = Modifier.align(Alignment.TopStart),
-                        )
-                        if (showPowerButton) {
+                        // 圆屏纵向三段：电池在上、操作键居中、时间在下。
+                        // 单独设置键严格居中；开启电源后两键组成以中线对称的 Row，
+                        // 不再与电池或时间争同一基线。
+                        Row(
+                            modifier = Modifier.align(Alignment.Center),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
                             SystemSettingsButton(
-                                icon = MiuixIcons.Reset,
-                                contentDescription = stringResource(R.string.cc_power_options),
+                                icon = MiuixIcons.Settings,
+                                contentDescription = stringResource(R.string.cc_system_settings),
                                 size = 28.dp,
                                 iconSize = 17.dp,
                                 onGestureLockChange = lockControlCenterGesture,
-                                onClick = onPowerClick,
-                                modifier = Modifier.align(Alignment.TopEnd),
+                                onClick = { openSettings(context, Settings.ACTION_SETTINGS) },
                             )
+                            if (showPowerButton) {
+                                SystemSettingsButton(
+                                    icon = MiuixIcons.Reset,
+                                    contentDescription = stringResource(R.string.cc_power_options),
+                                    size = 28.dp,
+                                    iconSize = 17.dp,
+                                    onGestureLockChange = lockControlCenterGesture,
+                                    onClick = onPowerClick,
+                                )
+                            }
                         }
                         Text(
                             timeText,
                             color = launcherStyle.titleColor,
                             fontSize = 22.sp,
-                            fontWeight = FontWeight.SemiBold,
+                            fontWeight = FontWeight.Bold,
                             modifier = Modifier.align(Alignment.BottomCenter),
                         )
                     } else {
@@ -2107,8 +2117,10 @@ private fun OneShotMarqueeText(
     val remainingScrollPx = (currentRestingTargetPx - marqueeScrollState.value)
         .coerceAtLeast(0)
         .toFloat()
+    val atCycleStart = scrollOffsetPx <= 0.5f ||
+        (repeatCyclePx > 0 && abs(scrollOffsetPx - repeatCyclePx) <= 0.5f)
     val leftFadeTarget = if (hasOverflow && fadeEdgePx > 0f) {
-        if (scrollOffsetPx > 0.5f) 1f else 0f
+        if (!atCycleStart) 1f else 0f
     } else {
         0f
     }

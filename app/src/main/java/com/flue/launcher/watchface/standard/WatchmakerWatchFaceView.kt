@@ -90,6 +90,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     /** Editor-only gate: null freezes every animated image layer. */
     private var editorAnimationPlaybackLimited = false
     private var editorAnimatedImageLayerIndex: Int? = null
+    private var editorAnimationInteractionFrozen = false
+    private var editorAnimationFrozenElapsedMs = 0L
     private var refreshToken = 0
     private var longPressAction: (() -> Unit)? = null
     private var doubleTapAction: (() -> Unit)? = null
@@ -599,20 +601,42 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         editorAnimationPlaybackLimited = true
         editorAnimatedImageLayerIndex = layerIndex
         frameStartedAtUptimeMs = SystemClock.uptimeMillis()
-        clearLastDrawnFrames()
-        synchronized(cacheLock) {
-            animatedBitmapCache.values.forEach { bitmap ->
-                if (!bitmap.isRecycled && bitmap !in bitmapCache.values) bitmap.recycle()
-            }
-            animatedBitmapCache.clear()
-            animatedBitmapCacheBytes = 0L
-        }
+        // 选中图层变化不代表素材内容变化。清空帧缓存会让高分辨率循环背景在
+        // 每次切换/拖动别的元素时重新解码首帧，既卡主画布又制造短暂消失；LRU
+        // 已经会按内存上限自然淘汰，保留现有帧即可。
         cancelTicks()
         if (!disposed) {
             scheduleTicks()
             invalidate()
         }
     }
+
+    /**
+     * 编辑器拖动/缩放/旋转循环背景时固定在手势开始那一帧。松手后从同一播放
+     * 位置继续，不跳回首帧；同时停止 30fps invalidate，避免拖动与解码争抢 UI。
+     */
+    fun setEditorAnimationInteractionFrozen(frozen: Boolean) {
+        if (editorAnimationInteractionFrozen == frozen) return
+        val now = SystemClock.uptimeMillis()
+        if (frozen) {
+            editorAnimationFrozenElapsedMs = (now - frameStartedAtUptimeMs).coerceAtLeast(0L)
+        } else {
+            frameStartedAtUptimeMs = now - editorAnimationFrozenElapsedMs
+        }
+        editorAnimationInteractionFrozen = frozen
+        cancelTicks()
+        if (!disposed) {
+            scheduleTicks()
+            invalidate()
+        }
+    }
+
+    private fun animatedImageElapsedMs(): Long =
+        if (editorAnimationInteractionFrozen) {
+            editorAnimationFrozenElapsedMs
+        } else {
+            (SystemClock.uptimeMillis() - frameStartedAtUptimeMs).coerceAtLeast(0L)
+        }
 
     private fun shouldAnimateImageLayer(layerIndex: Int): Boolean =
         !editorAnimationPlaybackLimited || editorAnimatedImageLayerIndex == layerIndex
@@ -1006,15 +1030,21 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         frameDelayMsOverride: Long? = null,
         animateFrames: Boolean = true,
     ) {
-        val pathExpression = pathExpressionOverride
-            ?: evaluateText(attrs["path"].orEmpty(), source)
+        val rawPathExpression = pathExpressionOverride ?: attrs["path"].orEmpty()
+        // 导入的视频帧会形成很长但完全静态的反引号路径表。没有 `{tag}` 时
+        // 不经过表达式扫描；否则每一帧、每个拖动事件都要重新遍历几十万字符。
+        val pathExpression = if ('{' in rawPathExpression) {
+            evaluateText(rawPathExpression, source)
+        } else {
+            rawPathExpression
+        }
         val framePaths = source.gifPathCache.getOrPut(pathExpression) {
             parseWatchGifPaths(pathExpression)
         }.orEmpty()
         val frameIndex = if (animateFrames) {
             watchGifFrameIndex(
                 framePaths.size,
-                SystemClock.uptimeMillis() - frameStartedAtUptimeMs,
+                animatedImageElapsedMs(),
                 frameDelayMsOverride
                     ?: dynamicNumber(attrs["gif_delay"], 50f, source).roundToInt().toLong(),
             )
@@ -1167,7 +1197,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         imagePaint.alpha = paintAlpha(alpha)
         imagePaint.colorFilter = tintFilter(resolveColor(attrs["color"], Color.WHITE, source))
         if (movie != null) {
-            val elapsed = (SystemClock.uptimeMillis() - frameStartedAtUptimeMs).coerceAtLeast(0L)
+            val elapsed = animatedImageElapsedMs()
             // Movie.duration() is allowed to return 0 for GIFs without a
             // reliable duration header. Treating that as 1 ms pins setTime()
             // to frame zero forever; Android's own Movie sample uses a
@@ -1214,7 +1244,15 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val designSize = dynamicNumber(attrs["text_size"] ?: attrs["size"], 24f, source)
             .coerceIn(1f, DESIGN_SIZE)
         resolveBitmapFont(attrs["font"], source)?.let { bitmapFont ->
-            drawBitmapText(canvas, value, attrs, alpha, designSize, bitmapFont, source)
+            val bitmapDesignSize = watchBitmapTextDesignSize(
+                requestedSize = designSize,
+                declaredLayerHeight = attrs["height"]?.let { raw ->
+                    dynamicNumber(raw, designSize, source)
+                },
+                bitmapFontNominalSize = bitmapFont.definition.nominalSize.toFloat(),
+                hscGenerated = source.isHscGenerated,
+            )
+            drawBitmapText(canvas, value, attrs, alpha, bitmapDesignSize, bitmapFont, source)
             return
         }
         val size = WatchTextLayout.ttfTextSize(designSize)
@@ -2069,6 +2107,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             definitionRevision = definitionRevision,
             watchDirectoryKey = watchDirectoryKey,
             definition = definition,
+            isHscGenerated = definition.rootAttributes["description"]
+                ?.contains("Generated by HSC watchface downloader", ignoreCase = true) == true,
             exactFiles = exact,
             uniqueBasenames = basename,
             galleryAssetPaths = galleryAssetPaths,
@@ -2194,10 +2234,14 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 val claim = claimAssetLoadLocked(AssetLoadKind.BITMAP, key, generation)
                 if (claim != null) {
                     bitmapLoading[key] = generation
+                    // 编辑器预览最多只需要当前 View 像素级的清晰度。把 2K/4K
+                    // 视频帧解到 1024px 再缩进几百像素画布，会平白增加解码、内存
+                    // 带宽和每次拖动的绘制成本。
+                    val decodeDimensionPx = bitmapDecodeDimensionPx()
                     val job = assetScope.launch {
                         var decoded: Bitmap? = null
                         try {
-                            decoded = decodeBitmapSafely(resolved.file)
+                            decoded = decodeBitmapSafely(resolved.file, decodeDimensionPx)
                             withContext(Dispatchers.Main.immediate) {
                                 val result = decoded
                                 var currentRequest = false
@@ -2373,15 +2417,25 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
     }
 
-    private fun decodeBitmapSafely(file: File): Bitmap? {
+    private fun bitmapDecodeDimensionPx(): Int {
+        if (!editorAnimationPlaybackLimited) return MAX_DECODE_DIMENSION_PX
+        return maxOf(width, height)
+            .coerceAtLeast(MIN_EDITOR_DECODE_DIMENSION_PX)
+            .coerceAtMost(MAX_EDITOR_DECODE_DIMENSION_PX)
+    }
+
+    private fun decodeBitmapSafely(
+        file: File,
+        maximumDimensionPx: Int = MAX_DECODE_DIMENSION_PX,
+    ): Bitmap? {
         return try {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(file.absolutePath, bounds)
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
             var sample = 1
             while (
-                bounds.outWidth / sample > MAX_DECODE_DIMENSION_PX ||
-                bounds.outHeight / sample > MAX_DECODE_DIMENSION_PX
+                bounds.outWidth / sample > maximumDimensionPx ||
+                bounds.outHeight / sample > maximumDimensionPx
             ) {
                 sample *= 2
             }
@@ -2541,7 +2595,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val needsFastTicks = if (textExitAnimationActive) {
             true
         } else if (editorAnimationPlaybackLimited) {
-            editorAnimatedImageLayerIndex != null
+            editorAnimatedImageLayerIndex != null && !editorAnimationInteractionFrozen
         } else {
             source?.needsFastTicks == true
         }
@@ -2766,6 +2820,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val definitionRevision: String,
         val watchDirectoryKey: String,
         val definition: WatchmakerDefinition,
+        val isHscGenerated: Boolean,
         val exactFiles: Map<String, ResolvedAsset>,
         val uniqueBasenames: Map<String, ResolvedAsset?>,
         val galleryAssetPaths: List<String>,
@@ -2797,7 +2852,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         )
         val gifPathCache = WatchStringLruCache<List<String>>(
             maximumEntries = MAX_GIF_PATH_CACHE_ENTRIES,
-            maximumKeyLength = MAX_DYNAMIC_CACHE_KEY_CHARS,
+            maximumKeyLength = MAX_WATCH_GIF_PATH_INPUT_CHARS,
         )
         val chartValuesCache = WatchStringLruCache<List<Float>>(
             maximumEntries = MAX_CHART_VALUE_CACHE_ENTRIES,
@@ -2873,12 +2928,15 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         private const val MAX_GIF_PATH_CACHE_ENTRIES = 32
         private const val MAX_CHART_VALUE_CACHE_ENTRIES = 16
         private const val MAX_DYNAMIC_CACHE_KEY_CHARS = 4 * 1024
+        private const val MAX_WATCH_GIF_PATH_INPUT_CHARS = 256 * 1024
         private const val MAX_ASSET_CACHE_KEY_CHARS = 1_024
         private const val MAX_ASSET_REFERENCE_CHARS = 1_000
         private const val MAX_CHART_REFERENCE_LINES = 16
         private const val MAX_SERIES_CACHE_ENTRIES = 32
         private const val MAX_CALENDAR_CACHE_ENTRIES = 8
         private const val MAX_DECODE_DIMENSION_PX = 1_024
+        private const val MIN_EDITOR_DECODE_DIMENSION_PX = 256
+        private const val MAX_EDITOR_DECODE_DIMENSION_PX = 768
         private const val MAX_SVG_BYTES = MAX_WATCH_SVG_BYTES
         private const val MAX_SVG_ASSET_COUNT = 64
         private const val MAX_SVG_TOTAL_BYTES = 8L * 1024L * 1024L

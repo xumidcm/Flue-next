@@ -749,6 +749,8 @@
     <string name="watch_editor_grant_sensor">授权身体传感器</string>
     <string name="watch_editor_save_as">另存为新表盘</string>
     <string name="watch_editor_save_current">保存当前表盘</string>
+    <string name="watch_editor_upload_save_required_title">请先保存表盘</string>
+    <string name="watch_editor_upload_save_required_message">上传到表盘市场前，必须先保存当前修改或另存为新表盘。</string>
     <string name="watch_editor_rename">重命名</string>
     <string name="watch_editor_import_watch">导入 .watch</string>
     <string name="watch_editor_import_wff">导入并转换 WFF</string>
@@ -989,6 +991,15 @@
     <string name="watch_store_use_face">使用此表盘</string>
     <string name="watch_store_apply_success">已应用表盘</string>
     <string name="watch_store_edit">编辑</string>
+    <string name="watch_store_edit_upload">编辑已上传表盘</string>
+    <string name="watch_store_update_upload">保存修改</string>
+    <string name="watch_store_status_updating">正在保存修改</string>
+    <string name="watch_store_update_success">已更新上传的表盘</string>
+    <string name="watch_store_error_auth_expired_update">登录已过期，请重新登录后再修改</string>
+    <string name="watch_store_replace_uploaded_file_optional">替换表盘包（可选）</string>
+    <string name="watch_store_keep_uploaded_file">未选择新文件时，将保留原表盘包和预览图。</string>
+    <string name="watch_store_replace_selected_file_fmt">将替换为：%1$s</string>
+    <string name="watch_store_select_replacement_file">选择新的 .watch 文件</string>
     <string name="watch_store_export">导出</string>
     <string name="watch_store_custom_name">自定义名称</string>
     <string name="watch_store_delete_installed">删除已安装表盘</string>

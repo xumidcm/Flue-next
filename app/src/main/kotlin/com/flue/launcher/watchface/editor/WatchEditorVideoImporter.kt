@@ -138,6 +138,23 @@ internal fun resolveVideoBitrateKbps(
     requestedBitrateKbps: Int,
 ): Int = requestedBitrateKbps
 
+/** 各分辨率档的编辑器默认码率；用户随后仍可手动修改输入框。 */
+internal fun defaultVideoBitrateKbps(
+    info: WatchEditorVideoInfo,
+    preset: WatchEditorVideoResolutionPreset,
+): Int {
+    val source = info.bitrateKbps?.coerceIn(64, 100_000)
+    if (preset == WatchEditorVideoResolutionPreset.ORIGINAL) return source ?: 3_000
+    val presetCap = when (preset) {
+        WatchEditorVideoResolutionPreset.P1080 -> 20_000
+        WatchEditorVideoResolutionPreset.P720 -> 15_000
+        WatchEditorVideoResolutionPreset.P480,
+        WatchEditorVideoResolutionPreset.P360 -> 10_000
+        WatchEditorVideoResolutionPreset.ORIGINAL -> 3_000
+    }
+    return source?.coerceAtMost(presetCap) ?: presetCap
+}
+
 data class WatchEditorVideoImportProgress(
     val processedMs: Long,
     val durationMs: Long,
@@ -298,7 +315,6 @@ object WatchEditorVideoImporter {
             "-vf", videoFilter,
             "-c:v", "mjpeg",
             "-pix_fmt", "yuvj420p",
-            "-threads", "1",
             "-b:v", "${options.bitrateKbps}k",
             "-qmin", "2",
             "-qmax", "31",

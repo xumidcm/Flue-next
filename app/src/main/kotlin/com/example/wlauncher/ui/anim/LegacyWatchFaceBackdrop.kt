@@ -93,10 +93,9 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
     visualKey: String,
     sourceBoundsInWindow: android.graphics.Rect?,
     captureAllowed: Boolean,
+    captureRequestToken: Long = 0L,
 ): LegacyWatchFaceCapturedFrame? {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-    ) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
         return null
     }
 
@@ -107,28 +106,44 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
     }
     val generation = remember { AtomicLong(0L) }
     var captured by remember { mutableStateOf<LegacyWatchFaceCapturedFrame?>(null) }
+    var observedRequestToken by remember { mutableStateOf(captureRequestToken) }
     val requestedBounds = sourceBoundsInWindow?.let { android.graphics.Rect(it) }
     val boundsKey = requestedBounds?.let {
         "${it.left},${it.top},${it.right},${it.bottom}"
     }
 
-    LaunchedEffect(visualKey, boundsKey, captureAllowed, window) {
+    val latestCaptureAllowed = rememberUpdatedState(captureAllowed)
+    // captureAllowed 进入 key：覆层一旦开始显示就取消仍未完成的捕获，避免第二次
+    // 手势把上一次页面残影采进表盘帧。被取消时继续沿用上一张干净缓存。
+    LaunchedEffect(visualKey, boundsKey, window, captureRequestToken, captureAllowed) {
         val requestedWindow = window ?: return@LaunchedEffect
         val requestedRect = requestedBounds ?: return@LaunchedEffect
         val requestedKey = boundsKey ?: return@LaunchedEffect
+        val explicitRequest = captureRequestToken != observedRequestToken
+        observedRequestToken = captureRequestToken
         if (!captureAllowed || requestedRect.isEmpty) {
             return@LaunchedEffect
         }
-        if (captured?.let { it.visualKey == visualKey && it.boundsKey == requestedKey } == true) {
+        val sameVisual = captured?.let {
+            it.visualKey == visualKey && it.boundsKey == requestedKey
+        } == true
+        if (sameVisual && !explicitRequest) {
             return@LaunchedEffect
         }
 
-        // Let AndroidView/TextureView and the watch-face switch fade finish.
-        // The second capture replaces a possible first-frame media placeholder.
-        val delays = longArrayOf(280L, 720L)
+        // 手势 DOWN 的显式请求必须立刻取当前合成帧；新换表盘时额外保留两次
+        // 延迟替换，让 AndroidView / TextureView 有时间越过首帧占位。
+        val delays = if (explicitRequest && sameVisual) {
+            longArrayOf(0L)
+        } else if (explicitRequest) {
+            longArrayOf(0L, 280L, 720L)
+        } else {
+            longArrayOf(280L, 720L)
+        }
         for (settleDelay in delays) {
-            delay(settleDelay)
+            if (settleDelay > 0L) delay(settleDelay)
             ensureActive()
+            if (!latestCaptureAllowed.value) return@LaunchedEffect
             val frame = requestWindowPixelCopy(
                 window = requestedWindow,
                 requestedBounds = requestedRect,
@@ -138,6 +153,7 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
             var frameOwnedByEffect = true
             try {
                 ensureActive()
+                if (!latestCaptureAllowed.value) continue
                 val previous = captured
                 captured = LegacyWatchFaceCapturedFrame(
                     visualKey = visualKey,
@@ -146,7 +162,14 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
                     bitmap = frame,
                 )
                 frameOwnedByEffect = false
-                previous?.bitmap?.let(::recycleCapturedBitmapSafely)
+                // Compose draw may still hold the previous ImageBitmap wrapper for
+                // this frame. Give it two VSYNCs before recycling the backing Bitmap.
+                previous?.bitmap?.let { old ->
+                    Handler(Looper.getMainLooper()).postDelayed(
+                        { recycleCapturedBitmapSafely(old) },
+                        48L,
+                    )
+                }
             } finally {
                 if (frameOwnedByEffect) recycleCapturedBitmapSafely(frame)
             }
@@ -269,12 +292,10 @@ internal fun rememberLegacyWatchFaceBackdropFrames(
     capturedFrame: LegacyWatchFaceCapturedFrame?,
     viewportSize: IntSize?,
 ): LegacyWatchFaceBackdropFrames? {
-    // AndroidView-backed Watchmaker/JB faces are not reliably captured by a
-    // Compose GraphicsLayer on newer Android releases. Keep a prepared clear
-    // source for those faces so hardware blur can still fill the shrinking
-    // edge instead of exposing the black window background.
-    val needsPreparedFrames = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-        descriptor.isWatchmaker || descriptor.isJbWatch
+    // API 31+ 的 AndroidView / TextureView 改由手势 DOWN 时的真实 PixelCopy
+    // 合成帧驱动硬件扩边，绝不再退回 preview.jpg 或视频首帧。预制三联帧只
+    // 服务 Android 12 以下，保持原来的低成本混合路径。
+    val needsPreparedFrames = Build.VERSION.SDK_INT < Build.VERSION_CODES.S
     if (!needsPreparedFrames) return null
 
     val measuredViewport = viewportSize?.takeIf { it.width > 0 && it.height > 0 }

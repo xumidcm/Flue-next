@@ -1,7 +1,13 @@
 package com.flue.launcher.watchface.store
 
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.HttpURLConnection
 import java.net.URI
 import java.net.InetAddress
+import java.net.URL
 import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.CancellationException
 import org.junit.Assert.assertEquals
@@ -36,6 +42,20 @@ class WatchStoreParsingTest {
         assertTrue(url.rawQuery.orEmpty().contains("limit=50"))
         assertTrue(url.rawQuery.orEmpty().contains("screen_type=round"))
         assertTrue(url.rawQuery.orEmpty().contains("search=%E7%8C%AB%20%26%20clock"))
+    }
+
+    @Test
+    fun `url policy builds authenticated upload update endpoint`() {
+        val base = WatchStoreUrlPolicy.normalizeBaseUrl(DEFAULT_WATCH_STORE_BASE_URL)
+        val id = "b749ed8e-c9f1-4f82-bed6-9ea14f5252b9"
+
+        assertEquals(
+            "https://jbwatchface.ai-life.xyz/api/my/watchfaces/$id",
+            WatchStoreUrlPolicy.myWatchFaceUpdate(base, id).toASCIIString(),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            WatchStoreUrlPolicy.myWatchFaceUpdate(base, "../watchfaces/other")
+        }
     }
 
     @Test
@@ -151,5 +171,50 @@ class WatchStoreParsingTest {
         assertThrows(CancellationException::class.java) {
             api.getCategories()
         }
+    }
+
+    @Test
+    fun `uploaded watch face edit uses authenticated put and keeps archive optional`() {
+        lateinit var connection: RecordingHttpURLConnection
+        val api = HttpWatchStoreApi(
+            baseUrl = "https://8.8.8.8/api",
+            connectionFactory = { url ->
+                RecordingHttpURLConnection(url).also { connection = it }
+            },
+        )
+
+        api.updateMyWatchFace(
+            token = "test-token",
+            id = "b749ed8e-c9f1-4f82-bed6-9ea14f5252b9",
+            name = "新名称",
+            description = "新的描述",
+            screenType = WatchStoreScreenType.ROUND,
+            categoryId = "675f3e3c-a644-4954-a3d8-8d300c5c36a4",
+        )
+
+        val body = connection.writtenBody.toString(StandardCharsets.UTF_8.name())
+        assertEquals("PUT", connection.requestMethod)
+        assertEquals("Bearer test-token", connection.getRequestProperty("Authorization"))
+        assertTrue(body.contains("name=\"name\""))
+        assertTrue(body.contains("\r\n新名称\r\n"))
+        assertTrue(body.contains("name=\"screen_type\""))
+        assertTrue(body.contains("\r\nround\r\n"))
+        assertTrue(!body.contains("name=\"file\""))
+    }
+
+    private class RecordingHttpURLConnection(url: URL) : HttpURLConnection(url) {
+        val writtenBody = ByteArrayOutputStream()
+
+        override fun connect() = Unit
+
+        override fun disconnect() = Unit
+
+        override fun usingProxy(): Boolean = false
+
+        override fun getOutputStream(): OutputStream = writtenBody
+
+        override fun getInputStream(): InputStream = ByteArrayInputStream("{}".toByteArray())
+
+        override fun getResponseCode(): Int = HTTP_OK
     }
 }

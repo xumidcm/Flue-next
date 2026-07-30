@@ -58,6 +58,10 @@ internal object WatchStoreUrlPolicy {
 
     fun myWatchFacesList(base: URI): URI = endpoint(base, "my/watchfaces")
 
+    /** Authenticated metadata/archive update for one of the caller's uploads. */
+    fun myWatchFaceUpdate(base: URI, id: String): URI =
+        endpoint(base, "my/watchfaces/${requireId(id)}")
+
     fun myWatchFaceDelete(base: URI, id: String): URI = endpoint(base, "my/watchfaces/${requireId(id)}")
 
     fun resolveRedirect(current: URI, location: String): URI {

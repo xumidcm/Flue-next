@@ -426,6 +426,7 @@ private fun InternalWatchFaceConfigScreen(
                 clockOverride = FIXED_PREVIEW_CLOCK,
                 showClock = true,
                 playVideo = true,
+                showBottomFade = false,
                 modifier = Modifier.fillMaxSize()
             )
         }

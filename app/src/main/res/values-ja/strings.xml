@@ -741,6 +741,8 @@
     <string name="watch_editor_grant_sensor">身体センサーを許可</string>
     <string name="watch_editor_save_as">新しい文字盤として保存</string>
     <string name="watch_editor_save_current">現在の文字盤を保存</string>
+    <string name="watch_editor_upload_save_required_title">先に文字盤を保存してください</string>
+    <string name="watch_editor_upload_save_required_message">文字盤マーケットへアップロードする前に、現在の変更を保存するか、新しい文字盤として保存してください。</string>
     <string name="watch_editor_rename">名前を変更</string>
     <string name="watch_editor_import_watch">.watch を読み込む</string>
     <string name="watch_editor_import_wff">WFF を読み込んで変換</string>
@@ -970,6 +972,15 @@
     <string name="watch_store_use_face">この文字盤を使用</string>
     <string name="watch_store_apply_success">文字盤を適用しました</string>
     <string name="watch_store_edit">編集</string>
+    <string name="watch_store_edit_upload">アップロード済み文字盤を編集</string>
+    <string name="watch_store_update_upload">変更を保存</string>
+    <string name="watch_store_status_updating">変更を保存しています</string>
+    <string name="watch_store_update_success">アップロード済み文字盤を更新しました</string>
+    <string name="watch_store_error_auth_expired_update">ログインの有効期限が切れました。再ログインしてから編集してください。</string>
+    <string name="watch_store_replace_uploaded_file_optional">文字盤ファイルを置き換える（任意）</string>
+    <string name="watch_store_keep_uploaded_file">新しいファイルを選択しない場合、現在の文字盤ファイルとプレビューを保持します。</string>
+    <string name="watch_store_replace_selected_file_fmt">置き換え先：%1$s</string>
+    <string name="watch_store_select_replacement_file">新しい .watch ファイルを選択</string>
     <string name="watch_store_export">書き出す</string>
     <string name="watch_store_custom_name">カスタム名</string>
     <string name="watch_store_delete_installed">インストール済み文字盤を削除</string>

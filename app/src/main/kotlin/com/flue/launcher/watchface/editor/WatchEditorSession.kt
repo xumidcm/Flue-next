@@ -201,12 +201,16 @@ class WatchEditorSession private constructor(
         val active = activeTransformGesture
             ?: throw WatchEditorException("没有活动的图层变换手势")
         require(active.key == key) { "图层变换手势目标已改变" }
-        val before = captureState()
+        // MOVE 是逐帧热路径。captureState() 会序列化整份 watch.xml；循环背景的
+        // path 往往包含上千个帧文件名，因此拖动任意元素都会在每一帧复制数十万
+        // 字符并校验整棵 DOM。这里只保存目标图层的 5 个变换值，完整快照和文档
+        // 校验留到 begin/commit 各执行一次。
+        val layer = findLayer(key)
+        val before = layerTransform(key)
         try {
-            setLayerTransformDirect(findLayer(key), transform.sanitized())
-            validateDocument()
+            setLayerTransformDirect(layer, transform.sanitized())
         } catch (error: Exception) {
-            restoreState(before)
+            runCatching { setLayerTransformDirect(layer, before) }
             throw if (error is WatchEditorException) {
                 error
             } else {
@@ -222,6 +226,8 @@ class WatchEditorSession private constructor(
         require(active.key == key) { "图层变换手势目标已改变" }
         activeTransformGesture = null
         return try {
+            // 手势期间只做局部数值写入；在形成唯一撤销点之前统一做一次完整校验。
+            validateDocument()
             val after = captureState()
             if (sameState(active.before, after)) {
                 false
@@ -462,16 +468,25 @@ class WatchEditorSession private constructor(
             setOrRemoveAttribute(layer, "path", null)
             stashUnreferencedResources(obsoleteLoopResources)
             var remainingBytes = remainingBudget()
-            val paths = frameFiles.map { file ->
-                require(file.isFile && file.length() > 0L) { "视频帧不可用：${file.name}" }
-                val path = importResourceDirect(
-                    input = file.inputStream(),
-                    requestedName = file.name,
-                    directory = "images",
-                    totalBudget = remainingBytes,
-                )
-                remainingBytes -= resolveDraftPath(path).length()
-                path
+            val importedPaths = mutableListOf<String>()
+            val paths = try {
+                frameFiles.map { file ->
+                    require(file.isFile && file.length() > 0L) { "视频帧不可用：${file.name}" }
+                    val path = importResourceFileDirect(
+                        sourceFile = file,
+                        requestedName = file.name,
+                        directory = "images",
+                        totalBudget = remainingBytes,
+                    )
+                    importedPaths += path
+                    remainingBytes -= resolveDraftPath(path).length()
+                    path
+                }
+            } catch (error: Exception) {
+                // XML 尚未引用这批文件，restoreState 看不到它们；在把异常交给
+                // mutate 回滚旧素材之前先清掉已经搬入草稿的孤儿帧。
+                importedPaths.forEach { path -> runCatching { resolveDraftPath(path).delete() } }
+                throw error
             }
             setOrRemoveAttribute(layer, "type", "image_gif")
             setOrRemoveAttribute(layer, "path", paths.joinToString("`"))
@@ -1007,6 +1022,52 @@ class WatchEditorSession private constructor(
             return relativePath
         } catch (error: Exception) {
             temporary.delete()
+            throw WatchEditorException("无法导入资源：${error.message ?: error.javaClass.simpleName}", error)
+        } finally {
+            temporary.delete()
+        }
+    }
+
+    /**
+     * FFmpeg 缓存与编辑草稿通常位于同一应用数据卷。优先直接移动帧文件，
+     * 避免高帧率视频逐帧经历“输入流 -> 临时文件 -> 再移动”的双倍 IO；
+     * 跨文件系统或厂商文件系统拒绝移动时仍回退到原有的有界原子复制。
+     */
+    private fun importResourceFileDirect(
+        sourceFile: File,
+        requestedName: String,
+        directory: String,
+        totalBudget: Long,
+    ): String {
+        val sourceBytes = sourceFile.length()
+        require(sourceFile.isFile && sourceBytes > 0L) { "资源文件不可用：${sourceFile.name}" }
+        require(sourceBytes <= limits.maxFileBytes) { "单个资源超过大小限制" }
+        require(totalBudget > 0L && sourceBytes <= totalBudget) { "草稿资源总大小已达到上限" }
+
+        val relativePath = uniqueResourcePath(requestedName, directory)
+        val destination = resolveDraftPath(relativePath)
+        destination.parentFile?.let { parent ->
+            if (!parent.exists() && !parent.mkdirs()) {
+                throw WatchEditorException("无法创建资源目录")
+            }
+        }
+        try {
+            atomicMove(sourceFile, destination)
+            return relativePath
+        } catch (_: Exception) {
+            destination.delete()
+        }
+
+        val temporaryDirectory = draftDirectory.parentFile ?: draftDirectory
+        val temporary = File.createTempFile(".resource-", ".tmp", temporaryDirectory)
+        try {
+            sourceFile.inputStream().use { source ->
+                copyBounded(source, temporary, limits.maxFileBytes, totalBudget)
+            }
+            atomicMove(temporary, destination)
+            return relativePath
+        } catch (error: Exception) {
+            destination.delete()
             throw WatchEditorException("无法导入资源：${error.message ?: error.javaClass.simpleName}", error)
         } finally {
             temporary.delete()

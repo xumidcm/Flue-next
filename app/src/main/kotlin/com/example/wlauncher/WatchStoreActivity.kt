@@ -5,6 +5,7 @@ import com.flue.launcher.i18n.FlueComponentActivity
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -32,6 +33,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -91,15 +94,20 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Clear
@@ -1159,6 +1167,7 @@ private fun WatchStoreScreen(
             visible = selectedId != null,
             modifier = Modifier
                 .fillMaxSize()
+                .blockPointerPassThrough()
                 .zIndex(1f),
             enter = slideInHorizontally(
                 animationSpec = tween(260, easing = FastOutSlowInEasing),
@@ -1174,6 +1183,7 @@ private fun WatchStoreScreen(
                     ?.value
                 WatchFaceDetailPage(
                     repository = repository,
+                    remoteId = overlayId,
                     detail = selectedDetail,
                     summary = entries.firstOrNull { it.id == overlayId },
                     localDescriptor = (transientState as? WatchStoreInstallState.Installed)?.record
@@ -1219,6 +1229,7 @@ private fun WatchStoreScreen(
             visible = uploadVisible,
             modifier = Modifier
                 .fillMaxSize()
+                .blockPointerPassThrough()
                 .zIndex(2f),
             enter = slideInHorizontally(
                 animationSpec = tween(260, easing = FastOutSlowInEasing),
@@ -1240,6 +1251,7 @@ private fun WatchStoreScreen(
             visible = myUploadsVisible,
             modifier = Modifier
                 .fillMaxSize()
+                .blockPointerPassThrough()
                 .zIndex(3f),
             enter = slideInHorizontally(
                 animationSpec = tween(260, easing = FastOutSlowInEasing),
@@ -1250,6 +1262,7 @@ private fun WatchStoreScreen(
         ) {
             MyUploadsOverlay(
                 repository = repository,
+                installedFaces = installedFaces,
                 onDismiss = { myUploadsVisible = false },
             )
         }
@@ -1761,6 +1774,7 @@ private fun WatchFaceGridCard(
 @Composable
 private fun WatchFaceDetailPage(
     repository: WatchStoreRepository,
+    remoteId: String,
     detail: WatchStoreWatchFaceDetail?,
     summary: WatchStoreWatchFace?,
     localDescriptor: WatchFaceDescriptor?,
@@ -1788,6 +1802,14 @@ private fun WatchFaceDetailPage(
         ?: stringResource(R.string.watch_store_installed_face)
     var editingName by remember(installedRecord?.logicalId, detail?.id) { mutableStateOf(false) }
     var nameText by remember(installedRecord?.logicalId, displayName) { mutableStateOf(displayName) }
+    var fullscreenPreview by remember(remoteId, localDescriptor?.id) { mutableStateOf<Bitmap?>(null) }
+    // 市场条目的预览身份和比例从点击第一帧起固定。已安装条目以前会先走
+    // LocalInstalledWatchPreview，详情接口返回后再换成远端 WatchPreview，造成
+    // “小图 -> 加载 -> 正常大图”的三段跳变。
+    val remotePreviewId = remoteId
+    val remoteScreenType = remember(remoteId) {
+        summary?.screenType ?: detail?.screenType ?: WatchStoreScreenType.UNKNOWN
+    }
     val detailScrollState = rememberScrollState()
     Column(
         modifier = Modifier
@@ -1836,7 +1858,7 @@ private fun WatchFaceDetailPage(
             )
         }
         when {
-            detail != null || installedRecord != null -> {
+            detail != null || summary != null || installedRecord != null -> {
                 // clipToBounds keeps the elastic-overscroll translation inside
                 // the scroll viewport instead of painting over the header row.
                 BoxWithConstraints(Modifier.fillMaxSize().clipToBounds()) {
@@ -1848,6 +1870,9 @@ private fun WatchFaceDetailPage(
                     // button pushed below the fold and reading as "the image
                     // covers the text".
                     val previewMaxHeight = maxHeight * 0.62f
+                    val previewMaxWidth = (
+                        maxWidth - if (isScreenRound) 12.dp else 0.dp
+                    ).coerceAtLeast(1.dp)
                     Column(
                         Modifier
                             .fillMaxSize()
@@ -1857,34 +1882,41 @@ private fun WatchFaceDetailPage(
                             .padding(horizontal = if (isScreenRound) 6.dp else 0.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        if (detail != null) {
-                            val previewRatio = when (detail.screenType) {
+                        if (remotePreviewId.isNotBlank()) {
+                            val previewRatio = when (remoteScreenType) {
                                 WatchStoreScreenType.RECTANGULAR -> 0.72f
                                 else -> 1f
                             }
+                            val previewWidth = minOf(previewMaxWidth, previewMaxHeight * previewRatio)
+                            val previewHeight = previewWidth / previewRatio
                             WatchPreview(
                                 repository = repository,
-                                id = detail.id,
+                                id = remotePreviewId,
                                 modifier = Modifier
                                     .align(Alignment.CenterHorizontally)
-                                    .height(previewMaxHeight)
-                                    .aspectRatio(previewRatio, matchHeightConstraintsFirst = true)
+                                    .size(previewWidth, previewHeight)
                                     .clip(
-                                        if (detail.screenType == WatchStoreScreenType.ROUND) {
+                                        if (remoteScreenType == WatchStoreScreenType.ROUND) {
                                             style.chipShape
                                         } else {
                                             style.cardShape
                                         },
                                     ),
-                                targetSize = 512,
+                                // 全屏预览允许双击放大，详情头图缓存一份较清晰版本。
+                                targetSize = 1024,
+                                onOpen = { bitmap -> fullscreenPreview = bitmap },
                             )
                         } else {
+                            val localPreviewSize = minOf(
+                                previewMaxWidth,
+                                previewMaxHeight.coerceIn(140.dp, 260.dp),
+                            )
                             LocalInstalledWatchPreview(
                                 descriptor = localDescriptor,
                                 modifier = Modifier
                                     .align(Alignment.CenterHorizontally)
-                                    .height(previewMaxHeight.coerceIn(140.dp, 260.dp))
-                                    .aspectRatio(1f, matchHeightConstraintsFirst = true),
+                                    .size(localPreviewSize),
+                                onOpen = { bitmap -> fullscreenPreview = bitmap },
                             )
                         }
                         Text(
@@ -2126,12 +2158,18 @@ private fun WatchFaceDetailPage(
             }
         }
     }
+    fullscreenPreview?.let { bitmap ->
+        FullscreenWatchPreview(
+            bitmap = bitmap,
+            onDismiss = { fullscreenPreview = null },
+        )
+    }
 }
 
 /**
  * 已上传表盘管理覆层。
  *
- * 从 GET /api/my/watchfaces 加载当前账号上传的全部表盘，支持删除（DELETE）。
+ * 从 GET /api/my/watchfaces 加载当前账号上传的全部表盘，支持编辑（PUT）和删除（DELETE）。
  * 未登录时可在当前覆层完成登录，不会绕到上传流程。
  */
 private enum class MyUploadsContentState {
@@ -2146,6 +2184,7 @@ private enum class MyUploadsContentState {
 @Composable
 private fun MyUploadsOverlay(
     repository: WatchStoreRepository,
+    installedFaces: List<WatchFaceDescriptor>,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -2157,8 +2196,11 @@ private fun MyUploadsOverlay(
     var session by remember { mutableStateOf(authStore.read()) }
 
     var entries by remember { mutableStateOf<List<MyWatchFaceEntry>>(emptyList()) }
+    var previewGeneration by remember { mutableIntStateOf(0) }
     var loading by remember { mutableStateOf(session != null) }
     var loadError by remember { mutableStateOf<String?>(null) }
+    var editTarget by remember { mutableStateOf<MyWatchFaceEntry?>(null) }
+    var lastEditTarget by remember { mutableStateOf<MyWatchFaceEntry?>(null) }
     var deleteTarget by remember { mutableStateOf<MyWatchFaceEntry?>(null) }
     var deleteInProgress by remember { mutableStateOf(false) }
     var deleteError by remember { mutableStateOf<String?>(null) }
@@ -2237,7 +2279,9 @@ private fun MyUploadsOverlay(
     }
 
     BackHandler {
-        if (loginFormVisible && session == null && authPage == WatchStoreAuthPage.REGISTER && !authBusy) {
+        if (editTarget != null) {
+            editTarget = null
+        } else if (loginFormVisible && session == null && authPage == WatchStoreAuthPage.REGISTER && !authBusy) {
             authPage = WatchStoreAuthPage.LOGIN
             authError = null
         } else if (loginFormVisible && session == null && !authBusy) {
@@ -2247,6 +2291,21 @@ private fun MyUploadsOverlay(
             onDismiss()
         }
     }
+
+    val editCovered = editTarget != null
+    val contentHierarchyOffset by animateFloatAsState(
+        targetValue = if (editCovered) 1f else 0f,
+        animationSpec = tween(
+            durationMillis = if (editCovered) 240 else 260,
+            easing = FastOutSlowInEasing,
+        ),
+        label = "my_uploads_hierarchy_offset",
+    )
+    val contentHierarchyAlpha by animateFloatAsState(
+        targetValue = if (editCovered) 0f else 1f,
+        animationSpec = tween(durationMillis = if (editCovered) 140 else 200),
+        label = "my_uploads_hierarchy_alpha",
+    )
 
     Box(
         modifier = Modifier
@@ -2267,6 +2326,10 @@ private fun MyUploadsOverlay(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .graphicsLayer {
+                    translationX = -size.width / 6f * contentHierarchyOffset
+                    alpha = contentHierarchyAlpha
+                }
                 .padding(horizontal = 10.dp, vertical = 6.dp),
         ) {
             // 顶栏
@@ -2443,11 +2506,55 @@ private fun MyUploadsOverlay(
                             MyUploadEntryRow(
                                 entry = entry,
                                 repository = repository,
+                                previewGeneration = previewGeneration,
+                                onEditRequest = {
+                                    lastEditTarget = it
+                                    editTarget = it
+                                },
                                 onDeleteRequest = { deleteTarget = it },
                             )
                         }
                     }
                 }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = editTarget != null,
+            modifier = Modifier
+                .fillMaxSize()
+                .blockPointerPassThrough()
+                .zIndex(5f),
+            enter = slideInHorizontally(
+                animationSpec = tween(260, easing = FastOutSlowInEasing),
+            ) { fullWidth -> fullWidth / 4 } + fadeIn(tween(200)),
+            exit = slideOutHorizontally(
+                animationSpec = tween(240, easing = FastOutSlowInEasing),
+            ) { fullWidth -> fullWidth / 4 } + fadeOut(tween(140)),
+        ) {
+            val entry = editTarget ?: lastEditTarget
+            if (entry != null) {
+                MyUploadEditOverlay(
+                    repository = repository,
+                    installedFaces = installedFaces,
+                    entry = entry,
+                    token = session?.token.orEmpty(),
+                    modifier = Modifier.fillMaxSize(),
+                    onUpdated = { updated, replacedArchive ->
+                        entries = entries.map { current ->
+                            if (current.id == updated.id) updated else current
+                        }
+                        if (replacedArchive) previewGeneration++
+                        editTarget = null
+                    },
+                    onTokenExpired = {
+                        authStore.clear()
+                        session = null
+                        entries = emptyList()
+                        editTarget = null
+                    },
+                    onDismiss = { editTarget = null },
+                )
             }
         }
     }
@@ -2523,14 +2630,16 @@ private fun MyUploadsOverlay(
 private fun MyUploadEntryRow(
     entry: MyWatchFaceEntry,
     repository: WatchStoreRepository,
+    previewGeneration: Int,
+    onEditRequest: (MyWatchFaceEntry) -> Unit,
     onDeleteRequest: (MyWatchFaceEntry) -> Unit,
 ) {
     val context = LocalContext.current
     val style = LauncherTheme.style
     val screenType = stringResource(screenTypeLabelRes(entry.screenType))
     val previewSizePx = 56
-    var bitmap by remember(entry.id) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(entry.id) {
+    var bitmap by remember(entry.id, previewGeneration) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(entry.id, previewGeneration) {
         runCatching {
             val bmp = withContext(Dispatchers.IO) { repository.loadPreview(entry.id, previewSizePx, previewSizePx) }
             bitmap = bmp.asImageBitmap()
@@ -2592,6 +2701,16 @@ private fun MyUploadEntryRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        TextButton(
+            onClick = { onEditRequest(entry) },
+            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+        ) {
+            Text(
+                stringResource(R.string.watch_store_edit),
+                color = style.accentColor,
+                fontSize = 12.sp,
+            )
+        }
         IconButton(onClick = { onDeleteRequest(entry) }, modifier = Modifier.size(36.dp)) {
             Icon(
                 MiuixIcons.Delete,
@@ -2599,6 +2718,463 @@ private fun MyUploadEntryRow(
                 tint = style.secondaryTextColor,
                 modifier = Modifier.size(18.dp),
             )
+        }
+    }
+}
+
+/**
+ * 编辑当前账号已经上传的表盘。服务端的 PUT 允许仅更新元数据；选择了新的
+ * `.watch` 文件时，服务端会同时替换归档和从中重新生成的封面。
+ */
+@Composable
+private fun MyUploadEditOverlay(
+    repository: WatchStoreRepository,
+    installedFaces: List<WatchFaceDescriptor>,
+    entry: MyWatchFaceEntry,
+    token: String,
+    modifier: Modifier = Modifier,
+    onUpdated: (MyWatchFaceEntry, replacedArchive: Boolean) -> Unit,
+    onTokenExpired: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val style = LauncherTheme.style
+    val isScreenRound = isFlueScreenRound()
+    val api = remember { HttpWatchStoreApi() }
+    var name by remember(entry.id) { mutableStateOf(entry.name) }
+    var description by remember(entry.id) { mutableStateOf(entry.description) }
+    var screenType by remember(entry.id) { mutableStateOf(entry.screenType) }
+    var selectedCategoryId by remember(entry.id) { mutableStateOf(entry.category.id) }
+    var categories by remember { mutableStateOf<List<WatchStoreCategory>?>(null) }
+    var categoriesError by remember { mutableStateOf<String?>(null) }
+    var categoriesRetryToken by remember { mutableIntStateOf(0) }
+    var pickedFileUri by remember(entry.id) { mutableStateOf<Uri?>(null) }
+    var pickedFileName by remember(entry.id) { mutableStateOf<String?>(null) }
+    var selectedDescriptorId by remember(entry.id) { mutableStateOf<String?>(null) }
+    var saving by remember { mutableStateOf(false) }
+    var updatePercent by remember { mutableStateOf<Int?>(null) }
+    var formError by remember { mutableStateOf<String?>(null) }
+    val textFieldColors = OutlinedTextFieldDefaults.colors(
+        focusedBorderColor = style.accentColor,
+        unfocusedBorderColor = style.outlineColor,
+        cursorColor = style.accentColor,
+        focusedTextColor = style.bodyColor,
+        unfocusedTextColor = style.bodyColor,
+    )
+    val installedWatchmakerFaces = remember(installedFaces) {
+        installedFaces.filter { it.isWatchmaker && it.sourceDirPath != null }
+    }
+    val selectedDescriptor = selectedDescriptorId
+        ?.let { id -> installedWatchmakerFaces.firstOrNull { it.id == id } }
+
+    val pickReplacementFile = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            pickedFileUri = uri
+            selectedDescriptorId = null
+            pickedFileName = queryStoreUploadDisplayName(context, uri)
+                ?: context.getString(R.string.watch_store_local_face)
+        }
+    }
+
+    LaunchedEffect(entry.id, categoriesRetryToken) {
+        categoriesError = null
+        runCatching { repository.getCategories() }
+            .onSuccess { loaded ->
+                categories = loaded
+                if (loaded.none { it.id == selectedCategoryId }) {
+                    selectedCategoryId = loaded.firstOrNull()?.id.orEmpty()
+                }
+            }
+            .onFailure { error ->
+                error.throwIfCancellation()
+                categoriesError = watchStoreUploadErrorMessage(context, error)
+            }
+    }
+
+    fun update() {
+        if (saving) return
+        val trimmedName = name.trim()
+        if (trimmedName.isEmpty()) {
+            formError = context.getString(R.string.watch_store_error_name_required)
+            return
+        }
+        val trimmedDescription = description.trim()
+        if (trimmedDescription.isEmpty()) {
+            formError = context.getString(R.string.watch_store_error_description_required)
+            return
+        }
+        val categoryId = selectedCategoryId.trim()
+        if (categoryId.isEmpty()) {
+            formError = context.getString(R.string.watch_store_error_category_required)
+            return
+        }
+        if (token.isBlank()) {
+            onTokenExpired()
+            return
+        }
+
+        val replacementUri = pickedFileUri
+        val replacementDescriptor = selectedDescriptor
+        val selectedCategory = categories.orEmpty().firstOrNull { it.id == categoryId } ?: entry.category
+        formError = null
+        updatePercent = null
+        saving = true
+        scope.launch {
+            try {
+                val replacedArchive = withContext(Dispatchers.IO) {
+                    var archive: File? = null
+                    try {
+                        if (replacementUri != null || replacementDescriptor != null) {
+                            archive = File.createTempFile(
+                                "flue_store_update_",
+                                ".watch",
+                                context.cacheDir,
+                            )
+                            if (replacementDescriptor != null) {
+                                WatchEditorSession.open(context, replacementDescriptor).use { session ->
+                                    session.exportWatch(archive)
+                                }
+                            } else {
+                                copyPickedWatchArchive(context, requireNotNull(replacementUri), archive)
+                            }
+                        }
+                        api.updateMyWatchFace(
+                            token = token,
+                            id = entry.id,
+                            name = trimmedName,
+                            description = trimmedDescription,
+                            screenType = screenType,
+                            categoryId = categoryId,
+                            replacementFile = archive,
+                        ) { sent, total ->
+                            val percent = ((sent * 100L) / total.coerceAtLeast(1L))
+                                .toInt()
+                                .coerceIn(0, 100)
+                            if (updatePercent != percent) updatePercent = percent
+                        }
+                        archive != null
+                    } finally {
+                        archive?.delete()
+                    }
+                }
+                if (replacedArchive) repository.invalidatePreview(entry.id)
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.watch_store_update_success),
+                    Toast.LENGTH_SHORT,
+                ).show()
+                onUpdated(
+                    entry.copy(
+                        name = trimmedName,
+                        description = trimmedDescription,
+                        screenType = screenType,
+                        category = selectedCategory,
+                    ),
+                    replacedArchive,
+                )
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                if (error is WatchStoreHttpException && error.statusCode == 401) {
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.watch_store_error_auth_expired_update),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    onTokenExpired()
+                } else {
+                    formError = watchStoreUploadErrorMessage(context, error)
+                }
+            } finally {
+                saving = false
+                updatePercent = null
+            }
+        }
+    }
+
+    // 保存中不允许返回，避免协程随组合一起取消而留下不确定的远端状态。
+    BackHandler { if (!saving) onDismiss() }
+
+    Column(
+        modifier = modifier
+            .background(style.screenBackground)
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.changes.none { it.pressed }) break
+                    }
+                }
+            }
+            .padding(
+                horizontal = if (isScreenRound) 16.dp else 10.dp,
+                vertical = if (isScreenRound) 10.dp else 6.dp,
+            ),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(
+                onClick = { if (!saving) onDismiss() },
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(
+                    MiuixIcons.Back,
+                    contentDescription = stringResource(R.string.watch_editor_back),
+                    tint = style.titleColor,
+                )
+            }
+            Text(
+                stringResource(R.string.watch_store_edit_upload),
+                modifier = Modifier.weight(1f),
+                color = style.titleColor,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                maxLines = 2,
+            )
+            Spacer(Modifier.size(40.dp))
+        }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = if (isScreenRound) 6.dp else 0.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (saving) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    MiuixLoadingIndicator(
+                        Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = style.accentColor,
+                    )
+                    Text(
+                        stringResource(R.string.watch_store_status_updating) +
+                            (updatePercent?.let { " $it%" }.orEmpty()),
+                        color = style.bodyColor,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+            formError?.let { message ->
+                Text(
+                    message,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(WatchColors.ActiveRed.copy(alpha = 0.16f), style.rowShape)
+                        .padding(10.dp),
+                    color = WatchColors.ActiveRed,
+                    fontSize = 12.sp,
+                )
+            }
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it.take(100) },
+                label = { Text(stringResource(R.string.watch_store_watch_name_required)) },
+                singleLine = true,
+                enabled = !saving,
+                modifier = Modifier.fillMaxWidth(),
+                colors = textFieldColors,
+            )
+            OutlinedTextField(
+                value = description,
+                onValueChange = { description = it.take(2000) },
+                label = { Text(stringResource(R.string.watch_store_description_required)) },
+                minLines = 2,
+                enabled = !saving,
+                modifier = Modifier.fillMaxWidth(),
+                colors = textFieldColors,
+            )
+            Text(
+                stringResource(R.string.watch_store_replace_uploaded_file_optional),
+                color = style.titleColor,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            val replacementName = selectedDescriptor?.displayName ?: pickedFileName
+            replacementName?.let { fileName ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.watch_store_replace_selected_file_fmt, fileName),
+                        modifier = Modifier.weight(1f),
+                        color = style.bodyColor,
+                        fontSize = 12.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    TextButton(
+                        enabled = !saving,
+                        onClick = {
+                            pickedFileUri = null
+                            pickedFileName = null
+                            selectedDescriptorId = null
+                        },
+                    ) {
+                        Text(stringResource(R.string.watch_editor_cancel), color = style.accentColor)
+                    }
+                }
+            } ?: Text(
+                stringResource(R.string.watch_store_keep_uploaded_file),
+                color = style.secondaryTextColor,
+                fontSize = 11.sp,
+            )
+            StoreSecondaryButton(
+                label = stringResource(R.string.watch_store_select_replacement_file),
+                onClick = { if (!saving) pickReplacementFile.launch(arrayOf("*/*")) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (installedWatchmakerFaces.isEmpty()) {
+                Text(
+                    stringResource(R.string.watch_store_no_uploadable_installed),
+                    color = style.secondaryTextColor,
+                    fontSize = 11.sp,
+                )
+            } else {
+                Text(
+                    stringResource(R.string.watch_store_or_select_installed),
+                    color = style.secondaryTextColor,
+                    fontSize = 11.sp,
+                )
+                installedWatchmakerFaces.forEach { descriptor ->
+                    val selected = descriptor.id == selectedDescriptorId
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(style.rowShape)
+                            .background(if (selected) style.selectedCardColor else style.cardColor)
+                            .border(1.dp, style.outlineColor, style.rowShape)
+                            .clickable(enabled = !saving) {
+                                selectedDescriptorId = descriptor.id
+                                pickedFileUri = null
+                                pickedFileName = null
+                            }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            descriptor.displayName,
+                            modifier = Modifier.weight(1f),
+                            color = style.bodyColor,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (selected) {
+                            Icon(
+                                imageVector = MiuixIcons.Ok,
+                                contentDescription = null,
+                                tint = style.accentColor,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+                }
+            }
+            Text(
+                stringResource(R.string.watch_store_screen_shape),
+                color = style.titleColor,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                STORE_UPLOAD_SCREEN_TYPE_OPTIONS.forEach { (candidate, labelRes) ->
+                    StorePill(stringResource(labelRes), screenType == candidate) {
+                        if (!saving) screenType = candidate
+                    }
+                }
+            }
+            Text(
+                stringResource(R.string.watch_store_category),
+                color = style.titleColor,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            when {
+                categoriesError != null -> {
+                    Text(
+                        categoriesError.orEmpty(),
+                        color = WatchColors.ActiveRed,
+                        fontSize = 12.sp,
+                    )
+                    StoreSecondaryButton(
+                        label = stringResource(R.string.watch_store_reload_categories),
+                        onClick = { if (!saving) categoriesRetryToken++ },
+                    )
+                }
+                categories == null -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    MiuixLoadingIndicator(
+                        Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = style.accentColor,
+                    )
+                    Text(
+                        stringResource(R.string.watch_store_status_loading_categories),
+                        color = style.secondaryTextColor,
+                        fontSize = 12.sp,
+                    )
+                }
+                categories.orEmpty().isEmpty() -> Text(
+                    stringResource(R.string.watch_store_no_categories),
+                    color = style.secondaryTextColor,
+                    fontSize = 12.sp,
+                )
+                else -> categories.orEmpty().forEach { category ->
+                    val selected = category.id == selectedCategoryId
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(style.rowShape)
+                            .background(if (selected) style.selectedCardColor else style.cardColor)
+                            .clickable(enabled = !saving) { selectedCategoryId = category.id }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            category.name,
+                            modifier = Modifier.weight(1f),
+                            color = style.bodyColor,
+                            fontSize = 13.sp,
+                        )
+                        if (selected) {
+                            Icon(
+                                imageVector = MiuixIcons.Ok,
+                                contentDescription = null,
+                                tint = style.accentColor,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+                }
+            }
+            StorePrimaryButton(
+                label = stringResource(R.string.watch_store_update_upload),
+                onClick = ::update,
+                enabled = !saving &&
+                    name.isNotBlank() &&
+                    description.isNotBlank() &&
+                    selectedCategoryId.isNotBlank(),
+            )
+            Spacer(Modifier.height(if (isScreenRound) 36.dp else 14.dp))
         }
     }
 }
@@ -3427,21 +4003,51 @@ private fun LocalInstalledWatchFaceCard(
 private fun LocalInstalledWatchPreview(
     descriptor: WatchFaceDescriptor?,
     modifier: Modifier,
+    onOpen: ((Bitmap) -> Unit)? = null,
 ) {
     val style = LauncherTheme.style
+    val previewPath = descriptor?.previewFilePath
+    var bitmap by remember(previewPath) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(previewPath) {
+        bitmap = withContext(Dispatchers.IO) {
+            previewPath
+                ?.let(::File)
+                ?.takeIf(File::isFile)
+                ?.let { file -> BitmapFactory.decodeFile(file.absolutePath) }
+        }
+    }
+    val image = remember(bitmap) { bitmap?.asImageBitmap() }
     Box(
-        modifier = modifier.clip(style.cardShape).background(style.cardColor),
+        modifier = modifier
+            .clip(style.cardShape)
+            .background(style.cardColor)
+            .then(
+                if (bitmap != null && onOpen != null) {
+                    Modifier.clickable { bitmap?.let(onOpen) }
+                } else {
+                    Modifier
+                },
+            ),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            descriptor?.displayName ?: stringResource(R.string.watch_store_local_face),
-            color = style.secondaryTextColor,
-            fontSize = 14.sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(18.dp),
-        )
+        if (image != null) {
+            Image(
+                bitmap = image,
+                contentDescription = stringResource(R.string.watch_store_preview),
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit,
+            )
+        } else {
+            Text(
+                descriptor?.displayName ?: stringResource(R.string.watch_store_local_face),
+                color = style.secondaryTextColor,
+                fontSize = 14.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(18.dp),
+            )
+        }
     }
 }
 
@@ -3451,6 +4057,7 @@ private fun WatchPreview(
     id: String,
     modifier: Modifier,
     targetSize: Int,
+    onOpen: ((Bitmap) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val style = LauncherTheme.style
@@ -3477,7 +4084,18 @@ private fun WatchPreview(
         loadError != null -> WatchPreviewState.FAILED
         else -> WatchPreviewState.LOADING
     }
-    Box(modifier.background(style.pressedCardColor), contentAlignment = Alignment.Center) {
+    Box(
+        modifier
+            .background(style.pressedCardColor)
+            .then(
+                if (bitmap != null && onOpen != null) {
+                    Modifier.clickable { bitmap?.let(onOpen) }
+                } else {
+                    Modifier
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
         // 220ms 交叉淡入：图片就绪后从加载态柔和过渡进来，替代原先的硬跳。
         Crossfade(
             targetState = previewState,
@@ -3521,6 +4139,114 @@ private fun WatchPreview(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun FullscreenWatchPreview(
+    bitmap: Bitmap,
+    onDismiss: () -> Unit,
+) {
+    var scale by remember(bitmap) { mutableStateOf(1f) }
+    var translation by remember(bitmap) { mutableStateOf(Offset.Zero) }
+    var viewport by remember(bitmap) { mutableStateOf(IntSize.Zero) }
+    val image = remember(bitmap) { bitmap.asImageBitmap() }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.96f))
+                .onSizeChanged { viewport = it }
+                .pointerInput(bitmap, viewport) {
+                    detectTapGestures(
+                        onDoubleTap = { position ->
+                            if (scale > 1.01f) {
+                                scale = 1f
+                                translation = Offset.Zero
+                            } else {
+                                val targetScale = 2.5f
+                                val maxX = viewport.width * (targetScale - 1f) / 2f
+                                val maxY = viewport.height * (targetScale - 1f) / 2f
+                                translation = Offset(
+                                    x = ((viewport.width / 2f - position.x) * (targetScale - 1f))
+                                        .coerceIn(-maxX, maxX),
+                                    y = ((viewport.height / 2f - position.y) * (targetScale - 1f))
+                                        .coerceIn(-maxY, maxY),
+                                )
+                                scale = targetScale
+                            }
+                        },
+                    )
+                }
+                .pointerInput(bitmap, viewport) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        val nextScale = (scale * zoom).coerceIn(1f, 5f)
+                        val maxX = viewport.width * (nextScale - 1f) / 2f
+                        val maxY = viewport.height * (nextScale - 1f) / 2f
+                        translation = if (nextScale <= 1.001f) {
+                            Offset.Zero
+                        } else {
+                            Offset(
+                                x = (translation.x + pan.x).coerceIn(-maxX, maxX),
+                                y = (translation.y + pan.y).coerceIn(-maxY, maxY),
+                            )
+                        }
+                        scale = nextScale
+                    }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                bitmap = image,
+                contentDescription = stringResource(R.string.watch_store_preview),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = translation.x
+                        translationY = translation.y
+                    },
+                contentScale = ContentScale.Fit,
+            )
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(12.dp)
+                    .size(44.dp)
+                    .background(Color.Black.copy(alpha = 0.45f), CircleShape),
+            ) {
+                Icon(
+                    imageVector = MiuixIcons.Back,
+                    contentDescription = stringResource(R.string.watch_editor_back),
+                    tint = Color.White,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 让仍在进/退场的全屏覆层保持命中，避免其滑动后露出的区域点到底层列表。
+ * 不消费事件，覆层自己的滚动、输入框和按钮仍可正常接收同一指针流。
+ */
+private fun Modifier.blockPointerPassThrough(): Modifier = pointerInput(Unit) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false)
+        while (true) {
+            val event = awaitPointerEvent()
+            if (event.changes.none { it.pressed }) break
         }
     }
 }

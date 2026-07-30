@@ -338,6 +338,30 @@ fun interface WatchWeatherSource {
     fun snapshot(nowEpochMs: Long): WatchWeatherSnapshot?
 }
 
+/**
+ * HSC downloader 的转换包把图层坐标/height 放大到了 512 设计空间，但保留了
+ * 原始 text_size。位图字体不能沿用较小的 text_size，否则数字和时间会缩小。
+ * 普通 WatchMaker 包不进入这条兼容路径，避免误放大原生 BMFont。
+ */
+internal fun watchBitmapTextDesignSize(
+    requestedSize: Float,
+    declaredLayerHeight: Float?,
+    bitmapFontNominalSize: Float?,
+    hscGenerated: Boolean,
+): Float {
+    val requested = requestedSize.takeIf(Float::isFinite)
+        ?.coerceIn(1f, WatchmakerGeometry.DESIGN_SIZE)
+        ?: 1f
+    if (!hscGenerated) return requested
+    val height = declaredLayerHeight?.takeIf(Float::isFinite)
+    val nominal = bitmapFontNominalSize?.takeIf(Float::isFinite)
+    // HSC 的 height 是 512 画布中的实际字框高，BMFont nominal size 则是
+    // 原图生成字号。两者都比残留的 text_size 更可信；取较大者才能同时覆盖
+    // 示例中 f1(height=86, nominal=45) 与 f2/f3(height≈180, nominal=180)。
+    return maxOf(requested, height ?: requested, nominal ?: requested)
+        .coerceIn(1f, WatchmakerGeometry.DESIGN_SIZE)
+}
+
 /** The unit selected for rendering. Weather source values themselves stay Celsius. */
 enum class WatchTemperatureUnit(val symbol: String) {
     CELSIUS("C"),

@@ -62,6 +62,18 @@ class WatchWeatherRepositoryTest {
         assertEquals(42.10, results[1].latitude, 0.0)
     }
 
+    @Test
+    fun locationProvidersIncludeLegacyAndVendorSourcesInCoarseFriendlyOrder() {
+        val providers = prioritizeWatchWeatherLocationProviders(
+            listOf("gps", "vendor_location", "network", "fused", "passive", "FUSED"),
+        )
+
+        assertEquals(
+            listOf("fused", "network", "vendor_location", "gps", "passive"),
+            providers,
+        )
+    }
+
     private class TrackingChunkedInputStream(
         private val payload: ByteArray,
         private val chunkSize: Int,

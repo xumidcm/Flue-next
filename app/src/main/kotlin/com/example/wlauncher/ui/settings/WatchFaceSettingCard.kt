@@ -127,6 +127,7 @@ fun WatchFaceSettingCard(
                 videoOptions = videoOptions,
                 showClock = false,
                 playVideo = false,
+                showBottomFade = false,
                 modifier = Modifier
                     .size(52.dp)
                     .clip(launcherStyle.compactShape)

@@ -193,6 +193,32 @@ class WatchStoreRepositoryRecoveryTest {
         }
     }
 
+    @Test
+    fun `invalidating one updated upload keeps unrelated preview covers`() = runBlocking {
+        val root = Files.createTempDirectory("flue-watch-store-preview-invalidate-").toFile()
+        try {
+            val cacheRoot = root.resolve("cache")
+            val previews = cacheRoot.resolve("previews").apply { mkdirs() }
+            val updatedId = "00000000-0000-0000-0000-000000000003"
+            val otherId = "00000000-0000-0000-0000-000000000004"
+            val updatedPreview = previews.resolve("$updatedId.img").apply { writeBytes(byteArrayOf(1)) }
+            val otherPreview = previews.resolve("$otherId.img").apply { writeBytes(byteArrayOf(2)) }
+            val repository = repository(
+                root = root,
+                catalogFile = root.resolve("watch-face-catalog.json"),
+                journalFile = root.resolve("watch-face-install-journal.json"),
+                installed = emptyList(),
+            )
+
+            repository.invalidatePreview(updatedId)
+
+            assertEquals(false, updatedPreview.exists())
+            assertTrue(otherPreview.isFile)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     private fun repository(
         root: File,
         catalogFile: File,

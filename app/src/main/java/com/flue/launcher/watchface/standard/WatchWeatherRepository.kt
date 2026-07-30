@@ -44,6 +44,25 @@ fun interface WatchWeatherLocationSource {
     fun current(): WatchWeatherLocation?
 }
 
+internal fun prioritizeWatchWeatherLocationProviders(providers: Iterable<String>): List<String> =
+    providers
+        .asSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .distinctBy { it.lowercase(Locale.ROOT) }
+        .sortedWith(
+            compareBy<String> { provider ->
+                when {
+                    provider.contains("fused", ignoreCase = true) -> 0
+                    provider.equals(LocationManager.NETWORK_PROVIDER, ignoreCase = true) -> 1
+                    provider.equals(LocationManager.GPS_PROVIDER, ignoreCase = true) -> 3
+                    provider.equals(LocationManager.PASSIVE_PROVIDER, ignoreCase = true) -> 4
+                    else -> 2
+                }
+            }.thenBy { it.lowercase(Locale.ROOT) },
+        )
+        .toList()
+
 /** Injectable synchronous HTTP seam for deterministic repository tests. */
 fun interface WatchWeatherHttpTransport {
     fun get(url: String, userAgent: String): String?
@@ -302,11 +321,7 @@ class WatchWeatherRepository(
     private fun readLastKnownLocation(): WatchWeatherLocation? {
         if (!hasLocationPermission()) return null
         val manager = appContext.getSystemService(LocationManager::class.java) ?: return null
-        val providers = buildList {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) add(LocationManager.FUSED_PROVIDER)
-            add(LocationManager.NETWORK_PROVIDER)
-            add(LocationManager.GPS_PROVIDER)
-        }
+        val providers = systemLocationProviders(manager, enabledOnly = false)
         return providers.asSequence()
             .mapNotNull { provider -> runCatching { manager.getLastKnownLocation(provider) }.getOrNull() }
             .filter { location -> location.latitude.isFinite() && location.longitude.isFinite() }
@@ -325,13 +340,7 @@ class WatchWeatherRepository(
     private fun readCurrentLocation(): WatchWeatherLocation? {
         if (!hasLocationPermission()) return null
         val manager = appContext.getSystemService(LocationManager::class.java) ?: return null
-        val providers = buildList {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) add(LocationManager.FUSED_PROVIDER)
-            add(LocationManager.NETWORK_PROVIDER)
-            add(LocationManager.GPS_PROVIDER)
-        }.distinct().filter { provider ->
-            runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false)
-        }
+        val providers = systemLocationProviders(manager, enabledOnly = true)
         if (providers.isEmpty()) return null
 
         val result = AtomicReference<Location?>(null)
@@ -378,6 +387,30 @@ class WatchWeatherRepository(
         }
         return result.get()?.let { location ->
             WatchWeatherLocation(location.latitude, location.longitude)
+        }
+    }
+
+    /**
+     * Old Wear OS/vendor Android builds may expose their usable coarse source
+     * as a legacy `fused` or vendor provider rather than NETWORK_PROVIDER.
+     * Discover the device providers instead of assuming the three AOSP names.
+     */
+    private fun systemLocationProviders(
+        manager: LocationManager,
+        enabledOnly: Boolean,
+    ): List<String> {
+        val discovered = runCatching { manager.getProviders(enabledOnly) }.getOrDefault(emptyList())
+        val candidates = buildList {
+            addAll(discovered)
+            // Keep well-known providers as a fallback for devices whose provider
+            // enumeration is incomplete. Every individual access is guarded.
+            add(LEGACY_FUSED_PROVIDER)
+            add(LocationManager.NETWORK_PROVIDER)
+            add(LocationManager.GPS_PROVIDER)
+            add(LocationManager.PASSIVE_PROVIDER)
+        }
+        return prioritizeWatchWeatherLocationProviders(candidates).filter { provider ->
+            !enabledOnly || runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false)
         }
     }
 
@@ -776,6 +809,7 @@ class WatchWeatherRepository(
     }
 
     companion object {
+        private const val LEGACY_FUSED_PROVIDER = "fused"
         const val PREFERENCES = "watch_weather_repository"
         const val KEY_LABEL = "manual_label"
         const val KEY_CITY = "manual_city"

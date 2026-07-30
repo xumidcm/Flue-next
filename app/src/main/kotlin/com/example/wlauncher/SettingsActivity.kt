@@ -32,6 +32,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.ui.text.style.TextAlign
@@ -139,6 +140,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -1119,14 +1121,17 @@ private fun SettingsRootScreen(
             .fillMaxSize()
             .background(launcherStyle.screenBackground),
     ) {
+        val destinationTransition = updateTransition(
+            targetState = destination,
+            label = "settings_destination_transition",
+        )
         CompositionLocalProvider(
             LocalSettingsLeftSafeInsetPercent provides appListLeftSafeInsetPercent,
             LocalSettingsRotaryHapticsEnabled provides rotaryHapticsEnabled,
             LocalFlueMotionProfile provides activeMotionProfile,
             LocalSettingsSearchTarget provides settingsSearchTarget,
         ) {
-            AnimatedContent(
-                targetState = destination,
+            destinationTransition.AnimatedContent(
                 modifier = Modifier.fillMaxSize(),
                 transitionSpec = {
                     // 所有界面风格统一使用 MIUIX / HyperOS 式层级推拉：进子页
@@ -1144,7 +1149,6 @@ private fun SettingsRootScreen(
                             fadeOut(tween(140))
                         )
                 },
-                label = "settings_destination"
             ) { currentDestination ->
         key(currentDestination, pageScrollResetVersions[currentDestination] ?: 0) {
         when (currentDestination) {
@@ -3312,6 +3316,24 @@ private fun SettingsRootScreen(
             }
             }
             }
+            if (destinationTransition.isRunning) {
+                // 新旧设置页在推拉期间会同时留在树上；用最上层命中面锁住
+                // 这 260ms，避免快速二次点击落到正在滑出的旧页面。
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(100f)
+                        .pointerInput(Unit) {
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    if (event.changes.none { it.pressed }) break
+                                }
+                            }
+                        },
+                )
+            }
         }
 
         donatePreviewResId?.let { resId ->
@@ -3644,7 +3666,7 @@ private fun SettingsPageScaffold(
                         fontSize = 26.sp,
                         fontWeight = FontWeight.Bold,
                         textAlign = if (settingsRoundScreen) TextAlign.Center else TextAlign.Start,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         modifier = if (settingsRoundScreen) {
                             Modifier

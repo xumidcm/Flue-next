@@ -176,6 +176,91 @@ class HttpWatchStoreApi(
         deleteWithAuth(WatchStoreUrlPolicy.myWatchFaceDelete(base, id), safeToken)
     }
 
+    /**
+     * Updates metadata for one of the current user's uploads.  [replacementFile]
+     * is optional: when absent, the service keeps the existing archive and
+     * preview; when present, it atomically replaces both on the service.
+     */
+    fun updateMyWatchFace(
+        token: String,
+        id: String,
+        name: String,
+        description: String,
+        screenType: WatchStoreScreenType,
+        categoryId: String,
+        replacementFile: File? = null,
+        onProgress: ((sentBytes: Long, totalBytes: Long) -> Unit)? = null,
+    ) {
+        val safeToken = requireBearerToken(token)
+        val normalizedId = WatchStoreUrlPolicy.requireId(id)
+        val trimmedName = name.trim()
+        require(trimmedName.isNotEmpty() && trimmedName.length <= MAX_UPLOAD_NAME_LENGTH) {
+            "表盘名称需要 1-$MAX_UPLOAD_NAME_LENGTH 个字符"
+        }
+        val trimmedDescription = description.trim()
+        require(trimmedDescription.isNotEmpty()) { "表盘描述不能为空" }
+        require(screenType != WatchStoreScreenType.UNKNOWN) { "屏幕形状无效" }
+        val normalizedCategoryId = categoryId.trim().lowercase(Locale.ROOT)
+        require(UPLOAD_CATEGORY_ID_PATTERN.matches(normalizedCategoryId)) { "分类无效，请重新选择" }
+
+        val archive = replacementFile
+        val totalFileBytes = archive?.let { file ->
+            require(file.isFile) { "找不到要替换的 .watch 文件" }
+            file.length().also { length ->
+                if (length <= 0L) throw WatchStoreProtocolException("要替换的 .watch 文件是空的")
+                if (length > MAX_UPLOAD_BYTES) throw WatchStorePayloadTooLargeException(MAX_UPLOAD_BYTES)
+            }
+        }
+        val boundary = "FlueWatchStore${UUID.randomUUID().toString().replace("-", "")}"
+        val head = buildString {
+            appendFormField(boundary, "name", trimmedName)
+            appendFormField(boundary, "description", trimmedDescription)
+            appendFormField(boundary, "screen_type", screenType.apiValue)
+            appendFormField(boundary, "category_id", normalizedCategoryId)
+            if (archive != null) {
+                append("--").append(boundary).append("\r\n")
+                append("Content-Disposition: form-data; name=\"file\"; filename=\"upload.watch\"\r\n")
+                append("Content-Type: application/octet-stream\r\n\r\n")
+            }
+        }.toByteArray(Charsets.UTF_8)
+        val tail = if (archive != null) {
+            "\r\n--$boundary--\r\n"
+        } else {
+            "--$boundary--\r\n"
+        }.toByteArray(Charsets.UTF_8)
+        put<Unit>(
+            url = WatchStoreUrlPolicy.myWatchFaceUpdate(base, normalizedId),
+            contentType = "multipart/form-data; boundary=$boundary",
+            contentLength = head.size.toLong() + (totalFileBytes ?: 0L) + tail.size.toLong(),
+            headers = mapOf("Authorization" to "Bearer $safeToken"),
+            readTimeoutMs = if (archive != null) maxOf(config.readTimeoutMs, UPLOAD_READ_TIMEOUT_MS) else config.readTimeoutMs,
+            expectJson = false,
+            writeBody = { output ->
+                output.write(head)
+                if (archive != null && totalFileBytes != null) {
+                    archive.inputStream().use { input ->
+                        val buffer = ByteArray(32 * 1024)
+                        var sent = 0L
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            sent += count
+                            if (sent > totalFileBytes) {
+                                throw WatchStoreProtocolException("更新期间 .watch 文件发生了变化")
+                            }
+                            output.write(buffer, 0, count)
+                            onProgress?.invoke(sent, totalFileBytes)
+                        }
+                        if (sent != totalFileBytes) {
+                            throw WatchStoreProtocolException("更新期间 .watch 文件发生了变化")
+                        }
+                    }
+                }
+                output.write(tail)
+            },
+        ) { }
+    }
+
     private fun requireBearerToken(token: String): String {
         val t = token.trim()
         require(t.isNotEmpty() && t.none { it.isWhitespace() || it.isISOControl() }) {
@@ -287,11 +372,13 @@ class HttpWatchStoreApi(
     }
 
     /**
-     * Single-shot POST channel for the write endpoints. Unlike [request], a
-     * redirect is a hard failure here: replaying a request body (or a bearer
-     * token) against a Location chosen by the network is never acceptable.
+     * Single-shot write channel for request-body endpoints. Unlike
+     * [request], a redirect is a hard failure here: replaying a request body
+     * (or a bearer token) against a Location chosen by the network is never
+     * acceptable.
      */
-    private fun <T> post(
+    private fun <T> write(
+        method: String,
         url: URI,
         contentType: String,
         contentLength: Long,
@@ -311,7 +398,7 @@ class HttpWatchStoreApi(
             }
             val connection = connectionFactory(url.toURL())
             try {
-                connection.requestMethod = "POST"
+                connection.requestMethod = method
                 connection.instanceFollowRedirects = false
                 connection.connectTimeout = config.connectTimeoutMs
                 connection.readTimeout = readTimeoutMs
@@ -329,7 +416,7 @@ class HttpWatchStoreApi(
                 }
                 val status = connection.responseCode
                 if (status in REDIRECT_STATUSES) {
-                    throw WatchStoreProtocolException("Watch store write request was redirected")
+                    throw WatchStoreProtocolException("Watch store $method request was redirected")
                 }
                 if (status !in 200..299) {
                     throw writeFailure(status, connection)
@@ -348,6 +435,48 @@ class HttpWatchStoreApi(
             throw WatchStoreException("Watch store request failed", error)
         }
     }
+
+    private fun <T> post(
+        url: URI,
+        contentType: String,
+        contentLength: Long,
+        headers: Map<String, String> = emptyMap(),
+        readTimeoutMs: Int = config.readTimeoutMs,
+        expectJson: Boolean = true,
+        writeBody: (OutputStream) -> Unit,
+        parse: (String) -> T,
+    ): T = write(
+        method = "POST",
+        url = url,
+        contentType = contentType,
+        contentLength = contentLength,
+        headers = headers,
+        readTimeoutMs = readTimeoutMs,
+        expectJson = expectJson,
+        writeBody = writeBody,
+        parse = parse,
+    )
+
+    private fun <T> put(
+        url: URI,
+        contentType: String,
+        contentLength: Long,
+        headers: Map<String, String> = emptyMap(),
+        readTimeoutMs: Int = config.readTimeoutMs,
+        expectJson: Boolean = true,
+        writeBody: (OutputStream) -> Unit,
+        parse: (String) -> T,
+    ): T = write(
+        method = "PUT",
+        url = url,
+        contentType = contentType,
+        contentLength = contentLength,
+        headers = headers,
+        readTimeoutMs = readTimeoutMs,
+        expectJson = expectJson,
+        writeBody = writeBody,
+        parse = parse,
+    )
 
     private fun writeFailure(status: Int, connection: HttpURLConnection): WatchStoreHttpException {
         val body = connection.errorStream?.let { stream ->

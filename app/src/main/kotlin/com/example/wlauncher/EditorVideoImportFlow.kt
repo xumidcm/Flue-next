@@ -76,6 +76,7 @@ import com.flue.launcher.watchface.editor.moveWatchEditorCropRect
 import com.flue.launcher.watchface.editor.resizeWatchEditorCropRect
 import com.flue.launcher.watchface.editor.resolveVideoTransform
 import com.flue.launcher.watchface.editor.resolveVideoBitrateKbps
+import com.flue.launcher.watchface.editor.defaultVideoBitrateKbps
 import com.flue.launcher.watchface.editor.resolveWatchEditorCropHandle
 import com.flue.launcher.watchface.editor.scaleWatchEditorCropRect
 import com.flue.launcher.watchface.editor.watchEditorCropAspectRatio
@@ -111,8 +112,10 @@ internal fun EditorVideoImportFlow(
     var endMs by remember(uri, info.durationMs) { mutableFloatStateOf(info.durationMs.toFloat()) }
     var playing by remember(uri) { mutableStateOf(false) }
     var preset by remember(uri) { mutableStateOf(WatchEditorVideoResolutionPreset.P480) }
-    var frameRate by remember(uri) { mutableStateOf("10") }
-    var bitrate by remember(uri) { mutableStateOf("3000") }
+    var frameRate by remember(uri) { mutableStateOf("30") }
+    var bitrate by remember(uri, info) {
+        mutableStateOf(defaultVideoBitrateKbps(info, WatchEditorVideoResolutionPreset.P480).toString())
+    }
     var previewView by remember(uri) { mutableStateOf<EditorVideoPreviewView?>(null) }
     val currentPreviewView = rememberUpdatedState(previewView)
 
@@ -194,6 +197,17 @@ internal fun EditorVideoImportFlow(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
+            // 覆层本身保持全屏命中，避免编码页弹性空白和裁剪页边缘把点击
+            // 传给下面的编辑器；只观察、不消费，内层滑块和裁剪手势照常工作。
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.changes.none { it.pressed }) break
+                    }
+                }
+            }
             .padding(
                 horizontal = if (isRound) 18.dp else 10.dp,
                 vertical = if (isRound) 14.dp else 8.dp,
@@ -349,10 +363,8 @@ internal fun EditorVideoImportFlow(
                         OutlinedButton(onClick = {
                             if (candidate == WatchEditorVideoResolutionPreset.ORIGINAL) {
                                 info.frameRate?.let { frameRate = formatEditorVideoFrameRate(it) }
-                                bitrate = (info.bitrateKbps ?: 3000).toString()
-                            } else if (preset == WatchEditorVideoResolutionPreset.ORIGINAL) {
-                                bitrate = "3000"
                             }
+                            bitrate = defaultVideoBitrateKbps(info, candidate).toString()
                             preset = candidate
                         }) { Text(label) }
                     }
