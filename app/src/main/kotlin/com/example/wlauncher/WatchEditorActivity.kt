@@ -3875,6 +3875,7 @@ private fun LayerPropertiesEditor(
         )
     }
     var expandedAttributePicker by remember(layer.key) { mutableStateOf<String?>(null) }
+    var colorPickerVisible by remember(layer.key) { mutableStateOf(false) }
 
     fun liveValue(name: String, value: String): String? =
         if (value.isEmpty() && name != "text") null else value
@@ -3886,7 +3887,8 @@ private fun LayerPropertiesEditor(
         )
         editableAttributes.forEach { attribute ->
             val hasAnimationPicker = attribute == "anim_in" || attribute == "anim_out"
-            val hasExpressionPicker = attribute in WATCH_EXPRESSION_ATTRIBUTES
+            val hasColorPicker = attribute == "color"
+            val hasExpressionPicker = attribute in WATCH_EXPRESSION_ATTRIBUTES && !hasColorPicker
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 OutlinedTextField(
                     value = drafts[attribute] ?: TextFieldValue(""),
@@ -3912,26 +3914,46 @@ private fun LayerPropertiesEditor(
                             KeyboardType.Text
                         },
                     ),
-                    trailingIcon = if (hasAnimationPicker || hasExpressionPicker) {
-                        {
-                            IconButton(
-                                onClick = {
-                                    expandedAttributePicker =
-                                        attribute.takeUnless { expandedAttributePicker == attribute }
-                                },
-                                enabled = enabled,
-                            ) {
-                                // 纯下箭头，不使用带中间竖线的导入/下载类图标。
-                                Icon(
-                                    MiuixIcons.ExpandMore,
-                                    contentDescription = stringResource(
-                                        R.string.watch_editor_expand_expression_reference,
-                                    ),
-                                )
+                    trailingIcon = when {
+                        hasColorPicker -> {
+                            {
+                                IconButton(
+                                    onClick = { colorPickerVisible = true },
+                                    enabled = enabled,
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(22.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(
+                                                parseEditorHexColor(
+                                                    drafts[attribute]?.text.orEmpty(),
+                                                ) ?: Color.DarkGray,
+                                            ),
+                                    )
+                                }
                             }
                         }
-                    } else {
-                        null
+                        hasAnimationPicker || hasExpressionPicker -> {
+                            {
+                                IconButton(
+                                    onClick = {
+                                        expandedAttributePicker =
+                                            attribute.takeUnless { expandedAttributePicker == attribute }
+                                    },
+                                    enabled = enabled,
+                                ) {
+                                    // 纯下箭头，不使用带中间竖线的导入/下载类图标。
+                                    Icon(
+                                        MiuixIcons.ExpandMore,
+                                        contentDescription = stringResource(
+                                            R.string.watch_editor_expand_expression_reference,
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+                        else -> null
                     },
                 )
                 if (expandedAttributePicker == attribute) {
@@ -4012,16 +4034,20 @@ private fun LayerPropertiesEditor(
                 onLongClick = onImportVideoLong,
             )
         }
-        // 颜色取色盘：与颜色文本框同源（写回同一个 draft + live 通道）。
-        EditorColorPickerRow(
-            currentHex = drafts["color"]?.text.orEmpty(),
-            enabled = enabled,
-            onPick = { hex ->
-                val newValue = TextFieldValue(hex, TextRange(hex.length))
-                drafts = drafts + ("color" to newValue)
-                onLiveChange(mapOf("color" to liveValue("color", hex)))
-            },
-        )
+        // 颜色输入框右侧的色块直接打开取色器，并写回同一个 draft + live 通道。
+        if (colorPickerVisible) {
+            EditorColorPickerDialog(
+                initial = parseEditorHexColor(drafts["color"]?.text.orEmpty()) ?: Color.White,
+                onDismiss = { colorPickerVisible = false },
+                onConfirm = { color ->
+                    colorPickerVisible = false
+                    val hex = editorColorToHex(color)
+                    val newValue = TextFieldValue(hex, TextRange(hex.length))
+                    drafts = drafts + ("color" to newValue)
+                    onLiveChange(mapOf("color" to liveValue("color", hex)))
+                },
+            )
+        }
         if (layer.type.lowercase(Locale.ROOT) in FONT_CAPABLE_LAYER_TYPES) {
             EditorFontSelector(
                 current = drafts["font"]?.text

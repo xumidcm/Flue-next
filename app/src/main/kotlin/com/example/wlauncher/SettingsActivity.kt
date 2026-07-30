@@ -1393,25 +1393,6 @@ private fun SettingsRootScreen(
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.WATCH_FACES).offset,
             onScrollChanged = { index, offset -> updateScroll(SettingsDestination.WATCH_FACES, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
-            if (selectedWatchFace.isWatchmaker) {
-                item("watchface_editor_current") {
-                    ActionCard(
-                        title = stringResource(R.string.settings_watchface_editor_current),
-                        subtitle = stringResource(
-                            R.string.settings_watchface_editor_current_sub_fmt,
-                            selectedWatchFace.displayName
-                        ),
-                        scale = itemFisheye(listState, "watchface_editor_current", screenCenterY, screenHeightPx),
-                        icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialSettings, miuix = OfficialMiuixIcons.OfficialSettings) },
-                        onClick = {
-                            context.startActivity(
-                                Intent(context, WatchEditorActivity::class.java)
-                                    .putExtra(WatchEditorActivity.EXTRA_WATCH_FACE_ID, selectedWatchFace.id)
-                            )
-                        }
-                    )
-                }
-            }
             if (!watchFaceLastError.isNullOrBlank()) {
                 item("watchface_error") {
                     MessageCard(
@@ -1496,6 +1477,25 @@ private fun SettingsRootScreen(
                     refreshToken = watchFaceRefreshToken,
                 )
             }
+            if (selectedWatchFace.isWatchmaker) {
+                item("watchface_editor_current") {
+                    ActionCard(
+                        title = stringResource(R.string.settings_watchface_editor_current),
+                        subtitle = stringResource(
+                            R.string.settings_watchface_editor_current_sub_fmt,
+                            selectedWatchFace.displayName
+                        ),
+                        scale = itemFisheye(listState, "watchface_editor_current", screenCenterY, screenHeightPx),
+                        icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialSettings, miuix = OfficialMiuixIcons.OfficialSettings) },
+                        onClick = {
+                            context.startActivity(
+                                Intent(context, WatchEditorActivity::class.java)
+                                    .putExtra(WatchEditorActivity.EXTRA_WATCH_FACE_ID, selectedWatchFace.id)
+                            )
+                        }
+                    )
+                }
+            }
             item("watchface_import_archive") {
                 ActionCard(
                     title = stringResource(R.string.settings_watchface_import),
@@ -1554,14 +1554,6 @@ private fun SettingsRootScreen(
                     }
                 )
             }
-            item("watchface_more") {
-                SettingsCategoryCard(
-                    title = stringResource(R.string.settings_watchface_more),
-                    subtitle = stringResource(R.string.settings_watchface_more_sub),
-                    onClick = { navigateTo(SettingsDestination.WATCH_FACE_MORE) },
-                    scale = itemFisheye(listState, "watchface_more", screenCenterY, screenHeightPx)
-                )
-            }
             item("watchface_refresh") {
                 ActionCard(
                     title = stringResource(R.string.settings_watchface_refresh),
@@ -1569,6 +1561,14 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "watchface_refresh", screenCenterY, screenHeightPx),
                     icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialRefresh, miuix = OfficialMiuixIcons.OfficialRefresh) },
                     onClick = { vm.refreshWatchFaces(force = true) }
+                )
+            }
+            item("watchface_more") {
+                SettingsCategoryCard(
+                    title = stringResource(R.string.settings_watchface_more),
+                    subtitle = stringResource(R.string.settings_watchface_more_sub),
+                    onClick = { navigateTo(SettingsDestination.WATCH_FACE_MORE) },
+                    scale = itemFisheye(listState, "watchface_more", screenCenterY, screenHeightPx)
                 )
             }
         }
@@ -3643,13 +3643,20 @@ private fun SettingsPageScaffold(
                         color = launcherStyle.accentColor,
                         fontSize = 26.sp,
                         fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center,
+                        textAlign = if (settingsRoundScreen) TextAlign.Center else TextAlign.Start,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .fillMaxWidth()
-                            .padding(horizontal = 50.dp),
+                        modifier = if (settingsRoundScreen) {
+                            Modifier
+                                .align(Alignment.Center)
+                                .fillMaxWidth()
+                                .padding(horizontal = 50.dp)
+                        } else {
+                            Modifier
+                                .align(Alignment.CenterStart)
+                                .fillMaxWidth()
+                                .padding(start = 54.dp, end = 16.dp)
+                        },
                     )
                 }
             }

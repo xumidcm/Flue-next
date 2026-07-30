@@ -633,13 +633,16 @@ fun ControlCenterLayer(
                             if (roundScreen) Alignment.TopCenter else Alignment.CenterStart
                         )
                     )
-                    Row(
-                        modifier = Modifier.align(
-                            if (roundScreen) Alignment.BottomEnd else Alignment.CenterEnd
-                        ),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
+                    if (roundScreen) {
+                        SystemSettingsButton(
+                            icon = MiuixIcons.Settings,
+                            contentDescription = stringResource(R.string.cc_system_settings),
+                            size = 28.dp,
+                            iconSize = 17.dp,
+                            onGestureLockChange = lockControlCenterGesture,
+                            onClick = { openSettings(context, Settings.ACTION_SETTINGS) },
+                            modifier = Modifier.align(Alignment.TopStart),
+                        )
                         if (showPowerButton) {
                             SystemSettingsButton(
                                 icon = MiuixIcons.Reset,
@@ -647,27 +650,10 @@ fun ControlCenterLayer(
                                 size = 28.dp,
                                 iconSize = 17.dp,
                                 onGestureLockChange = lockControlCenterGesture,
-                                onClick = onPowerClick
+                                onClick = onPowerClick,
+                                modifier = Modifier.align(Alignment.TopEnd),
                             )
                         }
-                        SystemSettingsButton(
-                            icon = MiuixIcons.Settings,
-                            contentDescription = stringResource(R.string.cc_system_settings),
-                            size = 28.dp,
-                            iconSize = 17.dp,
-                            onGestureLockChange = lockControlCenterGesture,
-                            onClick = { openSettings(context, Settings.ACTION_SETTINGS) }
-                        )
-                        if (!roundScreen) {
-                            Text(
-                                timeText,
-                                color = launcherStyle.titleColor,
-                                fontSize = 22.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-                    if (roundScreen) {
                         Text(
                             timeText,
                             color = launcherStyle.titleColor,
@@ -675,6 +661,37 @@ fun ControlCenterLayer(
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.align(Alignment.BottomCenter),
                         )
+                    } else {
+                        Row(
+                            modifier = Modifier.align(Alignment.CenterEnd),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        ) {
+                            if (showPowerButton) {
+                                SystemSettingsButton(
+                                    icon = MiuixIcons.Reset,
+                                    contentDescription = stringResource(R.string.cc_power_options),
+                                    size = 28.dp,
+                                    iconSize = 17.dp,
+                                    onGestureLockChange = lockControlCenterGesture,
+                                    onClick = onPowerClick,
+                                )
+                            }
+                            SystemSettingsButton(
+                                icon = MiuixIcons.Settings,
+                                contentDescription = stringResource(R.string.cc_system_settings),
+                                size = 28.dp,
+                                iconSize = 17.dp,
+                                onGestureLockChange = lockControlCenterGesture,
+                                onClick = { openSettings(context, Settings.ACTION_SETTINGS) },
+                            )
+                            Text(
+                                timeText,
+                                color = launcherStyle.titleColor,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
                 }
             }
