@@ -29,7 +29,6 @@ import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.updateTransition
@@ -114,7 +113,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.compositionLocalOf
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -122,6 +120,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
@@ -129,6 +128,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -212,7 +212,6 @@ import top.yukonga.miuix.kmp.icon.extended.Folder as OfficialFolder
 import top.yukonga.miuix.kmp.icon.extended.Refresh as OfficialRefresh
 import top.yukonga.miuix.kmp.icon.extended.Settings as OfficialSettings
 import top.yukonga.miuix.kmp.icon.extended.Ok as OfficialOk
-import java.text.SimpleDateFormat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -220,7 +219,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
-import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -584,7 +582,9 @@ private fun SettingsRootScreen(
     var accessibilityServiceEnabled by remember {
         mutableStateOf(FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected)
     }
-    val headerTime = rememberSettingsHeaderTime()
+    // The current settings header no longer renders a clock. Keeping a ticking
+    // state here used to invalidate the whole active page every 30 seconds.
+    val headerTime = ""
     var backupExportOptions by remember { mutableStateOf(FlueBackupOptions()) }
     var pendingBackupExportOptions by remember { mutableStateOf<FlueBackupOptions?>(null) }
     var backupImportUri by remember { mutableStateOf<Uri?>(null) }
@@ -807,7 +807,10 @@ private fun SettingsRootScreen(
     var diagnosticLoggingEnabled by remember { mutableStateOf(FlueLog.isDiagnosticLoggingEnabled()) }
     var importedWatchFaceDeleteTarget by remember { mutableStateOf<WatchFaceDescriptor?>(null) }
     var showOverlayMaskCornerDialog by remember { mutableStateOf(false) }
-    val pageScrollPositions = remember { mutableStateMapOf<SettingsDestination, SavedScrollPosition>() }
+    // Scroll positions are restoration bookkeeping, not UI state. A snapshot
+    // state map here invalidated the entire settings destination on every
+    // scroll pixel because SettingsPageScaffold continuously wrote offsets.
+    val pageScrollPositions = remember { mutableMapOf<SettingsDestination, SavedScrollPosition>() }
     val pageScrollResetVersions = remember { mutableStateMapOf<SettingsDestination, Int>() }
     // 搜索结果点进去要落在具体那一行上，而不是目标页的页顶。
     var searchTargetItemKey by remember { mutableStateOf<String?>(null) }
@@ -1321,7 +1324,7 @@ private fun SettingsRootScreen(
                 initialFirstVisibleItemIndex = scrollFor(SettingsDestination.HIDDEN_APPS).index,
                 initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.HIDDEN_APPS).offset,
                 onScrollChanged = { index, offset -> updateScroll(SettingsDestination.HIDDEN_APPS, index, offset) }
-            ) { listState, screenCenterY, screenHeightPx, visibleItemKeys ->
+            ) { listState, screenCenterY, screenHeightPx, _ ->
                 item("hidden_summary") {
                     MessageCard(
                         text = stringResource(R.string.settings_hidden_apps_count_fmt, hiddenHideableCount),
@@ -1329,7 +1332,11 @@ private fun SettingsRootScreen(
                         onClick = {}
                     )
                 }
-                items(hideableApps, key = { "app_${it.componentKey}" }) { app ->
+                items(
+                    items = hideableApps,
+                    key = { "app_${it.componentKey}" },
+                    contentType = { "hidden_app" },
+                ) { app ->
                     SettingsSwitchRow(
                         title = app.label,
                         subtitle = app.packageName,
@@ -1346,7 +1353,10 @@ private fun SettingsRootScreen(
                             hiddenAppsDirty = true
                         },
                         scale = itemFisheye(listState, "app_${app.componentKey}", screenCenterY, screenHeightPx),
-                        leadingIcon = app.cachedIcon.takeIf { visibleItemKeys.contains("app_${app.componentKey}") },
+                        // LazyColumn already composes only visible/prefetched rows. Do not
+                        // drive a second visibility state that unloads/reloads icons while
+                        // crossing every item boundary during a fling.
+                        leadingIcon = app.cachedIcon,
                         reserveLeadingIconSpace = true
                     )
                 }
@@ -3585,16 +3595,31 @@ private fun SettingsPageScaffold(
     )
     val focusRequester = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
-    val visibleItemKeys by remember(listState) {
-        derivedStateOf {
-            listState.layoutInfo.visibleItemsInfo.mapNotNull { it.key }.toSet()
-        }
-    }
+    val latestOnScrollChanged = rememberUpdatedState(onScrollChanged)
 
     LaunchedEffect(listState) {
-        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+        // Persist only when motion settles. Writing every pixel into caller state was the
+        // dominant settings-scroll recomposition path, especially in the icon-heavy hidden
+        // apps page. onDispose below covers navigation while a gesture is still settling.
+        snapshotFlow { listState.isScrollInProgress }
             .distinctUntilChanged()
-            .collect { (index, offset) -> onScrollChanged(index, offset) }
+            .collect { scrolling ->
+                if (!scrolling) {
+                    latestOnScrollChanged.value(
+                        listState.firstVisibleItemIndex,
+                        listState.firstVisibleItemScrollOffset,
+                    )
+                }
+            }
+    }
+
+    DisposableEffect(listState) {
+        onDispose {
+            latestOnScrollChanged.value(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset,
+            )
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -3682,7 +3707,7 @@ private fun SettingsPageScaffold(
                     )
                 }
             }
-            content(listState, screenCenterY, screenHeightPx, visibleItemKeys)
+            content(listState, screenCenterY, screenHeightPx, emptySet())
         }
     }
 }
@@ -3692,11 +3717,11 @@ private fun HeaderBackButton(onClick: () -> Unit) {
     val launcherStyle = LauncherTheme.style
     val pressedState = rememberPressedState()
     val pressed by pressedState
-    val scale by animateFloatAsState(if (pressed) 0.94f else 1f, label = "header_back_scale")
+    val scale = animateFloatAsState(if (pressed) 0.94f else 1f, label = "header_back_scale")
     Box(
         modifier = Modifier
             .size(42.dp)
-            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .graphicsLayer { scaleX = scale.value; scaleY = scale.value }
             .clip(CircleShape)
             .background(launcherStyle.topBarChipColor)
             .instantPressGesture(pressedState, onClick = onClick),
@@ -3730,12 +3755,12 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
     }
     val pressedState = rememberPressedState()
     val pressed by pressedState
-    val pressedScale by animateFloatAsState(
+    val pressedScale = animateFloatAsState(
         if (pressed) 0.958f else 1f,
         animationSpec = launcherStyle.pressScaleSpec,
         label = "settings_category_scale"
     )
-    val background by animateColorAsState(
+    val background = animateColorAsState(
         if (pressed) launcherStyle.pressedCardColor else launcherStyle.cardColor,
         label = "settings_category_bg"
     )
@@ -3743,12 +3768,12 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                scaleX = scale * pressedScale
-                scaleY = scale * pressedScale
+                scaleX = scale * pressedScale.value
+                scaleY = scale * pressedScale.value
                 alpha = scale.coerceIn(0.55f, 1f)
             }
             .clip(launcherStyle.cardShape)
-            .background(background)
+            .drawBehind { drawRect(background.value) }
             .border(1.dp, launcherStyle.outlineColor, launcherStyle.cardShape)
             .instantPressGesture(pressedState, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 18.dp)
@@ -3913,7 +3938,7 @@ private fun MessageCard(text: String, background: Color, onClick: () -> Unit) {
     val launcherStyle = LauncherTheme.style
     val pressedState = rememberPressedState()
     val pressed by pressedState
-    val pressedScale by animateFloatAsState(
+    val pressedScale = animateFloatAsState(
         if (pressed) 0.964f else 1f,
         animationSpec = launcherStyle.pressScaleSpec,
         label = "message_card_scale"
@@ -3922,8 +3947,8 @@ private fun MessageCard(text: String, background: Color, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                scaleX = pressedScale
-                scaleY = pressedScale
+                scaleX = pressedScale.value
+                scaleY = pressedScale.value
             }
             .clip(launcherStyle.compactShape)
             .background(background)
@@ -3968,7 +3993,7 @@ private fun SettingsChoiceRow(
     }
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
-    val pressedScale by animateFloatAsState(
+    val pressedScale = animateFloatAsState(
         if (pressed) 0.964f else 1f,
         animationSpec = launcherStyle.pressScaleSpec,
         label = "choice_row_scale"
@@ -3977,8 +4002,8 @@ private fun SettingsChoiceRow(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                scaleX = scale * pressedScale
-                scaleY = scale * pressedScale
+                scaleX = scale * pressedScale.value
+                scaleY = scale * pressedScale.value
                 alpha = if (enabled) scale.coerceIn(0.55f, 1f) else 0.48f
             }
             .clip(launcherStyle.compactShape)
@@ -4080,12 +4105,12 @@ private fun SettingsSwitchRow(
     }
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
-    val pressedScale by animateFloatAsState(
+    val pressedScale = animateFloatAsState(
         if (pressed) 0.958f else 1f,
         animationSpec = launcherStyle.pressScaleSpec,
         label = "switch_row_scale"
     )
-    val trackColor by animateColorAsState(
+    val trackColor = animateColorAsState(
         when {
             !enabled -> Color(0xFF2A2A2A)
             checked -> launcherStyle.positiveColor
@@ -4093,18 +4118,18 @@ private fun SettingsSwitchRow(
         },
         label = "switch_track_color"
     )
-    val knobOffset by animateDpAsState(
-        if (checked) 24.dp else 2.dp,
+    val knobProgress = animateFloatAsState(
+        if (checked) 1f else 0f,
         animationSpec = spring(stiffness = 760f, dampingRatio = 0.82f),
-        label = "switch_knob_offset"
+        label = "switch_knob_progress"
     )
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                scaleX = scale * pressedScale
-                scaleY = scale * pressedScale
+                scaleX = scale * pressedScale.value
+                scaleY = scale * pressedScale.value
                 alpha = if (enabled) scale.coerceIn(0.55f, 1f) else 0.5f
             }
             .clip(launcherStyle.compactShape)
@@ -4164,12 +4189,13 @@ private fun SettingsSwitchRow(
                     .width(46.dp)
                     .height(26.dp)
                     .clip(RoundedCornerShape(13.dp))
-                    .background(trackColor)
+                    .drawBehind { drawRect(trackColor.value) }
             ) {
                 Box(
                     modifier = Modifier
-                        .padding(start = knobOffset, top = 3.dp)
-                        .size(20.dp)
+                    .padding(start = 2.dp, top = 3.dp)
+                    .size(20.dp)
+                    .graphicsLayer { translationX = 22.dp.toPx() * knobProgress.value }
                         .clip(CircleShape)
                         .background(Color.White)
                 )
@@ -4313,7 +4339,7 @@ private fun ActionCard(
         }
         return
     }
-    val pressedScale by animateFloatAsState(
+    val pressedScale = animateFloatAsState(
         if (pressed) 0.96f else 1f,
         animationSpec = launcherStyle.pressScaleSpec,
         label = "action_card_scale"
@@ -4322,8 +4348,8 @@ private fun ActionCard(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                scaleX = scale * pressedScale
-                scaleY = scale * pressedScale
+                scaleX = scale * pressedScale.value
+                scaleY = scale * pressedScale.value
                 alpha = scale.coerceIn(0.55f, 1f)
             }
             .clip(launcherStyle.compactShape)
@@ -4538,7 +4564,7 @@ private fun DonateMethodCard(
     val pressedState = rememberPressedState()
     val pressed by pressedState
     val launcherStyle = LauncherTheme.style
-    val pressedScale by animateFloatAsState(
+    val pressedScale = animateFloatAsState(
         if (pressed) 0.962f else 1f,
         animationSpec = spring(stiffness = 820f, dampingRatio = 0.74f),
         label = "donate_card_scale"
@@ -4547,8 +4573,8 @@ private fun DonateMethodCard(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer {
-                scaleX = scale * pressedScale
-                scaleY = scale * pressedScale
+                scaleX = scale * pressedScale.value
+                scaleY = scale * pressedScale.value
                 alpha = scale.coerceIn(0.55f, 1f)
             }
             .clip(RoundedCornerShape(24.dp))
@@ -5207,20 +5233,6 @@ private fun openHeartRatePermissionSettings(context: Context) {
         )
     }
 }
-
-@Composable
-private fun rememberSettingsHeaderTime(): String {
-    var time by remember { mutableStateOf("--:--") }
-    LaunchedEffect(Unit) {
-        val formatter = SimpleDateFormat("HH:mm", Locale.getDefault())
-        while (true) {
-            time = formatter.format(Date())
-            delay(30_000)
-        }
-    }
-    return time
-}
-
 
 /**
  * 设置搜索索引：标题 / 描述 / 关键词（含拼音首字母与英文别名）。

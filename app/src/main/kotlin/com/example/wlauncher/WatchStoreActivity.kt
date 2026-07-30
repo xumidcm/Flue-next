@@ -77,6 +77,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -347,6 +348,14 @@ private fun WatchStoreScreen(
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
     var viewMode by remember { mutableStateOf(uiPreferences.readViewMode()) }
+    val browseScrolling by remember(viewMode, listState, gridState) {
+        derivedStateOf {
+            when (viewMode) {
+                WatchStoreViewMode.LIST -> listState.isScrollInProgress
+                WatchStoreViewMode.GRID -> gridState.isScrollInProgress
+            }
+        }
+    }
     var sort by remember { mutableStateOf(WatchStoreSort.LATEST) }
     var screenType by remember { mutableStateOf<WatchStoreScreenType?>(null) }
     var selectedCategory by remember { mutableStateOf<WatchStoreCategory?>(null) }
@@ -1112,7 +1121,11 @@ private fun WatchStoreScreen(
                         contentPadding = browseContentPadding,
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        items(visibleEntries, key = { it.id }) { item ->
+                        items(
+                            items = visibleEntries,
+                            key = { it.id },
+                            contentType = { "watch_face_list_card" },
+                        ) { item ->
                             val transientState = downloadStates[item.id]
                                 ?.collectAsStateWithLifecycle()
                                 ?.value
@@ -1123,6 +1136,7 @@ private fun WatchStoreScreen(
                                 onOpen = { openDetail(item.id) },
                                 onDownload = { download(item.id, item.screenType) },
                                 onCancelDownload = { cancelDownload(item.id) },
+                                loadPreview = !browseScrolling,
                             )
                         }
                         items(statusRows, key = { it.first }) { row -> row.second() }
@@ -1138,7 +1152,11 @@ private fun WatchStoreScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        gridItems(visibleEntries, key = { it.id }) { item ->
+                        gridItems(
+                            items = visibleEntries,
+                            key = { it.id },
+                            contentType = { "watch_face_grid_card" },
+                        ) { item ->
                             val transientState = downloadStates[item.id]
                                 ?.collectAsStateWithLifecycle()
                                 ?.value
@@ -1149,6 +1167,7 @@ private fun WatchStoreScreen(
                                 onOpen = { openDetail(item.id) },
                                 onDownload = { download(item.id, item.screenType) },
                                 onCancelDownload = { cancelDownload(item.id) },
+                                loadPreview = !browseScrolling,
                             )
                         }
                         gridItems(
@@ -1628,6 +1647,7 @@ private fun WatchFaceListCard(
     onOpen: () -> Unit,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
+    loadPreview: Boolean,
 ) {
     val style = LauncherTheme.style
     val displayName = (downloadState as? WatchStoreInstallState.Installed)
@@ -1664,6 +1684,8 @@ private fun WatchFaceListCard(
                 .aspectRatio(previewRatio)
                 .clip(previewShape),
             targetSize = 256,
+            loadEnabled = loadPreview,
+            animateStateChanges = false,
         )
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -1709,6 +1731,7 @@ private fun WatchFaceGridCard(
     onOpen: () -> Unit,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
+    loadPreview: Boolean,
 ) {
     val style = LauncherTheme.style
     val displayName = (downloadState as? WatchStoreInstallState.Installed)
@@ -1737,6 +1760,8 @@ private fun WatchFaceGridCard(
                 .fillMaxWidth()
                 .aspectRatio(1f),
             targetSize = 256,
+            loadEnabled = loadPreview,
+            animateStateChanges = false,
         )
         Column(
             Modifier
@@ -4058,14 +4083,19 @@ private fun WatchPreview(
     modifier: Modifier,
     targetSize: Int,
     onOpen: ((Bitmap) -> Unit)? = null,
+    loadEnabled: Boolean = true,
+    animateStateChanges: Boolean = true,
 ) {
     val context = LocalContext.current
     val style = LauncherTheme.style
     var retryToken by remember(repository, id, targetSize) { mutableIntStateOf(0) }
     var bitmap by remember(repository, id, targetSize) { mutableStateOf<Bitmap?>(null) }
     var loadError by remember(repository, id, targetSize) { mutableStateOf<String?>(null) }
-    LaunchedEffect(repository, id, targetSize, retryToken) {
-        bitmap = null
+    LaunchedEffect(repository, id, targetSize, retryToken, loadEnabled) {
+        // During a fling, cards can live for only a few milliseconds. Starting a disk/network
+        // decode and an animated spinner for every passing card competes with LazyColumn's
+        // measure/draw work. Keep an already loaded image, but defer new work until settling.
+        if (!loadEnabled || bitmap != null) return@LaunchedEffect
         loadError = null
         try {
             bitmap = repository.loadPreview(id, targetSize, targetSize)
@@ -4096,48 +4126,87 @@ private fun WatchPreview(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        // 220ms 交叉淡入：图片就绪后从加载态柔和过渡进来，替代原先的硬跳。
-        Crossfade(
-            targetState = previewState,
-            animationSpec = tween(durationMillis = 220),
-            label = "watchPreviewFade",
-        ) { state ->
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                when (state) {
-                    WatchPreviewState.READY -> image?.let { readyImage ->
-                        Image(
-                            readyImage,
-                            contentDescription = stringResource(R.string.watch_store_preview),
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Fit,
-                        )
-                    }
-                    WatchPreviewState.FAILED -> Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier.padding(8.dp),
-                    ) {
-                        // 灰色占位图标：失败时不留白，一眼可辨预览没加载出来。
-                        Icon(
-                            imageVector = MiuixIcons.Image,
-                            contentDescription = stringResource(R.string.watch_store_preview_load_failed),
-                            tint = style.secondaryTextColor,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        StoreMiniAction(
-                            label = stringResource(R.string.watch_store_retry),
-                            color = style.accentColor,
-                            fontSize = 10.sp,
-                            onClick = { retryToken++ },
-                            icon = MiuixIcons.Refresh,
-                        )
-                    }
-                    WatchPreviewState.LOADING -> MiuixLoadingIndicator(
-                        Modifier.size(22.dp),
-                        strokeWidth = 2.dp,
-                        color = style.accentColor,
-                    )
-                }
+        if (animateStateChanges) {
+            // Detail/full-size previews keep the polished fade. Browse cards use a direct
+            // state swap so a fast list does not maintain several Crossfade subcompositions.
+            Crossfade(
+                targetState = previewState,
+                animationSpec = tween(durationMillis = 220),
+                label = "watchPreviewFade",
+            ) { state ->
+                WatchPreviewContent(
+                    state = state,
+                    image = image,
+                    loadingAnimated = loadEnabled,
+                    style = style,
+                    onRetry = { retryToken++ },
+                )
+            }
+        } else {
+            WatchPreviewContent(
+                state = previewState,
+                image = image,
+                loadingAnimated = loadEnabled,
+                style = style,
+                onRetry = { retryToken++ },
+            )
+        }
+    }
+}
+
+@Composable
+private fun WatchPreviewContent(
+    state: WatchPreviewState,
+    image: ImageBitmap?,
+    loadingAnimated: Boolean,
+    style: com.flue.launcher.ui.theme.LauncherStyle,
+    onRetry: () -> Unit,
+) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        when (state) {
+            WatchPreviewState.READY -> image?.let { readyImage ->
+                Image(
+                    readyImage,
+                    contentDescription = stringResource(R.string.watch_store_preview),
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                )
+            }
+
+            WatchPreviewState.FAILED -> Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.padding(8.dp),
+            ) {
+                Icon(
+                    imageVector = MiuixIcons.Image,
+                    contentDescription = stringResource(R.string.watch_store_preview_load_failed),
+                    tint = style.secondaryTextColor,
+                    modifier = Modifier.size(18.dp),
+                )
+                StoreMiniAction(
+                    label = stringResource(R.string.watch_store_retry),
+                    color = style.accentColor,
+                    fontSize = 10.sp,
+                    onClick = onRetry,
+                    icon = MiuixIcons.Refresh,
+                )
+            }
+
+            WatchPreviewState.LOADING -> if (loadingAnimated) {
+                MiuixLoadingIndicator(
+                    Modifier.size(22.dp),
+                    strokeWidth = 2.dp,
+                    color = style.accentColor,
+                )
+            } else {
+                // A static placeholder is intentionally cheap while the list is moving.
+                Icon(
+                    imageVector = MiuixIcons.Image,
+                    contentDescription = stringResource(R.string.watch_store_preview),
+                    tint = style.secondaryTextColor.copy(alpha = 0.45f),
+                    modifier = Modifier.size(20.dp),
+                )
             }
         }
     }

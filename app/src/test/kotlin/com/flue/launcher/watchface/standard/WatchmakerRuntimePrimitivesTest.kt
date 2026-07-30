@@ -2,6 +2,7 @@ package com.flue.launcher.watchface.standard
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -11,6 +12,23 @@ import java.util.Calendar
 import java.util.Locale
 
 class WatchmakerRuntimePrimitivesTest {
+    @Test
+    fun animatedImageFallbackIdentityChangesWhenReusedLayerGetsNewMaterial() {
+        val imported = WatchImageFallbackKey(
+            layerCacheKey = "draft\u00000",
+            materialExpression = "images/frame_0001.jpg`images/frame_0002.jpg",
+            variant = "day",
+        )
+        val blankReplacement = WatchImageFallbackKey(
+            layerCacheKey = "draft\u00000",
+            materialExpression = "",
+            variant = "day",
+        )
+
+        assertNotEquals(imported, blankReplacement)
+        assertEquals(imported, imported.copy())
+    }
+
     @Test
     fun gifFramesRespectDelayBoundaryAndLoop() {
         val paths = "images/a.png`images/b.png`images/c.png"

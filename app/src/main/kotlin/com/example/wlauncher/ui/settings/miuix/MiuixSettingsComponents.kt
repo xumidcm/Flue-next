@@ -1,7 +1,7 @@
 package com.flue.launcher.ui.settings.miuix
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -34,6 +34,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
@@ -142,7 +145,7 @@ fun MiuixSettingsRow(
     val style = LauncherTheme.style
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
-    val background by animateColorAsState(
+    val background = animateColorAsState(
         if (pressed && onClick != null) style.pressedCardColor else Color.Transparent,
         label = "miuix_row_bg"
     )
@@ -150,7 +153,10 @@ fun MiuixSettingsRow(
         modifier = modifier
             .fillMaxWidth()
             .defaultMinSize(minHeight = 56.dp)
-            .background(background)
+            // Observe the animation in draw rather than composition: beginning a scroll
+            // cancels the pressed interaction, and the old background modifier otherwise
+            // recomposed the whole row for every color-animation frame.
+            .drawBehind { drawRect(background.value) }
             .then(
                 if (onClick != null) {
                     Modifier.clickable(
@@ -215,18 +221,18 @@ fun MiuixSwitch(
 
     val thumbPadding = 2.5.dp
     val thumbSize = trackHeight - thumbPadding * 2
-    // 拖影：按压时滑块拉长
-    val thumbWidth by animateDpAsState(
-        if (pressed && enabled) thumbSize + 4.dp else thumbSize,
+    val thumbProgress = animateFloatAsState(
+        if (checked) 1f else 0f,
         animationSpec = miuixSpring(),
-        label = "miuix_switch_thumb_width"
+        label = "miuix_switch_thumb_progress"
     )
-    val thumbOffset by animateDpAsState(
-        if (checked) trackWidth - thumbPadding - thumbWidth else thumbPadding,
+    // 拖影只缩放绘制层，不再每帧改变 thumb 宽度并重新测量整行。
+    val thumbStretch = animateFloatAsState(
+        if (pressed && enabled) 1.18f else 1f,
         animationSpec = miuixSpring(),
-        label = "miuix_switch_thumb_offset"
+        label = "miuix_switch_thumb_stretch"
     )
-    val trackColor by animateColorAsState(
+    val trackColor = animateColorAsState(
         when {
             !enabled -> style.secondaryTextColor.copy(alpha = 0.20f)
             checked -> style.accentColor
@@ -244,7 +250,7 @@ fun MiuixSwitch(
             .width(trackWidth)
             .height(trackHeight)
             .clip(RoundedCornerShape(999.dp))
-            .background(trackColor)
+            .drawBehind { drawRect(trackColor.value) }
             .then(
                 if (onCheckedChange != null) {
                     Modifier.clickable(
@@ -270,9 +276,14 @@ fun MiuixSwitch(
     ) {
         Box(
             modifier = Modifier
-                .padding(start = thumbOffset)
-                .width(thumbWidth)
-                .height(thumbSize)
+                .padding(start = thumbPadding)
+                .size(thumbSize)
+                .graphicsLayer {
+                    translationX = (trackWidth - thumbSize - thumbPadding * 2).toPx() *
+                        thumbProgress.value
+                    scaleX = thumbStretch.value
+                    transformOrigin = TransformOrigin(if (checked) 1f else 0f, 0.5f)
+                }
                 .clip(RoundedCornerShape(999.dp))
                 .background(thumbColor)
         )
@@ -301,7 +312,7 @@ fun MiuixSlider(
     val style = LauncherTheme.style
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
-    val fillColor by animateColorAsState(
+    val fillColor = animateColorAsState(
         when {
             !enabled -> style.secondaryTextColor.copy(alpha = 0.30f)
             pressed -> style.accentColor
@@ -339,7 +350,7 @@ fun MiuixSlider(
                         .fillMaxWidth(fraction)
                         .fillMaxHeight()
                         .clip(RoundedCornerShape(999.dp))
-                        .background(fillColor)
+                        .drawBehind { drawRect(fillColor.value) }
                 )
             }
         }

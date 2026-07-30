@@ -45,6 +45,19 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
+ * Identity of a last-successful animated image fallback.
+ *
+ * The material expression is deliberately part of the key. Layer indices and optional XML
+ * ids can be reused after deletion; keying only by that slot makes a newly created blank
+ * looping layer draw the deleted layer's last frame.
+ */
+internal data class WatchImageFallbackKey(
+    val layerCacheKey: String,
+    val materialExpression: String,
+    val variant: String,
+)
+
+/**
  * A deliberately self-contained native renderer for the open Watchmaker
  * `.watch` format.  The view owns the frame clock and asset loading; Compose
  * only hosts this one coarse-grained view.  Unsupported layer types remain
@@ -375,9 +388,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
      *
      * 只在主线程的 onDraw 里读写，不需要 cacheLock。
      */
-    private val lastDrawnFrameByLayer = LinkedHashMap<String, Bitmap>(8, 0.75f, true)
+    private val lastDrawnFrameByLayer = LinkedHashMap<WatchImageFallbackKey, Bitmap>(8, 0.75f, true)
     /** Raw GIF equivalent of [lastDrawnFrameByLayer], used while a replacement Movie decodes. */
-    private val lastDrawnMovieByLayer = LinkedHashMap<String, Movie>(4, 0.75f, true)
+    private val lastDrawnMovieByLayer = LinkedHashMap<WatchImageFallbackKey, Movie>(4, 0.75f, true)
+    /** Avoids scanning the tiny fallback LRUs unless a layer actually changes material. */
+    private val lastMaterialExpressionByLayer = HashMap<String, String>()
     private var bitmapCacheBytes = 0L
     private var animatedBitmapCacheBytes = 0L
     private val activeAssetLoads = HashSet<AssetLoadClaim>(MAX_CONCURRENT_ASSET_LOADS)
@@ -1031,6 +1046,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         animateFrames: Boolean = true,
     ) {
         val rawPathExpression = pathExpressionOverride ?: attrs["path"].orEmpty()
+        forgetReplacedImageFallbacks(layerCacheKey, rawPathExpression)
         // 导入的视频帧会形成很长但完全静态的反引号路径表。没有 `{tag}` 时
         // 不经过表达式扫描；否则每一帧、每个拖动事件都要重新遍历几十万字符。
         val pathExpression = if ('{' in rawPathExpression) {
@@ -1061,6 +1077,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
         val usingNightWeatherSheet = nightResolved != null
         val selectedPath = if (usingNightWeatherSheet) nightPath.orEmpty() else path
+        val fallbackKey = WatchImageFallbackKey(
+            layerCacheKey = layerCacheKey,
+            materialExpression = rawPathExpression,
+            variant = if (usingNightWeatherSheet) "night" else "day",
+        )
         // A dynamic expression can briefly resolve to an empty/missing path at
         // the exact frame where it switches. Do not turn that transient lookup
         // miss into a transparent frame: the per-layer fallback below remains
@@ -1073,7 +1094,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             ?.let { requestMovie(it, source) }
         var movie = requestedMovie
         if (requestedMovie != null) {
-            lastDrawnMovieByLayer[layerCacheKey] = requestedMovie
+            lastDrawnMovieByLayer[fallbackKey] = requestedMovie
             while (lastDrawnMovieByLayer.size > MAX_LAST_MOVIE_ENTRIES) {
                 val iterator = lastDrawnMovieByLayer.entries.iterator()
                 if (!iterator.hasNext()) break
@@ -1116,7 +1137,6 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
         // 跨帧兜底：新帧还没解码好就继续画这一层上次画成的那张。
         var drawingNightWeatherSheet = usingNightWeatherSheet
-        val fallbackKey = "$layerCacheKey\u0000${if (usingNightWeatherSheet) "night" else "day"}"
         val bitmap = if (requestedMovie == null) {
             val usable = requestedBitmap?.takeIf { !it.isRecycled }
             if (usable != null) {
@@ -1136,7 +1156,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                         // 日夜切换时夜图也走异步解码；准备好之前沿用白天最后一帧，
                         // 避免条件图标短暂透明。
                         drawingNightWeatherSheet = false
-                        lastDrawnFrameByLayer["$layerCacheKey\u0000day"]
+                        lastDrawnFrameByLayer[fallbackKey.copy(variant = "day")]
                             ?.takeIf { !it.isRecycled }
                     } else {
                         null
@@ -1148,7 +1168,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         if (movie == null && bitmap == null) {
             // Switching a dynamic path from/to a raw GIF must retain the old
             // Movie until the new resource is decoded, just like bitmap frames.
-            movie = lastDrawnMovieByLayer[layerCacheKey]
+            movie = lastDrawnMovieByLayer[fallbackKey]
         }
         if (
             trackTransitionAssetReadiness &&
@@ -2495,7 +2515,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     }
 
     /** Keeps an evicted animated frame alive until this layer draws its successor. */
-    private fun rememberLastDrawnFrame(key: String, bitmap: Bitmap) {
+    private fun rememberLastDrawnFrame(key: WatchImageFallbackKey, bitmap: Bitmap) {
         val previous = lastDrawnFrameByLayer.put(key, bitmap)
         if (previous != null && previous !== bitmap) recycleDetachedLastFrame(previous)
     }
@@ -2512,7 +2532,26 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private fun clearLastDrawnFrames() {
         val frames = lastDrawnFrameByLayer.values.distinct()
         lastDrawnFrameByLayer.clear()
+        lastMaterialExpressionByLayer.clear()
         frames.forEach(::recycleDetachedLastFrame)
+    }
+
+    /** Drops a deleted/replaced layer's fallback before its XML slot can be reused. */
+    private fun forgetReplacedImageFallbacks(layerCacheKey: String, materialExpression: String) {
+        val previous = lastMaterialExpressionByLayer.put(layerCacheKey, materialExpression)
+        if (previous == null || previous == materialExpression) return
+
+        val detachedFrames = ArrayList<Bitmap>()
+        val frameIterator = lastDrawnFrameByLayer.entries.iterator()
+        while (frameIterator.hasNext()) {
+            val entry = frameIterator.next()
+            if (entry.key.layerCacheKey == layerCacheKey) {
+                detachedFrames += entry.value
+                frameIterator.remove()
+            }
+        }
+        detachedFrames.distinct().forEach(::recycleDetachedLastFrame)
+        lastDrawnMovieByLayer.keys.removeAll { it.layerCacheKey == layerCacheKey }
     }
 
     /** Caller must hold [cacheLock]. */
