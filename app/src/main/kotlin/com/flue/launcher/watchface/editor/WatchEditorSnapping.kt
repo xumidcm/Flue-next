@@ -27,6 +27,12 @@ object WatchEditorSnapping {
     /** 旋转吸附阈值（度）。 */
     const val ROTATION_THRESHOLD_DEG = 3f
 
+    /** 双指旋转开始前必须累计越过的角度，过滤手指落下时的轻微扭动。 */
+    const val ROTATION_ACTIVATION_THRESHOLD_DEG = 4f
+
+    /** 已吸附直角后的脱离阈值，和进入阈值分开以避免 90° 附近抖动。 */
+    const val ROTATION_EXIT_THRESHOLD_DEG = 7f
+
     /** 位置吸附「进入」阈值（设计单位）。512 画布下 2.5 ≈ 0.5% 边长。 */
     const val ENTER_THRESHOLD = 2.5f
 
@@ -46,6 +52,31 @@ object WatchEditorSnapping {
         val snappedNormalized = if (target >= 360f) 0f else target
         val turns = ((rotation - normalized) / 360f).roundToInt()
         return snappedNormalized + turns * 360f
+    }
+
+    /** 双指旋转专用的 90° 吸附，并带释放滞回。 */
+    fun snapRightAngleRotation(
+        rotation: Float,
+        state: RotationGestureState,
+    ): Float {
+        val locked = state.lockedAt
+        if (locked != null) {
+            if (rotationDistance(rotation, locked) <= ROTATION_EXIT_THRESHOLD_DEG) return locked
+            state.lockedAt = null
+            return rotation
+        }
+        val nearest = (rotation / 90f).roundToInt() * 90f
+        return if (rotationDistance(rotation, nearest) <= ROTATION_THRESHOLD_DEG) {
+            state.lockedAt = nearest
+            nearest
+        } else {
+            rotation
+        }
+    }
+
+    private fun rotationDistance(first: Float, second: Float): Float {
+        val normalized = ((first - second + 180f) % 360f + 360f) % 360f - 180f
+        return abs(normalized)
     }
 
     /**
@@ -107,6 +138,10 @@ object WatchEditorSnapping {
             lockedX = null
             lockedY = null
         }
+    }
+
+    class RotationGestureState {
+        var lockedAt: Float? = null
     }
 
     /**

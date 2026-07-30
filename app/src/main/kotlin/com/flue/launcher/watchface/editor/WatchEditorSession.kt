@@ -396,6 +396,50 @@ class WatchEditorSession private constructor(
         return mutate { importResourceDirect(input, requestedName, directory) }
     }
 
+    /** Imports one AngelCode BMFont definition and all selected page images atomically. */
+    @Synchronized
+    fun importBitmapFont(
+        files: List<Pair<String, ByteArray>>,
+        selectedLayer: WatchEditorLayerKey,
+    ): String {
+        require(files.isNotEmpty()) { "位图字体资源不能为空" }
+        return mutate {
+            val normalized = files.associate { (name, bytes) ->
+                sanitizeFileName(name) to bytes
+            }
+            val definition = normalized.entries.firstOrNull { it.key.endsWith(".fnt", true) }
+                ?: throw WatchEditorException("请选择 .fnt 位图字体定义")
+            val referencedPages = BITMAP_FONT_PAGE_PATTERN.findAll(
+                definition.value.toString(StandardCharsets.UTF_8),
+            ).map { it.groupValues[1].substringAfterLast('/').substringAfterLast('\\') }.toSet()
+            val available = normalized.keys.map { it.lowercase(Locale.ROOT) }.toSet() +
+                draftDirectory.resolve("fonts_bm").listFiles().orEmpty()
+                    .filter(File::isFile).map { it.name.lowercase(Locale.ROOT) }
+            val missing = referencedPages.filter { it.lowercase(Locale.ROOT) !in available }
+            if (missing.isNotEmpty()) {
+                throw WatchEditorException("位图字体缺少图片：${missing.joinToString()}")
+            }
+            val importedPageNames = linkedMapOf<String, String>()
+            normalized.filterKeys { !it.endsWith(".fnt", true) }.forEach { (name, bytes) ->
+                val path = importResourceDirect(bytes.inputStream(), name, "fonts_bm")
+                importedPageNames[name.lowercase(Locale.ROOT)] = path.substringAfterLast('/')
+            }
+            val rewrittenDefinition = BITMAP_FONT_PAGE_PATTERN.replace(
+                definition.value.toString(StandardCharsets.UTF_8),
+            ) { match ->
+                val original = match.groupValues[1].substringAfterLast('/').substringAfterLast('\\')
+                val imported = importedPageNames[original.lowercase(Locale.ROOT)] ?: original
+                match.value.replace(match.groupValues[1], imported)
+            }
+            val definitionPath = importResourceDirect(
+                rewrittenDefinition.byteInputStream(), definition.key, "fonts_bm",
+            )
+            val value = "bm:${definitionPath.substringAfterLast('/').substringBeforeLast('.')}"
+            setOrRemoveAttribute(findLayer(selectedLayer), "font", value)
+            value
+        }
+    }
+
     /**
      * Imports an FFmpeg-produced frame set and updates the target layer in one
      * editor transaction. A failed frame copy rolls the whole sequence back,
@@ -676,6 +720,13 @@ class WatchEditorSession private constructor(
             throw WatchEditorException(error.message ?: "编辑操作失败", error)
         }
     }
+
+    private fun sanitizeFileName(name: String): String = name
+        .substringAfterLast('/')
+        .substringAfterLast('\\')
+        .replace(Regex("[^A-Za-z0-9._-]"), "_")
+        .take(120)
+        .ifBlank { "bitmap_font.bin" }
 
     private fun captureState(): EditorState = EditorState(
         xml = serializeDocument(document),
@@ -1069,6 +1120,11 @@ class WatchEditorSession private constructor(
     }
 
     companion object {
+        private val BITMAP_FONT_PAGE_PATTERN =
+            Regex(
+                """page\s+[^\r\n]*file="([^"]+)"""",
+                RegexOption.IGNORE_CASE,
+            )
         private const val DRAFT_DIRECTORY_NAME = "flue-watch-editor"
         private const val WATCHMAKER_SCALE_NORMAL = 100f
         private const val MIN_TRANSFORM_SCALE = 0.05f

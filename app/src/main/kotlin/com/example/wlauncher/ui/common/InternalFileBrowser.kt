@@ -85,6 +85,7 @@ data class InternalFileBrowserRequest(
     val title: String,
     val extensions: Set<String>,
     val allowMultiple: Boolean = false,
+    val selectDirectory: Boolean = false,
     val onSelected: (List<Uri>) -> Unit,
 ) {
     val normalizedExtensions: Set<String> = normalizeInternalFileExtensions(extensions)
@@ -295,7 +296,18 @@ private fun InternalFileBrowserDialog(
                     }
                 }
 
-                if (request.allowMultiple) {
+                if (request.selectDirectory) {
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            request.onSelected(listOf(Uri.fromFile(currentDirectory)))
+                            onDismiss()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.internal_file_browser_select_current_folder))
+                    }
+                } else if (request.allowMultiple) {
                     Spacer(Modifier.height(8.dp))
                     Button(
                         onClick = {

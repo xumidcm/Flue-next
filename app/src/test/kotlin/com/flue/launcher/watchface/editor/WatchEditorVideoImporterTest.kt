@@ -83,7 +83,7 @@ class WatchEditorVideoImporterTest {
     }
 
     @Test
-    fun originalResolutionAlsoKeepsSourceBitrate() {
+    fun originalResolutionUsesTheEditableBitrateField() {
         val info = WatchEditorVideoInfo(
             durationMs = 1_000L,
             width = 1920,
@@ -92,7 +92,7 @@ class WatchEditorVideoImporterTest {
         )
 
         assertEquals(
-            6_400,
+            1_800,
             resolveVideoBitrateKbps(info, WatchEditorVideoResolutionPreset.ORIGINAL, 1_800),
         )
         assertEquals(

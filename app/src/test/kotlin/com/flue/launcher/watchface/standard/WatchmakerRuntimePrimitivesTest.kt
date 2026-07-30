@@ -111,6 +111,19 @@ class WatchmakerRuntimePrimitivesTest {
     }
 
     @Test
+    fun navigationExitAnimationIsOneShotAndAllowsNone() {
+        val exiting = watchTextExitAnimationFrame("SlideRight", 1f, 250L)
+        assertEquals(WatchTextAnimationPhase.EXITING, exiting.phase)
+        assertTrue(exiting.translationX > 0f)
+
+        val finished = watchTextExitAnimationFrame("SlideRight", 1f, 1_000L)
+        assertEquals(WatchTextAnimationPhase.HIDDEN, finished.phase)
+
+        val disabled = watchTextExitAnimationFrame("", 1f, 1_000L)
+        assertEquals(WatchTextAnimationPhase.VISIBLE, disabled.phase)
+    }
+
+    @Test
     fun conditionalImageAndChartInputsAreBoundedAndDeterministic() {
         assertEquals(3 to 2, parseWatchGrid("3x2"))
         assertEquals(1 to 1, parseWatchGrid("garbage"))

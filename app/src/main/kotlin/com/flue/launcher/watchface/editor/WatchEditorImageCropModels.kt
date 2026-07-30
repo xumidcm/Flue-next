@@ -27,20 +27,28 @@ data class WatchEditorCropRect(
     fun contains(x: Float, y: Float): Boolean = x in left..right && y in top..bottom
 }
 
-/** Crop aspect presets: free, 1:1, and the physical watch screen ratio. */
-enum class WatchEditorCropAspect { FREE, SQUARE, SCREEN }
+/** Crop aspect presets: free, 1:1, physical screen, and current watch canvas. */
+enum class WatchEditorCropAspect { FREE, SQUARE, SCREEN, CANVAS }
 
 /** Resolves the preset to a width/height ratio, or null for free cropping. */
 fun watchEditorCropAspectRatio(
     aspect: WatchEditorCropAspect,
     screenWidthPx: Int,
     screenHeightPx: Int,
+    canvasWidthPx: Int = screenWidthPx,
+    canvasHeightPx: Int = screenHeightPx,
 ): Float? = when (aspect) {
     WatchEditorCropAspect.FREE -> null
     WatchEditorCropAspect.SQUARE -> 1f
     WatchEditorCropAspect.SCREEN ->
         if (screenWidthPx > 0 && screenHeightPx > 0) {
             screenWidthPx.toFloat() / screenHeightPx.toFloat()
+        } else {
+            1f
+        }
+    WatchEditorCropAspect.CANVAS ->
+        if (canvasWidthPx > 0 && canvasHeightPx > 0) {
+            canvasWidthPx.toFloat() / canvasHeightPx.toFloat()
         } else {
             1f
         }

@@ -21,12 +21,14 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toIntSize
 import kotlin.math.roundToInt
 
 private const val BACKDROP_CAPTURE_INTERVAL_MS = 1_000L
 private const val BACKDROP_BLUR_STEP_PX = 2
 private const val BACKDROP_MAX_BLUR_RADIUS_PX = 64
+private const val BACKDROP_SHARED_MAX_BLUR_RADIUS_PX = 128
 
 /**
  * The backdrop animation is sampled every frame. Reusing a small fixed set of
@@ -158,6 +160,8 @@ fun Modifier.flueBackdropFill(
     legacyDarkMode: Boolean = true,
     contentScale: (() -> Float)? = null,
     contentTranslationYFraction: (() -> Float)? = null,
+    /** Same dp blur clock installed on the live face layer for API 31+. */
+    contentBlurRadiusDp: (() -> Float)? = null,
 ): Modifier {
     if (!enabled) return this
     val backdropLayer = rememberGraphicsLayer()
@@ -271,7 +275,15 @@ fun Modifier.flueBackdropFill(
                     alpha = 1f,
                 )
             }
-            val preparedBlurRadius = quantizeBackdropBlurRadiusPx(p)
+            val requestedBlurDp = contentBlurRadiusDp?.invoke()
+                ?.takeIf(Float::isFinite)
+                ?.coerceAtLeast(0f)
+            val preparedBlurRadius = if (requestedBlurDp != null) {
+                with(this) { requestedBlurDp.dp.toPx() }.roundToInt()
+                    .coerceIn(0, BACKDROP_SHARED_MAX_BLUR_RADIUS_PX)
+            } else {
+                quantizeBackdropBlurRadiusPx(p)
+            }
             magnifiedLayer.renderEffect = if (preparedBlurRadius > 0) {
                 BackdropBlurEffectCache.get(preparedBlurRadius)
             } else {
@@ -408,7 +420,15 @@ fun Modifier.flueBackdropFill(
         }
         // Mirror handles convolution sampling beyond the physical screen;
         // the mirrored center/strips/corners already fill the visible area.
-        val blurRadiusBucketPx = quantizeBackdropBlurRadiusPx(p)
+        val requestedBlurDp = contentBlurRadiusDp?.invoke()
+            ?.takeIf(Float::isFinite)
+            ?.coerceAtLeast(0f)
+        val blurRadiusBucketPx = if (requestedBlurDp != null) {
+            with(this) { requestedBlurDp.dp.toPx() }.roundToInt()
+                .coerceIn(0, BACKDROP_SHARED_MAX_BLUR_RADIUS_PX)
+        } else {
+            quantizeBackdropBlurRadiusPx(p)
+        }
         magnifiedLayer.renderEffect = if (blurRadiusBucketPx > 0) {
             BackdropBlurEffectCache.get(blurRadiusBucketPx)
         } else {

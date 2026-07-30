@@ -72,6 +72,17 @@ class WatchEditorImageCropModelsTest {
             watchEditorCropAspectRatio(WatchEditorCropAspect.SCREEN, 0, 0)!!,
             1e-4f,
         )
+        assertEquals(
+            410f / 502f,
+            watchEditorCropAspectRatio(
+                WatchEditorCropAspect.CANVAS,
+                300,
+                400,
+                canvasWidthPx = 410,
+                canvasHeightPx = 502,
+            )!!,
+            1e-4f,
+        )
     }
 
     @Test

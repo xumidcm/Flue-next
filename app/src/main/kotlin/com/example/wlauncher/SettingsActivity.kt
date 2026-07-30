@@ -35,6 +35,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
@@ -245,6 +246,7 @@ const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
 const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
 private val LocalSettingsLeftSafeInsetPercent = compositionLocalOf { 0 }
+private val LocalSettingsRotaryHapticsEnabled = compositionLocalOf { true }
 
 /**
  * 搜索跳转目标。[token] 每次点击自增，用来让同一个 key 也能重新触发定位。
@@ -568,6 +570,7 @@ private fun SettingsRootScreen(
     val powerMenuButtonEnabled by vm.powerMenuButtonEnabled.collectAsStateWithLifecycle()
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
     val watchFaceTextEntryAnimation by vm.watchFaceTextEntryAnimation.collectAsStateWithLifecycle()
+    val watchFaceTextExitAnimation by vm.watchFaceTextExitAnimation.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val watchmakerForceFill by vm.watchmakerForceFill.collectAsStateWithLifecycle()
@@ -1118,6 +1121,7 @@ private fun SettingsRootScreen(
     ) {
         CompositionLocalProvider(
             LocalSettingsLeftSafeInsetPercent provides appListLeftSafeInsetPercent,
+            LocalSettingsRotaryHapticsEnabled provides rotaryHapticsEnabled,
             LocalFlueMotionProfile provides activeMotionProfile,
             LocalSettingsSearchTarget provides settingsSearchTarget,
         ) {
@@ -1389,6 +1393,25 @@ private fun SettingsRootScreen(
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.WATCH_FACES).offset,
             onScrollChanged = { index, offset -> updateScroll(SettingsDestination.WATCH_FACES, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
+            if (selectedWatchFace.isWatchmaker) {
+                item("watchface_editor_current") {
+                    ActionCard(
+                        title = stringResource(R.string.settings_watchface_editor_current),
+                        subtitle = stringResource(
+                            R.string.settings_watchface_editor_current_sub_fmt,
+                            selectedWatchFace.displayName
+                        ),
+                        scale = itemFisheye(listState, "watchface_editor_current", screenCenterY, screenHeightPx),
+                        icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialSettings, miuix = OfficialMiuixIcons.OfficialSettings) },
+                        onClick = {
+                            context.startActivity(
+                                Intent(context, WatchEditorActivity::class.java)
+                                    .putExtra(WatchEditorActivity.EXTRA_WATCH_FACE_ID, selectedWatchFace.id)
+                            )
+                        }
+                    )
+                }
+            }
             if (!watchFaceLastError.isNullOrBlank()) {
                 item("watchface_error") {
                     MessageCard(
@@ -1473,15 +1496,6 @@ private fun SettingsRootScreen(
                     refreshToken = watchFaceRefreshToken,
                 )
             }
-            item("watchface_refresh") {
-                ActionCard(
-                    title = stringResource(R.string.settings_watchface_refresh),
-                    subtitle = stringResource(R.string.settings_watchface_refresh_sub),
-                    scale = itemFisheye(listState, "watchface_refresh", screenCenterY, screenHeightPx),
-                    icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialRefresh, miuix = OfficialMiuixIcons.OfficialRefresh) },
-                    onClick = { vm.refreshWatchFaces(force = true) }
-                )
-            }
             item("watchface_import_archive") {
                 ActionCard(
                     title = stringResource(R.string.settings_watchface_import),
@@ -1540,31 +1554,21 @@ private fun SettingsRootScreen(
                     }
                 )
             }
-            if (selectedWatchFace.isWatchmaker) {
-                item("watchface_editor_current") {
-                    ActionCard(
-                        title = stringResource(R.string.settings_watchface_editor_current),
-                        subtitle = stringResource(
-                            R.string.settings_watchface_editor_current_sub_fmt,
-                            selectedWatchFace.displayName
-                        ),
-                        scale = itemFisheye(listState, "watchface_editor_current", screenCenterY, screenHeightPx),
-                        icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialSettings, miuix = OfficialMiuixIcons.OfficialSettings) },
-                        onClick = {
-                            context.startActivity(
-                                Intent(context, WatchEditorActivity::class.java)
-                                    .putExtra(WatchEditorActivity.EXTRA_WATCH_FACE_ID, selectedWatchFace.id)
-                            )
-                        }
-                    )
-                }
-            }
             item("watchface_more") {
                 SettingsCategoryCard(
                     title = stringResource(R.string.settings_watchface_more),
                     subtitle = stringResource(R.string.settings_watchface_more_sub),
                     onClick = { navigateTo(SettingsDestination.WATCH_FACE_MORE) },
                     scale = itemFisheye(listState, "watchface_more", screenCenterY, screenHeightPx)
+                )
+            }
+            item("watchface_refresh") {
+                ActionCard(
+                    title = stringResource(R.string.settings_watchface_refresh),
+                    subtitle = stringResource(R.string.settings_watchface_refresh_sub),
+                    scale = itemFisheye(listState, "watchface_refresh", screenCenterY, screenHeightPx),
+                    icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialRefresh, miuix = OfficialMiuixIcons.OfficialRefresh) },
+                    onClick = { vm.refreshWatchFaces(force = true) }
                 )
             }
         }
@@ -1808,6 +1812,15 @@ private fun SettingsRootScreen(
                     checked = watchFaceTextEntryAnimation,
                     onToggle = vm::setWatchFaceTextEntryAnimationEnabled,
                     scale = itemFisheye(listState, "watchface_text_entry_animation", screenCenterY, screenHeightPx)
+                )
+            }
+            item("watchface_text_exit_animation") {
+                SettingsSwitchRow(
+                    title = stringResource(R.string.settings_watchface_text_exit_animation),
+                    subtitle = stringResource(R.string.settings_watchface_text_exit_animation_sub),
+                    checked = watchFaceTextExitAnimation,
+                    onToggle = vm::setWatchFaceTextExitAnimationEnabled,
+                    scale = itemFisheye(listState, "watchface_text_exit_animation", screenCenterY, screenHeightPx)
                 )
             }
             item("watchface_date_locale_header") {
@@ -2609,15 +2622,8 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "app_list_return_shrink", screenCenterY, screenHeightPx)
                 )
             }
-            item("app_list_return_icon_float") {
-                // 子选项：仅在收缩动画关闭时展开。item 常驻挂载、内容用
-                // AnimatedVisibility 做高度动画——展开时向下弹出，LazyColumn
-                // 逐帧重排让下方选项自动让位，而不是瞬间插行。
-                AnimatedVisibility(
-                    visible = !appListReturnShrinkEnabled,
-                    enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
-                    exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
-                ) {
+            if (!appListReturnShrinkEnabled) {
+                item("app_list_return_icon_float") {
                     SettingsSwitchRow(
                         title = stringResource(R.string.settings_icon_float),
                         subtitle = stringResource(R.string.settings_icon_float_sub),
@@ -3550,6 +3556,7 @@ private fun SettingsPageScaffold(
     val context = LocalContext.current
     val settingsRoundScreen = com.flue.launcher.ui.common.isFlueScreenRound()
     val leftSafeInsetPercent = LocalSettingsLeftSafeInsetPercent.current
+    val rotaryHapticsEnabled = LocalSettingsRotaryHapticsEnabled.current
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = initialFirstVisibleItemIndex,
         initialFirstVisibleItemScrollOffset = initialFirstVisibleItemScrollOffset
@@ -3607,7 +3614,9 @@ private fun SettingsPageScaffold(
                 .flueRotaryScrollable(
                     focusRequester,
                     rotaryScrollMultiplier,
-                    onRotaryScroll = { vibrateHaptic(context) }
+                    onRotaryScroll = {
+                        if (rotaryHapticsEnabled) vibrateHaptic(context)
+                    }
                 ) { rotaryDelta ->
                     scope.launch {
                         listState.scrollBy(-rotaryDelta)
@@ -3626,21 +3635,23 @@ private fun SettingsPageScaffold(
             ),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // 顶栏（返回圆钮 + 时间）按老师要求删除：返回交给系统手势与
-            // BackHandler，时间表盘自己会显示。
             item {
-                Text(
-                    text = title,
-                    color = launcherStyle.accentColor,
-                    fontSize = 26.sp,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = if (settingsRoundScreen) TextAlign.Center else null,
-                    modifier = Modifier
-                        .then(
-                            if (settingsRoundScreen) Modifier.fillMaxWidth() else Modifier
-                        )
-                        .padding(bottom = 8.dp)
-                )
+                Box(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                    HeaderBackButton(onClick = onBack)
+                    Text(
+                        text = title,
+                        color = launcherStyle.accentColor,
+                        fontSize = 26.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .fillMaxWidth()
+                            .padding(horizontal = 50.dp),
+                    )
+                }
             }
             content(listState, screenCenterY, screenHeightPx, visibleItemKeys)
         }
@@ -5241,6 +5252,7 @@ private fun buildSettingsSearchIndex(context: Context): List<SettingsSearchEntry
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_font", s(R.string.settings_watchface_font), s(R.string.search_d_watchface_font), listOf("bpzt", "font", "ziti")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_bottom_fade", s(R.string.settings_watchface_bottom_fade), s(R.string.search_d_watchface_bottom_fade), listOf("bpdb", "bottom fade")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_text_entry_animation", s(R.string.settings_watchface_text_entry_animation), s(R.string.settings_watchface_text_entry_animation_sub), listOf("bpwz", "text animation", "fly in")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_text_exit_animation", s(R.string.settings_watchface_text_exit_animation), s(R.string.settings_watchface_text_exit_animation_sub), listOf("bpwz", "text exit animation", "fly out")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_status_indicators", s(R.string.settings_watchface_status), s(R.string.search_d_watchface_status), listOf("ztts", "indicator")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_charging_power_text", s(R.string.settings_watchface_charging_power), s(R.string.search_d_charging_power), listOf("cdgl", "charging", "wattage")),
     SettingsSearchEntry("ICON_PACKS", null, s(R.string.settings_icon_packs), s(R.string.search_d_icon_packs), listOf("tbb", "icon pack")),

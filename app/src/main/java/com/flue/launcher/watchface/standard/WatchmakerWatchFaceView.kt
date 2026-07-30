@@ -84,6 +84,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private var faceVisible = false
     private var textEntryAnimationEnabled = true
     private var textAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
+    private var textExitAnimationEnabled = true
+    private var textExitAnimationActive = false
+    private var textExitAnimationStartedAtUptimeMs = 0L
     /** Editor-only gate: null freezes every animated image layer. */
     private var editorAnimationPlaybackLimited = false
     private var editorAnimatedImageLayerIndex: Int? = null
@@ -440,6 +443,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         onTapAction: ((WatchTapAction) -> Unit)? = null,
         onSourceReady: ((Int) -> Unit)? = null,
         textEntryAnimationEnabled: Boolean = true,
+        textExitAnimationEnabled: Boolean = true,
     ) {
         if (disposed) return
         require(descriptor.isWatchmaker) { "Watchmaker view requires a standard .watch descriptor" }
@@ -447,6 +451,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val enablingAnimation = isFaceVisible && textEntryAnimationEnabled && !this.textEntryAnimationEnabled
         this.faceVisible = isFaceVisible
         this.textEntryAnimationEnabled = textEntryAnimationEnabled
+        this.textExitAnimationEnabled = textExitAnimationEnabled
         if (textEntryAnimationEnabled && (enteringFace || enablingAnimation)) {
             textAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
         }
@@ -454,7 +459,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         this.doubleTapAction = onDoubleTap
         this.tapActionHandler = onTapAction
         if (descriptorKey == descriptor.stableKey && this.refreshToken == refreshToken) {
-            if (faceVisible) scheduleTicks() else cancelTicks()
+            if (faceVisible || textExitAnimationActive) scheduleTicks() else cancelTicks()
             if (
                 loadedDescriptorKey == descriptor.stableKey &&
                 loadedRefreshToken == refreshToken
@@ -562,8 +567,17 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         if (visible && textEntryAnimationEnabled) {
             textAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
         }
-        if (visible) scheduleTicks() else cancelTicks()
+        if (visible || textExitAnimationActive) scheduleTicks() else cancelTicks()
         invalidate()
+    }
+
+    fun setTextExitAnimationActive(active: Boolean) {
+        val effective = active && textExitAnimationEnabled
+        if (textExitAnimationActive == effective) return
+        textExitAnimationActive = effective
+        if (effective) textExitAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
+        if (effective) scheduleTicks()
+        if (!disposed) invalidate()
     }
 
     fun setWatchDataProvider(provider: WatchDataProvider?) {
@@ -585,7 +599,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         editorAnimationPlaybackLimited = true
         editorAnimatedImageLayerIndex = layerIndex
         frameStartedAtUptimeMs = SystemClock.uptimeMillis()
-        lastDrawnFrameByLayer.clear()
+        clearLastDrawnFrames()
         synchronized(cacheLock) {
             animatedBitmapCache.values.forEach { bitmap ->
                 if (!bitmap.isRecycled && bitmap !in bitmapCache.values) bitmap.recycle()
@@ -866,7 +880,18 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val attrs = layer.attributes
         val normalizedType = layer.type.lowercase(Locale.ROOT)
         var animatedAlpha = alpha
-        if (textEntryAnimationEnabled && normalizedType.startsWith("text") &&
+        if (textExitAnimationActive && normalizedType.startsWith("text")) {
+            val animation = watchTextExitAnimationFrame(
+                animOut = attrs["anim_out"],
+                durationOutSeconds = dynamicNumber(attrs["dur_out"], 0.5f, source),
+                elapsedMs = SystemClock.uptimeMillis() - textExitAnimationStartedAtUptimeMs,
+            )
+            if (!animation.visible) return
+            canvas.translate(animation.translationX, animation.translationY)
+            if (animation.scale != 1f) canvas.scale(animation.scale, animation.scale)
+            if (animation.rotation != 0f) canvas.rotate(animation.rotation)
+            animatedAlpha *= animation.alpha
+        } else if (textEntryAnimationEnabled && normalizedType.startsWith("text") &&
             (!attrs["anim_in"].isNullOrBlank() || !attrs["anim_out"].isNullOrBlank())
         ) {
             val animation = watchTextAnimationFrame(
@@ -1065,12 +1090,13 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val bitmap = if (requestedMovie == null) {
             val usable = requestedBitmap?.takeIf { !it.isRecycled }
             if (usable != null) {
-                lastDrawnFrameByLayer[fallbackKey] = usable
+                rememberLastDrawnFrame(fallbackKey, usable)
                 while (lastDrawnFrameByLayer.size > MAX_LAST_FRAME_ENTRIES) {
                     val iterator = lastDrawnFrameByLayer.entries.iterator()
                     if (!iterator.hasNext()) break
-                    iterator.next()
+                    val removed = iterator.next().value
                     iterator.remove()
+                    recycleDetachedLastFrame(removed)
                 }
                 usable
             } else {
@@ -2198,7 +2224,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                                                     } else {
                                                         bitmapCacheBytes -= staleBitmap.safeAllocationByteCount()
                                                     }
-                                                    if (staleBitmap !== result && !staleBitmap.isRecycled) {
+                                                    if (
+                                                        staleBitmap !== result &&
+                                                        staleBitmap !in lastDrawnFrameByLayer.values &&
+                                                        !staleBitmap.isRecycled
+                                                    ) {
                                                         staleBitmap.recycle()
                                                     }
                                                 }
@@ -2370,7 +2400,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private fun putBitmapLocked(key: String, bitmap: Bitmap) {
         bitmapCache.put(key, bitmap)?.let { previous ->
             bitmapCacheBytes -= previous.safeAllocationByteCount()
-            if (previous !== bitmap && !previous.isRecycled) previous.recycle()
+            if (previous !== bitmap && previous !in lastDrawnFrameByLayer.values && !previous.isRecycled) {
+                previous.recycle()
+            }
         }
         bitmapCacheBytes += bitmap.safeAllocationByteCount()
         while (
@@ -2390,7 +2422,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private fun putAnimatedBitmapLocked(key: String, bitmap: Bitmap) {
         animatedBitmapCache.put(key, bitmap)?.let { previous ->
             animatedBitmapCacheBytes -= previous.safeAllocationByteCount()
-            if (previous !== bitmap && !previous.isRecycled) previous.recycle()
+            if (previous !== bitmap && previous !in lastDrawnFrameByLayer.values && !previous.isRecycled) {
+                previous.recycle()
+            }
         }
         animatedBitmapCacheBytes += bitmap.safeAllocationByteCount()
         while (
@@ -2402,8 +2436,29 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             val eldest = iterator.next().value
             iterator.remove()
             animatedBitmapCacheBytes -= eldest.safeAllocationByteCount()
-            if (!eldest.isRecycled) eldest.recycle()
+            if (eldest !in lastDrawnFrameByLayer.values && !eldest.isRecycled) eldest.recycle()
         }
+    }
+
+    /** Keeps an evicted animated frame alive until this layer draws its successor. */
+    private fun rememberLastDrawnFrame(key: String, bitmap: Bitmap) {
+        val previous = lastDrawnFrameByLayer.put(key, bitmap)
+        if (previous != null && previous !== bitmap) recycleDetachedLastFrame(previous)
+    }
+
+    private fun recycleDetachedLastFrame(bitmap: Bitmap) {
+        val stillCached = synchronized(cacheLock) {
+            bitmap in bitmapCache.values || bitmap in animatedBitmapCache.values
+        }
+        if (!stillCached && bitmap !in lastDrawnFrameByLayer.values && !bitmap.isRecycled) {
+            bitmap.recycle()
+        }
+    }
+
+    private fun clearLastDrawnFrames() {
+        val frames = lastDrawnFrameByLayer.values.distinct()
+        lastDrawnFrameByLayer.clear()
+        frames.forEach(::recycleDetachedLastFrame)
     }
 
     /** Caller must hold [cacheLock]. */
@@ -2461,7 +2516,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // 兜底图持有的就是 bitmapCache 里那批实例，下面要把它们 recycle 掉：
         // 先松手，否则 map 里留着一堆已回收引用（画的时候有 isRecycled 守卫，
         // 但没必要留悬垂引用占着）。
-        lastDrawnFrameByLayer.clear()
+        clearLastDrawnFrames()
         lastDrawnMovieByLayer.clear()
         synchronized(cacheLock) {
             bitmapCache.values.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
@@ -2481,9 +2536,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     }
 
     private fun scheduleTicks() {
-        if (!faceVisible || !isAttachedToWindow || tickPosted) return
+        if ((!faceVisible && !textExitAnimationActive) || !isAttachedToWindow || tickPosted) return
         tickPosted = true
-        val needsFastTicks = if (editorAnimationPlaybackLimited) {
+        val needsFastTicks = if (textExitAnimationActive) {
+            true
+        } else if (editorAnimationPlaybackLimited) {
             editorAnimatedImageLayerIndex != null
         } else {
             source?.needsFastTicks == true
@@ -2494,7 +2551,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     private val tickRunnable = Runnable {
         tickPosted = false
-        if (faceVisible) {
+        if (faceVisible || textExitAnimationActive) {
             invalidate()
             scheduleTicks()
         }
@@ -2871,6 +2928,8 @@ fun WatchmakerWatchFaceHost(
     onTapAction: ((WatchTapAction) -> Unit)? = null,
     forceFill: Boolean = false,
     textEntryAnimationEnabled: Boolean = true,
+    textExitAnimationEnabled: Boolean = true,
+    textExitAnimationActive: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val ownedDataProvider = rememberWatchmakerWatchDataProvider(
@@ -2893,7 +2952,9 @@ fun WatchmakerWatchFaceHost(
                 onLoadFailure = onLoadFailure,
                 onTapAction = onTapAction,
                 textEntryAnimationEnabled = textEntryAnimationEnabled,
+                textExitAnimationEnabled = textExitAnimationEnabled,
             )
+            view.setTextExitAnimationActive(textExitAnimationActive)
         },
         onRelease = WatchmakerWatchFaceView::dispose,
     )

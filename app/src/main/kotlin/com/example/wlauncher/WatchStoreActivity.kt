@@ -395,6 +395,20 @@ private fun WatchStoreScreen(
     // listLoading 的写入不在同一帧，观察布尔量会在启动缝隙里提前收指示器。
     var listLoadCompletedToken by remember { mutableIntStateOf(-1) }
     var pullRefreshRequestedToken by remember { mutableStateOf<Int?>(null) }
+
+    // Returning from the editor can detach a market install from the durable
+    // catalog. Drop only stale terminal Installed snapshots; active downloads
+    // remain untouched. Otherwise an old transient state masks the refreshed
+    // catalog and keeps showing "Installed" until the Activity is recreated.
+    LaunchedEffect(installedMarketRecords) {
+        downloadStates.toMap().forEach { (remoteId, state) ->
+            if (state.value is WatchStoreInstallState.Installed) {
+                val current = installedMarketRecords[remoteId]
+                if (current == null) downloadStates.remove(remoteId)
+                else state.value = WatchStoreInstallState.Installed(current)
+            }
+        }
+    }
     var pullRefreshHolding by remember { mutableStateOf(false) }
     val pullRefreshing = pullRefreshHolding ||
         pullRefreshRequestedToken?.let { it > listLoadCompletedToken } == true

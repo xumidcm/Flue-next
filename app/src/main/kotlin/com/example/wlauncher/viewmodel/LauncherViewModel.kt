@@ -178,6 +178,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_POWER_MENU_BUTTON = booleanPreferencesKey("power_menu_button_enabled")
         val KEY_WATCHFACE_CHARGING_POWER_TEXT = booleanPreferencesKey("watchface_charging_power_text")
         val KEY_WATCHFACE_TEXT_ENTRY_ANIMATION = booleanPreferencesKey("watchface_text_entry_animation")
+        val KEY_WATCHFACE_TEXT_EXIT_ANIMATION = booleanPreferencesKey("watchface_text_exit_animation")
         val KEY_WATCHFACE_STATUS_INDICATORS = booleanPreferencesKey("watchface_status_indicators")
         val KEY_WATCHFACE_BOTTOM_FADE = booleanPreferencesKey("watchface_bottom_fade_enabled")
         val KEY_WATCHMAKER_FORCE_FILL = booleanPreferencesKey("watchmaker_force_fill")
@@ -423,8 +424,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val iconShadowEnabled: StateFlow<Boolean> = _iconShadowEnabled.asStateFlow()
     private val _appListReturnShrinkEnabled = MutableStateFlow(true)
     val appListReturnShrinkEnabled: StateFlow<Boolean> = _appListReturnShrinkEnabled.asStateFlow()
-    // 老师指定：表盘缩放默认关。
-    private val _faceReturnShrinkEnabled = MutableStateFlow(false)
+    // 表盘收缩效果默认开启；用户仍可在显示设置中独立关闭。
+    private val _faceReturnShrinkEnabled = MutableStateFlow(true)
     val faceReturnShrinkEnabled: StateFlow<Boolean> = _faceReturnShrinkEnabled.asStateFlow()
     // 还原 watchOS 三段式之前的老转场（表盘 2.5 倍冲脸 / 列表缩点退场）。
     private val _legacyAppListTransitionEnabled = MutableStateFlow(false)
@@ -474,6 +475,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val watchFaceChargingPowerText: StateFlow<Boolean> = _watchFaceChargingPowerText.asStateFlow()
     private val _watchFaceTextEntryAnimation = MutableStateFlow(true)
     val watchFaceTextEntryAnimation: StateFlow<Boolean> = _watchFaceTextEntryAnimation.asStateFlow()
+    private val _watchFaceTextExitAnimation = MutableStateFlow(true)
+    val watchFaceTextExitAnimation: StateFlow<Boolean> = _watchFaceTextExitAnimation.asStateFlow()
     private val _watchFaceStatusIndicators = MutableStateFlow(true)
     val watchFaceStatusIndicators: StateFlow<Boolean> = _watchFaceStatusIndicators.asStateFlow()
     // 表盘底部渐隐遮罩默认关闭；用户可在“更多表盘选项”里手动开启。
@@ -967,7 +970,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListReturnIconFloatEnabled.value = loadedAppListReturnIconFloat
                 }
 
-                val loadedFaceReturnShrink = prefs[KEY_FACE_RETURN_SHRINK] ?: false
+                val loadedFaceReturnShrink = prefs[KEY_FACE_RETURN_SHRINK] ?: true
                 if (_faceReturnShrinkEnabled.value != loadedFaceReturnShrink) {
                     _faceReturnShrinkEnabled.value = loadedFaceReturnShrink
                 }
@@ -1021,6 +1024,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedWatchFaceTextEntryAnimation = prefs[KEY_WATCHFACE_TEXT_ENTRY_ANIMATION] ?: true
                 if (_watchFaceTextEntryAnimation.value != loadedWatchFaceTextEntryAnimation) {
                     _watchFaceTextEntryAnimation.value = loadedWatchFaceTextEntryAnimation
+                }
+                val loadedWatchFaceTextExitAnimation = prefs[KEY_WATCHFACE_TEXT_EXIT_ANIMATION] ?: true
+                if (_watchFaceTextExitAnimation.value != loadedWatchFaceTextExitAnimation) {
+                    _watchFaceTextExitAnimation.value = loadedWatchFaceTextExitAnimation
                 }
 
                 val loadedWatchFaceStatusIndicators = prefs[KEY_WATCHFACE_STATUS_INDICATORS] ?: true
@@ -2299,6 +2306,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_WATCHFACE_TEXT_ENTRY_ANIMATION] = enabled } }
     }
 
+    fun setWatchFaceTextExitAnimationEnabled(enabled: Boolean) {
+        _watchFaceTextExitAnimation.value = enabled
+        persist { store.edit { it[KEY_WATCHFACE_TEXT_EXIT_ANIMATION] = enabled } }
+    }
+
     fun setWatchFaceStatusIndicatorsEnabled(enabled: Boolean) {
         _watchFaceStatusIndicators.value = enabled
         persist { store.edit { it[KEY_WATCHFACE_STATUS_INDICATORS] = enabled } }
@@ -3147,7 +3159,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _twoToneIconsEnabled.value = false
         _iconShadowEnabled.value = true
         _appListReturnShrinkEnabled.value = true
-        _faceReturnShrinkEnabled.value = false
+        _faceReturnShrinkEnabled.value = true
         _legacyAppListTransitionEnabled.value = false
         _appListReturnIconFloatEnabled.value = false
         _reduceDynamicEffects.value = false
@@ -3168,6 +3180,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _powerMenuButtonEnabled.value = false
         _watchFaceChargingPowerText.value = true
         _watchFaceTextEntryAnimation.value = true
+        _watchFaceTextExitAnimation.value = true
         _watchFaceStatusIndicators.value = true
         _watchFaceBottomFadeEnabled.value = false
         _watchmakerForceFill.value = false
@@ -3283,6 +3296,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_POWER_MENU_BUTTON] = false
                 it[KEY_WATCHFACE_CHARGING_POWER_TEXT] = true
                 it[KEY_WATCHFACE_TEXT_ENTRY_ANIMATION] = true
+                it[KEY_WATCHFACE_TEXT_EXIT_ANIMATION] = true
                 it[KEY_WATCHFACE_STATUS_INDICATORS] = true
                 it[KEY_WATCHFACE_BOTTOM_FADE] = false
                 it[KEY_WATCHMAKER_FORCE_FILL] = false

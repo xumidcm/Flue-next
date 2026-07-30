@@ -424,6 +424,8 @@
     <string name="settings_watchface_font_clear_sub">清除已保存的表盘字体</string>
     <string name="settings_watchface_text_entry_animation">表盘文字飞入动画</string>
     <string name="settings_watchface_text_entry_animation_sub">每次进入表盘时重播文字进入动画；关闭后文字直接显示</string>
+    <string name="settings_watchface_text_exit_animation">表盘文字退出动画</string>
+    <string name="settings_watchface_text_exit_animation_sub">滑入控制中心、负一屏、小组件或通知页时播放文字退出动画</string>
 
     <!-- About 与 Donate -->
     <string name="settings_about_title">关于</string>
@@ -764,6 +766,7 @@
     <string name="watch_editor_crop_free">自由</string>
     <string name="watch_editor_crop_square">1:1</string>
     <string name="watch_editor_crop_screen">屏幕</string>
+    <string name="watch_editor_crop_canvas">表盘画布大小</string>
     <string name="watch_editor_import_cropped">裁剪导入</string>
     <string name="watch_editor_import_original">导入原图</string>
     <string name="watch_editor_import_video">导入视频</string>
@@ -804,6 +807,7 @@
     <string name="watch_editor_import_image_sequence">导入多张图片作为循环背景</string>
     <string name="watch_editor_import_video_frames">导入视频并转换为循环帧</string>
     <string name="watch_editor_text_entry_animation">文字进入动画</string>
+    <string name="watch_editor_text_exit_animation">文字退出动画</string>
     <string name="watch_editor_select_app_title">选择要启动的应用</string>
     <string name="watch_editor_search_app_hint">搜索应用名或包名</string>
     <string name="watch_editor_tap_action">点击动作</string>
@@ -869,6 +873,7 @@
     <string name="watch_editor_font">字体</string>
     <string name="watch_editor_default">默认</string>
     <string name="watch_editor_import_font_formats">导入字体（TTF/OTF）</string>
+    <string name="watch_editor_import_bitmap_font">导入位图字体（FNT + 图片）</string>
     <string name="watch_editor_layer_text">文字</string>
     <string name="watch_editor_layer_shape">形状</string>
     <string name="watch_editor_layer_image">图片</string>
@@ -1179,5 +1184,8 @@
     <string name="internal_file_browser_pick_images">选择多张图片</string>
     <string name="internal_file_browser_pick_video">选择视频</string>
     <string name="internal_file_browser_pick_font">选择字体</string>
+    <string name="internal_file_browser_pick_bitmap_font">选择位图字体与配套图片</string>
+    <string name="internal_file_browser_pick_export_folder">选择导出目录</string>
+    <string name="internal_file_browser_select_current_folder">导出到当前目录</string>
     <string name="internal_file_browser_pick_conversion">选择要转换的表盘</string>
 </resources>

@@ -48,6 +48,15 @@ class NativeAppListView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0,
 ) : RecyclerView(context, attrs, defStyleAttr) {
+    init {
+        // Wear OS sends crown/rotary generic-motion events to the focused View.
+        // AndroidView can keep Compose focus after a page transition, so make the
+        // native list an explicit focus owner whenever it is active.
+        isFocusable = true
+        isFocusableInTouchMode = true
+        descendantFocusability = FOCUS_BLOCK_DESCENDANTS
+    }
+
     private val contentVersionGate = NativeAppListContentVersionGate()
     private var currentConfig =
         NativeAppListResolvedConfig.from(NativeAppListConfig())
@@ -867,6 +876,11 @@ class NativeAppListView @JvmOverloads constructor(
             (layoutManager as? NativeSpatialAppListLayoutManager)?.markGeometryDirty()
         }
         currentConfig = next
+        if (next.value.active && (!previous.active || !hasFocus())) {
+            post {
+                if (!released && currentConfig.value.active) requestFocus()
+            }
+        }
         next.value.runtimeBlurSuppressed = motionBlurSuppressed
         if (motionProfileChanged) {
             springEdgeEffects.updateMotionProfile(next.value.motionProfile)

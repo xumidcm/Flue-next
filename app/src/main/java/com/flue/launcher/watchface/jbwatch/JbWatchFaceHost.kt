@@ -50,6 +50,7 @@ import com.flue.launcher.watchface.standard.resolveWatchCounterTag
 import com.flue.launcher.watchface.standard.watchGifFrameIndex
 import com.flue.launcher.watchface.standard.watchLayerRequiresFrameTicks
 import com.flue.launcher.watchface.standard.watchTextAnimationFrame
+import com.flue.launcher.watchface.standard.watchTextExitAnimationFrame
 import com.flue.launcher.watchface.standard.watchWeatherNightSpriteIndex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -357,6 +358,8 @@ fun JbWatchFaceHost(
     onDoubleTap: (() -> Unit)? = null,
     dataProvider: WatchDataProvider? = null,
     textEntryAnimationEnabled: Boolean = true,
+    textExitAnimationEnabled: Boolean = true,
+    textExitAnimationActive: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -380,9 +383,17 @@ fun JbWatchFaceHost(
     var textAnimationStartedAtUptimeMs by remember(descriptor.stableKey, refreshToken) {
         mutableStateOf(SystemClock.uptimeMillis())
     }
+    var textExitAnimationStartedAtUptimeMs by remember(descriptor.stableKey, refreshToken) {
+        mutableStateOf(0L)
+    }
     LaunchedEffect(isFaceVisible, face, textEntryAnimationEnabled) {
         if (isFaceVisible && textEntryAnimationEnabled) {
             textAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
+        }
+    }
+    LaunchedEffect(textExitAnimationActive, textExitAnimationEnabled) {
+        if (textExitAnimationActive && textExitAnimationEnabled) {
+            textExitAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
         }
     }
     val renderFace = remember(face, textAnimationStartedAtUptimeMs) {
@@ -398,8 +409,14 @@ fun JbWatchFaceHost(
     val latestFace by rememberUpdatedState(face)
     val latestNowMillis by rememberUpdatedState(nowMillis)
     val latestDataSnapshot by rememberUpdatedState(dataSnapshot)
-    LaunchedEffect(isFaceVisible, face?.needsHighRefresh, descriptor.stableKey, refreshToken) {
-        while (isFaceVisible) {
+    LaunchedEffect(
+        isFaceVisible,
+        face?.needsHighRefresh,
+        textExitAnimationActive,
+        descriptor.stableKey,
+        refreshToken,
+    ) {
+        while (isFaceVisible || (textExitAnimationActive && textExitAnimationEnabled)) {
             nowMillis = System.currentTimeMillis()
             delay(if (face?.needsHighRefresh == true) 33L else 1_000L)
         }
@@ -447,6 +464,8 @@ fun JbWatchFaceHost(
                             height = size.height.toInt(),
                             is24Hour = is24Hour,
                             textEntryAnimationEnabled = textEntryAnimationEnabled,
+                            textExitAnimationActive = textExitAnimationActive && textExitAnimationEnabled,
+                            textExitAnimationStartedAtUptimeMs = textExitAnimationStartedAtUptimeMs,
                         )
                     }
                 }
@@ -467,6 +486,8 @@ private fun drawJbFace(
     height: Int,
     is24Hour: Boolean,
     textEntryAnimationEnabled: Boolean,
+    textExitAnimationActive: Boolean,
+    textExitAnimationStartedAtUptimeMs: Long,
 ) {
     val canvasWidth = face.designWidth.coerceAtLeast(1)
     val canvasHeight = face.designHeight.coerceAtLeast(1)
@@ -488,6 +509,8 @@ private fun drawJbFace(
             dataSnapshot,
             is24Hour,
             textEntryAnimationEnabled,
+            textExitAnimationActive,
+            textExitAnimationStartedAtUptimeMs,
         )
     }
     canvas.restore()
@@ -502,6 +525,8 @@ private fun drawJbLayer(
     dataSnapshot: WatchDataSnapshot,
     is24Hour: Boolean,
     textEntryAnimationEnabled: Boolean,
+    textExitAnimationActive: Boolean,
+    textExitAnimationStartedAtUptimeMs: Long,
 ) {
     val animationElapsedMs = (SystemClock.uptimeMillis() - face.animationStartedAtUptimeMs)
         .coerceAtLeast(0L)
@@ -511,7 +536,13 @@ private fun drawJbLayer(
         dataSnapshot = dataSnapshot,
         animationElapsedMs = animationElapsedMs,
     )
-    val textAnimation = if (textEntryAnimationEnabled && animatedLayer.type.startsWith("text") &&
+    val textAnimation = if (textExitAnimationActive && animatedLayer.type.startsWith("text")) {
+        watchTextExitAnimationFrame(
+            animOut = animatedLayer.animOut,
+            durationOutSeconds = animatedLayer.durationOutSeconds,
+            elapsedMs = SystemClock.uptimeMillis() - textExitAnimationStartedAtUptimeMs,
+        )
+    } else if (textEntryAnimationEnabled && animatedLayer.type.startsWith("text") &&
         (!animatedLayer.animIn.isNullOrBlank() || !animatedLayer.animOut.isNullOrBlank())
     ) {
         jbTextAnimationFrame(animatedLayer, animationElapsedMs)

@@ -30,6 +30,8 @@ data class WatchEditorVideoInfo(
     val height: Int,
     /** Source stream bitrate in kbps when exposed by the platform metadata retriever. */
     val bitrateKbps: Int? = null,
+    /** Source frame rate when exposed by the platform metadata retriever. */
+    val frameRate: Float? = null,
 )
 
 /** Normalised crop in the display-oriented video coordinate space. */
@@ -131,14 +133,10 @@ internal fun resolveVideoTransform(
 }
 
 internal fun resolveVideoBitrateKbps(
-    info: WatchEditorVideoInfo,
-    preset: WatchEditorVideoResolutionPreset,
+    @Suppress("UNUSED_PARAMETER") info: WatchEditorVideoInfo,
+    @Suppress("UNUSED_PARAMETER") preset: WatchEditorVideoResolutionPreset,
     requestedBitrateKbps: Int,
-): Int = if (preset == WatchEditorVideoResolutionPreset.ORIGINAL) {
-    info.bitrateKbps ?: requestedBitrateKbps
-} else {
-    requestedBitrateKbps
-}
+): Int = requestedBitrateKbps
 
 data class WatchEditorVideoImportProgress(
     val processedMs: Long,
@@ -191,12 +189,18 @@ object WatchEditorVideoImporter {
                 ?.div(1_000L)
                 ?.coerceIn(64L, 100_000L)
                 ?.toInt()
+            val frameRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)
+                    ?.toFloatOrNull()
+                    ?.takeIf { it.isFinite() && it in 0.5f..240f }
+            } else null
             val rotated = rotation == 90 || rotation == 270
             WatchEditorVideoInfo(
                 durationMs = durationMs,
                 width = if (rotated) rawHeight else rawWidth,
                 height = if (rotated) rawWidth else rawHeight,
                 bitrateKbps = bitrateKbps,
+                frameRate = frameRate,
             )
         } catch (error: Throwable) {
             Log.e(

@@ -419,6 +419,8 @@
     <string name="settings_watchface_font_clear_sub">Clear the saved watch face font</string>
     <string name="settings_watchface_text_entry_animation">Watch face text fly-in</string>
     <string name="settings_watchface_text_entry_animation_sub">Replay text entry animations whenever the watch face is entered; text appears immediately when disabled</string>
+    <string name="settings_watchface_text_exit_animation">Watch face text exit animation</string>
+    <string name="settings_watchface_text_exit_animation_sub">Play text exit animations when opening Control Center, the side page, widgets, or notifications</string>
 
     <!-- About and Donate -->
     <string name="settings_about_title">About</string>
@@ -756,6 +758,7 @@
     <string name="watch_editor_crop_free">Free</string>
     <string name="watch_editor_crop_square">1:1</string>
     <string name="watch_editor_crop_screen">Screen</string>
+    <string name="watch_editor_crop_canvas">Watch canvas</string>
     <string name="watch_editor_import_cropped">Import crop</string>
     <string name="watch_editor_import_original">Import original</string>
     <string name="watch_editor_import_video">Import video</string>
@@ -787,6 +790,7 @@
     <string name="watch_editor_import_image_sequence">Import images as a looping background</string>
     <string name="watch_editor_import_video_frames">Import video as looping frames</string>
     <string name="watch_editor_text_entry_animation">Text entrance animation</string>
+    <string name="watch_editor_text_exit_animation">Text exit animation</string>
     <string name="watch_editor_select_app_title">Choose an app to launch</string>
     <string name="watch_editor_search_app_hint">Search app name or package</string>
     <string name="watch_editor_tap_action">Tap action</string>
@@ -850,6 +854,7 @@
     <string name="watch_editor_font">Font</string>
     <string name="watch_editor_default">Default</string>
     <string name="watch_editor_import_font_formats">Import font (TTF/OTF)</string>
+    <string name="watch_editor_import_bitmap_font">Import bitmap font (FNT + images)</string>
     <string name="watch_editor_layer_text">Text</string>
     <string name="watch_editor_layer_shape">Shape</string>
     <string name="watch_editor_layer_image">Image</string>
@@ -1160,5 +1165,8 @@
     <string name="internal_file_browser_pick_images">Choose images</string>
     <string name="internal_file_browser_pick_video">Choose a video</string>
     <string name="internal_file_browser_pick_font">Choose a font</string>
+    <string name="internal_file_browser_pick_bitmap_font">Choose bitmap font and page images</string>
+    <string name="internal_file_browser_pick_export_folder">Choose export folder</string>
+    <string name="internal_file_browser_select_current_folder">Export to this folder</string>
     <string name="internal_file_browser_pick_conversion">Choose a watch face to convert</string>
 </resources>

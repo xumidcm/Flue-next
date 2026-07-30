@@ -69,6 +69,7 @@ import com.flue.launcher.watchface.editor.WatchEditorVideoCrop
 import com.flue.launcher.watchface.editor.WatchEditorVideoImportOptions
 import com.flue.launcher.watchface.editor.WatchEditorVideoInfo
 import com.flue.launcher.watchface.editor.WatchEditorVideoResolutionPreset
+import com.flue.launcher.watchface.editor.WatchCanvasSize
 import com.flue.launcher.watchface.editor.constrainWatchEditorCropRect
 import com.flue.launcher.watchface.editor.mapWatchEditorCropToSource
 import com.flue.launcher.watchface.editor.moveWatchEditorCropRect
@@ -94,6 +95,7 @@ private enum class EditorVideoImportStage { CROP_AND_TRIM, ENCODING }
 internal fun EditorVideoImportFlow(
     uri: Uri,
     info: WatchEditorVideoInfo,
+    canvasSize: WatchCanvasSize,
     onDismiss: () -> Unit,
     onConfirm: (WatchEditorVideoImportOptions) -> Unit,
 ) {
@@ -110,7 +112,7 @@ internal fun EditorVideoImportFlow(
     var playing by remember(uri) { mutableStateOf(false) }
     var preset by remember(uri) { mutableStateOf(WatchEditorVideoResolutionPreset.P480) }
     var frameRate by remember(uri) { mutableStateOf("10") }
-    var bitrate by remember(uri) { mutableStateOf("1800") }
+    var bitrate by remember(uri) { mutableStateOf("3000") }
     var previewView by remember(uri) { mutableStateOf<EditorVideoPreviewView?>(null) }
     val currentPreviewView = rememberUpdatedState(previewView)
 
@@ -128,6 +130,8 @@ internal fun EditorVideoImportFlow(
         aspect,
         displayMetrics.widthPixels,
         displayMetrics.heightPixels,
+        canvasSize.width,
+        canvasSize.height,
     )
     val minCropSizePx = with(density) { 32.dp.toPx() }
     LaunchedEffect(fit, aspect) {
@@ -242,12 +246,17 @@ internal fun EditorVideoImportFlow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                listOf(WatchEditorCropAspect.FREE, WatchEditorCropAspect.SCREEN).forEach { candidate ->
+                listOf(
+                    WatchEditorCropAspect.FREE,
+                    WatchEditorCropAspect.SCREEN,
+                    WatchEditorCropAspect.CANVAS,
+                ).forEach { candidate ->
                     val label = stringResource(
-                        if (candidate == WatchEditorCropAspect.FREE) {
-                            R.string.watch_editor_crop_free
-                        } else {
-                            R.string.watch_editor_crop_screen
+                        when (candidate) {
+                            WatchEditorCropAspect.FREE -> R.string.watch_editor_crop_free
+                            WatchEditorCropAspect.SCREEN -> R.string.watch_editor_crop_screen
+                            WatchEditorCropAspect.CANVAS -> R.string.watch_editor_crop_canvas
+                            WatchEditorCropAspect.SQUARE -> R.string.watch_editor_crop_square
                         },
                     )
                     if (aspect == candidate) {
@@ -337,7 +346,15 @@ internal fun EditorVideoImportFlow(
                     if (preset == candidate) {
                         Button(onClick = {}) { Text(label) }
                     } else {
-                        OutlinedButton(onClick = { preset = candidate }) { Text(label) }
+                        OutlinedButton(onClick = {
+                            if (candidate == WatchEditorVideoResolutionPreset.ORIGINAL) {
+                                info.frameRate?.let { frameRate = formatEditorVideoFrameRate(it) }
+                                bitrate = (info.bitrateKbps ?: 3000).toString()
+                            } else if (preset == WatchEditorVideoResolutionPreset.ORIGINAL) {
+                                bitrate = "3000"
+                            }
+                            preset = candidate
+                        }) { Text(label) }
                     }
                 }
             }
@@ -351,16 +368,11 @@ internal fun EditorVideoImportFlow(
                     modifier = Modifier.weight(1f),
                 )
                 OutlinedTextField(
-                    value = if (preset == WatchEditorVideoResolutionPreset.ORIGINAL) {
-                        info.bitrateKbps?.toString() ?: bitrate
-                    } else {
-                        bitrate
-                    },
+                    value = bitrate,
                     onValueChange = { bitrate = it.filter(Char::isDigit) },
                     label = { Text(stringResource(R.string.watch_editor_video_bitrate)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
-                    enabled = preset != WatchEditorVideoResolutionPreset.ORIGINAL,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -499,6 +511,9 @@ private fun formatEditorVideoTime(milliseconds: Long): String {
 
 private fun formatEditorVideoSeconds(milliseconds: Long): String =
     String.format(Locale.US, "%.3f", milliseconds / 1_000.0).trimEnd('0').trimEnd('.')
+
+private fun formatEditorVideoFrameRate(value: Float): String =
+    String.format(Locale.US, "%.3f", value).trimEnd('0').trimEnd('.')
 
 private class EditorVideoPreviewView(context: Context) : TextureView(context), TextureView.SurfaceTextureListener {
     private val mainHandler = Handler(Looper.getMainLooper())

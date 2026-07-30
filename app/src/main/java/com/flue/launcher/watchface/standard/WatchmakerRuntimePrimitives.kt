@@ -272,6 +272,26 @@ fun watchTextAnimationFrame(
     return WatchTextAnimationFrame(WatchTextAnimationPhase.HIDDEN, alpha = 0f)
 }
 
+/** A one-shot exit timeline driven by launcher navigation, independent of dur_on/repeat. */
+fun watchTextExitAnimationFrame(
+    animOut: String?,
+    durationOutSeconds: Float,
+    elapsedMs: Long,
+): WatchTextAnimationFrame {
+    val exitName = animOut.orEmpty().trim()
+    if (exitName.isBlank()) return WatchTextAnimationFrame(WatchTextAnimationPhase.VISIBLE)
+    val durationMs = ((durationOutSeconds.takeIf(Float::isFinite) ?: 0.5f)
+        .coerceIn(0.05f, 60f) * 1_000f).toLong().coerceAtLeast(1L)
+    if (elapsedMs >= durationMs) {
+        return WatchTextAnimationFrame(WatchTextAnimationPhase.HIDDEN, alpha = 0f)
+    }
+    return textAnimationTransform(
+        rawName = exitName,
+        rawProgress = elapsedMs.coerceAtLeast(0L).toFloat() / durationMs,
+        entering = false,
+    )
+}
+
 private fun textAnimationTransform(
     rawName: String,
     rawProgress: Float,

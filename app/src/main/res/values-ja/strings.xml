@@ -419,6 +419,8 @@
     <string name="settings_watchface_font_clear_sub">保存された文字盤フォントを消去</string>
     <string name="settings_watchface_text_entry_animation">文字盤テキストのフライイン</string>
     <string name="settings_watchface_text_entry_animation_sub">文字盤に戻るたびに文字の登場アニメーションを再生します。オフでは文字をすぐ表示します</string>
+    <string name="settings_watchface_text_exit_animation">文字盤テキストの退出アニメーション</string>
+    <string name="settings_watchface_text_exit_animation_sub">コントロールセンター、サイドページ、ウィジェット、通知を開くときに文字の退出アニメーションを再生します</string>
 
     <!-- このアプリについて・寄付 -->
     <string name="settings_about_title">このアプリについて</string>
@@ -756,6 +758,7 @@
     <string name="watch_editor_crop_free">自由</string>
     <string name="watch_editor_crop_square">1:1</string>
     <string name="watch_editor_crop_screen">画面</string>
+    <string name="watch_editor_crop_canvas">文字盤キャンバス</string>
     <string name="watch_editor_import_cropped">切り抜いて読み込む</string>
     <string name="watch_editor_import_original">元画像を読み込む</string>
     <string name="watch_editor_import_video">動画を読み込む</string>
@@ -787,6 +790,7 @@
     <string name="watch_editor_import_image_sequence">複数画像をループ背景として読み込む</string>
     <string name="watch_editor_import_video_frames">動画をループフレームとして読み込む</string>
     <string name="watch_editor_text_entry_animation">テキストの開始アニメーション</string>
+    <string name="watch_editor_text_exit_animation">テキストの終了アニメーション</string>
     <string name="watch_editor_select_app_title">起動するアプリを選択</string>
     <string name="watch_editor_search_app_hint">アプリ名またはパッケージを検索</string>
     <string name="watch_editor_tap_action">タップ動作</string>
@@ -850,6 +854,7 @@
     <string name="watch_editor_font">フォント</string>
     <string name="watch_editor_default">既定</string>
     <string name="watch_editor_import_font_formats">フォントを読み込む（TTF/OTF）</string>
+    <string name="watch_editor_import_bitmap_font">ビットマップフォントを読み込む（FNT + 画像）</string>
     <string name="watch_editor_layer_text">文字</string>
     <string name="watch_editor_layer_shape">図形</string>
     <string name="watch_editor_layer_image">画像</string>
@@ -1160,5 +1165,8 @@
     <string name="internal_file_browser_pick_images">複数の画像を選択</string>
     <string name="internal_file_browser_pick_video">動画を選択</string>
     <string name="internal_file_browser_pick_font">フォントを選択</string>
+    <string name="internal_file_browser_pick_bitmap_font">ビットマップフォントと画像を選択</string>
+    <string name="internal_file_browser_pick_export_folder">書き出し先を選択</string>
+    <string name="internal_file_browser_select_current_folder">このフォルダーに書き出す</string>
     <string name="internal_file_browser_pick_conversion">変換する文字盤を選択</string>
 </resources>

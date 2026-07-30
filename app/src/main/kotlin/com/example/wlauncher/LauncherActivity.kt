@@ -309,6 +309,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val showControlCenter by vm.showControlCenter.collectAsStateWithLifecycle()
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
     val watchFaceTextEntryAnimation by vm.watchFaceTextEntryAnimation.collectAsStateWithLifecycle()
+    val watchFaceTextExitAnimation by vm.watchFaceTextExitAnimation.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val watchmakerForceFill by vm.watchmakerForceFill.collectAsStateWithLifecycle()
@@ -1497,6 +1498,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 faceLayerFrame.translationY
                             }
                         },
+                        contentBlurRadiusDp = {
+                            if (overlayBackdropActive) {
+                                faceBackdropProvider().blur
+                            } else {
+                                faceLayerFrame.blur
+                            }
+                        },
                     )
                     // API 31+ 由 scaleBlurAlpha / RenderEffect 实时模糊；
                     // API 27-30 的清晰/预制模糊帧混合已由 flueBackdropFill 处理。
@@ -1590,6 +1598,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 dataProvider = watchmakerDataProvider,
                                 forceFill = watchmakerForceFill,
                                 textEntryAnimationEnabled = watchFaceTextEntryAnimation,
+                                textExitAnimationEnabled = watchFaceTextExitAnimation,
+                                textExitAnimationActive = overlayBackdropActive,
                             )
                             if (watchFaceBottomFadeEnabled) {
                                 WatchFaceBottomFadeOverlay(
@@ -1617,6 +1627,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                     vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
                                 },
                                 textEntryAnimationEnabled = watchFaceTextEntryAnimation,
+                                textExitAnimationEnabled = watchFaceTextExitAnimation,
+                                textExitAnimationActive = overlayBackdropActive,
                             )
                             if (watchFaceBottomFadeEnabled) {
                                 WatchFaceBottomFadeOverlay(

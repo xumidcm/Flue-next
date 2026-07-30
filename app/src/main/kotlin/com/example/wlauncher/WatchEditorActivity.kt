@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.util.Log
 import android.widget.Toast
 import androidx.annotation.StringRes
@@ -109,7 +110,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
@@ -316,6 +316,8 @@ private enum class EditorInternalImportKind {
     IMAGE_SEQUENCE,
     VIDEO,
     FONT,
+    BITMAP_FONT,
+    EXPORT_DIRECTORY,
     WATCH,
     CONVERSION,
 }
@@ -576,6 +578,74 @@ private fun WatchEditorRoute(
             busyMessage = null
         }
     }
+
+    fun displayNameForUri(uri: Uri): String = runCatching {
+        context.contentResolver.query(
+            uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null,
+        )?.use { cursor ->
+            val column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else null
+        }
+    }.getOrNull()?.takeIf(String::isNotBlank)
+        ?: uri.lastPathSegment?.substringAfterLast('/').orEmpty().ifBlank { "font.bin" }
+
+    fun handleBitmapFontUris(uris: List<Uri>) {
+        val active = session
+        val key = selectedLayerKey
+        if (uris.isEmpty() || active == null || key == null) return
+        scope.launch {
+            busyMessage = context.getString(R.string.watch_editor_status_importing_font)
+            errorMessage = null
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val files = uris.map { uri ->
+                        val name = displayNameForUri(uri)
+                        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                            ?: error(context.getString(R.string.watch_editor_error_read_font))
+                        name to bytes
+                    }
+                    active.importBitmapFont(files, key)
+                    active.flushDraftForPreview()
+                    active.snapshot()
+                }
+            }.onSuccess { next ->
+                updateSnapshot(next, key)
+                previewToken++
+            }.onFailure { error ->
+                errorMessage = context.localizedEditorError(R.string.watch_editor_error_font_import, error)
+            }
+            busyMessage = null
+        }
+    }
+    val bitmapFontPicker = rememberLauncherForActivityResult(OpenMultipleDocuments(), ::handleBitmapFontUris)
+
+    fun exportToDirectory(directory: File) {
+        val active = session ?: return
+        val current = snapshot ?: return
+        scope.launch {
+            busyMessage = context.getString(R.string.watch_editor_status_exporting)
+            errorMessage = null
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    require(directory.isDirectory && directory.canWrite()) {
+                        context.getString(R.string.watch_editor_error_export_destination)
+                    }
+                    val base = safeWatchFileName(current.rootAttributes["name"])
+                    var output = File(directory, "$base.watch")
+                    var suffix = 2
+                    while (output.exists()) output = File(directory, "${base}_$suffix.watch").also { suffix++ }
+                    active.exportWatch(output)
+                    active.snapshot()
+                }
+            }.onSuccess { next ->
+                updateSnapshot(next)
+                Toast.makeText(context, context.getString(R.string.watch_editor_toast_exported), Toast.LENGTH_SHORT).show()
+            }.onFailure { error ->
+                errorMessage = context.localizedEditorError(R.string.watch_editor_error_export, error)
+            }
+            busyMessage = null
+        }
+    }
     val fontPicker = rememberLauncherForActivityResult(OpenDocument()) { handleFontUri(it) }
 
     fun handleImageUri(uri: Uri?) {
@@ -666,9 +736,6 @@ private fun WatchEditorRoute(
             errorMessage = null
             runCatching {
                 withContext(Dispatchers.IO) {
-                    if (!WatchEditorVideoImporter.isRuntimeSupported()) {
-                    throw IllegalStateException(context.getString(R.string.watch_editor_error_ffmpeg_unsupported))
-                    }
                     WatchEditorVideoImporter.inspect(context, uri)
                 }
             }.onSuccess { info ->
@@ -901,6 +968,8 @@ private fun WatchEditorRoute(
                 EditorInternalImportKind.IMAGE_SEQUENCE -> R.string.internal_file_browser_pick_images
                 EditorInternalImportKind.VIDEO -> R.string.internal_file_browser_pick_video
                 EditorInternalImportKind.FONT -> R.string.internal_file_browser_pick_font
+                EditorInternalImportKind.BITMAP_FONT -> R.string.internal_file_browser_pick_bitmap_font
+                EditorInternalImportKind.EXPORT_DIRECTORY -> R.string.internal_file_browser_pick_export_folder
                 EditorInternalImportKind.WATCH -> R.string.internal_file_browser_pick_watch
                 EditorInternalImportKind.CONVERSION -> R.string.internal_file_browser_pick_conversion
             },
@@ -910,19 +979,25 @@ private fun WatchEditorRoute(
             EditorInternalImportKind.IMAGE_SEQUENCE -> EDITOR_INTERNAL_IMAGE_EXTENSIONS
             EditorInternalImportKind.VIDEO -> EDITOR_INTERNAL_VIDEO_EXTENSIONS
             EditorInternalImportKind.FONT -> EDITOR_FONT_EXTENSIONS
+            EditorInternalImportKind.BITMAP_FONT -> EDITOR_BITMAP_FONT_EXTENSIONS
+            EditorInternalImportKind.EXPORT_DIRECTORY -> emptySet()
             EditorInternalImportKind.WATCH -> setOf("watch")
             EditorInternalImportKind.CONVERSION -> setOf("wff", "zip")
         }
         internalFileBrowserRequest = InternalFileBrowserRequest(
             title = title,
             extensions = extensions,
-            allowMultiple = kind == EditorInternalImportKind.IMAGE_SEQUENCE,
+            allowMultiple = kind == EditorInternalImportKind.IMAGE_SEQUENCE ||
+                kind == EditorInternalImportKind.BITMAP_FONT,
+            selectDirectory = kind == EditorInternalImportKind.EXPORT_DIRECTORY,
             onSelected = { uris ->
                 when (kind) {
                     EditorInternalImportKind.IMAGE -> handleImageUri(uris.firstOrNull())
                     EditorInternalImportKind.IMAGE_SEQUENCE -> handleImageSequenceUris(uris)
                     EditorInternalImportKind.VIDEO -> handleVideoUri(uris.firstOrNull())
                     EditorInternalImportKind.FONT -> handleFontUri(uris.firstOrNull())
+                    EditorInternalImportKind.BITMAP_FONT -> handleBitmapFontUris(uris)
+                    EditorInternalImportKind.EXPORT_DIRECTORY -> uris.firstOrNull()?.path?.let { exportToDirectory(File(it)) }
                     EditorInternalImportKind.WATCH -> handleWatchArchiveUri(uris.firstOrNull())
                     EditorInternalImportKind.CONVERSION -> handleConversionUri(uris.firstOrNull())
                 }
@@ -1416,6 +1491,8 @@ private fun WatchEditorRoute(
                         onImportFontLong = {
                             openInternalFileBrowser(EditorInternalImportKind.FONT)
                         },
+                        onImportBitmapFont = { bitmapFontPicker.launch(arrayOf("*/*")) },
+                        onImportBitmapFontLong = { openInternalFileBrowser(EditorInternalImportKind.BITMAP_FONT) },
                         onSaveAsNew = {
                             saveAsMode = true
                             pendingSaveName = current.rootAttributes["name"].orEmpty()
@@ -1505,6 +1582,7 @@ private fun WatchEditorRoute(
                                 ),
                             )
                         },
+                        onExportLong = { openInternalFileBrowser(EditorInternalImportKind.EXPORT_DIRECTORY) },
                         onImportWatchLong = {
                             openInternalFileBrowser(EditorInternalImportKind.WATCH)
                         },
@@ -1536,6 +1614,7 @@ private fun WatchEditorRoute(
                     cropRequest?.let { request ->
                         EditorImageCropOverlay(
                             uri = request.uri,
+                            canvasSize = WatchCanvasSize.fromRootAttributes(current.rootAttributes),
                             onCancel = { cropRequest = null },
                             onConfirm = { sourceRect, preserveOriginal ->
                                 performImageImport(
@@ -1549,6 +1628,7 @@ private fun WatchEditorRoute(
                         EditorVideoImportFlow(
                             uri = request.uri,
                             info = request.info,
+                            canvasSize = WatchCanvasSize.fromRootAttributes(current.rootAttributes),
                             onDismiss = { videoRequest = null },
                             onConfirm = { options -> beginVideoImport(request, options) },
                         )
@@ -1673,10 +1753,13 @@ private fun WatchEditorScreen(
     onImportVideoLong: () -> Unit,
     onImportFont: () -> Unit,
     onImportFontLong: () -> Unit,
+    onImportBitmapFont: () -> Unit,
+    onImportBitmapFontLong: () -> Unit,
     onSaveAsNew: () -> Unit,
     onSave: () -> Unit,
     onRename: () -> Unit,
     onExport: () -> Unit,
+    onExportLong: () -> Unit,
     onUpdateShape: (String) -> Unit,
     onUpdateCanvasSize: (WatchCanvasSize) -> Unit,
     onUploadToStore: () -> Unit,
@@ -1740,10 +1823,11 @@ private fun WatchEditorScreen(
             textThumbnailClockTick++
         }
     }
-    val layerDragScope = rememberCoroutineScope()
     val layerDragDensity = LocalDensity.current
     var draggedLayerKey by remember { mutableStateOf<WatchEditorLayerKey?>(null) }
     var draggedLayerOffsetY by remember { mutableStateOf(0f) }
+    var draggedLayerPointerY by remember { mutableStateOf(0f) }
+    var draggedLayerHeightPx by remember { mutableStateOf(0f) }
     var draggedLayerTargetOrder by remember { mutableStateOf<Int?>(null) }
     val draftSizeBytes by produceState(
         initialValue = 0L,
@@ -1755,6 +1839,39 @@ private fun WatchEditorScreen(
     }
     val treeRows = remember(snapshot.layers, collapsedLayerKeys) {
         buildWatchEditorTreeRows(layers = snapshot.layers, collapsedKeys = collapsedLayerKeys)
+    }
+    LaunchedEffect(draggedLayerKey) {
+        while (draggedLayerKey != null) {
+            val layout = layerListState.layoutInfo
+            val edgePx = with(layerDragDensity) { 52.dp.toPx() }
+            val pointerY = draggedLayerPointerY
+            val distanceIntoEdge = when {
+                pointerY < layout.viewportStartOffset + edgePx ->
+                    pointerY - (layout.viewportStartOffset + edgePx)
+                pointerY > layout.viewportEndOffset - edgePx ->
+                    pointerY - (layout.viewportEndOffset - edgePx)
+                else -> 0f
+            }
+            if (distanceIntoEdge != 0f) {
+                val requested = (distanceIntoEdge / edgePx).coerceIn(-1f, 1f) *
+                    with(layerDragDensity) { 22.dp.toPx() }
+                val consumed = layerListState.scrollBy(requested)
+                draggedLayerOffsetY += consumed
+                layerListState.layoutInfo.visibleItemsInfo
+                    .asSequence()
+                    .mapNotNull { info ->
+                        val row = treeRows.firstOrNull { it.layer.key.value == info.key }
+                            ?: return@mapNotNull null
+                        row.layer.order to kotlin.math.abs(
+                            info.offset + info.size / 2f - pointerY,
+                        )
+                    }
+                    .minByOrNull { it.second }
+                    ?.first
+                    ?.let { draggedLayerTargetOrder = it }
+            }
+            delay(16L)
+        }
     }
     LaunchedEffect(scrollToLayerRequest) {
         val request = scrollToLayerRequest ?: return@LaunchedEffect
@@ -2037,6 +2154,65 @@ private fun WatchEditorScreen(
                     state = layerListState,
                     modifier = Modifier
                         .fillMaxSize()
+                        // 手势挂在稳定的列表容器上：被拖行滚出可见区并销毁时，
+                        // pointer session 仍继续，直到抬手才提交一次层级变更。
+                        .pointerInput(treeRows, busyMessage) {
+                            if (busyMessage != null) return@pointerInput
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = { position ->
+                                    val info = layerListState.layoutInfo.visibleItemsInfo
+                                        .firstOrNull {
+                                            position.y >= it.offset && position.y <= it.offset + it.size
+                                        } ?: return@detectDragGesturesAfterLongPress
+                                    val row = treeRows.firstOrNull { it.layer.key.value == info.key }
+                                        ?: return@detectDragGesturesAfterLongPress
+                                    draggedLayerKey = row.layer.key
+                                    draggedLayerOffsetY = 0f
+                                    draggedLayerPointerY = position.y
+                                    draggedLayerHeightPx = info.size.toFloat()
+                                    draggedLayerTargetOrder = row.layer.order
+                                    onSelectLayer(row.layer.key)
+                                },
+                                onDrag = { change, dragAmount ->
+                                    val activeKey = draggedLayerKey ?: return@detectDragGesturesAfterLongPress
+                                    change.consume()
+                                    draggedLayerPointerY += dragAmount.y
+                                    draggedLayerOffsetY += dragAmount.y
+                                    layerListState.layoutInfo.visibleItemsInfo
+                                        .asSequence()
+                                        .mapNotNull { info ->
+                                            val row = treeRows.firstOrNull {
+                                                it.layer.key.value == info.key
+                                            } ?: return@mapNotNull null
+                                            row.layer.order to kotlin.math.abs(
+                                                info.offset + info.size / 2f - draggedLayerPointerY,
+                                            )
+                                        }
+                                        .minByOrNull { it.second }
+                                        ?.first
+                                        ?.let { draggedLayerTargetOrder = it }
+                                    // Keep the captured key read so a deletion during drag
+                                    // cancels safely instead of committing a stale row.
+                                    if (treeRows.none { it.layer.key == activeKey }) draggedLayerKey = null
+                                },
+                                onDragEnd = {
+                                    val key = draggedLayerKey
+                                    val originalOrder = treeRows.firstOrNull { it.layer.key == key }?.layer?.order
+                                    val target = draggedLayerTargetOrder
+                                    draggedLayerKey = null
+                                    draggedLayerOffsetY = 0f
+                                    draggedLayerTargetOrder = null
+                                    if (key != null && target != null && target != originalOrder) {
+                                        onMoveLayer(key, target)
+                                    }
+                                },
+                                onDragCancel = {
+                                    draggedLayerKey = null
+                                    draggedLayerOffsetY = 0f
+                                    draggedLayerTargetOrder = null
+                                },
+                            )
+                        }
                         .flueElasticNestedScroll(layerListState),
                     contentPadding = listContentPadding,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2070,6 +2246,19 @@ private fun WatchEditorScreen(
                     } else {
                         items(treeRows, key = { it.layer.key.value }) { row ->
                             val layer = row.layer
+                            val draggedIndex = treeRows.indexOfFirst { it.layer.key == draggedLayerKey }
+                            val targetIndex = treeRows.indexOfFirst {
+                                it.layer.order == draggedLayerTargetOrder
+                            }
+                            val rowIndex = treeRows.indexOf(row)
+                            val avoidanceOffsetY = when {
+                                draggedIndex < 0 || targetIndex < 0 || rowIndex == draggedIndex -> 0f
+                                draggedIndex < targetIndex && rowIndex in (draggedIndex + 1)..targetIndex ->
+                                    -(draggedLayerHeightPx + with(layerDragDensity) { 8.dp.toPx() })
+                                draggedIndex > targetIndex && rowIndex in targetIndex until draggedIndex ->
+                                    draggedLayerHeightPx + with(layerDragDensity) { 8.dp.toPx() }
+                                else -> 0f
+                            }
                             val thumbSizePx = with(LocalDensity.current) { 40.dp.roundToPx() }
                             // 缩略图展示「这一层用的素材」而不是渲染截图。
                             //
@@ -2135,6 +2324,7 @@ private fun WatchEditorScreen(
                                 enabled = busyMessage == null,
                                 dragging = draggedLayerKey == layer.key,
                                 dragOffsetY = if (draggedLayerKey == layer.key) draggedLayerOffsetY else 0f,
+                                avoidanceOffsetY = avoidanceOffsetY,
                                 onSelect = {
                                     onSelectLayer(layer.key)
                                     panel = WatchEditorPanel.PROPERTIES
@@ -2146,69 +2336,6 @@ private fun WatchEditorScreen(
                                     } else {
                                         collapsedLayerKeys + key
                                     }
-                                },
-                                onDragStart = {
-                                    draggedLayerKey = layer.key
-                                    draggedLayerOffsetY = 0f
-                                    draggedLayerTargetOrder = layer.order
-                                    onSelectLayer(layer.key)
-                                },
-                                onDrag = { deltaY ->
-                                    if (draggedLayerKey == layer.key) {
-                                        draggedLayerOffsetY += deltaY
-                                        val layout = layerListState.layoutInfo
-                                        val draggedInfo = layout.visibleItemsInfo.firstOrNull {
-                                            it.key == layer.key.value
-                                        }
-                                        if (draggedInfo != null) {
-                                            val draggedCenter = draggedInfo.offset +
-                                                draggedInfo.size / 2f + draggedLayerOffsetY
-                                            layout.visibleItemsInfo
-                                                .asSequence()
-                                                .mapNotNull { info ->
-                                                    val key = info.key as? String ?: return@mapNotNull null
-                                                    val rowLayer = treeRows.firstOrNull {
-                                                        it.layer.key.value == key
-                                                    }?.layer ?: return@mapNotNull null
-                                                    rowLayer.order to kotlin.math.abs(
-                                                        info.offset + info.size / 2f - draggedCenter,
-                                                    )
-                                                }
-                                                .minByOrNull { it.second }
-                                                ?.first
-                                                ?.let { draggedLayerTargetOrder = it }
-
-                                            val edgePx = with(layerDragDensity) { 48.dp.toPx() }
-                                            val stepPx = with(layerDragDensity) { 18.dp.toPx() }
-                                            val scrollDelta = when {
-                                                draggedCenter < layout.viewportStartOffset + edgePx -> -stepPx
-                                                draggedCenter > layout.viewportEndOffset - edgePx -> stepPx
-                                                else -> 0f
-                                            }
-                                            if (scrollDelta != 0f) {
-                                                val activeKey = layer.key
-                                                layerDragScope.launch {
-                                                    val consumed = layerListState.scrollBy(scrollDelta)
-                                                    if (draggedLayerKey == activeKey) {
-                                                        // Compensate the row translation so it remains under the finger.
-                                                        draggedLayerOffsetY += consumed
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
-                                onDragEnd = {
-                                    val target = draggedLayerTargetOrder
-                                    draggedLayerKey = null
-                                    draggedLayerOffsetY = 0f
-                                    draggedLayerTargetOrder = null
-                                    if (target != null && target != layer.order) onMoveLayer(layer.key, target)
-                                },
-                                onDragCancel = {
-                                    draggedLayerKey = null
-                                    draggedLayerOffsetY = 0f
-                                    draggedLayerTargetOrder = null
                                 },
                                 onMove = { onMoveLayer(layer.key, it) },
                                 onDuplicate = { onDuplicateLayer(layer.key) },
@@ -2240,11 +2367,16 @@ private fun WatchEditorScreen(
                                 layer = selectedLayer,
                                 draftResetKey = propertyDraftRevision,
                                 enabled = busyMessage == null,
-                                fontOptions = remember(snapshot.resourcePaths) {
-                                    snapshot.resourcePaths.filter { path ->
-                                        path.substringAfterLast('.', "")
-                                            .lowercase(Locale.ROOT) in EDITOR_FONT_EXTENSIONS
-                                    }
+                                fontOptions = remember(snapshot.resourcePaths, selectedLayer.attributes["font"]) {
+                                    buildList {
+                                        addAll(snapshot.resourcePaths.filter { path ->
+                                            path.substringAfterLast('.', "").lowercase(Locale.ROOT) in EDITOR_FONT_EXTENSIONS
+                                        })
+                                        addAll(snapshot.resourcePaths.filter { it.endsWith(".fnt", true) }.map {
+                                            "bm:${it.substringAfterLast('/').substringBeforeLast('.')}"
+                                        })
+                                        selectedLayer.attributes["font"]?.takeIf { it.startsWith("bm:", true) }?.let(::add)
+                                    }.distinctBy { it.lowercase(Locale.ROOT) }
                                 },
                                 onLiveChange = { changes ->
                                     onLiveAttributeChange(selectedLayer.key, changes)
@@ -2257,19 +2389,10 @@ private fun WatchEditorScreen(
                                 onImportVideoLong = onImportVideoLong,
                                 onImportFont = onImportFont,
                                 onImportFontLong = onImportFontLong,
+                                onImportBitmapFont = onImportBitmapFont,
+                                onImportBitmapFontLong = onImportBitmapFontLong,
                             )
                         }
-                    }
-                    item("current_watch_size") {
-                        Text(
-                            text = stringResource(
-                                R.string.watch_editor_current_watch_size_fmt,
-                                formatEditorFileSize(draftSizeBytes),
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                        )
                     }
                 }
 
@@ -2399,11 +2522,13 @@ private fun WatchEditorScreen(
                                 showIcon = true,
                                 modifier = Modifier.fillMaxWidth(),
                             )
-                            OutlinedButton(
-                                onClick = onExport,
+                            EditorLongPressImportButton(
+                                label = stringResource(R.string.watch_editor_export_watch),
                                 enabled = busyMessage == null,
+                                onClick = onExport,
+                                onLongClick = onExportLong,
                                 modifier = Modifier.fillMaxWidth(),
-                            ) { Text(stringResource(R.string.watch_editor_export_watch)) }
+                            )
                             OutlinedButton(
                                 onClick = onUploadToStore,
                                 enabled = busyMessage == null,
@@ -2415,11 +2540,12 @@ private fun WatchEditorScreen(
                             }
                         }
                     }
-                    item("safety_note") {
+                    item("current_watch_size") {
                         Text(
-                            stringResource(R.string.watch_editor_preserve_unknown),
+                            text = stringResource(R.string.watch_editor_current_watch_size_fmt, formatEditorFileSize(draftSizeBytes)),
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
                         )
                     }
                 }
@@ -2721,7 +2847,9 @@ private fun WatchEditorPreview(
                         onRefreshFailed(refreshToken)
                     },
                     onSourceReady = onRefreshReady,
-                    textEntryAnimationEnabled = false,
+                    // 编辑器预览始终按表盘 XML 播放，和启动器全局开关独立。
+                    textEntryAnimationEnabled = true,
+                    textExitAnimationEnabled = true,
                 )
             },
             onRelease = { view ->
@@ -2904,7 +3032,10 @@ private fun WatchEditorPreview(
                             // 于是元素彻底拖不动（老师报的粘住）。
                             var rawAccumX = 0f
                             var rawAccumY = 0f
+                            var accumulatedRotationDelta = 0f
+                            var rotationActivated = false
                             val snapState = WatchEditorSnapping.GestureState()
+                            val rotationSnapState = WatchEditorSnapping.RotationGestureState()
                             while (true) {
                                 val event = awaitPointerEvent()
                                 if (event.changes.any { it.isConsumed }) break
@@ -2936,12 +3067,18 @@ private fun WatchEditorPreview(
                                     EditorCanvasGestureMode.BODY -> {
                                         val pan = event.calculatePan()
                                         val zoom = event.calculateZoom()
-                                        // 双指拖动只做平移 + 缩放，不再吃 calculateRotation()
-                                        // （老师指定：双指拖一个元素时不应该顺带转它）。
-                                        // 旋转仍可通过 HANDLE 模式的旋转手柄和属性面板改。
+                                        val rotationDelta = event.calculateRotation()
+                                        accumulatedRotationDelta += rotationDelta
+                                        if (
+                                            !rotationActivated &&
+                                            kotlin.math.abs(accumulatedRotationDelta) >=
+                                                WatchEditorSnapping.ROTATION_ACTIVATION_THRESHOLD_DEG
+                                        ) {
+                                            rotationActivated = true
+                                        }
                                         if (
                                             base != null &&
-                                            (pan != Offset.Zero || zoom != 1f)
+                                            (pan != Offset.Zero || zoom != 1f || rotationActivated)
                                         ) {
                                             val designDeltaX = mapping.designLength(pan.x)
                                             val designDeltaY = mapping.designLength(pan.y)
@@ -2980,7 +3117,15 @@ private fun WatchEditorPreview(
                                                 y = snapped.y,
                                                 scaleX = base.scaleX * zoom,
                                                 scaleY = base.scaleY * zoom,
-                                                rotation = base.rotation,
+                                                rotation = if (rotationActivated) {
+                                                    WatchEditorSnapping.snapRightAngleRotation(
+                                                        rotation = gestureStart.rotation +
+                                                            accumulatedRotationDelta,
+                                                        state = rotationSnapState,
+                                                    )
+                                                } else {
+                                                    gestureStart.rotation
+                                                },
                                             ).sanitized()
                                             current = next
                                             latestUpdate.value(key, next)
@@ -3168,6 +3313,7 @@ private fun EditorSelectionOverlay(
 @Composable
 private fun EditorImageCropOverlay(
     uri: Uri,
+    canvasSize: WatchCanvasSize,
     onCancel: () -> Unit,
     onConfirm: (WatchEditorSourceRect, preserveOriginal: Boolean) -> Unit,
 ) {
@@ -3185,6 +3331,8 @@ private fun EditorImageCropOverlay(
         aspect,
         displayMetrics.widthPixels,
         displayMetrics.heightPixels,
+        canvasSize.width,
+        canvasSize.height,
     )
 
     LaunchedEffect(uri) {
@@ -3480,6 +3628,7 @@ private fun watchEditorCropAspectLabel(aspect: WatchEditorCropAspect): Int = whe
     WatchEditorCropAspect.FREE -> R.string.watch_editor_crop_free
     WatchEditorCropAspect.SQUARE -> R.string.watch_editor_crop_square
     WatchEditorCropAspect.SCREEN -> R.string.watch_editor_crop_screen
+    WatchEditorCropAspect.CANVAS -> R.string.watch_editor_crop_canvas
 }
 
 @Composable
@@ -3495,12 +3644,9 @@ private fun EditorLayerRow(
     enabled: Boolean,
     dragging: Boolean,
     dragOffsetY: Float,
+    avoidanceOffsetY: Float,
     onSelect: () -> Unit,
     onToggleExpanded: () -> Unit,
-    onDragStart: () -> Unit,
-    onDrag: (Float) -> Unit,
-    onDragEnd: () -> Unit,
-    onDragCancel: () -> Unit,
     onMove: (Int) -> Unit,
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
@@ -3516,24 +3662,12 @@ private fun EditorLayerRow(
             .fillMaxWidth()
             .zIndex(if (dragging) 2f else 0f)
             .graphicsLayer {
-                translationY = dragOffsetY
+                translationY = dragOffsetY + avoidanceOffsetY
                 shadowElevation = if (dragging) 10.dp.toPx() else 0f
             }
             .heightIn(min = 64.dp)
             .background(container, RoundedCornerShape(8.dp))
             .clickable(enabled = enabled, onClick = onSelect)
-            .pointerInput(layer.key, enabled) {
-                if (!enabled) return@pointerInput
-                detectDragGesturesAfterLongPress(
-                    onDragStart = { onDragStart() },
-                    onDrag = { change, dragAmount ->
-                        change.consume()
-                        onDrag(dragAmount.y)
-                    },
-                    onDragEnd = onDragEnd,
-                    onDragCancel = onDragCancel,
-                )
-            }
             .padding(start = (10 + depth * 18).dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
         verticalArrangement = Arrangement.spacedBy(7.dp),
     ) {
@@ -3725,6 +3859,8 @@ private fun LayerPropertiesEditor(
     fontOptions: List<String> = emptyList(),
     onImportFont: (() -> Unit)? = null,
     onImportFontLong: (() -> Unit)? = null,
+    onImportBitmapFont: (() -> Unit)? = null,
+    onImportBitmapFontLong: (() -> Unit)? = null,
 ) {
     val localizedLayerType = watchEditorLayerTypeLabel(layer.type)
     val editableAttributes = remember(layer.type) { editableAttributesFor(layer.type) }
@@ -3738,7 +3874,7 @@ private fun LayerPropertiesEditor(
             },
         )
     }
-    var lastFocusedAttribute by remember(layer.key) { mutableStateOf<String?>(null) }
+    var expandedAttributePicker by remember(layer.key) { mutableStateOf<String?>(null) }
 
     fun liveValue(name: String, value: String): String? =
         if (value.isEmpty() && name != "text") null else value
@@ -3749,35 +3885,107 @@ private fun LayerPropertiesEditor(
             fontWeight = FontWeight.SemiBold,
         )
         editableAttributes.forEach { attribute ->
-            OutlinedTextField(
-                value = drafts[attribute] ?: TextFieldValue(""),
-                onValueChange = { value ->
-                    // 点按只改选区也会触发 onValueChange：以前这里无差别
-                    // take(512) 并立刻回写，超长的 Watchmaker 表达式点一下
-                    // 就被截断毁掉。不再截断；只有文本真变化才上报。
-                    val previous = drafts[attribute] ?: TextFieldValue("")
-                    drafts = drafts + (attribute to value)
-                    if (value.text != previous.text) {
-                        onLiveChange(mapOf(attribute to liveValue(attribute, value.text)))
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .onFocusChanged { state ->
-                        if (state.isFocused) lastFocusedAttribute = attribute
+            val hasAnimationPicker = attribute == "anim_in" || attribute == "anim_out"
+            val hasExpressionPicker = attribute in WATCH_EXPRESSION_ATTRIBUTES
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                OutlinedTextField(
+                    value = drafts[attribute] ?: TextFieldValue(""),
+                    onValueChange = { value ->
+                        // 点按只改选区也会触发 onValueChange：以前这里无差别
+                        // take(512) 并立刻回写，超长的 Watchmaker 表达式点一下
+                        // 就被截断毁掉。不再截断；只有文本真变化才上报。
+                        val previous = drafts[attribute] ?: TextFieldValue("")
+                        drafts = drafts + (attribute to value)
+                        if (value.text != previous.text) {
+                            onLiveChange(mapOf(attribute to liveValue(attribute, value.text)))
+                        }
                     },
-                enabled = enabled,
-                label = { Text(stringResource(attributeLabelRes(attribute))) },
-                singleLine = attribute != "text",
-                minLines = if (attribute == "text") 2 else 1,
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = if (attribute in NUMERIC_ATTRIBUTES) {
-                        KeyboardType.Decimal
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = enabled,
+                    label = { Text(stringResource(attributeLabelRes(attribute))) },
+                    singleLine = attribute != "text",
+                    minLines = if (attribute == "text") 2 else 1,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = if (attribute in NUMERIC_ATTRIBUTES) {
+                            KeyboardType.Decimal
+                        } else {
+                            KeyboardType.Text
+                        },
+                    ),
+                    trailingIcon = if (hasAnimationPicker || hasExpressionPicker) {
+                        {
+                            IconButton(
+                                onClick = {
+                                    expandedAttributePicker =
+                                        attribute.takeUnless { expandedAttributePicker == attribute }
+                                },
+                                enabled = enabled,
+                            ) {
+                                // 纯下箭头，不使用带中间竖线的导入/下载类图标。
+                                Icon(
+                                    MiuixIcons.ExpandMore,
+                                    contentDescription = stringResource(
+                                        R.string.watch_editor_expand_expression_reference,
+                                    ),
+                                )
+                            }
+                        }
                     } else {
-                        KeyboardType.Text
+                        null
                     },
-                ),
-            )
+                )
+                if (expandedAttributePicker == attribute) {
+                    if (hasAnimationPicker) {
+                        InlineAnimationOptionsPanel(
+                            selectedValue = drafts[attribute]?.text.orEmpty(),
+                            enabled = enabled,
+                            onSelect = { value ->
+                                val next = TextFieldValue(value, TextRange(value.length))
+                                if (attribute == "anim_in") {
+                                    val restart = if (value.isBlank()) "N" else "Y"
+                                    drafts = drafts + mapOf(
+                                        attribute to next,
+                                        "restart_on_load" to TextFieldValue(
+                                            restart,
+                                            TextRange(restart.length),
+                                        ),
+                                    )
+                                    onLiveChange(
+                                        mapOf(
+                                            attribute to value.ifBlank { null },
+                                            "restart_on_load" to restart,
+                                        ),
+                                    )
+                                } else {
+                                    drafts = drafts + (attribute to next)
+                                    onLiveChange(mapOf(attribute to value.ifBlank { null }))
+                                }
+                                expandedAttributePicker = null
+                            },
+                        )
+                    } else {
+                        ExpressionReferencePanel(
+                            enabled = enabled,
+                            onInsert = { tag ->
+                                val currentValue = drafts[attribute] ?: TextFieldValue("")
+                                val (newText, cursor) = insertWatchEditorExpression(
+                                    text = currentValue.text,
+                                    selectionStart = currentValue.selection.start,
+                                    selectionEnd = currentValue.selection.end,
+                                    tag = tag,
+                                )
+                                val next = TextFieldValue(
+                                    text = newText,
+                                    selection = TextRange(cursor.coerceAtMost(newText.length)),
+                                )
+                                drafts = drafts + (attribute to next)
+                                onLiveChange(mapOf(attribute to liveValue(attribute, next.text)))
+                                expandedAttributePicker = null
+                            },
+                        )
+                    }
+                }
+            }
         }
         val supportsAnimatedImageImport = layer.type.equals("image", ignoreCase = true) ||
             layer.type.equals("image_gif", ignoreCase = true) ||
@@ -3804,46 +4012,6 @@ private fun LayerPropertiesEditor(
                 onLongClick = onImportVideoLong,
             )
         }
-        if (layer.type.equals("text", ignoreCase = true) ||
-            layer.type.equals("text_curved", ignoreCase = true)
-        ) {
-            Text(
-                stringResource(R.string.watch_editor_text_entry_animation),
-                style = MaterialTheme.typography.labelMedium,
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                TEXT_ENTRY_ANIMATION_OPTIONS.forEach { (value, labelRes) ->
-                    val selected = drafts["anim_in"]?.text.orEmpty() == value
-                    if (selected) {
-                        Button(onClick = {}, enabled = enabled) { Text(stringResource(labelRes)) }
-                    } else {
-                        OutlinedButton(
-                            onClick = {
-                                val animationValue = TextFieldValue(value, TextRange(value.length))
-                                val restartValue = if (value.isBlank()) "N" else "Y"
-                                drafts = drafts + mapOf(
-                                    "anim_in" to animationValue,
-                                    "restart_on_load" to TextFieldValue(
-                                        restartValue,
-                                        TextRange(restartValue.length),
-                                    ),
-                                )
-                                onLiveChange(
-                                    mapOf(
-                                        "anim_in" to value.ifBlank { null },
-                                        "restart_on_load" to restartValue,
-                                    ),
-                                )
-                            },
-                            enabled = enabled,
-                        ) { Text(stringResource(labelRes)) }
-                    }
-                }
-            }
-        }
         // 颜色取色盘：与颜色文本框同源（写回同一个 draft + live 通道）。
         EditorColorPickerRow(
             currentHex = drafts["color"]?.text.orEmpty(),
@@ -3865,6 +4033,8 @@ private fun LayerPropertiesEditor(
                 },
                 onImportFont = onImportFont,
                 onImportFontLong = onImportFontLong,
+                onImportBitmapFont = onImportBitmapFont,
+                onImportBitmapFontLong = onImportBitmapFontLong,
             )
             EditorOutlineSection(
                 layer = layer,
@@ -4020,88 +4190,29 @@ private fun LayerPropertiesEditor(
                 }
             }
         }
-        ExpressionReferencePanel(
-            enabled = enabled,
-            onInsert = { tag ->
-                val target = lastFocusedAttribute ?: "text"
-                val currentValue = drafts[target] ?: TextFieldValue("")
-                val (newText, cursor) = insertWatchEditorExpression(
-                    text = currentValue.text,
-                    selectionStart = currentValue.selection.start,
-                    selectionEnd = currentValue.selection.end,
-                    tag = tag,
-                )
-                val newValue = TextFieldValue(
-                    text = newText,
-                    selection = TextRange(cursor.coerceAtMost(newText.length)),
-                )
-                drafts = drafts + (target to newValue)
-                onLiveChange(mapOf(target to liveValue(target, newValue.text)))
-            },
-        )
-        if (layer.attributes.keys.any { it !in EDITABLE_ATTRIBUTES && it != "type" }) {
-            Text(
-                stringResource(
-                    R.string.watch_editor_preserved_attributes_fmt,
-                    layer.attributes.keys
-                        .filter { it !in EDITABLE_ATTRIBUTES && it != "type" }
-                        .sorted()
-                        .joinToString(", "),
-                ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
     }
 }
 
 /**
- * Collapsible quick reference of common Watchmaker tags. Tapping an entry
- * inserts the tag at the cursor of the most recently focused property field.
+ * Inline reference of common Watchmaker tags for one concrete property field.
  */
 @Composable
 private fun ExpressionReferencePanel(
     enabled: Boolean,
     onInsert: (String) -> Unit,
 ) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(10.dp),
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { expanded = !expanded }
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    stringResource(R.string.watch_editor_expression_reference),
-                    modifier = Modifier.weight(1f),
-                    fontWeight = FontWeight.SemiBold,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Icon(
-                    if (expanded) MiuixIcons.ExpandMore else MiuixIcons.ChevronForward,
-                    contentDescription = stringResource(
-                        if (expanded) {
-                            R.string.watch_editor_collapse_expression_reference
-                        } else {
-                            R.string.watch_editor_expand_expression_reference
-                        },
-                    ),
-                )
-            }
-            if (expanded) {
-                Text(
-                    stringResource(R.string.watch_editor_expression_reference_hint),
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                BoxWithConstraints(Modifier.fillMaxWidth()) {
+            Text(
+                stringResource(R.string.watch_editor_expression_reference),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
                     val twoColumns = maxWidth >= 300.dp
                     Column(
                         modifier = Modifier
@@ -4151,6 +4262,37 @@ private fun ExpressionReferencePanel(
                                 }
                             }
                         }
+                    }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InlineAnimationOptionsPanel(
+    selectedValue: String,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(10.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            TEXT_ENTRY_ANIMATION_OPTIONS.forEach { (value, labelRes) ->
+                if (selectedValue == value) {
+                    Button(onClick = { onSelect(value) }, enabled = enabled) {
+                        Text(stringResource(labelRes))
+                    }
+                } else {
+                    OutlinedButton(onClick = { onSelect(value) }, enabled = enabled) {
+                        Text(stringResource(labelRes))
                     }
                 }
             }
@@ -5143,6 +5285,8 @@ private fun EditorFontSelector(
     onSelect: (String) -> Unit,
     onImportFont: (() -> Unit)?,
     onImportFontLong: (() -> Unit)?,
+    onImportBitmapFont: (() -> Unit)?,
+    onImportBitmapFontLong: (() -> Unit)?,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(stringResource(R.string.watch_editor_font), fontWeight = FontWeight.SemiBold)
@@ -5162,9 +5306,9 @@ private fun EditorFontSelector(
                 onClick = { onSelect("") },
             )
             options.forEach { path ->
-                val name = path.substringAfterLast('/')
+                val name = if (path.startsWith("bm:", true)) path else path.substringAfterLast('/')
                 EditorFontChip(
-                    label = name.substringBeforeLast('.'),
+                    label = name.removePrefix("bm:").substringBeforeLast('.'),
                     selected = !defaultSelected && currentName.equals(name, ignoreCase = true),
                     enabled = enabled,
                     onClick = { onSelect(name) },
@@ -5177,6 +5321,15 @@ private fun EditorFontSelector(
                 enabled = enabled,
                 onClick = onImportFont,
                 onLongClick = onImportFontLong,
+                showIcon = true,
+            )
+        }
+        if (onImportBitmapFont != null && onImportBitmapFontLong != null) {
+            EditorLongPressImportButton(
+                label = stringResource(R.string.watch_editor_import_bitmap_font),
+                enabled = enabled,
+                onClick = onImportBitmapFont,
+                onLongClick = onImportBitmapFontLong,
                 showIcon = true,
             )
         }
@@ -5303,6 +5456,11 @@ private val TEXT_ANIMATION_ATTRIBUTES = listOf(
     "restart_on_load",
 )
 
+/** Attributes whose runtime value is parsed as WatchMaker text or a dynamic number/path. */
+private val WATCH_EXPRESSION_ATTRIBUTES = (
+    EDITABLE_ATTRIBUTES + TEXT_ANIMATION_ATTRIBUTES
+).toSet() - setOf("anim_in", "anim_out", "restart_on_load")
+
 private val TEXT_ENTRY_ANIMATION_OPTIONS = listOf(
     "" to R.string.watch_editor_none,
     "SlideLeft" to R.string.watch_editor_animation_slide_left,
@@ -5314,7 +5472,6 @@ private val TEXT_ENTRY_ANIMATION_OPTIONS = listOf(
     "ZoomOut" to R.string.watch_editor_animation_zoom_out,
     "Spin" to R.string.watch_editor_animation_spin,
 )
-
 private fun editableAttributesFor(type: String): List<String> = buildList {
     addAll(EDITABLE_ATTRIBUTES)
     when (type.lowercase(Locale.ROOT)) {
@@ -5351,6 +5508,7 @@ private val FONT_CAPABLE_LAYER_TYPES = setOf(
 
 /** 字体资源扩展名（矢量 + 位图字体索引）。 */
 private val EDITOR_FONT_EXTENSIONS = setOf("ttf", "otf", "ttc")
+private val EDITOR_BITMAP_FONT_EXTENSIONS = setOf("fnt", "png", "jpg", "jpeg", "webp")
 private val EDITOR_INTERNAL_IMAGE_EXTENSIONS =
     setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "heic", "heif")
 private val EDITOR_INTERNAL_VIDEO_EXTENSIONS =

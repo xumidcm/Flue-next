@@ -227,6 +227,7 @@ fun ControlCenterLayer(
     val currentOnDismissProgressChange by rememberUpdatedState(onDismissProgressChange)
     val currentOnDismissRelease by rememberUpdatedState(onDismissRelease)
     val launcherStyle = LauncherTheme.style
+    val roundScreen = com.flue.launcher.ui.common.isFlueScreenRound()
     val audioManager = remember(context) { context.getSystemService(AudioManager::class.java) }
     var mediaVolume by remember(context) {
         mutableFloatStateOf(readMusicVolume(audioManager))
@@ -616,7 +617,7 @@ fun ControlCenterLayer(
             // 滚动关闭时恒为 0，头部保持全透明）。
             FrostedHeader(
                 scrollProvider = { verticalScrollState.value.toFloat() },
-                height = 32.dp
+                height = if (roundScreen) 56.dp else 32.dp
             ) {
                 Box(
                     modifier = Modifier
@@ -628,10 +629,14 @@ fun ControlCenterLayer(
                         charging = batteryStatus.charging,
                         width = 32.dp,
                         height = 16.dp,
-                        modifier = Modifier.align(Alignment.CenterStart)
+                        modifier = Modifier.align(
+                            if (roundScreen) Alignment.TopCenter else Alignment.CenterStart
+                        )
                     )
                     Row(
-                        modifier = Modifier.align(Alignment.CenterEnd),
+                        modifier = Modifier.align(
+                            if (roundScreen) Alignment.BottomEnd else Alignment.CenterEnd
+                        ),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
@@ -653,11 +658,22 @@ fun ControlCenterLayer(
                             onGestureLockChange = lockControlCenterGesture,
                             onClick = { openSettings(context, Settings.ACTION_SETTINGS) }
                         )
+                        if (!roundScreen) {
+                            Text(
+                                timeText,
+                                color = launcherStyle.titleColor,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                    if (roundScreen) {
                         Text(
                             timeText,
                             color = launcherStyle.titleColor,
                             fontSize = 22.sp,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.align(Alignment.BottomCenter),
                         )
                     }
                 }
@@ -2506,17 +2522,16 @@ private fun readMediaState(context: Context): ControlCenterMediaState {
     val artworkBitmap = metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
         ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
         ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
-    val artworkIdentity = artworkBitmap?.let {
+    // Bluetooth relays may continuously rewrite title/artist while the actual
+    // cover stays unchanged. Animation identity therefore comes from bitmap
+    // content (with URI fallback), never from textual metadata.
+    val artworkIdentity = artworkBitmap?.let { bitmap ->
         listOf(
             controller.packageName,
-            metadata?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID),
-            metadata?.getString(MediaMetadata.METADATA_KEY_TITLE),
-            metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM),
-            metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST),
+            mediaArtworkContentFingerprint(bitmap),
             metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI),
             metadata?.getString(MediaMetadata.METADATA_KEY_ART_URI),
             metadata?.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI),
-            "${it.width}x${it.height}",
         ).joinToString("\u0000")
     }
     val customActions = playbackState?.customActions.orEmpty().mapNotNull { action ->
@@ -2644,6 +2659,29 @@ private fun averageBitmapColor(bitmap: Bitmap): Color {
     val g = ((green / count) * 0.72f).roundToInt().coerceIn(0, 255)
     val b = ((blue / count) * 0.72f).roundToInt().coerceIn(0, 255)
     return Color(android.graphics.Color.rgb(r, g, b))
+}
+
+private fun mediaArtworkContentFingerprint(bitmap: Bitmap): String {
+    val width = bitmap.width.coerceAtLeast(1)
+    val height = bitmap.height.coerceAtLeast(1)
+    return runCatching {
+        var hash = 0xcbf29ce484222325UL
+        // A stable 7 x 7 grid is cheap enough for the 500 ms metadata poll and
+        // distinguishes real artwork changes without hashing full-size covers.
+        repeat(7) { row ->
+            repeat(7) { column ->
+                val x = (column * (width - 1) / 6).coerceIn(0, width - 1)
+                val y = (row * (height - 1) / 6).coerceIn(0, height - 1)
+                hash = (hash xor bitmap.getPixel(x, y).toUInt().toULong()) * 0x100000001b3UL
+            }
+        }
+        "${width}x$height:${hash.toString(16)}"
+    }.getOrElse {
+        // Hardware bitmaps may reject getPixel on a few vendor builds. URI
+        // metadata in the caller still participates; dimensions are the safe
+        // deterministic fallback and never include title/artist.
+        "${width}x$height"
+    }
 }
 
 private fun readBatteryStatus(context: Context): BatteryStatusSnapshot {
