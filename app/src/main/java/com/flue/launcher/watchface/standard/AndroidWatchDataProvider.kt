@@ -39,6 +39,7 @@ internal class AndroidWatchDataProvider(
         ?: WatchWeatherRepository.default(appContext)
     private val batteryManager = appContext.getSystemService(BatteryManager::class.java)
     private val sensorManager = appContext.getSystemService(SensorManager::class.java)
+    private val hasGyroscopeSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE) != null
     private val wifiManager = appContext.getSystemService(WifiManager::class.java)
     private val bluetoothManager = appContext.getSystemService(BluetoothManager::class.java)
     private val stepPreferences = appContext.getSharedPreferences(STEP_PREFERENCES, Context.MODE_PRIVATE)
@@ -61,6 +62,10 @@ internal class AndroidWatchDataProvider(
 
     @Volatile
     private var gyroscope: Triple<Float, Float, Float>? = null
+    private var previousRoll = 0f
+    private var previousPitch = 0f
+    private var smoothedSimulatedPitch = 0f
+    private var smoothedSimulatedRoll = 0f
 
     @Volatile
     private var wifiSignalFraction: Float? = null
@@ -131,7 +136,13 @@ internal class AndroidWatchDataProvider(
         if (hasHeartRatePermission(appContext)) {
             registerSensor(Sensor.TYPE_HEART_RATE)
         }
-        registerSensor(Sensor.TYPE_GYROSCOPE)
+        if (hasGyroscopeSensor) {
+            registerSensor(Sensor.TYPE_GYROSCOPE)
+        } else {
+            // Wear OS devices frequently omit a physical gyro. Match CloX's
+            // fallback by deriving a low-pass angular signal from tilt.
+            registerSensor(Sensor.TYPE_ACCELEROMETER)
+        }
     }
 
     fun stop() {
@@ -213,6 +224,25 @@ internal class AndroidWatchDataProvider(
             val y = sensorEvent.values.getOrNull(1)?.takeIf(Float::isFinite) ?: return
             val z = sensorEvent.values.getOrNull(2)?.takeIf(Float::isFinite) ?: return
             gyroscope = Triple(x, y, z)
+            return
+        }
+        if (sensorEvent.sensor.type == Sensor.TYPE_ACCELEROMETER && !hasGyroscopeSensor) {
+            val x = sensorEvent.values.getOrNull(0)?.takeIf(Float::isFinite) ?: return
+            val y = sensorEvent.values.getOrNull(1)?.takeIf(Float::isFinite) ?: return
+            val z = sensorEvent.values.getOrNull(2)?.takeIf(Float::isFinite) ?: return
+            val roll = Math.toDegrees(
+                Math.atan2(x.toDouble(), Math.sqrt((y * y + z * z).toDouble()))
+            ).toFloat()
+            val pitch = Math.toDegrees(
+                Math.atan2(y.toDouble(), Math.sqrt((x * x + z * z).toDouble()))
+            ).toFloat()
+            val deltaRoll = roll - previousRoll
+            val deltaPitch = pitch - previousPitch
+            smoothedSimulatedPitch = deltaPitch * 0.1f + smoothedSimulatedPitch * 0.9f
+            smoothedSimulatedRoll = deltaRoll * 0.1f + smoothedSimulatedRoll * 0.9f
+            previousRoll = roll
+            previousPitch = pitch
+            gyroscope = Triple(-smoothedSimulatedPitch, smoothedSimulatedRoll, 0f)
             return
         }
         val value = sensorEvent.values.firstOrNull()?.takeIf(Float::isFinite) ?: return

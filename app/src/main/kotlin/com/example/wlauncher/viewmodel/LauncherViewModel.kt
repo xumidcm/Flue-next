@@ -182,6 +182,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_WATCHFACE_STATUS_INDICATORS = booleanPreferencesKey("watchface_status_indicators")
         val KEY_WATCHFACE_BOTTOM_FADE = booleanPreferencesKey("watchface_bottom_fade_enabled")
         val KEY_WATCHMAKER_FORCE_FILL = booleanPreferencesKey("watchmaker_force_fill")
+        val KEY_WATCHFACE_GRAVITY_PARALLAX = booleanPreferencesKey("watchface_gravity_parallax_enabled")
         val KEY_WATCHFACE_DATE_LOCALE = stringPreferencesKey("watchface_date_locale")
         val KEY_DEVICE_PRESET_APPLIED = booleanPreferencesKey("device_preset_applied")
         val KEY_HIDDEN_APPS = stringPreferencesKey("hidden_apps")
@@ -227,6 +228,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_HIDE_FROM_RECENTS = booleanPreferencesKey("hide_from_recents")
         val KEY_APP_LANGUAGE = stringPreferencesKey("app_language")
         val KEY_GLASS_HIGHLIGHT = booleanPreferencesKey("glass_highlight_enabled")
+        val KEY_WIDGET_GLASS_HIGHLIGHT = booleanPreferencesKey("widget_glass_highlight_enabled")
         val KEY_SIDE_SCREEN_WIDGETS = stringPreferencesKey("side_screen_widgets")
         val KEY_SIDE_SCREEN_SHORTCUT_ROWS = intPreferencesKey("side_screen_shortcut_rows")
         val KEY_SIDE_SCREEN_SHORTCUT_COLS = intPreferencesKey("side_screen_shortcut_cols")
@@ -393,7 +395,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _appListFisheyeEnabled = MutableStateFlow(true)
     val appListFisheyeEnabled: StateFlow<Boolean> = _appListFisheyeEnabled.asStateFlow()
-    private val _materialHoneycombTopFisheyeEnabled = MutableStateFlow(true)
+    // MD3 顶部鱼眼是额外效果，默认关闭；底部鱼眼仍由总开关控制。
+    private val _materialHoneycombTopFisheyeEnabled = MutableStateFlow(false)
     val materialHoneycombTopFisheyeEnabled: StateFlow<Boolean> = _materialHoneycombTopFisheyeEnabled.asStateFlow()
     private val _appListFisheyeRangeRows = MutableStateFlow(4)
     val appListFisheyeRangeRows: StateFlow<Int> = _appListFisheyeRangeRows.asStateFlow()
@@ -484,6 +487,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val watchFaceBottomFadeEnabled: StateFlow<Boolean> = _watchFaceBottomFadeEnabled.asStateFlow()
     private val _watchmakerForceFill = MutableStateFlow(false)
     val watchmakerForceFill: StateFlow<Boolean> = _watchmakerForceFill.asStateFlow()
+    private val _watchfaceGravityParallaxEnabled = MutableStateFlow(false)
+    val watchfaceGravityParallaxEnabled: StateFlow<Boolean> = _watchfaceGravityParallaxEnabled.asStateFlow()
     // 表盘日期语言：system/zh/en/ja 四档，默认跟随系统。
     private val _watchfaceDateLocale = MutableStateFlow(WatchDateLocale.PREFERENCE_SYSTEM)
     val watchfaceDateLocale: StateFlow<String> = _watchfaceDateLocale.asStateFlow()
@@ -660,6 +665,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val appLanguage: StateFlow<String> = _appLanguage.asStateFlow()
     private val _glassHighlightEnabled = MutableStateFlow(true)
     val glassHighlightEnabled: StateFlow<Boolean> = _glassHighlightEnabled.asStateFlow()
+    private val _widgetGlassHighlightEnabled = MutableStateFlow(true)
+    val widgetGlassHighlightEnabled: StateFlow<Boolean> = _widgetGlassHighlightEnabled.asStateFlow()
 
     private val _appOpenOrigin = MutableStateFlow(Offset(0.5f, 0.5f))
     val appOpenOrigin: StateFlow<Offset> = _appOpenOrigin.asStateFlow()
@@ -869,7 +876,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListFisheyeEnabled.value = loadedFisheyeEnabled
                 }
 
-                val loadedMaterialTopFisheye = prefs[KEY_MATERIAL_HONEYCOMB_TOP_FISHEYE] ?: true
+                val loadedMaterialTopFisheye = prefs[KEY_MATERIAL_HONEYCOMB_TOP_FISHEYE] ?: false
                 if (_materialHoneycombTopFisheyeEnabled.value != loadedMaterialTopFisheye) {
                     _materialHoneycombTopFisheyeEnabled.value = loadedMaterialTopFisheye
                 }
@@ -1043,6 +1050,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedWatchmakerForceFill = prefs[KEY_WATCHMAKER_FORCE_FILL] ?: false
                 if (_watchmakerForceFill.value != loadedWatchmakerForceFill) {
                     _watchmakerForceFill.value = loadedWatchmakerForceFill
+                }
+                val loadedGravityParallax = prefs[KEY_WATCHFACE_GRAVITY_PARALLAX] ?: false
+                if (_watchfaceGravityParallaxEnabled.value != loadedGravityParallax) {
+                    _watchfaceGravityParallaxEnabled.value = loadedGravityParallax
                 }
 
                 val loadedWatchfaceDateLocale =
@@ -1335,6 +1346,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 val loadedGlassHighlight = prefs[KEY_GLASS_HIGHLIGHT] ?: true
                 if (_glassHighlightEnabled.value != loadedGlassHighlight) _glassHighlightEnabled.value = loadedGlassHighlight
+
+                val loadedWidgetGlassHighlight = prefs[KEY_WIDGET_GLASS_HIGHLIGHT] ?: true
+                if (_widgetGlassHighlightEnabled.value != loadedWidgetGlassHighlight) {
+                    _widgetGlassHighlightEnabled.value = loadedWidgetGlassHighlight
+                }
 
                 watchFacePrefsHydrated = true
                 syncSelectedWatchFace()
@@ -2326,6 +2342,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_WATCHMAKER_FORCE_FILL] = enabled } }
     }
 
+    fun setWatchfaceGravityParallaxEnabled(enabled: Boolean) {
+        _watchfaceGravityParallaxEnabled.value = enabled
+        persist { store.edit { it[KEY_WATCHFACE_GRAVITY_PARALLAX] = enabled } }
+    }
+
     /** 表盘日期语言四档：system/zh/en/ja；未知值按跟随系统兜底。 */
     fun setWatchfaceDateLocale(value: String) {
         _watchfaceDateLocale.value = value
@@ -2962,6 +2983,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_GLASS_HIGHLIGHT] = enabled } }
     }
 
+    fun setWidgetGlassHighlightEnabled(enabled: Boolean) {
+        _widgetGlassHighlightEnabled.value = enabled
+        persist { store.edit { it[KEY_WIDGET_GLASS_HIGHLIGHT] = enabled } }
+    }
+
     fun requestWatchFaceRefresh() {
         _watchFaceRefreshToken.value = _watchFaceRefreshToken.value + 1
     }
@@ -3144,7 +3170,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _honeycombTopFade.value = 30
         _honeycombBottomFade.value = 30
         _appListFisheyeEnabled.value = true
-        _materialHoneycombTopFisheyeEnabled.value = true
+        _materialHoneycombTopFisheyeEnabled.value = false
         _appListFisheyeRangeRows.value = 4
         _appListFisheyeStrengthPercent.value = 100
         _appListEdgeSpacingCompressionEnabled.value = true
@@ -3152,6 +3178,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appListScalePercent.value = 100
         _globalUiScalePercent.value = 100
         _overlayMaskCornerRadiusDp.value = DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP
+        _widgetGlassHighlightEnabled.value = true
         _appListWatchFaceColors.value = false
         _appListRowBorderEnabled.value = false
         _appListFoldersEnabled.value = true
@@ -3257,7 +3284,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_HONEYCOMB_TOP_FADE] = 30
                 it[KEY_HONEYCOMB_BOTTOM_FADE] = 30
                 it[KEY_APP_LIST_FISHEYE] = true
-                it[KEY_MATERIAL_HONEYCOMB_TOP_FISHEYE] = true
+                it[KEY_MATERIAL_HONEYCOMB_TOP_FISHEYE] = false
                 it[KEY_APP_LIST_FISHEYE_RANGE_ROWS] = 4
                 it[KEY_APP_LIST_FISHEYE_STRENGTH_PERCENT] = 100
                 it[KEY_APP_LIST_EDGE_SPACING_COMPRESSION] = true
@@ -3265,6 +3292,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_APP_LIST_SCALE_PERCENT] = 100
                 it[KEY_GLOBAL_UI_SCALE_PERCENT] = 100
                 it[KEY_OVERLAY_MASK_CORNER_RADIUS_DP] = DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP
+                it[KEY_GLASS_HIGHLIGHT] = true
+                it[KEY_WIDGET_GLASS_HIGHLIGHT] = true
                 it[KEY_APP_LIST_WATCHFACE_COLORS] = false
                 it[KEY_APP_LIST_ROW_BORDER] = false
                 it[KEY_APP_LIST_FOLDERS_ENABLED] = false
@@ -3300,6 +3329,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_WATCHFACE_STATUS_INDICATORS] = true
                 it[KEY_WATCHFACE_BOTTOM_FADE] = false
                 it[KEY_WATCHMAKER_FORCE_FILL] = false
+                it[KEY_WATCHFACE_GRAVITY_PARALLAX] = false
                 it.remove(KEY_WATCHFACE_DATE_LOCALE)
                 it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
                 it.remove(KEY_SIDE_SCREEN_SHORTCUTS)

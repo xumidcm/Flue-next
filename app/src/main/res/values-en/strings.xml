@@ -123,6 +123,12 @@
     <string name="settings_widget_page">Show Widget Page</string>
     <string name="settings_widget_page_on">Swipe left from the watch face to open the widget page</string>
     <string name="settings_widget_page_off">Disable the swipe-left widget page</string>
+    <string name="settings_widget_glass_highlight">Widget glass highlight</string>
+    <string name="settings_widget_glass_highlight_on">Show the edge highlight on widget cards</string>
+    <string name="settings_widget_glass_highlight_off">Hide the edge highlight on widget cards</string>
+    <string name="settings_glass_highlight">Glass edge highlight</string>
+    <string name="settings_glass_highlight_on">Show edge highlights on Control Center, notifications, and side screen</string>
+    <string name="settings_glass_highlight_off">Hide glass edge highlights on all pages</string>
     <string name="settings_swap_music_notifications">Swap Music and Notifications</string>
     <string name="settings_swap_music_notifications_on">Show music on side screen and notifications in Control Center</string>
     <string name="settings_swap_music_notifications_off">Keep notifications on side screen and music in Control Center</string>
@@ -252,6 +258,7 @@
     <string name="search_d_side_screen">Side screen, widget page, step count</string>
     <string name="search_d_side_screen_toggle">Swipe right for quick launch and notifications</string>
     <string name="search_d_widget_page">Swipe left for the widget page</string>
+    <string name="search_d_widget_glass_highlight">Control the glass edge highlight on widget cards</string>
     <string name="search_d_show_steps">Step count at the bottom of the side screen</string>
     <string name="search_d_swap">Swap side screen and control center cards</string>
     <string name="search_d_notifications">Notification display and persistent filter</string>
@@ -379,6 +386,9 @@
     <string name="settings_watchmaker_force_fill">Force fill</string>
     <string name="settings_watchmaker_force_fill_on">Scale from the canvas center and crop the edges</string>
     <string name="settings_watchmaker_force_fill_off">Show the full design canvas and respect the declared shape</string>
+    <string name="settings_watchface_gravity_parallax">Gyro depth watch faces</string>
+    <string name="settings_watchface_gravity_parallax_on">Enable wrist-motion parallax for faces that declare gyro layers</string>
+    <string name="settings_watchface_gravity_parallax_off">Disable gyro depth movement</string>
     <string name="settings_watchface_heart_rate">Watch face heart rate</string>
     <string name="settings_watchface_heart_rate_on">Body sensors granted; supported .watch tags can read heart rate</string>
     <string name="settings_watchface_heart_rate_off">Heart rate stays unavailable until granted; tap to let the system ask</string>

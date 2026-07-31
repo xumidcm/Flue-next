@@ -123,6 +123,12 @@
     <string name="settings_widget_page">显示小组件页</string>
     <string name="settings_widget_page_on">从表盘左滑进入独立小组件页面</string>
     <string name="settings_widget_page_off">关闭左滑小组件页面入口</string>
+    <string name="settings_widget_glass_highlight">小组件玻璃高光</string>
+    <string name="settings_widget_glass_highlight_on">显示小组件卡片边缘高光</string>
+    <string name="settings_widget_glass_highlight_off">关闭小组件卡片边缘高光</string>
+    <string name="settings_glass_highlight">玻璃边缘高光</string>
+    <string name="settings_glass_highlight_on">控制中心、通知中心和负一屏显示边缘高光</string>
+    <string name="settings_glass_highlight_off">关闭所有页面的玻璃边缘高光</string>
     <string name="settings_swap_music_notifications">互换通知和音乐组件</string>
     <string name="settings_swap_music_notifications_on">副一屏显示音乐卡片，控制中心显示通知卡片</string>
     <string name="settings_swap_music_notifications_off">保持副一屏通知、控制中心音乐的默认位置</string>
@@ -252,6 +258,7 @@
     <string name="search_d_side_screen">副一屏、小组件页、步数</string>
     <string name="search_d_side_screen_toggle">右滑进入快捷启动与通知预览</string>
     <string name="search_d_widget_page">左滑进入小组件</string>
+    <string name="search_d_widget_glass_highlight">控制小组件卡片边缘玻璃高光</string>
     <string name="search_d_show_steps">侧屏底部步数</string>
     <string name="search_d_swap">负一屏与控制中心卡片对调</string>
     <string name="search_d_notifications">通知显示与常驻过滤</string>
@@ -379,6 +386,9 @@
     <string name="settings_watchmaker_force_fill">强制铺满</string>
     <string name="settings_watchmaker_force_fill_on">以表盘画布中心为锚点等比放大并裁切边缘</string>
     <string name="settings_watchmaker_force_fill_off">完整显示设计画布，并遵循表盘定义的形状</string>
+    <string name="settings_watchface_gravity_parallax">重力景深表盘效果</string>
+    <string name="settings_watchface_gravity_parallax_on">对声明 gyro 图层的表盘启用随手腕晃动的景深移动</string>
+    <string name="settings_watchface_gravity_parallax_off">关闭重力景深移动</string>
     <string name="settings_watchface_heart_rate">表盘心率数据</string>
     <string name="settings_watchface_heart_rate_on">已授权身体传感器；支持的 .watch 标签可读取心率</string>
     <string name="settings_watchface_heart_rate_off">未授权时心率保持不可用；点击后由系统询问授权</string>

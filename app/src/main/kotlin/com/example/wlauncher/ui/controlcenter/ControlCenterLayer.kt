@@ -113,6 +113,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -462,9 +463,14 @@ fun ControlCenterLayer(
         val topStatusHorizontalInset = 20.dp
         val contentHorizontalPadding = 18.dp
         val toggleRowSpacing = 14.dp
-        val toggleRowRequiredWidth = toggleSize * 4f + toggleRowSpacing * 3f
         val availableToggleRowWidth = (maxWidth - leftSafeInset - contentHorizontalPadding * 2f).coerceAtLeast(0.dp)
-        val toggleRowFits = availableToggleRowWidth >= toggleRowRequiredWidth
+        val toggleRowLayout = controlToggleRowLayout(
+            availableWidthPx = with(density) { availableToggleRowWidth.toPx() },
+            buttonWidthPx = with(density) { toggleSize.toPx() },
+            preferredSpacingPx = with(density) { toggleRowSpacing.toPx() },
+        )
+        val toggleRowFits = !toggleRowLayout.scrollable
+        val fittedToggleRowSpacing = with(density) { toggleRowLayout.spacingPx.toDp() }
         val estimatedControlsHeight = toggleSize +
             controlsSpacing +
             sliderHeight +
@@ -716,7 +722,14 @@ fun ControlCenterLayer(
                     if (toggleRowFits) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            // Keep the four fixed-size buttons centered. SpaceBetween
+                            // used to stretch the gap to the full viewport, which put
+                            // the last circle into the round-screen cutout on narrow
+                            // DPI profiles. The gap is adaptive but never below 4px.
+                            horizontalArrangement = Arrangement.spacedBy(
+                                fittedToggleRowSpacing,
+                                Alignment.CenterHorizontally,
+                            ),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             ControlToggle(
@@ -802,7 +815,9 @@ fun ControlCenterLayer(
                                 modifier = Modifier
                                     .widthIn(min = toggleViewportWidth)
                                     .graphicsLayer { translationX = toggleOverscroll.value },
-                                horizontalArrangement = Arrangement.spacedBy(toggleRowSpacing),
+                                horizontalArrangement = Arrangement.spacedBy(
+                                    toggleRowSpacing.coerceAtLeast(fittedToggleRowSpacing),
+                                ),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 ControlToggle(
@@ -887,6 +902,7 @@ fun ControlCenterLayer(
                     value = mediaVolume,
                     height = sliderHeight,
                     horizontalPadding = sliderHorizontalPadding,
+                    glassHighlightEnabled = glassHighlightEnabled,
                     onValueChange = { value ->
                         mediaVolume = value
                         pendingRequestedMediaVolume = value
@@ -899,6 +915,7 @@ fun ControlCenterLayer(
                     value = brightness,
                     height = sliderHeight,
                     horizontalPadding = sliderHorizontalPadding,
+                    glassHighlightEnabled = glassHighlightEnabled,
                     onValueChange = { value ->
                         brightness = value
                         setBrightness(context, value)
@@ -926,6 +943,7 @@ fun ControlCenterLayer(
                     ControlCenterNotificationPreviewCard(
                         notificationGroups = notificationGroups,
                         notificationAccessGranted = notificationAccessGranted,
+                        glassHighlightEnabled = glassHighlightEnabled,
                         onClick = onOpenNotifications
                     )
                 }
@@ -980,6 +998,7 @@ fun CompactControlCenterMusicCard(
 private fun ControlCenterNotificationPreviewCard(
     notificationGroups: List<NotificationGroupUi>,
     notificationAccessGranted: Boolean,
+    glassHighlightEnabled: Boolean = true,
     onGestureLockChange: (Boolean) -> Unit = {},
     onClick: () -> Unit
 ) {
@@ -1044,7 +1063,11 @@ private fun ControlCenterNotificationPreviewCard(
                     scaleY = cardScale
                 }
                 // 与通知中心的通知卡、负一屏的通知条同一份 glass 令牌。
-                .glassSurface(launcherStyle.cardShape, launcherStyle.glass)
+                .glassSurface(
+                    launcherStyle.cardShape,
+                    launcherStyle.glass,
+                    highlightEnabled = glassHighlightEnabled,
+                )
                 .controlCenterPressGesture(
                     pressedState = pressedState,
                     onGestureLockChange = onGestureLockChange,
@@ -1199,7 +1222,10 @@ private fun ControlToggle(
         animationSpec = spring(dampingRatio = 0.92f, stiffness = 700f),
         label = "control_toggle_tint"
     )
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(
+        modifier = Modifier.width(size),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         Box(
             modifier = Modifier
                 .size(size)
@@ -1226,8 +1252,57 @@ private fun ControlToggle(
             )
         }
         Spacer(Modifier.height(labelGap))
-        Text(label, color = WatchColors.TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Text(
+            text = label,
+            color = WatchColors.TextSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
+}
+
+internal data class ControlToggleRowLayout(
+    val scrollable: Boolean,
+    val spacingPx: Float,
+)
+
+/**
+ * Four control-center buttons keep their physical size. Only the inter-button
+ * gap may shrink, down to four physical pixels; below that boundary the row
+ * remains at its preferred spacing and becomes horizontally scrollable.
+ */
+internal fun controlToggleRowLayout(
+    availableWidthPx: Float,
+    buttonWidthPx: Float,
+    preferredSpacingPx: Float,
+    buttonCount: Int = 4,
+    minimumSpacingPx: Float = 4f,
+): ControlToggleRowLayout {
+    val count = buttonCount.coerceAtLeast(1)
+    val gapCount = (count - 1).coerceAtLeast(0)
+    val safeButtonWidth = buttonWidthPx.coerceAtLeast(0f)
+    val safePreferredSpacing = preferredSpacingPx.coerceAtLeast(minimumSpacingPx)
+    if (gapCount == 0) {
+        return ControlToggleRowLayout(
+            scrollable = availableWidthPx < safeButtonWidth,
+            spacingPx = 0f,
+        )
+    }
+    val availableForGaps = availableWidthPx.coerceAtLeast(0f) - safeButtonWidth * count
+    val minimumRequired = minimumSpacingPx * gapCount
+    if (availableForGaps < minimumRequired) {
+        return ControlToggleRowLayout(scrollable = true, spacingPx = safePreferredSpacing)
+    }
+    return ControlToggleRowLayout(
+        scrollable = false,
+        spacingPx = (availableForGaps / gapCount)
+            .coerceIn(minimumSpacingPx, safePreferredSpacing),
+    )
 }
 
 
@@ -1238,6 +1313,7 @@ private fun ControlSliderCard(
     value: Float,
     height: androidx.compose.ui.unit.Dp,
     horizontalPadding: androidx.compose.ui.unit.Dp,
+    glassHighlightEnabled: Boolean,
     onValueChange: (Float) -> Unit
 ) {
     val launcherStyle = LauncherTheme.style
@@ -1246,7 +1322,11 @@ private fun ControlSliderCard(
             .fillMaxWidth()
             .height(height)
             // 滑块卡原来是 cardColor 平铺（MD3/MIUIX 下就是不透明实色板）。
-            .glassSurface(launcherStyle.cardShape, launcherStyle.glass)
+            .glassSurface(
+                launcherStyle.cardShape,
+                launcherStyle.glass,
+                highlightEnabled = glassHighlightEnabled,
+            )
             .padding(horizontal = horizontalPadding),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1382,7 +1462,11 @@ private fun MediaControlCard(
             // panelShape(30dp)：媒体卡是大块表面。内层封面 18dp = 30 − 12 padding，
             // 同心圆角关系（内 = 外 − 间距）；旧的 32/24 组合会让封面的角
             // 「胀」出外壳弧线约 4dp。
-            .glassSurface(cardShape, launcherStyle.glass)
+            .glassSurface(
+                cardShape,
+                launcherStyle.glass,
+                highlightEnabled = glassHighlightEnabled,
+            )
             .clickable(onClick = if (notificationAccessGranted) onOpenApp else onOpenNotificationAccess)
     ) {
         Box(

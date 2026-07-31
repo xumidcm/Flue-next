@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.layout.fillMaxSize
 import com.flue.launcher.watchface.WatchFaceDescriptor
+import com.flue.launcher.ui.anim.createLegacyPrebuiltBlur
 import com.flue.launcher.watchface.editor.WatchCanvasSize
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -113,6 +114,13 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private var dataProvider: WatchDataProvider = EmptyWatchDataProvider
     private var frameDataSnapshot = WatchDataSnapshot()
     private var forceFill = false
+    private var gravityParallaxEnabled = false
+    private var smoothedGyroscopeX = 0f
+    private var smoothedGyroscopeY = 0f
+    private var gravityBackdropFrame: Bitmap? = null
+    private var gravityBackdropBlurFrame: Bitmap? = null
+    private var gravityBackdropBlurPrepared = false
+    private val gravityBackdropPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     /** 当前手势是否由本视图消费；决策在 DOWN 时定下、整个手势保持一致。 */
     private var consumeCurrentGesture = false
 
@@ -554,7 +562,12 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                         generation = generation,
                     )
                 }
-                if (replacement !== current) current?.clearRuntimeCaches()
+                if (replacement !== current) {
+                    current?.clearRuntimeCaches()
+                    gravityBackdropFrame = null
+                    gravityBackdropBlurFrame = null
+                    gravityBackdropBlurPrepared = false
+                }
                 source = replacement
                 loadedDescriptorKey = descriptor.stableKey
                 loadedRefreshToken = refreshToken
@@ -608,6 +621,23 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         if (forceFill == enabled) return
         forceFill = enabled
         if (!disposed) invalidate()
+    }
+
+    /** Enables CloX-compatible gyro parallax only for faces that declare gyro layers. */
+    fun setGravityParallaxEnabled(enabled: Boolean) {
+        if (gravityParallaxEnabled == enabled) return
+        gravityParallaxEnabled = enabled
+        if (!enabled) {
+            smoothedGyroscopeX = 0f
+            smoothedGyroscopeY = 0f
+            gravityBackdropFrame = null
+            gravityBackdropBlurFrame = null
+            gravityBackdropBlurPrepared = false
+        }
+        if (!disposed) {
+            if (enabled) scheduleTicks() else if (!textExitAnimationActive) scheduleTicks()
+            invalidate()
+        }
     }
 
     /** Limits animated image playback to the selected editor layer. */
@@ -700,6 +730,15 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         sourceTransitionFrame = null
         sourceTransitionGeneration = -1L
         sourceTransitionStartedAtUptimeMs = 0L
+        gravityBackdropFrame?.let { frame ->
+            if (!frame.isRecycled) frame.recycle()
+        }
+        gravityBackdropFrame = null
+        gravityBackdropBlurFrame?.let { frame ->
+            if (!frame.isRecycled) frame.recycle()
+        }
+        gravityBackdropBlurFrame = null
+        gravityBackdropBlurPrepared = false
     }
 
     override fun onAttachedToWindow() {
@@ -739,7 +778,36 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         trackTransitionAssetReadiness =
             transition != null && sourceTransitionGeneration == bindGeneration
         transitionFrameHasUnreadyVisualAsset = false
+        if (gravityParallaxEnabled && prepared.hasGyroParallax) {
+            val clearBackdrop = gravityBackdropFrame ?: capturePreparedFrame(prepared)?.also {
+                gravityBackdropFrame = it
+            }
+            if (!gravityBackdropBlurPrepared && clearBackdrop != null && !clearBackdrop.isRecycled) {
+                // Keep this as a prebuilt bitmap on every API level. It is the
+                // same downsampled box blur used by the Android 12-below
+                // fallback, so there is no RenderEffect-only path or per-frame
+                // blur work on newer systems either.
+                gravityBackdropBlurPrepared = true
+                gravityBackdropBlurFrame = runCatching {
+                    createLegacyPrebuiltBlur(clearBackdrop)
+                }.getOrNull()
+            }
+            val backdrop = gravityBackdropBlurFrame?.takeIf { !it.isRecycled } ?: clearBackdrop
+            if (backdrop != null && !backdrop.isRecycled) {
+                canvas.save()
+                // Keep a softly enlarged prebuilt blur underneath moving layers
+                // so parallax never exposes the black view background.
+                canvas.scale(1.10f, 1.10f, width / 2f, height / 2f)
+                canvas.drawBitmap(backdrop, null, Rect(0, 0, width, height), gravityBackdropPaint)
+                canvas.restore()
+            }
+        }
         drawPreparedSource(canvas, prepared, width.toFloat(), height.toFloat())
+        val gyroEnabledForSource = gravityParallaxEnabled && prepared.hasGyroParallax
+        val rawGyroX = if (gyroEnabledForSource) frameDataSnapshot.gyroscopeX ?: 0f else 0f
+        val rawGyroY = if (gyroEnabledForSource) frameDataSnapshot.gyroscopeY ?: 0f else 0f
+        smoothedGyroscopeX += (rawGyroX - smoothedGyroscopeX) * 0.18f
+        smoothedGyroscopeY += (rawGyroY - smoothedGyroscopeY) * 0.18f
         trackTransitionAssetReadiness = false
 
         if (transition != null) {
@@ -872,9 +940,21 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     ) {
         // 编辑器画布手势期间的实时覆盖：表盘像素立刻跟手，不等落盘。
         val live = layerIndex >= 0 && layerIndex == liveTransformLayerIndex
+        val baseX = if (live) liveTransformX else dynamicNumber(attrs["x"], 0f, source)
+        val baseY = if (live) liveTransformY else dynamicNumber(attrs["y"], 0f, source)
+        val gyroScale = if (gravityParallaxEnabled) {
+            attrs["gyro"]?.trim()?.takeIf(String::isNotEmpty)?.let {
+                dynamicNumber(it, 0f, source).coerceIn(-32f, 32f)
+            } ?: 0f
+        } else {
+            0f
+        }
+        // CloX's contract is x += sgy * gyro and y += sgx * gyro. The
+        // native provider exposes those streams directly; keep the authored
+        // coordinate stable and only add the opt-in parallax offset.
         canvas.translate(
-            if (live) liveTransformX else dynamicNumber(attrs["x"], 0f, source),
-            if (live) liveTransformY else dynamicNumber(attrs["y"], 0f, source),
+            baseX + smoothedGyroscopeY * gyroScale,
+            baseY + smoothedGyroscopeX * gyroScale,
         )
         val rotation = if (live) {
             liveTransformRotation
@@ -2119,6 +2199,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             .sorted()
             .take(MAX_WATCH_GIF_FRAME_PATHS)
             .toList()
+        val hasGyroParallax = definition.layers.any { layer ->
+            layer.attributes["gyro"]?.trim()?.takeIf(String::isNotEmpty)?.let { raw ->
+                raw.toFloatOrNull()?.let { it != 0f } ?: true
+            } == true
+        }
         return PreparedSource(
             sourceGeneration = sourceGeneration,
             animationStartedAtUptimeMs = SystemClock.uptimeMillis(),
@@ -2129,6 +2214,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             definition = definition,
             isHscGenerated = definition.rootAttributes["description"]
                 ?.contains("Generated by HSC watchface downloader", ignoreCase = true) == true,
+            hasGyroParallax = hasGyroParallax,
             exactFiles = exact,
             uniqueBasenames = basename,
             galleryAssetPaths = galleryAssetPaths,
@@ -2636,7 +2722,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         } else if (editorAnimationPlaybackLimited) {
             editorAnimatedImageLayerIndex != null && !editorAnimationInteractionFrozen
         } else {
-            source?.needsFastTicks == true
+            source?.needsFastTicks == true ||
+                (gravityParallaxEnabled && source?.hasGyroParallax == true)
         }
         val delay = if (needsFastTicks) 33L else 1_000L
         postDelayed(tickRunnable, delay)
@@ -2860,6 +2947,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val watchDirectoryKey: String,
         val definition: WatchmakerDefinition,
         val isHscGenerated: Boolean,
+        val hasGyroParallax: Boolean,
         val exactFiles: Map<String, ResolvedAsset>,
         val uniqueBasenames: Map<String, ResolvedAsset?>,
         val galleryAssetPaths: List<String>,
@@ -3024,6 +3112,7 @@ fun WatchmakerWatchFaceHost(
     weatherSource: WatchWeatherSource? = null,
     onTapAction: ((WatchTapAction) -> Unit)? = null,
     forceFill: Boolean = false,
+    gravityParallaxEnabled: Boolean = false,
     textEntryAnimationEnabled: Boolean = true,
     textExitAnimationEnabled: Boolean = true,
     textExitAnimationActive: Boolean = false,
@@ -3040,6 +3129,7 @@ fun WatchmakerWatchFaceHost(
         update = { view ->
             view.setWatchDataProvider(resolvedDataProvider)
             view.setForceFill(forceFill)
+            view.setGravityParallaxEnabled(gravityParallaxEnabled)
             view.bind(
                 descriptor = descriptor,
                 refreshToken = refreshToken,

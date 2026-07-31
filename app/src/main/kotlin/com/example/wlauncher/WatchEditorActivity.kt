@@ -169,9 +169,7 @@ import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.watchface.WatchFaceType
 import com.flue.launcher.watchface.editor.WATCH_EDITOR_EXPRESSION_GROUPS
-import com.flue.launcher.watchface.editor.CanvasSizePickerDialog
 import com.flue.launcher.watchface.editor.WatchCanvasSize
-import com.flue.launcher.watchface.editor.rememberScreenCanvasSize
 import com.flue.launcher.watchface.editor.WatchEditorHandle
 import com.flue.launcher.watchface.editor.WatchEditorImageCropper
 import com.flue.launcher.watchface.editor.WatchEditorImageSourceInfo
@@ -1025,14 +1023,11 @@ private fun WatchEditorRoute(
     }
 
     val blankFaceIsRound = isFlueScreenRound()
-    val isBlankFace = watchFaceId.isNullOrBlank()
-    val screenCanvasSize = rememberScreenCanvasSize()
-    // 新建表盘先让用户定画布尺寸，选完才建草稿：null = 还没选。已有表盘
-    // 走 open()，直接填 DEFAULT 让下面的 LaunchedEffect 立刻开工。
+    // WatchMaker 表盘固定使用原生 512×512 设计空间；不再让新建流程
+    // 根据设备屏幕或自定义规格改变画布，否则导出的坐标会失真。
     var blankCanvasSize by remember(watchFaceId) {
-        mutableStateOf(if (isBlankFace) null else WatchCanvasSize.DEFAULT)
+        mutableStateOf(WatchCanvasSize.DEFAULT)
     }
-    var showBlankCanvasPicker by remember(watchFaceId) { mutableStateOf(isBlankFace) }
     LaunchedEffect(watchFaceId, blankCanvasSize) {
         val requestedCanvas = blankCanvasSize ?: return@LaunchedEffect
         loading = true
@@ -1094,23 +1089,6 @@ private fun WatchEditorRoute(
     }
 
     BackHandler(onBack = ::requestClose)
-
-    if (showBlankCanvasPicker) {
-        CanvasSizePickerDialog(
-            current = blankCanvasSize ?: screenCanvasSize,
-            screenSize = screenCanvasSize,
-                confirmLabel = stringResource(R.string.watch_editor_start_design),
-            // 直接关掉不该把编辑器留在空转的加载页：按跟随屏幕建草稿。
-            onDismiss = {
-                showBlankCanvasPicker = false
-                if (blankCanvasSize == null) blankCanvasSize = screenCanvasSize
-            },
-            onConfirm = { size ->
-                showBlankCanvasPicker = false
-                blankCanvasSize = size
-            },
-        )
-    }
 
     if (showDiscardDialog) {
         AlertDialog(
@@ -1595,18 +1573,6 @@ private fun WatchEditorRoute(
                                 selectedLayerKey
                             })
                         },
-                        onUpdateCanvasSize = { size ->
-                            // 宽高一次提交：分两次写会在撤销栈里留下半改状态。
-                            runSessionOperation(context.getString(R.string.watch_editor_status_update_canvas), operation = { editor ->
-                                editor.updateRootAttributes(
-                                    mapOf(
-                                        "width" to size.width.toString(),
-                                        "height" to size.height.toString(),
-                                    ),
-                                )
-                                selectedLayerKey
-                            })
-                        },
                         onUploadToStore = {
                             if (busyMessage == null) {
                                 scope.launch {
@@ -1675,7 +1641,7 @@ private fun WatchEditorRoute(
                     cropRequest?.let { request ->
                         EditorImageCropOverlay(
                             uri = request.uri,
-                            canvasSize = WatchCanvasSize.fromRootAttributes(current.rootAttributes),
+                            canvasSize = WatchCanvasSize.DEFAULT,
                             onCancel = { cropRequest = null },
                             onConfirm = { sourceRect, preserveOriginal ->
                                 performImageImport(
@@ -1689,7 +1655,7 @@ private fun WatchEditorRoute(
                         EditorVideoImportFlow(
                             uri = request.uri,
                             info = request.info,
-                            canvasSize = WatchCanvasSize.fromRootAttributes(current.rootAttributes),
+                            canvasSize = WatchCanvasSize.DEFAULT,
                             onDismiss = { videoRequest = null },
                             onConfirm = { options -> beginVideoImport(request, options) },
                         )
@@ -1822,7 +1788,6 @@ private fun WatchEditorScreen(
     onExport: () -> Unit,
     onExportLong: () -> Unit,
     onUpdateShape: (String) -> Unit,
-    onUpdateCanvasSize: (WatchCanvasSize) -> Unit,
     onUploadToStore: () -> Unit,
     onImportWatch: () -> Unit,
     onImportWatchLong: () -> Unit,
@@ -1864,17 +1829,6 @@ private fun WatchEditorScreen(
         bodySensorsPermissionGranted = hasEditorBodySensorsPermission(context)
     }
     val isRound = isFlueScreenRound()
-    val screenCanvasSize = rememberScreenCanvasSize()
-    val canvasSize = remember(snapshot.rootAttributes) {
-        WatchCanvasSize.fromRootAttributes(snapshot.rootAttributes)
-    }
-    // 老表盘根节点没有 width / height：卡片要说明当前值是回落的默认画布。
-    val canvasSizeDeclared = remember(snapshot.rootAttributes) {
-        snapshot.rootAttributes.keys.any {
-            it.equals("width", ignoreCase = true) || it.equals("height", ignoreCase = true)
-        }
-    }
-    var showCanvasSizePicker by remember { mutableStateOf(false) }
     // 图层缩略图渲染器：直接借预览的 WatchmakerWatchFaceView（同一资源缓存）。
     var thumbnailRenderer by remember { mutableStateOf<WatchmakerWatchFaceView?>(null) }
     var textThumbnailClockTick by remember { mutableIntStateOf(0) }
@@ -1982,8 +1936,8 @@ private fun WatchEditorScreen(
             },
             onRefreshReady = onPreviewRefreshReady,
             onRefreshFailed = onPreviewRefreshFailed,
-            designExtentWidth = canvasSize.designExtentWidth,
-            designExtentHeight = canvasSize.designExtentHeight,
+            designExtentWidth = WatchCanvasSize.DEFAULT.designExtentWidth,
+            designExtentHeight = WatchCanvasSize.DEFAULT.designExtentHeight,
         )
     }
 
@@ -2121,7 +2075,7 @@ private fun WatchEditorScreen(
                 val availableHeight = editorMaxHeight * previewFraction
                 // 用 designExtent 的比例而不是声明像素比：渲染器就是按
                 // designExtent 画的，容器必须同源，否则出现黑边或裁切。
-                val ratio = (canvasSize.designExtentWidth / canvasSize.designExtentHeight)
+                val ratio = (WatchCanvasSize.DEFAULT.designExtentWidth / WatchCanvasSize.DEFAULT.designExtentHeight)
                     .takeIf { it.isFinite() && it > 0f } ?: 1f
                 val byHeight = availableHeight * ratio        // 以高定宽
                 val previewWidth = min(byHeight, editorMaxWidth)
@@ -2591,15 +2545,6 @@ private fun WatchEditorScreen(
                             onUpdateShape = onUpdateShape,
                         )
                     }
-                    item("watch_canvas_size") {
-                        EditorWatchCanvasSizeCard(
-                            canvasSize = canvasSize,
-                            screenSize = screenCanvasSize,
-                            declared = canvasSizeDeclared,
-                            enabled = busyMessage == null,
-                            onEdit = { showCanvasSizePicker = true },
-                        )
-                    }
                     item("watch_data_permission") {
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceVariant,
@@ -2732,18 +2677,6 @@ private fun WatchEditorScreen(
         }
     }
 
-    if (showCanvasSizePicker) {
-        CanvasSizePickerDialog(
-            current = canvasSize,
-            screenSize = screenCanvasSize,
-            confirmLabel = stringResource(R.string.watch_editor_apply),
-            onDismiss = { showCanvasSizePicker = false },
-            onConfirm = { size ->
-                showCanvasSizePicker = false
-                if (size != canvasSize) onUpdateCanvasSize(size)
-            },
-        )
-    }
 }
 
 private enum class WatchEditorPanel(@StringRes val labelRes: Int) {

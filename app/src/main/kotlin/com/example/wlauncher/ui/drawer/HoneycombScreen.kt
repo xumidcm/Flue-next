@@ -111,6 +111,7 @@ fun HoneycombScreen(
     fisheyeEnabled: Boolean = true,
     fisheyeRangeRows: Int = 4,
     fisheyeStrengthPercent: Int = 100,
+    materialHoneycombTopFisheyeEnabled: Boolean = false,
     edgeSpacingCompressionEnabled: Boolean = true,
     twoToneIconsEnabled: Boolean = false,
     iconShadowEnabled: Boolean = true,
@@ -164,6 +165,7 @@ fun HoneycombScreen(
             fisheyeEnabled = fisheyeEnabled,
             fisheyeRangeRows = fisheyeRangeRows,
             fisheyeStrengthPercent = fisheyeStrengthPercent,
+            materialHoneycombTopFisheyeEnabled = materialHoneycombTopFisheyeEnabled,
             edgeSpacingCompressionEnabled = edgeSpacingCompressionEnabled,
             useWatchFaceColors = useWatchFaceColors,
             rotaryHapticsEnabled = rotaryHapticsEnabled,
@@ -1242,6 +1244,7 @@ private fun MaterialDenseGridScreen(
     fisheyeEnabled: Boolean,
     fisheyeRangeRows: Int,
     fisheyeStrengthPercent: Int,
+    materialHoneycombTopFisheyeEnabled: Boolean,
     edgeSpacingCompressionEnabled: Boolean,
     useWatchFaceColors: Boolean,
     rotaryHapticsEnabled: Boolean,
@@ -1755,12 +1758,23 @@ private fun MaterialDenseGridScreen(
                     bottomBlurDp = bottomBlurRadiusDp
                 )
                 val bottomFisheyeStartY = screenHeightPx * 0.52f
-                val itemScale = if (fisheyeEnabled && itemCenterY > bottomFisheyeStartY) {
-                    val dist = itemCenterY - bottomFisheyeStartY
-                    fisheyeScale(dist, fisheyeRangePx, minScale = fisheyeMinScale)
+                val topFisheyeStartY = screenHeightPx * 0.48f
+                val bottomFisheyeProgress = if (fisheyeEnabled && itemCenterY > bottomFisheyeStartY) {
+                    ((itemCenterY - bottomFisheyeStartY) / fisheyeRangePx).coerceIn(0f, 1f)
                 } else {
-                    1f
+                    0f
                 }
+                val topFisheyeProgress = if (
+                    fisheyeEnabled &&
+                        materialHoneycombTopFisheyeEnabled &&
+                        itemCenterY < topFisheyeStartY
+                ) {
+                    ((topFisheyeStartY - itemCenterY) / fisheyeRangePx).coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+                val fisheyeProgress = maxOf(bottomFisheyeProgress, topFisheyeProgress)
+                val itemScale = 1f - (1f - fisheyeMinScale) * fisheyeProgress
                 val itemAlpha = if (fisheyeEnabled) itemScale.coerceIn(0.24f, 1f) else 1f
                 val itemHeightPx = itemBounds?.height ?: (screenHeightPx / effectiveColumns.coerceAtLeast(1))
                 val itemCenterX = itemBounds?.center?.x ?: screenWidthPx / 2f
@@ -1773,7 +1787,7 @@ private fun MaterialDenseGridScreen(
                     itemSize = itemHeightPx,
                     strengthPercent = fisheyeStrengthPercent,
                     enabled = fisheyeEnabled && edgeSpacingCompressionEnabled &&
-                        itemCenterY > bottomFisheyeStartY &&
+                        fisheyeProgress > 0f &&
                         dragFromIndex == null &&
                         longPressedApp == null
                 )

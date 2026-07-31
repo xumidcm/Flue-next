@@ -1,5 +1,6 @@
 package com.flue.launcher.watchface.store
 
+import androidx.compose.runtime.Immutable
 import java.util.Locale
 
 /** Public WatchMaker community-store endpoint used by Flue Next. */
@@ -49,12 +50,14 @@ data class WatchStoreQuery(
     }
 }
 
+@Immutable
 data class WatchStoreCategory(
     val id: String,
     val name: String,
     val slug: String,
 )
 
+@Immutable
 data class WatchStoreWatchFace(
     val id: String,
     val name: String,
@@ -78,6 +81,7 @@ data class WatchStoreAuthResult(
     val username: String,
 )
 
+@Immutable
 data class WatchStoreWatchFaceDetail(
     val id: String,
     val name: String,
@@ -106,6 +110,7 @@ data class WatchStorePage(
 )
 
 /** One entry in the current user's uploaded watch-face list (`GET /api/my/watchfaces`). */
+@Immutable
 data class MyWatchFaceEntry(
     val id: String,
     val name: String,

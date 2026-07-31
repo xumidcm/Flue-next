@@ -82,6 +82,24 @@ class WatchStoreRepository(
         api.getWatchFace(WatchStoreUrlPolicy.requireId(id))
     }
 
+    /**
+     * Returns an already decoded preview without touching disk or starting I/O.
+     *
+     * Lazy store cards are routinely disposed and recreated while scrolling. Seeding
+     * their state from this cache prevents a cached cover from briefly falling back to
+     * the loading frame every time it re-enters the viewport.
+     */
+    fun peekPreview(
+        id: String,
+        targetWidth: Int = DEFAULT_PREVIEW_SIZE,
+        targetHeight: Int = DEFAULT_PREVIEW_SIZE,
+    ): Bitmap? {
+        require(targetWidth in 1..MAX_PREVIEW_DIMENSION) { "targetWidth is out of range" }
+        require(targetHeight in 1..MAX_PREVIEW_DIMENSION) { "targetHeight is out of range" }
+        val normalizedId = WatchStoreUrlPolicy.requireId(id)
+        return getMemoryPreview(previewMemoryKey(normalizedId, targetWidth, targetHeight))
+    }
+
     suspend fun loadPreview(
         id: String,
         targetWidth: Int = DEFAULT_PREVIEW_SIZE,
@@ -90,7 +108,7 @@ class WatchStoreRepository(
         require(targetWidth in 1..MAX_PREVIEW_DIMENSION) { "targetWidth is out of range" }
         require(targetHeight in 1..MAX_PREVIEW_DIMENSION) { "targetHeight is out of range" }
         val normalizedId = WatchStoreUrlPolicy.requireId(id)
-        val memoryKey = "$normalizedId:${targetWidth}x$targetHeight"
+        val memoryKey = previewMemoryKey(normalizedId, targetWidth, targetHeight)
         getMemoryPreview(memoryKey)?.let { return@withContext it }
         ensureDirectories()
         cleanupIfDue()
@@ -496,6 +514,9 @@ class WatchStoreRepository(
         }
     }
 
+    private fun previewMemoryKey(id: String, targetWidth: Int, targetHeight: Int): String =
+        "$id:${targetWidth}x$targetHeight"
+
     private fun putMemoryPreview(key: String, bitmap: Bitmap) = synchronized(memoryLock) {
         previewMemoryCache.put(key, bitmap)?.let { previous ->
             previewMemoryBytes -= previous.safeByteCount()
@@ -622,7 +643,10 @@ class WatchStoreRepository(
         private const val INSTALL_JOURNAL_RELATIVE_PATH = "watchface/watch-face-install-journal.json"
         private const val DEFAULT_PREVIEW_SIZE = 512
         private const val MAX_PREVIEW_DIMENSION = 2_048
-        private const val MAX_MEMORY_PREVIEWS = 16
+        // A 256px ARGB card cover is about 256 KiB. Keep enough for roughly two
+        // API pages so scrolling back does not replay loading, while the byte cap
+        // below still protects devices after a 1024px detail cover is opened.
+        private const val MAX_MEMORY_PREVIEWS = 40
         private const val MAX_MEMORY_PREVIEW_BYTES = 12L * 1024L * 1024L
         private const val MAX_DISK_PREVIEW_BYTES = 64L * 1024L * 1024L
         private const val CLEANUP_INTERVAL_MS = 6L * 60L * 60L * 1_000L

@@ -128,6 +128,7 @@ fun NotificationLayer(
     onRunNotificationAction: (String) -> Boolean,
     onOpenNotification: (String, Offset) -> Boolean,
     overlayMaskCornerRadiusDp: Int,
+    glassHighlightEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -425,7 +426,7 @@ fun NotificationLayer(
                         .then(staticContentDismissModifier),
                     contentAlignment = Alignment.Center
                 ) {
-                    PermissionCard(contentWidth) {
+                    PermissionCard(contentWidth, glassHighlightEnabled) {
                         context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
                     }
                 }
@@ -437,7 +438,7 @@ fun NotificationLayer(
                         .then(staticContentDismissModifier),
                     contentAlignment = Alignment.Center
                 ) {
-                    EmptyCard(contentWidth)
+                    EmptyCard(contentWidth, glassHighlightEnabled)
                 }
 
                 else -> LazyColumn(
@@ -524,6 +525,7 @@ fun NotificationLayer(
                                                                     NotificationCardReplacement(
                                                                         width = contentWidth,
                                                                         entry = entry,
+                                                                        glassHighlightEnabled = glassHighlightEnabled,
                                                                         onOpenNotification = onOpenNotification,
                                                                         onRunNotificationAction = onRunNotificationAction
                                                                     )
@@ -560,6 +562,7 @@ fun NotificationLayer(
                                                                 width = contentWidth,
                                                                 leadEntry = leadEntry,
                                                                 hiddenCount = group.entries.size - 1,
+                                                                glassHighlightEnabled = glassHighlightEnabled,
                                                                 onClick = { onToggleGroup(group.packageName) }
                                                             )
                                                         }
@@ -579,6 +582,7 @@ fun NotificationLayer(
                                                 NotificationCardReplacement(
                                                     width = contentWidth,
                                                     entry = entry,
+                                                    glassHighlightEnabled = glassHighlightEnabled,
                                                     onOpenNotification = onOpenNotification,
                                                     onRunNotificationAction = onRunNotificationAction
                                                 )
@@ -601,7 +605,7 @@ fun NotificationLayer(
                                     fadeOutSpec = tween(140)
                                 )
                             ) {
-                                ActionDock {
+                                ActionDock(glassHighlightEnabled) {
                                     DockActionButton(
                                         text = stringResource(R.string.notification_clear_all),
                                         onClick = onDismissAllNotifications
@@ -658,6 +662,7 @@ private fun NewNotificationGroupEntrance(
 private fun NotificationCardReplacement(
     width: androidx.compose.ui.unit.Dp,
     entry: NotificationEntryUi,
+    glassHighlightEnabled: Boolean,
     onOpenNotification: (String, Offset) -> Boolean,
     onRunNotificationAction: (String) -> Boolean
 ) {
@@ -678,6 +683,7 @@ private fun NotificationCardReplacement(
         NotificationCard(
             width = width,
             entry = entry,
+            glassHighlightEnabled = glassHighlightEnabled,
             subtitle = entry.text.ifBlank {
                 entry.title.ifBlank { entry.appLabel }
             },
@@ -689,14 +695,21 @@ private fun NotificationCardReplacement(
 }
 
 @Composable
-private fun ActionDock(content: @Composable () -> Unit) {
+private fun ActionDock(
+    glassHighlightEnabled: Boolean,
+    content: @Composable () -> Unit,
+) {
     val launcherStyle = LauncherTheme.style
     // 操作栏浮在通知流上方，用薄档玻璃会让图标和下面的卡片糊在一起。
     // 原来写死的 #151515@0.82 / #F2F2F6@0.88 已收进 glassThick 令牌，
     // 视觉效果一字未变，但与其他玻璃表面同源，统一调玻璃时不会漏掉这里。
     Box(
         modifier = Modifier
-            .glassSurface(launcherStyle.chipShape, launcherStyle.glassThick)
+            .glassSurface(
+                launcherStyle.chipShape,
+                launcherStyle.glassThick,
+                highlightEnabled = glassHighlightEnabled,
+            )
             .padding(horizontal = 7.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -719,19 +732,23 @@ private fun NotificationRowContainer(
 }
 
 @Composable
-private fun PermissionCard(width: androidx.compose.ui.unit.Dp, onClick: () -> Unit) {
+private fun PermissionCard(
+    width: androidx.compose.ui.unit.Dp,
+    glassHighlightEnabled: Boolean,
+    onClick: () -> Unit,
+) {
     val title = stringResource(R.string.notification_permission_title)
     val subtitle = stringResource(R.string.notification_permission_subtitle)
     val fake = NotificationEntryUi("perm", "", null, title, title, subtitle, 0L, null, false, false, false, false)
-    NotificationCard(width, fake, subtitle, "", onClick = { onClick() })
+    NotificationCard(width, fake, subtitle, "", glassHighlightEnabled, onClick = { onClick() })
 }
 
 @Composable
-private fun EmptyCard(width: androidx.compose.ui.unit.Dp) {
+private fun EmptyCard(width: androidx.compose.ui.unit.Dp, glassHighlightEnabled: Boolean) {
     val title = stringResource(R.string.notification_empty_title)
     val subtitle = stringResource(R.string.notification_empty_subtitle)
     val fake = NotificationEntryUi("empty", "", null, title, title, subtitle, 0L, null, false, false, false, false)
-    NotificationCard(width, fake, subtitle, "", onClick = {})
+    NotificationCard(width, fake, subtitle, "", glassHighlightEnabled, onClick = {})
 }
 
 @Composable
@@ -787,6 +804,7 @@ private fun CollapsedStackCard(
     width: androidx.compose.ui.unit.Dp,
     leadEntry: NotificationEntryUi,
     hiddenCount: Int,
+    glassHighlightEnabled: Boolean,
     onClick: () -> Unit
 ) {
     val stackStrength by animateFloatAsState(
@@ -821,6 +839,7 @@ private fun CollapsedStackCard(
             NotificationCard(
                 width = width,
                 entry = leadEntry,
+                glassHighlightEnabled = glassHighlightEnabled,
                 subtitle = leadEntry.text.ifBlank { leadEntry.title.ifBlank { leadEntry.appLabel } },
                 trailing = formatNotificationTime(leadEntry.time),
                 onClick = { onClick() },
@@ -846,6 +865,7 @@ private fun NotificationCard(
     entry: NotificationEntryUi,
     subtitle: String,
     trailing: String,
+    glassHighlightEnabled: Boolean = true,
     onClick: (Offset) -> Unit,
     onRunNotificationAction: (String) -> Boolean = { false },
     onMeasuredHeight: ((Int) -> Unit)? = null
@@ -874,7 +894,11 @@ private fun NotificationCard(
             // 原来深色下是写死的不透明渐变 3A3A3C→2C2C2E（外加 0.07 描边），
             // 半透明主题还会被强制刷成 #353535。这两条都让通知卡变成实色板，
             // 与控制中心的玻璃不同源；统一走 glass 令牌，形状仍是各风格的 cardShape。
-            .glassSurface(launcherStyle.cardShape, launcherStyle.glass)
+            .glassSurface(
+                launcherStyle.cardShape,
+                launcherStyle.glass,
+                highlightEnabled = glassHighlightEnabled,
+            )
             .instantPressGesture(
                 pressed,
                 enabled = entry.key == "perm" || entry.key == "empty" || entry.contentIntentAvailable,

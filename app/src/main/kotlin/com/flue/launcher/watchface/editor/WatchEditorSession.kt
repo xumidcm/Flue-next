@@ -1287,12 +1287,13 @@ class WatchEditorSession private constructor(
                 // definition.shape == ROUND 罩上圆形裁剪 —— 方屏表盘删光元素后
                 // 仍有一圈圆形遮罩就是它。现在跟随调用方传入的屏幕形状。
                 val shapeCode = if (roundShape) "R" else "S"
-                // 画布尺寸落在根节点上（缺省 512×512 与历史表盘一致），新建时
-                // 由调用方按屏幕/预设/自定义决定，见 WatchCanvasSize。
+                // WatchMaker 表盘固定使用原生 512×512 画布。保留旧参数只是
+                // 为了兼容已有调用方，但新建结果永远写入固定规格。
+                val fixedCanvasSize = WatchCanvasSize.DEFAULT
                 val xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
                     "<Watch name=\"${escapeXmlAttribute(safeName)}\" build_source=\"studio\"" +
                     " shape=\"$shapeCode\"" +
-                    " width=\"${canvasSize.width}\" height=\"${canvasSize.height}\"/>"
+                    " width=\"${fixedCanvasSize.width}\" height=\"${fixedCanvasSize.height}\"/>"
                 writeAtomically(resolveFile(draft, watchXml), xml.toByteArray(StandardCharsets.UTF_8))
                 val document = parseXml(resolveFile(draft, watchXml), limits)
                 return WatchEditorSession(

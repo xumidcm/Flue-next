@@ -12,10 +12,10 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
@@ -27,6 +27,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * 下拉刷新的手势与位移状态。
@@ -211,4 +212,9 @@ internal val FLUE_PULL_REFRESH_THRESHOLD: Dp = 56.dp
 /** 让内容跟着下拉走；指示器由调用方叠在上面。 */
 internal fun Modifier.fluePullToRefresh(state: FluePullToRefreshState): Modifier =
     nestedScroll(state.connection)
-        .graphicsLayer { translationY = state.offsetPx }
+        .layout { measurable, constraints ->
+            val placeable = measurable.measure(constraints)
+            layout(placeable.width, placeable.height) {
+                placeable.placeRelative(0, state.offsetPx.roundToInt())
+            }
+        }

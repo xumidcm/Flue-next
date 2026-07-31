@@ -12,10 +12,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Velocity
@@ -27,6 +27,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * One shared nested-scroll contract for every vertically scrolling Flue page.
@@ -166,7 +167,7 @@ internal class FlueElasticScrollState internal constructor(
 }
 
 /**
- * Owns the synchronous value used by the graphics layer.  Animatable's
+ * Owns the synchronous value used by placement. Animatable's
  * suspend-only snapTo was previously launched from every MOVE callback, so
  * multiple callbacks observed the same stale value and consumed deltas that
  * were never rendered.  Direct gesture updates now publish immediately;
@@ -281,7 +282,16 @@ internal fun Modifier.flueElasticNestedScroll(
 ): Modifier {
     val state = rememberFlueElasticScrollState(listState, motionProfile)
     return nestedScroll(state.connection)
-        .graphicsLayer { translationY = state.offsetPx }
+        // Placement-phase offset keeps the same elastic motion without turning the
+        // entire scrolling viewport into a persistent full-screen graphics layer.
+        // The latter is especially costly on 1200x1920 Wear OS displays because
+        // every LazyColumn invalidation has to redraw through that layer.
+        .layout { measurable, constraints ->
+            val placeable = measurable.measure(constraints)
+            layout(placeable.width, placeable.height) {
+                placeable.placeRelative(0, state.offsetPx.roundToInt())
+            }
+        }
 }
 
 @Composable
@@ -320,5 +330,10 @@ internal fun Modifier.flueElasticNestedScroll(
         state.setViewportHeight(viewportHeight.height)
     }
         .nestedScroll(state.connection)
-        .graphicsLayer { translationY = state.offsetPx }
+        .layout { measurable, constraints ->
+            val placeable = measurable.measure(constraints)
+            layout(placeable.width, placeable.height) {
+                placeable.placeRelative(0, state.offsetPx.roundToInt())
+            }
+        }
 }

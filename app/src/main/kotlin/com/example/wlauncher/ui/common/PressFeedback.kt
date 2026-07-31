@@ -59,7 +59,11 @@ internal fun fluePressScaleTarget(
 ): Float = if (pressed) pressedScale.coerceIn(0.8f, 1f) else 1f
 
 fun Modifier.fluePressScale(scale: Float): Modifier =
-    graphicsLayer {
-        scaleX = scale
-        scaleY = scale
+    if (scale >= 0.9999f) {
+        this
+    } else {
+        graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
     }

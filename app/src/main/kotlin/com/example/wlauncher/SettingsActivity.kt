@@ -36,8 +36,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.spring
 import com.flue.launcher.ui.settings.miuix.MiuixLoadingIndicator
@@ -562,6 +560,8 @@ private fun SettingsRootScreen(
     val showOngoingNotifications by vm.showOngoingNotifications.collectAsStateWithLifecycle()
     val rotaryHapticsEnabled by vm.rotaryHapticsEnabled.collectAsStateWithLifecycle()
     val showWidgetPage by vm.showWidgetPage.collectAsStateWithLifecycle()
+    val glassHighlightEnabled by vm.glassHighlightEnabled.collectAsStateWithLifecycle()
+    val widgetGlassHighlightEnabled by vm.widgetGlassHighlightEnabled.collectAsStateWithLifecycle()
     val showControlCenter by vm.showControlCenter.collectAsStateWithLifecycle()
     val showMusicControls by vm.showMusicControls.collectAsStateWithLifecycle()
     val showMediaCustomActions by vm.showMediaCustomActions.collectAsStateWithLifecycle()
@@ -574,6 +574,7 @@ private fun SettingsRootScreen(
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val watchmakerForceFill by vm.watchmakerForceFill.collectAsStateWithLifecycle()
+    val watchfaceGravityParallaxEnabled by vm.watchfaceGravityParallaxEnabled.collectAsStateWithLifecycle()
     val watchfaceDateLocale by vm.watchfaceDateLocale.collectAsStateWithLifecycle()
     val appLanguage by vm.appLanguage.collectAsStateWithLifecycle()
     // 表盘保存会原地覆盖 preview.jpg：令牌自增时列表缩略图重读文件。
@@ -1139,17 +1140,17 @@ private fun SettingsRootScreen(
                 transitionSpec = {
                     // 所有界面风格统一使用 MIUIX / HyperOS 式层级推拉：进子页
                     // 新页从右 1/4 滑入、旧页左移 1/6；返回时方向相反。
+                    // 不叠加全屏透明度动画，避免高分辨率手表同时合成两张
+                    // 1200x1920 离屏纹理，层级方向和时长保持不变。
                     val forward = targetState.depth >= initialState.depth
                     (
                         slideInHorizontally(
                             animationSpec = tween(260, easing = FastOutSlowInEasing),
-                        ) { fullWidth -> if (forward) fullWidth / 4 else -fullWidth / 6 } +
-                            fadeIn(tween(200))
+                        ) { fullWidth -> if (forward) fullWidth / 4 else -fullWidth / 6 }
                         ) togetherWith (
                         slideOutHorizontally(
                             animationSpec = tween(240, easing = FastOutSlowInEasing),
-                        ) { fullWidth -> if (forward) -fullWidth / 6 else fullWidth / 4 } +
-                            fadeOut(tween(140))
+                        ) { fullWidth -> if (forward) -fullWidth / 6 else fullWidth / 4 }
                         )
                 },
             ) { currentDestination ->
@@ -1334,7 +1335,7 @@ private fun SettingsRootScreen(
                 }
                 items(
                     items = hideableApps,
-                    key = { "app_${it.componentKey}" },
+                    key = { it.componentKey },
                     contentType = { "hidden_app" },
                 ) { app ->
                     SettingsSwitchRow(
@@ -1352,7 +1353,7 @@ private fun SettingsRootScreen(
                             }
                             hiddenAppsDirty = true
                         },
-                        scale = itemFisheye(listState, "app_${app.componentKey}", screenCenterY, screenHeightPx),
+                        scale = 1f,
                         // LazyColumn already composes only visible/prefetched rows. Do not
                         // drive a second visibility state that unloads/reloads icons while
                         // crossing every item boundary during a fling.
@@ -1379,7 +1380,11 @@ private fun SettingsRootScreen(
                         scale = itemFisheye(listState, "icon_pack_default", screenCenterY, screenHeightPx)
                     )
                 }
-                items(availableIconPacks, key = { "iconpack_${it.packageName}" }) { pack ->
+                items(
+                    items = availableIconPacks,
+                    key = { "iconpack_${it.packageName}" },
+                    contentType = { "icon_pack" },
+                ) { pack ->
                     SettingsChoiceRow(
                         title = pack.label,
                         subtitle = stringResource(R.string.settings_icon_pack_adw),
@@ -1416,7 +1421,11 @@ private fun SettingsRootScreen(
                     )
                 }
             }
-            items(watchFaces, key = { it.id }) { descriptor ->
+            items(
+                items = watchFaces,
+                key = { it.id },
+                contentType = { "watch_face_setting" },
+            ) { descriptor ->
                 WatchFaceSettingCard(
                     descriptor = descriptor,
                     selected = descriptor.id == selectedWatchFaceId,
@@ -1733,6 +1742,24 @@ private fun SettingsRootScreen(
                         scale = itemFisheye(
                             listState,
                             "watchmaker_force_fill",
+                            screenCenterY,
+                            screenHeightPx,
+                        ),
+                    )
+                }
+                item("watchface_gravity_parallax") {
+                    SettingsSwitchRow(
+                        title = stringResource(R.string.settings_watchface_gravity_parallax),
+                        subtitle = if (watchfaceGravityParallaxEnabled) {
+                            stringResource(R.string.settings_watchface_gravity_parallax_on)
+                        } else {
+                            stringResource(R.string.settings_watchface_gravity_parallax_off)
+                        },
+                        checked = watchfaceGravityParallaxEnabled,
+                        onToggle = vm::setWatchfaceGravityParallaxEnabled,
+                        scale = itemFisheye(
+                            listState,
+                            "watchface_gravity_parallax",
                             screenCenterY,
                             screenHeightPx,
                         ),
@@ -2329,6 +2356,19 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "cat_app_list_behavior", screenCenterY, screenHeightPx)
                 )
             }
+            item("glass_highlight_toggle") {
+                SettingsSwitchRow(
+                    title = stringResource(R.string.settings_glass_highlight),
+                    subtitle = if (glassHighlightEnabled) {
+                        stringResource(R.string.settings_glass_highlight_on)
+                    } else {
+                        stringResource(R.string.settings_glass_highlight_off)
+                    },
+                    checked = glassHighlightEnabled,
+                    onToggle = vm::setGlassHighlightEnabled,
+                    scale = itemFisheye(listState, "glass_highlight_toggle", screenCenterY, screenHeightPx),
+                )
+            }
         }
 
             SettingsDestination.SIDE_SCREEN -> SettingsPageScaffold(
@@ -2359,6 +2399,20 @@ private fun SettingsRootScreen(
                     checked = showWidgetPage,
                     onToggle = vm::setShowWidgetPage,
                     scale = itemFisheye(listState, "widget_center_toggle", screenCenterY, screenHeightPx)
+                )
+            }
+            item("widget_glass_highlight") {
+                SettingsSwitchRow(
+                    title = stringResource(R.string.settings_widget_glass_highlight),
+                    subtitle = if (widgetGlassHighlightEnabled) {
+                        stringResource(R.string.settings_widget_glass_highlight_on)
+                    } else {
+                        stringResource(R.string.settings_widget_glass_highlight_off)
+                    },
+                    checked = widgetGlassHighlightEnabled,
+                    enabled = sideScreenEnabled && showWidgetPage,
+                    onToggle = vm::setWidgetGlassHighlightEnabled,
+                    scale = itemFisheye(listState, "widget_glass_highlight", screenCenterY, screenHeightPx)
                 )
             }
             item("music_notification_swap_toggle") {
@@ -2748,7 +2802,11 @@ private fun SettingsRootScreen(
                     onClick = {}
                 )
             }
-            items(activeMotionProfileOptions(motionProfiles), key = { "motion_profile_${it.id}" }) { profile ->
+            items(
+                items = activeMotionProfileOptions(motionProfiles),
+                key = { "motion_profile_${it.id}" },
+                contentType = { "motion_profile" },
+            ) { profile ->
                 SettingsChoiceRow(
                     title = profile.name,
                     subtitle = if (FlueMotionProfiles.isBuiltIn(profile.id)) {
@@ -2984,7 +3042,11 @@ private fun SettingsRootScreen(
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.MUSIC_TEXT_ANIMATION).offset,
             onScrollChanged = { index, offset -> updateScroll(SettingsDestination.MUSIC_TEXT_ANIMATION, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
-            items(MusicTextSwitchAnimations.presets, key = { "music_text_anim_${it.id}" }) { preset ->
+            items(
+                items = MusicTextSwitchAnimations.presets,
+                key = { "music_text_anim_${it.id}" },
+                contentType = { "music_text_animation" },
+            ) { preset ->
                 SettingsChoiceRow(
                     title = stringResource(preset.labelRes),
                     subtitle = stringResource(preset.subtitleRes),
@@ -4058,48 +4120,92 @@ private fun SettingsSwitchRow(
 ) {
     val launcherStyle = LauncherTheme.style
     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
-        // MIUIX：56dp 设置行 + 胶囊 MiuixSwitch。
-        val leading: (@Composable () -> Unit)? = if (leadingIcon != null || reserveLeadingIconSpace) {
-            {
+        // The hidden-app page can compose a new row on nearly every fling frame.
+        // Keep this common MIUIX switch row to one clickable node and one small
+        // animated layer instead of nesting Card -> Row -> independently clickable
+        // Switch (four animation states and two pointer-input chains per app).
+        val interactionSource = remember { MutableInteractionSource() }
+        val pressed by interactionSource.collectIsPressedAsState()
+        val trackColor = animateColorAsState(
+            when {
+                !enabled -> launcherStyle.secondaryTextColor.copy(alpha = 0.20f)
+                checked -> launcherStyle.accentColor
+                else -> launcherStyle.secondaryTextColor.copy(alpha = 0.36f)
+            },
+            label = "miuix_settings_switch_track",
+        )
+        val knobProgress = animateFloatAsState(
+            if (checked) 1f else 0f,
+            animationSpec = spring(dampingRatio = 0.9f, stiffness = 600f),
+            label = "miuix_settings_switch_thumb",
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 56.dp)
+                .background(
+                    color = if (pressed) launcherStyle.pressedCardColor else launcherStyle.cardColor,
+                    shape = launcherStyle.cardShape,
+                )
+                .clickable(
+                    interactionSource = interactionSource,
+                    indication = null,
+                    enabled = enabled,
+                    onClick = { onToggle(!checked) },
+                )
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (leadingIcon != null || reserveLeadingIconSpace) {
                 Box(
                     modifier = Modifier
                         .size(34.dp)
                         .clip(CircleShape)
                         .background(
                             if (leadingIcon != null) Color.Transparent
-                            else launcherStyle.pressedCardColor.copy(alpha = 0.6f)
+                            else launcherStyle.pressedCardColor.copy(alpha = 0.6f),
                         ),
-                    contentAlignment = Alignment.Center
+                    contentAlignment = Alignment.Center,
                 ) {
                     if (leadingIcon != null) {
                         Image(
                             bitmap = leadingIcon,
                             contentDescription = null,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(CircleShape)
+                            modifier = Modifier.fillMaxSize(),
                         )
                     }
                 }
+                Spacer(Modifier.width(12.dp))
             }
-        } else {
-            null
-        }
-        MiuixSettingsCard {
-            MiuixSettingsRow(
-                title = title,
-                subtitle = subtitle.takeIf { it.isNotBlank() },
-                enabled = enabled,
-                onClick = { onToggle(!checked) },
-                leading = leading,
-                trailing = {
-                    MiuixSwitch(
-                        checked = checked,
-                        onCheckedChange = { onToggle(it) },
-                        enabled = enabled
-                    )
+            Column(
+                modifier = Modifier.weight(1f).padding(end = 12.dp),
+            ) {
+                Text(
+                    title,
+                    color = if (enabled) launcherStyle.titleColor else launcherStyle.secondaryTextColor,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                if (subtitle.isNotBlank()) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(subtitle, color = launcherStyle.secondaryTextColor, fontSize = 12.sp)
                 }
-            )
+            }
+            Box(
+                modifier = Modifier
+                    .width(44.dp)
+                    .height(26.dp)
+                    .clip(RoundedCornerShape(13.dp))
+                    .drawBehind { drawRect(trackColor.value) },
+            ) {
+                Box(
+                    modifier = Modifier
+                        .padding(start = 2.5.dp, top = 2.5.dp)
+                        .size(21.dp)
+                        .graphicsLayer { translationX = 18.dp.toPx() * knobProgress.value }
+                        .background(Color.White, CircleShape),
+                )
+            }
         }
         return
     }
@@ -4170,9 +4276,7 @@ private fun SettingsSwitchRow(
                             Image(
                                 bitmap = leadingIcon,
                                 contentDescription = null,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .clip(CircleShape)
+                                modifier = Modifier.fillMaxSize()
                             )
                         }
                     }
@@ -4634,25 +4738,38 @@ private fun OverlayMaskCornerRadiusDialog(
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             contentAlignment = Alignment.BottomCenter,
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(24.dp, dialogShape, clip = false)
-                    .clip(dialogShape)
-                    // MaterialTheme owns the actual light/dark mode. Apple Watch
-                    // style card tokens intentionally contrast the page and must
-                    // not be reused as a modal surface or its text becomes inverted.
-                    .background(dialogSurface)
-                    // High-light and panel use exactly the same animated shape,
-                    // so the white glass edge follows the slider without lag.
-                    .border(
-                        launcherStyle.glass.borderWidth,
-                        launcherStyle.glass.highlight,
-                        dialogShape,
-                    )
-                    .padding(horizontal = 22.dp, vertical = 24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+            BoxWithConstraints(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.BottomCenter,
             ) {
+                val dialogScrollState = rememberScrollState()
+                // The dialog is a separate window on Wear OS. Constrain it to the
+                // visible window and make the complete content scrollable, otherwise
+                // the action row is laid out below the viewport with no way to reach
+                // the confirm button. maxHeight is measured after the global density
+                // provider, so the setting follows the global UI scale as well.
+                val maxDialogHeight = maxHeight * 0.92f
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = maxDialogHeight)
+                        .verticalScroll(dialogScrollState)
+                        .shadow(24.dp, dialogShape, clip = false)
+                        .clip(dialogShape)
+                        // MaterialTheme owns the actual light/dark mode. Apple Watch
+                        // style card tokens intentionally contrast the page and must
+                        // not be reused as a modal surface or its text becomes inverted.
+                        .background(dialogSurface)
+                        // High-light and panel use exactly the same animated shape,
+                        // so the white glass edge follows the slider without lag.
+                        .border(
+                            launcherStyle.glass.borderWidth,
+                            launcherStyle.glass.highlight,
+                            dialogShape,
+                        )
+                        .padding(horizontal = 22.dp, vertical = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                 Box(modifier = Modifier.size(62.dp)) {
                     Box(
                         modifier = Modifier
@@ -4770,7 +4887,7 @@ private fun OverlayMaskCornerRadiusDialog(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = stringResource(R.string.action_save_changes),
+                        text = stringResource(R.string.action_done),
                         color = Color.White,
                         fontSize = 17.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -4779,6 +4896,8 @@ private fun OverlayMaskCornerRadiusDialog(
             }
         }
     }
+}
+
 }
 
 @Composable
@@ -5289,6 +5408,7 @@ private fun buildSettingsSearchIndex(context: Context): List<SettingsSearchEntry
     SettingsSearchEntry("WATCH_FACE_MORE", "watch_weather_unit_header", s(R.string.settings_watch_weather_unit), s(R.string.settings_watch_weather_celsius_sub), listOf("wd", "temperature", "celsius", "fahrenheit", "sheshi", "huashi")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_date_locale_header", s(R.string.settings_watchface_date_language), s(R.string.search_d_watchface_date_locale), listOf("rqyy", "date locale", "yuyan")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchmaker_force_fill", s(R.string.settings_watchmaker_force_fill), s(R.string.search_d_force_fill), listOf("qzpm", "force fill", "puman")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_gravity_parallax", s(R.string.settings_watchface_gravity_parallax), s(R.string.settings_watchface_gravity_parallax_on), listOf("景深", "gravity", "gyro", "parallax", "jing shen")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchmaker_body_sensors", s(R.string.settings_watchface_heart_rate), s(R.string.search_d_heart_rate), listOf("bpxl", "heart rate", "xinlv")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_font", s(R.string.settings_watchface_font), s(R.string.search_d_watchface_font), listOf("bpzt", "font", "ziti")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_bottom_fade", s(R.string.settings_watchface_bottom_fade), s(R.string.search_d_watchface_bottom_fade), listOf("bpdb", "bottom fade")),
@@ -5299,9 +5419,11 @@ private fun buildSettingsSearchIndex(context: Context): List<SettingsSearchEntry
     SettingsSearchEntry("ICON_PACKS", null, s(R.string.settings_icon_packs), s(R.string.search_d_icon_packs), listOf("tbb", "icon pack")),
     SettingsSearchEntry("HIDDEN_APPS", null, s(R.string.settings_hidden_apps), s(R.string.search_d_hidden_apps), listOf("ycyy", "hidden", "yincang")),
     SettingsSearchEntry("FEATURE_TOGGLES", null, s(R.string.settings_feature_toggles), s(R.string.search_d_feature_toggles), listOf("gnkg", "toggles")),
+    SettingsSearchEntry("FEATURE_TOGGLES", "glass_highlight_toggle", s(R.string.settings_glass_highlight), s(R.string.settings_glass_highlight_on), listOf("gaoguang", "glass", "highlight", "bianyuan")),
     SettingsSearchEntry("SIDE_SCREEN", null, s(R.string.settings_side_screen_title), s(R.string.search_d_side_screen), listOf("fyp", "side screen", "fuyiping", "xiaozujian")),
     SettingsSearchEntry("SIDE_SCREEN", "side_screen_toggle", s(R.string.settings_side_screen), s(R.string.search_d_side_screen_toggle), listOf("fyp", "side screen")),
     SettingsSearchEntry("SIDE_SCREEN", "widget_center_toggle", s(R.string.search_t_widget_page), s(R.string.search_d_widget_page), listOf("xzjy", "widget")),
+    SettingsSearchEntry("SIDE_SCREEN", "widget_glass_highlight", s(R.string.settings_widget_glass_highlight), s(R.string.search_d_widget_glass_highlight), listOf("xzjy", "widget", "glass", "highlight", "gaoguang")),
     SettingsSearchEntry("SIDE_SCREEN", "show_step_count", s(R.string.settings_show_steps), s(R.string.search_d_show_steps), listOf("xsbs", "steps", "bushu")),
     SettingsSearchEntry("SIDE_SCREEN", "music_notification_swap_toggle", s(R.string.settings_swap_music_notifications), s(R.string.search_d_swap), listOf("hhzj", "swap")),
     SettingsSearchEntry("NOTIFICATION_SETTINGS", null, s(R.string.settings_notifications_title), s(R.string.search_d_notifications), listOf("tzzx", "notification", "tongzhi")),

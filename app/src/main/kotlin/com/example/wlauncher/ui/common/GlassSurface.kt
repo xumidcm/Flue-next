@@ -20,7 +20,14 @@ import com.flue.launcher.ui.theme.GlassSurfaceTokens
 fun Modifier.glassSurface(
     shape: Shape,
     tokens: GlassSurfaceTokens,
+    highlightEnabled: Boolean = true,
 ): Modifier = this
     .clip(shape)
     .background(tokens.fill)
-    .border(tokens.borderWidth, tokens.highlight, shape)
+    .then(
+        if (highlightEnabled) {
+            Modifier.border(tokens.borderWidth, tokens.highlight, shape)
+        } else {
+            Modifier
+        },
+    )

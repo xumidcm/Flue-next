@@ -1,5 +1,6 @@
 package com.flue.launcher.watchface.store
 
+import android.graphics.Bitmap
 import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.watchface.WatchFaceType
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceScanFailure
@@ -12,6 +13,8 @@ import java.nio.file.Files
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -219,6 +222,30 @@ class WatchStoreRepositoryRecoveryTest {
         }
     }
 
+    @Test
+    fun `decoded preview can seed a recreated card without another loading frame`() = runBlocking {
+        val root = Files.createTempDirectory("flue-watch-store-preview-memory-").toFile()
+        try {
+            val id = "00000000-0000-0000-0000-000000000005"
+            val repository = WatchStoreRepository(
+                api = BitmapPreviewApi,
+                cacheRoot = root.resolve("cache"),
+                catalog = FileWatchFaceCatalog(root.resolve("watch-face-catalog.json")),
+                installJournal = FileWatchFaceInstallJournal(root.resolve("watch-face-install-journal.json")),
+                installedWatchFacesProvider = { emptyList() },
+                ioDispatcher = Dispatchers.Unconfined,
+            )
+
+            assertNull(repository.peekPreview(id, 32, 32))
+            val loaded = repository.loadPreview(id, 32, 32)
+
+            assertSame(loaded, repository.peekPreview(id, 32, 32))
+            assertNull(repository.peekPreview(id, 64, 64))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     private fun repository(
         root: File,
         catalogFile: File,
@@ -244,6 +271,23 @@ class WatchStoreRepositoryRecoveryTest {
         override fun listWatchFaces(query: WatchStoreQuery): WatchStorePage = error("not used")
         override fun getWatchFace(id: String): WatchStoreWatchFaceDetail = error("not used")
         override fun downloadPreview(id: String, destination: File): File = error("not used")
+        override fun downloadWatchFace(id: String, destination: File): File = error("not used")
+    }
+
+    private object BitmapPreviewApi : WatchStoreApi {
+        override fun getCategories(): List<WatchStoreCategory> = error("not used")
+        override fun listWatchFaces(query: WatchStoreQuery): WatchStorePage = error("not used")
+        override fun getWatchFace(id: String): WatchStoreWatchFaceDetail = error("not used")
+        override fun downloadPreview(id: String, destination: File): File = destination.also { file ->
+            val bitmap = Bitmap.createBitmap(32, 32, Bitmap.Config.ARGB_8888)
+            try {
+                file.outputStream().use { output ->
+                    check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
+                }
+            } finally {
+                bitmap.recycle()
+            }
+        }
         override fun downloadWatchFace(id: String, destination: File): File = error("not used")
     }
 }

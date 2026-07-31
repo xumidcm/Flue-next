@@ -82,6 +82,7 @@ import com.flue.launcher.ui.drawer.AppListBackend
 import com.flue.launcher.ui.drawer.appListBackend
 import com.flue.launcher.ui.drawer.appListPalette
 import com.flue.launcher.ui.drawer.vibrateHaptic
+import com.flue.launcher.ui.common.flueOverlayMaskShape
 import com.flue.launcher.ui.home.WatchFaceLayer
 import com.flue.launcher.ui.home.WatchFaceBottomFadeOverlay
 import com.flue.launcher.ui.home.WatchFaceStatusIndicatorOverlay
@@ -311,6 +312,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
     val rotaryHapticsEnabled by vm.rotaryHapticsEnabled.collectAsStateWithLifecycle()
     val showWidgetPage by vm.showWidgetPage.collectAsStateWithLifecycle()
+    val widgetGlassHighlightEnabled by vm.widgetGlassHighlightEnabled.collectAsStateWithLifecycle()
     val showControlCenter by vm.showControlCenter.collectAsStateWithLifecycle()
     val watchFaceChargingPowerText by vm.watchFaceChargingPowerText.collectAsStateWithLifecycle()
     val watchFaceTextEntryAnimation by vm.watchFaceTextEntryAnimation.collectAsStateWithLifecycle()
@@ -318,6 +320,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val watchmakerForceFill by vm.watchmakerForceFill.collectAsStateWithLifecycle()
+    val watchfaceGravityParallaxEnabled by vm.watchfaceGravityParallaxEnabled.collectAsStateWithLifecycle()
     val doubleTapLockScreenEnabled by vm.doubleTapLockScreenEnabled.collectAsStateWithLifecycle()
     val powerMenuButtonEnabled by vm.powerMenuButtonEnabled.collectAsStateWithLifecycle()
     val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
@@ -434,6 +437,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         watchFaceStatusIndicators,
         watchFaceBottomFadeEnabled,
         watchmakerForceFill,
+        watchfaceGravityParallaxEnabled,
         honeycombBottomFade,
         honeycombEdgeBlurRadius,
         edgeBlurEnabled,
@@ -1841,6 +1845,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 },
                                 dataProvider = watchmakerDataProvider,
                                 forceFill = watchmakerForceFill,
+                                gravityParallaxEnabled = watchfaceGravityParallaxEnabled,
                                 textEntryAnimationEnabled = watchFaceTextEntryAnimation,
                                 textExitAnimationEnabled = watchFaceTextExitAnimation,
                                 textExitAnimationActive = overlayBackdropActive,
@@ -2021,6 +2026,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         fisheyeEnabled = appListFisheyeEnabled,
                         fisheyeRangeRows = appListFisheyeRangeRows,
                         fisheyeStrengthPercent = appListFisheyeStrengthPercent,
+                        honeycombTopFisheyeEnabled = materialHoneycombTopFisheyeEnabled,
                         edgeSpacingCompressionEnabled = appListEdgeSpacingCompressionEnabled,
                         twoToneIconsEnabled = twoToneIconsEnabled,
                         iconShadowEnabled = effectiveIconShadowEnabled,
@@ -2304,16 +2310,22 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             translationX = (1f - pageProgress) * offscreen
                             alpha = if (pageProgress > 0.001f) 1f else 0f
                         }
+                        // Keep the screen mask outside the page translation so an
+                        // Android widget cannot expose a square corner while the
+                        // widget page is sliding in or out.
+                        .clip(flueOverlayMaskShape(overlayMaskCornerRadiusDp))
                 ) {
                     val sideScreenWidgetSlots by vm.sideScreenWidgetSlots.collectAsStateWithLifecycle()
                     WidgetPageLayer(
                         apps = allApps,
                         sideScreenWidgetSlots = sideScreenWidgetSlots,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
+                        glassHighlightEnabled = glassHighlightEnabled,
                         onSetWidget = vm::setWidgetSlot,
                         onSwapWidget = vm::swapWidgetSlots,
                         onRemoveWidget = vm::removeWidgetSlot,
                         onEditModeChange = { widgetPageEditGestureLocked = it },
+                        widgetGlassHighlightEnabled = widgetGlassHighlightEnabled,
                         overlayMaskCornerRadiusDp = overlayMaskCornerRadiusDp,
                     )
                 }
@@ -2422,6 +2434,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 }
                             )
                         },
+                        glassHighlightEnabled = glassHighlightEnabled,
                         overlayMaskCornerRadiusDp = overlayMaskCornerRadiusDp,
                     )
                     }

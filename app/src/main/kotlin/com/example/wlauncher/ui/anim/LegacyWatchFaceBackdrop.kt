@@ -613,6 +613,13 @@ private fun createGeneratedWatchFaceCover(
  * 小图半径 6px 约等于原图 60px 以上，明显强于旧版 18dp 八方向叠图，且只
  * 在缓存生成时执行一次。
  */
+/**
+ * Reuses the API 27-30 prebuilt blur for other renderers that need a stable
+ * backdrop (for example the opt-in gyro face). The returned bitmap is owned by
+ * the caller; [source] remains untouched.
+ */
+internal fun createLegacyPrebuiltBlur(source: Bitmap): Bitmap = createStrongBlur(source)
+
 private fun createStrongBlur(source: Bitmap): Bitmap {
     val smallWidth = (source.width / LEGACY_BACKDROP_BLUR_DOWNSAMPLE_DIVISOR).coerceAtLeast(28)
     val smallHeight = (source.height / LEGACY_BACKDROP_BLUR_DOWNSAMPLE_DIVISOR).coerceAtLeast(28)

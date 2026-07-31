@@ -123,6 +123,12 @@
     <string name="settings_widget_page">ウィジェットページを表示</string>
     <string name="settings_widget_page_on">文字盤から左にスワイプで独立したウィジェットページを開く</string>
     <string name="settings_widget_page_off">左スワイプウィジェットページを無効にする</string>
+    <string name="settings_widget_glass_highlight">ウィジェットのガラスハイライト</string>
+    <string name="settings_widget_glass_highlight_on">ウィジェットカードの縁のハイライトを表示</string>
+    <string name="settings_widget_glass_highlight_off">ウィジェットカードの縁のハイライトを非表示</string>
+    <string name="settings_glass_highlight">ガラス縁ハイライト</string>
+    <string name="settings_glass_highlight_on">コントロールセンター、通知、サイド画面の縁を強調表示</string>
+    <string name="settings_glass_highlight_off">すべての画面でガラス縁ハイライトを非表示</string>
     <string name="settings_swap_music_notifications">音楽と通知を入れ替え</string>
     <string name="settings_swap_music_notifications_on">サイド画面に音楽カード、コントロールセンターに通知カードを表示</string>
     <string name="settings_swap_music_notifications_off">サイド画面に通知、コントロールセンターに音楽のデフォルト配置を維持</string>
@@ -252,6 +258,7 @@
     <string name="search_d_side_screen">サイド画面・ウィジェット・歩数</string>
     <string name="search_d_side_screen_toggle">右スワイプでクイック起動と通知へ</string>
     <string name="search_d_widget_page">左スワイプでウィジェットページへ</string>
+    <string name="search_d_widget_glass_highlight">ウィジェットカードのガラス縁ハイライトを設定</string>
     <string name="search_d_show_steps">サイド画面下部の歩数</string>
     <string name="search_d_swap">サイド画面とコントロールセンターのカードを入れ替え</string>
     <string name="search_d_notifications">通知の表示と常駐フィルター</string>
@@ -379,6 +386,9 @@
     <string name="settings_watchmaker_force_fill">画面いっぱいに表示</string>
     <string name="settings_watchmaker_force_fill_on">キャンバス中心を基点に拡大し、端をトリミング</string>
     <string name="settings_watchmaker_force_fill_off">デザインキャンバス全体を表示し、指定された形状に従う</string>
+    <string name="settings_watchface_gravity_parallax">ジャイロ奥行き文字盤</string>
+    <string name="settings_watchface_gravity_parallax_on">gyro レイヤーを持つ文字盤で手首の動きによる視差を有効化</string>
+    <string name="settings_watchface_gravity_parallax_off">ジャイロ奥行き移動を無効化</string>
     <string name="settings_watchface_heart_rate">文字盤の心拍データ</string>
     <string name="settings_watchface_heart_rate_on">身体センサーを許可済み。対応する .watch タグで心拍を取得できます</string>
     <string name="settings_watchface_heart_rate_off">未許可の間は心拍を利用できません。タップすると許可を求めます</string>

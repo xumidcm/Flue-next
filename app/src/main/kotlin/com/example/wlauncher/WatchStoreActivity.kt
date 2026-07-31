@@ -77,7 +77,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -98,6 +97,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -183,6 +183,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.roundToInt
 
 /**
  * Public Watchmaker community store.  The Activity deliberately owns only the
@@ -348,14 +349,6 @@ private fun WatchStoreScreen(
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
     var viewMode by remember { mutableStateOf(uiPreferences.readViewMode()) }
-    val browseScrolling by remember(viewMode, listState, gridState) {
-        derivedStateOf {
-            when (viewMode) {
-                WatchStoreViewMode.LIST -> listState.isScrollInProgress
-                WatchStoreViewMode.GRID -> gridState.isScrollInProgress
-            }
-        }
-    }
     var sort by remember { mutableStateOf(WatchStoreSort.LATEST) }
     var screenType by remember { mutableStateOf<WatchStoreScreenType?>(null) }
     var selectedCategory by remember { mutableStateOf<WatchStoreCategory?>(null) }
@@ -865,22 +858,17 @@ private fun WatchStoreScreen(
         }
     }
 
-    // Match the settings hierarchy transition exactly: when a child page is
-    // pushed, the preserved browse page moves left by 1/6 and fades away. On
-    // return it comes back from that same position, retaining both lazy states.
+    // Match the settings hierarchy transition: when a child page is pushed,
+    // the preserved browse page moves left by 1/6. Placement-phase movement
+    // avoids a persistent full-screen graphics layer while retaining both lazy states.
     val browseCovered = selectedId != null || uploadVisible || myUploadsVisible
-    val browseHierarchyOffset by animateFloatAsState(
+    val browseHierarchyOffset = animateFloatAsState(
         targetValue = if (browseCovered) 1f else 0f,
         animationSpec = tween(
             durationMillis = if (browseCovered) 240 else 260,
             easing = FastOutSlowInEasing,
         ),
         label = "watch_store_browse_hierarchy_offset",
-    )
-    val browseHierarchyAlpha by animateFloatAsState(
-        targetValue = if (browseCovered) 0f else 1f,
-        animationSpec = tween(durationMillis = if (browseCovered) 140 else 200),
-        label = "watch_store_browse_hierarchy_alpha",
     )
 
     Box(
@@ -891,9 +879,14 @@ private fun WatchStoreScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer {
-                    translationX = -size.width / 6f * browseHierarchyOffset
-                    alpha = browseHierarchyAlpha
+                .layout { measurable, constraints ->
+                    val placeable = measurable.measure(constraints)
+                    layout(placeable.width, placeable.height) {
+                        placeable.placeRelative(
+                            x = (-placeable.width / 6f * browseHierarchyOffset.value).roundToInt(),
+                            y = 0,
+                        )
+                    }
                 }
                 .padding(
                     horizontal = if (isScreenRound) 16.dp else 10.dp,
@@ -1103,9 +1096,9 @@ private fun WatchStoreScreen(
                 },
             )
             Box(modifier = Modifier.fillMaxSize()) {
-                // 指示器画在列表下方图层、被内容位移带出来：列表本体由
-                // fluePullToRefresh 的 graphicsLayer 一起下移，指示器停在
-                // 顶端固定位置，视觉上就是从列表底下被拉出来的。
+                // 指示器画在列表下方、被内容位移带出来：列表本体由
+                // fluePullToRefresh 在 placement 阶段下移，指示器停在顶端
+                // 固定位置，视觉上就是从列表底下被拉出来的。
                 PullRefreshIndicator(
                     state = pullRefreshState,
                     refreshing = pullRefreshing,
@@ -1136,10 +1129,13 @@ private fun WatchStoreScreen(
                                 onOpen = { openDetail(item.id) },
                                 onDownload = { download(item.id, item.screenType) },
                                 onCancelDownload = { cancelDownload(item.id) },
-                                loadPreview = !browseScrolling,
                             )
                         }
-                        items(statusRows, key = { it.first }) { row -> row.second() }
+                        items(
+                            items = statusRows,
+                            key = { it.first },
+                            contentType = { "watch_store_status" },
+                        ) { row -> row.second() }
                     }
                 } else {
                     LazyVerticalGrid(
@@ -1167,12 +1163,12 @@ private fun WatchStoreScreen(
                                 onOpen = { openDetail(item.id) },
                                 onDownload = { download(item.id, item.screenType) },
                                 onCancelDownload = { cancelDownload(item.id) },
-                                loadPreview = !browseScrolling,
                             )
                         }
                         gridItems(
-                            statusRows,
+                            items = statusRows,
                             key = { it.first },
+                            contentType = { "watch_store_status" },
                             span = { GridItemSpan(maxLineSpan) },
                         ) { row -> row.second() }
                     }
@@ -1190,10 +1186,10 @@ private fun WatchStoreScreen(
                 .zIndex(1f),
             enter = slideInHorizontally(
                 animationSpec = tween(260, easing = FastOutSlowInEasing),
-            ) { fullWidth -> fullWidth / 4 } + fadeIn(tween(200)),
+            ) { fullWidth -> fullWidth / 4 },
             exit = slideOutHorizontally(
                 animationSpec = tween(240, easing = FastOutSlowInEasing),
-            ) { fullWidth -> fullWidth / 4 } + fadeOut(tween(140)),
+            ) { fullWidth -> fullWidth / 4 },
         ) {
             val overlayId = selectedId ?: lastDetailId
             if (overlayId != null) {
@@ -1252,10 +1248,10 @@ private fun WatchStoreScreen(
                 .zIndex(2f),
             enter = slideInHorizontally(
                 animationSpec = tween(260, easing = FastOutSlowInEasing),
-            ) { fullWidth -> fullWidth / 4 } + fadeIn(tween(200)),
+            ) { fullWidth -> fullWidth / 4 },
             exit = slideOutHorizontally(
                 animationSpec = tween(240, easing = FastOutSlowInEasing),
-            ) { fullWidth -> fullWidth / 4 } + fadeOut(tween(140)),
+            ) { fullWidth -> fullWidth / 4 },
         ) {
             StoreUploadOverlay(
                 repository = repository,
@@ -1274,10 +1270,10 @@ private fun WatchStoreScreen(
                 .zIndex(3f),
             enter = slideInHorizontally(
                 animationSpec = tween(260, easing = FastOutSlowInEasing),
-            ) { fullWidth -> fullWidth / 4 } + fadeIn(tween(200)),
+            ) { fullWidth -> fullWidth / 4 },
             exit = slideOutHorizontally(
                 animationSpec = tween(240, easing = FastOutSlowInEasing),
-            ) { fullWidth -> fullWidth / 4 } + fadeOut(tween(140)),
+            ) { fullWidth -> fullWidth / 4 },
         ) {
             MyUploadsOverlay(
                 repository = repository,
@@ -1647,7 +1643,6 @@ private fun WatchFaceListCard(
     onOpen: () -> Unit,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
-    loadPreview: Boolean,
 ) {
     val style = LauncherTheme.style
     val displayName = (downloadState as? WatchStoreInstallState.Installed)
@@ -1684,8 +1679,6 @@ private fun WatchFaceListCard(
                 .aspectRatio(previewRatio)
                 .clip(previewShape),
             targetSize = 256,
-            loadEnabled = loadPreview,
-            animateStateChanges = false,
         )
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -1731,7 +1724,6 @@ private fun WatchFaceGridCard(
     onOpen: () -> Unit,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
-    loadPreview: Boolean,
 ) {
     val style = LauncherTheme.style
     val displayName = (downloadState as? WatchStoreInstallState.Installed)
@@ -1760,8 +1752,6 @@ private fun WatchFaceGridCard(
                 .fillMaxWidth()
                 .aspectRatio(1f),
             targetSize = 256,
-            loadEnabled = loadPreview,
-            animateStateChanges = false,
         )
         Column(
             Modifier
@@ -1858,9 +1848,8 @@ private fun WatchFaceDetailPage(
                 vertical = if (isScreenRound) 10.dp else 6.dp,
             ),
     ) {
-        // Opaque background + explicit zIndex: the scroll column below carries
-        // flueElasticNestedScroll's graphicsLayer translation, and during the
-        // top overscroll bounce it was drawn straight over this header.
+        // Opaque background + explicit zIndex: the scroll column below can move
+        // during the top overscroll bounce and must not draw over this header.
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
@@ -2318,18 +2307,13 @@ private fun MyUploadsOverlay(
     }
 
     val editCovered = editTarget != null
-    val contentHierarchyOffset by animateFloatAsState(
+    val contentHierarchyOffset = animateFloatAsState(
         targetValue = if (editCovered) 1f else 0f,
         animationSpec = tween(
             durationMillis = if (editCovered) 240 else 260,
             easing = FastOutSlowInEasing,
         ),
         label = "my_uploads_hierarchy_offset",
-    )
-    val contentHierarchyAlpha by animateFloatAsState(
-        targetValue = if (editCovered) 0f else 1f,
-        animationSpec = tween(durationMillis = if (editCovered) 140 else 200),
-        label = "my_uploads_hierarchy_alpha",
     )
 
     Box(
@@ -2351,9 +2335,14 @@ private fun MyUploadsOverlay(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer {
-                    translationX = -size.width / 6f * contentHierarchyOffset
-                    alpha = contentHierarchyAlpha
+                .layout { measurable, constraints ->
+                    val placeable = measurable.measure(constraints)
+                    layout(placeable.width, placeable.height) {
+                        placeable.placeRelative(
+                            x = (-placeable.width / 6f * contentHierarchyOffset.value).roundToInt(),
+                            y = 0,
+                        )
+                    }
                 }
                 .padding(horizontal = 10.dp, vertical = 6.dp),
         ) {
@@ -2391,15 +2380,15 @@ private fun MyUploadsOverlay(
                 entries.isEmpty() -> MyUploadsContentState.EMPTY
                 else -> MyUploadsContentState.LIST
             }
-            Crossfade(
-                targetState = contentState,
-                animationSpec = tween(180),
+            // Keep the active list out of a full-viewport Crossfade layer. The
+            // surrounding hierarchy slide already animates page navigation; a
+            // persistent alpha layer here made every upload-list frame more costly.
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                label = "my_uploads_content",
-            ) { state ->
-                when (state) {
+            ) {
+                when (contentState) {
                     MyUploadsContentState.LOGIN_PROMPT -> Box(
                         Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center,
@@ -2527,7 +2516,11 @@ private fun MyUploadsOverlay(
                     MyUploadsContentState.LIST -> LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        items(entries, key = { it.id }) { entry ->
+                        items(
+                            items = entries,
+                            key = { it.id },
+                            contentType = { "my_upload_row" },
+                        ) { entry ->
                             MyUploadEntryRow(
                                 entry = entry,
                                 repository = repository,
@@ -2552,10 +2545,10 @@ private fun MyUploadsOverlay(
                 .zIndex(5f),
             enter = slideInHorizontally(
                 animationSpec = tween(260, easing = FastOutSlowInEasing),
-            ) { fullWidth -> fullWidth / 4 } + fadeIn(tween(200)),
+            ) { fullWidth -> fullWidth / 4 },
             exit = slideOutHorizontally(
                 animationSpec = tween(240, easing = FastOutSlowInEasing),
-            ) { fullWidth -> fullWidth / 4 } + fadeOut(tween(140)),
+            ) { fullWidth -> fullWidth / 4 },
         ) {
             val entry = editTarget ?: lastEditTarget
             if (entry != null) {
@@ -2663,12 +2656,19 @@ private fun MyUploadEntryRow(
     val style = LauncherTheme.style
     val screenType = stringResource(screenTypeLabelRes(entry.screenType))
     val previewSizePx = 56
-    var bitmap by remember(entry.id, previewGeneration) { mutableStateOf<ImageBitmap?>(null) }
+    var bitmap by remember(entry.id, previewGeneration) {
+        mutableStateOf(repository.peekPreview(entry.id, previewSizePx, previewSizePx)?.asImageBitmap())
+    }
+    var previewFailed by remember(entry.id, previewGeneration) { mutableStateOf(false) }
     LaunchedEffect(entry.id, previewGeneration) {
-        runCatching {
-            val bmp = withContext(Dispatchers.IO) { repository.loadPreview(entry.id, previewSizePx, previewSizePx) }
-            bitmap = bmp.asImageBitmap()
-        }
+        if (bitmap != null) return@LaunchedEffect
+        previewFailed = false
+        runCatching { repository.loadPreview(entry.id, previewSizePx, previewSizePx) }
+            .onSuccess { bitmap = it.asImageBitmap() }
+            .onFailure { error ->
+                error.throwIfCancellation()
+                previewFailed = true
+            }
     }
 
     Row(
@@ -2693,12 +2693,18 @@ private fun MyUploadEntryRow(
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
                 )
-            } else {
+            } else if (previewFailed) {
                 Icon(
                     MiuixIcons.Folder,
                     contentDescription = null,
                     tint = style.secondaryTextColor,
                     modifier = Modifier.size(24.dp),
+                )
+            } else {
+                MiuixLoadingIndicator(
+                    Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                    color = style.accentColor,
                 )
             }
         }
@@ -4083,19 +4089,16 @@ private fun WatchPreview(
     modifier: Modifier,
     targetSize: Int,
     onOpen: ((Bitmap) -> Unit)? = null,
-    loadEnabled: Boolean = true,
-    animateStateChanges: Boolean = true,
 ) {
     val context = LocalContext.current
     val style = LauncherTheme.style
     var retryToken by remember(repository, id, targetSize) { mutableIntStateOf(0) }
-    var bitmap by remember(repository, id, targetSize) { mutableStateOf<Bitmap?>(null) }
+    var bitmap by remember(repository, id, targetSize) {
+        mutableStateOf(repository.peekPreview(id, targetSize, targetSize))
+    }
     var loadError by remember(repository, id, targetSize) { mutableStateOf<String?>(null) }
-    LaunchedEffect(repository, id, targetSize, retryToken, loadEnabled) {
-        // During a fling, cards can live for only a few milliseconds. Starting a disk/network
-        // decode and an animated spinner for every passing card competes with LazyColumn's
-        // measure/draw work. Keep an already loaded image, but defer new work until settling.
-        if (!loadEnabled || bitmap != null) return@LaunchedEffect
+    LaunchedEffect(repository, id, targetSize, retryToken) {
+        if (bitmap != null) return@LaunchedEffect
         loadError = null
         try {
             bitmap = repository.loadPreview(id, targetSize, targetSize)
@@ -4126,27 +4129,16 @@ private fun WatchPreview(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        if (animateStateChanges) {
-            // Detail/full-size previews keep the polished fade. Browse cards use a direct
-            // state swap so a fast list does not maintain several Crossfade subcompositions.
-            Crossfade(
-                targetState = previewState,
-                animationSpec = tween(durationMillis = 220),
-                label = "watchPreviewFade",
-            ) { state ->
-                WatchPreviewContent(
-                    state = state,
-                    image = image,
-                    loadingAnimated = loadEnabled,
-                    style = style,
-                    onRetry = { retryToken++ },
-                )
-            }
-        } else {
+        // Keep the original loading spinner and polished image fade. A synchronous
+        // memory-cache seed above avoids replaying this state for covers already seen.
+        Crossfade(
+            targetState = previewState,
+            animationSpec = tween(durationMillis = 220),
+            label = "watchPreviewFade",
+        ) { state ->
             WatchPreviewContent(
-                state = previewState,
+                state = state,
                 image = image,
-                loadingAnimated = loadEnabled,
                 style = style,
                 onRetry = { retryToken++ },
             )
@@ -4158,7 +4150,6 @@ private fun WatchPreview(
 private fun WatchPreviewContent(
     state: WatchPreviewState,
     image: ImageBitmap?,
-    loadingAnimated: Boolean,
     style: com.flue.launcher.ui.theme.LauncherStyle,
     onRetry: () -> Unit,
 ) {
@@ -4193,19 +4184,11 @@ private fun WatchPreviewContent(
                 )
             }
 
-            WatchPreviewState.LOADING -> if (loadingAnimated) {
+            WatchPreviewState.LOADING -> {
                 MiuixLoadingIndicator(
                     Modifier.size(22.dp),
                     strokeWidth = 2.dp,
                     color = style.accentColor,
-                )
-            } else {
-                // A static placeholder is intentionally cheap while the list is moving.
-                Icon(
-                    imageVector = MiuixIcons.Image,
-                    contentDescription = stringResource(R.string.watch_store_preview),
-                    tint = style.secondaryTextColor.copy(alpha = 0.45f),
-                    modifier = Modifier.size(20.dp),
                 )
             }
         }

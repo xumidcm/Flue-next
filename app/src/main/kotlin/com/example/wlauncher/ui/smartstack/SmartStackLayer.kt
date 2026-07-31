@@ -812,6 +812,7 @@ fun SmartStackLayer(
                 items = shortcutItems,
                 slotCenters = slotCenters,
                 dockWidth = contentWidth,
+                glassHighlightEnabled = glassHighlightEnabled,
                 onAdd = { onRevealTargetChange(null); modalState = SideScreenModalState.ShortcutPicker(it) },
                 onOpenActions = { slot, app ->
                     onRevealTargetChange(null)
@@ -852,11 +853,13 @@ fun SmartStackLayer(
                         !notificationAccessGranted -> PreviewInfoCard(
                             stringResource(R.string.side_notification_permission_title),
                             stringResource(R.string.side_notification_permission_subtitle),
+                            glassHighlightEnabled,
                             onOpenNotifications,
                         )
                         previewGroups.isEmpty() -> PreviewInfoCard(
                             stringResource(R.string.side_notification_empty_title),
                             stringResource(R.string.side_notification_empty_subtitle),
+                            glassHighlightEnabled,
                             onOpenNotifications,
                         )
                         else -> previewRows.forEach { row ->
@@ -864,6 +867,7 @@ fun SmartStackLayer(
                                 is PreviewRow.Aggregate -> StackedPreviewCard(
                                     row.leadEntry,
                                     row.hiddenCount,
+                                    glassHighlightEnabled,
                                     onOpenNotifications
                                 )
                                 is PreviewRow.Group -> {
@@ -892,10 +896,11 @@ fun SmartStackLayer(
                                             actionHeight = 72.dp
                                         ) {
                                             if (row.hiddenCount > 0) {
-                                                StackedPreviewCard(entry, row.hiddenCount, onOpenNotifications)
+                                                StackedPreviewCard(entry, row.hiddenCount, glassHighlightEnabled, onOpenNotifications)
                                             } else {
                                                 PreviewPill(
                                                     entry = entry,
+                                                    glassHighlightEnabled = glassHighlightEnabled,
                                                     onClick = onOpenNotifications
                                                 )
                                             }
@@ -955,6 +960,8 @@ fun WidgetPageLayer(
     apps: List<AppInfo>,
     sideScreenWidgetSlots: List<String?>,
     leftSafeInsetPercent: Int,
+    glassHighlightEnabled: Boolean = true,
+    widgetGlassHighlightEnabled: Boolean = true,
     onSetWidget: (Int, String?) -> Unit,
     onSwapWidget: (Int, Int) -> Unit,
     onRemoveWidget: (Int) -> Unit,
@@ -966,6 +973,8 @@ fun WidgetPageLayer(
     val activity = remember(context) { context.findActivity() }
     val density = LocalDensity.current
     val launcherStyle = LauncherTheme.style
+    val effectiveWidgetGlassHighlightEnabled =
+        glassHighlightEnabled && widgetGlassHighlightEnabled
     val roundScreen = isFlueScreenRound()
     val widgetRepository = remember(context) { FlueApplication.repositories(context).widgetRepository }
     val appWidgetManager = remember(context) { AppWidgetManager.getInstance(context) }
@@ -1352,7 +1361,11 @@ fun WidgetPageLayer(
                                 // 退出编辑后退回纯白/透明塑料底。
                                 .then(
                                     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
-                                        Modifier.glassSurface(shellShape, launcherStyle.glass)
+                                        Modifier.glassSurface(
+                                            shellShape,
+                                            launcherStyle.glass,
+                                            highlightEnabled = effectiveWidgetGlassHighlightEnabled,
+                                        )
                                     } else {
                                         Modifier.background(
                                             if (editMode) Color.White.copy(alpha = 0.05f)
@@ -1372,6 +1385,7 @@ fun WidgetPageLayer(
                                     cardWidth = cardWidth,
                                     widgetRepository = widgetRepository,
                                     appWidgetHost = appWidgetHost,
+                                    glassHighlightEnabled = effectiveWidgetGlassHighlightEnabled,
                                     onLongPress = if (!editMode && !showPicker) {
                                         {
                                             editMode = true
@@ -1760,7 +1774,7 @@ fun WidgetPageLayer(
                                     verticalArrangement = Arrangement.spacedBy(widgetColumnGap)
                                 ) {
                                     section.right.forEach { card ->
-                                        EditableWidgetCard(card, singleColumnWidth)
+                                    EditableWidgetCard(card, singleColumnWidth)
                                     }
                                 }
                             }
@@ -1782,6 +1796,7 @@ fun WidgetPageLayer(
                     rootOffset = widgetPageRootOffset,
                     widgetRepository = widgetRepository,
                     appWidgetHost = appWidgetHost,
+                    glassHighlightEnabled = effectiveWidgetGlassHighlightEnabled,
                     modifier = Modifier.zIndex(100f),
                 )
             }
@@ -1943,6 +1958,7 @@ private fun WidgetDragPreviewCard(
     rootOffset: Offset,
     widgetRepository: WidgetRepository,
     appWidgetHost: AppWidgetHost,
+    glassHighlightEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val launcherStyle = LauncherTheme.style
@@ -1963,7 +1979,11 @@ private fun WidgetDragPreviewCard(
             }
             .then(
                 if (launcherStyle.uiStyle == UiStyle.MIUIX) {
-                    Modifier.glassSurface(shape, launcherStyle.glassThick)
+                    Modifier.glassSurface(
+                        shape,
+                        launcherStyle.glassThick,
+                        highlightEnabled = glassHighlightEnabled,
+                    )
                 } else {
                     Modifier
                         .clip(shape)
@@ -1977,6 +1997,7 @@ private fun WidgetDragPreviewCard(
             cardWidth = width,
             widgetRepository = widgetRepository,
             appWidgetHost = appWidgetHost,
+            glassHighlightEnabled = glassHighlightEnabled,
             onLongPress = null,
             onMeasuredHeight = {}
         )
@@ -2011,6 +2032,7 @@ private val QUICK_DOCK_PADDING_VERTICAL = 18.dp
     slotCenters: MutableMap<Int, Offset>,
     /** 与通知横幅/音乐卡同源的内容宽度，dock 必须与它们左右对齐。 */
     dockWidth: Dp,
+    glassHighlightEnabled: Boolean,
     onAdd: (Int) -> Unit,
     onOpenActions: (Int, AppInfo) -> Unit,
     onCloseActions: () -> Unit,
@@ -2039,7 +2061,11 @@ private val QUICK_DOCK_PADDING_VERTICAL = 18.dp
                 .width(dockWidth)
                 // 原先这里写死白 0.13→0.06 填充 + 白 0.18→0.04 描边；那套实测配方
                 // 现在提成了 glass 令牌，三套风格与通知条共用同一份，取值不变。
-                .glassSurface(dockShape, LauncherTheme.style.glass)
+                .glassSurface(
+                    dockShape,
+                    LauncherTheme.style.glass,
+                    highlightEnabled = glassHighlightEnabled,
+                )
                 .padding(
                     horizontal = QUICK_DOCK_PADDING_HORIZONTAL,
                     vertical = QUICK_DOCK_PADDING_VERTICAL,
@@ -2158,6 +2184,7 @@ private fun WidgetCard(
     cardWidth: Dp,
     widgetRepository: WidgetRepository,
     appWidgetHost: AppWidgetHost,
+    glassHighlightEnabled: Boolean = true,
     onLongPress: (() -> Unit)?,
     onMeasuredHeight: (Int) -> Unit
 ) {
@@ -2194,7 +2221,11 @@ private fun WidgetCard(
             }
             .then(
                 if (launcherStyle.uiStyle == UiStyle.MIUIX) {
-                    Modifier.glassSurface(cardShape, launcherStyle.glass)
+                    Modifier.glassSurface(
+                        cardShape,
+                        launcherStyle.glass,
+                        highlightEnabled = glassHighlightEnabled,
+                    )
                 } else {
                     Modifier.background(launcherStyle.cardColor, cardShape)
                 },
@@ -2212,11 +2243,16 @@ private fun WidgetCard(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
                         )
+                        clipChildren = true
+                        clipToPadding = true
                         clipToOutline = true
                         outlineProvider = object : ViewOutlineProvider() {
                             override fun getOutline(view: View, outline: Outline) {
                                 outline.setRoundRect(0, 0, view.width, view.height, radiusPx)
                             }
+                        }
+                        addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
+                            view.invalidateOutline()
                         }
                     }
                     val hostView = appWidgetHost.createView(viewContext, widget.widgetId, providerInfo).apply {
@@ -2227,6 +2263,9 @@ private fun WidgetCard(
                             override fun getOutline(view: View, outline: Outline) {
                                 outline.setRoundRect(0, 0, view.width, view.height, radiusPx)
                             }
+                        }
+                        addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
+                            view.invalidateOutline()
                         }
                         layoutParams = FrameLayout.LayoutParams(
                             FrameLayout.LayoutParams.MATCH_PARENT,
@@ -2288,6 +2327,7 @@ private fun WidgetCard(
                         // 宿主内容轻微透出后面的玻璃层，普通态与编辑态一致。
                         alpha = if (launcherStyle.uiStyle == UiStyle.MIUIX) 0.84f else 1f
                     }
+                    .clip(cardShape)
             )
         } else {
             val interactionSource = remember { MutableInteractionSource() }
@@ -2308,7 +2348,11 @@ private fun WidgetCard(
                     .clip(cardShape)
                     .then(
                         if (launcherStyle.uiStyle == UiStyle.MIUIX) {
-                            Modifier.glassSurface(cardShape, launcherStyle.glass)
+                            Modifier.glassSurface(
+                                cardShape,
+                                launcherStyle.glass,
+                                highlightEnabled = glassHighlightEnabled,
+                            )
                         } else {
                             Modifier.background(launcherStyle.cardColor, cardShape)
                         },
@@ -2368,15 +2412,21 @@ private fun EmptyWidgetCard(width: Dp) {
     }
 }
 
-@Composable private fun PreviewInfoCard(title: String, subtitle: String, onClick: () -> Unit) {
+@Composable private fun PreviewInfoCard(
+    title: String,
+    subtitle: String,
+    glassHighlightEnabled: Boolean,
+    onClick: () -> Unit,
+) {
     val fake = NotificationEntryUi("info", "", null, title, title, subtitle, 0L, null, false, false, false, false)
-    PreviewPill(fake, onClick)
+    PreviewPill(fake, onClick, glassHighlightEnabled = glassHighlightEnabled)
 }
 
 @Composable private fun PreviewPill(
     entry: NotificationEntryUi,
     onClick: () -> Unit,
-    onMeasuredHeight: ((Int) -> Unit)? = null
+    onMeasuredHeight: ((Int) -> Unit)? = null,
+    glassHighlightEnabled: Boolean = true
 ) {
     val launcherStyle = LauncherTheme.style
     val pressed = rememberPressedState(); val isPressed by pressed
@@ -2391,7 +2441,11 @@ private fun EmptyWidgetCard(width: Dp) {
             // 通知条原来走 cardColor，且半透明时被强制刷成不透明 #353535 ——
             // 上面那栏快捷启动是玻璃，它是实色板，两者材质断层。改成同一份
             // glass 令牌；形状换 cardShape，三套风格各自的圆角语言仍然保留。
-            .glassSurface(launcherStyle.cardShape, launcherStyle.glass)
+            .glassSurface(
+                launcherStyle.cardShape,
+                launcherStyle.glass,
+                highlightEnabled = glassHighlightEnabled,
+            )
             .instantPressGesture(pressed, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
@@ -2414,6 +2468,7 @@ private fun EmptyWidgetCard(width: Dp) {
 @Composable private fun StackedPreviewCard(
     entry: NotificationEntryUi,
     hiddenCount: Int,
+    glassHighlightEnabled: Boolean,
     onClick: () -> Unit
 ) {
     val stackStrength by animateFloatAsState(
@@ -2448,6 +2503,7 @@ private fun EmptyWidgetCard(width: Dp) {
             PreviewPill(
                 entry = entry,
                 onClick = onClick,
+                glassHighlightEnabled = glassHighlightEnabled,
                 onMeasuredHeight = { heightPx ->
                     if (heightPx > 0 && frontCardHeight != heightPx) {
                         frontCardHeight = heightPx

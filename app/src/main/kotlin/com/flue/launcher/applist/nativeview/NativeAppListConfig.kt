@@ -67,6 +67,8 @@ data class NativeAppListConfig(
     val honeycombCellSizePx: Float = 0f,
     val honeycombNarrowColumns: Int = 4,
     val honeycombFisheyeRangeRows: Int = 4,
+    /** MD3 密集蜂窝顶部鱼眼开关；默认关闭，底部鱼眼仍由 [fisheyeEnabled] 控制。 */
+    val honeycombTopFisheyeEnabled: Boolean = false,
     val denseGridColumns: Int = 5,
     val denseGridHorizontalPaddingPx: Float = 8f,
     val denseGridItemSpacingPx: Float = 4f,
@@ -604,6 +606,7 @@ internal fun nativeDenseGridChildVisual(
     val screenCenterX = safeLeft + (viewportWidth - safeLeft) / 2f
     val screenCenterY = viewportHeight / 2f
     val bottomFisheyeStartY = viewportHeight * 0.52f
+    val topFisheyeStartY = viewportHeight * 0.48f
     val columns = config.denseGridColumns.coerceIn(1, 10)
     val rangeRows = config.honeycombFisheyeRangeRows.coerceIn(1, 8)
     val minimumRange = viewportHeight / columns
@@ -611,14 +614,24 @@ internal fun nativeDenseGridChildVisual(
     val strength = config.fisheyeStrength.coerceIn(0f, 2f)
     val minimumScale = (1f - 0.42f * strength).coerceIn(0.16f, 1f)
     val inBottomBand = config.fisheyeEnabled && centerY > bottomFisheyeStartY
-    val scale = if (inBottomBand && fisheyeRange > 0f) {
-        val progress = ((centerY - bottomFisheyeStartY) / fisheyeRange).coerceIn(0f, 1f)
-        1f - (1f - minimumScale) * progress
+    val inTopBand = config.fisheyeEnabled &&
+        config.honeycombTopFisheyeEnabled &&
+        centerY < topFisheyeStartY
+    val fisheyeBottomProgress = if (inBottomBand && fisheyeRange > 0f) {
+        ((centerY - bottomFisheyeStartY) / fisheyeRange).coerceIn(0f, 1f)
     } else {
-        1f
+        0f
     }
+    val fisheyeTopProgress = if (inTopBand && fisheyeRange > 0f) {
+        ((topFisheyeStartY - centerY) / fisheyeRange).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val fisheyeProgress = maxOf(fisheyeBottomProgress, fisheyeTopProgress)
+    val fisheyeActive = fisheyeProgress > 0f
+    val scale = 1f - (1f - minimumScale) * fisheyeProgress
 
-    val translationX = if (inBottomBand && config.edgeSpacingCompressionEnabled) {
+    val translationX = if (fisheyeActive && config.edgeSpacingCompressionEnabled) {
         val edgeProgress = (
             kotlin.math.abs(centerY - screenCenterY) / (viewportHeight / 2f)
             ).coerceIn(0f, 1f)
