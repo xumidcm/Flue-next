@@ -80,7 +80,8 @@ class WatchmakerRuntimeContractsTest {
             viewHeight = 400f,
             forceFill = false,
         )
-        assertEquals(0.625f, fit.scale, 0.0001f)
+        assertEquals(0.625f, fit.scaleX, 0.0001f)
+        assertEquals(0.625f, fit.scaleY, 0.0001f)
         assertEquals(0f, fit.left, 0.0001f)
         assertEquals(40f, fit.top, 0.0001f)
 
@@ -89,7 +90,8 @@ class WatchmakerRuntimeContractsTest {
             viewHeight = 400f,
             forceFill = true,
         )
-        assertEquals(0.78125f, fill.scale, 0.0001f)
+        assertEquals(0.78125f, fill.scaleX, 0.0001f)
+        assertEquals(0.78125f, fill.scaleY, 0.0001f)
         assertEquals(-40f, fill.left, 0.0001f)
         assertEquals(0f, fill.top, 0.0001f)
     }
@@ -105,12 +107,13 @@ class WatchmakerRuntimeContractsTest {
             designWidth = 512f,
             designHeight = 616f,
         )
-        assertEquals(500f / 512f, matched.scale, 0.0001f)
+        assertEquals(500f / 512f, matched.scaleX, 0.0001f)
+        assertEquals(500f / 512f, matched.scaleY, 0.0001f)
         assertEquals(0f, matched.left, 0.01f)
         assertEquals(0f, matched.top, 0.01f)
 
-        // 视口偏方时按短边等比装入，长边留居中黑边——scale 仍是单一值，
-        // 绝不做各轴不同的拉伸。
+        // 视口偏方时按短边等比装入，长边留居中黑边——FIT 下两轴 scale 必须相等，
+        // 绝不做各轴不同的拉伸（那是 STRETCH 的职责）。
         val letterboxed = watchCanvasTransform(
             viewWidth = 600f,
             viewHeight = 400f,
@@ -118,9 +121,233 @@ class WatchmakerRuntimeContractsTest {
             designWidth = 512f,
             designHeight = 616f,
         )
-        assertEquals(400f / 616f, letterboxed.scale, 0.0001f)
+        assertEquals(400f / 616f, letterboxed.scaleX, 0.0001f)
+        assertEquals(400f / 616f, letterboxed.scaleY, 0.0001f)
         assertEquals((600f - 512f * (400f / 616f)) / 2f, letterboxed.left, 0.01f)
         assertEquals(0f, letterboxed.top, 0.01f)
+    }
+
+    /**
+     * 可调画布上线后**存量表盘位置一个像素都不许动**。
+     *
+     * 这条比单独验各预设更重要：它钉住「不传新参数 = 旧行为」。默认值哪天被人
+     * 顺手改一下，这里立刻红。
+     */
+    @Test
+    fun defaultCanvasSettingsMatchTheLegacyForceFillOffPathBitForBit() {
+        listOf(320f to 400f, 400f to 320f, 454f to 454f).forEach { (viewWidth, viewHeight) ->
+            val legacy = watchCanvasTransform(
+                viewWidth = viewWidth,
+                viewHeight = viewHeight,
+                forceFill = false,
+            )
+            val viaSettings = watchCanvasTransform(
+                viewWidth = viewWidth,
+                viewHeight = viewHeight,
+                settings = WatchCanvasSettings.DEFAULT,
+            )
+            // 逐位相同，不给容差 —— 这不是数值近似问题，是同一条代码路径。
+            assertEquals(legacy, viaSettings)
+
+            val legacyFill = watchCanvasTransform(
+                viewWidth = viewWidth,
+                viewHeight = viewHeight,
+                forceFill = true,
+            )
+            val viaFillSettings = watchCanvasTransform(
+                viewWidth = viewWidth,
+                viewHeight = viewHeight,
+                settings = WatchCanvasSettings.fromForceFill(true),
+            )
+            assertEquals(legacyFill, viaFillSettings)
+        }
+    }
+
+    @Test
+    fun canvasPresetsPickTheirDeclaredBaseScale() {
+        // 320×400 视口、512² 设计空间：fitX = 0.625、fitY = 0.78125，两轴不等，
+        // 六个预设的差别才显现得出来。
+        fun transformFor(preset: WatchCanvasPreset) = watchCanvasTransform(
+            viewWidth = 320f,
+            viewHeight = 400f,
+            settings = WatchCanvasSettings(preset = preset),
+        )
+
+        transformFor(WatchCanvasPreset.FIT).let {
+            assertEquals(0.625f, it.scaleX, 0.0001f)
+            assertEquals(0.625f, it.scaleY, 0.0001f)
+            assertEquals(0f, it.left, 0.0001f)
+            assertEquals(40f, it.top, 0.0001f)
+        }
+        transformFor(WatchCanvasPreset.FILL).let {
+            assertEquals(0.78125f, it.scaleX, 0.0001f)
+            assertEquals(0.78125f, it.scaleY, 0.0001f)
+            assertEquals(-40f, it.left, 0.0001f)
+            assertEquals(0f, it.top, 0.0001f)
+        }
+        // 竖直贴合按高度：这个视口下与 FILL 同值，但语义不同（视口更宽时会分岔）。
+        transformFor(WatchCanvasPreset.VERTICAL).let {
+            assertEquals(0.78125f, it.scaleX, 0.0001f)
+            assertEquals(0.78125f, it.scaleY, 0.0001f)
+        }
+        transformFor(WatchCanvasPreset.HORIZONTAL).let {
+            assertEquals(0.625f, it.scaleX, 0.0001f)
+            assertEquals(0.625f, it.scaleY, 0.0001f)
+        }
+        // 唯一允许两轴不等的预设，且两个方向都正好铺满、不留边。
+        transformFor(WatchCanvasPreset.STRETCH).let {
+            assertEquals(0.625f, it.scaleX, 0.0001f)
+            assertEquals(0.78125f, it.scaleY, 0.0001f)
+            assertEquals(0f, it.left, 0.0001f)
+            assertEquals(0f, it.top, 0.0001f)
+        }
+        // CUSTOM 基准恒为 1：设计空间比视口大，所以居中后 left/top 为负。
+        transformFor(WatchCanvasPreset.CUSTOM).let {
+            assertEquals(1f, it.scaleX, 0.0001f)
+            assertEquals(1f, it.scaleY, 0.0001f)
+            assertEquals(-96f, it.left, 0.0001f)
+            assertEquals(-56f, it.top, 0.0001f)
+        }
+    }
+
+    @Test
+    fun canvasPresetsDivergeWhenTheViewportIsWiderThanTheDesign() {
+        // 600×400 视口、512² 设计：fitX = 1.171875 > fitY = 0.78125。
+        // VERTICAL 取高度、HORIZONTAL 取宽度，此时两者与 FIT/FILL 的对应关系翻转。
+        fun scaleFor(preset: WatchCanvasPreset) = watchCanvasTransform(
+            viewWidth = 600f,
+            viewHeight = 400f,
+            settings = WatchCanvasSettings(preset = preset),
+        ).scaleX
+
+        assertEquals(0.78125f, scaleFor(WatchCanvasPreset.FIT), 0.0001f)
+        assertEquals(1.171875f, scaleFor(WatchCanvasPreset.FILL), 0.0001f)
+        // 竖直贴合此刻等于 FIT，水平贴合等于 FILL —— 与上一条测试恰好相反，
+        // 这就是「方屏上四预设部分等价」不能当成实现正确的证据的原因。
+        assertEquals(0.78125f, scaleFor(WatchCanvasPreset.VERTICAL), 0.0001f)
+        assertEquals(1.171875f, scaleFor(WatchCanvasPreset.HORIZONTAL), 0.0001f)
+    }
+
+    @Test
+    fun canvasZoomAndOffsetApplyOnTopOfThePresetBaseline() {
+        val zoomed = watchCanvasTransform(
+            viewWidth = 320f,
+            viewHeight = 400f,
+            settings = WatchCanvasSettings(
+                preset = WatchCanvasPreset.FIT,
+                zoomX = 2f,
+                zoomY = 1f,
+            ),
+        )
+        // zoom 只乘自己那一轴，另一轴保持基准。
+        assertEquals(1.25f, zoomed.scaleX, 0.0001f)
+        assertEquals(0.625f, zoomed.scaleY, 0.0001f)
+        // 放大后仍以视口中心为锚点：left 跟着缩放重算，不是原样保留。
+        assertEquals((320f - 512f * 1.25f) / 2f, zoomed.left, 0.0001f)
+        assertEquals(40f, zoomed.top, 0.0001f)
+
+        val shifted = watchCanvasTransform(
+            viewWidth = 320f,
+            viewHeight = 400f,
+            settings = WatchCanvasSettings(offsetX = 12f, offsetY = -8f),
+        )
+        assertEquals(12f, shifted.left, 0.0001f)
+        assertEquals(32f, shifted.top, 0.0001f)
+    }
+
+    /**
+     * 脏配置不能把画布弄没。
+     *
+     * zoom 取 0 会让整块表盘塌成一个点、偏移取无穷会把它推出屏幕，两种情况下
+     * 用户都点不中「重置」——所以兜底是可用性问题，不只是数值卫生。
+     */
+    @Test
+    fun canvasTransformClampsHostileZoomAndOffsetValues() {
+        fun transformWith(settings: WatchCanvasSettings) = watchCanvasTransform(
+            viewWidth = 320f,
+            viewHeight = 400f,
+            settings = settings,
+        )
+
+        // 0 与负数被夹到下限 0.1，画布仍然可见、可交互。
+        assertEquals(
+            0.625f * 0.1f,
+            transformWith(WatchCanvasSettings(zoomX = 0f)).scaleX,
+            0.0001f,
+        )
+        assertEquals(
+            0.625f * 0.1f,
+            transformWith(WatchCanvasSettings(zoomX = -3f)).scaleX,
+            0.0001f,
+        )
+        // 上限 5，防止一个滑到底的滑杆把位图放大到 OOM。
+        assertEquals(
+            0.625f * 5f,
+            transformWith(WatchCanvasSettings(zoomX = 100f)).scaleX,
+            0.0001f,
+        )
+        // NaN / 无穷回落到中性值，而不是继续污染整条矩阵。
+        assertEquals(
+            0.625f,
+            transformWith(WatchCanvasSettings(zoomY = Float.NaN)).scaleY,
+            0.0001f,
+        )
+        assertEquals(
+            0.625f,
+            transformWith(WatchCanvasSettings(zoomY = Float.POSITIVE_INFINITY)).scaleY,
+            0.0001f,
+        )
+        assertEquals(
+            0f,
+            transformWith(WatchCanvasSettings(offsetX = Float.NaN)).left,
+            0.0001f,
+        )
+        assertEquals(
+            4_096f,
+            transformWith(WatchCanvasSettings(offsetX = 1_000_000f)).left,
+            0.0001f,
+        )
+        // 负方向同样夹住：40 是 FIT 在这个视口下的居中留边，兜底只削偏移那一项。
+        assertEquals(
+            40f - 4_096f,
+            transformWith(WatchCanvasSettings(offsetY = -1_000_000f)).top,
+            0.0001f,
+        )
+    }
+
+    @Test
+    fun canvasSettingsCodecRoundTripsAndSurvivesGarbage() {
+        val settings = WatchCanvasSettings(
+            preset = WatchCanvasPreset.STRETCH,
+            zoomX = 1.5f,
+            zoomY = 0.5f,
+            offsetX = 12f,
+            offsetY = -8f,
+        )
+        assertEquals(settings, WatchCanvasSettings.decode(settings.encode()))
+        // 六个预设都要能往返，别让某个后加的枚举值悄悄退化成 FIT。
+        WatchCanvasPreset.entries.forEach { preset ->
+            val single = WatchCanvasSettings(preset = preset)
+            assertEquals(single, WatchCanvasSettings.decode(single.encode()))
+        }
+
+        assertEquals(WatchCanvasSettings.DEFAULT, WatchCanvasSettings.decode(null))
+        assertEquals(WatchCanvasSettings.DEFAULT, WatchCanvasSettings.decode(""))
+        assertEquals(WatchCanvasSettings.DEFAULT, WatchCanvasSettings.decode("   "))
+        // 整串无法识别时退回默认，而不是抛异常把整个偏好加载打断。
+        assertEquals(WatchCanvasSettings.DEFAULT, WatchCanvasSettings.decode("nonsense"))
+        // 单个坏字段只丢那一项：预设留住，坏掉的 zoomX 回落 1。
+        assertEquals(
+            WatchCanvasSettings(preset = WatchCanvasPreset.FILL),
+            WatchCanvasSettings.decode("FILL|abc"),
+        )
+        // 字段比预期少也不越界。
+        assertEquals(
+            WatchCanvasSettings(preset = WatchCanvasPreset.CUSTOM, zoomX = 2f),
+            WatchCanvasSettings.decode("CUSTOM|2.0"),
+        )
+        assertTrue(WatchCanvasSettings.DEFAULT.isDefault)
+        assertFalse(settings.isDefault)
     }
 
     @Test
@@ -648,7 +875,19 @@ class WatchmakerRuntimeContractsTest {
         )
         assertFalse(WatchmakerExpressionEvaluator.supports("os.execute('boom')"))
         assertFalse(WatchmakerExpressionEvaluator.supports("var_mode + 1"))
-        assertFalse(WatchmakerExpressionEvaluator.supports("1 + ".repeat(2_048) + "1"))
+        // 源文本上限（32K）仍然拦得住无边界输入。这个数字比原来的 4K 大，是为了
+        // 容纳 WFF 导出的巨型链式三元式（实测 7.6K），护栏本身没有取消。
+        assertFalse(WatchmakerExpressionEvaluator.supports("1 + ".repeat(9_000) + "1"))
+        // 深度嵌套单独限：token 数没超但栈会爆，所以在解析入口按层数拦。
+        assertFalse(
+            WatchmakerExpressionEvaluator.supports("(".repeat(400) + "1" + ")".repeat(400)),
+        )
+        // 放宽后必须真的能吃下那批表达式：7.6K 字符 / 约 2500 token 的链式三元式。
+        assertTrue(
+            WatchmakerExpressionEvaluator.supports(
+                (1..300).joinToString(" or ") { "('{wci}' == '${it}d' and $it)" },
+            ),
+        )
     }
 
     @Test
@@ -853,6 +1092,73 @@ class WatchmakerRuntimeContractsTest {
 
         assertEquals("05", WatchmakerExpressionEvaluator.evaluateText("{dmz}", resolver))
         assertEquals("(05 +", WatchmakerExpressionEvaluator.evaluateText("({dmz} +", resolver))
+    }
+
+    /**
+     * 求值缓存不得改变语义。
+     *
+     * 缓存键是「tag 代入之后」的文本，所以 tag 变了就必须重算 —— 如果误按原始
+     * 文本缓存，秒针、心率这类每帧变化的图层会永久停在第一帧的值上。
+     */
+    @Test
+    fun expressionCacheStillRecomputesWhenTagValuesChange() {
+        var level = 20
+        val resolver: (String) -> WatchTagResolution = { tag ->
+            if (tag == "bl") WatchTagResolution.Resolved(level.toString()) else WatchTagResolution.Unsupported(tag)
+        }
+        val expression = "{bl} * 2"
+
+        assertEquals(40f, WatchmakerExpressionEvaluator.evaluateNumber(expression, -1f, resolver))
+        level = 35
+        assertEquals(70f, WatchmakerExpressionEvaluator.evaluateNumber(expression, -1f, resolver))
+        // 回到旧值要能命中缓存，且拿到的仍是正确结果而不是陈旧的另一个值。
+        level = 20
+        assertEquals(40f, WatchmakerExpressionEvaluator.evaluateNumber(expression, -1f, resolver))
+    }
+
+    /**
+     * 同一段文本在不同 scope 下必须各算各的。
+     *
+     * 缓存条目带着 scope 一起存并按引用校验；漏掉这层校验时，带脚本变量的表盘
+     * 会读到另一块表盘的变量值。
+     */
+    @Test
+    fun expressionCacheKeepsScopesApart() {
+        val resolver: (String) -> WatchTagResolution = { WatchTagResolution.Unsupported(it) }
+        val twelve = WatchExpressionScope.fromInitialScript("var_tipo_hora = 12")
+        val twentyFour = WatchExpressionScope.fromInitialScript("var_tipo_hora = 24")
+        val expression = "var_tipo_hora + 0"
+
+        assertEquals(12f, WatchmakerExpressionEvaluator.evaluateNumber(expression, -1f, twelve, resolver))
+        assertEquals(24f, WatchmakerExpressionEvaluator.evaluateNumber(expression, -1f, twentyFour, resolver))
+        assertEquals(12f, WatchmakerExpressionEvaluator.evaluateNumber(expression, -1f, twelve, resolver))
+    }
+
+    /**
+     * WFF 导出的天气图标链：靠 opacity 表达式在 N 个叠放的图标里只点亮一个。
+     *
+     * 这条链有 7.6K 字符 / 约 2500 token，旧的 4K + 512 上限直接把它判为不可
+     * 求值，opacity 落回默认 100 —— 结果所有天气图标同时全亮叠在一起（老师
+     * 实机反馈）。这里用同样的结构验证「只有匹配那条给出 100，其余给 0」。
+     */
+    @Test
+    fun oversizedWeatherIconChainSelectsExactlyOneIcon() {
+        val resolver: (String) -> WatchTagResolution = { tag ->
+            if (tag == "wci") WatchTagResolution.Resolved("04d") else WatchTagResolution.Unsupported(tag)
+        }
+        // 与真实表盘同构：先把天气代码映射成序号，再判等点亮对应图标。
+        val codes = listOf("01d", "01n", "02d", "02n", "03d", "03n", "04d", "04n", "09d", "10d")
+        val selector = codes
+            .mapIndexed { index, code -> "('{wci}' == '$code' and $index)" }
+            .joinToString(" or ") + " or 0"
+
+        codes.forEachIndexed { index, _ ->
+            val opacity = "((($selector) == $index) and 100 or 0)"
+            assertEquals(
+                if (index == 6) 100f else 0f,
+                WatchmakerExpressionEvaluator.evaluateNumber(opacity, -1f, resolver),
+            )
+        }
     }
 
     @Test

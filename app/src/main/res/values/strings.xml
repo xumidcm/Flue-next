@@ -201,6 +201,8 @@
     <string name="settings_reduce_motion_sub">去掉转场收尾的越界回弹：动画到位即停，不再弹一下</string>
     <string name="settings_hide_recents">隐藏后台卡片</string>
     <string name="settings_hide_recents_sub">从最近任务中隐藏 Flue 的后台卡片</string>
+    <string name="settings_watch_store_segmented_download">多线程分段下载</string>
+    <string name="settings_watch_store_segmented_download_sub">下载表盘时分成多段并发拉取，服务器不支持时自动退回单线程</string>
 
     <!-- 搜索索引：仅搜索用的标题 -->
     <string name="search_t_theme_system">跟随系统深浅色</string>
@@ -288,6 +290,7 @@
     <string name="search_d_low_res">降低图标开销提升流畅度</string>
     <string name="search_d_music_text">切歌文字过渡</string>
     <string name="search_d_hide_recents">从最近任务隐藏 Flue</string>
+    <string name="search_d_segmented_download">分段并发下载表盘</string>
     <string name="search_d_thumbnails">图片视频列表预览图</string>
     <string name="search_d_motion_profile_entry">进入动画曲线页</string>
     <string name="search_d_motion_profile">时长、贝塞尔、弹簧参数</string>
@@ -386,6 +389,29 @@
     <string name="settings_watchmaker_force_fill">强制铺满</string>
     <string name="settings_watchmaker_force_fill_on">以表盘画布中心为锚点等比放大并裁切边缘</string>
     <string name="settings_watchmaker_force_fill_off">完整显示设计画布，并遵循表盘定义的形状</string>
+    <string name="settings_watchface_canvas_preset">画布铺法</string>
+    <string name="settings_watchface_canvas_preset_fit">贴合</string>
+    <string name="settings_watchface_canvas_preset_fit_desc">按短边贴合，长边留居中黑边，整块画布都可见</string>
+    <string name="settings_watchface_canvas_preset_fill">铺满</string>
+    <string name="settings_watchface_canvas_preset_fill_desc">按长边等比铺满，短边溢出部分被裁掉</string>
+    <string name="settings_watchface_canvas_preset_vertical">按高度</string>
+    <string name="settings_watchface_canvas_preset_vertical_desc">垂直方向铺满，水平方向可能溢出或留边</string>
+    <string name="settings_watchface_canvas_preset_horizontal">按宽度</string>
+    <string name="settings_watchface_canvas_preset_horizontal_desc">水平方向铺满，垂直方向可能溢出或留边</string>
+    <string name="settings_watchface_canvas_preset_stretch">拉伸</string>
+    <string name="settings_watchface_canvas_preset_stretch_desc">两个方向各自铺满，可能不等比、画面会形变</string>
+    <string name="settings_watchface_canvas_preset_custom">自定义</string>
+    <string name="settings_watchface_canvas_preset_custom_desc">不做自动贴合，完全由下面的缩放滑杆决定</string>
+    <string name="settings_watchface_canvas_zoom_x">水平缩放</string>
+    <string name="settings_watchface_canvas_zoom_y">垂直缩放</string>
+    <string name="settings_watchface_canvas_offset_x">水平偏移</string>
+    <string name="settings_watchface_canvas_offset_y">垂直偏移</string>
+    <string name="settings_watchface_canvas_follow_default">跟随全局默认</string>
+    <string name="settings_watchface_canvas_follow_default_on">这张表盘使用全局画布设置，改全局它就跟着变</string>
+    <string name="settings_watchface_canvas_follow_default_off">这张表盘用自己的画布设置，不受全局影响</string>
+    <string name="settings_watchface_canvas_reset">重置画布设置</string>
+    <string name="settings_watchface_canvas_reset_desc">恢复到贴合、无缩放、无偏移</string>
+    <string name="settings_watchface_canvas_section">画布调节</string>
     <string name="settings_watchface_gravity_parallax">重力景深表盘效果</string>
     <string name="settings_watchface_gravity_parallax_on">对声明 gyro 图层的表盘启用随手腕晃动的景深移动</string>
     <string name="settings_watchface_gravity_parallax_off">关闭重力景深移动</string>
@@ -475,6 +501,12 @@
 
     <!-- 性能与动画页 -->
     <string name="settings_performance_title">性能与动画</string>
+    <string name="settings_perf_group_rendering">渲染质量</string>
+    <string name="settings_perf_group_rendering_sub">图标分辨率、阴影与缩略图</string>
+    <string name="settings_perf_group_motion">动画与转场</string>
+    <string name="settings_perf_group_motion_sub">启动返回动效、入场与动画曲线</string>
+    <string name="settings_perf_group_system">系统与网络</string>
+    <string name="settings_perf_group_system_sub">后台可见性与下载行为</string>
     <string name="settings_low_res_icons">低分辨率图标</string>
     <string name="settings_low_res_icons_sub">降低图标开销以提升流畅度</string>
     <string name="settings_music_text_animation">音乐文字切换动画</string>
@@ -692,6 +724,7 @@
     <string name="watch_editor_error_ffmpeg_unsupported">当前设备为 32 位；现有 FFmpeg 不提供 32 位版本，暂不支持视频导入</string>
     <string name="watch_editor_error_read_video">无法读取所选视频</string>
     <string name="watch_editor_status_converting_video_fmt">正在转换视频 %1$d%%</string>
+    <string name="watch_editor_status_copying_video_fmt">正在导入原视频 %1$d%%</string>
     <string name="watch_editor_error_video_import">视频导入失败</string>
     <string name="watch_editor_status_importing_watch">正在导入 .watch</string>
     <string name="watch_editor_error_read_file">无法读取所选文件</string>
@@ -727,6 +760,13 @@
     <string name="watch_editor_save">保存</string>
     <string name="watch_editor_cancel">取消</string>
     <string name="watch_editor_status_creating_draft">正在创建安全草稿</string>
+    <string name="watch_editor_format_choice_title">选择表盘格式</string>
+    <string name="watch_editor_format_recommended">推荐</string>
+    <string name="watch_editor_format_v1_title">WatchMaker 1.0</string>
+    <string name="watch_editor_format_v1_sub">支持 video 视频图层，可直接播放视频文件</string>
+    <string name="watch_editor_format_v2_title">WatchMaker 2.0</string>
+    <string name="watch_editor_format_v2_sub">Studio 格式，没有 video 图层，视频只能转成循环帧</string>
+    <string name="watch_editor_format_choice_note">1.0 有 video 图层，可以直接放视频；2.0 没有这个图层，视频导入后只能转成循环帧序列。</string>
     <string name="watch_editor_error_init">编辑器初始化失败</string>
     <string name="watch_editor_error_begin_gesture">无法开始画布手势</string>
     <string name="watch_editor_error_commit_gesture">画布手势提交失败</string>
@@ -737,6 +777,7 @@
     <string name="watch_editor_status_duplicate_layer">正在复制图层</string>
     <string name="watch_editor_status_delete_layer">正在删除图层</string>
     <string name="watch_editor_status_update_shape">正在更新表盘形状</string>
+    <string name="watch_editor_status_update_background">正在更新背景色</string>
     <string name="watch_editor_status_update_canvas">正在更新画布尺寸</string>
     <string name="watch_editor_status_saving">正在保存表盘</string>
     <string name="watch_editor_error_upload_autosave">上传前自动保存失败</string>
@@ -749,6 +790,18 @@
     <string name="watch_editor_undo">撤销</string>
     <string name="watch_editor_redo">重做</string>
     <string name="watch_editor_return_split">返回分屏</string>
+    <string name="watch_editor_preview_play">播放预览动效</string>
+    <string name="watch_editor_preview_pause">暂停预览动效</string>
+    <string name="shortcut_menu_rename">重命名</string>
+    <string name="shortcut_menu_rename_folder_title">重命名文件夹</string>
+    <string name="shortcut_menu_rename_confirm">完成</string>
+    <string name="shortcut_menu_rename_cancel">取消</string>
+    <string name="shortcut_menu_dissolve_folder">解散文件夹</string>
+    <string name="shortcut_menu_app_info">应用信息</string>
+    <string name="shortcut_menu_remove">移除</string>
+    <string name="shortcut_menu_remove_from_quick_launch">从快捷启动移除</string>
+    <string name="shortcut_menu_uninstall">卸载</string>
+    <string name="shortcut_menu_exclude_app">排除应用</string>
     <string name="watch_editor_no_layers">当前没有图层</string>
     <string name="watch_editor_select_layer_first">请先选择一个图层</string>
     <string name="watch_editor_unnamed_face">未命名表盘</string>
@@ -804,6 +857,9 @@
     <string name="watch_editor_start_conversion">开始转换</string>
     <string name="watch_editor_converting_video">正在转换视频</string>
     <string name="watch_editor_video_conversion_message">FFmpeg 会把选定片段转换成表盘循环帧。</string>
+    <string name="watch_editor_video_reencode_message">FFmpeg 会把选定片段重新编码成表盘视频。</string>
+    <string name="watch_editor_video_passthrough_message">正在把原视频拷贝进表盘，不重新编码。</string>
+    <string name="watch_editor_copying_video">正在导入原视频</string>
     <string name="watch_editor_cancel_conversion">取消转换</string>
     <string name="watch_editor_collapse_child_layers">折叠子图层</string>
     <string name="watch_editor_expand_child_layers">展开子图层</string>
@@ -818,6 +874,8 @@
     <string name="watch_editor_import_image_path">导入图片并写入 path</string>
     <string name="watch_editor_import_image_sequence">导入多张图片作为循环背景</string>
     <string name="watch_editor_import_video_frames">导入视频并转换为循环帧</string>
+    <string name="watch_editor_error_frames_need_ffmpeg">当前设备为 32 位，无法转换为循环帧；video 图层仍可直接导入视频原文件</string>
+    <string name="watch_editor_error_reencode_need_ffmpeg">当前设备为 32 位，无法裁剪或调整视频；请保持原参数直接导入</string>
     <string name="watch_editor_text_entry_animation">文字进入动画</string>
     <string name="watch_editor_text_exit_animation">文字退出动画</string>
     <string name="watch_editor_select_app_title">选择要启动的应用</string>
@@ -837,6 +895,10 @@
     <string name="watch_editor_watch_shape_description">圆形表盘渲染时会按圆形裁剪；方形表盘保留完整方形画布。</string>
     <string name="watch_editor_unknown_shape_fmt">当前 shape="%1$s"，点击上方按钮即可改为圆形或方形。</string>
     <string name="watch_editor_not_set">未设置</string>
+    <string name="watch_editor_watch_background">表盘背景色</string>
+    <string name="watch_editor_watch_background_description">图层之下的底色。表盘有铺满的背景图时通常看不到它。</string>
+    <string name="watch_editor_watch_background_current_fmt">当前 bg_color="%1$s"</string>
+    <string name="watch_editor_watch_background_clear">恢复默认（黑）</string>
     <string name="watch_editor_canvas_size">画布尺寸</string>
     <string name="watch_editor_canvas_undeclared_suffix">（未声明，按默认画布）</string>
     <string name="watch_editor_canvas_matches_screen_suffix"> · 与本机屏幕一致</string>
@@ -852,6 +914,7 @@
     <string name="watch_editor_attribute_opacity">不透明度</string>
     <string name="watch_editor_attribute_scale_x">横向缩放（%）</string>
     <string name="watch_editor_attribute_scale_y">纵向缩放（%）</string>
+    <string name="watch_editor_attribute_gyro">动态景深强度（-32～32）</string>
     <string name="watch_editor_attribute_text">文字 / Watchmaker 表达式</string>
     <string name="watch_editor_attribute_text_size">字号</string>
     <string name="watch_editor_attribute_font">字体</string>
@@ -890,6 +953,7 @@
     <string name="watch_editor_layer_shape">形状</string>
     <string name="watch_editor_layer_image">图片</string>
     <string name="watch_editor_layer_looping_background">循环背景</string>
+    <string name="watch_editor_layer_video">视频</string>
     <string name="watch_editor_layer_ring">圆环</string>
     <string name="watch_editor_layer_progress">进度</string>
     <string name="watch_editor_shape_round">圆形</string>
@@ -970,7 +1034,6 @@
     <string name="watch_store_filter_round">圆屏</string>
     <string name="watch_store_filter_square">方屏</string>
     <string name="watch_store_filter_rectangular">矩形</string>
-    <string name="watch_store_category_loading_short">分类加载中…</string>
     <string name="watch_store_all_categories">全部分类</string>
     <string name="watch_store_category_load_failed">分类加载失败</string>
     <string name="watch_store_status_restoring_installations">正在恢复已安装表盘…</string>
@@ -1027,6 +1090,7 @@
     <string name="watch_store_scan_warning_fmt">有 %1$d 个安装目录未能扫描</string>
     <string name="watch_store_scan_warning_detail_fmt">%1$s；首个失败目录：%2$s（%3$s）</string>
     <string name="watch_store_unknown_directory">未知目录</string>
+    <string name="watch_store_lua_script_warning">该表盘含有 Global Script Lua 脚本，Flue 可能无法完全正确渲染并实现其功能</string>
     <string name="watch_store_error_superseded_cleanup_fmt">新版本已安装，但清理旧版本失败：%1$s</string>
     <string name="watch_store_error_transaction_cleanup_fmt">安装失败，且清理临时事务失败：%1$s</string>
     <string name="watch_store_error_catalog_restore_after_install">表盘已经安装，但市场记录尚未恢复；请重新扫描后再试</string>
@@ -1209,4 +1273,6 @@
     <string name="internal_file_browser_pick_export_folder">选择导出目录</string>
     <string name="internal_file_browser_select_current_folder">导出到当前目录</string>
     <string name="internal_file_browser_pick_conversion">选择要转换的表盘</string>
+    <string name="watch_face_loading">表盘加载中</string>
+    <string name="watch_face_loading_fallback">切换默认表盘并重启</string>
 </resources>

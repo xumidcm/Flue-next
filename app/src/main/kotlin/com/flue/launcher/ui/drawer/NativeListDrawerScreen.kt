@@ -1,8 +1,6 @@
 package com.flue.launcher.ui.drawer
 
 import android.os.Build
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.background
@@ -11,6 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -167,14 +166,17 @@ fun NativeListDrawerScreen(
     val projection = rememberNativeAppListProjection(apps, twoToneIconsEnabled)
     var actionAppKey by remember { mutableStateOf<String?>(null) }
     val actionApp = actionAppKey?.let { key -> projection.appsByKey[AppItemKey(key)] }
-    val actionOverlayProgress by animateFloatAsState(
-        targetValue = if (actionApp != null) 1f else 0f,
-        animationSpec = tween(180),
-        label = "native_action_overlay_progress",
-    )
+    // 长按菜单的模糊进度由菜单自己的 alpha 反馈，而不是挂在「actionApp 是否为
+    // null」上再跑一条独立 tween。挂在挂载状态上时两条时间线是错开的：菜单先
+    // 淡完，onDismiss 之后模糊才开始退，看起来像模糊自己延迟化开。文件夹那侧
+    // （folderOverlayProgress）一直就是反馈式的，这里对齐它。
+    var actionOverlayProgress by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(actionApp == null) {
+        if (actionApp == null) actionOverlayProgress = 0f
+    }
     val overlayProgress = max(
         folderOverlayProgress.coerceIn(0f, 1f),
-        actionOverlayProgress,
+        actionOverlayProgress.coerceIn(0f, 1f),
     )
     LaunchedEffect(actionAppKey, projection) {
         if (actionAppKey != null && actionApp == null) actionAppKey = null
@@ -332,6 +334,7 @@ fun NativeListDrawerScreen(
                 } else {
                     null
                 },
+                onTransitionProgress = { actionOverlayProgress = it },
                 onDismiss = { actionAppKey = null },
             )
         }

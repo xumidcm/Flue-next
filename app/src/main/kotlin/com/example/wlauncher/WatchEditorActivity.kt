@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -191,6 +192,10 @@ import com.flue.launcher.watchface.editor.WatchEditorVideoFrames
 import com.flue.launcher.watchface.editor.WatchEditorVideoImportOptions
 import com.flue.launcher.watchface.editor.WatchEditorVideoImporter
 import com.flue.launcher.watchface.editor.WatchEditorVideoInfo
+import com.flue.launcher.watchface.editor.WatchEditorVideoPassThrough
+import com.flue.launcher.watchface.editor.canPassThroughVideo
+import com.flue.launcher.watchface.editor.resolveVideoTransform
+import com.flue.launcher.watchface.editor.WatchFormatVersion
 import com.flue.launcher.watchface.editor.applyWatchEditorHandleDrag
 import com.flue.launcher.watchface.editor.buildWatchEditorLayerGeometries
 import com.flue.launcher.watchface.editor.buildWatchEditorTreeRows
@@ -215,11 +220,13 @@ import com.flue.launcher.watchface.editor.watchEditorViewPxFromDesign
 import com.flue.launcher.watchface.editor.conversion.WatchConversionResult
 import com.flue.launcher.watchface.editor.conversion.WatchFormatConverter
 import com.flue.launcher.watchface.standard.MAX_WATCH_OUTLINE_SIZE
+import com.flue.launcher.watchface.standard.PLAYABLE_VIDEO_EXTENSIONS
 import com.flue.launcher.watchface.standard.WATCHMAKER_ID_PREFIX
 import com.flue.launcher.watchface.standard.WatchFaceShape
 import com.flue.launcher.watchface.standard.WatchOutlineMode
 import com.flue.launcher.watchface.standard.WatchmakerGeometry
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStorage
+import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStageView
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceView
 import com.flue.launcher.watchface.standard.hasHeartRatePermission
 import com.flue.launcher.watchface.standard.rememberWatchmakerWatchDataProvider
@@ -324,6 +331,11 @@ private data class EditorVideoImportRequest(
     val info: WatchEditorVideoInfo,
     val session: WatchEditorSession,
     val layerKey: WatchEditorLayerKey,
+    /**
+     * 目标图层当前的 type。导入终点由它决定，而不是由文档格式版本决定：
+     * 只有本来就是 video 的图层才允许收视频，image_gif（循环背景）一律转帧序列。
+     */
+    val layerType: String,
 )
 
 private enum class EditorInternalImportKind {
@@ -384,6 +396,10 @@ private fun WatchEditorRoute(
     var videoRequest by remember { mutableStateOf<EditorVideoImportRequest?>(null) }
     var videoConversionJob by remember { mutableStateOf<Job?>(null) }
     var videoConversionProgress by remember { mutableStateOf(0f) }
+    // 与 videoConversionJob 同生命周期：进度对话框靠它决定说哪套文案。
+    var videoConversionKind by remember {
+        mutableStateOf(EditorVideoConversionKind.FRAMES)
+    }
     var internalFileBrowserRequest by remember { mutableStateOf<InternalFileBrowserRequest?>(null) }
     // 画布渲染 View：保存 / 上传前用它离屏重渲 preview.jpg 写回草稿。
     var previewRenderer by remember { mutableStateOf<WatchmakerWatchFaceView?>(null) }
@@ -757,7 +773,11 @@ private fun WatchEditorRoute(
                 }
             }.onSuccess { info ->
                 if (session === active) {
-                    videoRequest = EditorVideoImportRequest(uri, info, active, key)
+                    val layerType = snapshot?.layers
+                        ?.firstOrNull { it.key == key }
+                        ?.type
+                        .orEmpty()
+                    videoRequest = EditorVideoImportRequest(uri, info, active, key, layerType)
                 }
             }.onFailure { error ->
                 if (error is CancellationException) throw error
@@ -772,36 +792,125 @@ private fun WatchEditorRoute(
         if (videoConversionJob != null || session !== request.session) return
         videoRequest = null
         videoConversionProgress = 0f
+        // 终点由目标图层类型决定，不看文档格式版本：
+        //   video 图层  + 参数未改 → 直通（拷字节，不需要 FFmpeg，32 位设备也能用）
+        //   video 图层  + 参数改过 → 重编码成 mp4
+        //   其它（含 image_gif 循环背景）→ 一律转帧序列，绝不改写成 video
+        // 之前这里按 formatVersion == V1 判定，于是往循环背景导入未改参的视频会
+        // 把图层悄悄改写成 video。
+        val targetsVideoLayer = request.layerType.equals("video", ignoreCase = true)
+        val allowPassThrough = targetsVideoLayer && canPassThroughVideo(request.info, options)
+        val needsReencode = targetsVideoLayer && !allowPassThrough
+        videoConversionKind = when {
+            allowPassThrough -> EditorVideoConversionKind.PASS_THROUGH
+            needsReencode -> EditorVideoConversionKind.REENCODE
+            else -> EditorVideoConversionKind.FRAMES
+        }
+        // 32 位设备没有 FFmpeg。直通不需要它，另两条路都需要 —— 在这里拦，而不是
+        // 在选文件那一步拦，否则 32 位设备连视频都选不了。
+        if (!allowPassThrough && !WatchEditorVideoImporter.isRuntimeSupported()) {
+            errorMessage = context.getString(
+                if (needsReencode) {
+                    R.string.watch_editor_error_reencode_need_ffmpeg
+                } else {
+                    R.string.watch_editor_error_frames_need_ffmpeg
+                },
+            )
+            return
+        }
         videoConversionJob = scope.launch {
-        busyMessage = context.getString(R.string.watch_editor_status_converting_video_fmt, 0)
+            busyMessage = context.getString(
+                if (allowPassThrough) {
+                    R.string.watch_editor_status_copying_video_fmt
+                } else {
+                    R.string.watch_editor_status_converting_video_fmt
+                },
+                0,
+            )
             errorMessage = null
             var converted: WatchEditorVideoFrames? = null
+            var passedThrough: WatchEditorVideoPassThrough? = null
             try {
-                converted = WatchEditorVideoImporter.convertToFrames(
-                    context = context,
-                    uri = request.uri,
-                    options = options,
-                    onProgress = { progress ->
-                        // FFmpeg can report its final timestamp before the
-                        // process exits and before frames are copied into the
-                        // draft. Never leave the dialog apparently stuck at
-                        // 100%; it closes only after the import is committed.
-                        val visibleProgress = progress.fraction.coerceAtMost(0.99f)
-                        videoConversionProgress = visibleProgress
-                    busyMessage = context.getString(
-                        R.string.watch_editor_status_converting_video_fmt,
-                        (visibleProgress * 100f).roundToInt(),
+                val next = if (allowPassThrough || needsReencode) {
+                    val copied = if (allowPassThrough) {
+                        // 原文件拷贝：不启 FFmpeg，进度按字节走。
+                        WatchEditorVideoImporter.passThrough(
+                            context = context,
+                            uri = request.uri,
+                            durationMs = options.durationMs,
+                            onProgress = { progress ->
+                                val visibleProgress = progress.fraction.coerceAtMost(0.99f)
+                                videoConversionProgress = visibleProgress
+                                busyMessage = context.getString(
+                                    R.string.watch_editor_status_copying_video_fmt,
+                                    (visibleProgress * 100f).roundToInt(),
+                                )
+                            },
+                        )
+                    } else {
+                        // 裁剪/剪辑/改参后的视频：重编码成 mp4，仍然落在 video 图层。
+                        WatchEditorVideoImporter.reencodeToVideo(
+                            context = context,
+                            uri = request.uri,
+                            options = options,
+                            onProgress = { progress ->
+                                val visibleProgress = progress.fraction.coerceAtMost(0.99f)
+                                videoConversionProgress = visibleProgress
+                                busyMessage = context.getString(
+                                    R.string.watch_editor_status_converting_video_fmt,
+                                    (visibleProgress * 100f).roundToInt(),
+                                )
+                            },
+                        )
+                    }
+                    passedThrough = copied
+                    // 落进图层的实际像素尺寸两条路不同：直通是源尺寸（info 已按
+                    // 容器 rotation 换算成显示朝向），重编码是 transform 算出的
+                    // 输出尺寸。拿错会让 contain 盒子按错误比例写。
+                    val importedSize = if (allowPassThrough) {
+                        request.info.width to request.info.height
+                    } else {
+                        val transform = resolveVideoTransform(request.info, options)
+                        transform.outputWidth to transform.outputHeight
+                    }
+                    withContext(Dispatchers.IO) {
+                        request.session.importVideoFile(
+                            key = request.layerKey,
+                            videoFile = copied.videoFile,
+                            videoWidth = importedSize.first,
+                            videoHeight = importedSize.second,
+                        )
+                        request.session.flushDraftForPreview()
+                        request.session.snapshot()
+                    }
+                } else {
+                    val frames = WatchEditorVideoImporter.convertToFrames(
+                        context = context,
+                        uri = request.uri,
+                        options = options,
+                        onProgress = { progress ->
+                            // FFmpeg can report its final timestamp before the
+                            // process exits and before frames are copied into the
+                            // draft. Never leave the dialog apparently stuck at
+                            // 100%; it closes only after the import is committed.
+                            val visibleProgress = progress.fraction.coerceAtMost(0.99f)
+                            videoConversionProgress = visibleProgress
+                            busyMessage = context.getString(
+                                R.string.watch_editor_status_converting_video_fmt,
+                                (visibleProgress * 100f).roundToInt(),
+                            )
+                        },
                     )
-                    },
-                )
-                val next = withContext(Dispatchers.IO) {
-                    request.session.importVideoFrameSequence(
-                        key = request.layerKey,
-                        frameFiles = converted.frameFiles,
-                        frameDelayMs = converted.frameDelayMs,
-                    )
-                    request.session.flushDraftForPreview()
-                    request.session.snapshot()
+                    converted = frames
+                    withContext(Dispatchers.IO) {
+                        request.session.importVideoFrameSequence(
+                            key = request.layerKey,
+                            frameFiles = frames.frameFiles,
+                            frameDelayMs = frames.frameDelayMs,
+                        )
+                        request.session.flushDraftForPreview()
+                        request.session.snapshot()
+                    }
                 }
                 if (session === request.session) {
                     updateSnapshot(next, request.layerKey)
@@ -819,8 +928,11 @@ private fun WatchEditorRoute(
                 busyMessage = null
                 videoConversionJob = null
                 // The draft owns its copies now. Hide the modal first, then
-                // delete the potentially large FFmpeg cache off the UI path.
-                withContext(Dispatchers.IO + NonCancellable) { converted?.deleteTemporaryFiles() }
+                // delete the potentially large cache off the UI path.
+                withContext(Dispatchers.IO + NonCancellable) {
+                    converted?.deleteTemporaryFiles()
+                    passedThrough?.deleteTemporaryFiles()
+                }
             }
         }
     }
@@ -975,10 +1087,9 @@ private fun WatchEditorRoute(
     }
 
     fun openInternalFileBrowser(kind: EditorInternalImportKind) {
-        if (kind == EditorInternalImportKind.VIDEO && !WatchEditorVideoImporter.isRuntimeSupported()) {
-            errorMessage = context.getString(R.string.watch_editor_error_ffmpeg_unsupported)
-            return
-        }
+        // 视频这里不查 FFmpeg 可用性：32 位设备没有 FFmpeg，但直通不需要它。
+        // 能不能走到终点由 beginVideoImport 按目标图层类型判定，在选文件这一步
+        // 拦死会让 32 位设备连 video 图层的直通导入都做不了。
         val title = context.getString(
             when (kind) {
                 EditorInternalImportKind.IMAGE -> R.string.internal_file_browser_pick_image
@@ -1028,7 +1139,17 @@ private fun WatchEditorRoute(
     var blankCanvasSize by remember(watchFaceId) {
         mutableStateOf(WatchCanvasSize.DEFAULT)
     }
-    LaunchedEffect(watchFaceId, blankCanvasSize) {
+    // 格式版本必须在 createBlank 之前定下来 —— build_source 是建档时写进
+    // watch.xml 的，事后改要重写文档。新建时先停在选择页，选完才开工；
+    // 打开已有表盘不经过这里。
+    var pendingFormatChoice by remember(watchFaceId) {
+        mutableStateOf(watchFaceId.isNullOrBlank())
+    }
+    var blankFormatVersion by remember(watchFaceId) {
+        mutableStateOf(WatchFormatVersion.V1)
+    }
+    LaunchedEffect(watchFaceId, blankCanvasSize, pendingFormatChoice, blankFormatVersion) {
+        if (pendingFormatChoice) return@LaunchedEffect
         val requestedCanvas = blankCanvasSize ?: return@LaunchedEffect
         loading = true
         errorMessage = null
@@ -1041,6 +1162,7 @@ private fun WatchEditorRoute(
                         context,
                         roundShape = blankFaceIsRound,
                         canvasSize = requestedCanvas,
+                        formatVersion = blankFormatVersion,
                     )
                 } else {
                     val descriptor = WatchmakerWatchFaceStorage.scan(context)
@@ -1327,6 +1449,13 @@ private fun WatchEditorRoute(
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         when {
+        pendingFormatChoice -> WatchFormatChoicePage(
+            onChoose = { version ->
+                blankFormatVersion = version
+                pendingFormatChoice = false
+            },
+            onCancel = onClose,
+        )
         loading -> CenteredStatus(
             stringResource(R.string.watch_editor_status_creating_draft),
             showProgress = true,
@@ -1528,13 +1657,9 @@ private fun WatchEditorRoute(
                             openInternalFileBrowser(EditorInternalImportKind.IMAGE_SEQUENCE)
                         },
                         onImportVideo = {
-                            if (WatchEditorVideoImporter.isRuntimeSupported()) {
-                                videoPicker.launch(arrayOf("video/*"))
-                            } else {
-                                errorMessage = context.getString(
-                                    R.string.watch_editor_error_ffmpeg_unsupported,
-                                )
-                            }
+                            // 不在这里查 FFmpeg：直通不需要它，终点在 beginVideoImport
+                            // 里按目标图层类型判定。
+                            videoPicker.launch(arrayOf("video/*"))
                         },
                         onImportVideoLong = {
                             openInternalFileBrowser(EditorInternalImportKind.VIDEO)
@@ -1570,6 +1695,13 @@ private fun WatchEditorRoute(
                         onUpdateShape = { shapeCode ->
                             runSessionOperation(context.getString(R.string.watch_editor_status_update_shape), operation = { editor ->
                                 editor.updateRootAttribute("shape", shapeCode)
+                                selectedLayerKey
+                            })
+                        },
+                        onUpdateBackground = { hex ->
+                            runSessionOperation(context.getString(R.string.watch_editor_status_update_background), operation = { editor ->
+                                // null 走 removeAttribute，回落到渲染侧的默认黑。
+                                editor.updateRootAttribute("bg_color", hex)
                                 selectedLayerKey
                             })
                         },
@@ -1663,6 +1795,7 @@ private fun WatchEditorRoute(
                     if (videoConversionJob != null) {
                         EditorVideoConversionProgressDialog(
                             progress = videoConversionProgress,
+                            kind = videoConversionKind,
                             onCancel = { videoConversionJob?.cancel() },
                         )
                     }
@@ -1704,9 +1837,16 @@ private fun resolveLayerAssetThumbnail(
     // GIF 帧序列写成 "a.png`b.png`c.png"：取第一帧代表这一层。
     val path = rawPath.substringBefore('`').trim().replace('\\', '/')
     if (path.isBlank() || path.contains("..") || path.startsWith('/')) return null
-    // 与 runtime 一致：先按原样找，再退回约定的 images/ 目录。
-    val file = listOf(File(draftDirectory, path), File(draftDirectory, "images/$path"))
-        .firstOrNull(File::isFile) ?: return null
+    // 与 runtime 一致：先按原样找，再退回约定目录。videos/ 也要试 —— video
+    // 图层的素材落在那里，只找 images/ 时整层没有缩略图（老师实机反馈）。
+    val file = listOf(
+        File(draftDirectory, path),
+        File(draftDirectory, "images/$path"),
+        File(draftDirectory, "videos/$path"),
+    ).firstOrNull(File::isFile) ?: return null
+    if (file.extension.lowercase(Locale.ROOT) in PLAYABLE_VIDEO_EXTENSIONS) {
+        return resolveVideoFirstFrameThumbnail(file, sizePx)
+    }
     return runCatching {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         FileInputStream(file).use { BitmapFactory.decodeStream(it, null, bounds) }
@@ -1724,6 +1864,32 @@ private fun resolveLayerAssetThumbnail(
             ?.asImageBitmap()
     }.getOrNull()
 }
+
+/**
+ * video 图层的缩略图 = 视频首帧。
+ *
+ * 用 `getScaledFrameAtTime` 让平台直接给缩放好的帧，省掉「解全尺寸再缩」的
+ * 一步。取 0 时刻并允许向后找最近关键帧（`OPTION_CLOSEST_SYNC`），首帧不是
+ * 关键帧的视频也能出图。
+ */
+private fun resolveVideoFirstFrameThumbnail(
+    file: File,
+    sizePx: Int,
+): androidx.compose.ui.graphics.ImageBitmap? = runCatching {
+    val retriever = MediaMetadataRetriever()
+    try {
+        retriever.setDataSource(file.absolutePath)
+        retriever.getScaledFrameAtTime(
+            0L,
+            MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+            sizePx,
+            sizePx,
+        )?.asImageBitmap()
+    } finally {
+        // release() 自身可能抛（损坏文件），不能让它盖掉上面的结果。
+        runCatching { retriever.release() }
+    }
+}.getOrNull()
 
 /**
  * Resolves an image layer's `path` attribute against the draft directory the
@@ -1788,6 +1954,7 @@ private fun WatchEditorScreen(
     onExport: () -> Unit,
     onExportLong: () -> Unit,
     onUpdateShape: (String) -> Unit,
+    onUpdateBackground: (String?) -> Unit,
     onUploadToStore: () -> Unit,
     onImportWatch: () -> Unit,
     onImportWatchLong: () -> Unit,
@@ -1808,6 +1975,9 @@ private fun WatchEditorScreen(
     // 表盘要整个重载一遍。
     var editorLayout by rememberSaveable { mutableStateOf(WatchEditorLayout.SPLIT) }
     val previewFullscreen = editorLayout == WatchEditorLayout.CANVAS_FULL
+    // 预览播放开关：一次点击同时控制序列帧、视频与重力景深。默认暂停，
+    // 进编辑器先看到表盘的默认正视角，也避免一进来就 30fps 解码。
+    var previewPlaying by rememberSaveable { mutableStateOf(false) }
     // Each editor level keeps its own position. Re-creating one state whenever
     // the tab changes made returning from Properties jump the layer list back
     // to the top, which is especially disorienting on a small watch viewport.
@@ -1936,6 +2106,7 @@ private fun WatchEditorScreen(
             },
             onRefreshReady = onPreviewRefreshReady,
             onRefreshFailed = onPreviewRefreshFailed,
+            previewPlaying = previewPlaying,
             designExtentWidth = WatchCanvasSize.DEFAULT.designExtentWidth,
             designExtentHeight = WatchCanvasSize.DEFAULT.designExtentHeight,
         )
@@ -2012,6 +2183,21 @@ private fun WatchEditorScreen(
                             ),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(
+                        onClick = { previewPlaying = !previewPlaying },
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(
+                            if (previewPlaying) FlueMiuixIcons.Pause else FlueMiuixIcons.Play,
+                            contentDescription = stringResource(
+                                if (previewPlaying) {
+                                    R.string.watch_editor_preview_pause
+                                } else {
+                                    R.string.watch_editor_preview_play
+                                },
+                            ),
                         )
                     }
                     IconButton(
@@ -2244,7 +2430,7 @@ private fun WatchEditorScreen(
                             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            BASIC_LAYER_TYPES.forEach { (type, labelRes) ->
+                            insertableLayerTypes(snapshot.formatVersion).forEach { (type, labelRes) ->
                                 OutlinedButton(
                                     onClick = { onAddLayer(type) },
                                     enabled = busyMessage == null,
@@ -2543,6 +2729,13 @@ private fun WatchEditorScreen(
                             rawShape = snapshot.rootAttributes["shape"],
                             enabled = busyMessage == null,
                             onUpdateShape = onUpdateShape,
+                        )
+                    }
+                    item("watch_bg_color") {
+                        EditorWatchBackgroundCard(
+                            rawBackground = snapshot.rootAttributes["bg_color"],
+                            enabled = busyMessage == null,
+                            onUpdateBackground = onUpdateBackground,
                         )
                     }
                     item("watch_data_permission") {
@@ -2870,6 +3063,7 @@ private fun WatchEditorPreview(
     onEndTransform: (WatchEditorLayerKey, Boolean) -> Unit,
     onRefreshReady: (Int) -> Unit,
     onRefreshFailed: (Int) -> Unit,
+    previewPlaying: Boolean,
     modifier: Modifier = Modifier,
     onFaceViewChanged: (WatchmakerWatchFaceView?) -> Unit = {},
     /**
@@ -2928,14 +3122,22 @@ private fun WatchEditorPreview(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { context ->
-                WatchmakerWatchFaceView(context).also {
-                    faceView = it
-                    onFaceViewChanged(it)
+                WatchmakerWatchFaceStageView(context).also { stage ->
+                    faceView = stage.renderer
+                    onFaceViewChanged(stage.renderer)
                 }
             },
-            update = { view ->
+            update = { stage ->
+                val view = stage.renderer
                 view.setWatchDataProvider(dataProvider)
+                // Editor preview is intentionally independent from the launcher
+                // setting: authors must be able to see and tune gyro layers even
+                // when the everyday gravity-parallax switch is disabled.
+                view.setGravityParallaxEnabled(true)
                 view.setEditorAnimatedImageLayer(animatedPreviewLayerIndex)
+                // 统一的预览播放开关：序列帧、视频、重力景深三者同进同退。
+                view.setEditorPreviewPlaying(previewPlaying)
+                if (!previewPlaying) view.resetEditorPreviewViewpoint()
                 // 拖动任意元素时都暂停循环素材；否则它的 30fps 解码/刷新仍会和
                 // 当前元素的跟手重绘竞争，即使拖动目标本身不是循环背景。
                 view.setEditorAnimationInteractionFrozen(transformPreview != null)
@@ -2949,16 +3151,20 @@ private fun WatchEditorPreview(
                         loadError = context.localizedEditorError(R.string.watch_editor_error_preview_load, error)
                         onRefreshFailed(refreshToken)
                     },
-                    onSourceReady = onRefreshReady,
+                    onSourceReady = { token ->
+                        // 素材就绪才知道有几个可播 video、路径各是什么。
+                        stage.syncVideoSegments()
+                        onRefreshReady(token)
+                    },
                     // 编辑器预览始终按表盘 XML 播放，和启动器全局开关独立。
                     textEntryAnimationEnabled = true,
                     textExitAnimationEnabled = true,
                 )
             },
-            onRelease = { view ->
-                if (faceView === view) faceView = null
+            onRelease = { stage ->
+                if (faceView === stage.renderer) faceView = null
                 onFaceViewChanged(null)
-                view.dispose()
+                stage.dispose()
             },
         )
         // 拖动期间把手势变换逐帧喂给渲染器：元素和选中框一起动，
@@ -3698,15 +3904,33 @@ private fun EditorImageCropOverlay(
     }
 }
 
+/**
+ * 视频导入的三条终点，决定进度对话框的标题与说明文案。
+ *
+ * 三条路的动作完全不同：帧序列是烘焙成图片序列、重编码是转成 mp4、
+ * 直通只是拷字节。以前三条共用一句「转换成表盘循环帧」，后两条都是错的。
+ */
+private enum class EditorVideoConversionKind { FRAMES, REENCODE, PASS_THROUGH }
+
 @Composable
 private fun EditorVideoConversionProgressDialog(
     progress: Float,
+    kind: EditorVideoConversionKind,
     onCancel: () -> Unit,
 ) {
     val safeProgress = progress.coerceIn(0f, 1f)
     AlertDialog(
         onDismissRequest = {},
-        title = { Text(stringResource(R.string.watch_editor_converting_video)) },
+        title = {
+            Text(
+                stringResource(
+                    when (kind) {
+                        EditorVideoConversionKind.PASS_THROUGH -> R.string.watch_editor_copying_video
+                        else -> R.string.watch_editor_converting_video
+                    },
+                ),
+            )
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 LinearProgressIndicator(
@@ -3715,7 +3939,16 @@ private fun EditorVideoConversionProgressDialog(
                 )
                 Text("${(safeProgress * 100f).roundToInt()}%")
                 Text(
-                    stringResource(R.string.watch_editor_video_conversion_message),
+                    stringResource(
+                        when (kind) {
+                            EditorVideoConversionKind.FRAMES ->
+                                R.string.watch_editor_video_conversion_message
+                            EditorVideoConversionKind.REENCODE ->
+                                R.string.watch_editor_video_reencode_message
+                            EditorVideoConversionKind.PASS_THROUGH ->
+                                R.string.watch_editor_video_passthrough_message
+                        },
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -4141,6 +4374,16 @@ private fun LayerPropertiesEditor(
                 onLongClick = onImportVideoLong,
             )
         }
+        // video 图层只给「导入视频」一个入口：它收的是视频本身，不该出现
+        // 「导入图片转序列帧」那一路（那会把图层改写成 image_gif）。
+        if (layer.type.equals("video", ignoreCase = true)) {
+            EditorLongPressImportButton(
+                label = stringResource(R.string.watch_editor_import_video),
+                enabled = enabled,
+                onClick = onImportVideo,
+                onLongClick = onImportVideoLong,
+            )
+        }
         // 颜色输入框右侧的色块直接打开取色器，并写回同一个 draft + live 通道。
         if (colorPickerVisible) {
             EditorColorPickerDialog(
@@ -4494,6 +4737,57 @@ private fun EditorWatchShapeCard(
                     style = MaterialTheme.typography.labelSmall,
                     color = style.secondaryTextColor,
                 )
+            }
+        }
+    }
+}
+
+/**
+ * 表盘级背景色卡片。渲染时 `bg_color` 是所有图层之下的底色（见
+ * WatchmakerWatchFaceView 的 drawPreparedSource），此前只有渲染侧在读、
+ * 编辑器没有任何入口。清空则移除属性，回落到渲染侧的默认黑。
+ */
+@Composable
+private fun EditorWatchBackgroundCard(
+    rawBackground: String?,
+    enabled: Boolean,
+    onUpdateBackground: (String?) -> Unit,
+) {
+    val style = LauncherTheme.style
+    val notSetLabel = stringResource(R.string.watch_editor_not_set)
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(14.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(stringResource(R.string.watch_editor_watch_background), fontWeight = FontWeight.SemiBold)
+            Text(
+                stringResource(R.string.watch_editor_watch_background_description),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            EditorColorPickerRow(
+                // 属性缺失时按渲染侧的回落值显示，避免色块画成灰。
+                currentHex = rawBackground.orEmpty().ifBlank { "000000" },
+                enabled = enabled,
+                onPick = { hex -> onUpdateBackground(hex) },
+            )
+            Text(
+                stringResource(
+                    R.string.watch_editor_watch_background_current_fmt,
+                    rawBackground.orEmpty().ifBlank { notSetLabel },
+                ),
+                style = MaterialTheme.typography.labelSmall,
+                color = style.secondaryTextColor,
+            )
+            if (!rawBackground.isNullOrBlank()) {
+                OutlinedButton(
+                    onClick = { onUpdateBackground(null) },
+                    enabled = enabled,
+                ) { Text(stringResource(R.string.watch_editor_watch_background_clear)) }
             }
         }
     }
@@ -5058,6 +5352,102 @@ private fun ErrorPage(message: String, onClose: () -> Unit) {
     }
 }
 
+@Composable
+private fun WatchFormatChoicePage(
+    onChoose: (WatchFormatVersion) -> Unit,
+    onCancel: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = stringResource(R.string.watch_editor_format_choice_title),
+            style = MaterialTheme.typography.titleMedium,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(16.dp))
+        WatchFormatChoiceCard(
+            title = stringResource(R.string.watch_editor_format_v1_title),
+            subtitle = stringResource(R.string.watch_editor_format_v1_sub),
+            recommended = true,
+            onClick = { onChoose(WatchFormatVersion.V1) },
+        )
+        Spacer(Modifier.height(10.dp))
+        WatchFormatChoiceCard(
+            title = stringResource(R.string.watch_editor_format_v2_title),
+            subtitle = stringResource(R.string.watch_editor_format_v2_sub),
+            recommended = false,
+            onClick = { onChoose(WatchFormatVersion.V2) },
+        )
+        Spacer(Modifier.height(18.dp))
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        ) {
+            Text(
+                text = stringResource(R.string.watch_editor_format_choice_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(14.dp),
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+        TextButton(onClick = onCancel) {
+            Text(stringResource(R.string.watch_editor_cancel))
+        }
+    }
+}
+
+@Composable
+private fun WatchFormatChoiceCard(
+    title: String,
+    subtitle: String,
+    recommended: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                if (recommended) {
+                    Spacer(Modifier.width(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f),
+                    ) {
+                        Text(
+                            text = stringResource(R.string.watch_editor_format_recommended),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 private fun draftDescriptor(
     context: Context,
     session: WatchEditorSession,
@@ -5110,6 +5500,16 @@ private fun defaultAttributes(type: String): Map<String, String> = when (type) {
         "x" to "0",
         "y" to "0",
     )
+    // 1.0 §7.14。display="b" 是规范的建议默认：视频解码很耗电，
+    // 息屏/dim 模式不该继续播。
+    "video" -> mapOf(
+        "path" to "",
+        "width" to "512",
+        "height" to "512",
+        "display" to "b",
+        "x" to "0",
+        "y" to "0",
+    )
     else -> emptyMap()
 } + mapOf(
     "anim_scale_x" to "100",
@@ -5124,6 +5524,7 @@ private fun attributeLabelRes(name: String): Int = when (name) {
     "opacity" -> R.string.watch_editor_attribute_opacity
     "anim_scale_x" -> R.string.watch_editor_attribute_scale_x
     "anim_scale_y" -> R.string.watch_editor_attribute_scale_y
+    "gyro" -> R.string.watch_editor_attribute_gyro
     "text" -> R.string.watch_editor_attribute_text
     "text_size" -> R.string.watch_editor_attribute_text_size
     "font" -> R.string.watch_editor_attribute_font
@@ -5544,9 +5945,30 @@ private val BASIC_LAYER_TYPES = listOf(
     "progress" to R.string.watch_editor_layer_progress,
 )
 
+/** 1.0 专属的可插入类型。2.0 序列化器的白名单里没有 video。 */
+private val V1_ONLY_LAYER_TYPES = listOf(
+    "video" to R.string.watch_editor_layer_video,
+)
+
+/**
+ * 按文档格式版本过滤「可插入」类型。
+ *
+ * 只影响新增按钮，不影响 [watchEditorLayerTypeLabel] —— 已打开的 2.0 文档若
+ * 因某种途径含 video 图层，图层列表仍要显示它的中文名而不是裸类型串。
+ */
+private fun insertableLayerTypes(
+    version: WatchFormatVersion,
+): List<Pair<String, Int>> = when (version) {
+    WatchFormatVersion.V1 -> BASIC_LAYER_TYPES + V1_ONLY_LAYER_TYPES
+    WatchFormatVersion.V2 -> BASIC_LAYER_TYPES
+}
+
+/** 标签查表覆盖全部已知类型，与可插入与否无关。 */
+private val LAYER_TYPE_LABELS = BASIC_LAYER_TYPES + V1_ONLY_LAYER_TYPES
+
 @Composable
 private fun watchEditorLayerTypeLabel(type: String): String {
-    val labelRes = BASIC_LAYER_TYPES.firstOrNull { (code, _) ->
+    val labelRes = LAYER_TYPE_LABELS.firstOrNull { (code, _) ->
         code.equals(type, ignoreCase = true)
     }?.second
     return labelRes?.let { stringResource(it) } ?: type
@@ -5571,6 +5993,7 @@ private val EDITABLE_ATTRIBUTES = listOf(
     "opacity",
     "anim_scale_x",
     "anim_scale_y",
+    "gyro",
     "text",
     "text_size",
     "color",
@@ -5620,6 +6043,7 @@ private val NUMERIC_ATTRIBUTES = setOf(
     "opacity",
     "anim_scale_x",
     "anim_scale_y",
+    "gyro",
     "text_size",
     "gif_delay",
     "dur_in",

@@ -16,7 +16,6 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,7 +26,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
@@ -36,6 +34,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RangeSlider
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -111,10 +110,24 @@ internal fun EditorVideoImportFlow(
     var startMs by remember(uri) { mutableFloatStateOf(0f) }
     var endMs by remember(uri, info.durationMs) { mutableFloatStateOf(info.durationMs.toFloat()) }
     var playing by remember(uri) { mutableStateOf(false) }
-    var preset by remember(uri) { mutableStateOf(WatchEditorVideoResolutionPreset.P480) }
-    var frameRate by remember(uri) { mutableStateOf("30") }
+    // 播放头。由播放器每 32ms 回写，拖动进度条期间改为由手指驱动。
+    var positionMs by remember(uri) { mutableFloatStateOf(0f) }
+    var scrubbing by remember(uri) { mutableStateOf(false) }
+    // 源帧率取到了就默认「原画」档并沿用源参数，取不到才退回 480P + 30fps。
+    // 初始档位只判一次，让下面三个 remember 不可能各判出不同的档。
+    val initialPreset = if (info.importableFrameRate != null) {
+        WatchEditorVideoResolutionPreset.ORIGINAL
+    } else {
+        WatchEditorVideoResolutionPreset.P480
+    }
+    var preset by remember(uri, info) { mutableStateOf(initialPreset) }
+    var frameRate by remember(uri, info) {
+        // 用夹到 0.5f..60f 的 importableFrameRate：源可能是 120/240fps，
+        // 而 WatchEditorVideoImportOptions 只收 ≤60，原值填进来提交就会抛。
+        mutableStateOf(info.importableFrameRate?.let { formatEditorVideoFrameRate(it) } ?: "30")
+    }
     var bitrate by remember(uri, info) {
-        mutableStateOf(defaultVideoBitrateKbps(info, WatchEditorVideoResolutionPreset.P480).toString())
+        mutableStateOf(defaultVideoBitrateKbps(info, initialPreset).toString())
     }
     var previewView by remember(uri) { mutableStateOf<EditorVideoPreviewView?>(null) }
     val currentPreviewView = rememberUpdatedState(previewView)
@@ -243,6 +256,11 @@ internal fun EditorVideoImportFlow(
                     },
                     update = { view ->
                         previewView = view
+                        // 拖动期间摘掉回调：否则播放器每 32ms 把播放头写回来，
+                        // 手指刚拖到的位置立刻被覆盖，滑块会在两处横跳。
+                        view.setPositionListener(
+                            if (scrubbing) null else { position -> positionMs = position.toFloat() },
+                        )
                         view.bind(uri, info, startMs.roundToLong(), endMs.roundToLong(), playing)
                     },
                     modifier = Modifier.fillMaxSize(),
@@ -288,12 +306,27 @@ internal fun EditorVideoImportFlow(
                     val durationMax = info.durationMs.toFloat().coerceAtLeast(1f)
                     startMs = range.start.coerceIn(0f, (durationMax - 1f).coerceAtLeast(0f))
                     endMs = range.endInclusive.coerceIn(startMs + 1f, durationMax)
+                    // 播放头可能已落在新片段之外，跟着夹回来。
+                    positionMs = positionMs.coerceIn(startMs, endMs)
                 },
                 valueRange = 0f..info.durationMs.toFloat().coerceAtLeast(1f),
                 modifier = Modifier.fillMaxWidth(),
             )
+            // 播放进度：显示播放头 + 可拖动定位。范围是片段而非整段视频，
+            // 因为预览本身就只在片段内循环。
+            Slider(
+                value = positionMs.coerceIn(startMs, endMs),
+                onValueChange = { value ->
+                    scrubbing = true
+                    positionMs = value
+                    previewView?.seekTo(value.roundToLong())
+                },
+                onValueChangeFinished = { scrubbing = false },
+                valueRange = startMs..(endMs.coerceAtLeast(startMs + 1f)),
+                modifier = Modifier.fillMaxWidth(),
+            )
             Text(
-                text = stringResource(
+                text = formatEditorVideoTime(positionMs.roundToLong()) + " / " + stringResource(
                     R.string.watch_editor_video_trim_fmt,
                     formatEditorVideoTime(startMs.roundToLong()),
                     formatEditorVideoTime(endMs.roundToLong()),
@@ -343,30 +376,42 @@ internal fun EditorVideoImportFlow(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                WatchEditorVideoResolutionPreset.entries.forEach { candidate ->
-                    val label = when (candidate) {
-                        WatchEditorVideoResolutionPreset.ORIGINAL -> stringResource(R.string.watch_editor_video_original)
-                        WatchEditorVideoResolutionPreset.P1080 -> "1080P"
-                        WatchEditorVideoResolutionPreset.P720 -> "720P"
-                        WatchEditorVideoResolutionPreset.P480 -> "480P"
-                        WatchEditorVideoResolutionPreset.P360 -> "360P"
-                    }
-                    if (preset == candidate) {
-                        Button(onClick = {}) { Text(label) }
-                    } else {
-                        OutlinedButton(onClick = {
-                            if (candidate == WatchEditorVideoResolutionPreset.ORIGINAL) {
-                                info.frameRate?.let { frameRate = formatEditorVideoFrameRate(it) }
-                            }
-                            bitrate = defaultVideoBitrateKbps(info, candidate).toString()
-                            preset = candidate
-                        }) { Text(label) }
+            // 选中态也接同一个回调：初始档就是「原画」时，用户改过帧率
+            // 再点回「原画」应该能把参数同步回源值，空 onClick 做不到。
+            val applyPreset: (WatchEditorVideoResolutionPreset) -> Unit = { candidate ->
+                if (candidate == WatchEditorVideoResolutionPreset.ORIGINAL) {
+                    // importableFrameRate 而非 frameRate：源可能 120/240fps，
+                    // 而 options 只收 ≤60，填原值提交就会抛。
+                    info.importableFrameRate?.let { frameRate = formatEditorVideoFrameRate(it) }
+                }
+                bitrate = defaultVideoBitrateKbps(info, candidate).toString()
+                preset = candidate
+            }
+            // 原画独占一行 + 四个压制档 2×2。以前是五个横排 + horizontalScroll，
+            // 表形屏上后两档要横滑才点得到（老师实机反馈）。
+            ResolutionPresetButton(
+                preset = WatchEditorVideoResolutionPreset.ORIGINAL,
+                label = stringResource(R.string.watch_editor_video_original),
+                selected = preset == WatchEditorVideoResolutionPreset.ORIGINAL,
+                onClick = applyPreset,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            listOf(
+                WatchEditorVideoResolutionPreset.P1080 to WatchEditorVideoResolutionPreset.P720,
+                WatchEditorVideoResolutionPreset.P480 to WatchEditorVideoResolutionPreset.P360,
+            ).forEach { (left, right) ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    listOf(left, right).forEach { candidate ->
+                        ResolutionPresetButton(
+                            preset = candidate,
+                            label = resolutionPresetLabel(candidate),
+                            selected = preset == candidate,
+                            onClick = applyPreset,
+                            modifier = Modifier.weight(1f),
+                        )
                     }
                 }
             }
@@ -424,6 +469,32 @@ internal fun EditorVideoImportFlow(
                 }
             }
         }
+    }
+}
+
+/** 压制档的显示名。原画那档要走 stringResource，所以不在这里。 */
+private fun resolutionPresetLabel(preset: WatchEditorVideoResolutionPreset): String =
+    when (preset) {
+        WatchEditorVideoResolutionPreset.ORIGINAL -> "" // 调用方单独取三语串。
+        WatchEditorVideoResolutionPreset.P1080 -> "1080P"
+        WatchEditorVideoResolutionPreset.P720 -> "720P"
+        WatchEditorVideoResolutionPreset.P480 -> "480P"
+        WatchEditorVideoResolutionPreset.P360 -> "360P"
+    }
+
+/** 选中走实心、未选走描边；两态尺寸一致，切换时不会让网格抖动。 */
+@Composable
+private fun ResolutionPresetButton(
+    preset: WatchEditorVideoResolutionPreset,
+    label: String,
+    selected: Boolean,
+    onClick: (WatchEditorVideoResolutionPreset) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (selected) {
+        Button(onClick = { onClick(preset) }, modifier = modifier) { Text(label) }
+    } else {
+        OutlinedButton(onClick = { onClick(preset) }, modifier = modifier) { Text(label) }
     }
 }
 
@@ -537,13 +608,22 @@ private class EditorVideoPreviewView(context: Context) : TextureView(context), T
     private var endMs: Long = Long.MAX_VALUE
     private var shouldPlay = false
     private var preparing = false
+    /**
+     * 播放头回调。挂在下面那个 32ms 心跳上，不另起计时器 —— UI 侧拖动进度条
+     * 时会把它摘掉，否则播放头和手指互相打架。
+     */
+    private var positionListener: ((Long) -> Unit)? = null
     private val progressGuard = object : Runnable {
         override fun run() {
             val active = player
-            if (active != null && runCatching { active.isPlaying }.getOrDefault(false)) {
+            if (active != null) {
                 val position = runCatching { active.currentPosition.toLong() }.getOrDefault(startMs)
-                if (position >= endMs - 20L) {
+                if (runCatching { active.isPlaying }.getOrDefault(false) && position >= endMs - 20L) {
                     runCatching { active.seekTo(startMs, MediaPlayer.SEEK_CLOSEST_SYNC) }
+                    // 刚跳回片段开头，把开头而不是越界值报出去。
+                    positionListener?.invoke(startMs)
+                } else {
+                    positionListener?.invoke(position.coerceIn(startMs, endMs))
                 }
             }
             mainHandler.postDelayed(this, 32L)
@@ -580,6 +660,18 @@ private class EditorVideoPreviewView(context: Context) : TextureView(context), T
             }
             runCatching { active.start() }
         }
+    }
+
+    /** 传 null 摘掉回调：UI 侧拖动进度条期间用，避免回写和手指打架。 */
+    fun setPositionListener(listener: ((Long) -> Unit)?) {
+        positionListener = listener
+    }
+
+    /** 把播放头挪到片段内的指定位置。暂停态也生效，画面跟着跳。 */
+    fun seekTo(milliseconds: Long) {
+        val target = milliseconds.coerceIn(startMs, endMs)
+        val active = player ?: return
+        runCatching { active.seekTo(target, MediaPlayer.SEEK_CLOSEST_SYNC) }
     }
 
     private fun maybePrepare() {
@@ -657,6 +749,7 @@ private class EditorVideoPreviewView(context: Context) : TextureView(context), T
 
     fun release() {
         mainHandler.removeCallbacks(progressGuard)
+        positionListener = null
         releasePlayer()
         surface?.release()
         surface = null

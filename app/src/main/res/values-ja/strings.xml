@@ -201,6 +201,8 @@
     <string name="settings_reduce_motion_sub">トランジション後のオーバーシュートを除去：アニメーションが正確に停止</string>
     <string name="settings_hide_recents">履歴カードを非表示</string>
     <string name="settings_hide_recents_sub">システムの履歴画面から Flue を非表示にする</string>
+    <string name="settings_watch_store_segmented_download">マルチスレッド分割ダウンロード</string>
+    <string name="settings_watch_store_segmented_download_sub">文字盤を複数の区間に分けて並行取得します。サーバーが非対応の場合は単一接続に自動で戻ります</string>
 
     <!-- 検索インデックス：検索専用タイトル -->
     <string name="search_t_theme_system">システムに従う（ライト/ダーク）</string>
@@ -288,6 +290,7 @@
     <string name="search_d_low_res">アイコンの負荷を下げてパフォーマンス向上</string>
     <string name="search_d_music_text">曲替えのテキストトランジション</string>
     <string name="search_d_hide_recents">履歴画面から Flue を非表示</string>
+    <string name="search_d_segmented_download">文字盤を分割して並行ダウンロード</string>
     <string name="search_d_thumbnails">写真・動画リストのプレビュー画像</string>
     <string name="search_d_motion_profile_entry">モーションプロファイルページへ移動</string>
     <string name="search_d_motion_profile">時間・ベジェ・ばねのパラメーター</string>
@@ -386,6 +389,29 @@
     <string name="settings_watchmaker_force_fill">画面いっぱいに表示</string>
     <string name="settings_watchmaker_force_fill_on">キャンバス中心を基点に拡大し、端をトリミング</string>
     <string name="settings_watchmaker_force_fill_off">デザインキャンバス全体を表示し、指定された形状に従う</string>
+    <string name="settings_watchface_canvas_preset">キャンバスの合わせ方</string>
+    <string name="settings_watchface_canvas_preset_fit">全体表示</string>
+    <string name="settings_watchface_canvas_preset_fit_desc">短辺に合わせ、長辺に余白を残してキャンバス全体を表示</string>
+    <string name="settings_watchface_canvas_preset_fill">画面いっぱい</string>
+    <string name="settings_watchface_canvas_preset_fill_desc">長辺に合わせて等比拡大し、はみ出した部分をトリミング</string>
+    <string name="settings_watchface_canvas_preset_vertical">高さ基準</string>
+    <string name="settings_watchface_canvas_preset_vertical_desc">縦方向をいっぱいに、横方向ははみ出しや余白が出ることがある</string>
+    <string name="settings_watchface_canvas_preset_horizontal">幅基準</string>
+    <string name="settings_watchface_canvas_preset_horizontal_desc">横方向をいっぱいに、縦方向ははみ出しや余白が出ることがある</string>
+    <string name="settings_watchface_canvas_preset_stretch">引き伸ばし</string>
+    <string name="settings_watchface_canvas_preset_stretch_desc">縦横それぞれをいっぱいに。等比にならず変形する場合がある</string>
+    <string name="settings_watchface_canvas_preset_custom">カスタム</string>
+    <string name="settings_watchface_canvas_preset_custom_desc">自動調整せず、下の拡大縮小スライダーだけで決める</string>
+    <string name="settings_watchface_canvas_zoom_x">横方向の拡大縮小</string>
+    <string name="settings_watchface_canvas_zoom_y">縦方向の拡大縮小</string>
+    <string name="settings_watchface_canvas_offset_x">横方向のオフセット</string>
+    <string name="settings_watchface_canvas_offset_y">縦方向のオフセット</string>
+    <string name="settings_watchface_canvas_follow_default">全体の既定に従う</string>
+    <string name="settings_watchface_canvas_follow_default_on">この文字盤は全体のキャンバス設定を使い、変更に追従します</string>
+    <string name="settings_watchface_canvas_follow_default_off">この文字盤は独自のキャンバス設定を使い、全体の設定に影響されません</string>
+    <string name="settings_watchface_canvas_reset">キャンバス設定をリセット</string>
+    <string name="settings_watchface_canvas_reset_desc">全体表示・拡大縮小なし・オフセットなしに戻す</string>
+    <string name="settings_watchface_canvas_section">キャンバス調整</string>
     <string name="settings_watchface_gravity_parallax">ジャイロ奥行き文字盤</string>
     <string name="settings_watchface_gravity_parallax_on">gyro レイヤーを持つ文字盤で手首の動きによる視差を有効化</string>
     <string name="settings_watchface_gravity_parallax_off">ジャイロ奥行き移動を無効化</string>
@@ -472,6 +498,12 @@
 
     <!-- パフォーマンスとアニメーション -->
     <string name="settings_performance_title">パフォーマンスとアニメーション</string>
+    <string name="settings_perf_group_rendering">描画品質</string>
+    <string name="settings_perf_group_rendering_sub">アイコン解像度・影・サムネイル</string>
+    <string name="settings_perf_group_motion">アニメーションと画面遷移</string>
+    <string name="settings_perf_group_motion_sub">起動・復帰の動き、登場、モーションカーブ</string>
+    <string name="settings_perf_group_system">システムとネットワーク</string>
+    <string name="settings_perf_group_system_sub">バックグラウンド表示とダウンロード動作</string>
     <string name="settings_low_res_icons">低解像度アイコン</string>
     <string name="settings_low_res_icons_sub">アイコンの処理負荷を下げてスクロールをなめらかにする</string>
     <string name="settings_music_text_animation">音楽テキスト切り替えアニメーション</string>
@@ -684,6 +716,7 @@
     <string name="watch_editor_error_ffmpeg_unsupported">この端末アーキテクチャでは FFmpeg 動画読み込みを利用できません</string>
     <string name="watch_editor_error_read_video">選択した動画を読み込めません</string>
     <string name="watch_editor_status_converting_video_fmt">動画を変換しています %1$d%%</string>
+    <string name="watch_editor_status_copying_video_fmt">元の動画を読み込んでいます %1$d%%</string>
     <string name="watch_editor_error_video_import">動画の読み込みに失敗しました</string>
     <string name="watch_editor_status_importing_watch">.watch を読み込んでいます</string>
     <string name="watch_editor_error_read_file">選択したファイルを読み込めません</string>
@@ -719,6 +752,13 @@
     <string name="watch_editor_save">保存</string>
     <string name="watch_editor_cancel">キャンセル</string>
     <string name="watch_editor_status_creating_draft">安全な下書きを作成しています</string>
+    <string name="watch_editor_format_choice_title">文字盤フォーマットを選択</string>
+    <string name="watch_editor_format_recommended">推奨</string>
+    <string name="watch_editor_format_v1_title">WatchMaker 1.0</string>
+    <string name="watch_editor_format_v1_sub">video レイヤーに対応し、動画ファイルを直接再生できます</string>
+    <string name="watch_editor_format_v2_title">WatchMaker 2.0</string>
+    <string name="watch_editor_format_v2_sub">Studio 形式。video レイヤーがなく、動画はループフレームに変換されます</string>
+    <string name="watch_editor_format_choice_note">1.0 には video レイヤーがあり、動画をそのまま再生できます。2.0 にはこのレイヤーがないため、読み込んだ動画はループフレーム列にしか変換できません。</string>
     <string name="watch_editor_error_init">エディターの初期化に失敗しました</string>
     <string name="watch_editor_error_begin_gesture">キャンバス操作を開始できません</string>
     <string name="watch_editor_error_commit_gesture">キャンバス操作を確定できません</string>
@@ -729,6 +769,7 @@
     <string name="watch_editor_status_duplicate_layer">レイヤーを複製しています</string>
     <string name="watch_editor_status_delete_layer">レイヤーを削除しています</string>
     <string name="watch_editor_status_update_shape">文字盤形状を更新しています</string>
+    <string name="watch_editor_status_update_background">背景色を更新しています</string>
     <string name="watch_editor_status_update_canvas">キャンバスサイズを更新しています</string>
     <string name="watch_editor_status_saving">文字盤を保存しています</string>
     <string name="watch_editor_error_upload_autosave">アップロード前の自動保存に失敗しました</string>
@@ -741,6 +782,18 @@
     <string name="watch_editor_undo">元に戻す</string>
     <string name="watch_editor_redo">やり直す</string>
     <string name="watch_editor_return_split">分割表示に戻る</string>
+    <string name="watch_editor_preview_play">プレビューを再生</string>
+    <string name="watch_editor_preview_pause">プレビューを一時停止</string>
+    <string name="shortcut_menu_rename">名前を変更</string>
+    <string name="shortcut_menu_rename_folder_title">フォルダー名を変更</string>
+    <string name="shortcut_menu_rename_confirm">完了</string>
+    <string name="shortcut_menu_rename_cancel">キャンセル</string>
+    <string name="shortcut_menu_dissolve_folder">フォルダーを解除</string>
+    <string name="shortcut_menu_app_info">アプリ情報</string>
+    <string name="shortcut_menu_remove">削除</string>
+    <string name="shortcut_menu_remove_from_quick_launch">クイック起動から削除</string>
+    <string name="shortcut_menu_uninstall">アンインストール</string>
+    <string name="shortcut_menu_exclude_app">リストから非表示</string>
     <string name="watch_editor_no_layers">レイヤーはありません</string>
     <string name="watch_editor_select_layer_first">先にレイヤーを選択してください</string>
     <string name="watch_editor_unnamed_face">名称未設定の文字盤</string>
@@ -787,6 +840,9 @@
     <string name="watch_editor_start_conversion">変換を開始</string>
     <string name="watch_editor_converting_video">動画を変換しています</string>
     <string name="watch_editor_video_conversion_message">FFmpeg が選択した範囲を文字盤用のループフレームへ変換します。</string>
+    <string name="watch_editor_video_reencode_message">FFmpeg が選択した範囲を文字盤用の動画へ再エンコードします。</string>
+    <string name="watch_editor_video_passthrough_message">再エンコードせずに元の動画を文字盤へコピーしています。</string>
+    <string name="watch_editor_copying_video">元の動画を読み込んでいます</string>
     <string name="watch_editor_cancel_conversion">変換をキャンセル</string>
     <string name="watch_editor_collapse_child_layers">子レイヤーを折りたたむ</string>
     <string name="watch_editor_expand_child_layers">子レイヤーを展開</string>
@@ -801,6 +857,8 @@
     <string name="watch_editor_import_image_path">画像を path に読み込む</string>
     <string name="watch_editor_import_image_sequence">複数画像をループ背景として読み込む</string>
     <string name="watch_editor_import_video_frames">動画をループフレームとして読み込む</string>
+    <string name="watch_editor_error_frames_need_ffmpeg">この端末は 32 ビットのためループフレームへ変換できません。video レイヤーであれば動画をそのまま読み込めます。</string>
+    <string name="watch_editor_error_reencode_need_ffmpeg">この端末は 32 ビットのため動画の切り抜きや再エンコードができません。元の設定のまま読み込んでください。</string>
     <string name="watch_editor_text_entry_animation">テキストの開始アニメーション</string>
     <string name="watch_editor_text_exit_animation">テキストの終了アニメーション</string>
     <string name="watch_editor_select_app_title">起動するアプリを選択</string>
@@ -819,6 +877,10 @@
     <string name="watch_editor_watch_shape_description">円形文字盤は円で切り抜き、正方形文字盤はキャンバス全体を保持します。</string>
     <string name="watch_editor_unknown_shape_fmt">現在の shape="%1$s"。上のボタンで円形または正方形に変更できます。</string>
     <string name="watch_editor_not_set">未設定</string>
+    <string name="watch_editor_watch_background">文字盤の背景色</string>
+    <string name="watch_editor_watch_background_description">すべてのレイヤーの下に描かれる下地です。全面の背景画像がある文字盤では通常見えません。</string>
+    <string name="watch_editor_watch_background_current_fmt">現在の bg_color="%1$s"</string>
+    <string name="watch_editor_watch_background_clear">既定（黒）に戻す</string>
     <string name="watch_editor_canvas_size">キャンバスサイズ</string>
     <string name="watch_editor_canvas_undeclared_suffix">（未宣言・既定キャンバスを使用）</string>
     <string name="watch_editor_canvas_matches_screen_suffix">・この端末の画面と一致</string>
@@ -833,6 +895,7 @@
     <string name="watch_editor_attribute_opacity">不透明度</string>
     <string name="watch_editor_attribute_scale_x">横方向の拡大率（%）</string>
     <string name="watch_editor_attribute_scale_y">縦方向の拡大率（%）</string>
+    <string name="watch_editor_attribute_gyro">動的な奥行き（-32～32）</string>
     <string name="watch_editor_attribute_text">文字 / Watchmaker 式</string>
     <string name="watch_editor_attribute_text_size">文字サイズ</string>
     <string name="watch_editor_attribute_font">フォント</string>
@@ -871,6 +934,7 @@
     <string name="watch_editor_layer_shape">図形</string>
     <string name="watch_editor_layer_image">画像</string>
     <string name="watch_editor_layer_looping_background">ループ背景</string>
+    <string name="watch_editor_layer_video">動画</string>
     <string name="watch_editor_layer_ring">リング</string>
     <string name="watch_editor_layer_progress">進捗</string>
     <string name="watch_editor_shape_round">円形</string>
@@ -951,7 +1015,6 @@
     <string name="watch_store_filter_round">円形</string>
     <string name="watch_store_filter_square">正方形</string>
     <string name="watch_store_filter_rectangular">長方形</string>
-    <string name="watch_store_category_loading_short">カテゴリを読み込み中…</string>
     <string name="watch_store_all_categories">すべてのカテゴリ</string>
     <string name="watch_store_category_load_failed">カテゴリを読み込めませんでした</string>
     <string name="watch_store_status_restoring_installations">インストール済み文字盤を復元中…</string>
@@ -1008,6 +1071,7 @@
     <string name="watch_store_scan_warning_fmt">%1$d 個のインストール先をスキャンできませんでした</string>
     <string name="watch_store_scan_warning_detail_fmt">%1$s；最初に失敗したフォルダー：%2$s（%3$s）</string>
     <string name="watch_store_unknown_directory">不明なフォルダー</string>
+    <string name="watch_store_lua_script_warning">この文字盤には Global Script（Lua）が含まれています。Flue では正しく描画できず、機能を再現できない場合があります。</string>
     <string name="watch_store_error_superseded_cleanup_fmt">新版はインストールされましたが、旧版を削除できませんでした：%1$s</string>
     <string name="watch_store_error_transaction_cleanup_fmt">インストールに失敗し、一時トランザクションも削除できませんでした：%1$s</string>
     <string name="watch_store_error_catalog_restore_after_install">文字盤はインストール済みですが、ストア記録を復元できていません。再スキャンしてもう一度お試しください。</string>
@@ -1190,4 +1254,6 @@
     <string name="internal_file_browser_pick_export_folder">書き出し先を選択</string>
     <string name="internal_file_browser_select_current_folder">このフォルダーに書き出す</string>
     <string name="internal_file_browser_pick_conversion">変換する文字盤を選択</string>
+    <string name="watch_face_loading">文字盤を読み込んでいます</string>
+    <string name="watch_face_loading_fallback">既定の文字盤に切り替えて再起動</string>
 </resources>

@@ -56,6 +56,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
@@ -75,6 +76,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -128,6 +130,15 @@ fun NotificationLayer(
     onRunNotificationAction: (String) -> Boolean,
     onOpenNotification: (String, Offset) -> Boolean,
     overlayMaskCornerRadiusDp: Int,
+    /**
+     * Android 12 以下的预制烘焙模糊背景：底层覆层（负一屏 / 控制中心）在静止
+     * 时刻的窗口像素，已离线糊过。
+     *
+     * 给了就铺在半透明玻璃底之下当不透明衬底 —— 那层 0.62 的底本身糊不了任何
+     * 东西（穿透过来的像素不在它的图层里），只靠它通知列表后面就是清晰的图标，
+     * 可读性极差。31+ 传 null，由各层自己的 RenderEffect 实时模糊。
+     */
+    legacyBlurBackdrop: ImageBitmap? = null,
     glassHighlightEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
@@ -396,6 +407,20 @@ fun NotificationLayer(
             .fillMaxSize()
             // 圆屏整圆裁剪 + 半透明玻璃根底（表盘背衬透出即毛玻璃）。
             .clip(flueOverlayMaskShape(overlayMaskCornerRadiusDp))
+            // 烘焙帧先铺，玻璃底后压：顺序反了就成了「玻璃在底下」，
+            // 不透明的模糊帧会把那层 0.62 的质感整个盖死。
+            .then(
+                if (legacyBlurBackdrop != null) {
+                    Modifier.drawBehind {
+                        drawImage(
+                            image = legacyBlurBackdrop,
+                            dstSize = IntSize(size.width.toInt(), size.height.toInt()),
+                        )
+                    }
+                } else {
+                    Modifier
+                },
+            )
             .background(launcherStyle.screenBackground.copy(alpha = 0.62f))
             // 顶部安全间距也必须属于通知页的命中区域；只观察指针，不抢
             // LazyColumn / 下拉关闭手势，但不再把这 22dp 传到底层控制中心。

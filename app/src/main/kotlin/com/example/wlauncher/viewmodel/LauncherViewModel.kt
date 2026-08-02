@@ -79,8 +79,11 @@ import com.flue.launcher.watchface.jbwatch.JBWATCH_ID_PREFIX
 import com.flue.launcher.watchface.jbwatch.JbWatchFaceStorage
 import com.flue.launcher.watchface.editor.WatchEditorSession
 import com.flue.launcher.watchface.standard.WATCHMAKER_ID_PREFIX
+import com.flue.launcher.watchface.standard.WatchCanvasPreset
+import com.flue.launcher.watchface.standard.WatchCanvasSettings
 import com.flue.launcher.watchface.standard.WatchDateLocale
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStorage
+import com.flue.launcher.watchface.store.FlueDownloadTuning
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -182,6 +185,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_WATCHFACE_STATUS_INDICATORS = booleanPreferencesKey("watchface_status_indicators")
         val KEY_WATCHFACE_BOTTOM_FADE = booleanPreferencesKey("watchface_bottom_fade_enabled")
         val KEY_WATCHMAKER_FORCE_FILL = booleanPreferencesKey("watchmaker_force_fill")
+
+        /**
+         * App 级画布默认配置（[WatchCanvasSettings.encode] 的输出）。
+         *
+         * 缺省时从存量的 [KEY_WATCHMAKER_FORCE_FILL] 推导，所以升级用户看到的画面不变。
+         */
+        val KEY_WATCHFACE_CANVAS_DEFAULT = stringPreferencesKey("watchface_canvas_default")
+
+        /**
+         * 每表盘覆盖，`id=编码` 用换行分隔的多行文本。
+         *
+         * **表里有条目 = 该表盘不跟随全局默认**；「跟随」不额外存一个布尔，免得
+         * 出现「followGlobal=true 却又存着一份覆盖值」这种自相矛盾的状态。
+         */
+        val KEY_WATCHFACE_CANVAS_OVERRIDES = stringPreferencesKey("watchface_canvas_overrides")
         val KEY_WATCHFACE_GRAVITY_PARALLAX = booleanPreferencesKey("watchface_gravity_parallax_enabled")
         val KEY_WATCHFACE_DATE_LOCALE = stringPreferencesKey("watchface_date_locale")
         val KEY_DEVICE_PRESET_APPLIED = booleanPreferencesKey("device_preset_applied")
@@ -226,6 +244,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_VIDEO_CUSTOM_TEXT = stringPreferencesKey("video_custom_text")
         val KEY_BUILTIN_MANAGER_THUMBNAILS = booleanPreferencesKey("builtin_manager_thumbnails")
         val KEY_HIDE_FROM_RECENTS = booleanPreferencesKey("hide_from_recents")
+        val KEY_WATCH_STORE_SEGMENTED_DOWNLOAD = booleanPreferencesKey("watch_store_segmented_download")
         val KEY_APP_LANGUAGE = stringPreferencesKey("app_language")
         val KEY_GLASS_HIGHLIGHT = booleanPreferencesKey("glass_highlight_enabled")
         val KEY_WIDGET_GLASS_HIGHLIGHT = booleanPreferencesKey("widget_glass_highlight_enabled")
@@ -485,8 +504,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     // 表盘底部渐隐遮罩默认关闭；用户可在“更多表盘选项”里手动开启。
     private val _watchFaceBottomFadeEnabled = MutableStateFlow(false)
     val watchFaceBottomFadeEnabled: StateFlow<Boolean> = _watchFaceBottomFadeEnabled.asStateFlow()
-    private val _watchmakerForceFill = MutableStateFlow(false)
-    val watchmakerForceFill: StateFlow<Boolean> = _watchmakerForceFill.asStateFlow()
+    /** App 级画布默认。没配过每表盘覆盖的表盘都用它。 */
+    private val _watchfaceCanvasDefault = MutableStateFlow(WatchCanvasSettings.DEFAULT)
+    val watchfaceCanvasDefault: StateFlow<WatchCanvasSettings> = _watchfaceCanvasDefault.asStateFlow()
+
+    /** 每表盘覆盖表。**键存在即代表该表盘不跟随全局默认**。 */
+    private val _watchfaceCanvasOverrides = MutableStateFlow<Map<String, WatchCanvasSettings>>(emptyMap())
+    val watchfaceCanvasOverrides: StateFlow<Map<String, WatchCanvasSettings>> =
+        _watchfaceCanvasOverrides.asStateFlow()
     private val _watchfaceGravityParallaxEnabled = MutableStateFlow(false)
     val watchfaceGravityParallaxEnabled: StateFlow<Boolean> = _watchfaceGravityParallaxEnabled.asStateFlow()
     // 表盘日期语言：system/zh/en/ja 四档，默认跟随系统。
@@ -658,6 +683,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val builtInManagerThumbnails: StateFlow<Boolean> = _builtInManagerThumbnails.asStateFlow()
     private val _hideFromRecents = MutableStateFlow(true)
     val hideFromRecents: StateFlow<Boolean> = _hideFromRecents.asStateFlow()
+    private val _watchStoreSegmentedDownload = MutableStateFlow(true)
+    val watchStoreSegmentedDownload: StateFlow<Boolean> = _watchStoreSegmentedDownload.asStateFlow()
     // 启动语言真源是 SharedPreferences；DataStore 只保存镜像，不能回灌旧值。
     private val _appLanguage = MutableStateFlow(
         com.flue.launcher.i18n.FlueLocaleManager.getSavedLanguage(application)
@@ -1047,9 +1074,20 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _watchFaceBottomFadeEnabled.value = loadedWatchFaceBottomFade
                 }
 
-                val loadedWatchmakerForceFill = prefs[KEY_WATCHMAKER_FORCE_FILL] ?: false
-                if (_watchmakerForceFill.value != loadedWatchmakerForceFill) {
-                    _watchmakerForceFill.value = loadedWatchmakerForceFill
+                // 画布默认：新键缺席时从存量的 force_fill 布尔推导，升级用户画面不变。
+                // 不在这里回写新键 —— 读路径每次都能推导出同一个值，回写只会让
+                // 一次纯读取变成一次写盘。
+                val loadedCanvasDefault = prefs[KEY_WATCHFACE_CANVAS_DEFAULT]
+                    ?.let(WatchCanvasSettings::decode)
+                    ?: WatchCanvasSettings.fromForceFill(prefs[KEY_WATCHMAKER_FORCE_FILL] ?: false)
+                if (_watchfaceCanvasDefault.value != loadedCanvasDefault) {
+                    _watchfaceCanvasDefault.value = loadedCanvasDefault
+                }
+
+                val loadedCanvasOverrides =
+                    decodeWatchfaceCanvasOverrides(prefs[KEY_WATCHFACE_CANVAS_OVERRIDES])
+                if (_watchfaceCanvasOverrides.value != loadedCanvasOverrides) {
+                    _watchfaceCanvasOverrides.value = loadedCanvasOverrides
                 }
                 val loadedGravityParallax = prefs[KEY_WATCHFACE_GRAVITY_PARALLAX] ?: false
                 if (_watchfaceGravityParallaxEnabled.value != loadedGravityParallax) {
@@ -1336,6 +1374,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 val loadedHideFromRecents = prefs[KEY_HIDE_FROM_RECENTS] ?: true
                 if (_hideFromRecents.value != loadedHideFromRecents) _hideFromRecents.value = loadedHideFromRecents
+
+                val loadedSegmentedDownload = prefs[KEY_WATCH_STORE_SEGMENTED_DOWNLOAD] ?: true
+                if (_watchStoreSegmentedDownload.value != loadedSegmentedDownload) {
+                    _watchStoreSegmentedDownload.value = loadedSegmentedDownload
+                }
+                // 传输层是在 Composable 的 remember 里 new 出来的，拿不到 ViewModel，
+                // 只能靠这个进程级引用把开关递过去。
+                FlueDownloadTuning.segmentedDownloads = loadedSegmentedDownload
 
                 // Locale is needed synchronously from Application/Activity.attachBaseContext,
                 // so SharedPreferences is the sole authority. DataStore keeps a mirror for
@@ -2337,9 +2383,81 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_WATCHFACE_BOTTOM_FADE] = enabled } }
     }
 
-    fun setWatchmakerForceFillEnabled(enabled: Boolean) {
-        _watchmakerForceFill.value = enabled
-        persist { store.edit { it[KEY_WATCHMAKER_FORCE_FILL] = enabled } }
+    /**
+     * 当前生效的画布配置：**每表盘覆盖 → App 默认**。
+     *
+     * [faceId] 传空串等价于「问全局默认」。
+     */
+    fun effectiveWatchfaceCanvasSettings(faceId: String): WatchCanvasSettings =
+        _watchfaceCanvasOverrides.value[faceId] ?: _watchfaceCanvasDefault.value
+
+    /** 该表盘是否跟随全局默认（即覆盖表里没有它）。 */
+    fun watchfaceCanvasFollowsDefault(faceId: String): Boolean =
+        faceId !in _watchfaceCanvasOverrides.value
+
+    /** 写 App 级默认。跟随默认的表盘会立刻一起变。 */
+    fun setWatchfaceCanvasDefault(settings: WatchCanvasSettings) {
+        if (_watchfaceCanvasDefault.value == settings) return
+        _watchfaceCanvasDefault.value = settings
+        persist {
+            store.edit {
+                it[KEY_WATCHFACE_CANVAS_DEFAULT] = settings.encode()
+                // 存量键跟着同步，方便回滚到旧版 APK 时画面不跳。
+                it[KEY_WATCHMAKER_FORCE_FILL] = settings.preset == WatchCanvasPreset.FILL
+            }
+        }
+    }
+
+    /**
+     * 写某个表盘的覆盖配置。写入即意味着该表盘**不再**跟随全局默认。
+     */
+    fun setWatchfaceCanvasOverride(faceId: String, settings: WatchCanvasSettings) {
+        if (faceId.isBlank()) return
+        val current = _watchfaceCanvasOverrides.value
+        if (current[faceId] == settings) return
+        val updated = current + (faceId to settings)
+        _watchfaceCanvasOverrides.value = updated
+        persistWatchfaceCanvasOverrides(updated)
+    }
+
+    /**
+     * 切换某表盘的「跟随全局默认」。
+     *
+     * 关掉跟随时把**当前生效值**快照进覆盖表 —— 否则用户一关开关画面就跳到出厂
+     * 默认，而他们的意图只是「从现在这个样子开始自己调」。
+     */
+    fun setWatchfaceCanvasFollowsDefault(faceId: String, follow: Boolean) {
+        if (faceId.isBlank()) return
+        val current = _watchfaceCanvasOverrides.value
+        val updated = if (follow) {
+            if (faceId !in current) return
+            current - faceId
+        } else {
+            if (faceId in current) return
+            current + (faceId to _watchfaceCanvasDefault.value)
+        }
+        _watchfaceCanvasOverrides.value = updated
+        persistWatchfaceCanvasOverrides(updated)
+    }
+
+    /** 丢弃已卸载表盘的覆盖配置，别让它们在偏好里无限堆积。 */
+    private fun pruneWatchfaceCanvasOverrides(removedIds: Set<String>) {
+        if (removedIds.isEmpty()) return
+        val current = _watchfaceCanvasOverrides.value
+        val updated = current - removedIds
+        if (updated.size == current.size) return
+        _watchfaceCanvasOverrides.value = updated
+        persistWatchfaceCanvasOverrides(updated)
+    }
+
+    private fun persistWatchfaceCanvasOverrides(overrides: Map<String, WatchCanvasSettings>) {
+        val encoded = encodeWatchfaceCanvasOverrides(overrides)
+        persist {
+            store.edit {
+                if (encoded.isEmpty()) it.remove(KEY_WATCHFACE_CANVAS_OVERRIDES)
+                else it[KEY_WATCHFACE_CANVAS_OVERRIDES] = encoded
+            }
+        }
     }
 
     fun setWatchfaceGravityParallaxEnabled(enabled: Boolean) {
@@ -2673,6 +2791,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
             val scanned = withContext(Dispatchers.IO) { scanAllWatchFaces() }
             publishWatchFaces(scanned)
+            // 只清真正删掉的那些：删除失败的表盘还在，它的画布配置得留着。
+            pruneWatchfaceCanvasOverrides(
+                descriptors.map(WatchFaceDescriptor::id).toSet() - failedIds.toSet(),
+            )
             if (_selectedWatchFaceId.value in requestedIds) {
                 _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
                 _watchFaceLastError.value = null
@@ -2735,6 +2857,29 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _watchFaceLastError.value = error
         syncSelectedWatchFace()
         persist {
+            store.edit {
+                it[KEY_SELECTED_WATCHFACE_ID] = BUILT_IN_WATCHFACE_ID
+                if (error.isNullOrBlank()) {
+                    it.remove(KEY_LAST_WATCHFACE_ERROR)
+                } else {
+                    it[KEY_LAST_WATCHFACE_ERROR] = error
+                }
+            }
+        }
+    }
+
+    /**
+     * 落盘版的退回内置表盘：**等 DataStore 真的写完才返回**。
+     *
+     * [fallbackToBuiltIn] 走的 `persist` 是 fire-and-forget，紧接着杀进程会让
+     * 写入丢掉，新进程读到的还是那块加载失败的表盘 —— 加载页那个「切换默认
+     * 表盘并重启」按钮必须用这条，否则重启完还是卡在同一个地方。
+     */
+    suspend fun fallbackToBuiltInAndAwaitPersist(error: String? = null) {
+        _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
+        _watchFaceLastError.value = error
+        syncSelectedWatchFace()
+        withContext(Dispatchers.IO) {
             store.edit {
                 it[KEY_SELECTED_WATCHFACE_ID] = BUILT_IN_WATCHFACE_ID
                 if (error.isNullOrBlank()) {
@@ -2978,6 +3123,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_HIDE_FROM_RECENTS] = enabled } }
     }
 
+    fun setWatchStoreSegmentedDownload(enabled: Boolean) {
+        _watchStoreSegmentedDownload.value = enabled
+        // 立刻生效，不等落盘：下一次下载读的是这个字段。
+        FlueDownloadTuning.segmentedDownloads = enabled
+        persist { store.edit { it[KEY_WATCH_STORE_SEGMENTED_DOWNLOAD] = enabled } }
+    }
+
     fun setGlassHighlightEnabled(enabled: Boolean) {
         _glassHighlightEnabled.value = enabled
         persist { store.edit { it[KEY_GLASS_HIGHLIGHT] = enabled } }
@@ -3210,7 +3362,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _watchFaceTextExitAnimation.value = true
         _watchFaceStatusIndicators.value = true
         _watchFaceBottomFadeEnabled.value = false
-        _watchmakerForceFill.value = false
+        _watchfaceCanvasDefault.value = WatchCanvasSettings.DEFAULT
+        _watchfaceCanvasOverrides.value = emptyMap()
+        // 这一项的写盘半区在下面的 store.edit 里，StateFlow 半区必须同步复位，
+        // 否则 reset 后 UI 还显示旧值、下一次落盘又把旧值写回去。
+        _watchfaceGravityParallaxEnabled.value = false
         _watchfaceDateLocale.value = WatchDateLocale.PREFERENCE_SYSTEM
         WatchDateLocale.override = null
         _hiddenApps.value = emptySet()
@@ -3256,6 +3412,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _builtInVideoCustomText.value = ""
         _builtInManagerThumbnails.value = true
         _hideFromRecents.value = true
+        _watchStoreSegmentedDownload.value = true
+        FlueDownloadTuning.segmentedDownloads = true
         InternalWatchFaceStorage.clearFont(getApplication())
         appRepository.setHiddenComponents(emptySet())
         appRepository.setIconRenderingOptions(
@@ -3329,6 +3487,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_WATCHFACE_STATUS_INDICATORS] = true
                 it[KEY_WATCHFACE_BOTTOM_FADE] = false
                 it[KEY_WATCHMAKER_FORCE_FILL] = false
+                it.remove(KEY_WATCHFACE_CANVAS_DEFAULT)
+                it.remove(KEY_WATCHFACE_CANVAS_OVERRIDES)
                 it[KEY_WATCHFACE_GRAVITY_PARALLAX] = false
                 it.remove(KEY_WATCHFACE_DATE_LOCALE)
                 it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
@@ -3372,6 +3532,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it.remove(KEY_VIDEO_CUSTOM_TEXT)
                 it[KEY_BUILTIN_MANAGER_THUMBNAILS] = true
                 it[KEY_HIDE_FROM_RECENTS] = true
+                it[KEY_WATCH_STORE_SEGMENTED_DOWNLOAD] = true
                 it.remove(KEY_LAST_WATCHFACE_ERROR)
             }
         }
@@ -3663,6 +3824,31 @@ private fun Offset.toNormalizedPoint(): NormalizedPoint = NormalizedPoint(
     x = x.coerceIn(0f, 1f),
     y = y.coerceIn(0f, 1f),
 )
+
+/**
+ * 每表盘画布覆盖的行式编码：每行 `表盘id=配置编码`。
+ *
+ * 表盘 id 由 `builtin*` 常量或 `watchmaker_watch_<sha>` / `jbwatch_*` 构成，
+ * 不含 `=` 与换行；仍然按「首个 `=` 切分」解析，这样 id 里万一混进 `=`
+ * 也只会丢那一条而不是错位整张表。
+ */
+private fun encodeWatchfaceCanvasOverrides(
+    overrides: Map<String, WatchCanvasSettings>,
+): String = overrides.entries
+    .filter { it.key.isNotBlank() && '=' !in it.key && '\n' !in it.key }
+    .joinToString("\n") { "${it.key}=${it.value.encode()}" }
+
+private fun decodeWatchfaceCanvasOverrides(raw: String?): Map<String, WatchCanvasSettings> {
+    if (raw.isNullOrBlank()) return emptyMap()
+    return raw.lineSequence()
+        .mapNotNull { line ->
+            val separator = line.indexOf('=')
+            if (separator <= 0) return@mapNotNull null
+            val id = line.substring(0, separator)
+            id to WatchCanvasSettings.decode(line.substring(separator + 1))
+        }
+        .toMap()
+}
 
 private fun ExternalLaunchState.sessionOrNull(): ExternalLaunchSession? = when (this) {
     ExternalLaunchState.Idle -> null

@@ -35,6 +35,8 @@ import javax.xml.transform.OutputKeys
 import javax.xml.transform.TransformerFactory
 import javax.xml.transform.dom.DOMSource
 import javax.xml.transform.stream.StreamResult
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * A cache-backed, lossless editing session for a standard Watchmaker .watch
@@ -493,6 +495,93 @@ class WatchEditorSession private constructor(
             setOrRemoveAttribute(layer, "gif_delay", frameDelayMs.toString())
             paths
         }
+    }
+
+    /**
+     * 把源视频原样导入为 1.0 的 `video` 图层（直通路径，无重编码）。
+     *
+     * 与 [importVideoFrameSequence] 是同一位置的两条路：那条把视频烘焙成
+     * `image_gif` + 反引号帧路径，这条直接引用 `videos/` 下的源文件。调用方
+     * 先用 `canPassThroughVideo` 判定走哪条。
+     *
+     * 仍然复用相同的资源预算与回滚约定 —— 旧素材先解引用再入库，异常时把已
+     * 搬入草稿的孤儿文件清掉，剩下的交给 `mutate` 回滚。
+     *
+     * [videoWidth] / [videoHeight] 是视频的显示朝向像素尺寸。给了就按 contain
+     * 写 `width`/`height`：不写的话渲染器缺省取整个设计空间，方画布下视频会被
+     * 拉成 1:1（老师实机反馈）。
+     */
+    fun importVideoFile(
+        key: WatchEditorLayerKey,
+        videoFile: File,
+        videoWidth: Int = 0,
+        videoHeight: Int = 0,
+        /** false 时保留图层已有的 width/height，不用导入的比例覆盖手工尺寸。 */
+        overwriteSize: Boolean = true,
+    ): String {
+        require(videoFile.isFile && videoFile.length() > 0L) { "视频文件不可用：${videoFile.name}" }
+        return mutate {
+            val layer = findLayer(key)
+            val obsoleteLoopResources = loopingImageResources(layer)
+            setOrRemoveAttribute(layer, "path", null)
+            stashUnreferencedResources(obsoleteLoopResources)
+            val path = try {
+                importResourceFileDirect(
+                    sourceFile = videoFile,
+                    requestedName = videoFile.name,
+                    directory = "videos",
+                    totalBudget = remainingBudget(),
+                )
+            } catch (error: Exception) {
+                throw error
+            }
+            setOrRemoveAttribute(layer, "type", "video")
+            setOrRemoveAttribute(layer, "path", path)
+            // 帧序列的属性在这条路上没有意义；留着会让渲染器同时看到两套
+            // 播放参数。gif_delay 是 image_gif 专属，一并清掉。
+            setOrRemoveAttribute(layer, "gif_delay", null)
+            applyContainedVideoSize(layer, videoWidth, videoHeight, overwriteSize)
+            path
+        }
+    }
+
+    /**
+     * 按 contain 语义写图层盒子：等比缩放到刚好装进设计空间，长边贴边、
+     * 短边留白。
+     *
+     * 基准是**设计空间**（[WatchCanvasSize.designExtentWidth]）而不是根节点上
+     * 的像素声明 —— 图层坐标全部活在设计空间里，拿 466 这类像素值去算会得到
+     * 完全错误的盒子。
+     */
+    private fun applyContainedVideoSize(
+        layer: Element,
+        videoWidth: Int,
+        videoHeight: Int,
+        overwriteSize: Boolean,
+    ) {
+        if (videoWidth <= 0 || videoHeight <= 0) return
+        if (!overwriteSize &&
+            (layer.hasAttribute("width") || layer.hasAttribute("height"))
+        ) {
+            return
+        }
+        val canvas = WatchCanvasSize.fromRootAttributes(attributesOf(document.documentElement))
+        val scale = min(
+            canvas.designExtentWidth / videoWidth,
+            canvas.designExtentHeight / videoHeight,
+        )
+        setOrRemoveAttribute(
+            layer,
+            "width",
+            (videoWidth * scale).roundToInt().coerceAtLeast(1).toString(),
+        )
+        setOrRemoveAttribute(
+            layer,
+            "height",
+            (videoHeight * scale).roundToInt().coerceAtLeast(1).toString(),
+        )
+        // size 是 width/height 的共享回退值，留着会和刚写的两条打架。
+        setOrRemoveAttribute(layer, "size", null)
     }
 
     fun importImage(context: Context, uri: Uri, requestedName: String? = null): String {
@@ -1261,6 +1350,7 @@ class WatchEditorSession private constructor(
             limits: WatchEditorLimits = WatchEditorLimits.DEFAULT,
             roundShape: Boolean = false,
             canvasSize: WatchCanvasSize = WatchCanvasSize.DEFAULT,
+            formatVersion: WatchFormatVersion = WatchFormatVersion.V1,
         ): WatchEditorSession =
             createBlank(
                 File(context.cacheDir, DRAFT_DIRECTORY_NAME),
@@ -1268,6 +1358,7 @@ class WatchEditorSession private constructor(
                 limits,
                 roundShape = roundShape,
                 canvasSize = canvasSize,
+                formatVersion = formatVersion,
             )
 
         fun createBlank(
@@ -1277,6 +1368,7 @@ class WatchEditorSession private constructor(
             removeDraftOnClose: Boolean = true,
             roundShape: Boolean = false,
             canvasSize: WatchCanvasSize = WatchCanvasSize.DEFAULT,
+            formatVersion: WatchFormatVersion = WatchFormatVersion.V1,
         ): WatchEditorSession {
             val cache = prepareCacheDirectory(cacheDirectory)
             val draft = createDraftDirectory(cache)
@@ -1290,8 +1382,15 @@ class WatchEditorSession private constructor(
                 // WatchMaker 表盘固定使用原生 512×512 画布。保留旧参数只是
                 // 为了兼容已有调用方，但新建结果永远写入固定规格。
                 val fixedCanvasSize = WatchCanvasSize.DEFAULT
+                // 版本判据就是有没有 build_source="studio"：写了算 2.0，不写算 1.0。
+                // 这里曾无条件写 studio，于是新建出来的每一块都是 2.0，
+                // 用不了 1.0 专属的 video 图层。
+                val buildSourceAttribute = when (formatVersion) {
+                    WatchFormatVersion.V2 -> " build_source=\"studio\""
+                    WatchFormatVersion.V1 -> ""
+                }
                 val xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
-                    "<Watch name=\"${escapeXmlAttribute(safeName)}\" build_source=\"studio\"" +
+                    "<Watch name=\"${escapeXmlAttribute(safeName)}\"$buildSourceAttribute" +
                     " shape=\"$shapeCode\"" +
                     " width=\"${fixedCanvasSize.width}\" height=\"${fixedCanvasSize.height}\"/>"
                 writeAtomically(resolveFile(draft, watchXml), xml.toByteArray(StandardCharsets.UTF_8))

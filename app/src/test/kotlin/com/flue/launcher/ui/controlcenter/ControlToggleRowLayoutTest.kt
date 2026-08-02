@@ -16,6 +16,7 @@ class ControlToggleRowLayoutTest {
 
         assertFalse(layout.scrollable)
         assertEquals(14f, layout.spacingPx, 0f)
+        assertTrue(layout.useSpaceBetween)
     }
 
     @Test
@@ -28,17 +29,32 @@ class ControlToggleRowLayoutTest {
 
         assertFalse(layout.scrollable)
         assertEquals(6f, layout.spacingPx, 0f)
+        assertFalse(layout.useSpaceBetween)
     }
 
     @Test
-    fun `less than four pixels per gap switches to scrolling`() {
+    fun `two pixels per gap is still allowed`() {
         val layout = controlToggleRowLayout(
-            availableWidthPx = 243f,
+            availableWidthPx = 238f,
+            buttonWidthPx = 58f,
+            preferredSpacingPx = 14f,
+        )
+
+        assertFalse(layout.scrollable)
+        assertEquals(2f, layout.spacingPx, 0f)
+        assertFalse(layout.useSpaceBetween)
+    }
+
+    @Test
+    fun `less than two pixels per gap switches to scrolling`() {
+        val layout = controlToggleRowLayout(
+            availableWidthPx = 237f,
             buttonWidthPx = 58f,
             preferredSpacingPx = 14f,
         )
 
         assertTrue(layout.scrollable)
         assertEquals(14f, layout.spacingPx, 0f)
+        assertFalse(layout.useSpaceBetween)
     }
 }

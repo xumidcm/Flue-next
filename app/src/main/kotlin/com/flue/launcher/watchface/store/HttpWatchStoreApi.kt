@@ -3,12 +3,15 @@ package com.flue.launcher.watchface.store
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 
@@ -514,70 +517,289 @@ class HttpWatchStoreApi(
             }
         }
         return try {
-            request(url) { connection ->
-                validateContentType(connection, expectPreview = expectPreview, expectJson = false)
-                val length = connection.contentLengthLong
-                if (length > maxBytes) throw WatchStorePayloadTooLargeException(maxBytes)
-                connection.inputStream.use { input ->
-                    destination.outputStream().use { output ->
-                        copyLimited(input, output, maxBytes, connection.contentLengthLong.takeIf { it >= 0L }, onProgress)
-                    }
+            // 分段只对「大到值得分」的正片档案开。预览图几十 KB，多开三条连接
+            // 净亏握手；关掉开关也直接走单流。
+            val allowSegmented = !expectPreview && segmentedDownloads()
+            if (allowSegmented) {
+                translateTransportErrors {
+                    downloadSegmentedOrFallback(url, destination, maxBytes, expectPreview, onProgress)
                 }
-                if (!destination.isFile || destination.length() == 0L) {
-                    throw WatchStoreProtocolException("Watch store returned an empty file")
-                }
-                destination
+            } else {
+                downloadSingleStream(url, destination, maxBytes, expectPreview, onProgress)
             }
+            if (!destination.isFile || destination.length() == 0L) {
+                throw WatchStoreProtocolException("Watch store returned an empty file")
+            }
+            destination
         } catch (error: Throwable) {
             destination.delete()
             throw error
         }
     }
 
-    private fun <T> request(url: URI, block: (HttpURLConnection) -> T): T {
-        var current = url
-        var redirectCount = 0
-        try {
-            while (true) {
-                // The endpoint and every redirect are validated before a socket is opened.
-                try {
-                    WatchStoreUrlPolicy.requirePublicHttps(current)
-                } catch (error: IllegalArgumentException) {
-                    throw WatchStoreRedirectException(
-                        error.message ?: "Watch store connection target is unsafe",
-                    )
-                }
-                val connection = connectionFactory(current.toURL())
-                connection.requestMethod = "GET"
-                connection.instanceFollowRedirects = false
-                connection.connectTimeout = config.connectTimeoutMs
-                connection.readTimeout = config.readTimeoutMs
-                connection.useCaches = false
-                connection.setRequestProperty("Accept-Encoding", "identity")
-                connection.setRequestProperty("User-Agent", "Flue-Next-WatchStore/1")
-                try {
-                    val status = connection.responseCode
-                    if (status in REDIRECT_STATUSES) {
-                        if (redirectCount++ >= config.maxRedirects) {
-                            throw WatchStoreRedirectException("Too many watch store redirects")
-                        }
-                        val location = connection.getHeaderField("Location")
-                            ?: throw WatchStoreRedirectException("Redirect response has no Location")
-                        current = WatchStoreUrlPolicy.resolveRedirect(current, location)
-                        continue
-                    }
-                    if (status !in 200..299) {
-                        val detail = connection.errorStream?.let {
-                            runCatching { readLimited(it, MAX_ERROR_BYTES).toString(Charsets.UTF_8) }.getOrNull()
-                        }.orEmpty().trim().take(160)
-                        val suffix = if (detail.isBlank()) "" else ": $detail"
-                        throw WatchStoreHttpException(status, "Watch store request failed ($status)$suffix")
-                    }
-                    return block(connection)
-                } finally {
-                    connection.disconnect()
+    /**
+     * 每次下载都重新读一次：[HttpWatchStoreApi] 在 Composable 的 `remember` 里构造，
+     * 早于 DataStore 把设置读出来，不能在构造期定值。
+     */
+    private fun segmentedDownloads(): Boolean = FlueDownloadTuning.segmentedDownloads
+
+    private fun downloadSingleStream(
+        url: URI,
+        destination: File,
+        maxBytes: Long,
+        expectPreview: Boolean,
+        onProgress: ((bytes: Long, totalBytes: Long?) -> Unit)?,
+    ) {
+        request(url) { connection ->
+            validateContentType(connection, expectPreview = expectPreview, expectJson = false)
+            val length = connection.contentLengthLong
+            if (length > maxBytes) throw WatchStorePayloadTooLargeException(maxBytes)
+            connection.inputStream.use { input ->
+                destination.outputStream().use { output ->
+                    copyLimited(input, output, maxBytes, length.takeIf { it >= 0L }, onProgress)
                 }
             }
+        }
+    }
+
+    /**
+     * 多线程分段下载：先用一个 1 字节的 Range 探针问服务器支不支持，支持就切段并发拉。
+     *
+     * 探针故意只要 `bytes=0-0`：
+     * - 支持 → 206 + `Content-Range: bytes 0-0/<total>`，总长从这里拿，响应体只有 1 字节，
+     *   连接干净地还回连接池，下一条分段能复用 socket。
+     * - 不支持 → 服务器忽略 Range 直接回 200 和整个文件。这时探针本身就是完整下载，
+     *   顺手读完即可，一次请求都不浪费。这就是「静默回退」：调用方看不出区别。
+     *
+     * 任何一段失败，整次下载失败并删除半成品——分段文件缺一块就是坏包，不能悄悄留下。
+     */
+    private fun downloadSegmentedOrFallback(
+        url: URI,
+        destination: File,
+        maxBytes: Long,
+        expectPreview: Boolean,
+        onProgress: ((bytes: Long, totalBytes: Long?) -> Unit)?,
+    ) {
+        val probe = connect(url, rangeHeader = "bytes=0-0")
+        val plan: List<SegmentRange>
+        val totalBytes: Long
+        val finalUrl: URI
+        try {
+            validateContentType(probe.connection, expectPreview = expectPreview, expectJson = false)
+            if (probe.status != HttpURLConnection.HTTP_PARTIAL) {
+                // 没有 206：服务器不认 Range，手上这条连接就是完整响应。
+                val length = probe.connection.contentLengthLong
+                if (length > maxBytes) throw WatchStorePayloadTooLargeException(maxBytes)
+                probe.connection.inputStream.use { input ->
+                    destination.outputStream().use { output ->
+                        copyLimited(input, output, maxBytes, length.takeIf { it >= 0L }, onProgress)
+                    }
+                }
+                return
+            }
+            totalBytes = parseContentRangeTotal(probe.connection.getHeaderField("Content-Range"))
+                ?: throw WatchStoreProtocolException("Range response has no total length")
+            if (totalBytes > maxBytes) throw WatchStorePayloadTooLargeException(maxBytes)
+            if (totalBytes <= 0L) throw WatchStoreProtocolException("Range response declares an empty body")
+            finalUrl = probe.finalUrl
+            plan = planSegments(totalBytes)
+        } finally {
+            probe.connection.disconnect()
+        }
+
+        if (plan.size <= 1) {
+            // 小于分段门槛：并发只会把一次顺序读拆成几次抢带宽的短读。
+            downloadSingleStream(url, destination, maxBytes, expectPreview, onProgress)
+            return
+        }
+
+        // 先把文件撑到最终大小，各段 seek 到自己的偏移直接写。不同 offset 的写
+        // 互不重叠，交给内核即可，不需要应用层加锁。
+        RandomAccessFile(destination, "rw").use { it.setLength(totalBytes) }
+
+        val fetched = AtomicLong(0L)
+        val aborted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+        // 进度回调可能来自任意分段线程，节流器自己 @Synchronized，但状态写入侧
+        // 也要串行化，否则 bytes 会前后跳。
+        val progressLock = Any()
+        val emitProgress: (Long) -> Unit = { delta ->
+            val soFar = fetched.addAndGet(delta)
+            if (onProgress != null) {
+                synchronized(progressLock) { onProgress(soFar, totalBytes) }
+            }
+        }
+
+        // 第 0 段留给当前线程，只为后面 n-1 段起线程：省一次线程创建，
+        // 并且调用线程被阻塞在这里，取消语义与单流版本一致。
+        val workers = plan.drop(1).map { segment ->
+            Thread {
+                try {
+                    fetchSegment(finalUrl, destination, segment, aborted, emitProgress)
+                } catch (error: Throwable) {
+                    aborted.set(true)
+                    failure.compareAndSet(null, error)
+                }
+            }.apply {
+                name = "flue-dl-seg-${segment.index}"
+                isDaemon = true
+                start()
+            }
+        }
+        try {
+            fetchSegment(finalUrl, destination, plan.first(), aborted, emitProgress)
+        } catch (error: Throwable) {
+            aborted.set(true)
+            failure.compareAndSet(null, error)
+        }
+        workers.forEach { worker ->
+            // join 不能被跳过：提前返回会让后台线程继续往已被删掉的文件写。
+            while (true) {
+                try {
+                    worker.join()
+                    break
+                } catch (interrupt: InterruptedException) {
+                    aborted.set(true)
+                    failure.compareAndSet(null, interrupt)
+                    Thread.currentThread().interrupt()
+                }
+            }
+        }
+        failure.get()?.let { throw it }
+
+        // 分段下载最容易出的坏包是「少了一段但文件长度对」——setLength 已经把
+        // 洞撑成 0 字节了，长度检查看不出来。所以真正的判据是累计写入量。
+        val written = fetched.get()
+        if (written != totalBytes) {
+            throw WatchStoreProtocolException(
+                "Segmented download wrote $written of $totalBytes bytes",
+            )
+        }
+        if (destination.length() != totalBytes) {
+            throw WatchStoreProtocolException("Segmented download size mismatch")
+        }
+        onProgress?.invoke(totalBytes, totalBytes)
+    }
+
+    private fun fetchSegment(
+        url: URI,
+        destination: File,
+        segment: SegmentRange,
+        aborted: java.util.concurrent.atomic.AtomicBoolean,
+        onDelta: (Long) -> Unit,
+    ) {
+        if (aborted.get()) return
+        val resolved = connect(url, rangeHeader = "bytes=${segment.start}-${segment.endInclusive}")
+        try {
+            if (resolved.status != HttpURLConnection.HTTP_PARTIAL) {
+                // 探针说支持、真取时又回 200：整个响应是全文件，按分段偏移写进去
+                // 就是错的。直接失败，让上层删掉半成品重来。
+                throw WatchStoreProtocolException("Server stopped honouring Range mid-download")
+            }
+            val expected = segment.endInclusive - segment.start + 1
+            RandomAccessFile(destination, "rw").use { file ->
+                file.seek(segment.start)
+                resolved.connection.inputStream.use { input ->
+                    val buffer = ByteArray(SEGMENT_BUFFER_BYTES)
+                    var remaining = expected
+                    while (remaining > 0L) {
+                        if (aborted.get()) return
+                        if (Thread.currentThread().isInterrupted) {
+                            throw InterruptedIOException("Segment ${segment.index} interrupted")
+                        }
+                        val cap = minOf(remaining, buffer.size.toLong()).toInt()
+                        val count = input.read(buffer, 0, cap)
+                        if (count < 0) break
+                        file.write(buffer, 0, count)
+                        remaining -= count
+                        onDelta(count.toLong())
+                    }
+                    if (remaining > 0L && !aborted.get()) {
+                        throw WatchStoreProtocolException(
+                            "Segment ${segment.index} ended $remaining bytes early",
+                        )
+                    }
+                }
+            }
+        } finally {
+            resolved.connection.disconnect()
+        }
+    }
+
+    private fun <T> request(url: URI, block: (HttpURLConnection) -> T): T =
+        translateTransportErrors {
+            val resolved = connect(url, rangeHeader = null)
+            try {
+                block(resolved.connection)
+            } finally {
+                resolved.connection.disconnect()
+            }
+        }
+
+    /**
+     * 打开一条已跟完重定向、状态码已校验的连接。
+     *
+     * 调用方负责 [HttpURLConnection.disconnect]。抽出来是为了让分段下载能拿到
+     * 「重定向解析后的最终 URL」——各分段必须都打同一个终点，否则 CDN 轮询会让
+     * 不同分段落到不同副本上，拼出来的文件是坏的。
+     */
+    private fun connect(url: URI, rangeHeader: String?): ResolvedConnection {
+        var current = url
+        var redirectCount = 0
+        while (true) {
+            // The endpoint and every redirect are validated before a socket is opened.
+            try {
+                WatchStoreUrlPolicy.requirePublicHttps(current)
+            } catch (error: IllegalArgumentException) {
+                throw WatchStoreRedirectException(
+                    error.message ?: "Watch store connection target is unsafe",
+                )
+            }
+            val connection = connectionFactory(current.toURL())
+            connection.requestMethod = "GET"
+            connection.instanceFollowRedirects = false
+            connection.connectTimeout = config.connectTimeoutMs
+            connection.readTimeout = config.readTimeoutMs
+            connection.useCaches = false
+            connection.setRequestProperty("Accept-Encoding", "identity")
+            connection.setRequestProperty("User-Agent", "Flue-Next-WatchStore/1")
+            rangeHeader?.let { connection.setRequestProperty("Range", it) }
+            var handOff = false
+            try {
+                val status = connection.responseCode
+                if (status in REDIRECT_STATUSES) {
+                    if (redirectCount++ >= config.maxRedirects) {
+                        throw WatchStoreRedirectException("Too many watch store redirects")
+                    }
+                    val location = connection.getHeaderField("Location")
+                        ?: throw WatchStoreRedirectException("Redirect response has no Location")
+                    current = WatchStoreUrlPolicy.resolveRedirect(current, location)
+                    continue
+                }
+                if (status !in 200..299) {
+                    val detail = connection.errorStream?.let {
+                        runCatching { readLimited(it, MAX_ERROR_BYTES).toString(Charsets.UTF_8) }.getOrNull()
+                    }.orEmpty().trim().take(160)
+                    val suffix = if (detail.isBlank()) "" else ": $detail"
+                    throw WatchStoreHttpException(status, "Watch store request failed ($status)$suffix")
+                }
+                handOff = true
+                return ResolvedConnection(connection, current, status)
+            } finally {
+                if (!handOff) connection.disconnect()
+            }
+        }
+    }
+
+    private class ResolvedConnection(
+        val connection: HttpURLConnection,
+        val finalUrl: URI,
+        val status: Int,
+    )
+
+    private fun <T> translateTransportErrors(block: () -> T): T {
+        try {
+            return block()
         } catch (error: WatchStoreException) {
             throw error
         } catch (cancelled: CancellationException) {
@@ -636,6 +858,53 @@ class HttpWatchStoreApi(
         private const val MAX_ERROR_BYTES = 16L * 1024L
         private val REDIRECT_STATUSES = setOf(301, 302, 303, 307, 308)
 
+        /**
+         * 分段门槛。低于这个大小不分：一次顺序读本来就快，切开只会让几条连接
+         * 互相抢带宽，还多付 N 次握手。
+         */
+        internal const val MIN_SEGMENTED_BYTES: Long = 4L * 1024L * 1024L
+
+        /** 每段至少这么大，避免大文件被切成一堆碎块。 */
+        private const val MIN_SEGMENT_BYTES: Long = 1L * 1024L * 1024L
+
+        /**
+         * 分段并发上限。手表是小核 CPU + 单条 Wi-Fi，超过 4 条基本只增加拥塞
+         * 控制的抖动，不再提升吞吐。
+         */
+        internal const val MAX_SEGMENTS: Int = 4
+
+        private const val SEGMENT_BUFFER_BYTES = 32 * 1024
+
+        /**
+         * 把 [totalBytes] 切成不重叠、连续、覆盖全长的分段。
+         *
+         * 返回单元素表示「不值得分段」，调用方回落单流。
+         */
+        internal fun planSegments(totalBytes: Long): List<SegmentRange> {
+            if (totalBytes < MIN_SEGMENTED_BYTES) {
+                return listOf(SegmentRange(0, 0L, totalBytes - 1))
+            }
+            val byMinSize = (totalBytes / MIN_SEGMENT_BYTES).toInt()
+            val count = byMinSize.coerceIn(1, MAX_SEGMENTS)
+            if (count <= 1) return listOf(SegmentRange(0, 0L, totalBytes - 1))
+            val chunk = totalBytes / count
+            return (0 until count).map { index ->
+                val start = chunk * index
+                // 最后一段吃掉除不尽的余数：用 total-1 而不是 start+chunk-1，
+                // 保证分段并集严格等于 [0, total-1]。
+                val end = if (index == count - 1) totalBytes - 1 else start + chunk - 1
+                SegmentRange(index, start, end)
+            }
+        }
+
+        /** 从 `Content-Range: bytes 0-0/12345` 里取出总长；`*` 或畸形返回 null。 */
+        internal fun parseContentRangeTotal(header: String?): Long? {
+            val value = header?.trim() ?: return null
+            val total = value.substringAfterLast('/', "").trim()
+            if (total.isEmpty() || total == "*") return null
+            return total.toLongOrNull()?.takeIf { it > 0L }
+        }
+
         internal fun readLimited(input: java.io.InputStream, maxBytes: Long): ByteArray {
             val output = ByteArrayOutputStream(minOf(maxBytes, 8_192L).toInt())
             val buffer = ByteArray(8_192)
@@ -662,6 +931,11 @@ class HttpWatchStoreApi(
             val buffer = ByteArray(32 * 1024)
             var total = 0L
             while (true) {
+                // 取消检查放在每个缓冲区边界：阻塞读本身不响应协程取消，
+                // 少了这一行，用户点了取消、UI 也回到取消态，网络仍会把整包拉完。
+                if (Thread.currentThread().isInterrupted) {
+                    throw InterruptedIOException("Download interrupted after $total bytes")
+                }
                 val count = input.read(buffer)
                 if (count < 0) break
                 total += count

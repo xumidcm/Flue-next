@@ -41,6 +41,19 @@ private val BatteryLabelStyle = TextStyle(
 )
 
 /**
+ * 全局统一的电池图标尺寸。控制中心与负一屏必须用同一组值 —— 两处曾各写
+ * 一套（控制中心方屏 52×28、负一屏 34×17），同一块表上两个电池明显不一样大。
+ */
+val DefaultBatteryPillWidth = 34.dp
+val DefaultBatteryPillHeight = 17.dp
+
+/** 描边到填充的内缩量，四边相同。 */
+private val BatteryFillInset = 2.dp
+
+/** 外壳圆角占高度的比例；内圆角由它减去内缩量推出，保证同心。 */
+private const val ShellCornerRatio = 0.3f
+
+/**
  * 圆角矩形电池图标：描边外壳 + 半透明填充 + 正极凸起，剩余电量数字
  * **半透明居中在图标内部**（老师指定的形态）。充电时数字让位给闪电。
  *
@@ -55,8 +68,8 @@ fun WatchBatteryPill(
     level: Int,
     charging: Boolean,
     modifier: Modifier = Modifier,
-    width: Dp = 30.dp,
-    height: Dp = 15.dp,
+    width: Dp = DefaultBatteryPillWidth,
+    height: Dp = DefaultBatteryPillHeight,
     showLabel: Boolean = true,
 ) {
     val style = LauncherTheme.style
@@ -78,7 +91,7 @@ fun WatchBatteryPill(
         label = "battery_fill_level",
     )
     val shellColor = style.titleColor.copy(alpha = 0.35f)
-    val shellShape = RoundedCornerShape(height * 0.3f)
+    val shellShape = RoundedCornerShape(height * ShellCornerRatio)
     Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier) {
         Box(Modifier.size(width, height), contentAlignment = Alignment.CenterStart) {
             Box(
@@ -86,18 +99,21 @@ fun WatchBatteryPill(
                     .matchParentSize()
                     .border(1.2.dp, shellColor, shellShape)
             )
-            val innerMax = width - 4.dp
-            val innerHeight = height - 4.dp
+            val innerMax = width - BatteryFillInset * 2
+            val innerHeight = height - BatteryFillInset * 2
             val fillWidth = (innerMax * animLevel).coerceAtLeast(0.dp)
-            // A fixed radius is larger than the fill itself at low charge and
-            // gets coerced to a square corner by Compose. Keep the existing
-            // rectangular battery silhouette, but cap the fill radius by both
-            // its height and half of its actual width.
-            val fillRadius = minOf(24.dp, innerHeight / 2f, fillWidth / 2f)
+            // 同心圆角：内圆角 = 外圆角 − 内缩量，填充的边角才与描边平行贴合。
+            // 上一版取 innerHeight / 2f，等于把圆角矩形磨成了胶囊（老师实机反馈）。
+            // 仍按实际填充宽度的一半兜底：低电量时半径大于填充自身会被 Compose
+            // 强制拉成直角，反而更难看。
+            val fillRadius = minOf(
+                (height * ShellCornerRatio - BatteryFillInset).coerceAtLeast(0.dp),
+                fillWidth / 2f,
+            )
             val fillShape = RoundedCornerShape(fillRadius)
             Box(
                 Modifier
-                    .padding(2.dp)
+                    .padding(BatteryFillInset)
                     .height(innerHeight)
                     // 宽度严格跟随真实电量，不再人为放大低电量最小宽度。
                     .width(fillWidth)

@@ -6,12 +6,14 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Movie
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.media.MediaMetadataRetriever
 import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.GestureDetector
@@ -26,6 +28,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.layout.fillMaxSize
 import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.ui.anim.createLegacyPrebuiltBlur
+import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.watchface.editor.WatchCanvasSize
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -57,6 +60,31 @@ internal data class WatchImageFallbackKey(
     val materialExpression: String,
     val variant: String,
 )
+
+/**
+ * 一个 video 图层这一帧的最终变换与不透明度。
+ *
+ * [matrix] 是 [WatchmakerWatchFaceView.videoLayerGeometry] 内部 scratch 的拷贝
+ * 语义：宿主拿到后应立即喂给 TextureView，不要长期持有。
+ */
+internal data class WatchVideoLayerGeometry(
+    val matrix: Matrix,
+    val alpha: Float,
+)
+
+/** renderPlan 里一个可播放 video 图层的位置与素材路径。 */
+internal data class WatchVideoLayerPlanEntry(
+    val planIndex: Int,
+    val layerIndex: Int,
+    val absolutePath: String,
+)
+
+/** MediaPlayer 能直接播的容器；序列帧导入产物走 image 路径，不在此列。 */
+internal val PLAYABLE_VIDEO_EXTENSIONS = setOf("mp4", "webm", "mkv", "3gp")
+
+/** `video`/`map` 兜底时可以当静态图片画的扩展名。 */
+private val STATIC_MEDIA_IMAGE_EXTENSIONS =
+    setOf("png", "jpg", "jpeg", "webp", "bmp", "gif")
 
 /**
  * A deliberately self-contained native renderer for the open Watchmaker
@@ -106,14 +134,34 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private var editorAnimatedImageLayerIndex: Int? = null
     private var editorAnimationInteractionFrozen = false
     private var editorAnimationFrozenElapsedMs = 0L
+    /**
+     * 编辑器预览的统一播放/暂停。一个开关同时管住序列帧(image_gif)、视频图层
+     * 和重力景深:暂停时三者都停在当前帧/当前位移,恢复时从同一位置继续,不跳回
+     * 首帧。与 [editorAnimationInteractionFrozen] 分开是因为后者是手势期间的临时
+     * 冻结(自动),这里是用户的显式意图(手动)。
+     */
+    private var editorPreviewPlaying = true
+    private var editorPreviewPausedElapsedMs = 0L
+    private var editorPreviewPausedGyroX = 0f
+    private var editorPreviewPausedGyroY = 0f
+    private var editorVideoPlaybackListener: ((Boolean) -> Unit)? = null
+    private var frameGeometryListener: (() -> Unit)? = null
+    private var transitionOverlayListener: ((Boolean) -> Unit)? = null
     private var refreshToken = 0
+    /** 供 [adoptRenderStateFrom] 复制给补画段；只读不改。 */
+    private var boundDescriptor: WatchFaceDescriptor? = null
+    private val boundRefreshToken: Int get() = refreshToken
     private var longPressAction: (() -> Unit)? = null
     private var doubleTapAction: (() -> Unit)? = null
     private var tapActionHandler: ((WatchTapAction) -> Unit)? = null
     private var tickPosted = false
     private var dataProvider: WatchDataProvider = EmptyWatchDataProvider
     private var frameDataSnapshot = WatchDataSnapshot()
-    private var forceFill = false
+    /**
+     * 画布铺法。取代旧的 `forceFill: Boolean` —— 后者只是这里的
+     * [WatchCanvasPreset.FIT] / [WatchCanvasPreset.FILL] 两种取值。
+     */
+    private var canvasSettings = WatchCanvasSettings.DEFAULT
     private var gravityParallaxEnabled = false
     private var smoothedGyroscopeX = 0f
     private var smoothedGyroscopeY = 0f
@@ -123,6 +171,166 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private val gravityBackdropPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     /** 当前手势是否由本视图消费；决策在 DOWN 时定下、整个手势保持一致。 */
     private var consumeCurrentGesture = false
+
+    /**
+     * 本实例负责的 renderPlan 区间；null 表示全量。
+     *
+     * 视频图层是独立 Surface，像素进不了 Canvas，所以有 video 的表盘要被
+     * [WatchmakerWatchFaceStageView] 切成「Canvas 段 / TextureView / Canvas 段」
+     * 交替的若干层，每个 Canvas 段是一个只画自己那段的本类实例。
+     */
+    private var renderRange: IntRange? = null
+
+    /**
+     * 是否画根背景。只有首段该画：后续段若也铺一遍不透明 bg_color，
+     * 会把夹在中间的 TextureView 整块糊死。
+     */
+    private var drawBackground = true
+
+    /**
+     * 分段渲染的配置。只在段结构变化时调用，不是逐帧接口。
+     *
+     * [range] 为 null 时恢复全量渲染。
+     */
+    fun setRenderSegment(range: IntRange?, drawBackground: Boolean) {
+        if (renderRange == range && this.drawBackground == drawBackground) return
+        renderRange = range
+        this.drawBackground = drawBackground
+        if (!disposed) requestFullRepaint()
+    }
+
+    /**
+     * 离屏出图必须无视分段：预览图/缩略图/景深底图都是一张完整的表盘，
+     * 而 TextureView 在软件 Canvas 里根本不存在。
+     */
+    private inline fun <T> withFullRenderPlan(block: () -> T): T {
+        val savedRange = renderRange
+        val savedBackground = drawBackground
+        val savedSuppress = flattenBakingSuppressed
+        renderRange = null
+        drawBackground = true
+        // 离屏出图是一次性的：预览图/缩略图/景深底图各画一次就丢，烘出来的位图
+        // 没有第二帧可复用，纯属白占内存。
+        flattenBakingSuppressed = true
+        return try {
+            block()
+        } finally {
+            renderRange = savedRange
+            drawBackground = savedBackground
+            flattenBakingSuppressed = savedSuppress
+        }
+    }
+
+    /** 见 [withFullRenderPlan]：离屏出图期间不烘焙。 */
+    private var flattenBakingSuppressed = false
+
+    /** 编辑器正在实时改写某个图层的变换 —— 它可能落在某个烘焙段里。 */
+    private fun editorLiveTransformActive(): Boolean = liveTransformLayerIndex >= 0
+
+    /**
+     * 视频图层在 View 空间的最终变换，供宿主喂给 TextureView。
+     *
+     * 与 Canvas 路径共用 [composeLayerMatrix]，并按同一套 anchor 语义把
+     * 单位矩形映射到图层声明的 width/height —— TextureView 的内容默认铺满自身
+     * 尺寸，所以这里返回的矩阵包含「View 全尺寸 → 图层目标矩形」那一步。
+     *
+     * 返回 null 表示这一帧不该显示（opacity 为 0、display 求值为假、
+     * 或图层不存在）。
+     */
+    internal fun videoLayerGeometry(layerIndex: Int): WatchVideoLayerGeometry? {
+        if (disposed || width <= 0 || height <= 0) return null
+        val prepared = source ?: return null
+        val item = prepared.renderPlan.firstOrNull { it.layerIndex == layerIndex } ?: return null
+        val layer = prepared.definition.layers.getOrNull(layerIndex) ?: return null
+
+        val matrix = videoMatrixScratch
+        // 自算而不是复用上一帧 drawPreparedSource 留下的值：宿主可能在首帧
+        // 之前就来问几何，那时 canvasBaseMatrix 还是单位矩阵。
+        matrix.set(
+            composeCanvasBaseMatrix(
+                canvasBaseMatrix,
+                watchCanvasTransform(
+                    viewWidth = width.toFloat(),
+                    viewHeight = height.toFloat(),
+                    settings = canvasSettings,
+                    designWidth = prepared.designExtentWidth,
+                    designHeight = prepared.designExtentHeight,
+                ),
+                prepared.designExtentWidth,
+                prepared.designExtentHeight,
+            ),
+        )
+        var alpha = 1f
+        // 祖先组的变换按外→内累乘，与 drawRenderItem 的遍历顺序一致。
+        var ancestorCount = 0
+        var ancestor = item.ancestorChain
+        while (ancestor != null && ancestorCount < ancestorIndexScratch.size) {
+            ancestorIndexScratch[ancestorCount++] = ancestor.layerIndex
+            ancestor = ancestor.outer
+        }
+        for (scratchIndex in ancestorCount - 1 downTo 0) {
+            val ancestorIndex = ancestorIndexScratch[scratchIndex]
+            val attributes = prepared.definition.layers[ancestorIndex].attributes
+            alpha *= dynamicNumber(attributes["opacity"], 100f, prepared)
+                .coerceIn(0f, 100f) / 100f
+            if (alpha <= 0f || !isDisplayed(attributes["display"], prepared)) return null
+            matrix.preConcat(
+                composeLayerMatrix(layerMatrixScratch, attributes, prepared, ancestorIndex),
+            )
+        }
+        val attrs = layer.attributes
+        alpha *= dynamicNumber(attrs["opacity"], 100f, prepared).coerceIn(0f, 100f) / 100f
+        if (alpha <= 0f || !isDisplayed(attrs["display"], prepared)) return null
+        matrix.preConcat(composeLayerMatrix(layerMatrixScratch, attrs, prepared, layerIndex))
+
+        // 视频没有「原生尺寸」可依（解码尺寸要等 prepare 完成，而几何每帧都要），
+        // 所以按编辑器侧同一套约定：未声明就占满设计画布。
+        val sharedSize = attrs["size"]
+        val designWidth = dynamicNumber(
+            attrs["width"] ?: sharedSize,
+            prepared.designExtentWidth,
+            prepared,
+        ).coerceAtLeast(1f)
+        val designHeight = dynamicNumber(
+            attrs["height"] ?: sharedSize,
+            prepared.designExtentHeight,
+            prepared,
+        ).coerceAtLeast(1f)
+        val dst = anchoredRect(designWidth, designHeight, attrs["alignment"])
+        // TextureView 内容铺满 View 全尺寸，先把它压缩到 1×1 再放大到目标矩形，
+        // 这样上面那串设计空间的变换才作用在正确的盒子上。
+        matrix.preTranslate(dst.left, dst.top)
+        matrix.preScale(designWidth / width, designHeight / height)
+
+        return WatchVideoLayerGeometry(matrix, alpha)
+    }
+
+    /**
+     * renderPlan 里全部 video 图层的位置，按绘制顺序返回。
+     *
+     * 宿主用它切分段：每个 planIndex 之前的部分是一个 Canvas 段。
+     */
+    internal fun videoLayerPlanEntries(): List<WatchVideoLayerPlanEntry> {
+        if (disposed) return emptyList()
+        val prepared = source ?: return emptyList()
+        return prepared.renderPlan.mapIndexedNotNull { planIndex, item ->
+            val layer = prepared.definition.layers.getOrNull(item.layerIndex)
+                ?: return@mapIndexedNotNull null
+            if (!layer.type.equals("video", ignoreCase = true)) return@mapIndexedNotNull null
+            val rawPath = layer.attributes["path"] ?: layer.attributes["source"] ?: ""
+            val evaluated = evaluateText(rawPath, prepared)
+            val resolved = resolveAsset(evaluated, prepared, conventionalDirectory = "videos")
+                ?: return@mapIndexedNotNull null
+            if (resolved.file.extension.lowercase(Locale.ROOT) !in PLAYABLE_VIDEO_EXTENSIONS) {
+                return@mapIndexedNotNull null
+            }
+            WatchVideoLayerPlanEntry(
+                planIndex = planIndex,
+                layerIndex = item.layerIndex,
+                absolutePath = resolved.file.absolutePath,
+            )
+        }
+    }
 
     // 编辑器画布拖拽的实时变换覆盖（按图层文档序号定位）。
     private var liveTransformLayerIndex = -1
@@ -151,7 +359,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         liveTransformRotation = rotationDegrees
         liveTransformScaleX = scaleX
         liveTransformScaleY = scaleY
-        invalidate()
+        requestFullRepaint()
     }
 
     /** Called when a new pointer gesture takes ownership of the live override. */
@@ -213,7 +421,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val scale = sizePx / DESIGN_SIZE
         canvas.scale(scale, scale)
         canvas.translate(DESIGN_SIZE / 2f, DESIGN_SIZE / 2f)
-        runCatching { drawRenderItem(canvas, item, prepared) }
+        runCatching { withFullRenderPlan { drawRenderItem(canvas, item, prepared) } }
         return bitmap
     }
 
@@ -354,36 +562,43 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val bitmapWidth = (extentW * scale).roundToInt().coerceAtLeast(1)
         val bitmapHeight = (extentH * scale).roundToInt().coerceAtLeast(1)
         val bitmap = Bitmap.createBitmap(bitmapWidth, bitmapHeight, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        canvas.save()
-        canvas.scale(scale, scale)
-        canvas.translate(extentW / 2f, extentH / 2f)
-        canvas.clipRect(-extentW / 2f, -extentH / 2f, extentW / 2f, extentH / 2f)
-        if (prepared.definition.shape == WatchFaceShape.ROUND) {
-            pathScratch.reset()
-            pathScratch.addCircle(0f, 0f, min(extentW, extentH) / 2f, Path.Direction.CW)
-            canvas.clipPath(pathScratch)
+        val backdrop = if (gravityParallaxEnabled && prepared.hasGyroParallax) {
+            resolveGravityBackdrop(prepared)
+        } else {
+            null
         }
-        calendar.timeInMillis = System.currentTimeMillis()
-        frameDataSnapshot = runCatching { dataProvider.snapshot(calendar.timeInMillis) }
-            .getOrDefault(WatchDataSnapshot())
-        backgroundPaint.color =
-            resolveColor(prepared.definition.rootAttributes["bg_color"], Color.BLACK, prepared)
-        canvas.drawRect(
-            -extentW / 2f,
-            -extentH / 2f,
-            extentW / 2f,
-            extentH / 2f,
-            backgroundPaint,
-        )
-        runCatching { prepared.renderPlan.forEach { drawRenderItem(canvas, it, prepared) } }
-        canvas.restore()
+        withFullRenderPlan {
+            drawPreparedSource(
+                canvas = Canvas(bitmap),
+                prepared = prepared,
+                targetWidth = bitmapWidth.toFloat(),
+                targetHeight = bitmapHeight.toFloat(),
+                gravityBackdrop = backdrop,
+                // Saved thumbnails represent the authored neutral pose, not the
+                // sensor sample that happened to be active when Save was pressed.
+                gyroscopeX = 0f,
+                gyroscopeY = 0f,
+            )
+        }
         return bitmap
     }
 
     private val bitmapCache = LinkedHashMap<String, Bitmap>(16, 0.75f, true)
     /** Small transient LRU so long frame sequences cannot evict static face assets. */
     private val animatedBitmapCache = LinkedHashMap<String, Bitmap>(4, 0.75f, true)
+
+    /**
+     * 位图字体图集专用 LRU，**独立于 [bitmapCache] 的字节预算**。
+     *
+     * 图集不降采样（见 [MAX_FONT_ATLAS_DECODE_DIMENSION_PX]），一张 1042² 就是
+     * 4.3MB、2048² 是 16MB —— 混在 24MB 的图片预算里，它一进来就把背景图挤出去，
+     * 下一层画背景又把它挤出去，两边都是 `recycle()`，于是每帧解两次几 MB 的图。
+     * 图集这边的 `pageBitmaps` 还持着已回收的引用，`isRecycled` 守卫一触发就再解
+     * 一次 —— 这就是「背景图切换时卡」和「怎么滑都掉帧」的同一个根因。
+     *
+     * 一张表盘的图集通常只有 1~2 张，给它自己一档预算，两边就都不会再互相驱逐。
+     */
+    private val fontAtlasCache = LinkedHashMap<String, Bitmap>(4, 0.75f, true)
     private val movieCache = LinkedHashMap<String, Movie>(4, 0.75f, true)
     /**
      * 帧序列图层上一次成功画出的位图，按图层的完整 path 表达式索引。
@@ -403,6 +618,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private val lastMaterialExpressionByLayer = HashMap<String, String>()
     private var bitmapCacheBytes = 0L
     private var animatedBitmapCacheBytes = 0L
+    private var fontAtlasCacheBytes = 0L
     private val activeAssetLoads = HashSet<AssetLoadClaim>(MAX_CONCURRENT_ASSET_LOADS)
     /** Asset key -> bind generation which owns the in-flight decode. */
     private val bitmapLoading = HashMap<String, Long>()
@@ -430,6 +646,12 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private val bitmapOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val pathScratch = Path()
     private val rectScratch = RectF()
+    /** [composeLayerMatrix] 的逐帧复用缓冲；concat 会立即读走内容。 */
+    private val layerMatrixScratch = Matrix()
+    /** 视频图层几何计算专用，不与 [layerMatrixScratch] 争用。 */
+    private val videoMatrixScratch = Matrix()
+    /** 设计空间 → View 空间的画布变换，每帧在 [drawPreparedSource] 里重算。 */
+    private val canvasBaseMatrix = Matrix()
     private val bitmapFontSourceRect = Rect()
     private val bitmapFontDestRect = RectF()
     private val ancestorIndexScratch = IntArray(MAX_WATCH_PARENT_DEPTH)
@@ -458,6 +680,38 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         },
     )
 
+    /**
+     * 让补画段跟随首段渲染同一张表盘。
+     *
+     * 只复制「画出正确像素」所需的状态：素材来源、数据源、画布铺法、重力开关、
+     * 播放位置。手势回调、tap_action、过渡帧一概不传 —— 那些是首段独有的职责，
+     * 补画段重复持有只会让同一次点击被处理多次。
+     *
+     * ⚠️ 画布配置必须整份复制（不只是预设）：各段共用一个设计空间，任一段的
+     * zoom / offset 与首段不一致，视频段与 Canvas 段之间就会错开一截。
+     */
+    internal fun adoptRenderStateFrom(primary: WatchmakerWatchFaceView) {
+        if (disposed) return
+        val descriptor = primary.boundDescriptor ?: return
+        setWatchDataProvider(primary.dataProvider)
+        setCanvasSettings(primary.canvasSettings)
+        setGravityParallaxEnabled(primary.gravityParallaxEnabled)
+        bind(
+            descriptor = descriptor,
+            refreshToken = primary.boundRefreshToken,
+            isFaceVisible = primary.faceVisible,
+            onLongPress = null,
+            onDoubleTap = null,
+            onLoadFailure = { _, _ -> },
+            textEntryAnimationEnabled = primary.textEntryAnimationEnabled,
+            textExitAnimationEnabled = primary.textExitAnimationEnabled,
+        )
+        // 播放位置必须对齐，否则各段的序列帧会各播各的。
+        frameStartedAtUptimeMs = primary.frameStartedAtUptimeMs
+        editorPreviewPlaying = primary.editorPreviewPlaying
+        editorPreviewPausedElapsedMs = primary.editorPreviewPausedElapsedMs
+    }
+
     fun bind(
         descriptor: WatchFaceDescriptor,
         refreshToken: Int,
@@ -483,6 +737,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         this.longPressAction = onLongPress
         this.doubleTapAction = onDoubleTap
         this.tapActionHandler = onTapAction
+        this.boundDescriptor = descriptor
         if (descriptorKey == descriptor.stableKey && this.refreshToken == refreshToken) {
             if (faceVisible || textExitAnimationActive) scheduleTicks() else cancelTicks()
             if (
@@ -491,7 +746,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             ) {
                 completeLiveTransformHandoffIfReady(descriptor.stableKey, refreshToken)
             }
-            invalidate()
+            requestFullRepaint()
             if (
                 loadedDescriptorKey == descriptor.stableKey &&
                 loadedRefreshToken == refreshToken
@@ -580,7 +835,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                     textAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
                 }
                 scheduleTicks()
-                invalidate()
+                requestFullRepaint()
                 onSourceReady?.invoke(refreshToken)
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -598,7 +853,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             textAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
         }
         if (visible || textExitAnimationActive) scheduleTicks() else cancelTicks()
-        invalidate()
+        requestFullRepaint()
     }
 
     fun setTextExitAnimationActive(active: Boolean) {
@@ -607,20 +862,20 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         textExitAnimationActive = effective
         if (effective) textExitAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
         if (effective) scheduleTicks()
-        if (!disposed) invalidate()
+        if (!disposed) requestFullRepaint()
     }
 
     fun setWatchDataProvider(provider: WatchDataProvider?) {
         val resolved = provider ?: EmptyWatchDataProvider
         if (dataProvider === resolved) return
         dataProvider = resolved
-        if (!disposed) invalidate()
+        if (!disposed) requestFullRepaint()
     }
 
-    fun setForceFill(enabled: Boolean) {
-        if (forceFill == enabled) return
-        forceFill = enabled
-        if (!disposed) invalidate()
+    fun setCanvasSettings(settings: WatchCanvasSettings) {
+        if (canvasSettings == settings) return
+        canvasSettings = settings
+        if (!disposed) requestFullRepaint()
     }
 
     /** Enables CloX-compatible gyro parallax only for faces that declare gyro layers. */
@@ -636,7 +891,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
         if (!disposed) {
             if (enabled) scheduleTicks() else if (!textExitAnimationActive) scheduleTicks()
-            invalidate()
+            requestFullRepaint()
         }
     }
 
@@ -652,7 +907,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         cancelTicks()
         if (!disposed) {
             scheduleTicks()
-            invalidate()
+            requestFullRepaint()
         }
     }
 
@@ -672,12 +927,59 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         cancelTicks()
         if (!disposed) {
             scheduleTicks()
-            invalidate()
+            requestFullRepaint()
         }
     }
 
+    /**
+     * 编辑器预览播放开关。一次点击同时作用于序列帧、视频与重力景深。
+     *
+     * 暂停时把播放位置与重力位移都定格:序列帧停在当前帧、视频 pause()、景深保持
+     * 当前视角不再采样传感器,并退回 1s tick 省电。恢复播放时序列帧从同一位置继续
+     * (不跳首帧)、视频 start()、景深重新跟随。
+     */
+    fun setEditorPreviewPlaying(playing: Boolean) {
+        if (editorPreviewPlaying == playing) return
+        val now = SystemClock.uptimeMillis()
+        if (playing) {
+            // 从暂停处接着走:把起点前移已播过的时长。
+            frameStartedAtUptimeMs = now - editorPreviewPausedElapsedMs
+        } else {
+            editorPreviewPausedElapsedMs = (now - frameStartedAtUptimeMs).coerceAtLeast(0L)
+            // 定格当前视角,后续帧不再向新的传感器读数插值。
+            editorPreviewPausedGyroX = smoothedGyroscopeX
+            editorPreviewPausedGyroY = smoothedGyroscopeY
+        }
+        editorPreviewPlaying = playing
+        editorVideoPlaybackListener?.invoke(playing)
+        cancelTicks()
+        if (!disposed) {
+            scheduleTicks()
+            requestFullRepaint()
+        }
+    }
+
+    /** 视频图层的播放/暂停回调,由宿主(编辑器)接上真正的播放器。 */
+    fun setEditorVideoPlaybackListener(listener: ((Boolean) -> Unit)?) {
+        editorVideoPlaybackListener = listener
+    }
+
+    /**
+     * 把重力景深恢复到默认正视角。暂停时用户要看的是"表盘本来的样子",
+     * 所以不只是停止采样,还要把已经累积的平滑位移归零。
+     */
+    fun resetEditorPreviewViewpoint() {
+        smoothedGyroscopeX = 0f
+        smoothedGyroscopeY = 0f
+        editorPreviewPausedGyroX = 0f
+        editorPreviewPausedGyroY = 0f
+        if (!disposed) requestFullRepaint()
+    }
+
     private fun animatedImageElapsedMs(): Long =
-        if (editorAnimationInteractionFrozen) {
+        if (!editorPreviewPlaying) {
+            editorPreviewPausedElapsedMs
+        } else if (editorAnimationInteractionFrozen) {
             editorAnimationFrozenElapsedMs
         } else {
             (SystemClock.uptimeMillis() - frameStartedAtUptimeMs).coerceAtLeast(0L)
@@ -708,6 +1010,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             animatedBitmapCache.values.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
             animatedBitmapCache.clear()
             animatedBitmapCacheBytes = 0L
+            fontAtlasCache.values.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
+            fontAtlasCache.clear()
+            fontAtlasCacheBytes = 0L
             movieCache.clear()
             bitmapLoading.clear()
             movieLoading.clear()
@@ -720,6 +1025,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         longPressAction = null
         doubleTapAction = null
         tapActionHandler = null
+        frameGeometryListener = null
+        transitionOverlayListener = null
+        boundDescriptor = null
         tapTargets.clear()
         consumeCurrentGesture = false
         source?.clearRuntimeCaches()
@@ -778,36 +1086,34 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         trackTransitionAssetReadiness =
             transition != null && sourceTransitionGeneration == bindGeneration
         transitionFrameHasUnreadyVisualAsset = false
-        if (gravityParallaxEnabled && prepared.hasGyroParallax) {
-            val clearBackdrop = gravityBackdropFrame ?: capturePreparedFrame(prepared)?.also {
-                gravityBackdropFrame = it
-            }
-            if (!gravityBackdropBlurPrepared && clearBackdrop != null && !clearBackdrop.isRecycled) {
-                // Keep this as a prebuilt bitmap on every API level. It is the
-                // same downsampled box blur used by the Android 12-below
-                // fallback, so there is no RenderEffect-only path or per-frame
-                // blur work on newer systems either.
-                gravityBackdropBlurPrepared = true
-                gravityBackdropBlurFrame = runCatching {
-                    createLegacyPrebuiltBlur(clearBackdrop)
-                }.getOrNull()
-            }
-            val backdrop = gravityBackdropBlurFrame?.takeIf { !it.isRecycled } ?: clearBackdrop
-            if (backdrop != null && !backdrop.isRecycled) {
-                canvas.save()
-                // Keep a softly enlarged prebuilt blur underneath moving layers
-                // so parallax never exposes the black view background.
-                canvas.scale(1.10f, 1.10f, width / 2f, height / 2f)
-                canvas.drawBitmap(backdrop, null, Rect(0, 0, width, height), gravityBackdropPaint)
-                canvas.restore()
-            }
+        val gravityBackdrop = if (gravityParallaxEnabled && prepared.hasGyroParallax) {
+            resolveGravityBackdrop(prepared)
+        } else {
+            null
         }
-        drawPreparedSource(canvas, prepared, width.toFloat(), height.toFloat())
+        // The fallback is rendered inside drawPreparedSource after the root
+        // background and before authored layers. Drawing it against the View
+        // bounds used to put it outside the 512x512 watch canvas, where the
+        // canvas' opaque black bg_color immediately covered it.
+        drawPreparedSource(
+            canvas = canvas,
+            prepared = prepared,
+            targetWidth = width.toFloat(),
+            targetHeight = height.toFloat(),
+            gravityBackdrop = gravityBackdrop,
+        )
         val gyroEnabledForSource = gravityParallaxEnabled && prepared.hasGyroParallax
-        val rawGyroX = if (gyroEnabledForSource) frameDataSnapshot.gyroscopeX ?: 0f else 0f
-        val rawGyroY = if (gyroEnabledForSource) frameDataSnapshot.gyroscopeY ?: 0f else 0f
-        smoothedGyroscopeX += (rawGyroX - smoothedGyroscopeX) * 0.18f
-        smoothedGyroscopeY += (rawGyroY - smoothedGyroscopeY) * 0.18f
+        if (!editorPreviewPlaying) {
+            // 预览暂停:定格在暂停那一刻的视角,不再向新的传感器读数插值。
+            // 直接赋值而非插值,否则暂停后画面还会继续缓慢滑动一小段。
+            smoothedGyroscopeX = editorPreviewPausedGyroX
+            smoothedGyroscopeY = editorPreviewPausedGyroY
+        } else {
+            val rawGyroX = if (gyroEnabledForSource) frameDataSnapshot.gyroscopeX ?: 0f else 0f
+            val rawGyroY = if (gyroEnabledForSource) frameDataSnapshot.gyroscopeY ?: 0f else 0f
+            smoothedGyroscopeX += (rawGyroX - smoothedGyroscopeX) * 0.18f
+            smoothedGyroscopeY += (rawGyroY - smoothedGyroscopeY) * 0.18f
+        }
         trackTransitionAssetReadiness = false
 
         if (transition != null) {
@@ -828,6 +1134,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 sourceTransitionFrame = null
                 sourceTransitionGeneration = -1L
                 sourceTransitionStartedAtUptimeMs = 0L
+                // 过渡帧撤掉了，视频面可以重新露出来。
+                transitionOverlayListener?.invoke(false)
                 // Do not recycle here. A hardware display list may still refer
                 // to this bitmap after onDraw returns; dropping our reference
                 // lets the runtime reclaim it safely once that frame retires.
@@ -845,7 +1153,66 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         if (width <= 0 || height <= 0) return null
         return runCatching {
             Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { bitmap ->
-                drawPreparedSource(Canvas(bitmap), prepared, width.toFloat(), height.toFloat())
+                withFullRenderPlan {
+                    drawPreparedSource(Canvas(bitmap), prepared, width.toFloat(), height.toFloat())
+                }
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * Builds the gyro fallback in the face's own design space, never in the
+     * surrounding View space. While image assets are still decoding we retain
+     * a clear frame as a temporary bottom layer; once the generation is ready
+     * it is recaptured and converted to the same prebuilt box blur used by the
+     * Android 12-below backdrop path.
+     */
+    private fun resolveGravityBackdrop(prepared: PreparedSource): Bitmap? {
+        var clearBackdrop = gravityBackdropFrame?.takeIf { !it.isRecycled }
+        if (clearBackdrop == null) {
+            clearBackdrop = captureGravityBackdrop(prepared)
+            gravityBackdropFrame = clearBackdrop
+        }
+        if (!gravityBackdropBlurPrepared) {
+            val visualAssetsPending = synchronized(cacheLock) {
+                activeAssetLoads.any { claim -> claim.generation == prepared.sourceGeneration }
+            }
+            if (!visualAssetsPending) {
+                // The first capture may have initiated asynchronous image loads.
+                // Recapture once they settle so the permanent blur contains the
+                // complete watch rather than a black placeholder frame.
+                captureGravityBackdrop(prepared)?.let { refreshed ->
+                    clearBackdrop = refreshed
+                    gravityBackdropFrame = refreshed
+                }
+                gravityBackdropBlurFrame = clearBackdrop
+                    ?.takeIf { !it.isRecycled }
+                    ?.let { source ->
+                        runCatching { createLegacyPrebuiltBlur(source) }.getOrNull()
+                    }
+                gravityBackdropBlurPrepared = true
+            }
+        }
+        return gravityBackdropBlurFrame?.takeIf { !it.isRecycled }
+            ?: clearBackdrop?.takeIf { !it.isRecycled }
+    }
+
+    private fun captureGravityBackdrop(prepared: PreparedSource): Bitmap? {
+        val bitmapWidth = prepared.designExtentWidth.roundToInt().coerceIn(1, 1_024)
+        val bitmapHeight = prepared.designExtentHeight.roundToInt().coerceIn(1, 1_024)
+        return runCatching {
+            Bitmap.createBitmap(bitmapWidth, bitmapHeight, Bitmap.Config.ARGB_8888).also { bitmap ->
+                withFullRenderPlan {
+                    drawPreparedSource(
+                        canvas = Canvas(bitmap),
+                        prepared = prepared,
+                        targetWidth = bitmapWidth.toFloat(),
+                        targetHeight = bitmapHeight.toFloat(),
+                        gravityBackdrop = null,
+                        gyroscopeX = 0f,
+                        gyroscopeY = 0f,
+                    )
+                }
             }
         }.getOrNull()
     }
@@ -856,8 +1223,44 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         sourceTransitionGeneration = if (frame == null) -1L else generation
         sourceTransitionStartedAtUptimeMs =
             if (frame == null) 0L else SystemClock.uptimeMillis()
+        // 过渡帧是画在 Canvas 最上层的不透明整屏位图，但 TextureView 是独立
+        // Surface，会直接穿透它露出正在播的视频。所以切表盘期间必须让宿主把
+        // 视频面藏掉，等新表盘揭晓后再恢复。
+        transitionOverlayListener?.invoke(frame != null)
         // As above, an outgoing hardware display list may still own [previous].
         // Releasing the Kotlin reference is safer than eager recycle().
+    }
+
+    /**
+     * 切表盘过渡帧的显示/隐藏，由 [WatchmakerWatchFaceStageView] 消费。
+     *
+     * true 表示过渡帧正盖在最上层，此时视频面必须隐藏。
+     */
+    internal fun setTransitionOverlayListener(listener: ((Boolean) -> Unit)?) {
+        transitionOverlayListener = listener
+    }
+
+    /**
+     * 设计空间 → View 空间的画布变换。
+     *
+     * Canvas 路径与视频图层路径都从这里取值：前者 concat 进 Canvas，后者作为
+     * TextureView 变换的最外层。两边各写一份必然随时间漂移。
+     */
+    private fun composeCanvasBaseMatrix(
+        into: Matrix,
+        transform: WatchCanvasTransform,
+        extentW: Float,
+        extentH: Float,
+    ): Matrix {
+        into.reset()
+        into.preTranslate(transform.left, transform.top)
+        into.preScale(transform.scaleX, transform.scaleY)
+        // Watchmaker coordinates are centered on (0, 0), unlike Android's
+        // top-left canvas coordinates. Keeping this translation at the single
+        // renderer boundary makes every primitive (including groups and
+        // rings) use the same coordinate contract.
+        into.preTranslate(extentW / 2f, extentH / 2f)
+        return into
     }
 
     private fun drawPreparedSource(
@@ -865,6 +1268,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         prepared: PreparedSource,
         targetWidth: Float,
         targetHeight: Float,
+        gravityBackdrop: Bitmap? = null,
+        gyroscopeX: Float = smoothedGyroscopeX,
+        gyroscopeY: Float = smoothedGyroscopeY,
     ) {
         // 设计空间跟随表盘自己声明的画布比例（基准边恒 512）。方形声明算出来
         // 就是 512×512，所以这里对存量表盘是恒等变换。
@@ -873,18 +1279,14 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val transform = watchCanvasTransform(
             viewWidth = targetWidth,
             viewHeight = targetHeight,
-            forceFill = forceFill,
+            settings = canvasSettings,
             designWidth = extentW,
             designHeight = extentH,
         )
         canvas.save()
-        canvas.translate(transform.left, transform.top)
-        canvas.scale(transform.scale, transform.scale)
-        // Watchmaker coordinates are centered on (0, 0), unlike Android's
-        // top-left canvas coordinates. Keeping this translation at the single
-        // renderer boundary makes every primitive (including groups and
-        // rings) use the same coordinate contract.
-        canvas.translate(extentW / 2f, extentH / 2f)
+        // 视频图层的 TextureView 活在 View 空间、拿不到 Canvas 的当前矩阵，只能
+        // 吃 Matrix。两条路径共用这一个矩阵，几何才不会随时间漂移。
+        canvas.concat(composeCanvasBaseMatrix(canvasBaseMatrix, transform, extentW, extentH))
         canvas.clipRect(-extentW / 2f, -extentH / 2f, extentW / 2f, extentH / 2f)
         if (prepared.definition.shape == WatchFaceShape.ROUND) {
             pathScratch.reset()
@@ -895,14 +1297,133 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         calendar.timeInMillis = System.currentTimeMillis()
         frameDataSnapshot = runCatching { dataProvider.snapshot(calendar.timeInMillis) }
             .getOrDefault(WatchDataSnapshot())
-        tapTargets.clear()
-        backgroundPaint.color = resolveColor(prepared.definition.rootAttributes["bg_color"], Color.BLACK, prepared)
-        canvas.drawRect(-extentW / 2f, -extentH / 2f, extentW / 2f, extentH / 2f, backgroundPaint)
-        prepared.renderPlan.forEach { drawRenderItem(canvas, it, prepared) }
+        // 分段渲染时 tapTargets 必须只在首段清空，否则后面的段会把前面段
+        // 已经登记的可点区域抹掉，整块表盘只有最后一段能响应点击。
+        if (renderRange?.first?.let { it <= 0 } != false) tapTargets.clear()
+        if (drawBackground) {
+            backgroundPaint.color =
+                resolveColor(prepared.definition.rootAttributes["bg_color"], Color.BLACK, prepared)
+            canvas.drawRect(-extentW / 2f, -extentH / 2f, extentW / 2f, extentH / 2f, backgroundPaint)
+        }
+        gravityBackdrop?.takeIf { !it.isRecycled }?.let { backdrop ->
+            // Slightly overscan inside the already-clipped watch canvas. The
+            // blurred bottom layer therefore reaches every edge when foreground
+            // layers move, but it can never bleed beyond the face boundary.
+            val overscanX = extentW * 0.05f
+            val overscanY = extentH * 0.05f
+            canvas.drawBitmap(
+                backdrop,
+                null,
+                RectF(
+                    -extentW / 2f - overscanX,
+                    -extentH / 2f - overscanY,
+                    extentW / 2f + overscanX,
+                    extentH / 2f + overscanY,
+                ),
+                gravityBackdropPaint,
+            )
+        }
+        val plan = prepared.renderPlan
+        val range = renderRange
+        val fromIndex = range?.first?.coerceIn(0, plan.size) ?: 0
+        val toIndex = range?.let { (it.last + 1).coerceIn(fromIndex, plan.size) } ?: plan.size
+        val segments = resolveActiveFlattenSegments(prepared, extentW, extentH)
+        var planIndex = fromIndex
+        while (planIndex < toIndex) {
+            val segment = segments?.firstOrNull { it.fromIndex == planIndex }
+            // 段必须整段落在本次绘制区间内：跨出去就退回逐层，宁可不省。
+            val baked = segment
+                ?.takeIf { it.toIndex < toIndex }
+                ?.let { prepared.bakedSegmentBitmaps[it.fromIndex] }
+                ?.takeIf { !it.isRecycled }
+            if (segment != null && baked != null) {
+                canvas.drawBitmap(baked, -extentW / 2f, -extentH / 2f, null)
+                planIndex = segment.toIndex + 1
+                continue
+            }
+            drawRenderItem(canvas, plan[planIndex], prepared, gyroscopeX, gyroscopeY)
+            planIndex++
+        }
         canvas.restore()
     }
 
-    private fun drawRenderItem(canvas: Canvas, item: WatchLayerRenderItem, source: PreparedSource) {
+    /**
+     * 取本帧可用的烘焙段，必要时（首帧、尺寸变化、慢桶 tag 变化）重烘。
+     *
+     * 返回 null 表示这一帧不走烘焙（编辑器、离屏出图、尺寸异常）。
+     */
+    private fun resolveActiveFlattenSegments(
+        prepared: PreparedSource,
+        extentW: Float,
+        extentH: Float,
+    ): List<WatchFlattenSegment>? {
+        if (prepared.flattenSegments.isEmpty() || flattenBakingSuppressed) return null
+        // 编辑器里图层随时被实时变换/选中高亮改写，烘了就会看到"改了没反应"。
+        if (editorLiveTransformActive() || editorAnimationPlaybackLimited) return null
+        val width = extentW.toInt()
+        val height = extentH.toInt()
+        if (width < 1 || height < 1) return null
+        if (width > MAX_FLATTEN_BITMAP_SIZE || height > MAX_FLATTEN_BITMAP_SIZE) return null
+        val sizeChanged = prepared.bakedSegmentWidth != width || prepared.bakedSegmentHeight != height
+        if (sizeChanged || prepared.slowTagTracker.slowTagsChangedOnLastPoll) {
+            prepared.recycleBakedSegments()
+            prepared.bakedSegmentWidth = width
+            prepared.bakedSegmentHeight = height
+        }
+        if (prepared.bakedSegmentBitmaps.isEmpty()) {
+            bakeFlattenSegments(prepared, extentW, extentH, width, height)
+        }
+        return prepared.flattenSegments.takeIf { prepared.bakedSegmentBitmaps.isNotEmpty() }
+    }
+
+    /**
+     * 把每个段合成到一张离屏位图上。
+     *
+     * alpha 累积（`wf_render.lua:3093`）：位图初值全透明，逐层按 `SRC_OVER` 画进去，
+     * 合成回主 Canvas 时**不再乘一次 alpha** —— 否则半透明层被压暗两次。
+     */
+    private fun bakeFlattenSegments(
+        prepared: PreparedSource,
+        extentW: Float,
+        extentH: Float,
+        width: Int,
+        height: Int,
+    ) {
+        val bytesPerSegment = width.toLong() * height.toLong() * 4L
+        if (bytesPerSegment <= 0L || bytesPerSegment > MAX_FLATTEN_SEGMENT_BYTES) return
+        // 字节记账：别再开第四个不记账的位图缓存（计划 §3.5）。
+        var budget = MAX_FLATTEN_TOTAL_BYTES
+        for (segment in prepared.flattenSegments) {
+            if (budget < bytesPerSegment) break
+            val bitmap = runCatching {
+                Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            }.getOrNull() ?: continue
+            val offscreen = Canvas(bitmap)
+            // 段内图层的坐标是设计空间（原点在中心），位图原点在左上。
+            offscreen.translate(extentW / 2f, extentH / 2f)
+            var ok = true
+            for (index in segment.fromIndex..segment.toIndex) {
+                val item = prepared.renderPlan.getOrNull(index) ?: continue
+                // 段内层按定义不含快依赖，陀螺仪传 0 即可。
+                if (runCatching { drawRenderItem(offscreen, item, prepared, 0f, 0f) }.isFailure) {
+                    ok = false
+                    break
+                }
+            }
+            if (ok) {
+                prepared.bakedSegmentBitmaps[segment.fromIndex] = bitmap
+                budget -= bytesPerSegment
+            }
+        }
+    }
+
+    private fun drawRenderItem(
+        canvas: Canvas,
+        item: WatchLayerRenderItem,
+        source: PreparedSource,
+        gyroscopeX: Float = smoothedGyroscopeX,
+        gyroscopeY: Float = smoothedGyroscopeY,
+    ) {
         val saveCount = canvas.save()
         try {
             var alpha = 1f
@@ -918,26 +1439,52 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 alpha *= dynamicNumber(attributes["opacity"], 100f, source)
                     .coerceIn(0f, 100f) / 100f
                 if (alpha <= 0f || !isDisplayed(attributes["display"], source)) return
-                applyTransform(canvas, attributes, source, ancestorIndex)
+                applyTransform(
+                    canvas,
+                    attributes,
+                    source,
+                    ancestorIndex,
+                    gyroscopeX,
+                    gyroscopeY,
+                )
             }
             val layer = source.definition.layers[item.layerIndex]
             val attributes = layer.attributes
             alpha *= dynamicNumber(attributes["opacity"], 100f, source)
                 .coerceIn(0f, 100f) / 100f
             if (alpha <= 0f || !isDisplayed(attributes["display"], source)) return
-            applyTransform(canvas, attributes, source, item.layerIndex)
+            applyTransform(
+                canvas,
+                attributes,
+                source,
+                item.layerIndex,
+                gyroscopeX,
+                gyroscopeY,
+            )
             drawPrimitive(canvas, layer, item.layerIndex, alpha, source)
         } finally {
             canvas.restoreToCount(saveCount)
         }
     }
 
-    private fun applyTransform(
-        canvas: Canvas,
+    /**
+     * 图层变换的唯一真源：把 translate/rotate/scale/skew 折叠进一个 Matrix。
+     *
+     * Canvas 路径（[applyTransform]）与视频图层的 TextureView 路径都从这里取值。
+     * 视频是独立 Surface，只吃 Matrix 不吃 Canvas 操作；两条路径各写一份变换必然
+     * 会随时间漂移，所以这里刻意做成两者共用的唯一实现。
+     *
+     * 结果写进传入的 [into] 并原样返回，供逐帧调用复用同一个对象。
+     */
+    private fun composeLayerMatrix(
+        into: Matrix,
         attrs: Map<String, String>,
         source: PreparedSource,
         layerIndex: Int = -1,
-    ) {
+        gyroscopeX: Float = smoothedGyroscopeX,
+        gyroscopeY: Float = smoothedGyroscopeY,
+    ): Matrix {
+        into.reset()
         // 编辑器画布手势期间的实时覆盖：表盘像素立刻跟手，不等落盘。
         val live = layerIndex >= 0 && layerIndex == liveTransformLayerIndex
         val baseX = if (live) liveTransformX else dynamicNumber(attrs["x"], 0f, source)
@@ -952,16 +1499,16 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // CloX's contract is x += sgy * gyro and y += sgx * gyro. The
         // native provider exposes those streams directly; keep the authored
         // coordinate stable and only add the opt-in parallax offset.
-        canvas.translate(
-            baseX + smoothedGyroscopeY * gyroScale,
-            baseY + smoothedGyroscopeX * gyroScale,
+        into.preTranslate(
+            baseX + gyroscopeY * gyroScale,
+            baseY + gyroscopeX * gyroScale,
         )
         val rotation = if (live) {
             liveTransformRotation
         } else {
             dynamicNumber(attrs["rotation"], 0f, source)
         }
-        if (rotation != 0f) canvas.rotate(rotation)
+        if (rotation != 0f) into.preRotate(rotation)
         val sharedScale = attrs["anim_scale"] ?: attrs["scale"]
         val sx = if (live) {
             liveTransformScaleX
@@ -981,12 +1528,37 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 source,
             ).coerceIn(-500f, 500f) / 100f
         }
-        if (sx != 1f || sy != 1f) canvas.scale(sx, sy)
+        if (sx != 1f || sy != 1f) into.preScale(sx, sy)
         val skewX = dynamicNumber(attrs["skew_x"], 0f, source)
         val skewY = dynamicNumber(attrs["skew_y"], 0f, source)
         if (skewX != 0f || skewY != 0f) {
-            canvas.skew(kotlin.math.tan(Math.toRadians(skewX.toDouble())).toFloat(), kotlin.math.tan(Math.toRadians(skewY.toDouble())).toFloat())
+            into.preSkew(
+                kotlin.math.tan(Math.toRadians(skewX.toDouble())).toFloat(),
+                kotlin.math.tan(Math.toRadians(skewY.toDouble())).toFloat(),
+            )
         }
+        return into
+    }
+
+    private fun applyTransform(
+        canvas: Canvas,
+        attrs: Map<String, String>,
+        source: PreparedSource,
+        layerIndex: Int = -1,
+        gyroscopeX: Float = smoothedGyroscopeX,
+        gyroscopeY: Float = smoothedGyroscopeY,
+    ) {
+        // concat 会立即读走矩阵内容，所以这里可以安全复用同一个 scratch 对象。
+        canvas.concat(
+            composeLayerMatrix(
+                into = layerMatrixScratch,
+                attrs = attrs,
+                source = source,
+                layerIndex = layerIndex,
+                gyroscopeX = gyroscopeX,
+                gyroscopeY = gyroscopeY,
+            ),
+        )
     }
 
     private fun drawPrimitive(
@@ -1566,7 +2138,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 val bitmap = preparedFont.pageBitmaps.getOrNull(glyph.page)
                     ?.takeUnless(Bitmap::isRecycled)
                     ?: preparedFont.pageAssetPaths.getOrNull(glyph.page)
-                        ?.let { path -> requestBitmap(path, source) }
+                        ?.let { path -> requestBitmap(path, source, fontAtlas = true) }
                         ?.also { loaded ->
                             preparedFont.pageBitmaps[glyph.page] = loaded
                         }
@@ -2055,6 +2627,13 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         canvas.restore()
     }
 
+    /**
+     * `video`/`map` 的静态兜底。
+     *
+     * 视频有两种情况都要走这里：离屏出图（预览图/缩略图/景深底图 —— TextureView
+     * 在软件 Canvas 里根本不存在），以及宿主没能给这一层配上播放面（同屏视频数
+     * 超限时的降级）。两者都画首帧，绝不留透明空洞。
+     */
     private fun drawStaticMediaFallback(
         canvas: Canvas,
         attrs: Map<String, String>,
@@ -2063,11 +2642,49 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         layerCacheKey: String,
     ) {
         val path = evaluateText(attrs["path"] ?: attrs["source"] ?: "", source)
-        val resolved = resolveAsset(path, source, conventionalDirectory = "images") ?: return
+        // 素材可能被作者放在 images/ 也可能在 videos/，两个约定目录都试。
+        val resolved = resolveAsset(path, source, conventionalDirectory = "images")
+            ?: resolveAsset(path, source, conventionalDirectory = "videos")
+            ?: return
         val extension = resolved.file.extension.lowercase(Locale.ROOT)
-        if (extension in setOf("png", "jpg", "jpeg", "webp", "bmp", "gif")) {
-            drawImage(canvas, attrs + ("path" to path), alpha, source, layerCacheKey)
+        when {
+            extension in STATIC_MEDIA_IMAGE_EXTENSIONS ->
+                drawImage(canvas, attrs + ("path" to path), alpha, source, layerCacheKey)
+            extension in PLAYABLE_VIDEO_EXTENSIONS ->
+                drawVideoFirstFrame(canvas, attrs, alpha, source, resolved)
         }
+    }
+
+    /**
+     * 按 [videoLayerGeometry] 同一套盒子语义画视频首帧。
+     *
+     * 首帧解码走和图片资源一样的 LRU + 失败冷却，所以逐帧调用不会反复解码；
+     * 解码没跟上时不画，下一帧再来 —— 视频图层通常是背景，短暂空一帧远好过
+     * 阻塞 onDraw。
+     */
+    private fun drawVideoFirstFrame(
+        canvas: Canvas,
+        attrs: Map<String, String>,
+        alpha: Float,
+        source: PreparedSource,
+        resolved: ResolvedAsset,
+    ) {
+        val frame = requestVideoFirstFrame(resolved, source)?.takeIf { !it.isRecycled } ?: return
+        val sharedSize = attrs["size"]
+        val width = dynamicNumber(
+            attrs["width"] ?: sharedSize,
+            source.designExtentWidth,
+            source,
+        ).coerceAtLeast(1f)
+        val height = dynamicNumber(
+            attrs["height"] ?: sharedSize,
+            source.designExtentHeight,
+            source,
+        ).coerceAtLeast(1f)
+        val dst = anchoredRect(width, height, attrs["alignment"])
+        imagePaint.alpha = paintAlpha(alpha)
+        imagePaint.colorFilter = null
+        canvas.drawBitmap(frame, null, dst, imagePaint)
     }
 
     private fun anchoredRect(width: Float, height: Float, alignment: String?): RectF {
@@ -2204,6 +2821,18 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 raw.toFloatOrNull()?.let { it != 0f } ?: true
             } == true
         }
+        val expressionScope = WatchExpressionScope.fromInitialScript(initialScript)
+        // 表达式预编译。对照 wf_expr.lua:11「Import is allowed to be slow; the
+        // running face is not.」——这里已经在 IO dispatcher 上、已经受
+        // sourceGeneration 保护，是天然的导入期。先把全部属性原文编译好塞进缓存，
+        // 首帧就是全命中，渲染线程不必现编译。
+        val expressionCompileReport = WatchmakerExpressionEvaluator.precompile(
+            sources = definition.layers
+                .take(MAX_WATCH_LAYER_COUNT)
+                .flatMapTo(LinkedHashSet()) { layer -> layer.attributes.values }
+                .also { it += definition.rootAttributes.values },
+            scope = expressionScope,
+        )
         return PreparedSource(
             sourceGeneration = sourceGeneration,
             animationStartedAtUptimeMs = SystemClock.uptimeMillis(),
@@ -2221,7 +2850,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             revisionByAbsolutePath = revisionByAbsolutePath,
             fontIndex = WatchFontIndex.build(canonicalRoot, files),
             bitmapFonts = bitmapFonts,
-            expressionScope = WatchExpressionScope.fromInitialScript(initialScript),
+            expressionScope = expressionScope,
+            expressionCompileReport = expressionCompileReport,
             renderPlan = renderPlanResult.items,
             renderPlanDiagnostics = renderPlanResult.diagnostics,
             svgDocuments = svgDocuments.toMap(),
@@ -2316,16 +2946,24 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         path: String,
         source: PreparedSource,
         animatedFrame: Boolean = false,
+        fontAtlas: Boolean = false,
     ): Bitmap? {
         if (path.isBlank()) return null
         val resolved = resolveAsset(path, source, conventionalDirectory = "images") ?: return null
         val assetPrefix = "${source.rootCacheKey}\u0000${resolved.key}\u0000"
         val key = resolved.cacheRevision
         synchronized(cacheLock) {
-            val primaryCache = if (animatedFrame) animatedBitmapCache else bitmapCache
-            val secondaryCache = if (animatedFrame) bitmapCache else animatedBitmapCache
+            // 图集走自己的 LRU，绝不和图片/帧序列共享字节预算（见 [fontAtlasCache]）。
+            val primaryCache = when {
+                fontAtlas -> fontAtlasCache
+                animatedFrame -> animatedBitmapCache
+                else -> bitmapCache
+            }
             primaryCache[key]?.let { return it }
-            secondaryCache[key]?.let { return it }
+            if (!fontAtlas) {
+                val secondaryCache = if (animatedFrame) bitmapCache else animatedBitmapCache
+                secondaryCache[key]?.let { return it }
+            }
             val previousFrame = primaryCache.entries
                 .lastOrNull { (cachedKey, bitmap) -> cachedKey.startsWith(assetPrefix) && !bitmap.isRecycled }
                 ?.value
@@ -2343,7 +2981,17 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                     // 编辑器预览最多只需要当前 View 像素级的清晰度。把 2K/4K
                     // 视频帧解到 1024px 再缩进几百像素画布，会平白增加解码、内存
                     // 带宽和每次拖动的绘制成本。
-                    val decodeDimensionPx = bitmapDecodeDimensionPx()
+                    //
+                    // 但**位图字体图集必须排除在这个降档之外**。图集是一张几百到
+                    // 两千像素的图里塞几十个字形，单个字形只占几十像素；按 View
+                    // 尺寸给整张图 inSampleSize 降采样，等于把每个字形的分辨率
+                    // 同比砍掉，放大绘制必然糊（老师报的「位图字体非常模糊，
+                    // 以前不会这样」就是这里）。图集另给一档上限，不吃编辑器降档。
+                    val decodeDimensionPx = if (fontAtlas) {
+                        MAX_FONT_ATLAS_DECODE_DIMENSION_PX
+                    } else {
+                        bitmapDecodeDimensionPx()
+                    }
                     val job = assetScope.launch {
                         var decoded: Bitmap? = null
                         try {
@@ -2369,10 +3017,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                                                 }
                                             staleKeys.forEach { staleKey ->
                                                 primaryCache.remove(staleKey)?.let { staleBitmap ->
-                                                    if (animatedFrame) {
-                                                        animatedBitmapCacheBytes -= staleBitmap.safeAllocationByteCount()
-                                                    } else {
-                                                        bitmapCacheBytes -= staleBitmap.safeAllocationByteCount()
+                                                    val staleBytes = staleBitmap.safeAllocationByteCount()
+                                                    when {
+                                                        fontAtlas -> fontAtlasCacheBytes -= staleBytes
+                                                        animatedFrame -> animatedBitmapCacheBytes -= staleBytes
+                                                        else -> bitmapCacheBytes -= staleBytes
                                                     }
                                                     if (
                                                         staleBitmap !== result &&
@@ -2383,10 +3032,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                                                     }
                                                 }
                                             }
-                                            if (animatedFrame) {
-                                                putAnimatedBitmapLocked(key, result)
-                                            } else {
-                                                putBitmapLocked(key, result)
+                                            when {
+                                                fontAtlas -> putFontAtlasLocked(key, result)
+                                                animatedFrame -> putAnimatedBitmapLocked(key, result)
+                                                else -> putBitmapLocked(key, result)
                                             }
                                             bitmapFailures.remove(key)
                                             decoded = null // Ownership transferred to the LRU cache.
@@ -2473,6 +3122,72 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * 视频首帧，供离屏出图与降级路径使用。
+     *
+     * 结构照 [requestMovie]：内容寻址（cacheRevision）+ 失败冷却 + 主线程回填。
+     * 首帧提取比图片解码贵得多（要起 MediaMetadataRetriever、seek 到 0），所以
+     * 绝不能在 onDraw 里同步做，也绝不能失败后每帧重试。
+     */
+    private fun requestVideoFirstFrame(
+        resolved: ResolvedAsset,
+        source: PreparedSource,
+    ): Bitmap? {
+        val key = "video-frame ${resolved.cacheRevision}"
+        synchronized(cacheLock) {
+            bitmapCache[key]?.let { return it }
+            bitmapFailures[key]?.let { failure ->
+                val inCooldown = failure.generation == bindGeneration &&
+                    SystemClock.uptimeMillis() - failure.failedAtUptimeMs < BITMAP_FAILURE_RETRY_MS
+                if (inCooldown) return null
+                bitmapFailures.remove(key)
+            }
+            if (bitmapLoading[key] == null) {
+                val generation = bindGeneration
+                val claim = claimAssetLoadLocked(AssetLoadKind.BITMAP, key, generation)
+                if (claim != null) {
+                    bitmapLoading[key] = generation
+                    val targetPx = bitmapDecodeDimensionPx()
+                    val job = assetScope.launch {
+                        var decoded = extractVideoFirstFrame(resolved.file, targetPx)
+                        try {
+                            withContext(Dispatchers.Main.immediate) {
+                                val result = decoded
+                                var currentRequest = false
+                                synchronized(cacheLock) {
+                                    currentRequest = bitmapLoading[key] == generation
+                                    if (currentRequest) bitmapLoading.remove(key)
+                                    if (currentRequest && !disposed) {
+                                        if (result != null) {
+                                            putBitmapLocked(key, result)
+                                            bitmapFailures.remove(key)
+                                            decoded = null // 所有权移交 LRU。
+                                        } else {
+                                            putBoundedLocked(
+                                                cache = bitmapFailures,
+                                                key = key,
+                                                value = BitmapFailure(
+                                                    generation = generation,
+                                                    failedAtUptimeMs = SystemClock.uptimeMillis(),
+                                                ),
+                                                maximumEntries = MAX_BITMAP_FAILURE_ENTRIES,
+                                            )
+                                        }
+                                    }
+                                }
+                                if (currentRequest && !disposed) invalidate()
+                            }
+                        } finally {
+                            decoded?.let { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
+                        }
+                    }
+                    job.invokeOnCompletion { finishAssetLoad(claim) }
+                }
+            }
+            return null
+        }
+    }
+
     private fun resolveTypeface(name: String?, source: PreparedSource): Typeface {
         val normalized = name.orEmpty().removePrefix("bm:").trim()
         if (normalized.isBlank() || normalized.equals("Roboto-Regular", true)) return Typeface.DEFAULT
@@ -2525,7 +3240,13 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     private fun bitmapDecodeDimensionPx(): Int {
         if (!editorAnimationPlaybackLimited) return MAX_DECODE_DIMENSION_PX
-        return maxOf(width, height)
+        // View 还没量到尺寸时**不能降档**：这里原来会 coerceAtLeast(256) 兜底，
+        // 于是首帧之前发起的解码全部按 256px 上限跑。而位图缓存是按内容寻址
+        // （cacheRevision），不含解码尺寸，那张 256px 的图会一直留在缓存里 ——
+        // view 量好之后也不会重解。冷启动时序稍微一变，整块表盘就糊掉。
+        val viewDimensionPx = maxOf(width, height)
+        if (viewDimensionPx <= 0) return MAX_DECODE_DIMENSION_PX
+        return viewDimensionPx
             .coerceAtLeast(MIN_EDITOR_DECODE_DIMENSION_PX)
             .coerceAtMost(MAX_EDITOR_DECODE_DIMENSION_PX)
     }
@@ -2556,6 +3277,45 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * 抽视频首帧。
+     *
+     * `getScaledFrameAtTime` 只有 API 27+ 才有 —— 正好等于本应用的 minSdk，
+     * 所以不需要兜底分支。用它而不是先取全尺寸再缩：4K 视频的整帧位图有
+     * 30MB+，在低端机上足以直接 OOM。
+     */
+    private fun extractVideoFirstFrame(file: File, maximumDimensionPx: Int): Bitmap? {
+        return try {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(file.absolutePath)
+                val width = retriever
+                    .extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                    ?.toIntOrNull() ?: 0
+                val height = retriever
+                    .extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                    ?.toIntOrNull() ?: 0
+                if (width <= 0 || height <= 0) return null
+                val scale = min(
+                    1f,
+                    maximumDimensionPx.toFloat() / max(width, height).toFloat(),
+                )
+                retriever.getScaledFrameAtTime(
+                    0L,
+                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                    (width * scale).roundToInt().coerceAtLeast(1),
+                    (height * scale).roundToInt().coerceAtLeast(1),
+                )
+            } finally {
+                runCatching { retriever.release() }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     /** Caller must hold [cacheLock]. */
     private fun putBitmapLocked(key: String, bitmap: Bitmap) {
         bitmapCache.put(key, bitmap)?.let { previous ->
@@ -2578,7 +3338,18 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
     }
 
-    /** Caller must hold [cacheLock]. */
+    /**
+     * 帧序列位图的入缓存，Caller must hold [cacheLock]。
+     *
+     * 这里的字节上限与 [MIN_ANIMATED_BITMAP_CACHE_ENTRIES] 保底条数是一对：
+     * 帧序列是**循环访问**的工作集，每帧要当前帧、还要预取下一帧，所以缓存里
+     * 至少得同时住得下两张，否则「放进下一帧」就会把「正在画的这一帧」挤掉，
+     * 下一帧回来又得重解 —— 纯粹的乒乓，帧率直接对折。
+     *
+     * 保底条数必须优先于字节预算：解码上限是 1024px，一张 ARGB_8888 就是
+     * 4.2MB，几张大帧很容易顶穿任何固定字节预算。宁可让字节短暂超出一点，
+     * 也不能把缓存压到装不下一轮循环。
+     */
     private fun putAnimatedBitmapLocked(key: String, bitmap: Bitmap) {
         animatedBitmapCache.put(key, bitmap)?.let { previous ->
             animatedBitmapCacheBytes -= previous.safeAllocationByteCount()
@@ -2589,7 +3360,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         animatedBitmapCacheBytes += bitmap.safeAllocationByteCount()
         while (
             animatedBitmapCache.size > MAX_ANIMATED_BITMAP_CACHE_ENTRIES ||
-            (animatedBitmapCache.size > 1 && animatedBitmapCacheBytes > MAX_ANIMATED_BITMAP_CACHE_BYTES)
+            (animatedBitmapCache.size > MIN_ANIMATED_BITMAP_CACHE_ENTRIES &&
+             animatedBitmapCacheBytes > MAX_ANIMATED_BITMAP_CACHE_BYTES)
         ) {
             val iterator = animatedBitmapCache.entries.iterator()
             if (!iterator.hasNext()) break
@@ -2600,15 +3372,45 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
     }
 
-    /** Keeps an evicted animated frame alive until this layer draws its successor. */
-    private fun rememberLastDrawnFrame(key: WatchImageFallbackKey, bitmap: Bitmap) {
+    /**
+     * 位图字体图集的入缓存，Caller must hold [cacheLock]。
+     *
+     * 与 [putBitmapLocked] 的唯一区别是记在 [fontAtlasCacheBytes] 上 —— 也正是
+     * 这一点让图集和图片层不再互相驱逐。这里 recycle 之前同样要避开
+     * [lastDrawnFrameByLayer]：内容寻址的键理论上允许同一张文件既做图集又做
+     * 图片层素材，撞上了就不能把别人还在画的实例回收掉。
+     */
+    private fun putFontAtlasLocked(key: String, bitmap: Bitmap) {
+        fontAtlasCache.put(key, bitmap)?.let { previous ->
+            fontAtlasCacheBytes -= previous.safeAllocationByteCount()
+            if (previous !== bitmap && previous !in lastDrawnFrameByLayer.values && !previous.isRecycled) {
+                previous.recycle()
+            }
+        }
+        fontAtlasCacheBytes += bitmap.safeAllocationByteCount()
+        while (
+            fontAtlasCache.size > MAX_FONT_ATLAS_CACHE_ENTRIES ||
+            (fontAtlasCache.size > 1 && fontAtlasCacheBytes > MAX_FONT_ATLAS_CACHE_BYTES)
+        ) {
+            val iterator = fontAtlasCache.entries.iterator()
+            if (!iterator.hasNext()) break
+            val eldest = iterator.next().value
+            iterator.remove()
+            fontAtlasCacheBytes -= eldest.safeAllocationByteCount()
+            if (eldest !in lastDrawnFrameByLayer.values && !eldest.isRecycled) eldest.recycle()
+        }
+    }
+
+    /** Keeps an evicted animated frame alive until this layer draws its successor. */    private fun rememberLastDrawnFrame(key: WatchImageFallbackKey, bitmap: Bitmap) {
         val previous = lastDrawnFrameByLayer.put(key, bitmap)
         if (previous != null && previous !== bitmap) recycleDetachedLastFrame(previous)
     }
 
     private fun recycleDetachedLastFrame(bitmap: Bitmap) {
         val stillCached = synchronized(cacheLock) {
-            bitmap in bitmapCache.values || bitmap in animatedBitmapCache.values
+            bitmap in bitmapCache.values ||
+                bitmap in animatedBitmapCache.values ||
+                bitmap in fontAtlasCache.values
         }
         if (!stillCached && bitmap !in lastDrawnFrameByLayer.values && !bitmap.isRecycled) {
             bitmap.recycle()
@@ -2666,7 +3468,15 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             }
             activeAssetLoads.remove(claim)
         }
-        if (!disposed && claim.generation == sourceTransitionGeneration) {
+        if (disposed) return
+        // 素材是异步解码的：烘焙时这张图可能还没就绪，段里会留一个空洞，而慢桶
+        // tag 又没变 → 空洞永远不会被填上。所以每次素材落地都要作废烘焙产物。
+        post {
+            if (disposed) return@post
+            source?.recycleBakedSegments()
+            invalidate()
+        }
+        if (claim.generation == sourceTransitionGeneration) {
             postInvalidateOnAnimation()
         }
     }
@@ -2704,6 +3514,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             animatedBitmapCache.values.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
             animatedBitmapCache.clear()
             animatedBitmapCacheBytes = 0L
+            fontAtlasCache.values.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
+            fontAtlasCache.clear()
+            fontAtlasCacheBytes = 0L
             movieCache.clear()
             bitmapLoading.clear()
             movieLoading.clear()
@@ -2717,29 +3530,113 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private fun scheduleTicks() {
         if ((!faceVisible && !textExitAnimationActive) || !isAttachedToWindow || tickPosted) return
         tickPosted = true
-        val needsFastTicks = if (textExitAnimationActive) {
-            true
-        } else if (editorAnimationPlaybackLimited) {
-            editorAnimatedImageLayerIndex != null && !editorAnimationInteractionFrozen
-        } else {
-            source?.needsFastTicks == true ||
-                (gravityParallaxEnabled && source?.hasGyroParallax == true)
+        // 重力景深的采样与推进完全绑定 onDraw 频率(每帧 snapshot + 0.18 插值),
+        // 所以它必须自己要求 30fps。这一项刻意跨越编辑器分支:早先它只写在
+        // else 里,而编辑器一进来 editorAnimationPlaybackLimited 就是 true,
+        // 于是重力条件永远不被求值,退化成 1s 一帧 —— 只有手指拖动素材时靠
+        // 逐次 invalidate 才"看起来"正常。
+        val gyroNeedsTicks = gravityParallaxEnabled &&
+            source?.hasGyroParallax == true &&
+            editorPreviewPlaying
+        val needsFastTicks = when {
+            textExitAnimationActive -> true
+            editorAnimationPlaybackLimited ->
+                gyroNeedsTicks ||
+                    (
+                        editorAnimatedImageLayerIndex != null &&
+                            !editorAnimationInteractionFrozen &&
+                            editorPreviewPlaying
+                        )
+            else -> source?.needsFastTicks == true || gyroNeedsTicks
         }
-        val delay = if (needsFastTicks) 33L else 1_000L
+        val delay = when {
+            !needsFastTicks -> 1_000L
+            else -> 33L
+        }
         postDelayed(tickRunnable, delay)
     }
 
     private val tickRunnable = Runnable {
         tickPosted = false
         if (faceVisible || textExitAnimationActive) {
-            invalidate()
+            if (shouldRedrawThisTick()) {
+                invalidate()
+                // 视频图层的几何要跟着表盘时钟走：图层的 x/y/rotation 可以绑定
+                // 动态表达式，每帧都可能变。
+                frameGeometryListener?.invoke()
+            }
             scheduleTicks()
         }
+    }
+
+    /**
+     * 阶段 2 的推模型判定：这一拍要不要重绘。
+     *
+     * 慢桶表盘（最快依赖到分钟）在 1s 拍子上先把慢桶 tag 全部重算一遍，**一个都
+     * 没变就不重绘** —— 每分钟从 60 遍全量遍历降到 1 遍。快桶表盘、编辑器交互、
+     * 文字退场动画、陀螺仪视差一律照旧每拍重绘，行为与改动前逐帧一致。
+     *
+     * ⚠️ 判定只能省掉「重绘」，绝不能省掉「重算」：
+     * [WatchTagChangeTracker.poll] 内部把慢桶 tag 全部走完才返回。
+     */
+    private fun shouldRedrawThisTick(): Boolean {
+        val prepared = source ?: return true
+        // 编辑器交互、退场动画、过渡帧的时间来源都不是 tag，桶模型看不见它们。
+        if (textExitAnimationActive || sourceTransitionFrame != null) return true
+        if (editorAnimationPlaybackLimited || editorAnimatedImageLayerIndex != null) return true
+        if (requiresFastTicksNow(prepared)) return true
+        // 慢桶取值比对要用到当帧的 snapshot（电量、天气、步数都在里面）。
+        calendar.timeInMillis = System.currentTimeMillis()
+        frameDataSnapshot = runCatching { dataProvider.snapshot(calendar.timeInMillis) }
+            .getOrDefault(WatchDataSnapshot())
+        return prepared.slowTagTracker.poll { tag ->
+            when (val resolution = resolveTagResolution(tag, calendar, prepared)) {
+                is WatchTagResolution.Resolved -> resolution.renderedValue
+                // 不可用 / 不支持在一个 generation 内是稳定的，映射成同一个哨兵值即可。
+                else -> null
+            }
+        }
+    }
+
+    /**
+     * 陀螺仪视差的快依赖判定（计划 §2.3 第 1 点）。
+     *
+     * `smoothedGyroscopeX += (raw - smoothed) * 0.18f` 是低通滤波 —— 传感器停下后
+     * 它还要收敛几十帧，所以「传感器值没变」不等于「渲染结果没变」，带 gyro 的
+     * 表盘必须永远算快桶。
+     */
+    private fun requiresFastTicksNow(prepared: PreparedSource): Boolean =
+        prepared.slowTagTracker.requiresRedrawEveryTick ||
+            (gravityParallaxEnabled && prepared.hasGyroParallax && editorPreviewPlaying)
+
+    /**
+     * 逐帧回调，由 [WatchmakerWatchFaceStageView] 用来刷新 TextureView 几何。
+     *
+     * 挂在既有 tick 上而不是另起一个定时器：两套时钟必然错拍，视频会比
+     * Canvas 图层慢半帧。
+     */
+    internal fun setFrameGeometryListener(listener: (() -> Unit)?) {
+        frameGeometryListener = listener
     }
 
     private fun cancelTicks() {
         removeCallbacks(tickRunnable)
         tickPosted = false
+    }
+
+    /**
+     * 全量重绘入口（对照 `wf_engine.lua:337` `repaint`），计划 §2.4。
+     *
+     * 凡是**渲染结果变了但 tag 没变**的路径都必须走这里，而不是裸 `invalidate()`：
+     * 画布设置、数据源替换、重力开关、编辑器交互、可见性切换。它先清掉追踪器的
+     * 取值缓存，保证紧接着的那一拍无条件重绘一次。
+     *
+     * 漏走这个入口的后果不是"慢一点"，而是图层**永久停在旧画面**上 —— 所以宁可
+     * 多推，也不能少推。
+     */
+    private fun requestFullRepaint() {
+        source?.slowTagTracker?.invalidateAll()
+        invalidate()
     }
 
     private fun evaluateText(raw: String, source: PreparedSource): String {
@@ -2869,7 +3766,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         if (action === WatchTapAction.HeartRate) {
             performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
             runCatching { dataProvider.requestRefresh() }
-            invalidate()
+            requestFullRepaint()
             return
         }
         val intent = when (action) {
@@ -2955,6 +3852,12 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val fontIndex: WatchFontIndex,
         val bitmapFonts: Map<String, PreparedBitmapFont?>,
         val expressionScope: WatchExpressionScope,
+        /**
+         * 导入期预编译的产物摘要。随 generation 一起换掉，所以不需要额外的失效逻辑。
+         *
+         * 阶段 2 的 tag 分桶直接读它的 `tagDependencies`，不必再扫一遍属性。
+         */
+        val expressionCompileReport: WatchExpressionCompileReport,
         val renderPlan: List<WatchLayerRenderItem>,
         val renderPlanDiagnostics: WatchLayerGraphDiagnostics,
         val svgDocuments: Map<String, PreparedWatchSvgDocument<Path>>,
@@ -2971,6 +3874,52 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val canvasSize = WatchCanvasSize.fromRootAttributes(definition.rootAttributes)
         val designExtentWidth: Float = canvasSize.designExtentWidth
         val designExtentHeight: Float = canvasSize.designExtentHeight
+
+        /**
+         * 阶段 2：慢桶 tag 的取值追踪器（对照 `wf_engine.lua` 的推模型）。
+         *
+         * Flue 是 Canvas 直绘，一次 `invalidate()` 就是整张重画，没法只推一个图层。
+         * 所以它回答的是**这一拍到底要不要重绘**：一张最快依赖到分钟的表盘，
+         * 改动前 1s 一拍每拍都全量重绘，改动后每分钟只重绘 1 次。
+         *
+         * `forceFastTicks` 直接沿用 [needsFastTicks]：它已经把 GIF、`anim_in`/
+         * `anim_out`、毫秒级 tag 全算进去了（计划 §2.3 的非 tag 快依赖）。
+         * 陀螺仪要看运行时开关，由 [requiresFastTicksNow] 在调用点单独并进来。
+         */
+        val slowTagTracker = WatchTagChangeTracker(
+            tags = expressionCompileReport.referencedTags,
+            forceFastTicks = needsFastTicks,
+        )
+
+        /**
+         * 阶段 3：连续静态图层的烘焙段（对照 `wf_render.lua:3196` `flattenStatics`）。
+         *
+         * 构造时算一次。判定所需的一切都是不变量：图层属性、renderPlan 顺序、
+         * tag 依赖都随 generation 一起换掉，所以不需要额外的失效逻辑。
+         *
+         * ⚠️ 这里**只算段的划分**，不建位图 —— 位图要等真正的画布尺寸，且必须在
+         * 主线程的绘制路径上建（见 [bakedSegmentBitmaps]）。
+         */
+        val flattenSegments: List<WatchFlattenSegment> = run {
+            val bakeable = renderPlan.map { item ->
+                val layer = definition.layers.getOrNull(item.layerIndex)
+                    ?: return@map false
+                val tags = layer.attributes.values.flatMapTo(LinkedHashSet()) { value ->
+                    expressionCompileReport.tagDependencies[value].orEmpty()
+                }
+                WatchStaticFlatten.isBakeable(
+                    layer = layer,
+                    item = item,
+                    profile = WatchLayerTagProfile.of(tags),
+                )
+            }
+            // 视频分段边界：烘焙段跨过去会让两个 View 实例各烘一份重叠内容。
+            val videoBoundaries = renderPlan.indices.filterTo(HashSet()) { index ->
+                definition.layers.getOrNull(renderPlan[index].layerIndex)
+                    ?.type?.trim()?.equals("video", ignoreCase = true) == true
+            }
+            WatchStaticFlatten.planSegments(bakeable, videoBoundaries)
+        }
 
         /** Main-thread-only bounded memoization; the installed tree is immutable. */
         val assetResolutionCache = WatchStringLruCache<ResolvedAsset>(
@@ -2989,6 +3938,32 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val calendarCellsCache: MutableMap<String, List<WatchCalendarCell>> = HashMap()
         val calendarLabelsCache: MutableMap<String, List<String>> = HashMap()
 
+        /**
+         * 阶段 3 的烘焙产物：段起始下标 → 已合成的位图。
+         *
+         * 只在主线程的绘制路径上读写，所以用普通 HashMap。键是段的 `fromIndex`，
+         * 与 [flattenSegments] 对齐。
+         */
+        val bakedSegmentBitmaps: MutableMap<Int, Bitmap> = HashMap()
+
+        /** 烘焙时的画布尺寸。尺寸变了（旋屏、编辑器改画布）必须整批重烘。 */
+        var bakedSegmentWidth: Int = 0
+        var bakedSegmentHeight: Int = 0
+
+        /**
+         * 丢掉全部烘焙位图。
+         *
+         * 慢桶 tag 变化、画布尺寸变化、走全量重绘入口都要调用它 —— 段内图层虽然
+         * 不含快依赖，但分钟跳、天气变、压暗翻转都会改变它们的绘制结果。
+         */
+        fun recycleBakedSegments() {
+            // 不 recycle()：硬件 display list 在 onDraw 返回后可能仍引用这些位图，
+            // 丢掉引用让运行时在那一帧退役后自行回收（与过渡帧同一套契约）。
+            bakedSegmentBitmaps.clear()
+            bakedSegmentWidth = 0
+            bakedSegmentHeight = 0
+        }
+
         fun clearRuntimeCaches() {
             assetResolutionCache.clear()
             gifPathCache.clear()
@@ -2996,6 +3971,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             seriesCache.clear()
             calendarCellsCache.clear()
             calendarLabelsCache.clear()
+            recycleBakedSegments()
         }
     }
 
@@ -3040,10 +4016,64 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     companion object {
         private const val DESIGN_SIZE = WatchmakerGeometry.DESIGN_SIZE
         private const val MAX_CONCURRENT_ASSET_LOADS = 4
-        private const val MAX_BITMAP_CACHE_ENTRIES = 24
+
+        /**
+         * 阶段 3 烘焙位图的边长上限。超过就不烘 —— 一张 4096² ARGB 是 64MB，
+         * 省下的那点遍历换不回来。
+         */
+        private const val MAX_FLATTEN_BITMAP_SIZE = 2_048
+
+        /** 单张烘焙位图的字节上限（约一张 1024² ARGB_8888）。 */
+        private const val MAX_FLATTEN_SEGMENT_BYTES = 4L * 1024L * 1024L
+
+        /**
+         * 全部烘焙位图的字节上限。
+         *
+         * 这是本视图的第四个位图缓存（另三个是 bitmapCache / animatedBitmapCache /
+         * 过渡帧），必须记账 —— 不记账的缓存正是当初 wf_528 卡顿的根因。
+         */
+        private const val MAX_FLATTEN_TOTAL_BYTES = 16L * 1024L * 1024L
+        /**
+         * 图片缓存的条数上限。
+         *
+         * 这里必须能装下**整帧的工作集**，否则就是逐帧抖动：LRU 装不下时，画到
+         * 后面的图层把前面的踢掉并 `recycle()`，下一帧从头再来，于是每帧都在
+         * 重解码好几张图。日志里同一条加载线程上 512² 与 1042² 交替出现十几次，
+         * 就是 24 条时的实况 —— 而 377 层的表盘光是不同素材就远不止 24 张。
+         *
+         * 真正的护栏是 [MAX_BITMAP_CACHE_BYTES]：条数放宽只让小图都留得住，
+         * 大图仍然被字节预算挡着，不会把内存吃穿。
+         */
+        private const val MAX_BITMAP_CACHE_ENTRIES = 128
         private const val MAX_BITMAP_CACHE_BYTES = 24L * 1024L * 1024L
-        private const val MAX_ANIMATED_BITMAP_CACHE_ENTRIES = 3
-        private const val MAX_ANIMATED_BITMAP_CACHE_BYTES = 8L * 1024L * 1024L
+        /**
+         * 帧序列缓存的预算（见 [putAnimatedBitmapLocked]）。
+         *
+         * 原值是 3 条 / 8MB，注释写的是「小而短命的 LRU，免得长帧序列把静态
+         * 素材冲掉」—— 隔离的方向没错，额度定反了。帧序列不是用一次就扔的
+         * 过客，它每帧换一张、而且会循环回来；3 条 8MB 意味着一张 1024²
+         * （4.2MB）进来就把上一张挤掉，于是**每帧都必然未命中**，一路重解到
+         * 掉帧。老师报的「所有背景会变换的表盘都巨卡、以前的版本从来不会」
+         * 就是它：`framePaths.size > 1` 的图层全部走这条分支，单张背景的表盘
+         * 走 [bitmapCache]，所以只有前者卡。
+         *
+         * 保底条数按「3 个帧序列图层 × (当前帧 + 预取帧)」取 6，即便每张都是
+         * 4.2MB 的极端尺寸也不会退化成乒乓；上限 48 条让小尺寸序列（几十 KB
+         * 的动画图标）整条都留得住，真正的护栏仍是字节预算。
+         */
+        private const val MAX_ANIMATED_BITMAP_CACHE_ENTRIES = 48
+        private const val MAX_ANIMATED_BITMAP_CACHE_BYTES = 24L * 1024L * 1024L
+        private const val MIN_ANIMATED_BITMAP_CACHE_ENTRIES = 6
+
+        /**
+         * 位图字体图集的独立预算（见 [fontAtlasCache]）。
+         *
+         * 一张表盘通常只有 1~2 张图集，4 条足够；字节上限按「一张不降采样的
+         * 2048² ARGB_8888 = 16MB」留了余量，这样即便是最大的图集也不会一进来
+         * 就把自己前一张挤掉 —— 挤掉就得重解，那正是要根治的乒乓。
+         */
+        private const val MAX_FONT_ATLAS_CACHE_ENTRIES = 4
+        private const val MAX_FONT_ATLAS_CACHE_BYTES = 24L * 1024L * 1024L
         private const val MAX_MOVIE_CACHE_ENTRIES = 4
         /** 帧序列兜底图上限：一块表盘同时有几个 GIF 图层已属极端情况。 */
         private const val MAX_LAST_FRAME_ENTRIES = 8
@@ -3062,8 +4092,22 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         private const val MAX_SERIES_CACHE_ENTRIES = 32
         private const val MAX_CALENDAR_CACHE_ENTRIES = 8
         private const val MAX_DECODE_DIMENSION_PX = 1_024
-        private const val MIN_EDITOR_DECODE_DIMENSION_PX = 256
+
+        /**
+         * 编辑器降档的下限。表盘设计画布是 512 见方，低于这个值就等于在
+         * 原分辨率之下重采样，缩放到屏上必然肉眼可见地糊。
+         */
+        private const val MIN_EDITOR_DECODE_DIMENSION_PX = 512
         private const val MAX_EDITOR_DECODE_DIMENSION_PX = 768
+
+        /**
+         * 位图字体图集的解码上限，独立于 [MAX_DECODE_DIMENSION_PX] 与编辑器降档。
+         *
+         * 图集降采样一次，图里每个字形的分辨率就同比减半，而字形本身只有几十
+         * 像素——放大到表盘上就是肉眼可见的模糊。2048 覆盖绝大多数表盘的图集
+         * 原尺寸（等于不降采样），同时仍然给病态素材留一道 OOM 护栏。
+         */
+        private const val MAX_FONT_ATLAS_DECODE_DIMENSION_PX = 2_048
         private const val MAX_SVG_BYTES = MAX_WATCH_SVG_BYTES
         private const val MAX_SVG_ASSET_COUNT = 64
         private const val MAX_SVG_TOTAL_BYTES = 8L * 1024L * 1024L
@@ -3111,7 +4155,7 @@ fun WatchmakerWatchFaceHost(
     /** Null selects [WatchWeatherSources.default]; callers may inject a deterministic source. */
     weatherSource: WatchWeatherSource? = null,
     onTapAction: ((WatchTapAction) -> Unit)? = null,
-    forceFill: Boolean = false,
+    canvasSettings: WatchCanvasSettings = WatchCanvasSettings.DEFAULT,
     gravityParallaxEnabled: Boolean = false,
     textEntryAnimationEnabled: Boolean = true,
     textExitAnimationEnabled: Boolean = true,
@@ -3123,12 +4167,16 @@ fun WatchmakerWatchFaceHost(
         weatherSource = weatherSource,
     )
     val resolvedDataProvider = dataProvider ?: ownedDataProvider
+    // 圆屏判定只能来自这里（用户可在设置里覆盖系统上报值），且必须在
+    // composable 体内读 —— update 块不是 composable 作用域。
+    val roundScreen = isFlueScreenRound()
     AndroidView(
-        factory = { context -> WatchmakerWatchFaceView(context) },
+        factory = { context -> WatchmakerWatchFaceStageView(context) },
         modifier = modifier.fillMaxSize(),
-        update = { view ->
+        update = { stage ->
+            val view = stage.renderer
             view.setWatchDataProvider(resolvedDataProvider)
-            view.setForceFill(forceFill)
+            view.setCanvasSettings(canvasSettings)
             view.setGravityParallaxEnabled(gravityParallaxEnabled)
             view.bind(
                 descriptor = descriptor,
@@ -3138,11 +4186,14 @@ fun WatchmakerWatchFaceHost(
                 onDoubleTap = onDoubleTap,
                 onLoadFailure = onLoadFailure,
                 onTapAction = onTapAction,
+                // 素材就绪才知道有几个可播 video、路径各是什么，此时才能分段。
+                onSourceReady = { stage.syncVideoSegments() },
                 textEntryAnimationEnabled = textEntryAnimationEnabled,
                 textExitAnimationEnabled = textExitAnimationEnabled,
             )
             view.setTextExitAnimationActive(textExitAnimationActive)
+            stage.setRoundClip(roundScreen)
         },
-        onRelease = WatchmakerWatchFaceView::dispose,
+        onRelease = WatchmakerWatchFaceStageView::dispose,
     )
 }

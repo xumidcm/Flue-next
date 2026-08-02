@@ -1684,7 +1684,9 @@ fun WidgetPageLayer(
                     }
                 } else {
                     Row(
-                        modifier = Modifier.width(contentWidth),
+                        modifier = Modifier
+                            .width(contentWidth)
+                            .padding(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -1979,11 +1981,18 @@ private fun WidgetDragPreviewCard(
             }
             .then(
                 if (launcherStyle.uiStyle == UiStyle.MIUIX) {
-                    Modifier.glassSurface(
-                        shape,
-                        launcherStyle.glassThick,
-                        highlightEnabled = glassHighlightEnabled,
-                    )
+                    if (glassHighlightEnabled) {
+                        Modifier.glassSurface(
+                            shape,
+                            launcherStyle.glassThick,
+                            highlightEnabled = true,
+                        )
+                    } else {
+                        // Turning glass highlight off restores the old opaque
+                        // MIUIX card instead of leaving a borderless translucent
+                        // sheet floating over the watch face.
+                        Modifier.clip(shape).background(launcherStyle.cardColor)
+                    }
                 } else {
                     Modifier
                         .clip(shape)
@@ -2221,11 +2230,15 @@ private fun WidgetCard(
             }
             .then(
                 if (launcherStyle.uiStyle == UiStyle.MIUIX) {
-                    Modifier.glassSurface(
-                        cardShape,
-                        launcherStyle.glass,
-                        highlightEnabled = glassHighlightEnabled,
-                    )
+                    if (glassHighlightEnabled) {
+                        Modifier.glassSurface(
+                            cardShape,
+                            launcherStyle.glass,
+                            highlightEnabled = true,
+                        )
+                    } else {
+                        Modifier.clip(cardShape).background(launcherStyle.cardColor)
+                    }
                 } else {
                     Modifier.background(launcherStyle.cardColor, cardShape)
                 },
@@ -2246,6 +2259,12 @@ private fun WidgetCard(
                         clipChildren = true
                         clipToPadding = true
                         clipToOutline = true
+                        // AppWidgetHostView adds the provider's default launcher
+                        // padding. That leaves the RemoteViews' own square root
+                        // background inset from our rounded outer mask, so its
+                        // right-angle corners stay visible. Let the provider fill
+                        // this rounded host and clip at the single outer boundary.
+                        setPadding(0, 0, 0, 0)
                         outlineProvider = object : ViewOutlineProvider() {
                             override fun getOutline(view: View, outline: Outline) {
                                 outline.setRoundRect(0, 0, view.width, view.height, radiusPx)
@@ -2258,6 +2277,7 @@ private fun WidgetCard(
                     val hostView = appWidgetHost.createView(viewContext, widget.widgetId, providerInfo).apply {
                         setAppWidget(widget.widgetId, providerInfo)
                         tag = widgetBindTag
+                        setPadding(0, 0, 0, 0)
                         clipToOutline = true
                         outlineProvider = object : ViewOutlineProvider() {
                             override fun getOutline(view: View, outline: Outline) {
@@ -2286,6 +2306,8 @@ private fun WidgetCard(
                     container
                 },
                 update = { container ->
+                    container.setPadding(0, 0, 0, 0)
+                    container.invalidateOutline()
                     val tag = container.tag as? WidgetHostTag
                     val hostView = tag?.hostView
                     if (tag?.bindTag != widgetBindTag && hostView != null) {
@@ -2294,6 +2316,8 @@ private fun WidgetCard(
                         container.tag = WidgetHostTag(widgetBindTag, hostView)
                     }
                     hostView?.let { view ->
+                        view.setPadding(0, 0, 0, 0)
+                        view.invalidateOutline()
                         val widthDp = with(density) { container.width.toDp().value.roundToInt() }
                             .coerceAtLeast(1)
                         val heightDp = with(density) { container.height.toDp().value.roundToInt() }
@@ -2325,7 +2349,9 @@ private fun WidgetCard(
                         clip = true
                         // 第三方 RemoteViews 常直接画不透明白底。MIUIX 下让
                         // 宿主内容轻微透出后面的玻璃层，普通态与编辑态一致。
-                        alpha = if (launcherStyle.uiStyle == UiStyle.MIUIX) 0.84f else 1f
+                        alpha = if (
+                            launcherStyle.uiStyle == UiStyle.MIUIX && glassHighlightEnabled
+                        ) 0.84f else 1f
                     }
                     .clip(cardShape)
             )
@@ -2348,11 +2374,15 @@ private fun WidgetCard(
                     .clip(cardShape)
                     .then(
                         if (launcherStyle.uiStyle == UiStyle.MIUIX) {
-                            Modifier.glassSurface(
-                                cardShape,
-                                launcherStyle.glass,
-                                highlightEnabled = glassHighlightEnabled,
-                            )
+                            if (glassHighlightEnabled) {
+                                Modifier.glassSurface(
+                                    cardShape,
+                                    launcherStyle.glass,
+                                    highlightEnabled = true,
+                                )
+                            } else {
+                                Modifier.clip(cardShape).background(launcherStyle.cardColor)
+                            }
                         } else {
                             Modifier.background(launcherStyle.cardColor, cardShape)
                         },
@@ -3128,8 +3158,6 @@ private fun WatchBatteryAndStepsPill(
         WatchBatteryPill(
             level = level,
             charging = charging,
-            width = 34.dp,
-            height = 17.dp,
         )
         if (showSteps) {
             // 24dp 间距 + graphicsLayer 放大曾让整条 pill 在圆屏上溢出约 28dp；

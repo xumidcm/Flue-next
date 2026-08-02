@@ -6,22 +6,11 @@ import java.io.InputStream
 import java.util.Calendar
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.acos
-import kotlin.math.asin
-import kotlin.math.atan
-import kotlin.math.atan2
 import kotlin.math.ceil
-import kotlin.math.cos
-import kotlin.math.exp
-import kotlin.math.floor
-import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.round
-import kotlin.math.sin
-import kotlin.math.sqrt
-import kotlin.math.tan
 
 /** The canvas contract used by WatchMaker exports. Values are design pixels. */
 object WatchmakerGeometry {
@@ -106,24 +95,161 @@ fun watchGlowRingAlpha(ring: Int, ringCount: Int): Float {
     return (ringCount - clamped + 1).toFloat() / (ringCount + 1).toFloat()
 }
 
+/**
+ * 设计画布 → 视口的变换。
+ *
+ * **双轴** scale：`STRETCH` 预设下两轴可以不等，所以这里没有单一的 `scale`
+ * 属性 —— 故意不提供，免得调用点在非等比预设下静默读到一个「大概对」的值。
+ * 需要等比语义的地方自己判 `scaleX == scaleY`。
+ */
 internal data class WatchCanvasTransform(
-    val scale: Float,
+    val scaleX: Float,
+    val scaleY: Float,
     val left: Float,
     val top: Float,
 )
 
 /**
+ * 画布贴合预设。
+ *
+ * 中间四个是对齐 clox 语义的预设；[FIT] / [FILL] 是 Flue 存量的
+ * `forceFill = false / true` 两档，保留它们才能让老配置零迁移。
+ *
+ * 方屏上 [FIT] / [VERTICAL] / [HORIZONTAL] 会算出同一个结果，这是预期的：
+ * 差别只在圆屏与异形屏（非方视口）上才显现。
+ */
+enum class WatchCanvasPreset {
+    /** 按短边贴合，长边留居中黑边。整块画布都可见。旧 `forceFill = false`。 */
+    FIT,
+
+    /** 按长边铺满，短边溢出被裁（居中裁切）。旧 `forceFill = true`。 */
+    FILL,
+
+    /** 按**高度**贴合：垂直铺满，水平可能溢出或留边。 */
+    VERTICAL,
+
+    /** 按**宽度**贴合：水平铺满，垂直可能溢出或留边。 */
+    HORIZONTAL,
+
+    /** 双轴各自铺满，**可非等比**（会形变）。 */
+    STRETCH,
+
+    /** 基准恒为 1，完全交给 zoom 滑杆决定。 */
+    CUSTOM,
+}
+
+/**
+ * 一套完整的画布调节参数。
+ *
+ * [DEFAULT] 必须等价于改动前的 `forceFill = false`，这样没配置过的表盘
+ * 位置一个像素都不动。
+ */
+data class WatchCanvasSettings(
+    val preset: WatchCanvasPreset = WatchCanvasPreset.FIT,
+    val zoomX: Float = 1f,
+    val zoomY: Float = 1f,
+    val offsetX: Float = 0f,
+    val offsetY: Float = 0f,
+) {
+    /** 是否与出厂默认完全一致 —— 供 UI 决定要不要显示「已自定义」标记。 */
+    val isDefault: Boolean get() = this == DEFAULT
+
+    companion object {
+        val DEFAULT = WatchCanvasSettings()
+
+        /** 存量全局开关的等价配置，供迁移期使用。 */
+        fun fromForceFill(forceFill: Boolean): WatchCanvasSettings = WatchCanvasSettings(
+            preset = if (forceFill) WatchCanvasPreset.FILL else WatchCanvasPreset.FIT,
+        )
+
+        /**
+         * 解析 [WatchCanvasSettings.encode] 的输出。
+         *
+         * 任何无法识别的字段都退回该字段的默认值而**不是**整体失败：这是持久化
+         * 偏好，为一个坏字段丢掉用户其余四项调节不值得。数值范围不在这里收敛
+         * —— 统一由 [watchCanvasTransform] 的兜底负责，免得两处上下限漂移。
+         */
+        fun decode(raw: String?): WatchCanvasSettings {
+            val parts = raw?.takeIf { it.isNotBlank() }?.split('|') ?: return DEFAULT
+            val preset = parts.getOrNull(0)?.let { name ->
+                WatchCanvasPreset.entries.firstOrNull { it.name == name }
+            } ?: WatchCanvasPreset.FIT
+            return WatchCanvasSettings(
+                preset = preset,
+                zoomX = parts.getOrNull(1)?.toFloatOrNull() ?: 1f,
+                zoomY = parts.getOrNull(2)?.toFloatOrNull() ?: 1f,
+                offsetX = parts.getOrNull(3)?.toFloatOrNull() ?: 0f,
+                offsetY = parts.getOrNull(4)?.toFloatOrNull() ?: 0f,
+            )
+        }
+    }
+
+    /**
+     * 扁平字符串编码，供 DataStore 存单个 key。
+     *
+     * 用 `|` 分隔而不是 JSON：五个标量不值得拖一个序列化框架进来，而预设名与
+     * 浮点数的字面量里都不可能出现 `|`。
+     */
+    fun encode(): String = "${preset.name}|$zoomX|$zoomY|$offsetX|$offsetY"
+}
+
+/**
  * Maps WatchMaker's design canvas into the current viewport.
  *
- * The default mode fits the complete canvas and keeps the definition's shape
- * clipping semantics. Force-fill uses a centered crop, so rectangular screens
- * never anchor the face to one edge.
+ * 预设决定**基准** scale，[zoomX] / [zoomY] 再乘上去，[offsetX] / [offsetY] 加在
+ * 居中后的偏移上。默认参数（[WatchCanvasPreset.FIT]、zoom 1、offset 0）的输出
+ * 与拆双轴之前**逐位相同**，所以存量表盘一个像素都不会动。
  *
  * [designWidth] / [designHeight] default to the square native canvas, so every
  * existing caller keeps its exact behaviour. A face that declares a genuinely
  * non-square canvas passes its own design extents (see
- * `WatchCanvasSize.designExtentWidth`); the scale stays uniform on both axes so
- * nothing is ever anamorphically stretched — only the letterbox offsets differ.
+ * `WatchCanvasSize.designExtentWidth`).
+ *
+ * 只有 [WatchCanvasPreset.STRETCH] 与「zoomX ≠ zoomY」会产生非等比缩放；其余
+ * 预设两轴恒等，不会把表盘拉变形。
+ */
+internal fun watchCanvasTransform(
+    viewWidth: Float,
+    viewHeight: Float,
+    preset: WatchCanvasPreset = WatchCanvasPreset.FIT,
+    designWidth: Float = WatchmakerGeometry.DESIGN_SIZE,
+    designHeight: Float = WatchmakerGeometry.DESIGN_SIZE,
+    zoomX: Float = 1f,
+    zoomY: Float = 1f,
+    offsetX: Float = 0f,
+    offsetY: Float = 0f,
+): WatchCanvasTransform {
+    require(viewWidth.isFinite() && viewWidth > 0f) { "viewWidth must be positive" }
+    require(viewHeight.isFinite() && viewHeight > 0f) { "viewHeight must be positive" }
+    require(designWidth.isFinite() && designWidth > 0f) { "designWidth must be positive" }
+    require(designHeight.isFinite() && designHeight > 0f) { "designHeight must be positive" }
+    val fitX = viewWidth / designWidth
+    val fitY = viewHeight / designHeight
+    // 基准 scale：前四个预设等比（两轴同值），STRETCH 各轴独立，CUSTOM 恒 1。
+    val (baseX, baseY) = when (preset) {
+        WatchCanvasPreset.FIT -> min(fitX, fitY).let { it to it }
+        WatchCanvasPreset.FILL -> max(fitX, fitY).let { it to it }
+        WatchCanvasPreset.VERTICAL -> fitY to fitY
+        WatchCanvasPreset.HORIZONTAL -> fitX to fitX
+        WatchCanvasPreset.STRETCH -> fitX to fitY
+        WatchCanvasPreset.CUSTOM -> 1f to 1f
+    }
+    // 缩放倍率兜底：滑杆值可能来自持久化的脏数据，0 或 NaN 会让整块表盘消失
+    // 且无法在 UI 上退回来（画布没了，也就点不中重置）。
+    val scaleX = baseX * zoomX.sanitizedCanvasZoom()
+    val scaleY = baseY * zoomY.sanitizedCanvasZoom()
+    return WatchCanvasTransform(
+        scaleX = scaleX,
+        scaleY = scaleY,
+        left = (viewWidth - designWidth * scaleX) / 2f + offsetX.sanitizedCanvasOffset(),
+        top = (viewHeight - designHeight * scaleY) / 2f + offsetY.sanitizedCanvasOffset(),
+    )
+}
+
+/**
+ * 存量二值签名，等价于 [WatchCanvasPreset.FIT] / [WatchCanvasPreset.FILL]。
+ *
+ * 保留它让既有调用点与单元测试不必全改，也让「可调画布」这一层可以整体回滚。
  */
 internal fun watchCanvasTransform(
     viewWidth: Float,
@@ -131,20 +257,49 @@ internal fun watchCanvasTransform(
     forceFill: Boolean,
     designWidth: Float = WatchmakerGeometry.DESIGN_SIZE,
     designHeight: Float = WatchmakerGeometry.DESIGN_SIZE,
-): WatchCanvasTransform {
-    require(viewWidth.isFinite() && viewWidth > 0f) { "viewWidth must be positive" }
-    require(viewHeight.isFinite() && viewHeight > 0f) { "viewHeight must be positive" }
-    require(designWidth.isFinite() && designWidth > 0f) { "designWidth must be positive" }
-    require(designHeight.isFinite() && designHeight > 0f) { "designHeight must be positive" }
-    val scaleX = viewWidth / designWidth
-    val scaleY = viewHeight / designHeight
-    val scale = if (forceFill) max(scaleX, scaleY) else min(scaleX, scaleY)
-    return WatchCanvasTransform(
-        scale = scale,
-        left = (viewWidth - designWidth * scale) / 2f,
-        top = (viewHeight - designHeight * scale) / 2f,
-    )
-}
+): WatchCanvasTransform = watchCanvasTransform(
+    viewWidth = viewWidth,
+    viewHeight = viewHeight,
+    preset = if (forceFill) WatchCanvasPreset.FILL else WatchCanvasPreset.FIT,
+    designWidth = designWidth,
+    designHeight = designHeight,
+)
+
+/** [WatchCanvasSettings] 版重载，渲染器与编辑器都走它。 */
+internal fun watchCanvasTransform(
+    viewWidth: Float,
+    viewHeight: Float,
+    settings: WatchCanvasSettings,
+    designWidth: Float = WatchmakerGeometry.DESIGN_SIZE,
+    designHeight: Float = WatchmakerGeometry.DESIGN_SIZE,
+): WatchCanvasTransform = watchCanvasTransform(
+    viewWidth = viewWidth,
+    viewHeight = viewHeight,
+    preset = settings.preset,
+    designWidth = designWidth,
+    designHeight = designHeight,
+    zoomX = settings.zoomX,
+    zoomY = settings.zoomY,
+    offsetX = settings.offsetX,
+    offsetY = settings.offsetY,
+)
+
+/** 缩放倍率的合法区间。下限不取 0：0 会让画布彻底消失且无法交互退回。 */
+private const val MIN_CANVAS_ZOOM = 0.1f
+private const val MAX_CANVAS_ZOOM = 5f
+
+/**
+ * 偏移上限（**视图像素**，因为它直接加在 view 空间的 `left`/`top` 上）。
+ *
+ * 4096 远大于任何手表屏，够用；它挡的是脏配置把表盘整块推出屏幕后再也调不回来。
+ */
+private const val MAX_CANVAS_OFFSET = 4_096f
+
+private fun Float.sanitizedCanvasZoom(): Float =
+    if (isFinite()) coerceIn(MIN_CANVAS_ZOOM, MAX_CANVAS_ZOOM) else 1f
+
+private fun Float.sanitizedCanvasOffset(): Float =
+    if (isFinite()) coerceIn(-MAX_CANVAS_OFFSET, MAX_CANVAS_OFFSET) else 0f
 
 enum class WatchFaceShape {
     ROUND,
@@ -1498,10 +1653,196 @@ object WatchmakerTagResolver {
 object WatchmakerExpressionEvaluator {
     // 同 WatchmakerDefinitionParser：ICU 后端要求 '}' 转义。
     private val tagPattern = Regex("\\{([^\\{\\}]+)\\}")
-    private const val MAX_EXPRESSION_LENGTH = 4 * 1024
-    private const val MAX_EXPRESSION_TOKENS = 512
-    private const val MAX_FUNCTION_ARGUMENTS = 16
-    private const val MAX_RESULT_TEXT_LENGTH = 4 * 1024
+    /**
+     * 表达式源文本上限。
+     *
+     * 32K 而不是原来的 4K：WFF/WatchMaker Studio 导出的表盘会把「按天气代码
+     * 选图标」这类逻辑压成一条巨型链式三元式 —— 实测某张 528 图层的表盘里，
+     * 9 条天气图标的 opacity 各 7665 字符。卡在 4K 时它们全部求值失败、
+     * opacity 落回默认 100，于是九个天气图标**同时全亮叠在一起**（老师实机
+     * 反馈）。
+     *
+     * 放宽的代价由下面的求值缓存兜住：同一条表达式只在 tag 值真的变化时才
+     * 重新解析，不再是每帧每图层重来一遍。
+     *
+     * 数值本体移到 [WatchExpressionLimits]，供编译路径共用；这里保留别名与
+     * 上面的来历说明。两条路径的限额必须相等，否则会出现「一条路收、一条路拒」。
+     */
+    private const val MAX_EXPRESSION_LENGTH = WatchExpressionLimits.MAX_EXPRESSION_LENGTH
+    /**
+     * 单条表达式的 token 上限。上面那 9 条各约 2500 token，512 同样拦死。
+     *
+     * 仍然保留上限：它挡的是「深度嵌套导致递归下降爆栈」和「恶意档案让解析
+     * 退化」。实测那批表达式的括号嵌套只有 47 层，离栈深度风险很远。
+     */
+    private const val MAX_EXPRESSION_TOKENS = WatchExpressionLimits.MAX_EXPRESSION_TOKENS
+    private const val MAX_FUNCTION_ARGUMENTS = WatchExpressionLimits.MAX_FUNCTION_ARGUMENTS
+    private const val MAX_RESULT_TEXT_LENGTH = WatchExpressionLimits.MAX_RESULT_TEXT_LENGTH
+
+    /**
+     * 求值结果缓存。键是「tag 代入后的文本 + scope 身份」，值是求值结果。
+     *
+     * 之所以能这么缓存：这个引擎是**纯函数** —— 内建只有 math.* / string.*，
+     * 没有 random、没有时间函数，全部外部输入都经 resolveTag 进来，而 tag 已经
+     * 被代入到键里了；scope 在一块表盘的生命周期内不可变。
+     *
+     * 之所以**必须**缓存：dynamicNumber 每帧、每图层、每个属性都调一次，
+     * 而这里原本每次都要重新扫描、词法、递归下降解析一遍。一张 377 图层的
+     * 表盘每帧要求值 276 条表达式（160 opacity + 113 text + 3 x），30fps 下就是
+     * 每秒近万次完整解析 —— 老师报的「卡顿、背景疯狂闪烁」正是它。
+     *
+     * 缓存的是**代入后**的文本而不是原始文本：像 `{sscp}` 这种每帧都变的 tag
+     * 本来就该重算，而 `{wci}`（天气代码）几小时才变一次，命中率接近 100%。
+     */
+    private val evaluationCache = object : LinkedHashMap<CacheKey, CachedEvaluation>(
+        64,
+        0.75f,
+        true,
+    ) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<CacheKey, CachedEvaluation>) =
+            size > MAX_EVALUATION_CACHE_ENTRIES
+    }
+
+    /**
+     * 缓存键 =（代入后的表达式文本, scope 引用）。
+     *
+     * scope 必须**进键**而不是「存一份、命中时校验引用」：后者在编辑器里会让
+     * 命中率直接归零。编辑器同时活着好几个 View（画布、实时预览、图层面板
+     * 缩略图），每个各持一份 [WatchExpressionScope]，于是同一条表达式在
+     * 各 View 之间互相把对方的条目**踢掉**（键相同、scope 引用不同 → 覆盖写），
+     * 每帧全部重新解析，还多背一层锁和哈希 —— 比不加缓存更慢，这正是老师报的
+     * 「播放和编辑预览都非常卡」。进键之后各 View 各占一份条目，互不干扰。
+     *
+     * scope 用**引用**语义（identity）而不是 equals：它在表盘加载时构造一次后
+     * 不再变动，引用相等即内容相等；而 equals 要逐个比 128 条变量，每帧几百次
+     * 反而变成新的热点。
+     */
+    private class CacheKey(
+        private val text: String,
+        private val scope: WatchExpressionScope,
+    ) {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            val that = other as? CacheKey ?: return false
+            return scope === that.scope && text == that.text
+        }
+
+        override fun hashCode(): Int = 31 * text.hashCode() + System.identityHashCode(scope)
+    }
+
+    /** null 也要缓存：解析失败同样昂贵，不能每帧重试一次。 */
+    private class CachedEvaluation(val value: ExpressionValue?)
+
+    /**
+     * 缓存条目上限。**必须明显大于一帧的工作集**，否则缓存会自己把自己挤掉：
+     * 实测一张 377 图层的表盘每帧要求值 276 条表达式（160 opacity + 113 text
+     * + 3 x），若上限取 256，本帧后半段的插入正好把本帧前半段刚算好的条目逐出，
+     * 命中率归零 —— 比不加缓存还多一层哈希开销。
+     *
+     * 2048 而不是 276 的两倍：键含 scope（见 [CacheKey]），编辑器里画布、
+     * 实时预览、图层缩略图各占一份完整工作集，几个 View 同时活着就是上千条。
+     *
+     * 内存代价来自键（代入后的表达式文本），单条由
+     * [MAX_EVALUATION_CACHE_KEY_LENGTH] 封顶。常见表达式 ~400 字符，满载约
+     * 1MB 量级，远小于同类的位图缓存。
+     */
+    private const val MAX_EVALUATION_CACHE_ENTRIES = 2_048
+
+    /**
+     * 缓存键长度上限。
+     *
+     * 不取 [MAX_EXPRESSION_LENGTH]（32K）：那是**单条**表达式的合法上限，
+     * 用作缓存键上限的话满载内存会到几十 MB。8K 足以覆盖实测最长的那批
+     * WFF 天气链（7.6K），更长的表达式退化成每次重新解析 —— 它们本来就罕见。
+     */
+    private const val MAX_EVALUATION_CACHE_KEY_LENGTH = 8 * 1024
+
+    /**
+     * 递归下降的嵌套深度上限。
+     *
+     * 每层括号要走 parseOr→…→parsePrimary 约 10 个栈帧，所以深度必须显式设限：
+     * 不设的话「32K 个左括号」这种档案会直接把解析线程的栈打爆，而
+     * StackOverflowError 虽然被 runCatching 吞掉，恢复后的 JVM 状态并不可靠。
+     * 实测那批 WFF 转换表盘的嵌套是 47 层，256 留了足够余量。
+     */
+    private const val MAX_PARSE_DEPTH = WatchExpressionLimits.MAX_PARSE_DEPTH
+
+    /**
+     * 编译产物缓存。键与 [evaluationCache] 同构，但存的是**原始**文本而不是
+     * 代入后的文本 —— 这正是编译路径省下的那一大笔开销。
+     *
+     * 老路径每帧都要先跑一遍 [substituteTags] 才拿得到缓存键，也就是每帧、
+     * 每图层、每属性建一个 StringBuilder、逐字符抄一遍、再 toString；一条 7665
+     * 字符的天气链就是每帧 ~8KB 活不过一帧的垃圾。编译路径的键是**属性原文**，
+     * 一张表盘加载后就再也不变，`String.hashCode` 被 JVM 记忆化，查表几乎零成本。
+     */
+    private val compileCache = LinkedHashMap<CacheKey, CompiledAttr>(64, 0.75f, true)
+
+    /** 编译缓存里所有 AST 的节点总数，用于给内存占用封顶。 */
+    private var compiledNodeTotal = 0L
+
+    private class CompiledAttr(val attr: WatchAttr, val nodeCount: Int)
+
+    /**
+     * 编译缓存条目上限。
+     *
+     * 比 [MAX_EVALUATION_CACHE_ENTRIES]（2048）大一个量级：求值缓存的工作集是
+     * 「本帧真的求了值的表达式」，而编译缓存装的是**整张表盘的全部属性原文**。
+     * 一张 377 图层的表盘每层约 20 条属性就是 ~7500 条，2048 会让它每帧自我
+     * 淘汰、退化成每帧重新编译 —— 那比不缓存更糟。
+     */
+    private const val MAX_COMPILE_CACHE_ENTRIES = 16 * 1024
+
+    /**
+     * 编译产物的 AST 节点总数上限（计划 §1.5）。
+     *
+     * 单节点约 32 字节，512K 节点 ≈ 16MB，与位图缓存同量级。超限时按 LRU 逐出，
+     * 被逐出的表达式下次用到再编译一遍 —— 慢一点，但不会把内存吃穿。
+     */
+    private const val MAX_COMPILED_NODES = 512L * 1024L
+
+    /**
+     * 取（并按需建立）一条表达式的编译产物。
+     *
+     * 编译失败**不上抛**：返回 [WatchAttr.Unsupported]，调用方据此退回老路径。
+     * 老路径一行都没删，它既是 fallback 也是回滚开关（计划 §六「老路径被删导致
+     * 无法回滚」那条风险）。
+     */
+    private fun compiledAttr(source: String, scope: WatchExpressionScope): WatchAttr {
+        // 超过缓存键上限的表达式**不走编译路径**：它每帧都得重新编译，白做一遍功
+        // 之后还要再走老路径，比直接走老路径更慢。界线取与 [evaluateLegacy] 的
+        // 求值缓存同一个值，两条路径在同一处退化，行为不会分叉。
+        if (source.length > MAX_EVALUATION_CACHE_KEY_LENGTH) return WatchAttr.Unsupported
+        val key = CacheKey(source, scope)
+        synchronized(compileCache) {
+            compileCache[key]?.let { return it.attr }
+        }
+        // 编译放在锁外：它是这里最慢的一步，占着锁会让渲染线程与资源加载线程
+        // 互堵。两条线程同时编译同一条表达式只是白做一次功，产物等价。
+        val attr = runCatching { compileWatchAttr(source, scope) }
+            .getOrDefault(WatchAttr.Unsupported)
+        val nodeCount = (attr as? WatchAttr.Dynamic)?.nodeCount ?: 1
+        synchronized(compileCache) {
+            val previous = compileCache.put(key, CompiledAttr(attr, nodeCount))
+            compiledNodeTotal += nodeCount - (previous?.nodeCount ?: 0)
+            trimCompileCacheLocked()
+        }
+        return attr
+    }
+
+    /** 双上限（条目数 / 节点总数）都满足才停手；访问序 LinkedHashMap 的迭代序即 LRU 序。 */
+    private fun trimCompileCacheLocked() {
+        if (compileCache.size <= MAX_COMPILE_CACHE_ENTRIES && compiledNodeTotal <= MAX_COMPILED_NODES) {
+            return
+        }
+        val iterator = compileCache.entries.iterator()
+        while (iterator.hasNext() &&
+            (compileCache.size > MAX_COMPILE_CACHE_ENTRIES || compiledNodeTotal > MAX_COMPILED_NODES)
+        ) {
+            compiledNodeTotal -= iterator.next().value.nodeCount
+            iterator.remove()
+        }
+    }
 
     fun interpolate(
         raw: String,
@@ -1525,16 +1866,20 @@ object WatchmakerExpressionEvaluator {
         scope: WatchExpressionScope,
         resolveTag: (String) -> WatchTagResolution,
     ): String {
-        val template = interpolate(raw, resolveTag)
-        val value = evaluate(raw, scope, resolveTag) ?: return template
+        // interpolate 只在「求值失败或结果该让位给模板」这几条分支里才用得上，
+        // 而它是一遍正则替换 + 重建字符串。原来无条件先跑一次，等于每个文字
+        // 图层每帧白烧一次正则（377 层的表盘每秒上万次），缓存也盖不住它 ——
+        // 改成惰性，命中率最高的纯文本分支彻底不跑。
+        val value = evaluate(raw, scope, resolveTag) ?: return interpolate(raw, resolveTag)
         if (value === ExpressionValue.Nil ||
             value is ExpressionValue.Logical && !value.value
         ) {
-            return template
+            return interpolate(raw, resolveTag)
         }
-        if (value is ExpressionValue.Numeric && template.trim().toDoubleOrNull() != null) {
+        if (value is ExpressionValue.Numeric) {
+            val template = interpolate(raw, resolveTag)
             // WatchMaker keeps zero-padded single-tag text such as "05".
-            return template
+            if (template.trim().toDoubleOrNull() != null) return template
         }
         return value.renderText().take(MAX_RESULT_TEXT_LENGTH)
     }
@@ -1582,6 +1927,54 @@ object WatchmakerExpressionEvaluator {
         }
     }
 
+    /**
+     * 导入期预编译。对照 `wf_expr.lua:11`：
+     *
+     * > Import is allowed to be slow; the running face is not.
+     *
+     * 由 `prepareSource()` 在 IO dispatcher 上调用 —— 那里已经受 `sourceGeneration`
+     * 保护，是天然的「导入期」。这里做的事只有一件：把每条属性原文塞进
+     * [compileCache]，让第一帧就已经是全命中，不必让渲染线程在首帧现编译。
+     *
+     * ⚠️ 每条源文本要**同时预热原文与实体解码后的形式**：`evaluateText` 会先做
+     * `&quot;`/`&apos;` 替换再进来（见 `WatchmakerWatchFaceView.evaluateText`），
+     * 那是另一个字符串、另一个缓存键。只热原文的话，带实体的属性首帧照旧现编译。
+     */
+    fun precompile(
+        sources: Collection<String>,
+        scope: WatchExpressionScope,
+    ): WatchExpressionCompileReport {
+        var constant = 0
+        var dynamic = 0
+        var unsupported = 0
+        val dependencies = LinkedHashMap<String, Set<String>>()
+        val seen = HashSet<String>(sources.size * 2)
+        sources.forEach { raw ->
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) return@forEach
+            val decoded = trimmed.replace("&quot;", "\"").replace("&apos;", "'").trim()
+            // decoded 与 trimmed 相同时 seen 会自动去重，不必额外判断。
+            listOf(trimmed, decoded).forEach { source ->
+                if (!seen.add(source)) return@forEach
+                when (val attr = compiledAttr(source, scope)) {
+                    is WatchAttr.Const -> constant++
+                    is WatchAttr.Dynamic -> {
+                        dynamic++
+                        dependencies[source] = attr.tagDependencies
+                    }
+                    WatchAttr.Unsupported -> unsupported++
+                }
+            }
+        }
+        return WatchExpressionCompileReport(
+            total = constant + dynamic + unsupported,
+            constant = constant,
+            dynamic = dynamic,
+            unsupported = unsupported,
+            tagDependencies = dependencies,
+        )
+    }
+
     fun supports(raw: String): Boolean = supports(raw, WatchExpressionScope.EMPTY)
 
     fun supports(raw: String, scope: WatchExpressionScope): Boolean {
@@ -1591,6 +1984,16 @@ object WatchmakerExpressionEvaluator {
         return runCatching { Parser(candidate, scope).parse() }.isSuccess
     }
 
+    /**
+     * 求值总入口：先走编译路径，编译不了或求值抛错再退回老的「代入 → 词法 →
+     * 边解析边求值」。
+     *
+     * 编译路径省掉的是每帧的 [substituteTags] + 词法 + 解析三件套；老路径即便
+     * 缓存命中也躲不掉第一步（缓存键是代入**之后**的文本）。
+     *
+     * 编译路径**不额外缓存求值结果**：AST 走一遍就是几十次虚调用，而缓存要先
+     * 把 tag 代入成字符串键才能查 —— 那正是我们要省掉的那步。
+     */
     private fun evaluate(
         raw: String?,
         scope: WatchExpressionScope,
@@ -1598,9 +2001,46 @@ object WatchmakerExpressionEvaluator {
     ): ExpressionValue? {
         val source = raw?.trim().orEmpty()
         if (source.isBlank() || source.length > MAX_EXPRESSION_LENGTH) return null
+        when (val compiled = compiledAttr(source, scope)) {
+            is WatchAttr.Const -> return compiled.value
+            is WatchAttr.Dynamic -> {
+                // 求值抛错就掉头走老路径：两条路径对「除零」「非数比大小」这类
+                // 错误的处置本来就该一致，而老路径是既有行为的基准。
+                runCatching { evaluateWatchExpr(compiled.node, scope, resolveTag) }
+                    .getOrNull()
+                    ?.let { return it }
+            }
+            WatchAttr.Unsupported -> Unit
+        }
+        return evaluateLegacy(source, scope, resolveTag)
+    }
+
+    /**
+     * 老求值路径。**不要删**：它是编译路径的兜底，也是出问题时的回滚开关
+     * （计划 §六）。
+     */
+    private fun evaluateLegacy(
+        source: String,
+        scope: WatchExpressionScope,
+        resolveTag: (String) -> WatchTagResolution,
+    ): ExpressionValue? {
         val substituted = try { substituteTags(source, resolveTag) } catch (_: Throwable) { null }
             ?: return null
-        return runCatching { Parser(substituted, scope).parse() }.getOrNull()
+        // tag 已经代入到 substituted 里了，所以它连同 scope 唯一决定结果。
+        if (substituted.length > MAX_EVALUATION_CACHE_KEY_LENGTH) {
+            return runCatching { Parser(substituted, scope).parse() }.getOrNull()
+        }
+        val cacheKey = CacheKey(substituted, scope)
+        synchronized(evaluationCache) {
+            evaluationCache[cacheKey]?.let { cached -> return cached.value }
+        }
+        // 解析放在锁外：它是这里最慢的一步，占着锁会让渲染线程和资源加载线程
+        // 互相堵住。两条线程同时解析同一条表达式只是白做一次功，结果一致。
+        val value = runCatching { Parser(substituted, scope).parse() }.getOrNull()
+        synchronized(evaluationCache) {
+            evaluationCache[cacheKey] = CachedEvaluation(value)
+        }
+        return value
     }
 
     /**
@@ -1613,6 +2053,14 @@ object WatchmakerExpressionEvaluator {
         resolveTag: (String) -> WatchTagResolution,
     ): String? {
         if (raw.length > MAX_EXPRESSION_LENGTH) return null
+        // 零分配快路径：没有 tag、也没有要归一化的不换行空格时，下面那趟扫描的
+        // 输出与输入逐字符相同，没必要为它建 StringBuilder 再 toString。
+        //
+        // 这条分支是渲染热路径的大头。求值缓存的键是**代入之后**的文本，所以
+        // 缓存命中也省不掉这一步；377 层的表盘每帧要为 x/y/rotation/anim_scale/
+        // opacity 各求一次值，一秒就是上万次「建一个 StringBuilder、逐字符抄一遍、
+        // 再 toString」—— 全是活不过一帧的垃圾，也是掉帧时 GC 压力的主要来源。
+        if (raw.substitutionIsIdentity()) return raw
         val output = StringBuilder(raw.length + 32)
         var index = 0
         var quote: Char? = null
@@ -1663,6 +2111,33 @@ object WatchmakerExpressionEvaluator {
         return output.toString()
     }
 
+    /**
+     * [substituteTags] 的输出是否会与输入逐字符相同。
+     *
+     * 引号与转义的状态机必须和 [substituteTags] 一模一样地走一遍：引号内的
+     * `\'` 不能翻转引号状态，引号内的不换行空格也不会被归一化成普通空格。末尾的
+     * `quote == null` 对应那边「引号没闭合就 return null」的约定 —— 不闭合时
+     * 这里返回 false，让它照旧走慢路径去返回 null，语义不变。
+     */
+    private fun String.substitutionIsIdentity(): Boolean {
+        var index = 0
+        var quote: Char? = null
+        while (index < length) {
+            val char = this[index]
+            when {
+                char == '{' -> return false
+                char.code == 0xa0 && quote == null -> return false
+                char == '\\' && quote != null && index + 1 < length -> index += 2
+                char == '\'' || char == '"' -> {
+                    if (quote == null) quote = char else if (quote == char) quote = null
+                    index++
+                }
+                else -> index++
+            }
+        }
+        return quote == null
+    }
+
     private fun String.escapeForQuote(quote: Char): String = buildString(length) {
         this@escapeForQuote.forEach { char ->
             when (char) {
@@ -1695,41 +2170,6 @@ object WatchmakerExpressionEvaluator {
                 }
             }
             append('"')
-        }
-    }
-
-    private sealed interface ExpressionValue {
-        fun asNumber(): Double?
-        fun isTruthy(): Boolean
-        fun renderText(): String
-
-        data class Numeric(val value: Double) : ExpressionValue {
-            override fun asNumber(): Double = value
-            override fun isTruthy(): Boolean = true
-            override fun renderText(): String = when {
-                value.isFinite() && value == floor(value) && abs(value) <= 9_007_199_254_740_992.0 ->
-                    value.toLong().toString()
-                value.isFinite() -> String.format(Locale.ROOT, "%.6g", value)
-                else -> ""
-            }
-        }
-
-        data class Text(val value: String) : ExpressionValue {
-            override fun asNumber(): Double? = value.toDoubleOrNull()
-            override fun isTruthy(): Boolean = true
-            override fun renderText(): String = value
-        }
-
-        data class Logical(val value: Boolean) : ExpressionValue {
-            override fun asNumber(): Double = if (value) 1.0 else 0.0
-            override fun isTruthy(): Boolean = value
-            override fun renderText(): String = value.toString()
-        }
-
-        data object Nil : ExpressionValue {
-            override fun asNumber(): Double? = null
-            override fun isTruthy(): Boolean = false
-            override fun renderText(): String = ""
         }
     }
 
@@ -1891,11 +2331,23 @@ object WatchmakerExpressionEvaluator {
     ) {
         private val tokens = Lexer(source).tokens()
         private var index = 0
+        /** 当前括号 / 函数参数的嵌套层数，见 [MAX_PARSE_DEPTH]。 */
+        private var depth = 0
 
         fun parse(): ExpressionValue {
             val value = parseOr()
             require(peek().type == TokenType.END) { "Unexpected token: ${peek().text}" }
             return value
+        }
+
+        /**
+         * 进入一层嵌套。每层括号约消耗 10 个栈帧，所以在**入口**处限深，
+         * 而不是指望 StackOverflowError 被兜住。
+         */
+        private inline fun <T> nested(block: () -> T): T {
+            require(depth < MAX_PARSE_DEPTH) { "Expression nesting is too deep" }
+            depth++
+            return try { block() } finally { depth-- }
         }
 
         private fun parseOr(): ExpressionValue {
@@ -1998,7 +2450,7 @@ object WatchmakerExpressionEvaluator {
                 TokenType.TRUE -> ExpressionValue.Logical(true)
                 TokenType.FALSE -> ExpressionValue.Logical(false)
                 TokenType.NIL -> ExpressionValue.Nil
-                TokenType.LEFT_PAREN -> parseOr().also {
+                TokenType.LEFT_PAREN -> nested { parseOr() }.also {
                     require(match(TokenType.RIGHT_PAREN)) { "Missing ')'" }
                 }
                 TokenType.IDENTIFIER -> parseIdentifier(token.text)
@@ -2025,184 +2477,44 @@ object WatchmakerExpressionEvaluator {
 
             val arguments = ArrayList<ExpressionValue>()
             if (!match(TokenType.RIGHT_PAREN)) {
-                do {
-                    require(arguments.size < MAX_FUNCTION_ARGUMENTS) { "Too many function arguments" }
-                    arguments += parseOr()
-                } while (match(TokenType.COMMA))
+                nested {
+                    do {
+                        require(arguments.size < MAX_FUNCTION_ARGUMENTS) { "Too many function arguments" }
+                        arguments += parseOr()
+                    } while (match(TokenType.COMMA))
+                }
                 require(match(TokenType.RIGHT_PAREN)) { "Missing ')' after function arguments" }
             }
             return callFunction(name, arguments)
         }
 
-        private fun callFunction(name: String, arguments: List<ExpressionValue>): ExpressionValue {
-            fun arg(index: Int, fallback: ExpressionValue = ExpressionValue.Numeric(0.0)): ExpressionValue =
-                arguments.getOrElse(index) { fallback }
-            fun number(index: Int, fallback: Double = 0.0): Double =
-                arguments.getOrNull(index)?.asNumber() ?: fallback
-            fun text(index: Int): String = arguments.getOrNull(index)?.renderText().orEmpty()
+        /**
+         * Lua 内建走共用实现（[WatchLuaStdlib]），编译路径调的是同一份。
+         *
+         * 各写一遍的话，`string.format` 的手写格式串解析、`string.sub` 的 Lua
+         * 负索引这些边角迟早不一致 —— 表现为「同一张表盘在编译成功与失败时
+         * 显示不同的文字」，极难定位。
+         */
+        private fun callFunction(name: String, arguments: List<ExpressionValue>): ExpressionValue =
+            WatchLuaStdlib.callFunction(name, arguments)
 
-            return when (name) {
-                "math.floor" -> numericValue(floor(number(0)))
-                "math.ceil" -> numericValue(ceil(number(0)))
-                "math.abs" -> numericValue(abs(number(0)))
-                "math.sqrt" -> numericValue(sqrt(number(0)))
-                "math.max" -> numericValue(arguments.maxOfOrNull { it.asNumber() ?: 0.0 } ?: 0.0)
-                "math.min" -> numericValue(arguments.minOfOrNull { it.asNumber() ?: 0.0 } ?: 0.0)
-                "math.mod", "math.fmod" -> {
-                    val divisor = number(1, 1.0)
-                    require(abs(divisor) > Double.MIN_VALUE) { "Division by zero" }
-                    numericValue(number(0) % divisor)
-                }
-                "math.pow" -> numericValue(number(0, 1.0).pow(number(1, 1.0)))
-                "math.sin" -> numericValue(sin(number(0)))
-                "math.cos" -> numericValue(cos(number(0)))
-                "math.tan" -> numericValue(tan(number(0)))
-                "math.asin" -> numericValue(asin(number(0)))
-                "math.acos" -> numericValue(acos(number(0)))
-                "math.atan" -> if (arguments.size >= 2) {
-                    numericValue(atan2(number(0), number(1)))
-                } else {
-                    numericValue(atan(number(0)))
-                }
-                "math.atan2" -> numericValue(atan2(number(0), number(1, 1.0)))
-                "math.rad" -> numericValue(Math.toRadians(number(0)))
-                "math.deg" -> numericValue(Math.toDegrees(number(0)))
-                "math.exp" -> numericValue(exp(number(0)))
-                "math.log" -> {
-                    val value = number(0)
-                    require(value > 0.0) { "Logarithm input must be positive" }
-                    val base = arguments.getOrNull(1)?.asNumber()
-                    numericValue(if (base == null) ln(value) else ln(value) / ln(base))
-                }
-                "string.len" -> numericValue(text(0).length.toDouble())
-                "string.upper" -> ExpressionValue.Text(text(0).uppercase(Locale.ROOT))
-                "string.lower" -> ExpressionValue.Text(text(0).lowercase(Locale.ROOT))
-                "string.sub" -> ExpressionValue.Text(luaSubstring(text(0), number(1, 1.0), arguments.getOrNull(2)?.asNumber()))
-                "string.rep" -> {
-                    val count = number(1).toInt().coerceIn(0, MAX_RESULT_TEXT_LENGTH)
-                    val unit = text(0)
-                    require(unit.length.toLong() * count <= MAX_RESULT_TEXT_LENGTH) {
-                        "Repeated string is too large"
-                    }
-                    ExpressionValue.Text(unit.repeat(count))
-                }
-                "string.find" -> {
-                    val start = luaStringIndex(number(2, 1.0).toInt(), text(0).length)
-                    val found = text(0).indexOf(text(1), startIndex = start.coerceAtMost(text(0).length))
-                    if (found < 0) ExpressionValue.Nil else numericValue((found + 1).toDouble())
-                }
-                "string.format" -> ExpressionValue.Text(formatLuaString(text(0), arguments.drop(1)))
-                "tonumber" -> arg(0).asNumber()?.let(::numericValue) ?: ExpressionValue.Nil
-                "tostring" -> ExpressionValue.Text(arg(0, ExpressionValue.Nil).renderText())
-                "type" -> ExpressionValue.Text(
-                    when (arg(0, ExpressionValue.Nil)) {
-                        is ExpressionValue.Numeric -> "number"
-                        is ExpressionValue.Text -> "string"
-                        is ExpressionValue.Logical -> "boolean"
-                        ExpressionValue.Nil -> "nil"
-                    },
-                )
-                else -> error("Unsupported function: $name")
-            }
-        }
+        private fun numericValue(value: Double): ExpressionValue.Numeric =
+            WatchLuaStdlib.numericValue(value)
 
-        private fun luaSubstring(value: String, fromRaw: Double, toRaw: Double?): String {
-            val length = value.length
-            val from = luaStringIndex(fromRaw.toInt(), length)
-            val inclusiveTo = toRaw?.toInt()?.let { index ->
-                if (index < 0) length + index else index - 1
-            } ?: (length - 1)
-            val endExclusive = (inclusiveTo + 1).coerceIn(0, length)
-            return if (from < endExclusive) value.substring(from, endExclusive) else ""
-        }
+        private fun String.toScopedExpressionValue(): ExpressionValue =
+            WatchLuaStdlib.toScopedExpressionValue(this)
 
-        private fun luaStringIndex(raw: Int, length: Int): Int =
-            (if (raw < 0) length + raw else raw - 1).coerceIn(0, length)
+        private fun compare(left: ExpressionValue, right: ExpressionValue, operator: TokenType): Boolean =
+            WatchLuaStdlib.compare(left, right, operator.toCompareOp())
 
-        private fun formatLuaString(
-            format: String,
-            arguments: List<ExpressionValue>,
-        ): String {
-            require(format.length <= MAX_RESULT_TEXT_LENGTH) { "Format string is too large" }
-            val output = StringBuilder(format.length + 16)
-            var index = 0
-            var argumentIndex = 0
-            while (index < format.length) {
-                if (format[index] != '%') {
-                    output.append(format[index++])
-                    continue
-                }
-                if (index + 1 < format.length && format[index + 1] == '%') {
-                    output.append('%')
-                    index += 2
-                    continue
-                }
-                val specStart = index++
-                while (index < format.length && format[index] in "-+ #0") index++
-                val widthStart = index
-                while (index < format.length && format[index].isDigit()) index++
-                val width = format.substring(widthStart, index).toIntOrNull() ?: 0
-                require(width <= 128) { "Format width is too large" }
-                if (index < format.length && format[index] == '.') {
-                    index++
-                    val precisionStart = index
-                    while (index < format.length && format[index].isDigit()) index++
-                    val precision = format.substring(precisionStart, index).toIntOrNull() ?: 0
-                    require(precision <= 32) { "Format precision is too large" }
-                }
-                require(index < format.length) { "Incomplete format specifier" }
-                val type = format[index++]
-                require(type in "diufFeEgGsq") { "Unsupported format type: $type" }
-                val argument = arguments.getOrNull(argumentIndex++) ?: ExpressionValue.Numeric(0.0)
-                val spec = format.substring(specStart, index)
-                val rendered = when (type) {
-                    'd', 'i' -> String.format(Locale.ROOT, spec.dropLast(1) + "d", (argument.asNumber() ?: 0.0).toLong())
-                    'u' -> (argument.asNumber() ?: 0.0).toLong().toULong().toString()
-                    'f', 'F', 'e', 'E', 'g', 'G' ->
-                        String.format(Locale.ROOT, spec, argument.asNumber() ?: 0.0)
-                    's' -> String.format(Locale.ROOT, spec, argument.renderText())
-                    'q' -> "\"${argument.renderText().replace("\\", "\\\\").replace("\"", "\\\"")}\""
-                    else -> error("Unsupported format type")
-                }
-                output.append(rendered)
-                require(output.length <= MAX_RESULT_TEXT_LENGTH) { "Formatted text is too large" }
-            }
-            return output.toString()
-        }
-
-        private fun numericValue(value: Double): ExpressionValue.Numeric {
-            require(value.isFinite()) { "Expression result is not finite" }
-            return ExpressionValue.Numeric(value)
-        }
-
-        private fun String.toScopedExpressionValue(): ExpressionValue = when {
-            equals("true", true) -> ExpressionValue.Logical(true)
-            equals("false", true) -> ExpressionValue.Logical(false)
-            this == "nil" -> ExpressionValue.Nil
-            toDoubleOrNull()?.isFinite() == true -> ExpressionValue.Numeric(toDouble())
-            else -> ExpressionValue.Text(this)
-        }
-
-        private fun compare(left: ExpressionValue, right: ExpressionValue, operator: TokenType): Boolean {
-            if (operator == TokenType.EQUAL || operator == TokenType.NOT_EQUAL) {
-                val equal = when {
-                    left === ExpressionValue.Nil || right === ExpressionValue.Nil -> left === right
-                    left.asNumber() != null && right.asNumber() != null -> left.asNumber() == right.asNumber()
-                    left is ExpressionValue.Text && right is ExpressionValue.Text -> left.value == right.value
-                    left is ExpressionValue.Logical && right is ExpressionValue.Logical -> left.value == right.value
-                    else -> false
-                }
-                return if (operator == TokenType.EQUAL) equal else !equal
-            }
-            val leftNumber = left.asNumber() ?: error("Expected number")
-            val rightNumber = right.asNumber() ?: error("Expected number")
-            return when (operator) {
-                TokenType.GREATER -> leftNumber > rightNumber
-                TokenType.GREATER_EQUAL -> leftNumber >= rightNumber
-                TokenType.LESS -> leftNumber < rightNumber
-                TokenType.LESS_EQUAL -> leftNumber <= rightNumber
-                else -> error("Unexpected comparison")
-            }
+        private fun TokenType.toCompareOp(): WatchCompareOp = when (this) {
+            TokenType.EQUAL -> WatchCompareOp.EQUAL
+            TokenType.NOT_EQUAL -> WatchCompareOp.NOT_EQUAL
+            TokenType.GREATER -> WatchCompareOp.GREATER
+            TokenType.GREATER_EQUAL -> WatchCompareOp.GREATER_EQUAL
+            TokenType.LESS -> WatchCompareOp.LESS
+            TokenType.LESS_EQUAL -> WatchCompareOp.LESS_EQUAL
+            else -> error("Unexpected comparison")
         }
 
         private fun peek(): Token = tokens[index]

@@ -201,6 +201,8 @@
     <string name="settings_reduce_motion_sub">Remove the settle overshoot: transitions stop exactly at rest</string>
     <string name="settings_hide_recents">Hide Recents Card</string>
     <string name="settings_hide_recents_sub">Hide Flue from the system recents screen</string>
+    <string name="settings_watch_store_segmented_download">Segmented Downloads</string>
+    <string name="settings_watch_store_segmented_download_sub">Fetch watch faces in parallel segments; falls back to a single stream when the server does not support it</string>
 
     <!-- Search index: titles only used in search -->
     <string name="search_t_theme_system">Follow system (light/dark)</string>
@@ -288,6 +290,7 @@
     <string name="search_d_low_res">Reduce icon overhead for smoother performance</string>
     <string name="search_d_music_text">Song change text transition</string>
     <string name="search_d_hide_recents">Hide Flue from the recents screen</string>
+    <string name="search_d_segmented_download">Download watch faces in parallel segments</string>
     <string name="search_d_thumbnails">Photo and video list preview images</string>
     <string name="search_d_motion_profile_entry">Go to the motion profile page</string>
     <string name="search_d_motion_profile">Duration, Bézier and spring parameters</string>
@@ -386,6 +389,29 @@
     <string name="settings_watchmaker_force_fill">Force fill</string>
     <string name="settings_watchmaker_force_fill_on">Scale from the canvas center and crop the edges</string>
     <string name="settings_watchmaker_force_fill_off">Show the full design canvas and respect the declared shape</string>
+    <string name="settings_watchface_canvas_preset">Canvas fit</string>
+    <string name="settings_watchface_canvas_preset_fit">Fit</string>
+    <string name="settings_watchface_canvas_preset_fit_desc">Fit the shorter edge, letterbox the longer one, whole canvas visible</string>
+    <string name="settings_watchface_canvas_preset_fill">Fill</string>
+    <string name="settings_watchface_canvas_preset_fill_desc">Scale uniformly to the longer edge and crop the overflow</string>
+    <string name="settings_watchface_canvas_preset_vertical">By height</string>
+    <string name="settings_watchface_canvas_preset_vertical_desc">Fill vertically; horizontally it may overflow or letterbox</string>
+    <string name="settings_watchface_canvas_preset_horizontal">By width</string>
+    <string name="settings_watchface_canvas_preset_horizontal_desc">Fill horizontally; vertically it may overflow or letterbox</string>
+    <string name="settings_watchface_canvas_preset_stretch">Stretch</string>
+    <string name="settings_watchface_canvas_preset_stretch_desc">Fill both axes independently; may be non-uniform and distort</string>
+    <string name="settings_watchface_canvas_preset_custom">Custom</string>
+    <string name="settings_watchface_canvas_preset_custom_desc">No automatic fit; the zoom sliders below decide everything</string>
+    <string name="settings_watchface_canvas_zoom_x">Horizontal zoom</string>
+    <string name="settings_watchface_canvas_zoom_y">Vertical zoom</string>
+    <string name="settings_watchface_canvas_offset_x">Horizontal offset</string>
+    <string name="settings_watchface_canvas_offset_y">Vertical offset</string>
+    <string name="settings_watchface_canvas_follow_default">Follow the global default</string>
+    <string name="settings_watchface_canvas_follow_default_on">This face uses the global canvas settings and tracks their changes</string>
+    <string name="settings_watchface_canvas_follow_default_off">This face keeps its own canvas settings, independent of the global ones</string>
+    <string name="settings_watchface_canvas_reset">Reset canvas settings</string>
+    <string name="settings_watchface_canvas_reset_desc">Back to fit, no zoom, no offset</string>
+    <string name="settings_watchface_canvas_section">Canvas adjustment</string>
     <string name="settings_watchface_gravity_parallax">Gyro depth watch faces</string>
     <string name="settings_watchface_gravity_parallax_on">Enable wrist-motion parallax for faces that declare gyro layers</string>
     <string name="settings_watchface_gravity_parallax_off">Disable gyro depth movement</string>
@@ -472,6 +498,12 @@
 
     <!-- Performance and animation -->
     <string name="settings_performance_title">Performance and animation</string>
+    <string name="settings_perf_group_rendering">Rendering quality</string>
+    <string name="settings_perf_group_rendering_sub">Icon resolution, shadows and thumbnails</string>
+    <string name="settings_perf_group_motion">Animation and transitions</string>
+    <string name="settings_perf_group_motion_sub">Launch and return motion, entry, motion curves</string>
+    <string name="settings_perf_group_system">System and network</string>
+    <string name="settings_perf_group_system_sub">Background visibility and download behaviour</string>
     <string name="settings_low_res_icons">Low-resolution icons</string>
     <string name="settings_low_res_icons_sub">Reduce icon overhead for smoother scrolling</string>
     <string name="settings_music_text_animation">Music text switch animation</string>
@@ -684,6 +716,7 @@
     <string name="watch_editor_error_ffmpeg_unsupported">FFmpeg video import is not supported on this device architecture</string>
     <string name="watch_editor_error_read_video">Couldn\'t read the selected video</string>
     <string name="watch_editor_status_converting_video_fmt">Converting video %1$d%%</string>
+    <string name="watch_editor_status_copying_video_fmt">Importing original video %1$d%%</string>
     <string name="watch_editor_error_video_import">Video import failed</string>
     <string name="watch_editor_status_importing_watch">Importing .watch</string>
     <string name="watch_editor_error_read_file">Couldn\'t read the selected file</string>
@@ -719,6 +752,13 @@
     <string name="watch_editor_save">Save</string>
     <string name="watch_editor_cancel">Cancel</string>
     <string name="watch_editor_status_creating_draft">Creating secure draft</string>
+    <string name="watch_editor_format_choice_title">Choose watch face format</string>
+    <string name="watch_editor_format_recommended">Recommended</string>
+    <string name="watch_editor_format_v1_title">WatchMaker 1.0</string>
+    <string name="watch_editor_format_v1_sub">Supports video layers, plays video files directly</string>
+    <string name="watch_editor_format_v2_title">WatchMaker 2.0</string>
+    <string name="watch_editor_format_v2_sub">Studio format, no video layer; videos become looping frames</string>
+    <string name="watch_editor_format_choice_note">1.0 has a video layer and can play video files directly. 2.0 has no such layer, so imported videos can only become looping frame sequences.</string>
     <string name="watch_editor_error_init">Editor initialization failed</string>
     <string name="watch_editor_error_begin_gesture">Couldn\'t start canvas gesture</string>
     <string name="watch_editor_error_commit_gesture">Couldn\'t commit canvas gesture</string>
@@ -729,6 +769,7 @@
     <string name="watch_editor_status_duplicate_layer">Duplicating layer</string>
     <string name="watch_editor_status_delete_layer">Deleting layer</string>
     <string name="watch_editor_status_update_shape">Updating watch face shape</string>
+    <string name="watch_editor_status_update_background">Updating background colour</string>
     <string name="watch_editor_status_update_canvas">Updating canvas size</string>
     <string name="watch_editor_status_saving">Saving watch face</string>
     <string name="watch_editor_error_upload_autosave">Automatic save before upload failed</string>
@@ -741,6 +782,18 @@
     <string name="watch_editor_undo">Undo</string>
     <string name="watch_editor_redo">Redo</string>
     <string name="watch_editor_return_split">Return to split view</string>
+    <string name="watch_editor_preview_play">Play preview animation</string>
+    <string name="watch_editor_preview_pause">Pause preview animation</string>
+    <string name="shortcut_menu_rename">Rename</string>
+    <string name="shortcut_menu_rename_folder_title">Rename folder</string>
+    <string name="shortcut_menu_rename_confirm">Done</string>
+    <string name="shortcut_menu_rename_cancel">Cancel</string>
+    <string name="shortcut_menu_dissolve_folder">Dissolve folder</string>
+    <string name="shortcut_menu_app_info">App info</string>
+    <string name="shortcut_menu_remove">Remove</string>
+    <string name="shortcut_menu_remove_from_quick_launch">Remove from quick launch</string>
+    <string name="shortcut_menu_uninstall">Uninstall</string>
+    <string name="shortcut_menu_exclude_app">Hide from list</string>
     <string name="watch_editor_no_layers">No layers yet</string>
     <string name="watch_editor_select_layer_first">Select a layer first</string>
     <string name="watch_editor_unnamed_face">Untitled watch face</string>
@@ -787,6 +840,9 @@
     <string name="watch_editor_start_conversion">Start conversion</string>
     <string name="watch_editor_converting_video">Converting video</string>
     <string name="watch_editor_video_conversion_message">FFmpeg will convert the selected clip into looping watch-face frames.</string>
+    <string name="watch_editor_video_reencode_message">FFmpeg will re-encode the selected clip into a watch-face video.</string>
+    <string name="watch_editor_video_passthrough_message">Copying the original video into the watch face without re-encoding.</string>
+    <string name="watch_editor_copying_video">Importing original video</string>
     <string name="watch_editor_cancel_conversion">Cancel conversion</string>
     <string name="watch_editor_collapse_child_layers">Collapse child layers</string>
     <string name="watch_editor_expand_child_layers">Expand child layers</string>
@@ -801,6 +857,8 @@
     <string name="watch_editor_import_image_path">Import image into path</string>
     <string name="watch_editor_import_image_sequence">Import images as a looping background</string>
     <string name="watch_editor_import_video_frames">Import video as looping frames</string>
+    <string name="watch_editor_error_frames_need_ffmpeg">This device is 32-bit and cannot convert to looping frames. A video layer can still import the file directly.</string>
+    <string name="watch_editor_error_reencode_need_ffmpeg">This device is 32-bit and cannot crop or re-encode video. Import it with its original settings instead.</string>
     <string name="watch_editor_text_entry_animation">Text entrance animation</string>
     <string name="watch_editor_text_exit_animation">Text exit animation</string>
     <string name="watch_editor_select_app_title">Choose an app to launch</string>
@@ -819,6 +877,10 @@
     <string name="watch_editor_watch_shape_description">Round faces are clipped to a circle; square faces keep the full square canvas.</string>
     <string name="watch_editor_unknown_shape_fmt">Current shape="%1$s". Use a button above to change it to round or square.</string>
     <string name="watch_editor_not_set">Not set</string>
+    <string name="watch_editor_watch_background">Background colour</string>
+    <string name="watch_editor_watch_background_description">The fill drawn beneath every layer. A face with a full-bleed background image usually hides it.</string>
+    <string name="watch_editor_watch_background_current_fmt">Current bg_color="%1$s"</string>
+    <string name="watch_editor_watch_background_clear">Reset to default (black)</string>
     <string name="watch_editor_canvas_size">Canvas size</string>
     <string name="watch_editor_canvas_undeclared_suffix"> (not declared; using the default canvas)</string>
     <string name="watch_editor_canvas_matches_screen_suffix"> · Matches this device</string>
@@ -833,6 +895,7 @@
     <string name="watch_editor_attribute_opacity">Opacity</string>
     <string name="watch_editor_attribute_scale_x">Horizontal scale (%)</string>
     <string name="watch_editor_attribute_scale_y">Vertical scale (%)</string>
+    <string name="watch_editor_attribute_gyro">Dynamic depth (-32 to 32)</string>
     <string name="watch_editor_attribute_text">Text / Watchmaker expression</string>
     <string name="watch_editor_attribute_text_size">Text size</string>
     <string name="watch_editor_attribute_font">Font</string>
@@ -871,6 +934,7 @@
     <string name="watch_editor_layer_shape">Shape</string>
     <string name="watch_editor_layer_image">Image</string>
     <string name="watch_editor_layer_looping_background">Looping background</string>
+    <string name="watch_editor_layer_video">Video</string>
     <string name="watch_editor_layer_ring">Ring</string>
     <string name="watch_editor_layer_progress">Progress</string>
     <string name="watch_editor_shape_round">Round</string>
@@ -951,7 +1015,6 @@
     <string name="watch_store_filter_round">Round</string>
     <string name="watch_store_filter_square">Square</string>
     <string name="watch_store_filter_rectangular">Rectangular</string>
-    <string name="watch_store_category_loading_short">Loading categories…</string>
     <string name="watch_store_all_categories">All categories</string>
     <string name="watch_store_category_load_failed">Could not load categories</string>
     <string name="watch_store_status_restoring_installations">Restoring installed watch faces…</string>
@@ -1008,6 +1071,7 @@
     <string name="watch_store_scan_warning_fmt">%1$d installation directories could not be scanned</string>
     <string name="watch_store_scan_warning_detail_fmt">%1$s; first failed directory: %2$s (%3$s)</string>
     <string name="watch_store_unknown_directory">Unknown directory</string>
+    <string name="watch_store_lua_script_warning">This watch face contains a Global Script (Lua). Flue may not render it correctly or support all of its features.</string>
     <string name="watch_store_error_superseded_cleanup_fmt">The new revision was installed, but the old revision could not be removed: %1$s</string>
     <string name="watch_store_error_transaction_cleanup_fmt">Installation failed and its temporary transaction could not be removed: %1$s</string>
     <string name="watch_store_error_catalog_restore_after_install">The watch face is installed, but its store record has not been restored. Rescan and try again.</string>
@@ -1190,4 +1254,6 @@
     <string name="internal_file_browser_pick_export_folder">Choose export folder</string>
     <string name="internal_file_browser_select_current_folder">Export to this folder</string>
     <string name="internal_file_browser_pick_conversion">Choose a watch face to convert</string>
+    <string name="watch_face_loading">Loading watch face</string>
+    <string name="watch_face_loading_fallback">Use default watch face and restart</string>
 </resources>

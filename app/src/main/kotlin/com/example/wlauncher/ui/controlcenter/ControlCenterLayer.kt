@@ -42,7 +42,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -138,6 +137,7 @@ import com.flue.launcher.ui.common.DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP
 import com.flue.launcher.ui.common.WatchBatteryPill
 import com.flue.launcher.ui.common.flueOverlayMaskShape
 import com.flue.launcher.ui.common.glassSurface
+import com.flue.launcher.ui.common.instantPressGesture
 import com.flue.launcher.ui.common.rememberFlueElasticScrollState
 import com.flue.launcher.ui.common.rememberPressedState
 import com.flue.launcher.ui.notification.NotificationGroupUi
@@ -636,8 +636,8 @@ fun ControlCenterLayer(
                     WatchBatteryPill(
                         level = batteryStatus.level,
                         charging = batteryStatus.charging,
-                        width = 32.dp,
-                        height = 16.dp,
+                        // 尺寸不再各写一套：与负一屏共用同一组默认值，
+                        // 同一块表上两个电池必须一样大（老师实机反馈）。
                         modifier = Modifier.align(
                             if (roundScreen) Alignment.TopCenter else Alignment.CenterStart
                         )
@@ -722,14 +722,18 @@ fun ControlCenterLayer(
                     if (toggleRowFits) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            // Keep the four fixed-size buttons centered. SpaceBetween
-                            // used to stretch the gap to the full viewport, which put
-                            // the last circle into the round-screen cutout on narrow
-                            // DPI profiles. The gap is adaptive but never below 4px.
-                            horizontalArrangement = Arrangement.spacedBy(
-                                fittedToggleRowSpacing,
-                                Alignment.CenterHorizontally,
-                            ),
+                            // Preserve the original edge alignment while the preferred
+                            // gap fits. Only a genuinely narrow viewport switches to a
+                            // measured fixed gap; this keeps the buttons aligned with
+                            // the slider cards below without compressing their icons.
+                            horizontalArrangement = if (toggleRowLayout.useSpaceBetween) {
+                                Arrangement.SpaceBetween
+                            } else {
+                                Arrangement.spacedBy(
+                                    fittedToggleRowSpacing,
+                                    Alignment.CenterHorizontally,
+                                )
+                            },
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             ControlToggle(
@@ -1269,11 +1273,12 @@ private fun ControlToggle(
 internal data class ControlToggleRowLayout(
     val scrollable: Boolean,
     val spacingPx: Float,
+    val useSpaceBetween: Boolean,
 )
 
 /**
  * Four control-center buttons keep their physical size. Only the inter-button
- * gap may shrink, down to four physical pixels; below that boundary the row
+ * gap may shrink, down to two physical pixels; below that boundary the row
  * remains at its preferred spacing and becomes horizontally scrollable.
  */
 internal fun controlToggleRowLayout(
@@ -1281,7 +1286,7 @@ internal fun controlToggleRowLayout(
     buttonWidthPx: Float,
     preferredSpacingPx: Float,
     buttonCount: Int = 4,
-    minimumSpacingPx: Float = 4f,
+    minimumSpacingPx: Float = 2f,
 ): ControlToggleRowLayout {
     val count = buttonCount.coerceAtLeast(1)
     val gapCount = (count - 1).coerceAtLeast(0)
@@ -1291,17 +1296,28 @@ internal fun controlToggleRowLayout(
         return ControlToggleRowLayout(
             scrollable = availableWidthPx < safeButtonWidth,
             spacingPx = 0f,
+            useSpaceBetween = false,
         )
     }
     val availableForGaps = availableWidthPx.coerceAtLeast(0f) - safeButtonWidth * count
     val minimumRequired = minimumSpacingPx * gapCount
     if (availableForGaps < minimumRequired) {
-        return ControlToggleRowLayout(scrollable = true, spacingPx = safePreferredSpacing)
+        return ControlToggleRowLayout(
+            scrollable = true,
+            spacingPx = safePreferredSpacing,
+            useSpaceBetween = false,
+        )
     }
+    val exactSpacing = availableForGaps / gapCount
+    val useSpaceBetween = exactSpacing >= safePreferredSpacing
     return ControlToggleRowLayout(
         scrollable = false,
-        spacingPx = (availableForGaps / gapCount)
-            .coerceIn(minimumSpacingPx, safePreferredSpacing),
+        spacingPx = if (useSpaceBetween) {
+            safePreferredSpacing
+        } else {
+            exactSpacing.coerceAtLeast(minimumSpacingPx)
+        },
+        useSpaceBetween = useSpaceBetween,
     )
 }
 
@@ -1455,10 +1471,24 @@ private fun MediaControlCard(
         animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
         label = "media_card_playing_edge",
     )
+    // 与通知预览卡 / 控制中心按钮同款的按压反馈：整卡按下缩到 0.968 再弹回。
+    // 以前是 Material 的 clickable 默认 ripple —— 一块 156dp 高的玻璃卡上
+    // 铺开一圈水波纹，和同屏其他控件完全不是一套语言（老师实机反馈）。
+    val pressedState = rememberPressedState()
+    val pressed by pressedState
+    val cardScale by animateFloatAsState(
+        targetValue = if (pressed) 0.968f else 1f,
+        animationSpec = spring(stiffness = 860f, dampingRatio = 0.72f),
+        label = "media_card_press",
+    )
     Box(
         modifier = modifier
             .fillMaxWidth()
             .height(156.dp)
+            .graphicsLayer {
+                scaleX = cardScale
+                scaleY = cardScale
+            }
             // panelShape(30dp)：媒体卡是大块表面。内层封面 18dp = 30 − 12 padding，
             // 同心圆角关系（内 = 外 − 间距）；旧的 32/24 组合会让封面的角
             // 「胀」出外壳弧线约 4dp。
@@ -1467,7 +1497,10 @@ private fun MediaControlCard(
                 launcherStyle.glass,
                 highlightEnabled = glassHighlightEnabled,
             )
-            .clickable(onClick = if (notificationAccessGranted) onOpenApp else onOpenNotificationAccess)
+            .instantPressGesture(
+                pressedState,
+                onClick = if (notificationAccessGranted) onOpenApp else onOpenNotificationAccess,
+            )
     ) {
         Box(
             modifier = Modifier

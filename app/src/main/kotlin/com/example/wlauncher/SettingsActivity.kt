@@ -45,6 +45,8 @@ import com.flue.launcher.ui.settings.SettingsSearchField
 import com.flue.launcher.ui.settings.searchSettingsEntries
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.background
@@ -126,6 +128,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
@@ -196,6 +199,8 @@ import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.InternalWatchFaceStorage
 import com.flue.launcher.watchface.WatchFaceDescriptor
+import com.flue.launcher.watchface.standard.WatchCanvasPreset
+import com.flue.launcher.watchface.standard.WatchCanvasSettings
 import com.flue.launcher.watchface.standard.WatchDateLocale
 import com.flue.launcher.watchface.standard.WatchTemperatureUnit
 import com.flue.launcher.watchface.standard.WatchWeatherLocation
@@ -273,6 +278,9 @@ enum class SettingsDestination {
     GESTURE_SETTINGS,
     APP_LIST_BEHAVIOR,
     PERFORMANCE,
+    PERFORMANCE_RENDERING,
+    PERFORMANCE_MOTION,
+    PERFORMANCE_SYSTEM,
     MOTION_PROFILE,
     MUSIC_TEXT_ANIMATION,
     TOOLS,
@@ -552,6 +560,7 @@ private fun SettingsRootScreen(
     val builtInVideoCustomText by vm.builtInVideoCustomText.collectAsStateWithLifecycle()
     val builtInManagerThumbnails by vm.builtInManagerThumbnails.collectAsStateWithLifecycle()
     val hideFromRecents by vm.hideFromRecents.collectAsStateWithLifecycle()
+    val watchStoreSegmentedDownload by vm.watchStoreSegmentedDownload.collectAsStateWithLifecycle()
     val themeMode by vm.themeMode.collectAsStateWithLifecycle()
     val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
     val launcherStyle = LauncherTheme.style
@@ -573,7 +582,8 @@ private fun SettingsRootScreen(
     val watchFaceTextExitAnimation by vm.watchFaceTextExitAnimation.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
-    val watchmakerForceFill by vm.watchmakerForceFill.collectAsStateWithLifecycle()
+    val watchfaceCanvasDefault by vm.watchfaceCanvasDefault.collectAsStateWithLifecycle()
+    val watchfaceCanvasOverrides by vm.watchfaceCanvasOverrides.collectAsStateWithLifecycle()
     val watchfaceGravityParallaxEnabled by vm.watchfaceGravityParallaxEnabled.collectAsStateWithLifecycle()
     val watchfaceDateLocale by vm.watchfaceDateLocale.collectAsStateWithLifecycle()
     val appLanguage by vm.appLanguage.collectAsStateWithLifecycle()
@@ -797,6 +807,10 @@ private fun SettingsRootScreen(
     var backStack by remember {
         mutableStateOf(initialSettingsBackStack(launchConfig.initialDestination, launchConfig.returnToFaceOnBack))
     }
+    // 层级转场方向。静态 depth 表描述不了双入口页面（FEATURE_TOGGLES 从 ROOT
+    // 进是二级、从 APPEARANCE 进是三级），所以方向只认导航意图：navigateTo
+    // 置 false、handleBack 置 true，transitionSpec 直接读。
+    var transitionIsBack by remember { mutableStateOf(false) }
     var hiddenAppsDraft by remember { mutableStateOf(hiddenApps) }
     var hiddenAppsDirty by remember { mutableStateOf(false) }
     var donatePreviewResId by remember { mutableStateOf<Int?>(null) }
@@ -828,6 +842,9 @@ private fun SettingsRootScreen(
         backupBusy = false
         if (state?.completionAction == BlockingProgressCompletionAction.WatchFaceArchiveImport) {
             pageScrollPositions.remove(SettingsDestination.WATCH_FACES)
+            // 导入完成后直接把用户送进表盘列表看结果，算进入而非回退。
+            // 不显式写就会沿用上一次导航残留的方向。
+            transitionIsBack = false
             destination = SettingsDestination.WATCH_FACES
             if (backStack.isEmpty() && !launchConfig.returnToFaceOnBack) {
                 backStack = listOf(SettingsDestination.ROOT)
@@ -1060,7 +1077,11 @@ private fun SettingsRootScreen(
                 resetPageScroll(next)
             }
             leaveDestination(next)
-            backStack = if (backStack.lastOrNull() == next) {
+            // backStack 末尾就是 next：这是「往回走一格」，方向按返回算，
+            // 否则会把用户熟悉的回退演成前进。
+            val poppingBack = backStack.lastOrNull() == next
+            transitionIsBack = poppingBack
+            backStack = if (poppingBack) {
                 backStack.dropLast(1)
             } else {
                 backStack + destination
@@ -1084,6 +1105,7 @@ private fun SettingsRootScreen(
         val previous = backStack.lastOrNull()
         if (previous != null) {
             leaveDestination(previous)
+            transitionIsBack = true
             backStack = backStack.dropLast(1)
             destination = previous
         } else {
@@ -1136,24 +1158,44 @@ private fun SettingsRootScreen(
             LocalSettingsSearchTarget provides settingsSearchTarget,
         ) {
             destinationTransition.AnimatedContent(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clipToBounds(),
                 transitionSpec = {
                     // 所有界面风格统一使用 MIUIX / HyperOS 式层级推拉：进子页
                     // 新页从右 1/4 滑入、旧页左移 1/6；返回时方向相反。
-                    // 不叠加全屏透明度动画，避免高分辨率手表同时合成两张
-                    // 1200x1920 离屏纹理，层级方向和时长保持不变。
-                    val forward = targetState.depth >= initialState.depth
+                    //
+                    // 方向必须由「导航意图」决定，不能由静态 depth 表推导。
+                    // depth 是硬编码的，而 FEATURE_TOGGLES 这类页面有两个入口
+                    // （ROOT 进是二级、APPEARANCE 进是三级），单个 depth 值在
+                    // 原理上就描述不了两条路径 —— 同深度跳转返回时会播成前进。
+                    // navigateTo/handleBack 已经维护了真实的 backStack，直接用
+                    // 它记下的意图即可。
+                    val forward = !transitionIsBack
                     (
                         slideInHorizontally(
                             animationSpec = tween(260, easing = FastOutSlowInEasing),
-                        ) { fullWidth -> if (forward) fullWidth / 4 else -fullWidth / 6 }
+                        ) { fullWidth -> if (forward) fullWidth / 4 else -fullWidth / 6 } +
+                            fadeIn(tween(200))
                         ) togetherWith (
                         slideOutHorizontally(
                             animationSpec = tween(240, easing = FastOutSlowInEasing),
-                        ) { fullWidth -> if (forward) -fullWidth / 6 else fullWidth / 4 }
+                        ) { fullWidth -> if (forward) -fullWidth / 6 else fullWidth / 4 } +
+                            fadeOut(tween(140))
                         )
                 },
             ) { currentDestination ->
+                // AnimatedContent keeps both destinations alive while they slide. A
+                // transparent destination lets every outgoing card remain visible
+                // through the incoming page, which looks like several navigations
+                // have piled up. Give each destination its own opaque plate; the
+                // uncovered edge still reveals the outgoing page naturally.
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(launcherStyle.screenBackground)
+                        .clipToBounds(),
+                ) {
         key(currentDestination, pageScrollResetVersions[currentDestination] ?: 0) {
         when (currentDestination) {
             SettingsDestination.ROOT -> SettingsPageScaffold(
@@ -1519,6 +1561,20 @@ private fun SettingsRootScreen(
                     )
                 }
             }
+            // 新建紧跟在「编辑当前表盘」之后：两个都是编辑器入口，放一起。
+            // 注意它必须在上面那个 isWatchmaker 判断之外——没有选中 .watch
+            // 表盘时也要能新建。
+            item("watchface_editor_new") {
+                ActionCard(
+                    title = stringResource(R.string.settings_watchface_editor_new),
+                    subtitle = stringResource(R.string.settings_watchface_editor_new_sub),
+                    scale = itemFisheye(listState, "watchface_editor_new", screenCenterY, screenHeightPx),
+                    icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialAdd, miuix = OfficialMiuixIcons.OfficialAdd) },
+                    onClick = {
+                        context.startActivity(Intent(context, WatchEditorActivity::class.java))
+                    }
+                )
+            }
             item("watchface_import_archive") {
                 ActionCard(
                     title = stringResource(R.string.settings_watchface_import),
@@ -1563,17 +1619,6 @@ private fun SettingsRootScreen(
                     },
                     onClick = {
                         context.startActivity(Intent(context, WatchStoreActivity::class.java))
-                    }
-                )
-            }
-            item("watchface_editor_new") {
-                ActionCard(
-                    title = stringResource(R.string.settings_watchface_editor_new),
-                    subtitle = stringResource(R.string.settings_watchface_editor_new_sub),
-                    scale = itemFisheye(listState, "watchface_editor_new", screenCenterY, screenHeightPx),
-                    icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialAdd, miuix = OfficialMiuixIcons.OfficialAdd) },
-                    onClick = {
-                        context.startActivity(Intent(context, WatchEditorActivity::class.java))
                     }
                 )
             }
@@ -1729,19 +1774,156 @@ private fun SettingsRootScreen(
                 )
             }
             if (selectedWatchFace.isWatchmaker) {
-                item("watchmaker_force_fill") {
+                // 三层继承在这里合流：覆盖表里有这张表盘就用它自己的，否则用全局默认。
+                val canvasFollowsDefault = selectedWatchFaceId !in watchfaceCanvasOverrides
+                val canvasSettings = watchfaceCanvasOverrides[selectedWatchFaceId]
+                    ?: watchfaceCanvasDefault
+                // 跟随全局时写全局，脱离后写这张表盘自己的那份 —— 两条路径共用一个
+                // 写入口，免得某个滑杆漏判层级、写到另一层去。
+                val writeCanvas: (WatchCanvasSettings) -> Unit = { updated ->
+                    if (canvasFollowsDefault) vm.setWatchfaceCanvasDefault(updated)
+                    else vm.setWatchfaceCanvasOverride(selectedWatchFaceId, updated)
+                }
+                item("watchface_canvas_header") {
+                    SectionTitle(
+                        stringResource(R.string.settings_watchface_canvas_section),
+                        itemFisheye(listState, "watchface_canvas_header", screenCenterY, screenHeightPx),
+                    )
+                }
+                item("watchface_canvas_follow") {
                     SettingsSwitchRow(
-                        title = stringResource(R.string.settings_watchmaker_force_fill),
-                        subtitle = if (watchmakerForceFill) {
-                            stringResource(R.string.settings_watchmaker_force_fill_on)
+                        title = stringResource(R.string.settings_watchface_canvas_follow_default),
+                        subtitle = if (canvasFollowsDefault) {
+                            stringResource(R.string.settings_watchface_canvas_follow_default_on)
                         } else {
-                            stringResource(R.string.settings_watchmaker_force_fill_off)
+                            stringResource(R.string.settings_watchface_canvas_follow_default_off)
                         },
-                        checked = watchmakerForceFill,
-                        onToggle = vm::setWatchmakerForceFillEnabled,
+                        checked = canvasFollowsDefault,
+                        onToggle = { follow ->
+                            vm.setWatchfaceCanvasFollowsDefault(selectedWatchFaceId, follow)
+                        },
                         scale = itemFisheye(
                             listState,
-                            "watchmaker_force_fill",
+                            "watchface_canvas_follow",
+                            screenCenterY,
+                            screenHeightPx,
+                        ),
+                    )
+                }
+                items(
+                    items = WatchCanvasPreset.entries,
+                    key = { preset -> "watchface_canvas_preset_${preset.name}" },
+                ) { preset ->
+                    val titleRes = when (preset) {
+                        WatchCanvasPreset.FIT -> R.string.settings_watchface_canvas_preset_fit
+                        WatchCanvasPreset.FILL -> R.string.settings_watchface_canvas_preset_fill
+                        WatchCanvasPreset.VERTICAL -> R.string.settings_watchface_canvas_preset_vertical
+                        WatchCanvasPreset.HORIZONTAL -> R.string.settings_watchface_canvas_preset_horizontal
+                        WatchCanvasPreset.STRETCH -> R.string.settings_watchface_canvas_preset_stretch
+                        WatchCanvasPreset.CUSTOM -> R.string.settings_watchface_canvas_preset_custom
+                    }
+                    val subtitleRes = when (preset) {
+                        WatchCanvasPreset.FIT -> R.string.settings_watchface_canvas_preset_fit_desc
+                        WatchCanvasPreset.FILL -> R.string.settings_watchface_canvas_preset_fill_desc
+                        WatchCanvasPreset.VERTICAL -> R.string.settings_watchface_canvas_preset_vertical_desc
+                        WatchCanvasPreset.HORIZONTAL -> R.string.settings_watchface_canvas_preset_horizontal_desc
+                        WatchCanvasPreset.STRETCH -> R.string.settings_watchface_canvas_preset_stretch_desc
+                        WatchCanvasPreset.CUSTOM -> R.string.settings_watchface_canvas_preset_custom_desc
+                    }
+                    SettingsChoiceRow(
+                        title = stringResource(titleRes),
+                        subtitle = stringResource(subtitleRes),
+                        selected = canvasSettings.preset == preset,
+                        onClick = { writeCanvas(canvasSettings.copy(preset = preset)) },
+                        scale = itemFisheye(
+                            listState,
+                            "watchface_canvas_preset_${preset.name}",
+                            screenCenterY,
+                            screenHeightPx,
+                        ),
+                    )
+                }
+                item("watchface_canvas_zoom_x") {
+                    SettingsSliderRow(
+                        title = stringResource(R.string.settings_watchface_canvas_zoom_x),
+                        value = canvasSettings.zoomX,
+                        valueText = "%.2f×".format(java.util.Locale.US, canvasSettings.zoomX),
+                        localValueText = { "%.2f×".format(java.util.Locale.US, it) },
+                        range = 0.5f..2f,
+                        steps = 29,
+                        // 拖动中不写盘：每帧一次 DataStore 写会把滑杆拖卡。
+                        onValueChange = {},
+                        onValueChangeFinished = { writeCanvas(canvasSettings.copy(zoomX = it)) },
+                        scale = itemFisheye(
+                            listState,
+                            "watchface_canvas_zoom_x",
+                            screenCenterY,
+                            screenHeightPx,
+                        ),
+                    )
+                }
+                item("watchface_canvas_zoom_y") {
+                    SettingsSliderRow(
+                        title = stringResource(R.string.settings_watchface_canvas_zoom_y),
+                        value = canvasSettings.zoomY,
+                        valueText = "%.2f×".format(java.util.Locale.US, canvasSettings.zoomY),
+                        localValueText = { "%.2f×".format(java.util.Locale.US, it) },
+                        range = 0.5f..2f,
+                        steps = 29,
+                        onValueChange = {},
+                        onValueChangeFinished = { writeCanvas(canvasSettings.copy(zoomY = it)) },
+                        scale = itemFisheye(
+                            listState,
+                            "watchface_canvas_zoom_y",
+                            screenCenterY,
+                            screenHeightPx,
+                        ),
+                    )
+                }
+                item("watchface_canvas_offset_x") {
+                    SettingsSliderRow(
+                        title = stringResource(R.string.settings_watchface_canvas_offset_x),
+                        value = canvasSettings.offsetX,
+                        valueText = "${canvasSettings.offsetX.roundToInt()} px",
+                        localValueText = { "${it.roundToInt()} px" },
+                        range = -200f..200f,
+                        steps = 39,
+                        onValueChange = {},
+                        onValueChangeFinished = { writeCanvas(canvasSettings.copy(offsetX = it)) },
+                        scale = itemFisheye(
+                            listState,
+                            "watchface_canvas_offset_x",
+                            screenCenterY,
+                            screenHeightPx,
+                        ),
+                    )
+                }
+                item("watchface_canvas_offset_y") {
+                    SettingsSliderRow(
+                        title = stringResource(R.string.settings_watchface_canvas_offset_y),
+                        value = canvasSettings.offsetY,
+                        valueText = "${canvasSettings.offsetY.roundToInt()} px",
+                        localValueText = { "${it.roundToInt()} px" },
+                        range = -200f..200f,
+                        steps = 39,
+                        onValueChange = {},
+                        onValueChangeFinished = { writeCanvas(canvasSettings.copy(offsetY = it)) },
+                        scale = itemFisheye(
+                            listState,
+                            "watchface_canvas_offset_y",
+                            screenCenterY,
+                            screenHeightPx,
+                        ),
+                    )
+                }
+                item("watchface_canvas_reset") {
+                    ActionCard(
+                        title = stringResource(R.string.settings_watchface_canvas_reset),
+                        subtitle = stringResource(R.string.settings_watchface_canvas_reset_desc),
+                        onClick = { writeCanvas(WatchCanvasSettings.DEFAULT) },
+                        scale = itemFisheye(
+                            listState,
+                            "watchface_canvas_reset",
                             screenCenterY,
                             screenHeightPx,
                         ),
@@ -2636,6 +2818,45 @@ private fun SettingsRootScreen(
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.PERFORMANCE).offset,
             onScrollChanged = { index, offset -> updateScroll(SettingsDestination.PERFORMANCE, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
+            // 性能页拆成三组：这一层只做目录，具体开关全在子页。
+            // 原来 13 项平铺在一页，滑到底要转很久，且「图标怎么画」「动画怎么
+            // 走」「系统与网络行为」三类东西混在一起没有边界。
+            item("perf_group_rendering") {
+                SettingsCategoryCard(
+                    title = stringResource(R.string.settings_perf_group_rendering),
+                    subtitle = stringResource(R.string.settings_perf_group_rendering_sub),
+                    onClick = { navigateTo(SettingsDestination.PERFORMANCE_RENDERING) },
+                    scale = itemFisheye(listState, "perf_group_rendering", screenCenterY, screenHeightPx)
+                )
+            }
+            item("perf_group_motion") {
+                SettingsCategoryCard(
+                    title = stringResource(R.string.settings_perf_group_motion),
+                    subtitle = stringResource(R.string.settings_perf_group_motion_sub),
+                    onClick = { navigateTo(SettingsDestination.PERFORMANCE_MOTION) },
+                    scale = itemFisheye(listState, "perf_group_motion", screenCenterY, screenHeightPx)
+                )
+            }
+            item("perf_group_system") {
+                SettingsCategoryCard(
+                    title = stringResource(R.string.settings_perf_group_system),
+                    subtitle = stringResource(R.string.settings_perf_group_system_sub),
+                    onClick = { navigateTo(SettingsDestination.PERFORMANCE_SYSTEM) },
+                    scale = itemFisheye(listState, "perf_group_system", screenCenterY, screenHeightPx)
+                )
+            }
+        }
+
+            SettingsDestination.PERFORMANCE_RENDERING -> SettingsPageScaffold(
+            title = stringResource(R.string.settings_perf_group_rendering),
+            onBack = { handleBack() },
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.PERFORMANCE_RENDERING).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.PERFORMANCE_RENDERING).offset,
+            onScrollChanged = { index, offset ->
+                updateScroll(SettingsDestination.PERFORMANCE_RENDERING, index, offset)
+            }
+        ) { listState, screenCenterY, screenHeightPx, _ ->
             item("low_res") {
                 SettingsSwitchRow(
                     title = stringResource(R.string.settings_low_res_icons),
@@ -2643,15 +2864,6 @@ private fun SettingsRootScreen(
                     checked = lowResIcons,
                     onToggle = { vm.setLowResIcons(it) },
                     scale = itemFisheye(listState, "low_res", screenCenterY, screenHeightPx)
-                )
-            }
-            item("music_text_animation") {
-                val selectedPreset = MusicTextSwitchAnimations.byId(musicTextSwitchAnimation)
-                SettingsCategoryCard(
-                    title = stringResource(R.string.settings_music_text_animation),
-                    subtitle = stringResource(selectedPreset.labelRes),
-                    onClick = { navigateTo(SettingsDestination.MUSIC_TEXT_ANIMATION) },
-                    scale = itemFisheye(listState, "music_text_animation", screenCenterY, screenHeightPx)
                 )
             }
             item("two_tone_icons") {
@@ -2672,6 +2884,27 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "icon_shadow", screenCenterY, screenHeightPx)
                 )
             }
+            item("builtin_manager_thumbnails") {
+                SettingsSwitchRow(
+                    title = stringResource(R.string.settings_builtin_thumbnails),
+                    subtitle = stringResource(R.string.settings_builtin_thumbnails_sub),
+                    checked = builtInManagerThumbnails,
+                    onToggle = { vm.setBuiltInManagerThumbnails(it) },
+                    scale = itemFisheye(listState, "builtin_manager_thumbnails", screenCenterY, screenHeightPx)
+                )
+            }
+        }
+
+            SettingsDestination.PERFORMANCE_MOTION -> SettingsPageScaffold(
+            title = stringResource(R.string.settings_perf_group_motion),
+            onBack = { handleBack() },
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.PERFORMANCE_MOTION).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.PERFORMANCE_MOTION).offset,
+            onScrollChanged = { index, offset ->
+                updateScroll(SettingsDestination.PERFORMANCE_MOTION, index, offset)
+            }
+        ) { listState, screenCenterY, screenHeightPx, _ ->
             item("anim_override") {
                 SettingsSwitchRow(
                     title = stringResource(R.string.settings_launch_animation),
@@ -2750,22 +2983,13 @@ private fun SettingsRootScreen(
                     scale = itemFisheye(listState, "reduce_dynamic_effects", screenCenterY, screenHeightPx)
                 )
             }
-            item("hide_from_recents") {
-                SettingsSwitchRow(
-                    title = stringResource(R.string.settings_hide_recents),
-                    subtitle = stringResource(R.string.settings_hide_recents_sub),
-                    checked = hideFromRecents,
-                    onToggle = vm::setHideFromRecents,
-                    scale = itemFisheye(listState, "hide_from_recents", screenCenterY, screenHeightPx)
-                )
-            }
-            item("builtin_manager_thumbnails") {
-                SettingsSwitchRow(
-                    title = stringResource(R.string.settings_builtin_thumbnails),
-                    subtitle = stringResource(R.string.settings_builtin_thumbnails_sub),
-                    checked = builtInManagerThumbnails,
-                    onToggle = { vm.setBuiltInManagerThumbnails(it) },
-                    scale = itemFisheye(listState, "builtin_manager_thumbnails", screenCenterY, screenHeightPx)
+            item("music_text_animation") {
+                val selectedPreset = MusicTextSwitchAnimations.byId(musicTextSwitchAnimation)
+                SettingsCategoryCard(
+                    title = stringResource(R.string.settings_music_text_animation),
+                    subtitle = stringResource(selectedPreset.labelRes),
+                    onClick = { navigateTo(SettingsDestination.MUSIC_TEXT_ANIMATION) },
+                    scale = itemFisheye(listState, "music_text_animation", screenCenterY, screenHeightPx)
                 )
             }
             item("motion_profile") {
@@ -2782,6 +3006,36 @@ private fun SettingsRootScreen(
                     ),
                     onClick = { navigateTo(SettingsDestination.MOTION_PROFILE) },
                     scale = itemFisheye(listState, "motion_profile", screenCenterY, screenHeightPx)
+                )
+            }
+        }
+
+            SettingsDestination.PERFORMANCE_SYSTEM -> SettingsPageScaffold(
+            title = stringResource(R.string.settings_perf_group_system),
+            onBack = { handleBack() },
+            headerTime = headerTime,
+            initialFirstVisibleItemIndex = scrollFor(SettingsDestination.PERFORMANCE_SYSTEM).index,
+            initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.PERFORMANCE_SYSTEM).offset,
+            onScrollChanged = { index, offset ->
+                updateScroll(SettingsDestination.PERFORMANCE_SYSTEM, index, offset)
+            }
+        ) { listState, screenCenterY, screenHeightPx, _ ->
+            item("hide_from_recents") {
+                SettingsSwitchRow(
+                    title = stringResource(R.string.settings_hide_recents),
+                    subtitle = stringResource(R.string.settings_hide_recents_sub),
+                    checked = hideFromRecents,
+                    onToggle = vm::setHideFromRecents,
+                    scale = itemFisheye(listState, "hide_from_recents", screenCenterY, screenHeightPx)
+                )
+            }
+            item("watch_store_segmented_download") {
+                SettingsSwitchRow(
+                    title = stringResource(R.string.settings_watch_store_segmented_download),
+                    subtitle = stringResource(R.string.settings_watch_store_segmented_download_sub),
+                    checked = watchStoreSegmentedDownload,
+                    onToggle = vm::setWatchStoreSegmentedDownload,
+                    scale = itemFisheye(listState, "watch_store_segmented_download", screenCenterY, screenHeightPx)
                 )
             }
         }
@@ -3388,6 +3642,7 @@ private fun SettingsRootScreen(
             }
             }
             }
+            }
             if (destinationTransition.isRunning) {
                 // 新旧设置页在推拉期间会同时留在树上；用最上层命中面锁住
                 // 这 260ms，避免快速二次点击落到正在滑出的旧页面。
@@ -3397,9 +3652,10 @@ private fun SettingsRootScreen(
                         .zIndex(100f)
                         .pointerInput(Unit) {
                             awaitEachGesture {
-                                awaitFirstDown(requireUnconsumed = false)
+                                awaitFirstDown(requireUnconsumed = false).consume()
                                 while (true) {
                                     val event = awaitPointerEvent()
+                                    event.changes.forEach { it.consume() }
                                     if (event.changes.none { it.pressed }) break
                                 }
                             }
@@ -3956,6 +4212,9 @@ private val SettingsDestination.depth: Int
         SettingsDestination.CONTROL_CENTER_SETTINGS,
         SettingsDestination.GESTURE_SETTINGS,
         SettingsDestination.APP_LIST_BEHAVIOR,
+        SettingsDestination.PERFORMANCE_RENDERING,
+        SettingsDestination.PERFORMANCE_MOTION,
+        SettingsDestination.PERFORMANCE_SYSTEM,
         SettingsDestination.DONATE -> 2
         SettingsDestination.MUSIC_TEXT_ANIMATION,
         SettingsDestination.MOTION_PROFILE,
@@ -5441,20 +5700,27 @@ private fun buildSettingsSearchIndex(context: Context): List<SettingsSearchEntry
     SettingsSearchEntry("APP_LIST_BEHAVIOR", "app_list_watchface_colors", s(R.string.settings_watchface_launch_mask), s(R.string.search_d_launch_mask), listOf("zzqs", "mask color")),
     SettingsSearchEntry("APP_LIST_BEHAVIOR", "app_list_row_border", s(R.string.settings_list_row_bg), s(R.string.search_d_row_bg), listOf("dsmz", "row background")),
     SettingsSearchEntry("PERFORMANCE", null, s(R.string.settings_performance), s(R.string.search_d_performance), listOf("xnydh", "performance", "donghua")),
-    SettingsSearchEntry("PERFORMANCE", "app_list_stagger", s(R.string.settings_stagger_entry), s(R.string.search_d_stagger), listOf("swrc", "stagger")),
-    SettingsSearchEntry("PERFORMANCE", "legacy_app_list_transition", s(R.string.settings_legacy_transition), s(R.string.search_d_legacy), listOf("lzcd", "legacy")),
-    SettingsSearchEntry("PERFORMANCE", "app_list_return_shrink", s(R.string.settings_app_list_shrink), s(R.string.search_d_app_list_shrink), listOf("sswd", "shrink")),
-    SettingsSearchEntry("PERFORMANCE", "app_list_return_icon_float", s(R.string.settings_icon_float), s(R.string.search_d_icon_float), listOf("tbsf", "icon float")),
-    SettingsSearchEntry("PERFORMANCE", "face_return_shrink", s(R.string.settings_face_shrink), s(R.string.search_d_face_shrink), listOf("bpss", "face shrink", "shousuo", "biaopan")),
-    SettingsSearchEntry("PERFORMANCE", "reduce_dynamic_effects", s(R.string.settings_reduce_motion), s(R.string.search_d_reduce_motion), listOf("jrdt", "reduce motion", "jianruo", "huitan")),
-    SettingsSearchEntry("PERFORMANCE", "anim_override", s(R.string.settings_launch_animation), s(R.string.search_d_launch_animation), listOf("qdfh", "launch animation")),
-    SettingsSearchEntry("PERFORMANCE", "icon_shadow", s(R.string.settings_icon_shadow), s(R.string.search_d_icon_shadow), listOf("tbyy", "shadow", "yinying")),
-    SettingsSearchEntry("PERFORMANCE", "two_tone_icons", s(R.string.settings_two_tone_icons), s(R.string.search_d_two_tone), listOf("sstb", "two tone", "shuangse")),
-    SettingsSearchEntry("PERFORMANCE", "low_res", s(R.string.settings_low_res_icons), s(R.string.search_d_low_res), listOf("dfbl", "low res", "fenbianlv")),
-    SettingsSearchEntry("PERFORMANCE", "music_text_animation", s(R.string.settings_music_text_animation), s(R.string.search_d_music_text), listOf("yywz", "music text")),
-    SettingsSearchEntry("PERFORMANCE", "hide_from_recents", s(R.string.settings_hide_recents), s(R.string.search_d_hide_recents), listOf("ychtkp", "recents", "houtai")),
-    SettingsSearchEntry("PERFORMANCE", "builtin_manager_thumbnails", s(R.string.settings_builtin_thumbnails), s(R.string.search_d_thumbnails), listOf("sltu", "thumbnails", "suoluetu")),
-    SettingsSearchEntry("PERFORMANCE", "motion_profile", s(R.string.search_t_motion_profile_entry), s(R.string.search_d_motion_profile_entry), listOf("dhqx", "motion profile")),
+    // 性能页拆成三个二级子页后，锚点的 destinationName 必须跟着搬家。
+    // SettingsDestination.valueOf 外面裹着 runCatching，写错名字不会报错，
+    // 只会静默跳不过去——所以这里的名字与上面的 enum 必须逐条对齐。
+    SettingsSearchEntry("PERFORMANCE_RENDERING", null, s(R.string.settings_perf_group_rendering), s(R.string.settings_perf_group_rendering_sub), listOf("xrzl", "rendering", "zhiliang")),
+    SettingsSearchEntry("PERFORMANCE_MOTION", null, s(R.string.settings_perf_group_motion), s(R.string.settings_perf_group_motion_sub), listOf("dhzc", "motion", "transition", "zhuanchang")),
+    SettingsSearchEntry("PERFORMANCE_SYSTEM", null, s(R.string.settings_perf_group_system), s(R.string.settings_perf_group_system_sub), listOf("xtwl", "system", "network", "wangluo")),
+    SettingsSearchEntry("PERFORMANCE_MOTION", "app_list_stagger", s(R.string.settings_stagger_entry), s(R.string.search_d_stagger), listOf("swrc", "stagger")),
+    SettingsSearchEntry("PERFORMANCE_MOTION", "legacy_app_list_transition", s(R.string.settings_legacy_transition), s(R.string.search_d_legacy), listOf("lzcd", "legacy")),
+    SettingsSearchEntry("PERFORMANCE_MOTION", "app_list_return_shrink", s(R.string.settings_app_list_shrink), s(R.string.search_d_app_list_shrink), listOf("sswd", "shrink")),
+    SettingsSearchEntry("PERFORMANCE_MOTION", "app_list_return_icon_float", s(R.string.settings_icon_float), s(R.string.search_d_icon_float), listOf("tbsf", "icon float")),
+    SettingsSearchEntry("PERFORMANCE_MOTION", "face_return_shrink", s(R.string.settings_face_shrink), s(R.string.search_d_face_shrink), listOf("bpss", "face shrink", "shousuo", "biaopan")),
+    SettingsSearchEntry("PERFORMANCE_MOTION", "reduce_dynamic_effects", s(R.string.settings_reduce_motion), s(R.string.search_d_reduce_motion), listOf("jrdt", "reduce motion", "jianruo", "huitan")),
+    SettingsSearchEntry("PERFORMANCE_MOTION", "anim_override", s(R.string.settings_launch_animation), s(R.string.search_d_launch_animation), listOf("qdfh", "launch animation")),
+    SettingsSearchEntry("PERFORMANCE_RENDERING", "icon_shadow", s(R.string.settings_icon_shadow), s(R.string.search_d_icon_shadow), listOf("tbyy", "shadow", "yinying")),
+    SettingsSearchEntry("PERFORMANCE_RENDERING", "two_tone_icons", s(R.string.settings_two_tone_icons), s(R.string.search_d_two_tone), listOf("sstb", "two tone", "shuangse")),
+    SettingsSearchEntry("PERFORMANCE_RENDERING", "low_res", s(R.string.settings_low_res_icons), s(R.string.search_d_low_res), listOf("dfbl", "low res", "fenbianlv")),
+    SettingsSearchEntry("PERFORMANCE_MOTION", "music_text_animation", s(R.string.settings_music_text_animation), s(R.string.search_d_music_text), listOf("yywz", "music text")),
+    SettingsSearchEntry("PERFORMANCE_SYSTEM", "hide_from_recents", s(R.string.settings_hide_recents), s(R.string.search_d_hide_recents), listOf("ychtkp", "recents", "houtai")),
+    SettingsSearchEntry("PERFORMANCE_SYSTEM", "watch_store_segmented_download", s(R.string.settings_watch_store_segmented_download), s(R.string.search_d_segmented_download), listOf("dxcfdxz", "segmented", "download", "xiazai", "duoxiancheng")),
+    SettingsSearchEntry("PERFORMANCE_RENDERING", "builtin_manager_thumbnails", s(R.string.settings_builtin_thumbnails), s(R.string.search_d_thumbnails), listOf("sltu", "thumbnails", "suoluetu")),
+    SettingsSearchEntry("PERFORMANCE_MOTION", "motion_profile", s(R.string.search_t_motion_profile_entry), s(R.string.search_d_motion_profile_entry), listOf("dhqx", "motion profile")),
     SettingsSearchEntry("MOTION_PROFILE", null, s(R.string.settings_motion_profile_title), s(R.string.search_d_motion_profile), listOf("dhqx", "motion", "quxian", "spring")),
     SettingsSearchEntry("MOTION_PROFILE", "motion_bounce", s(R.string.settings_motion_bounce), s(R.string.search_d_motion_bounce), listOf("cbht", "bounce", "huitan")),
     SettingsSearchEntry("MOTION_PROFILE", "motion_edge_strength", s(R.string.settings_motion_bounce_strength), s(R.string.search_d_edge_strength), listOf("bjqd", "edge strength")),

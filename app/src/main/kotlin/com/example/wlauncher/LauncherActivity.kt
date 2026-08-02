@@ -84,6 +84,7 @@ import com.flue.launcher.ui.drawer.appListPalette
 import com.flue.launcher.ui.drawer.vibrateHaptic
 import com.flue.launcher.ui.common.flueOverlayMaskShape
 import com.flue.launcher.ui.home.WatchFaceLayer
+import com.flue.launcher.ui.home.WatchFaceLoadingScreen
 import com.flue.launcher.ui.home.WatchFaceBottomFadeOverlay
 import com.flue.launcher.ui.home.WatchFaceStatusIndicatorOverlay
 import com.flue.launcher.ui.home.rememberAppListSeedColor
@@ -98,6 +99,7 @@ import com.flue.launcher.ui.anim.LayerFrameSnapshot
 import com.flue.launcher.ui.anim.lerpLayerAnimValues
 import com.flue.launcher.ui.anim.flueBackdropFill
 import com.flue.launcher.ui.anim.flueLegacyBlur
+import com.flue.launcher.ui.anim.rememberLegacyOverlayBlurBackdrop
 import com.flue.launcher.ui.anim.rememberLegacyWatchFaceBackdropFrames
 import com.flue.launcher.ui.anim.rememberLegacyWatchFacePixelCopyFrame
 import com.flue.launcher.ui.anim.shouldRenderLayerBlur
@@ -133,6 +135,14 @@ import kotlin.math.abs
 private const val SIDE_SCREEN_TRANSITION_MS = 260
 private const val NOTIFICATION_TRANSITION_MS = 240
 private const val APP_RETURN_MAINTENANCE_DELAY_MS = 260L
+
+/**
+ * 加载页出现后多久开始预热负一屏。
+ *
+ * 冷启动前几百毫秒 IO 全被表盘扫描和偏好读取占着，这时候去膨胀 RemoteViews
+ * 只会互相抢资源、把加载本身拖得更慢。让它们先跑一段。
+ */
+private const val SIDE_PAGE_PREWARM_DELAY_MS = 300L
 
 internal fun notificationUnderlayBlurProgress(
     notificationReturnState: ScreenState,
@@ -319,7 +329,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val watchFaceTextExitAnimation by vm.watchFaceTextExitAnimation.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
-    val watchmakerForceFill by vm.watchmakerForceFill.collectAsStateWithLifecycle()
     val watchfaceGravityParallaxEnabled by vm.watchfaceGravityParallaxEnabled.collectAsStateWithLifecycle()
     val doubleTapLockScreenEnabled by vm.doubleTapLockScreenEnabled.collectAsStateWithLifecycle()
     val powerMenuButtonEnabled by vm.powerMenuButtonEnabled.collectAsStateWithLifecycle()
@@ -336,6 +345,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val launchSourceState by vm.launchSourceState.collectAsStateWithLifecycle()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsStateWithLifecycle()
     val selectedWatchFace by vm.selectedWatchFace.collectAsStateWithLifecycle()
+    val watchfaceCanvasDefault by vm.watchfaceCanvasDefault.collectAsStateWithLifecycle()
+    val watchfaceCanvasOverrides by vm.watchfaceCanvasOverrides.collectAsStateWithLifecycle()
+    // 三层继承在这里落地：每表盘覆盖优先，缺省用 App 默认。
+    val watchfaceCanvasSettings = watchfaceCanvasOverrides[selectedWatchFaceId] ?: watchfaceCanvasDefault
     val watchFaceSelectionReady by vm.watchFaceSelectionReady.collectAsStateWithLifecycle()
     val watchFaceRefreshToken by vm.watchFaceRefreshToken.collectAsStateWithLifecycle()
     val watchmakerDataProvider = rememberWatchmakerWatchDataProvider(
@@ -436,7 +449,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
         watchFaceTextEntryAnimation,
         watchFaceStatusIndicators,
         watchFaceBottomFadeEnabled,
-        watchmakerForceFill,
+        watchfaceCanvasSettings,
         watchfaceGravityParallaxEnabled,
         honeycombBottomFade,
         honeycombEdgeBlurRadius,
@@ -953,6 +966,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 else -> false
             }
     val launchMotionRequested = launchMotionEntering || launchMotionReturnVisual
+    // 把布尔用 mutableStateOf 装一次，给 derivedStateOf 提供稳定的依赖。
+    val launchMotionRequestedState = remember { mutableStateOf(launchMotionRequested) }
+    launchMotionRequestedState.value = launchMotionRequested
     val launchMotionTarget = if (launchMotionEntering) 1f else 0f
     LaunchedEffect(launchMotionTarget, activeMotionProfile) {
         val current = launchMotionProgress.value
@@ -989,7 +1005,18 @@ fun LauncherScreen(vm: LauncherViewModel) {
             retainedLaunchOrigin = null
         }
     }
-    val showLaunchBackdrop = launchMotionRequested || launchMotionProgress.value > 0.001f
+    // 逐帧读 launchMotionProgress.value 会把整个 LauncherActivity 作用域拖进
+    // 每帧重组（这里有上百个 collectAsStateWithLifecycle，作用域极大）。挂载
+    // 判定只关心「是否 > 0.001」这个布尔，用 derivedStateOf 收敛成两次失效
+    // （起、落各一次），中间的几十帧不再触发重组。
+    //
+    // 这正是「列表停在中间时打开/返回掉帧、停在顶部或底部反而正常」的根因：
+    // 边界处可见行少、重组代价低，中间位置可见行最多、代价最高。
+    val showLaunchBackdrop by remember {
+        derivedStateOf {
+            launchMotionRequestedState.value || launchMotionProgress.value > 0.001f
+        }
+    }
     // 启动/返回期间遮罩、列表层、底色板、边缘罩共用 launchMotionProgress 这
     // 一个时钟（graphicsLayer 逐帧读，零重组）。p=0 时 provider 精确回到
     // Apps 静止态，外部时钟撤走零跳变。
@@ -1022,16 +1049,28 @@ fun LauncherScreen(vm: LauncherViewModel) {
     // The launch dispatch delay keeps the splash on screen long enough; it
     // must not also delay the source icon until the last few frames.
     val iconRevealFraction = 0.06f
-    val iconProgress = if (launchMotionTarget > 0.5f) {
-        if (splashIcon) {
-            ((launchMotionProgress.value - iconRevealFraction) /
-                (1f - iconRevealFraction)).coerceIn(0f, 1f)
-        } else {
-            0f
+    // 同 showLaunchBackdrop：这里曾在 composable 作用域直接算，等于每帧重组
+    // 整个 Activity。改成 provider 交给 LaunchBackdropContent 逐帧读，
+    // 计算完全不变，只是求值位置从组合期挪到绘制期。
+    val splashIconState = remember { mutableStateOf(splashIcon) }
+    splashIconState.value = splashIcon
+    val launchMotionEnteringState = remember { mutableStateOf(launchMotionTarget > 0.5f) }
+    launchMotionEnteringState.value = launchMotionTarget > 0.5f
+    val iconProgressProvider = remember {
+        {
+            if (launchMotionEnteringState.value) {
+                if (splashIconState.value) {
+                    ((launchMotionProgress.value - iconRevealFraction) /
+                        (1f - iconRevealFraction)).coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+            } else {
+                launchMotionProgress.value.coerceIn(0f, 1f)
+            }
         }
-    } else {
-        launchMotionProgress.value.coerceIn(0f, 1f)
     }
+    val launchProgressProvider = remember { { launchMotionProgress.value } }
 
     BoxWithConstraints(
         modifier = Modifier
@@ -1398,6 +1437,31 @@ fun LauncherScreen(vm: LauncherViewModel) {
             )
             settleNotificationTransition(0f)
         }
+        // 加载页的逃生出口：落盘退回内置表盘，然后重启进程。
+        //
+        // 必须用 await 版本落盘 —— fallbackToBuiltIn 走的是 fire-and-forget 的
+        // persist，紧接着杀进程会把写入丢掉，重启完读到的还是那块加载不出来的
+        // 表盘，按钮等于没用。
+        //
+        // 杀进程而不是 recreate()：卡住的往往是后台那条扫描/解析协程，重建
+        // Activity 会把它留在进程里继续卡着。本应用是 Launcher，exit 后系统会
+        // 用 HOME intent 立刻把它拉回来。
+        val fallbackToDefaultWatchFaceAndRestart: () -> Unit = {
+            launcherScope.launch {
+                vm.fallbackToBuiltInAndAwaitPersist(
+                    context.getString(R.string.watch_face_loading_fallback),
+                )
+                val restartIntent = context.packageManager
+                    .getLaunchIntentForPackage(context.packageName)
+                    ?.addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK,
+                    )
+                if (restartIntent != null) {
+                    runCatching { context.startActivity(restartIntent) }
+                }
+                Runtime.getRuntime().exit(0)
+            }
+        }
         LaunchedEffect(backPressRequests) {
             if (backPressRequests > 0L) {
                 if (screenState == ScreenState.Notifications) {
@@ -1416,6 +1480,33 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 }
             }
         }
+        // 加载页期间预热三个侧向覆层。
+        //
+        // 首次划开任一覆层要在同一帧里完成：该层首次组合、AppWidgetHostView
+        // 逐个膨胀 RemoteViews、AppWidgetHost.startListening 注册 —— 全挤一帧
+        // 必掉帧（老师报的）。趁加载页顶着屏幕先把这些做完。
+        //
+        // 小组件页和控制中心以前**没有**接进来，只有负一屏预热了，所以冷启动后
+        // 第一次划开小组件页照旧顿一下：那一帧要现做 WidgetPageLayer 组合 +
+        // startListening + 每个 createView 的跨进程 RemoteViews 膨胀（最贵的
+        // 一项），三件事都在主线程上（老师实机反馈）。
+        //
+        // 延后一拍再挂：冷启动本来就是 IO 密集的，让表盘扫描先抢到 IO，
+        // 否则预热反而拖慢加载本身。
+        var sidePagePrewarmed by remember { mutableStateOf(false) }
+        LaunchedEffect(watchFaceSelectionReady) {
+            if (sidePagePrewarmed) return@LaunchedEffect
+            if (watchFaceSelectionReady) return@LaunchedEffect
+            delay(SIDE_PAGE_PREWARM_DELAY_MS)
+            sidePagePrewarmed = true
+        }
+        // 预热单独一条判据，**不并进 sideSceneOverlayActive**：那个标志被表盘
+        // 捕获、模糊降档等一大票逻辑当作「有覆层活跃」用，混进来会让冷启动
+        // 期间那些路径全部误判。
+        val overlayPrewarming = sidePagePrewarmed && !watchFaceSelectionReady
+        val sideScreenPrewarming = sideScreenEnabled && overlayPrewarming
+        val widgetPagePrewarming = showWidgetPage && overlayPrewarming
+        val controlCenterPrewarming = showControlCenter && overlayPrewarming
         val sideScreenVisible = sidePageMounted ||
             overlayGestureTarget == OverlayGestureTarget.Stack ||
             screenState == ScreenState.Stack ||
@@ -1621,6 +1712,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
             onAppListDrag = updateAppListGesture,
             onAppListRelease = releaseAppListGesture,
             onBackdropCaptureRequested = requestCleanWatchFaceFrame,
+            // 加载页顶着的时候上滑 / 侧滑一律不响应：这些识别器挂在加载页外层，
+            // 加载页自己的 pointerInput 拦不到，只能从这里整个停掉。
+            gesturesLocked = !watchFaceSelectionReady,
             modifier = Modifier.fillMaxSize()
         ) {
             if (directLaunchBackdropVisible) {
@@ -1772,19 +1866,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     )
             ) {
                 AnimatedContent(
-                    targetState = if (
-                        watchFaceSelectionReady ||
-                        selectedWatchFace.isBuiltin ||
-                        selectedWatchFaceId == BUILT_IN_WATCHFACE_ID ||
-                        (
-                            selectedWatchFace.id == selectedWatchFaceId &&
-                                (
-                                    selectedWatchFace.isJbWatch ||
-                                        selectedWatchFace.isWatchmaker
-                                    ) &&
-                                !selectedWatchFace.sourceDirPath.isNullOrBlank()
-                            )
-                    ) {
+                    // 只认 watchFaceSelectionReady。
+                    //
+                    // 原来这里还并了三个 `||` 旁路，其中 `selectedWatchFace.isBuiltin`
+                    // 在冷启动第一帧必然成立（ViewModel 里那个字段的初始值就是内置
+                    // 表盘），于是 "loading" 分支成了永远走不到的死代码 —— 冷启动
+                    // 先渲染一瞬间默认表盘，偏好读出来后再跳到真表盘。老师看到的
+                    // 「未完成加载就显示默认表盘」就是它。
+                    //
+                    // 收紧后若这个 flow 永远不 true，桌面会一直停在加载页；
+                    // 加载页 5 秒后的逃生按钮就是为这种情况准备的，两者必须共存。
+                    targetState = if (watchFaceSelectionReady) {
                         selectedWatchFace.stableKey
                     } else {
                         "loading"
@@ -1797,10 +1889,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     label = "watchface_switch"
                 ) { targetKey ->
                     if (targetKey == "loading") {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black)
+                        WatchFaceLoadingScreen(
+                            onFallbackToDefault = fallbackToDefaultWatchFaceAndRestart,
                         )
                     } else if (selectedWatchFace.isBuiltin) {
                         WatchFaceLayer(
@@ -1844,7 +1934,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                     vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
                                 },
                                 dataProvider = watchmakerDataProvider,
-                                forceFill = watchmakerForceFill,
+                                canvasSettings = watchfaceCanvasSettings,
                                 gravityParallaxEnabled = watchfaceGravityParallaxEnabled,
                                 textEntryAnimationEnabled = watchFaceTextEntryAnimation,
                                 textExitAnimationEnabled = watchFaceTextExitAnimation,
@@ -2178,8 +2268,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
             if (showLaunchBackdrop) {
                 LaunchBackdropContent(
-                    progress = launchMotionProgress.value,
-                    iconProgress = iconProgress,
+                    progressProvider = launchProgressProvider,
+                    iconProgressProvider = iconProgressProvider,
                     entering = launchMotionTarget > 0.5f,
                     icon = effectiveLaunchIcon,
                     origin = effectiveLaunchOrigin,
@@ -2191,7 +2281,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 )
             }
 
-            if (sideScreenEnabled && sideScreenVisible) {
+            // sideScreenPrewarming 让这层在加载页期间就挂上来完成组合与
+            // RemoteViews 膨胀。不需要额外藏它：下面 graphicsLayer 的
+            // alpha 跟 pageProgress 走，此时是 0，translationX 也在屏外。
+            if (sideScreenEnabled && (sideScreenVisible || sideScreenPrewarming)) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -2297,7 +2390,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 }
             }
 
-            if (showWidgetPage && widgetPageVisible) {
+            // widgetPagePrewarming 让这层在加载页期间就挂上来完成组合、
+            // startListening 与 RemoteViews 膨胀。不需要额外藏它：下面
+            // graphicsLayer 的 alpha 跟 pageProgress 走，此时是 0，
+            // translationX 也在屏外。
+            if (showWidgetPage && (widgetPageVisible || widgetPagePrewarming)) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -2331,7 +2428,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 }
             }
 
-            if (showControlCenter && controlCenterVisible) {
+            // 同上：controlCenterPrewarming 在加载页期间完成首次组合。
+            // 这层的位移是 translationY，收起态同样在屏外且 alpha 为 0。
+            if (showControlCenter && (controlCenterVisible || controlCenterPrewarming)) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -2389,6 +2488,38 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 }
             }
 
+            // Android 12 以下：通知中心压在负一屏 / 控制中心上时的烘焙模糊背景。
+            //
+            // 那两层的根底是 alpha = 0.62 的半透明玻璃，底下的表盘和图标是直接
+            // 穿透过来的 —— 挂在它们身上的 flueLegacyBlur 只能糊「自己录下来的
+            // 内容」，穿透的像素根本不在那个图层里，所以通知列表后面一直是清晰
+            // 的图标，可读性极差（老师截图）。这里改成和表盘同一套 PixelCopy
+            // 预制帧。
+            //
+            // 闸门必须两头都卡死：覆层要完全展开（早了采到入场中间态），通知
+            // 要一点都还没拉出来（晚了会把通知列表自己采进背景，形成套娃）。
+            //
+            // 只用**离散状态**判定，绝不读 sidePageAnim / controlCenterAnim 的
+            // 逐帧 value —— 那些是 Animatable，在组合期读会让整个 Launcher 场景
+            // 跟着每一帧重组（本文件上面那条注释记的正是这个已修掉的坑）。
+            // 稳定停在 Stack / ControlCenter 且没有任何手势在飞，就等价于「已完全
+            // 展开」；剩下的落定余量由捕获函数自己那段 delay 负责。
+            val notificationUnderlaySettled =
+                (screenState == ScreenState.Stack || screenState == ScreenState.ControlCenter) &&
+                    overlayGestureTarget == null &&
+                    !notificationGestureActive &&
+                    !notificationSceneActive
+            val legacyNotificationBackdrop = rememberLegacyOverlayBlurBackdrop(
+                captureAllowed = notificationsEnabled && notificationUnderlaySettled,
+                // 底层内容变了就要重采：换页面、换表盘、小组件增删都算。
+                visualKey = listOf(
+                    screenState.name,
+                    selectedWatchFace.stableKey,
+                    watchFaceRefreshToken.toString(),
+                    sideScreenShortcuts.size.toString(),
+                    notificationGroups.size.toString(),
+                ).joinToString("|"),
+            )
             if (notificationsEnabled && keepNotificationLayer) {
                 Box(
                     modifier = Modifier
@@ -2435,6 +2566,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             )
                         },
                         glassHighlightEnabled = glassHighlightEnabled,
+                        legacyBlurBackdrop = legacyNotificationBackdrop,
                         overlayMaskCornerRadiusDp = overlayMaskCornerRadiusDp,
                     )
                     }
@@ -2446,8 +2578,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
 
 @Composable
 private fun LaunchBackdropContent(
-    progress: Float,
-    iconProgress: Float,
+    progressProvider: () -> Float,
+    iconProgressProvider: () -> Float,
     entering: Boolean,
     icon: androidx.compose.ui.graphics.ImageBitmap?,
     origin: Offset,
@@ -2458,15 +2590,8 @@ private fun LaunchBackdropContent(
     modifier: Modifier = Modifier,
 ) {
     val launcherStyle = LauncherTheme.style
-    val motionProgress = progress.coerceIn(0f, 1f)
-    val visibleIconProgress = iconProgress.coerceIn(0f, 1f)
     val initialIconScale = if (uiStyle == UiStyle.MATERIAL_3) 0.82f else 0.5f
     val exitIconScale = if (uiStyle == UiStyle.MATERIAL_3) 0.88f else 0.3f
-    val iconScale = if (entering) {
-        initialIconScale + (1f - initialIconScale) * visibleIconProgress
-    } else {
-        exitIconScale + (1f - exitIconScale) * visibleIconProgress
-    }
     val normalizedOrigin = if (origin.x.isFinite() && origin.y.isFinite()) {
         Offset(origin.x.coerceIn(0f, 1f), origin.y.coerceIn(0f, 1f))
     } else {
@@ -2474,41 +2599,71 @@ private fun LaunchBackdropContent(
     }
     val sourceTranslationX = (normalizedOrigin.x - 0.5f) * screenWidthPx
     val sourceTranslationY = (normalizedOrigin.y - 0.5f) * screenHeightPx
-    val sourceOffsetFraction = 1f - motionProgress
+    // 输入拦截跟遮罩自己的可见度走，而不是跟挂载周期走。
+    //
+    // 旧写法在整个挂载周期无条件 consume，而卸载条件是 progress > 0.001
+    // （showLaunchBackdrop），返回弹簧的 visibilityThreshold 又被刻意收紧到
+    // 0.0002 来消除「最后一点直接跳过去」。两者相乘：p=0.002 时 alpha 只剩
+    // 0.3%，肉眼已是纯透明，遮罩却还挂在 zIndex(6f) 上一帧不漏地吃掉每个
+    // 触摸，弹簧还要再爬几百毫秒才卸载 —— 就是「退出动画看起来做完了却
+    // 还不能滑动或点其他图标」。
+    //
+    // entering 必须无条件拦截：入场时 progress 从 0 起步，此时遮罩虽薄但
+    // 启动已在飞行中，放行会让第二次点击穿透到下面再启动一个应用。
+    //
+    // 拦截阈值用 derivedStateOf 而不是每帧直读：布尔只在跨过 0.03 时翻转，
+    // 中间几十帧不再重组。1.6 倍斜率与下面 graphicsLayer 里的 alpha 必须
+    // 同源，否则改一侧会让「看得见」和「挡得住」悄悄错位。
+    val consumesInput by remember(entering) {
+        derivedStateOf {
+            entering || (progressProvider().coerceIn(0f, 1f) * 1.6f) > 0.03f
+        }
+    }
     Box(
         modifier = modifier
             .fillMaxSize()
-            // 启动与返回遮罩整个生命周期都独占交互；返回途中状态已经切回
-            // Apps/Stack 时也不能点到下面的应用或快捷控件。
-            .pointerInput(Unit) {
-                awaitPointerEventScope {
-                    while (true) {
-                        awaitPointerEvent().changes.forEach { it.consume() }
+            .then(
+                if (consumesInput) {
+                    Modifier.pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                awaitPointerEvent().changes.forEach { it.consume() }
+                            }
+                        }
                     }
-                }
-            }
+                } else {
+                    Modifier
+                },
+            )
             .graphicsLayer {
                 // 1.6 倍斜率：p≈0.62 就完全不透明。列表层的 alpha 用 1.8 倍
                 // 斜率提前淡出（appListLaunchValues），两条曲线共用同一个
-                // progress——返回方向遮罩变薄时，底下列表已按同一时钟就位，
+                // progress —— 返回方向遮罩变薄时，底下列表已按同一时钟就位，
                 // 不再出现「透过半透明遮罩看见 4 倍巨图标收缩然后闪现」。
-                alpha = (motionProgress * 1.6f).coerceIn(0f, 1f)
+                alpha = (progressProvider().coerceIn(0f, 1f) * 1.6f).coerceIn(0f, 1f)
             }
             .background(backgroundColor.copy(alpha = 1f)),
         contentAlignment = Alignment.Center
     ) {
-        if (icon != null && visibleIconProgress > 0.001f) {
+        if (icon != null) {
             Image(
                 bitmap = icon,
                 contentDescription = null,
                 modifier = Modifier
                     .size(96.dp)
                     .graphicsLayer {
-                        scaleX = iconScale
-                        scaleY = iconScale
-                        alpha = visibleIconProgress
-                        translationX = sourceTranslationX * sourceOffsetFraction
-                        translationY = sourceTranslationY * sourceOffsetFraction
+                        // 图标的四个通道全在绘制期求值。原先 iconScale /
+                        // visibleIconProgress 在组合期算，把每帧动画变成一次
+                        // 重组；这里只读同一个 Animatable，视觉完全不变。
+                        val iconProgress = iconProgressProvider().coerceIn(0f, 1f)
+                        val base = if (entering) initialIconScale else exitIconScale
+                        val scale = base + (1f - base) * iconProgress
+                        val offsetFraction = 1f - progressProvider().coerceIn(0f, 1f)
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = iconProgress
+                        translationX = sourceTranslationX * offsetFraction
+                        translationY = sourceTranslationY * offsetFraction
                     }
                     .clip(if (uiStyle == UiStyle.MATERIAL_3) launcherStyle.compactShape else CircleShape),
                 contentScale = ContentScale.Crop

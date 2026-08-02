@@ -356,7 +356,6 @@ private fun WatchStoreScreen(
     var searchText by remember { mutableStateOf("") }
     var committedSearch by remember { mutableStateOf("") }
     var categories by remember { mutableStateOf<List<WatchStoreCategory>>(emptyList()) }
-    var categoriesLoading by remember { mutableStateOf(true) }
     var categoriesError by remember { mutableStateOf<String?>(null) }
     var categoriesReloadToken by remember { mutableIntStateOf(0) }
     var entries by remember { mutableStateOf<List<WatchStoreWatchFace>>(emptyList()) }
@@ -538,7 +537,6 @@ private fun WatchStoreScreen(
     }
 
     LaunchedEffect(repository, categoriesReloadToken) {
-        categoriesLoading = true
         categoriesError = null
         runCatching { repository.getCategories() }
             .onSuccess { categories = it }
@@ -546,7 +544,6 @@ private fun WatchStoreScreen(
                 it.throwIfCancellation()
             categoriesError = it.userFacingMessage(context)
             }
-        categoriesLoading = false
     }
 
     val queryKey = remember(sort, screenType, selectedCategory?.slug, committedSearch) {
@@ -957,7 +954,6 @@ private fun WatchStoreScreen(
                 onScreenTypeChange = { screenType = it },
                 selectedCategory = selectedCategory,
                 categories = categories,
-                categoriesLoading = categoriesLoading,
                 categoriesError = categoriesError,
                 categoryMenuExpanded = categoryMenuExpanded,
                 onCategoryMenuExpandedChange = { categoryMenuExpanded = it },
@@ -1184,12 +1180,8 @@ private fun WatchStoreScreen(
                 .fillMaxSize()
                 .blockPointerPassThrough()
                 .zIndex(1f),
-            enter = slideInHorizontally(
-                animationSpec = tween(260, easing = FastOutSlowInEasing),
-            ) { fullWidth -> fullWidth / 4 },
-            exit = slideOutHorizontally(
-                animationSpec = tween(240, easing = FastOutSlowInEasing),
-            ) { fullWidth -> fullWidth / 4 },
+            enter = STORE_LAYER_ENTER,
+            exit = STORE_LAYER_EXIT,
         ) {
             val overlayId = selectedId ?: lastDetailId
             if (overlayId != null) {
@@ -1246,12 +1238,8 @@ private fun WatchStoreScreen(
                 .fillMaxSize()
                 .blockPointerPassThrough()
                 .zIndex(2f),
-            enter = slideInHorizontally(
-                animationSpec = tween(260, easing = FastOutSlowInEasing),
-            ) { fullWidth -> fullWidth / 4 },
-            exit = slideOutHorizontally(
-                animationSpec = tween(240, easing = FastOutSlowInEasing),
-            ) { fullWidth -> fullWidth / 4 },
+            enter = STORE_LAYER_ENTER,
+            exit = STORE_LAYER_EXIT,
         ) {
             StoreUploadOverlay(
                 repository = repository,
@@ -1268,12 +1256,8 @@ private fun WatchStoreScreen(
                 .fillMaxSize()
                 .blockPointerPassThrough()
                 .zIndex(3f),
-            enter = slideInHorizontally(
-                animationSpec = tween(260, easing = FastOutSlowInEasing),
-            ) { fullWidth -> fullWidth / 4 },
-            exit = slideOutHorizontally(
-                animationSpec = tween(240, easing = FastOutSlowInEasing),
-            ) { fullWidth -> fullWidth / 4 },
+            enter = STORE_LAYER_ENTER,
+            exit = STORE_LAYER_EXIT,
         ) {
             MyUploadsOverlay(
                 repository = repository,
@@ -1363,7 +1347,6 @@ private fun FilterBar(
     onScreenTypeChange: (WatchStoreScreenType?) -> Unit,
     selectedCategory: WatchStoreCategory?,
     categories: List<WatchStoreCategory>,
-    categoriesLoading: Boolean,
     categoriesError: String?,
     categoryMenuExpanded: Boolean,
     onCategoryMenuExpandedChange: (Boolean) -> Unit,
@@ -1397,13 +1380,7 @@ private fun FilterBar(
         }
         Box {
             StorePill(
-                selectedCategory?.name ?: stringResource(
-                    if (categoriesLoading) {
-                        R.string.watch_store_category_loading_short
-                    } else {
-                        R.string.watch_store_category
-                    },
-                ),
+                selectedCategory?.name ?: stringResource(R.string.watch_store_category),
                 selectedCategory != null,
             ) {
                 onCategoryMenuExpandedChange(true)
@@ -2041,6 +2018,16 @@ private fun WatchFaceDetailPage(
                                         fontSize = 12.sp,
                                     )
                                 }
+                                // Flue 不执行 Lua，带 Global Script 的表盘装上后脚本不生效。
+                                // 只提示这一项：其余兼容性字段刻意不展示。报告随 catalog
+                                // 持久化，所以进程重启后回到这一页仍然看得到。
+                                if (record.compatibilityReport?.hasGlobalScript == true) {
+                                    Text(
+                                        stringResource(R.string.watch_store_lua_script_warning),
+                                        color = WatchColors.ActiveOrange,
+                                        fontSize = 11.sp,
+                                    )
+                                }
                                  Text(
                                      stringResource(
                                          R.string.watch_store_name_fmt,
@@ -2543,12 +2530,8 @@ private fun MyUploadsOverlay(
                 .fillMaxSize()
                 .blockPointerPassThrough()
                 .zIndex(5f),
-            enter = slideInHorizontally(
-                animationSpec = tween(260, easing = FastOutSlowInEasing),
-            ) { fullWidth -> fullWidth / 4 },
-            exit = slideOutHorizontally(
-                animationSpec = tween(240, easing = FastOutSlowInEasing),
-            ) { fullWidth -> fullWidth / 4 },
+            enter = STORE_LAYER_ENTER,
+            exit = STORE_LAYER_EXIT,
         ) {
             val entry = editTarget ?: lastEditTarget
             if (entry != null) {
@@ -4288,6 +4271,24 @@ private fun FullscreenWatchPreview(
         }
     }
 }
+
+/**
+ * 表盘市场层级覆层的进/退场动效，与设置页 [SettingsActivity] 的层级转场同源。
+ *
+ * fade 不是装饰：只做位移时覆层是一块 100% 不透明的板子，从 1/4 屏处直接盖上
+ * 来，底层页面在它后面全程满不透明地并存 —— 观感就是「元素叠加」。设置页那边
+ * 曾经为省合成开销删掉 fade，正是老师点名的那个退化。四处覆层共用同一份常量，
+ * 避免以后改一处漏三处。
+ */
+private val STORE_LAYER_ENTER =
+    slideInHorizontally(
+        animationSpec = tween(260, easing = FastOutSlowInEasing),
+    ) { fullWidth -> fullWidth / 4 } + fadeIn(tween(200))
+
+private val STORE_LAYER_EXIT =
+    slideOutHorizontally(
+        animationSpec = tween(240, easing = FastOutSlowInEasing),
+    ) { fullWidth -> fullWidth / 4 } + fadeOut(tween(140))
 
 /**
  * 让仍在进/退场的全屏覆层保持命中，避免其滑动后露出的区域点到底层列表。

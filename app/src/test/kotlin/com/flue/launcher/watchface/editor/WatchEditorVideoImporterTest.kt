@@ -102,17 +102,73 @@ class WatchEditorVideoImporterTest {
     }
 
     @Test
-    fun resolutionPresetsUseTheirCapsWithoutRaisingLowSourceBitrate() {
+    fun resolutionPresetsUseTheirDefaultsWithoutRaisingLowSourceBitrate() {
         val high = WatchEditorVideoInfo(1_000L, 1920, 1080, bitrateKbps = 24_000)
-        assertEquals(20_000, defaultVideoBitrateKbps(high, WatchEditorVideoResolutionPreset.P1080))
-        assertEquals(15_000, defaultVideoBitrateKbps(high, WatchEditorVideoResolutionPreset.P720))
-        assertEquals(10_000, defaultVideoBitrateKbps(high, WatchEditorVideoResolutionPreset.P480))
-        assertEquals(10_000, defaultVideoBitrateKbps(high, WatchEditorVideoResolutionPreset.P360))
+        assertEquals(8_000, defaultVideoBitrateKbps(high, WatchEditorVideoResolutionPreset.P1080))
+        assertEquals(8_000, defaultVideoBitrateKbps(high, WatchEditorVideoResolutionPreset.P720))
+        assertEquals(4_000, defaultVideoBitrateKbps(high, WatchEditorVideoResolutionPreset.P480))
+        assertEquals(4_000, defaultVideoBitrateKbps(high, WatchEditorVideoResolutionPreset.P360))
         assertEquals(24_000, defaultVideoBitrateKbps(high, WatchEditorVideoResolutionPreset.ORIGINAL))
 
         val low = high.copy(bitrateKbps = 820)
         WatchEditorVideoResolutionPreset.entries.forEach { preset ->
             assertEquals(820, defaultVideoBitrateKbps(low, preset))
         }
+    }
+
+    /**
+     * 源可能是 120/240fps，而 [WatchEditorVideoImportOptions] 的 init 只收 ≤60。
+     * UI 必须用夹过的值，否则高帧率素材选「原画」会直接抛异常。
+     */
+    @Test
+    fun importableFrameRateClampsHighSpeedSourcesIntoTheOptionsRange() {
+        val base = WatchEditorVideoInfo(1_000L, 1920, 1080)
+        assertEquals(null, base.importableFrameRate)
+        assertEquals(30f, base.copy(frameRate = 30f).importableFrameRate)
+        assertEquals(60f, base.copy(frameRate = 120f).importableFrameRate)
+        assertEquals(60f, base.copy(frameRate = 240f).importableFrameRate)
+        // 夹过的值必须真的能构造出 options —— 这条断言就是这个属性存在的理由。
+        val clamped = base.copy(frameRate = 240f).importableFrameRate!!
+        WatchEditorVideoImportOptions(
+            startMs = 0L,
+            endMs = 1_000L,
+            frameRate = clamped,
+            bitrateKbps = 4_000,
+        )
+    }
+
+    /**
+     * 重编码走 mp4，且不能带 mjpeg 那套只对静帧序列有意义的参数。
+     *
+     * 编码器必须是 ffmpeg-kit-video **实际包含**的那个：该变体不含 GPL 的
+     * libx264，写 `-c:v libx264` 会在真机上 returnCode=1（已实测）。
+     */
+    @Test
+    fun reencodeArgumentsProduceMp4WithAnEncoderThePackageActuallyShips() {
+        val info = WatchEditorVideoInfo(4_000L, 1920, 1080)
+        val options = WatchEditorVideoImportOptions(
+            startMs = 500L,
+            endMs = 3_500L,
+            resolutionPreset = WatchEditorVideoResolutionPreset.P720,
+            frameRate = 30f,
+            bitrateKbps = 8_000,
+        )
+        val arguments = WatchEditorVideoImporter.buildReencodeArguments(
+            inputFile = File("/tmp/in.mp4"),
+            outputFile = File("/tmp/out.mp4"),
+            info = info,
+            options = options,
+        )
+        assertTrue(arguments.windowed(2).contains(listOf("-c:v", "mpeg4")))
+        // GPL 编码器不在包里，出现即是回归。
+        assertEquals(false, arguments.contains("libx264"))
+        assertTrue(arguments.windowed(2).contains(listOf("-pix_fmt", "yuv420p")))
+        assertTrue(arguments.windowed(2).contains(listOf("-b:v", "8000k")))
+        assertTrue(arguments.contains("-an"))
+        assertTrue(arguments.contains("+faststart"))
+        // mjpeg 专属参数不该出现在视频轨这条路上。
+        assertEquals(false, arguments.contains("-start_number"))
+        assertEquals(false, arguments.contains("-qmin"))
+        assertTrue(arguments.last().endsWith(".mp4"))
     }
 }

@@ -907,7 +907,7 @@ fun AppFolderOverlay(
             AppShortcutOverlay(
                 app = app,
                 blurEnabled = blurEnabled,
-                onExcludeApp = null,
+                onExcludeApp = { onExcludeApp(app) },
                 onRemoveShortcut = if (app.isAppListShortcut) { { onRemoveShortcut(app) } } else null,
                 onDismiss = { menuApp = null }
             )

@@ -64,6 +64,14 @@ fun GestureHost(
     onAppListDrag: ((Float) -> Unit)? = null,
     onAppListRelease: ((Float, Float, Boolean) -> Unit)? = null,
     onBackdropCaptureRequested: (() -> Unit)? = null,
+    /**
+     * 全局锁死。表盘加载页显示期间为 true —— 加载没完成就不允许上滑应用列表
+     * 或侧滑负一屏，否则用户会划到一个还没准备好的界面上。
+     *
+     * 锁在这里而不是靠加载页自己的 pointerInput：这些识别器挂在加载页的**外层**
+     * 容器上，加载页拦不住它们。
+     */
+    gesturesLocked: Boolean = false,
     content: @Composable () -> Unit
 ) {
     var totalDx by remember { mutableFloatStateOf(0f) }
@@ -78,7 +86,7 @@ fun GestureHost(
     // 收到 ACTION_CANCEL——列表在边缘 overscroll 时没有消费滚动量、
     // requestDisallowIntercept 保护不生效，手势被偷走就是「到顶继续滑没有
     // 反馈且卡死 / 偶发滑不动」的第二个独立病灶（诊断日志里成串的 a=3）。
-    val hostGestureNeeded = when (screenState) {
+    val hostGestureNeeded = if (gesturesLocked) false else when (screenState) {
         ScreenState.Face, ScreenState.Widgets -> true
         ScreenState.Stack -> !stackDismissHandledByContent
         // 控制中心以前不在这份名单里：覆层一打开手势宿主就整体卸载，
@@ -103,8 +111,12 @@ fun GestureHost(
         modifier = modifier
             // 在 touch-slop 之前先取一张真实窗口合成帧。这个观察器不消费
             // 指针；方向识别与原来的拖动宿主并行，横/纵手势都能复用该帧。
-            .pointerInput(screenState, onBackdropCaptureRequested) {
-                if (screenState != ScreenState.Face || onBackdropCaptureRequested == null) {
+            .pointerInput(screenState, onBackdropCaptureRequested, gesturesLocked) {
+                if (
+                    gesturesLocked ||
+                    screenState != ScreenState.Face ||
+                    onBackdropCaptureRequested == null
+                ) {
                     return@pointerInput
                 }
                 awaitEachGesture {
@@ -124,6 +136,8 @@ fun GestureHost(
                 showControlCenter,
                 widgetsBackGestureLocked,
                 closingOverlay,
+                // 解锁后必须重建识别器，否则加载完成了手势还是死的。
+                gesturesLocked,
             ) {
                 if (!hostGestureNeeded) return@pointerInput
                 val widthPx = size.width.coerceAtLeast(1).toFloat()

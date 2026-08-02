@@ -485,12 +485,15 @@ class WatchmakerRuntimePrimitivesTest {
                       <Layer type="series" series="dh24z" />
                       <Layer type="calendar" />
                       <Layer type="video" />
+                      <Layer type="map" />
                     </Watch>
                     """.trimIndent(),
                 )
             }
 
-            assertEquals(setOf("video"), WatchmakerDefinitionParser().parse(xml).unsupportedLayerTypes)
+            // video 已由 Stage 的 TextureView 分段合成真正播放，只剩 map 仍需
+            // 一个实时地图桥。
+            assertEquals(setOf("map"), WatchmakerDefinitionParser().parse(xml).unsupportedLayerTypes)
         } finally {
             root.deleteRecursively()
         }

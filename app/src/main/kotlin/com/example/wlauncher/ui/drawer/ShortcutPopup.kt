@@ -34,11 +34,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.ui.res.stringResource
+import com.flue.launcher.R
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,7 +60,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.common.flueElasticNestedScroll
-import kotlinx.coroutines.delay
 
 @Composable
 fun AppShortcutOverlay(
@@ -67,6 +69,7 @@ fun AppShortcutOverlay(
     onRemoveShortcut: (() -> Unit)? = null,
     onRenameFolder: ((String) -> Unit)? = null,
     onDissolveFolder: (() -> Unit)? = null,
+    onTransitionProgress: (Float) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -91,28 +94,35 @@ fun AppShortcutOverlay(
         animateDismiss()
     }
 
-    LaunchedEffect(dismissing) {
-        if (dismissing) {
-            delay(250)
-            onDismiss()
-        }
-    }
-
+    // 关门契约与 AppFolderOverlay 完全对齐：卸载时机由 alpha 真正落到 0 决定，
+    // 不再用 delay(250) 猜。旧写法的两条时间线是错开的——alpha 走 tween(200)
+    // 淡完之后，还要空等 50ms 才 onDismiss()，而列表背景模糊是挂在
+    // actionApp != null 上的另一条 tween(180)，只有 onDismiss() 之后才开始退。
+    // 结果就是菜单已经看不见了，模糊还满着，然后才突兀地自己化开。
+    // 现在两侧同用一条 alpha：菜单淡多少，模糊就退多少。
     val animAlpha by animateFloatAsState(
         targetValue = if (showing && !dismissing) 1f else 0f,
-        animationSpec = tween(200),
-        label = "overlay_alpha"
+        animationSpec = tween(180),
+        label = "overlay_alpha",
+        finishedListener = { finalAlpha ->
+            if (dismissing && finalAlpha <= 0.001f) {
+                onDismiss()
+            }
+        },
     )
     val animScale by animateFloatAsState(
-        targetValue = if (showing && !dismissing) 1f else 0.8f,
-        animationSpec = spring(dampingRatio = 0.7f, stiffness = 600f),
+        targetValue = if (showing && !dismissing) 1f else 0.92f,
+        animationSpec = spring(dampingRatio = 0.78f, stiffness = 520f),
         label = "overlay_scale"
     )
+    SideEffect {
+        onTransitionProgress(animAlpha)
+    }
 
     if (renameDialogVisible) {
         AlertDialog(
             onDismissRequest = { renameDialogVisible = false },
-            title = { Text("重命名文件夹") },
+            title = { Text(stringResource(R.string.shortcut_menu_rename_folder_title)) },
             text = {
                 OutlinedTextField(
                     value = renameText,
@@ -128,12 +138,12 @@ fun AppShortcutOverlay(
                         animateDismiss()
                     }
                 ) {
-                    Text("完成")
+                    Text(stringResource(R.string.shortcut_menu_rename_confirm))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { renameDialogVisible = false }) {
-                    Text("取消")
+                    Text(stringResource(R.string.shortcut_menu_rename_cancel))
                 }
             }
         )
@@ -181,28 +191,49 @@ fun AppShortcutOverlay(
                         .background(Color(0xFF2C2C2E))
                 ) {
                     if (app.isFolder) {
-                        ShortcutMenuItem("重命名") {
+                        ShortcutMenuItem(stringResource(R.string.shortcut_menu_rename)) {
                             renameText = app.label
                             renameDialogVisible = true
                         }
                         onDissolveFolder?.let { dissolve ->
                             Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
-                            ShortcutMenuItem("解散文件夹", Color(0xFFFF9F0A)) {
+                            ShortcutMenuItem(
+                                stringResource(R.string.shortcut_menu_dissolve_folder),
+                                Color(0xFFFF9F0A),
+                            ) {
                                 dissolve()
                                 onDismiss()
                             }
                         }
                     } else {
-                        ShortcutMenuItem("应用信息") {
+                        ShortcutMenuItem(stringResource(R.string.shortcut_menu_app_info)) {
                             context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                                 data = Uri.parse("package:$appDetailsPackage")
                             })
                             onDismiss()
                         }
+                        // 从应用列表里隐藏这个应用，与设置→隐藏应用写的是同一份数据。
+                        // 内置设置入口不可隐藏（隐藏了就没有入口再改回来），
+                        // 快捷启动项本身由「移除」处理，这里都不显示。
+                        if (!app.isBuiltInSettingsEntry && !app.isAppListShortcut) {
+                            onExcludeApp?.let { excludeApp ->
+                                Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
+                                ShortcutMenuItem(
+                                    stringResource(R.string.shortcut_menu_exclude_app),
+                                    Color(0xFFFF9F0A),
+                                ) {
+                                    excludeApp()
+                                    onDismiss()
+                                }
+                            }
+                        }
                         if (app.isAppListShortcut) {
                             onRemoveShortcut?.let { removeShortcut ->
                                 Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
-                                ShortcutMenuItem("移除", Color(0xFFFF9F0A)) {
+                                ShortcutMenuItem(
+                                    stringResource(R.string.shortcut_menu_remove),
+                                    Color(0xFFFF9F0A),
+                                ) {
                                     removeShortcut()
                                     onDismiss()
                                 }
@@ -210,14 +241,20 @@ fun AppShortcutOverlay(
                         } else {
                             onRemoveShortcut?.let { removeShortcut ->
                                 Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
-                                ShortcutMenuItem("从快捷启动移除", Color(0xFFFF9F0A)) {
+                                ShortcutMenuItem(
+                                    stringResource(R.string.shortcut_menu_remove_from_quick_launch),
+                                    Color(0xFFFF9F0A),
+                                ) {
                                     removeShortcut()
                                     onDismiss()
                                 }
                             }
                             if (!app.isBuiltInSettingsEntry) {
                                 Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF48484A)))
-                                ShortcutMenuItem("卸载", Color(0xFFFF453A)) {
+                                ShortcutMenuItem(
+                                    stringResource(R.string.shortcut_menu_uninstall),
+                                    Color(0xFFFF453A),
+                                ) {
                                     val packageUri = Uri.fromParts("package", app.packageName, null)
                                     val intents = listOf(
                                         Intent(Intent.ACTION_DELETE, packageUri).apply {

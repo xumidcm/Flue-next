@@ -668,8 +668,10 @@ class WatchArchiveInstallerTest {
                 )
             }
 
+            // video 已经能真正播放（Stage 分段 + TextureView），离屏与降级路径
+            // 走静态首帧；map 仍然缺一个实时地图桥。
             assertEquals(
-                setOf("video", "map"),
+                setOf("map"),
                 WatchmakerDefinitionParser().parse(xml).unsupportedLayerTypes,
             )
         }

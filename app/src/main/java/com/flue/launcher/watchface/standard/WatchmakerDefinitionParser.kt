@@ -203,15 +203,17 @@ private val SUPPORTED_LAYER_TYPES = setOf(
     "text_ring",
     "markers",
     "markers_hm",
-    // WM_FORMAT_1.0/2.0 common data and vector layers.  `video` and `map`
-    // intentionally stay out of this set: they require a MediaPlayer/live
-    // map bridge and are reported as unsupported instead of being claimed as
-    // fully rendered by the Canvas runtime.
+    // WM_FORMAT_1.0/2.0 common data and vector layers.  `map` intentionally
+    // stays out of this set: it requires a live map bridge and is reported as
+    // unsupported instead of being claimed as fully rendered.
     "chart",
     "svg",
     "shape",
     "rounded",
     "group",
+    // `video` 由 WatchmakerWatchFaceStageView 用 TextureView 分段合成真正播放，
+    // 离屏出图与超出同屏上限时退回静态首帧 —— 两条路径都有像素，不再是空洞。
+    "video",
 )
 
 // '}' 与字符组内的 '{' 都必须转义，否则 ICU 后端 (SDK 34+) 抛 PatternSyntaxException。

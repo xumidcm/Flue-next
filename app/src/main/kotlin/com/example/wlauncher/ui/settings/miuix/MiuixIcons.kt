@@ -97,6 +97,28 @@ object MiuixIcons {
         }
     }
 
+    /** 播放：向右的实心播放三角（与 SkipNext 的三角同一口径，去掉定位杆）。 */
+    val Play: ImageVector by lazyIcon("Play") {
+        stroke {
+            moveTo(8f, 5.5f)
+            lineTo(18f, 12f)
+            lineTo(8f, 18.5f)
+            close()
+        }
+    }
+
+    /** 暂停：左右两根等宽竖杆。 */
+    val Pause: ImageVector by lazyIcon("Pause") {
+        stroke {
+            moveTo(9f, 5.5f)
+            verticalLineTo(18.5f)
+        }
+        stroke {
+            moveTo(15f, 5.5f)
+            verticalLineTo(18.5f)
+        }
+    }
+
     /** 移动数据：上下行双箭头。 */
     val MobileData: ImageVector by lazyIcon("MobileData") {
         stroke {

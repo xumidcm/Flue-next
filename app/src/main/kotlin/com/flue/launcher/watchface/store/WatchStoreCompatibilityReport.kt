@@ -18,6 +18,11 @@ data class WatchStoreCompatibilityReport(
     val unsupportedExpressions: Set<String> = emptySet(),
     val previewIssue: WatchStorePreviewIssue? = null,
     val inspectionError: String? = null,
+    /**
+     * True when the package ships a WatchMaker Global Script (`scripts/script.txt`).
+     * Flue does not execute Lua, so such faces render without their scripted behaviour.
+     */
+    val hasGlobalScript: Boolean = false,
 ) {
     init {
         require(unsupportedTags.size <= MAX_ITEMS) { "Too many unsupported watch tags" }
@@ -38,14 +43,16 @@ data class WatchStoreCompatibilityReport(
             unsupportedLayerTypes.isEmpty() &&
             unsupportedExpressions.isEmpty() &&
             previewIssue == null &&
-            inspectionError == null
+            inspectionError == null &&
+            !hasGlobalScript
 
     val issueCount: Int
         get() = unsupportedTags.size +
             unsupportedLayerTypes.size +
             unsupportedExpressions.size +
             (if (previewIssue != null) 1 else 0) +
-            (if (inspectionError != null) 1 else 0)
+            (if (inspectionError != null) 1 else 0) +
+            (if (hasGlobalScript) 1 else 0)
 
     internal companion object {
         const val MAX_ITEMS = 128
@@ -76,7 +83,11 @@ object WatchStoreCompatibilityInspector {
             ?: return WatchStoreCompatibilityReport(
                 previewIssue = previewIssue,
                 inspectionError = "已安装表盘缺少 watch.xml",
+                hasGlobalScript = hasGlobalScript(root, watchXml = null),
             )
+        // Detected before parsing so a watch.xml parser failure still reports the
+        // Lua incompatibility instead of collapsing into a generic inspection error.
+        val hasGlobalScript = hasGlobalScript(root, watchXml)
         return runCatching {
             val runtimeReport = WatchmakerDefinitionParser().parse(watchXml).compatibilityReport
             WatchStoreCompatibilityReport(
@@ -84,6 +95,7 @@ object WatchStoreCompatibilityInspector {
                 unsupportedLayerTypes = runtimeReport.unsupportedLayerTypes.boundedValues(),
                 unsupportedExpressions = runtimeReport.unsupportedExpressions.boundedValues(),
                 previewIssue = previewIssue,
+                hasGlobalScript = hasGlobalScript,
             )
         }.getOrElse { error ->
             WatchStoreCompatibilityReport(
@@ -92,9 +104,35 @@ object WatchStoreCompatibilityInspector {
                     .trim()
                     .take(WatchStoreCompatibilityReport.MAX_ERROR_LENGTH)
                     .ifBlank { "兼容性检查失败" },
+                hasGlobalScript = hasGlobalScript,
             )
         }
     }
+
+    /**
+     * Mirrors the renderer's Global Script lookup in
+     * `WatchmakerWatchFaceView.prepareSource`: the relative path must equal
+     * `scripts/script.txt` (case-insensitive) and the file must be non-empty.
+     *
+     * The renderer anchors that lookup at the install root only. A package whose
+     * watch.xml lives in a subdirectory is still checked against that
+     * subdirectory as well: such a script is one WatchMaker would run and Flue
+     * would not, which is exactly what the warning is about.
+     */
+    private fun hasGlobalScript(root: File, watchXml: File?): Boolean = runCatching {
+        val anchors = listOfNotNull(root, watchXml?.parentFile)
+            .distinctBy { anchor -> runCatching { anchor.canonicalPath }.getOrElse { anchor.absolutePath } }
+        anchors.any { anchor ->
+            anchor.isDirectory && anchor.walkTopDown()
+                .maxDepth(GLOBAL_SCRIPT_DEPTH)
+                .filter(File::isFile)
+                .any { file ->
+                    file.relativeTo(anchor).invariantSeparatorsPath
+                        .equals(GLOBAL_SCRIPT_RELATIVE_PATH, ignoreCase = true) &&
+                        file.length() > 0L
+                }
+        }
+    }.getOrDefault(false)
 
     private fun findWatchXml(root: File): File? {
         val direct = File(root, "watch.xml")
@@ -143,6 +181,10 @@ object WatchStoreCompatibilityInspector {
 
     private const val MAX_WATCH_XML_DEPTH = 8
     private const val PREVIEW_HEADER_BYTES = 12
+
+    /** `scripts/` 只有一层，深度 2 足够；放宽只会白扫整个包。 */
+    private const val GLOBAL_SCRIPT_DEPTH = 2
+    private const val GLOBAL_SCRIPT_RELATIVE_PATH = "scripts/script.txt"
 }
 
 /** Shared bounded JSON codec used by the catalog and crash-recovery journal. */
@@ -152,6 +194,7 @@ internal fun WatchStoreCompatibilityReport.toJsonObject(): JSONObject = JSONObje
     .put("unsupportedExpressions", unsupportedExpressions.toJsonArray())
     .put("previewIssue", previewIssue?.name ?: JSONObject.NULL)
     .put("inspectionError", inspectionError ?: JSONObject.NULL)
+    .put("hasGlobalScript", hasGlobalScript)
 
 internal fun JSONObject.toWatchStoreCompatibilityReport(): WatchStoreCompatibilityReport =
     WatchStoreCompatibilityReport(
@@ -164,6 +207,8 @@ internal fun JSONObject.toWatchStoreCompatibilityReport(): WatchStoreCompatibili
         },
         inspectionError = optionalString("inspectionError")
             ?.take(WatchStoreCompatibilityReport.MAX_ERROR_LENGTH),
+        // 旧目录记录没有这个键，缺省按 false 读 —— 不能让老用户的 catalog 解析失败。
+        hasGlobalScript = optBoolean("hasGlobalScript", false),
     )
 
 private fun JSONObject.readCompatibilityValues(key: String): Set<String> {

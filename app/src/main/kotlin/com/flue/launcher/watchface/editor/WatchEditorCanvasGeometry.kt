@@ -575,6 +575,12 @@ fun watchEditorDragDeltaInParentFrame(
  * 中心反投在动画每一帧都和渲染结果对齐。
  *
  * [designWidth] / [designHeight] 缺省是原生方形画布，方形表盘行为与改动前一致。
+ *
+ * ⚠️ 这里保持**单轴**是有意的：编辑器预览从不调 `setCanvasSettings`，永远按
+ * `WatchCanvasSettings.DEFAULT`（FIT）渲染，此时渲染器的 `scaleX == scaleY`，
+ * 两边正好对齐。用户的画布铺法只作用于桌面表盘 —— 编辑的是设计画布本身，不该
+ * 被观看偏好带偏。若哪天编辑器要跟随用户设置，这个类必须同步拆成双轴，否则
+ * 命中测试会和画面错开。
  */
 data class WatchEditorCanvasMapping(
     val viewWidthPx: Float,
