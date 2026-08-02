@@ -224,6 +224,13 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     /** 见 [withFullRenderPlan]：离屏出图期间不烘焙。 */
     private var flattenBakingSuppressed = false
 
+    /**
+     * 已经排了一次「素材落地 → 作废烘焙产物」的 post，用于合并同一批解码。
+     *
+     * 只在主线程读写（[finishAssetLoad] 的 post 体与调度点都在主线程侧）。
+     */
+    private var pendingFlattenAssetInvalidation = false
+
     /** 编辑器正在实时改写某个图层的变换 —— 它可能落在某个烘焙段里。 */
     private fun editorLiveTransformActive(): Boolean = liveTransformLayerIndex >= 0
 
@@ -998,6 +1005,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         liveTransformHandoff.cancel()
         clearLiveLayerTransformInternal()
         faceVisible = false
+        pendingFlattenAssetInvalidation = false
         loadJob?.cancel()
         loadJob = null
         assetGenerationJob.cancel()
@@ -1365,7 +1373,17 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         if (width < 1 || height < 1) return null
         if (width > MAX_FLATTEN_BITMAP_SIZE || height > MAX_FLATTEN_BITMAP_SIZE) return null
         val sizeChanged = prepared.bakedSegmentWidth != width || prepared.bakedSegmentHeight != height
-        if (sizeChanged || prepared.slowTagTracker.slowTagsChangedOnLastPoll) {
+        // ⚠️ 顺序很重要：consume 有副作用（清位），必须无条件先取，不能被 `||`
+        // 短路掉 —— 尺寸变化那一帧若跳过 consume，慢桶失效信号会残留到下一帧，
+        // 白烘一次。
+        val slowTagsInvalidated = prepared.slowTagTracker.consumeSlowTagInvalidation()
+        // 快桶表盘（GIF / 秒针 / 计数器 / 陀螺仪）从不走 poll()，慢桶信号永远不会
+        // 到达，所以它们的段位图靠这个自己的节流器重烘：段内层按定义不含快依赖，
+        // 最快也只依赖到分钟，1s 一次足够，且与 1s tick 同频。
+        val now = SystemClock.uptimeMillis()
+        val fastFaceDue = prepared.slowTagTracker.requiresRedrawEveryTick &&
+            now - prepared.bakedSegmentsAtUptimeMs >= FLATTEN_FAST_FACE_REBAKE_INTERVAL_MS
+        if (sizeChanged || slowTagsInvalidated || fastFaceDue) {
             prepared.recycleBakedSegments()
             prepared.bakedSegmentWidth = width
             prepared.bakedSegmentHeight = height
@@ -1389,6 +1407,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         width: Int,
         height: Int,
     ) {
+        // 无条件打点：失败路径（超预算、分配不到位图）也要计入节流，否则每帧重试。
+        prepared.bakedSegmentsAtUptimeMs = SystemClock.uptimeMillis()
         val bytesPerSegment = width.toLong() * height.toLong() * 4L
         if (bytesPerSegment <= 0L || bytesPerSegment > MAX_FLATTEN_SEGMENT_BYTES) return
         // 字节记账：别再开第四个不记账的位图缓存（计划 §3.5）。
@@ -3470,11 +3490,20 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
         if (disposed) return
         // 素材是异步解码的：烘焙时这张图可能还没就绪，段里会留一个空洞，而慢桶
-        // tag 又没变 → 空洞永远不会被填上。所以每次素材落地都要作废烘焙产物。
-        post {
-            if (disposed) return@post
-            source?.recycleBakedSegments()
-            invalidate()
+        // tag 又没变 → 空洞永远不会被填上。所以素材落地后要作废烘焙产物重烘一次。
+        //
+        // ⚠️ 但**只作废一次**，靠 pendingFlattenAssetInvalidation 去重。循环背景是
+        // 几十上百帧逐帧异步解码的，若每帧落地都作废，就会「解一帧→整批重烘→
+        // 挤占主线程→解码排队→再落地再重烘」形成正反馈，实机表现正是循环背景
+        // 播两下就卡住变静态。同一批解码合并成一次重烘即可。
+        if (!pendingFlattenAssetInvalidation) {
+            pendingFlattenAssetInvalidation = true
+            post {
+                pendingFlattenAssetInvalidation = false
+                if (disposed) return@post
+                source?.recycleBakedSegments()
+                invalidate()
+            }
         }
         if (claim.generation == sourceTransitionGeneration) {
             postInvalidateOnAnimation()
@@ -3951,6 +3980,14 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         var bakedSegmentHeight: Int = 0
 
         /**
+         * 上一次**尝试**烘焙的时刻，快桶表盘的重烘节流基准。
+         *
+         * 记「尝试」而不是「成功」：位图分配失败或超预算时段表是空的，若不记时间
+         * 就会每帧重试一次分配，正是这条路径想避免的开销。
+         */
+        var bakedSegmentsAtUptimeMs: Long = 0L
+
+        /**
          * 丢掉全部烘焙位图。
          *
          * 慢桶 tag 变化、画布尺寸变化、走全量重绘入口都要调用它 —— 段内图层虽然
@@ -4033,6 +4070,18 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
          * 过渡帧），必须记账 —— 不记账的缓存正是当初 wf_528 卡顿的根因。
          */
         private const val MAX_FLATTEN_TOTAL_BYTES = 16L * 1024L * 1024L
+
+        /**
+         * 快桶表盘的重烘间隔。
+         *
+         * 快桶表盘（GIF / 秒针 / 计数器 / 陀螺仪）永远走不到 `poll()`，慢桶失效
+         * 信号到不了烘焙路径，所以它们靠这个节流器自己重烘。段内图层按定义不含
+         * 快依赖、最快只依赖到分钟，1s 一次既够用又与慢 tick 同频。
+         *
+         * ⚠️ 别把它调小：曾经这里等价于「每帧重烘」，30fps 下每秒重建十几 MB
+         * 位图，比完全不烘还慢得多，实机表现就是切回表盘依旧卡、循环背景抖。
+         */
+        private const val FLATTEN_FAST_FACE_REBAKE_INTERVAL_MS = 1_000L
         /**
          * 图片缓存的条数上限。
          *

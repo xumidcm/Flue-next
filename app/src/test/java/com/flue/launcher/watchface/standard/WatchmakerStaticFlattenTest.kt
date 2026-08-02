@@ -64,7 +64,7 @@ class WatchStaticFlattenBakeableTest {
 
     @Test
     fun `慢 tag 图层可以烘`() {
-        // 分钟跳一次由 slowTagsChangedOnLastPoll 触发重烘，不需要禁烘。
+        // 分钟跳一次由 hasPendingSlowTagInvalidation 触发重烘，不需要禁烘。
         for (tag in listOf("dm", "dh", "dd", "bl", "wt")) {
             assertTrue(
                 "tag=$tag",

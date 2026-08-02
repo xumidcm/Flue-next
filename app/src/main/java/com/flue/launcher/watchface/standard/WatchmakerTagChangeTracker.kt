@@ -102,14 +102,34 @@ class WatchTagChangeTracker(
         get() = watchedTags.size
 
     /**
-     * 最近一次 [poll] 里慢桶 tag 是否真的变了。
+     * 慢桶取值自上次被消费以来是否变过 —— **待处理的失效信号**，不是「上一拍的电平」。
      *
-     * 与 [poll] 的返回值**不是**一回事：快桶表盘每拍都要重绘（返回 true），但它的
-     * 慢桶 tag 可能几分钟才动一次。阶段 3 的烘焙位图只关心后者 —— 段内图层按定义
-     * 不含快依赖，秒针跳动不该让整段背景重烘。
+     * ⚠️ 这里必须是「边沿 + 显式清位」，不能是「电平」。踩过的坑：
+     *
+     * 1. **快桶表盘根本不调 [poll]。** `shouldRedrawThisTick()` 对快桶表盘在
+     *    `requiresFastTicksNow` 就提前返回 true 了，`poll` 一次都走不到。若这个
+     *    标志由 `poll` 每拍覆写，它就永远停在初始的 true —— 烘焙位图于是**每帧**
+     *    全部回收重建，30fps 下每秒重建十几 MB 位图，比不烘还慢得多。
+     * 2. **就算补调 [poll]，电平语义仍然错。** 慢桶变化只在整分钟那一拍发生，但
+     *    一秒内的 30 帧都读到同一个 true，照样重烘 30 次。
+     *
+     * 所以：变化只**置位**（`= true`，绝不 `= false`），由消费方在真正重烘后调用
+     * [consumeSlowTagInvalidation] 清位。漏清只是多烘一次，漏置位才会让图层冻住。
      */
-    var slowTagsChangedOnLastPoll: Boolean = true
+    var hasPendingSlowTagInvalidation: Boolean = true
         private set
+
+    /**
+     * 取走并清掉待处理的失效信号 —— 返回 true 表示调用方**必须**重烘。
+     *
+     * 只能由烘焙路径调用（一个消费者）。诊断用途请直接读
+     * [hasPendingSlowTagInvalidation]，不要用它做窥视，否则会把信号吃掉。
+     */
+    fun consumeSlowTagInvalidation(): Boolean {
+        val pending = hasPendingSlowTagInvalidation
+        hasPendingSlowTagInvalidation = false
+        return pending
+    }
 
     /**
      * 重算全部慢桶 tag 并比对。返回 true 表示这一拍需要重绘。
@@ -127,7 +147,9 @@ class WatchTagChangeTracker(
         // 首拍（以及 invalidateAll 之后）一律当作"变了"：缓存是空的，没有基准可比。
         val firstPoll = pristine
         pristine = false
-        slowTagsChangedOnLastPoll = changed || firstPoll
+        // 只置位：清位是 consumeSlowTagInvalidation 的事。这里写成 `=` 会把上一拍
+        // 尚未被烘焙路径消费掉的失效信号抹掉，段位图停在旧内容上永不更新。
+        if (changed || firstPoll) hasPendingSlowTagInvalidation = true
         return requiresRedrawEveryTick || changed || firstPoll
     }
 
@@ -139,7 +161,7 @@ class WatchTagChangeTracker(
      */
     fun invalidateAll() {
         pristine = true
-        slowTagsChangedOnLastPoll = true
+        hasPendingSlowTagInvalidation = true
         lastValues.fill(null)
     }
 }

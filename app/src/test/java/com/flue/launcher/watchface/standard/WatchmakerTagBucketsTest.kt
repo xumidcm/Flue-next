@@ -269,3 +269,102 @@ class WatchTagChangeTrackerTest {
         assertFalse(tracker.poll { battery })
     }
 }
+
+/**
+ * 烘焙失效信号的语义 —— 「边沿 + 显式清位」。
+ *
+ * 这一组每一条都对应一个真实踩过的坑：把它写成「电平」曾让快桶表盘的段位图
+ * **每帧**全部回收重建（30fps 下每秒十几 MB），比完全不烘还慢。
+ */
+class WatchTagChangeTrackerInvalidationTest {
+
+    @Test
+    fun `首帧必须烘一次`() {
+        val tracker = WatchTagChangeTracker(listOf("dh"))
+        assertTrue(tracker.hasPendingSlowTagInvalidation)
+        assertTrue(tracker.consumeSlowTagInvalidation())
+    }
+
+    @Test
+    fun `消费之后信号必须清位`() {
+        // 这是修 bug 的核心：不清位就等于每帧重烘。
+        val tracker = WatchTagChangeTracker(listOf("dh"))
+        assertTrue(tracker.consumeSlowTagInvalidation())
+        assertFalse(tracker.consumeSlowTagInvalidation())
+        assertFalse(tracker.hasPendingSlowTagInvalidation)
+    }
+
+    @Test
+    fun `慢桶没变时不产生新信号`() {
+        val tracker = WatchTagChangeTracker(listOf("dh", "dm"))
+        val values = mutableMapOf("dh" to "10", "dm" to "30")
+        tracker.poll { values[it] }
+        assertTrue(tracker.consumeSlowTagInvalidation())
+        tracker.poll { values[it] }
+        tracker.poll { values[it] }
+        assertFalse(tracker.consumeSlowTagInvalidation())
+    }
+
+    @Test
+    fun `慢桶真变了才置位`() {
+        val tracker = WatchTagChangeTracker(listOf("dm"))
+        val values = mutableMapOf("dm" to "30")
+        tracker.poll { values[it] }
+        assertTrue(tracker.consumeSlowTagInvalidation())
+        values["dm"] = "31"
+        tracker.poll { values[it] }
+        assertTrue(tracker.consumeSlowTagInvalidation())
+        assertFalse(tracker.consumeSlowTagInvalidation())
+    }
+
+    @Test
+    fun `未被消费的信号不会被后续 poll 抹掉`() {
+        // 若 poll 里写成 `= changed` 而不是 `if (changed) = true`，分钟跳变那一拍
+        // 的信号会被下一拍覆盖成 false，段位图永久停在旧内容上。
+        val tracker = WatchTagChangeTracker(listOf("dm"))
+        val values = mutableMapOf("dm" to "30")
+        tracker.poll { values[it] }
+        tracker.consumeSlowTagInvalidation()
+        values["dm"] = "31"
+        tracker.poll { values[it] }
+        // 中间隔了几拍没人来消费。
+        tracker.poll { values[it] }
+        tracker.poll { values[it] }
+        assertTrue(tracker.hasPendingSlowTagInvalidation)
+        assertTrue(tracker.consumeSlowTagInvalidation())
+    }
+
+    @Test
+    fun `快桶表盘从不 poll 时信号只在首帧为真`() {
+        // 快桶表盘在 requiresFastTicksNow 就提前返回，poll 一次都不会被调用。
+        // 这时信号必须能被消费掉并归零，否则就是每帧重烘。重烘改由调用方的
+        // 时间节流器负责（FLATTEN_FAST_FACE_REBAKE_INTERVAL_MS）。
+        val tracker = WatchTagChangeTracker(listOf("dss"), forceFastTicks = true)
+        assertTrue(tracker.requiresRedrawEveryTick)
+        assertTrue(tracker.consumeSlowTagInvalidation())
+        assertFalse(tracker.consumeSlowTagInvalidation())
+        assertFalse(tracker.consumeSlowTagInvalidation())
+    }
+
+    @Test
+    fun `全量重绘入口重新置位`() {
+        val tracker = WatchTagChangeTracker(listOf("dh"))
+        tracker.consumeSlowTagInvalidation()
+        assertFalse(tracker.hasPendingSlowTagInvalidation)
+        tracker.invalidateAll()
+        assertTrue(tracker.consumeSlowTagInvalidation())
+    }
+
+    @Test
+    fun `纯静态表盘首拍之后不再置位`() {
+        // consume 与 poll 跟踪的是两件事：consume 不清 pristine，所以第一次 poll
+        // 仍然是一次货真价实的首拍边沿，理应再置位一次（多烘一次，倒在安全的
+        // 一侧）。真正要守的是「此后彻底安静」。
+        val tracker = WatchTagChangeTracker(emptyList())
+        assertTrue(tracker.consumeSlowTagInvalidation())
+        assertTrue(tracker.poll { null })
+        assertTrue(tracker.consumeSlowTagInvalidation())
+        repeat(5) { tracker.poll { null } }
+        assertFalse(tracker.consumeSlowTagInvalidation())
+    }
+}
