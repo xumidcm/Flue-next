@@ -160,3 +160,32 @@ fun ProvideGlobalUiScale(
         content = content
     )
 }
+
+/**
+ * 在 [androidx.compose.ui.window.Dialog] 内重新挂上全局 UI 缩放。
+ *
+ * Dialog 是**独立 Window**，Compose 在它的根节点按该 Window 自己的
+ * DisplayMetrics 重新提供 [LocalDensity]，外层 [ProvideGlobalUiScale] 那份
+ * 已缩放的 density 到不了弹窗里 —— 所以弹窗一直按系统原始 density 排版，
+ * 设置里的「全局 UI 大小」对它毫无作用（老师实机反馈）。
+ *
+ * [LocalGlobalUiScale] 走的是普通 CompositionLocal，**能**穿过 Dialog 边界，
+ * 所以这里直接读它拿到当前倍率，不需要调用方再传一次百分比。
+ */
+@Composable
+fun ProvideDialogUiScale(
+    content: @Composable () -> Unit
+) {
+    val scale = LocalGlobalUiScale.current
+    val dialogDensity = LocalDensity.current
+    val scaledDensity = remember(dialogDensity, scale) {
+        Density(
+            density = dialogDensity.density * scale,
+            fontScale = dialogDensity.fontScale
+        )
+    }
+    CompositionLocalProvider(
+        LocalDensity provides scaledDensity,
+        content = content
+    )
+}

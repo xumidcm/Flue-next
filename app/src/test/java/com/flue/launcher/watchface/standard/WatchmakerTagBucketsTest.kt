@@ -368,3 +368,128 @@ class WatchTagChangeTrackerInvalidationTest {
         assertFalse(tracker.consumeSlowTagInvalidation())
     }
 }
+
+/**
+ * 按桶消费与全量失效位 —— 「分钟跳一下卡 8 帧」的正解。
+ *
+ * 粗粒度的 [WatchTagChangeTracker.hasPendingSlowTagInvalidation] 只回答「要不要
+ * 重烘」，按桶集合回答「重烘**哪几段**」。312 有 16 段，一次分钟跳变通常只碰
+ * 一两段，原来整批回收要连卡 8 帧 × 240ms。
+ */
+class WatchTagChangeTrackerBucketConsumptionTest {
+
+    @Test
+    fun `只记录真的变了的那个桶`() {
+        val tracker = WatchTagChangeTracker(listOf("dm", "dd"))
+        val values = mutableMapOf("dm" to "30", "dd" to "3")
+        tracker.poll { values[it] }
+        // 首拍走全量语义，把它消费干净再看增量。
+        tracker.consumeFullInvalidation()
+        tracker.consumeChangedSlowBuckets()
+        values["dm"] = "31"
+        tracker.poll { values[it] }
+        assertEquals(setOf(WatchTagBucket.MINUTE), tracker.consumeChangedSlowBuckets())
+    }
+
+    @Test
+    fun `同桶多个 tag 变化只记一次`() {
+        val tracker = WatchTagChangeTracker(listOf("dm", "dmz"))
+        val values = mutableMapOf("dm" to "30", "dmz" to "30")
+        tracker.poll { values[it] }
+        tracker.consumeFullInvalidation()
+        tracker.consumeChangedSlowBuckets()
+        values["dm"] = "31"
+        values["dmz"] = "31"
+        tracker.poll { values[it] }
+        assertEquals(setOf(WatchTagBucket.MINUTE), tracker.consumeChangedSlowBuckets())
+    }
+
+    @Test
+    fun `消费之后桶集合清空`() {
+        // 不清空就会越攒越多，几拍之后退化成「全都变了」，按桶优化白做。
+        val tracker = WatchTagChangeTracker(listOf("dm"))
+        val values = mutableMapOf("dm" to "30")
+        tracker.poll { values[it] }
+        tracker.consumeChangedSlowBuckets()
+        values["dm"] = "31"
+        tracker.poll { values[it] }
+        assertEquals(setOf(WatchTagBucket.MINUTE), tracker.consumeChangedSlowBuckets())
+        assertTrue(tracker.consumeChangedSlowBuckets().isEmpty())
+    }
+
+    @Test
+    fun `值没变时桶集合为空`() {
+        val tracker = WatchTagChangeTracker(listOf("dm"))
+        val values = mutableMapOf("dm" to "30")
+        tracker.poll { values[it] }
+        tracker.consumeChangedSlowBuckets()
+        tracker.poll { values[it] }
+        assertTrue(tracker.consumeChangedSlowBuckets().isEmpty())
+    }
+
+    @Test
+    fun `未被消费的桶集合会累积`() {
+        // 中间隔了几拍没人消费，两次变化都不能丢 —— 漏一个桶就是那一段永久冻住。
+        val tracker = WatchTagChangeTracker(listOf("dm", "dd"))
+        val values = mutableMapOf("dm" to "30", "dd" to "3")
+        tracker.poll { values[it] }
+        tracker.consumeChangedSlowBuckets()
+        values["dm"] = "31"
+        tracker.poll { values[it] }
+        values["dd"] = "4"
+        tracker.poll { values[it] }
+        assertEquals(
+            setOf(WatchTagBucket.MINUTE, WatchTagBucket.DAY),
+            tracker.consumeChangedSlowBuckets(),
+        )
+    }
+
+    @Test
+    fun `首拍走全量位而不是往桶集合塞`() {
+        // ⚠️ 首拍一张段位图都还没烘，没有「段」可以挑，只能整批。曾经写成
+        // `changedSlowBuckets += bucketsPresent`，那样**盖不到全常量段**
+        // （它们的 slowBuckets 是空集，跟任何集合都没交集）。
+        val tracker = WatchTagChangeTracker(listOf("dm"))
+        tracker.poll { "30" }
+        assertTrue(tracker.hasPendingFullInvalidation)
+        assertTrue(tracker.consumeFullInvalidation())
+        assertFalse(tracker.consumeFullInvalidation())
+    }
+
+    @Test
+    fun `全量重绘入口置全量位`() {
+        // 压暗切换、主题变化走 requestFullRepaint -> invalidateAll。它们要刷新的
+        // 恰恰包括全常量段，只有全量位能覆盖到。
+        val tracker = WatchTagChangeTracker(listOf("dm"))
+        tracker.consumeFullInvalidation()
+        assertFalse(tracker.hasPendingFullInvalidation)
+        tracker.invalidateAll()
+        assertTrue(tracker.consumeFullInvalidation())
+        assertFalse(tracker.consumeFullInvalidation())
+    }
+
+    @Test
+    fun `没有慢桶 tag 的表盘全量位照样有效`() {
+        // 纯静态表盘（或只有快桶的表盘）bucketsPresent 里没有慢桶，往桶集合塞
+        // 什么都是空 —— 全量位是它唯一的重烘途径。
+        val tracker = WatchTagChangeTracker(emptyList())
+        assertTrue(tracker.consumeFullInvalidation())
+        tracker.invalidateAll()
+        assertTrue(tracker.consumeFullInvalidation())
+        assertTrue(tracker.consumeChangedSlowBuckets().isEmpty())
+    }
+
+    @Test
+    fun `普通慢桶变化不置全量位`() {
+        // 这是整个改动的收益点：分钟跳变只走按桶，不许升级成整批回收。
+        val tracker = WatchTagChangeTracker(listOf("dm"))
+        val values = mutableMapOf("dm" to "30")
+        tracker.poll { values[it] }
+        tracker.consumeFullInvalidation()
+        tracker.consumeChangedSlowBuckets()
+        values["dm"] = "31"
+        tracker.poll { values[it] }
+        assertFalse(tracker.hasPendingFullInvalidation)
+        assertEquals(setOf(WatchTagBucket.MINUTE), tracker.consumeChangedSlowBuckets())
+    }
+}

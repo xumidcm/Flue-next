@@ -38,7 +38,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.spring
-import com.flue.launcher.ui.settings.miuix.MiuixLoadingIndicator
 import com.flue.launcher.ui.settings.miuix.SettingsIcon
 import com.flue.launcher.ui.settings.SettingsSearchEntry
 import com.flue.launcher.ui.settings.SettingsSearchField
@@ -187,6 +186,7 @@ import com.flue.launcher.ui.settings.miuix.MiuixSettingsRow
 import com.flue.launcher.ui.settings.miuix.MiuixSlider
 import com.flue.launcher.ui.settings.miuix.MiuixSwitch
 import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.ProvideDialogUiScale
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
@@ -199,8 +199,6 @@ import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.InternalWatchFaceStorage
 import com.flue.launcher.watchface.WatchFaceDescriptor
-import com.flue.launcher.watchface.standard.WatchCanvasPreset
-import com.flue.launcher.watchface.standard.WatchCanvasSettings
 import com.flue.launcher.watchface.standard.WatchDateLocale
 import com.flue.launcher.watchface.standard.WatchTemperatureUnit
 import com.flue.launcher.watchface.standard.WatchWeatherLocation
@@ -208,6 +206,7 @@ import com.flue.launcher.watchface.standard.WatchWeatherRepository
 import com.flue.launcher.watchface.standard.hasHeartRatePermission
 import com.flue.launcher.watchface.standard.requiredHeartRatePermission
 import com.flue.launcher.watchface.store.WatchStoreRepository
+import top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator
 import top.yukonga.miuix.kmp.icon.MiuixIcons as OfficialMiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Add as OfficialAdd
 import top.yukonga.miuix.kmp.icon.extended.Carrier as OfficialCarrier
@@ -305,7 +304,8 @@ private data class SettingsLaunchConfig(
 
 private data class BlockingProgressState(
     val title: String,
-    val detail: String,
+    /** 副标题。为空时只显示标题（导出完成不再回显文件路径）。 */
+    val detail: String? = null,
     val completed: Boolean = false,
     val completionAction: BlockingProgressCompletionAction = BlockingProgressCompletionAction.None,
     val shareUri: Uri? = null
@@ -582,8 +582,6 @@ private fun SettingsRootScreen(
     val watchFaceTextExitAnimation by vm.watchFaceTextExitAnimation.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
-    val watchfaceCanvasDefault by vm.watchfaceCanvasDefault.collectAsStateWithLifecycle()
-    val watchfaceCanvasOverrides by vm.watchfaceCanvasOverrides.collectAsStateWithLifecycle()
     val watchfaceGravityParallaxEnabled by vm.watchfaceGravityParallaxEnabled.collectAsStateWithLifecycle()
     val watchfaceDateLocale by vm.watchfaceDateLocale.collectAsStateWithLifecycle()
     val appLanguage by vm.appLanguage.collectAsStateWithLifecycle()
@@ -744,7 +742,6 @@ private fun SettingsRootScreen(
                     .onSuccess {
                         backupProgress = BlockingProgressState(
                             title = context.getString(R.string.progress_export_done),
-                            detail = uri.backupDisplayLabel(context),
                             completed = true,
                             completionAction = BlockingProgressCompletionAction.ExportBackup,
                             shareUri = uri
@@ -1774,159 +1771,22 @@ private fun SettingsRootScreen(
                 )
             }
             if (selectedWatchFace.isWatchmaker) {
-                // 三层继承在这里合流：覆盖表里有这张表盘就用它自己的，否则用全局默认。
-                val canvasFollowsDefault = selectedWatchFaceId !in watchfaceCanvasOverrides
-                val canvasSettings = watchfaceCanvasOverrides[selectedWatchFaceId]
-                    ?: watchfaceCanvasDefault
-                // 跟随全局时写全局，脱离后写这张表盘自己的那份 —— 两条路径共用一个
-                // 写入口，免得某个滑杆漏判层级、写到另一层去。
-                val writeCanvas: (WatchCanvasSettings) -> Unit = { updated ->
-                    if (canvasFollowsDefault) vm.setWatchfaceCanvasDefault(updated)
-                    else vm.setWatchfaceCanvasOverride(selectedWatchFaceId, updated)
-                }
-                item("watchface_canvas_header") {
-                    SectionTitle(
-                        stringResource(R.string.settings_watchface_canvas_section),
-                        itemFisheye(listState, "watchface_canvas_header", screenCenterY, screenHeightPx),
-                    )
-                }
-                item("watchface_canvas_follow") {
-                    SettingsSwitchRow(
-                        title = stringResource(R.string.settings_watchface_canvas_follow_default),
-                        subtitle = if (canvasFollowsDefault) {
-                            stringResource(R.string.settings_watchface_canvas_follow_default_on)
-                        } else {
-                            stringResource(R.string.settings_watchface_canvas_follow_default_off)
-                        },
-                        checked = canvasFollowsDefault,
-                        onToggle = { follow ->
-                            vm.setWatchfaceCanvasFollowsDefault(selectedWatchFaceId, follow)
-                        },
-                        scale = itemFisheye(
-                            listState,
-                            "watchface_canvas_follow",
-                            screenCenterY,
-                            screenHeightPx,
-                        ),
-                    )
-                }
-                items(
-                    items = WatchCanvasPreset.entries,
-                    key = { preset -> "watchface_canvas_preset_${preset.name}" },
-                ) { preset ->
-                    val titleRes = when (preset) {
-                        WatchCanvasPreset.FIT -> R.string.settings_watchface_canvas_preset_fit
-                        WatchCanvasPreset.FILL -> R.string.settings_watchface_canvas_preset_fill
-                        WatchCanvasPreset.VERTICAL -> R.string.settings_watchface_canvas_preset_vertical
-                        WatchCanvasPreset.HORIZONTAL -> R.string.settings_watchface_canvas_preset_horizontal
-                        WatchCanvasPreset.STRETCH -> R.string.settings_watchface_canvas_preset_stretch
-                        WatchCanvasPreset.CUSTOM -> R.string.settings_watchface_canvas_preset_custom
-                    }
-                    val subtitleRes = when (preset) {
-                        WatchCanvasPreset.FIT -> R.string.settings_watchface_canvas_preset_fit_desc
-                        WatchCanvasPreset.FILL -> R.string.settings_watchface_canvas_preset_fill_desc
-                        WatchCanvasPreset.VERTICAL -> R.string.settings_watchface_canvas_preset_vertical_desc
-                        WatchCanvasPreset.HORIZONTAL -> R.string.settings_watchface_canvas_preset_horizontal_desc
-                        WatchCanvasPreset.STRETCH -> R.string.settings_watchface_canvas_preset_stretch_desc
-                        WatchCanvasPreset.CUSTOM -> R.string.settings_watchface_canvas_preset_custom_desc
-                    }
-                    SettingsChoiceRow(
-                        title = stringResource(titleRes),
-                        subtitle = stringResource(subtitleRes),
-                        selected = canvasSettings.preset == preset,
-                        onClick = { writeCanvas(canvasSettings.copy(preset = preset)) },
-                        scale = itemFisheye(
-                            listState,
-                            "watchface_canvas_preset_${preset.name}",
-                            screenCenterY,
-                            screenHeightPx,
-                        ),
-                    )
-                }
-                item("watchface_canvas_zoom_x") {
-                    SettingsSliderRow(
-                        title = stringResource(R.string.settings_watchface_canvas_zoom_x),
-                        value = canvasSettings.zoomX,
-                        valueText = "%.2f×".format(java.util.Locale.US, canvasSettings.zoomX),
-                        localValueText = { "%.2f×".format(java.util.Locale.US, it) },
-                        range = 0.5f..2f,
-                        steps = 29,
-                        // 拖动中不写盘：每帧一次 DataStore 写会把滑杆拖卡。
-                        onValueChange = {},
-                        onValueChangeFinished = { writeCanvas(canvasSettings.copy(zoomX = it)) },
-                        scale = itemFisheye(
-                            listState,
-                            "watchface_canvas_zoom_x",
-                            screenCenterY,
-                            screenHeightPx,
-                        ),
-                    )
-                }
-                item("watchface_canvas_zoom_y") {
-                    SettingsSliderRow(
-                        title = stringResource(R.string.settings_watchface_canvas_zoom_y),
-                        value = canvasSettings.zoomY,
-                        valueText = "%.2f×".format(java.util.Locale.US, canvasSettings.zoomY),
-                        localValueText = { "%.2f×".format(java.util.Locale.US, it) },
-                        range = 0.5f..2f,
-                        steps = 29,
-                        onValueChange = {},
-                        onValueChangeFinished = { writeCanvas(canvasSettings.copy(zoomY = it)) },
-                        scale = itemFisheye(
-                            listState,
-                            "watchface_canvas_zoom_y",
-                            screenCenterY,
-                            screenHeightPx,
-                        ),
-                    )
-                }
-                item("watchface_canvas_offset_x") {
-                    SettingsSliderRow(
-                        title = stringResource(R.string.settings_watchface_canvas_offset_x),
-                        value = canvasSettings.offsetX,
-                        valueText = "${canvasSettings.offsetX.roundToInt()} px",
-                        localValueText = { "${it.roundToInt()} px" },
-                        range = -200f..200f,
-                        steps = 39,
-                        onValueChange = {},
-                        onValueChangeFinished = { writeCanvas(canvasSettings.copy(offsetX = it)) },
-                        scale = itemFisheye(
-                            listState,
-                            "watchface_canvas_offset_x",
-                            screenCenterY,
-                            screenHeightPx,
-                        ),
-                    )
-                }
-                item("watchface_canvas_offset_y") {
-                    SettingsSliderRow(
-                        title = stringResource(R.string.settings_watchface_canvas_offset_y),
-                        value = canvasSettings.offsetY,
-                        valueText = "${canvasSettings.offsetY.roundToInt()} px",
-                        localValueText = { "${it.roundToInt()} px" },
-                        range = -200f..200f,
-                        steps = 39,
-                        onValueChange = {},
-                        onValueChangeFinished = { writeCanvas(canvasSettings.copy(offsetY = it)) },
-                        scale = itemFisheye(
-                            listState,
-                            "watchface_canvas_offset_y",
-                            screenCenterY,
-                            screenHeightPx,
-                        ),
-                    )
-                }
-                item("watchface_canvas_reset") {
+                // 画布调节只留这一个入口：预设、四条滑杆、跟随开关、重置全都搬进
+                // CanvasAdjustActivity —— 在设置页里调，效果在另一个页面上，用户
+                // 只能靠脑补；搬过去之后底下就是真实表盘，拖滑杆当场看到结果。
+                item("watchface_canvas_entry") {
                     ActionCard(
-                        title = stringResource(R.string.settings_watchface_canvas_reset),
-                        subtitle = stringResource(R.string.settings_watchface_canvas_reset_desc),
-                        onClick = { writeCanvas(WatchCanvasSettings.DEFAULT) },
+                        title = stringResource(R.string.settings_watchface_canvas_section),
+                        subtitle = stringResource(R.string.settings_watchface_canvas_entry_sub),
                         scale = itemFisheye(
                             listState,
-                            "watchface_canvas_reset",
+                            "watchface_canvas_entry",
                             screenCenterY,
                             screenHeightPx,
                         ),
+                        onClick = {
+                            CanvasAdjustActivity.start(context, selectedWatchFaceId)
+                        },
                     )
                 }
                 item("watchface_gravity_parallax") {
@@ -4989,6 +4849,9 @@ private fun OverlayMaskCornerRadiusDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
+        // Dialog 是独立 Window，density 要在这里重新缩放一次，
+        // 否则整个弹窗不跟随设置里的「全局 UI 大小」。
+        ProvideDialogUiScale {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -5002,11 +4865,9 @@ private fun OverlayMaskCornerRadiusDialog(
                 contentAlignment = Alignment.BottomCenter,
             ) {
                 val dialogScrollState = rememberScrollState()
-                // The dialog is a separate window on Wear OS. Constrain it to the
-                // visible window and make the complete content scrollable, otherwise
-                // the action row is laid out below the viewport with no way to reach
-                // the confirm button. maxHeight is measured after the global density
-                // provider, so the setting follows the global UI scale as well.
+                // 弹窗是独立 Window，maxHeight 在这个 BoxWithConstraints 里才能拿到
+                // 已缩放的 density 值，所以整个内容用 Column + verticalScroll 包起来，
+                // 限高到 0.92 倍避免按钮超出屏幕。
                 val maxDialogHeight = maxHeight * 0.92f
                 Column(
                     modifier = Modifier
@@ -5152,11 +5013,11 @@ private fun OverlayMaskCornerRadiusDialog(
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
-            }
-        }
-    }
-}
-
+                } // Column
+            } // BoxWithConstraints
+        } // Box(scrim)
+        } // ProvideDialogUiScale
+    } // Dialog
 }
 
 @Composable
@@ -5469,19 +5330,14 @@ private fun FlueBackupOptions.backupSummaryText(context: Context): String {
         ?: context.getString(R.string.backup_summary_none)
 }
 
-private fun Uri.backupDisplayLabel(context: Context): String {
-    return runCatching {
-        val path = lastPathSegment?.substringAfterLast(':').orEmpty().ifBlank { toString() }
-        path.substringAfterLast('/').ifBlank { context.getString(R.string.backup_unknown_location) }
-    }.getOrElse { toString() }
-}
-
 @Composable
 private fun BlockingProgressDialog(
     state: BlockingProgressState,
     onDismiss: () -> Unit,
     onShare: () -> Unit
 ) {
+    val launcherStyle = LauncherTheme.style
+    val flueScreenRound = isFlueScreenRound()
     Dialog(
         onDismissRequest = { if (state.completed) onDismiss() },
         properties = DialogProperties(
@@ -5490,45 +5346,155 @@ private fun BlockingProgressDialog(
             usePlatformDefaultWidth = false
         )
     ) {
+        BackHandler(enabled = state.completed) { onDismiss() }
+        ProvideDialogUiScale {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black),
-            contentAlignment = Alignment.Center
+                .background(launcherStyle.screenBackground),
         ) {
+            // 二级页面结构：顶部标题栏，内容居中，底部胶囊按钮。
             Column(
-                modifier = Modifier.padding(horizontal = 26.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(WindowInsets.safeDrawing.asPaddingValues())
+                    .padding(horizontal = if (flueScreenRound) 26.dp else 16.dp),
             ) {
-                if (state.completed) {
-                    Icon(
-                        imageVector = OfficialMiuixIcons.OfficialOk,
-                        contentDescription = null,
-                        tint = WatchColors.ActiveCyan,
-                        modifier = Modifier.size(52.dp)
-                    )
-                } else {
-                    MiuixLoadingIndicator(color = WatchColors.ActiveCyan)
-                }
-                Spacer(modifier = Modifier.height(18.dp))
-                Text(state.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(state.detail, color = WatchColors.TextTertiary, fontSize = 12.sp)
-                if (state.completed) {
-                    Spacer(modifier = Modifier.height(22.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        if (state.shareUri != null) {
-                            TextButton(onClick = onShare) {
-                                Text(stringResource(R.string.action_share), color = WatchColors.ActiveCyan)
-                            }
+                Spacer(modifier = Modifier.height(if (flueScreenRound) 30.dp else 18.dp))
+                // 标题栏：完成态左对齐「返回」按钮，进行中无按钮。
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                ) {
+                    if (state.completed) {
+                        val pressedState = rememberPressedState()
+                        val pressed by pressedState
+                        val scale = animateFloatAsState(
+                            if (pressed) 0.94f else 1f,
+                            label = "progress_back_scale"
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(42.dp)
+                                .graphicsLayer { scaleX = scale.value; scaleY = scale.value }
+                                .clip(CircleShape)
+                                .background(launcherStyle.topBarChipColor)
+                                .instantPressGesture(pressedState, onClick = onDismiss),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = null,
+                                tint = launcherStyle.topBarTextColor
+                            )
                         }
-                        TextButton(onClick = onDismiss) {
-                            Text(stringResource(R.string.action_done), color = WatchColors.ActiveCyan)
+                    }
+                    Text(
+                        text = state.title,
+                        color = launcherStyle.accentColor,
+                        fontSize = 26.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = if (flueScreenRound) TextAlign.Center else TextAlign.Start,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = if (flueScreenRound) {
+                            Modifier
+                                .align(Alignment.Center)
+                                .fillMaxWidth()
+                                .padding(horizontal = 50.dp)
+                        } else {
+                            Modifier
+                                .align(Alignment.CenterStart)
+                                .fillMaxWidth()
+                                .padding(start = 54.dp, end = 16.dp)
+                        },
+                    )
+                }
+
+                // 内容区：居中转圈 / 完成图标 + 副标题。
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        if (state.completed) {
+                            Icon(
+                                imageVector = OfficialMiuixIcons.OfficialOk,
+                                contentDescription = null,
+                                tint = launcherStyle.accentColor,
+                                modifier = Modifier.size(64.dp)
+                            )
+                        } else {
+                            // 用表盘加载页同款 InfiniteProgressIndicator。
+                            InfiniteProgressIndicator(
+                                color = launcherStyle.accentColor,
+                                size = 32.dp,
+                            )
+                        }
+                        if (!state.detail.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = state.detail,
+                                color = launcherStyle.secondaryTextColor,
+                                fontSize = 14.sp,
+                                textAlign = TextAlign.Center,
+                            )
                         }
                     }
                 }
+
+                // 底部按钮区：完成态显示「分享」+「完成」胶囊按钮。
+                if (state.completed) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        if (state.shareUri != null) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(54.dp)
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(launcherStyle.cardColor)
+                                    .clickable(onClick = onShare),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.action_share),
+                                    color = launcherStyle.accentColor,
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(54.dp)
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(launcherStyle.accentColor)
+                                .clickable(onClick = onDismiss),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.action_done),
+                                color = Color.White,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(if (flueScreenRound) 30.dp else 18.dp))
             }
         }
+        } // ProvideDialogUiScale
     }
 }
 

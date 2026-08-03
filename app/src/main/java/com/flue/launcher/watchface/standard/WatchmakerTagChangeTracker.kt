@@ -69,22 +69,70 @@ class WatchTagChangeTracker(
     /** 与 [watchedTags] 同序的上一拍取值。`null` 表示解析失败或不可用。 */
     private val lastValues: Array<String?>
 
+    /** 与 [watchedTags] 同序的所属桶 —— [poll] 靠它知道「变的是哪个桶」。 */
+    private val watchedBuckets: Array<WatchTagBucket>
+
+    /**
+     * 自上次消费以来**有过**变化的慢桶集合。
+     *
+     * ⚠️ 和 [hasPendingSlowTagInvalidation] 同为**边沿 + 显式清位**：只增不减，
+     * 由 [consumeChangedSlowBuckets] 取走清空。那条 KDoc 里的两个坑（快桶表盘
+     * 从不 poll、电平语义每帧重烘）在这里一字不差地成立。
+     */
+    private val changedSlowBuckets: MutableSet<WatchTagBucket> = LinkedHashSet()
+
+    /**
+     * 取走并清掉「自上次消费以来变化过的慢桶集合」。
+     *
+     * 返回的集合是快照，消费方可以随便持有。烘焙路径是唯一消费者：拿到之后
+     * 只重烘 [WatchFlattenSegment.slowBuckets] 与它有交集的段。
+     */
+    fun consumeChangedSlowBuckets(): Set<WatchTagBucket> {
+        if (changedSlowBuckets.isEmpty()) return emptySet()
+        val changed = LinkedHashSet(changedSlowBuckets)
+        changedSlowBuckets.clear()
+        return changed
+    }
+
+    /**
+     * **全量**失效信号 —— 语义是「什么都可能变了」，不是「某几个桶变了」。
+     *
+     * ⚠️ 为什么不能用 [changedSlowBuckets] 表达全量。按桶回收只作废
+     * `slowBuckets` 与变化集合有交集的段，而**全是常量层的段 `slowBuckets` 是
+     * 空集**，跟任何集合都没有交集 —— 于是压暗切换、主题变化这类非 tag 驱动的
+     * 变化会把常量段留在旧像素上，永久冻住。曾经写成 `changedSlowBuckets +=
+     * bucketsPresent` 就正好踩这个：塞进去的桶再多，也覆盖不到空集的段。
+     *
+     * 所以全量必须是独立的一位，由 [consumeFullInvalidation] 取走，消费方见真
+     * 就整批回收。
+     */
+    var hasPendingFullInvalidation: Boolean = true
+        private set
+
+    /** 取走并清掉全量失效位。返回 true 表示调用方必须**整批**重烘。 */
+    fun consumeFullInvalidation(): Boolean {
+        val pending = hasPendingFullInvalidation
+        hasPendingFullInvalidation = false
+        return pending
+    }
+
     private val bucketsPresent: Set<WatchTagBucket>
 
     /** 首拍（以及每次 [invalidateAll] 之后）必须重绘一次，不能拿空缓存去比。 */
     private var pristine: Boolean = true
 
     init {
-        val slow = LinkedHashSet<String>()
+        val slow = LinkedHashMap<String, WatchTagBucket>()
         val buckets = LinkedHashSet<WatchTagBucket>()
         for (tag in tags) {
             val name = WatchTagBuckets.normalize(tag)
             if (name.isEmpty()) continue
             val bucket = WatchTagBuckets.of(name)
             buckets += bucket
-            if (!bucket.isFast && bucket != WatchTagBucket.STATIC) slow += name
+            if (!bucket.isFast && bucket != WatchTagBucket.STATIC) slow[name] = bucket
         }
-        watchedTags = slow.toTypedArray()
+        watchedTags = slow.keys.toTypedArray()
+        watchedBuckets = slow.values.toTypedArray()
         lastValues = arrayOfNulls(watchedTags.size)
         bucketsPresent = buckets
     }
@@ -141,7 +189,12 @@ class WatchTagChangeTracker(
         for (index in watchedTags.indices) {
             val value = runCatching { resolve(watchedTags[index]) }.getOrNull()
             // 不能 break：见类注释里 wf_engine.lua:122 的坑。
-            if (value != lastValues[index]) changed = true
+            if (value != lastValues[index]) {
+                changed = true
+                // 记下**是哪个桶**变了 —— 阶段 3 只重烘慢桶命中的那几段，
+                // 而不是整批 16 段回收重建（老师报的「还是卡」的根因之一）。
+                changedSlowBuckets += watchedBuckets[index]
+            }
             lastValues[index] = value
         }
         // 首拍（以及 invalidateAll 之后）一律当作"变了"：缓存是空的，没有基准可比。
@@ -150,6 +203,10 @@ class WatchTagChangeTracker(
         // 只置位：清位是 consumeSlowTagInvalidation 的事。这里写成 `=` 会把上一拍
         // 尚未被烘焙路径消费掉的失效信号抹掉，段位图停在旧内容上永不更新。
         if (changed || firstPoll) hasPendingSlowTagInvalidation = true
+        // 首拍没有「哪个桶变了」可言 —— 一张段位图都还没烘，没有段可挑。走
+        // [hasPendingFullInvalidation] 的整批语义，而不是往桶集合里塞
+        // bucketsPresent：常量段的 slowBuckets 是空集，塞多少桶都盖不到它。
+        if (firstPoll) hasPendingFullInvalidation = true
         return requiresRedrawEveryTick || changed || firstPoll
     }
 
@@ -163,5 +220,10 @@ class WatchTagChangeTracker(
         pristine = true
         hasPendingSlowTagInvalidation = true
         lastValues.fill(null)
+        // 全量入口语义是「什么都可能变了」，用**独立的一位**表达，不是往桶集合里
+        // 塞 bucketsPresent。压暗切换、主题变化都走这里，而它们要刷新的恰恰包括
+        // 全是常量层的段 —— 那些段 slowBuckets 是空集，按桶回收永远盖不到，
+        // 只能靠整批。漏标会让图层永久冻住，倒向多烘一次。
+        hasPendingFullInvalidation = true
     }
 }

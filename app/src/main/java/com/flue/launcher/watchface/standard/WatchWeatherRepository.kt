@@ -445,7 +445,11 @@ class WatchWeatherRepository(
     }
 
     /** Fallback for older devices whose system Geocoder backend is absent. */
-    private fun reverseGeocodeLabelFromNetwork(location: WatchWeatherLocation): String? {
+    private fun reverseGeocodeLabelFromNetwork(location: WatchWeatherLocation): String? = runCatching {
+        reverseGeocodeLabelFromNetworkUnchecked(location)
+    }.getOrNull()
+
+    private fun reverseGeocodeLabelFromNetworkUnchecked(location: WatchWeatherLocation): String? {
         val latitude = String.format(Locale.US, "%.6f", location.latitude)
         val longitude = String.format(Locale.US, "%.6f", location.longitude)
         val language = URLEncoder.encode(
@@ -763,6 +767,10 @@ class WatchWeatherRepository(
             location = location.label,
             observedAtEpochMs = nowEpochMs,
             isDaytime = isDaytime,
+            // URL 里一直在请求 sunrise/sunset，之前只是没解析，{wsr}/{wss} 因此
+            // 永远渲染成 "--"。索引 0 是今天。
+            sunriseText = clockTimeFromIsoLocalTime(daily?.optJSONArray("sunrise")?.optString(0)),
+            sunsetText = clockTimeFromIsoLocalTime(daily?.optJSONArray("sunset")?.optString(0)),
             forecast = forecasts,
             hourlyForecast = hourlyForecasts,
         )
@@ -934,6 +942,15 @@ private fun hourOfDayFromIsoLocalTime(raw: String): Int? =
         ?.getOrNull(1)
         ?.toIntOrNull()
         ?.takeIf { it in 0..23 }
+
+/**
+ * 取 ISO 本地时间串的 `HH:mm` 部分，供 `{wsr}` / `{wss}` 直接当字符串渲染。
+ *
+ * 与 clox `WeatherProvider.kt:368` 的 `parseIsoTime` 同语义。Open-Meteo 在
+ * `timezone=auto` 下返回的已经是当地时间（`2026-08-02T05:41`），不需要再换算时区。
+ */
+private fun clockTimeFromIsoLocalTime(raw: String?): String? =
+    raw?.let { Regex("T(\\d{2}:\\d{2})").find(it)?.groupValues?.getOrNull(1) }
 
 private fun JSONObject.putNullable(key: String, value: Any?) {
     put(key, value ?: JSONObject.NULL)

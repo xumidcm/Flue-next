@@ -152,9 +152,11 @@ class WatchStaticFlattenSegmentTest {
     private fun segments(
         pattern: String,
         videoBoundaries: Set<Int> = emptySet(),
+        slowBuckets: List<Set<WatchTagBucket>> = emptyList(),
     ): List<WatchFlattenSegment> = WatchStaticFlatten.planSegments(
         bakeable = pattern.map { it == '1' },
         videoBoundaries = videoBoundaries,
+        slowBuckets = slowBuckets,
     )
 
     private fun ranges(pattern: String, videoBoundaries: Set<Int> = emptySet()) =
@@ -229,5 +231,85 @@ class WatchStaticFlattenSegmentTest {
         assertTrue(1 in segment)
         assertTrue(3 in segment)
         assertFalse(4 in segment)
+    }
+}
+
+/**
+ * 段慢桶并集 —— 按桶重烘的判据。
+ *
+ * ⚠️ 这一组守的是一个真踩过的坑：调用点漏传 `slowBuckets`，所有段的集合都是空集，
+ * 而空集跟任何变化集合都没有交集 —— 按桶回收于是一段都匹配不上，分钟跳变后烘焙
+ * 段的像素**永久冻住**。比卡顿严重得多，所以单独一组钉住。
+ */
+class WatchStaticFlattenSlowBucketTest {
+
+    private fun segments(
+        pattern: String,
+        slowBuckets: List<Set<WatchTagBucket>>,
+    ): List<WatchFlattenSegment> = WatchStaticFlatten.planSegments(
+        bakeable = pattern.map { it == '1' },
+        slowBuckets = slowBuckets,
+    )
+
+    @Test
+    fun `段的慢桶是段内各层之并`() {
+        val segment = segments(
+            pattern = "111",
+            slowBuckets = listOf(
+                setOf(WatchTagBucket.MINUTE),
+                emptySet(),
+                setOf(WatchTagBucket.PUSH),
+            ),
+        ).single()
+        assertEquals(setOf(WatchTagBucket.MINUTE, WatchTagBucket.PUSH), segment.slowBuckets)
+    }
+
+    @Test
+    fun `段外图层的慢桶不算进来`() {
+        // 分钟层在段外（下标 3），这一段就不该被分钟跳变触发重烘。
+        val segment = segments(
+            pattern = "1110",
+            slowBuckets = listOf(
+                setOf(WatchTagBucket.HOUR),
+                emptySet(),
+                emptySet(),
+                setOf(WatchTagBucket.MINUTE),
+            ),
+        ).single()
+        assertEquals(setOf(WatchTagBucket.HOUR), segment.slowBuckets)
+    }
+
+    @Test
+    fun `多段各自聚合互不串味`() {
+        val result = segments(
+            pattern = "11011",
+            slowBuckets = listOf(
+                setOf(WatchTagBucket.MINUTE),
+                setOf(WatchTagBucket.MINUTE),
+                setOf(WatchTagBucket.DAY),
+                setOf(WatchTagBucket.PUSH),
+                setOf(WatchTagBucket.PUSH),
+            ),
+        )
+        assertEquals(2, result.size)
+        assertEquals(setOf(WatchTagBucket.MINUTE), result[0].slowBuckets)
+        assertEquals(setOf(WatchTagBucket.PUSH), result[1].slowBuckets)
+    }
+
+    @Test
+    fun `全常量段的慢桶为空集`() {
+        // 空集是**正确**结果：这一段在整个 generation 内恒定，任何 tag 变化都不该
+        // 让它重烘。它只能由全量失效入口（压暗、主题）整批回收 —— 这也正是全量
+        // 必须有独立信号、不能编码成「所有桶都变了」的原因。
+        val segment = segments("11", slowBuckets = listOf(emptySet(), emptySet())).single()
+        assertTrue(segment.slowBuckets.isEmpty())
+    }
+
+    @Test
+    fun `不传慢桶时退化成空集`() {
+        // 调用方漏传就是这个下场，这里把「漏传 = 空集」显式钉住，配合上面那条
+        // 说明：空集的段只能靠全量回收，绝不会被按桶路径碰到。
+        val segment = WatchStaticFlatten.planSegments(bakeable = listOf(true, true)).single()
+        assertTrue(segment.slowBuckets.isEmpty())
     }
 }

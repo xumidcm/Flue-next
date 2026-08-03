@@ -412,6 +412,9 @@
     <string name="settings_watchface_canvas_reset">Reset canvas settings</string>
     <string name="settings_watchface_canvas_reset_desc">Back to fit, no zoom, no offset</string>
     <string name="settings_watchface_canvas_section">Canvas adjustment</string>
+    <string name="settings_watchface_canvas_entry_sub">Preview zoom and offset live on the real watch face</string>
+    <string name="canvas_adjust_done">Done</string>
+    <string name="canvas_input_range_hint">Allowed range: %1$s – %2$s</string>
     <string name="settings_watchface_gravity_parallax">Gyro depth watch faces</string>
     <string name="settings_watchface_gravity_parallax_on">Enable wrist-motion parallax for faces that declare gyro layers</string>
     <string name="settings_watchface_gravity_parallax_off">Disable gyro depth movement</string>

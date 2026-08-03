@@ -511,3 +511,94 @@ class WatchmakerRuntimePrimitivesTest {
         set(year, month, day, hour, minute, second)
     }
 }
+
+/**
+ * 帧序列预取目标 —— 「按 tick 时钟推算，而不是当前帧 +1」。
+ *
+ * 这一组守的是 `-_1.zip`（600 帧 JPG、`gif_delay=17`）「拨两下停一下」的根因：
+ * tick 固定 33ms，帧号却按 17ms 走，预取写死 +1 就永远暖错帧。
+ */
+class FrameSequencePrefetchTest {
+
+    private fun prefetch(
+        frameCount: Int,
+        elapsedMs: Long,
+        frameDelayMs: Long,
+        lookaheadTicks: Int = 2,
+    ): List<Int> = frameSequencePrefetchIndices(
+        frameCount = frameCount,
+        currentIndex = watchGifFrameIndex(frameCount, elapsedMs, frameDelayMs),
+        elapsedMs = elapsedMs,
+        frameDelayMs = frameDelayMs,
+        lookaheadTicks = lookaheadTicks,
+    )
+
+    @Test
+    fun `delay 小于 tick 时预取真正会落到的帧而不是相邻帧`() {
+        // 600 帧 / 17ms：一拍前进 ⌈33/17⌉ ≈ 2 帧。
+        // elapsed=0 时下两拍分别落在 33/17=1、66/17=3，旧的「+1」实现永远暖不到 3。
+        assertEquals(listOf(1, 3), prefetch(frameCount = 600, elapsedMs = 0L, frameDelayMs = 17L))
+        // 稳态下两拍是 +2 / +4，跟「当前帧 +1」彻底错开：这里第 6 帧根本不会被画。
+        assertEquals(listOf(7, 9), prefetch(frameCount = 600, elapsedMs = 100L, frameDelayMs = 17L))
+    }
+
+    @Test
+    fun `delay 与 tick 同频时逐帧前进`() {
+        assertEquals(listOf(1, 2), prefetch(frameCount = 600, elapsedMs = 0L, frameDelayMs = 33L))
+    }
+
+    @Test
+    fun `慢速序列连续几拍落同一帧时只吐一个目标`() {
+        // delay=500ms：两拍之后仍在第 0 帧，预取只需要一个目标，不能白占解码额度。
+        assertEquals(listOf(1), prefetch(frameCount = 10, elapsedMs = 480L, frameDelayMs = 500L))
+        assertTrue(prefetch(frameCount = 10, elapsedMs = 0L, frameDelayMs = 500L).isEmpty())
+    }
+
+    @Test
+    fun `预取目标从不包含当前帧`() {
+        for (elapsed in 0L until 200L step 7L) {
+            val current = watchGifFrameIndex(600, elapsed, 17L)
+            assertFalse(
+                "elapsed=$elapsed",
+                current in prefetch(frameCount = 600, elapsedMs = elapsed, frameDelayMs = 17L),
+            )
+        }
+    }
+
+    @Test
+    fun `预取目标去重且不超过 lookahead 拍数`() {
+        for (delay in longArrayOf(1L, 5L, 17L, 33L, 100L)) {
+            val targets = prefetch(frameCount = 600, elapsedMs = 0L, frameDelayMs = delay)
+            assertEquals("delay=$delay", targets.distinct(), targets)
+            assertTrue("delay=$delay", targets.size <= 2)
+        }
+    }
+
+    @Test
+    fun `绕回序列末尾时环绕到开头`() {
+        // 10 帧 / 33ms，当前停在第 9 帧：下两拍应该回到 0 和 1。
+        assertEquals(listOf(0, 1), prefetch(frameCount = 10, elapsedMs = 9 * 33L, frameDelayMs = 33L))
+    }
+
+    @Test
+    fun `单帧或空序列不预取`() {
+        assertTrue(prefetch(frameCount = 1, elapsedMs = 0L, frameDelayMs = 17L).isEmpty())
+        assertTrue(prefetch(frameCount = 0, elapsedMs = 0L, frameDelayMs = 17L).isEmpty())
+    }
+
+    @Test
+    fun `lookahead 非正数时不预取`() {
+        assertTrue(
+            prefetch(frameCount = 600, elapsedMs = 0L, frameDelayMs = 17L, lookaheadTicks = 0)
+                .isEmpty(),
+        )
+    }
+
+    @Test
+    fun `delay 为零按最小 1ms 处理不会崩`() {
+        // dynamicNumber 解析失败时 gif_delay 可能落成 0。
+        val targets = prefetch(frameCount = 600, elapsedMs = 0L, frameDelayMs = 0L)
+        assertEquals(targets.distinct(), targets)
+        assertTrue(targets.size <= 2)
+    }
+}

@@ -146,6 +146,13 @@
             android:screenOrientation="portrait" />
 
         <activity
+            android:name=".CanvasAdjustActivity"
+            android:exported="false"
+            android:label="@string/settings_watchface_canvas_section"
+            android:theme="@style/Theme.WatchLauncher"
+            android:screenOrientation="portrait" />
+
+        <activity
             android:name=".CrashActivity"
             android:exported="false"
             android:theme="@style/Theme.WatchLauncher"

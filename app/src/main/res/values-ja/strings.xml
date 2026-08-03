@@ -412,6 +412,9 @@
     <string name="settings_watchface_canvas_reset">キャンバス設定をリセット</string>
     <string name="settings_watchface_canvas_reset_desc">全体表示・拡大縮小なし・オフセットなしに戻す</string>
     <string name="settings_watchface_canvas_section">キャンバス調整</string>
+    <string name="settings_watchface_canvas_entry_sub">実際の文字盤上で拡大縮小とオフセットをリアルタイムにプレビュー</string>
+    <string name="canvas_adjust_done">完了</string>
+    <string name="canvas_input_range_hint">入力できる範囲：%1$s ～ %2$s</string>
     <string name="settings_watchface_gravity_parallax">ジャイロ奥行き文字盤</string>
     <string name="settings_watchface_gravity_parallax_on">gyro レイヤーを持つ文字盤で手首の動きによる視差を有効化</string>
     <string name="settings_watchface_gravity_parallax_off">ジャイロ奥行き移動を無効化</string>

@@ -63,6 +63,53 @@ class WatchmakerRuntimeContractsTest {
     }
 
     @Test
+    fun linearRasterOnlyForAnisotropicScaleComposedFromCanvasAncestorsAndLayer() {
+        // 等比缩放（含画布基变换的非 1 缩放）一律不触发：312 的 181 个 text 图层
+        // 全靠字形缓存，误开 LINEAR_TEXT_FLAG 会让它们每帧重新栅格化、拖慢整帧。
+        assertFalse(watchTextNeedsLinearRaster(1f, 1f))
+        assertFalse(watchTextNeedsLinearRaster(0.625f, 0.625f))
+        assertFalse(watchTextNeedsLinearRaster(1.28f, 1.28f))
+
+        // wf528 的五个手写体图层：anim_scale_x 80/85/92/95，画布基变换等比 → 合成
+        // 后两轴不等，必须开。
+        assertTrue(watchTextNeedsLinearRaster(0.8f, 1f))
+        assertTrue(watchTextNeedsLinearRaster(0.85f, 1f))
+        assertTrue(watchTextNeedsLinearRaster(0.92f, 1f))
+        assertTrue(watchTextNeedsLinearRaster(0.95f, 1f))
+
+        // 画布基变换本身非等比（STRETCH / zoomX≠zoomY）× 图层等比，合成后同样不等。
+        assertTrue(watchTextNeedsLinearRaster(0.7f, 0.9f))
+        assertTrue(watchTextNeedsLinearRaster(1.2f, 0.8f))
+
+        // 镜像缩放不改变笔画粗细，比绝对值。
+        assertFalse(watchTextNeedsLinearRaster(-1f, -1f))
+        assertTrue(watchTextNeedsLinearRaster(-0.8f, 1f))
+
+        // 两轴同时放大/缩小但保持比例 → 仍不算非等比。
+        assertFalse(watchTextNeedsLinearRaster(0.5f, 0.5f))
+        assertFalse(watchTextNeedsLinearRaster(2f, 2f))
+    }
+
+    @Test
+    fun linearRasterToleratesFloatingPointRatiosButNotRealAnisotropy() {
+        // 画布变换算出来的比例带浮点尾数：1.2800001 与 1.28 的差值远小于 1% 容差。
+        assertFalse(watchTextNeedsLinearRaster(1.2800001f, 1.28f))
+        assertFalse(watchTextNeedsLinearRaster(1.28f, 1.2800001f))
+
+        // 1% 容差按较大轴算：1f 与 0.99f 差 1% 整，应判为等比（不开）。
+        assertFalse(watchTextNeedsLinearRaster(1f, 0.99f))
+
+        // 实打实的非等比：0.985 与 1f 差 1.5% > 1% 容差，应开。
+        assertTrue(watchTextNeedsLinearRaster(0.985f, 1f))
+
+        // 边界保护：零 / 负数轴（不可渲染）与 NaN/无穷不参与判定。
+        assertFalse(watchTextNeedsLinearRaster(0f, 0f))
+        assertFalse(watchTextNeedsLinearRaster(1f, 0f))
+        assertFalse(watchTextNeedsLinearRaster(Float.NaN, 1f))
+        assertFalse(watchTextNeedsLinearRaster(Float.POSITIVE_INFINITY, 1f))
+    }
+
+    @Test
     fun hscBitmapFontsUseTheConvertedLayerHeightWithoutChangingRegularPackages() {
         // HSC conversion sample: original text_size is still 60/128/122 while
         // height has already been converted into the 512 design coordinate space.
@@ -1024,6 +1071,77 @@ class WatchmakerRuntimeContractsTest {
         assertEquals(listOf(null, 0, null, null, null), parents)
     }
 
+    /**
+     * wf528 的黑帧根因：opacity 表达式门控的图片层在翻真之前从没被画过，也就从没
+     * 发起过解码。预暖清单要挑出的正是这些层。
+     */
+    @Test
+    fun opacityWarmupPlanPicksDynamicallyGatedStillImagesOnly() {
+        val plan = planOpacityGatedImageWarmup(
+            parentIndices = listOf(null, null, null, null, null, null),
+            layerTypes = listOf("image", "image", "image", "text", "shape", "image_cond"),
+            rawOpacityValues = listOf(
+                "(math.floor({ds}/4) % 6 == 1) and 100 or 0 ", // 门控轮换层 → 要暖
+                "100", // 常驻可见 → 一直是热的，不必暖
+                "0", // 作者关掉的层 → 暖它纯属白解码
+                "{dm} > 30 and 100 or 0", // 动态但不是图片
+                "{dm} > 30 and 100 or 0", // 同上
+                "({shr} == 3) and 100 or 0", // 天气条件图也门控 → 要暖
+            ),
+            rawPathValues = listOf("a.png", "b.png", "c.png", "", "", "cond.png"),
+        )
+
+        assertEquals(listOf(0, 5), plan)
+    }
+
+    /** 门控写在 group 上、图片层自己是常量 opacity —— wf528/312 都有这种写法。 */
+    @Test
+    fun opacityWarmupPlanInheritsGatingFromAncestorGroups() {
+        val plan = planOpacityGatedImageWarmup(
+            parentIndices = listOf(null, 0, 1, null, 3),
+            layerTypes = listOf("group", "group", "image", "group", "image"),
+            rawOpacityValues = listOf("{ds} % 2 == 0 and 100 or 0", "100", "100", "100", "100"),
+            rawPathValues = listOf("", "", "nested.png", "", "static.png"),
+        )
+
+        assertEquals(listOf(2), plan)
+    }
+
+    /**
+     * 反引号帧序列与动态路径必须排除：翻真那一拍要哪一帧取决于届时的动画时钟，
+     * 现在暖的不一定是要的；312 有 19 个这样的层，全暖一遍就是自造卡顿。
+     */
+    @Test
+    fun opacityWarmupPlanSkipsFrameSequencesDynamicPathsAndPreparsedSvg() {
+        val gate = "({ds} % 4 == 0) and 100 or 0"
+        val plan = planOpacityGatedImageWarmup(
+            parentIndices = listOf(null, null, null, null),
+            layerTypes = listOf("image_gif", "image", "svg", "image"),
+            rawOpacityValues = listOf(gate, gate, gate, gate),
+            rawPathValues = listOf(
+                "f0.png`f1.png`f2.png", // 帧序列
+                "icons/{whi}.png", // 动态路径
+                "vector.svg", // SVG 在准备阶段就解析好了，没有异步解码
+                "  ", // 空路径
+            ),
+        )
+
+        assertTrue(plan.isEmpty())
+    }
+
+    /** 损坏的 XML 可能让父链成环，预暖清单不能因此死循环。 */
+    @Test
+    fun opacityWarmupPlanTerminatesOnCyclicParentChains() {
+        val plan = planOpacityGatedImageWarmup(
+            parentIndices = listOf(1, 0, 99),
+            layerTypes = listOf("image", "group", "image"),
+            rawOpacityValues = listOf("100", "100", "100"),
+            rawPathValues = listOf("a.png", "", "b.png"),
+        )
+
+        assertTrue(plan.isEmpty())
+    }
+
     @Test
     fun renderPlanKeepsDocumentZOrderAndAppliesAncestorsOuterToInner() {
         val child = layer(id = "child", parentId = "inner")
@@ -1194,6 +1312,248 @@ class WatchmakerRuntimeContractsTest {
             )
             assertEquals(listOf("second", "first"), order)
         }
+
+    /**
+     * `{dw}` = 一年中的第几周，**不是**星期几。对齐 clox
+     * `wf_tagdefs.lua:252` 的 `os.date("%W") + 1`：strftime 的 `%W` 以周一为
+     * 周首、首个周一之前算第 00 周。期望值取自 GNU `date +%W` 再 +1。
+     */
+    @Test
+    fun weekOfYearTagFollowsStrftimePercentWSemanticsNotCalendarLocale() {
+        val snapshot = WatchDataSnapshot()
+        val cases = listOf(
+            // 2026-01-01 是周四，在首个周一之前 → %W=00 → {dw}=1
+            Triple(Calendar.JANUARY, 1, "1"),
+            // 2026-01-04 周日，仍属第 00 周
+            Triple(Calendar.JANUARY, 4, "1"),
+            // 2026-01-05 是当年第一个周一 → %W=01
+            Triple(Calendar.JANUARY, 5, "2"),
+            Triple(Calendar.JULY, 20, "30"),
+            Triple(Calendar.AUGUST, 2, "31"),
+            Triple(Calendar.DECEMBER, 31, "53"),
+        )
+        for ((month, day, expected) in cases) {
+            val calendar = Calendar.getInstance().apply { clear(); set(2026, month, day, 12, 0, 0) }
+            assertEquals(
+                "dw@2026-${month + 1}-$day",
+                expected,
+                WatchmakerTagResolver.resolve("dw", calendar, snapshot).renderedValue,
+            )
+        }
+        // locale 不能改变周序号：{dw} 是 C 库定义，不走 Calendar.WEEK_OF_YEAR。
+        val august = Calendar.getInstance().apply { clear(); set(2026, Calendar.AUGUST, 2, 12, 0, 0) }
+        for (locale in listOf(Locale.US, Locale.GERMANY, Locale.SIMPLIFIED_CHINESE)) {
+            assertEquals(
+                "31",
+                WatchmakerTagResolver.resolve("dw", august, snapshot, locale = locale).renderedValue,
+            )
+        }
+    }
+
+    @Test
+    fun daysInMonthTagCoversShortMonthsAndLeapFebruary() {
+        val snapshot = WatchDataSnapshot()
+        fun daysIn(year: Int, month: Int): String {
+            val calendar = Calendar.getInstance().apply { clear(); set(year, month, 1, 8, 0, 0) }
+            return WatchmakerTagResolver.resolve("ddim", calendar, snapshot).renderedValue
+        }
+
+        assertEquals("31", daysIn(2026, Calendar.AUGUST))
+        assertEquals("30", daysIn(2026, Calendar.APRIL))
+        assertEquals("28", daysIn(2026, Calendar.FEBRUARY))
+        assertEquals("29", daysIn(2024, Calendar.FEBRUARY))
+    }
+
+    /**
+     * `{ddw1_N}` 家族 = N 天后的星期名（clox `wf_tagdefs.lua:800-811`）。
+     * 312 用满了 `{ddw1_1}`~`{ddw1_6}` 做未来一周预报行。
+     */
+    @Test
+    fun futureWeekdayTagsShiftByDaysAndRejectOutOfRangeOffsets() {
+        val monday = Calendar.getInstance().apply {
+            clear()
+            set(2026, Calendar.JULY, 20, 10, 0, 0) // 周一
+        }
+        val snapshot = WatchDataSnapshot()
+
+        // ddw = 短名，ddww = 全名，与不带 _N 的同名标签取名方式逐项一致。
+        assertEquals(
+            "Tue",
+            WatchmakerTagResolver.resolve("ddw_1", monday, snapshot, locale = Locale.ENGLISH).renderedValue,
+        )
+        assertEquals(
+            "Sunday",
+            WatchmakerTagResolver.resolve("ddww_6", monday, snapshot, locale = Locale.ENGLISH).renderedValue,
+        )
+        // ddw2 = 短名截前两个字符，周一 + 5 天 = 周六 → "Sat".take(2)。
+        assertEquals(
+            "Sa",
+            WatchmakerTagResolver.resolve("ddw2_5", monday, snapshot, locale = Locale.ENGLISH).renderedValue,
+        )
+        // 312 实际用到的六个：从周二一路推到周日。
+        val expected = listOf("Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+        for ((index, label) in expected.withIndex()) {
+            val tag = "ddw1_${index + 1}"
+            assertTrue(tag, WatchmakerTagResolver.isKnown(tag))
+            // ddw1 是 NARROW_FORMAT，英文下只有首字母；这里断言它确实跟着日期走。
+            val narrow = WatchmakerTagResolver
+                .resolve(tag, monday, snapshot, locale = Locale.ENGLISH)
+                .renderedValue
+            assertTrue("$tag => $narrow", label.startsWith(narrow))
+        }
+
+        // 家族正则限 1..6（与 clox 的显式范围检查一致），越界仍是未知标签。
+        assertFalse(WatchmakerTagResolver.isKnown("ddw1_0"))
+        assertFalse(WatchmakerTagResolver.isKnown("ddw1_7"))
+        assertTrue(
+            WatchmakerTagResolver.resolve("ddw1_7", monday, snapshot) is WatchTagResolution.Unsupported,
+        )
+    }
+
+    @Test
+    fun deviceLocaleAndClockFormatTagsFollowSnapshotAndRequestedLocale() {
+        val calendar = Calendar.getInstance().apply { clear(); set(2026, Calendar.AUGUST, 2, 9, 0, 0) }
+
+        // {alangcode}/{alangreg} 跟随 resolve 的 locale 形参，与日期标签同源。
+        assertEquals(
+            "en",
+            WatchmakerTagResolver
+                .resolve("alangcode", calendar, WatchDataSnapshot(), locale = Locale.US)
+                .renderedValue,
+        )
+        assertEquals(
+            "US",
+            WatchmakerTagResolver
+                .resolve("alangreg", calendar, WatchDataSnapshot(), locale = Locale.US)
+                .renderedValue,
+        )
+
+        // {d24h} 由 provider 侧读 DateFormat.is24HourFormat 塞进快照，渲染成 true/false。
+        assertEquals(
+            "true",
+            WatchmakerTagResolver
+                .resolve("d24h", calendar, WatchDataSnapshot(is24Hour = true))
+                .renderedValue,
+        )
+        assertEquals(
+            "false",
+            WatchmakerTagResolver
+                .resolve("d24h", calendar, WatchDataSnapshot(is24Hour = false))
+                .renderedValue,
+        )
+    }
+
+    /**
+     * `{cnc}`（通知数）与 `{stsc}`/`{sscp}`（步数目标与完成度）必须在无数据时
+     * 给出**数值**而不是 nil：表达式里 `{cnc} > 0` 代入 nil 会让整条算式失效，
+     * opacity 回落默认 100（历史事故：九个天气图标同时全亮）。
+     */
+    @Test
+    fun notificationAndStepGoalTagsStayNumericWithoutHostData() {
+        val calendar = Calendar.getInstance().apply { clear(); set(2026, Calendar.AUGUST, 2, 9, 0, 0) }
+
+        assertEquals(
+            "0",
+            WatchmakerTagResolver.resolve("cnc", calendar, WatchDataSnapshot()).renderedValue,
+        )
+        assertEquals(
+            "3",
+            WatchmakerTagResolver
+                .resolve("cnc", calendar, WatchDataSnapshot(notificationCount = 3))
+                .renderedValue,
+        )
+
+        // 没有用户档案时用规范默认目标 10000（clox watchface_bridge.lua:127 同值）。
+        assertEquals(
+            "10000",
+            WatchmakerTagResolver.resolve("stsc", calendar, WatchDataSnapshot()).renderedValue,
+        )
+        assertEquals(
+            "0",
+            WatchmakerTagResolver.resolve("sscp", calendar, WatchDataSnapshot()).renderedValue,
+        )
+        val walking = WatchDataSnapshot(steps = 4_500, stepGoal = 9_000)
+        assertEquals("9000", WatchmakerTagResolver.resolve("stsc", calendar, walking).renderedValue)
+        assertEquals("50", WatchmakerTagResolver.resolve("sscp", calendar, walking).renderedValue)
+        // 目标为 0 / 负数时不能除零，回落到默认目标。
+        assertEquals(
+            "10000",
+            WatchmakerTagResolver
+                .resolve("stsc", calendar, WatchDataSnapshot(steps = 100, stepGoal = 0))
+                .renderedValue,
+        )
+
+        // 表达式里参与算术，不被替换成 nil。
+        assertEquals(
+            5f,
+            WatchmakerExpressionEvaluator.evaluateNumber("{cnc} + 5", -1f) { tag ->
+                WatchmakerTagResolver.resolve(tag, calendar, WatchDataSnapshot())
+            },
+            0.001f,
+        )
+    }
+
+    @Test
+    fun sunriseSunsetTagsRenderWeatherClockTimes() {
+        val calendar = Calendar.getInstance().apply { clear(); set(2026, Calendar.AUGUST, 2, 9, 0, 0) }
+        val snapshot = WatchDataSnapshot(
+            weather = WatchWeatherSnapshot(sunriseText = "05:41", sunsetText = "19:12"),
+        )
+
+        assertEquals("05:41", WatchmakerTagResolver.resolve("wsr", calendar, snapshot).renderedValue)
+        assertEquals("19:12", WatchmakerTagResolver.resolve("wss", calendar, snapshot).renderedValue)
+        // 没有天气数据时回落到 Unavailable（渲染 "--"），而不是空串。
+        val missing = WatchmakerTagResolver.resolve("wsr", calendar, WatchDataSnapshot())
+        assertTrue(missing is WatchTagResolution.Unavailable)
+        assertEquals("--", missing.renderedValue)
+    }
+
+    /**
+     * `{wmp}` 必须是 0..9 的**整数**相位序号：表盘写 `{wmp} == 5` 判满月，
+     * 推小数永远不匹配（clox `wf_tagdefs.lua:329-334` 记了这个坑）。
+     * 基准取 2000-01-06 新月、朔望月 29.53058867 天。
+     */
+    @Test
+    fun moonPhaseTagIsAnIntegerIndexDrivenOnlyByTheDate() {
+        val snapshot = WatchDataSnapshot()
+        fun phase(year: Int, month: Int, day: Int): String {
+            val calendar = Calendar.getInstance().apply { clear(); set(year, month, day, 12, 0, 0) }
+            return WatchmakerTagResolver.resolve("wmp", calendar, snapshot).renderedValue
+        }
+
+        assertEquals("0", phase(2000, Calendar.JANUARY, 6)) // 基准新月
+        assertEquals("2", phase(2026, Calendar.JULY, 20))
+        assertEquals("6", phase(2026, Calendar.AUGUST, 2))
+        assertEquals("0", phase(2026, Calendar.AUGUST, 13)) // 下一次朔回到 0
+
+        // 全年每一天都必须落在 0..9 且是整数，不能出现小数或越界。
+        val walker = Calendar.getInstance().apply { clear(); set(2026, Calendar.JANUARY, 1, 12, 0, 0) }
+        repeat(365) {
+            val value = WatchmakerTagResolver.resolve("wmp", walker, snapshot).renderedValue
+            val index = requireNotNull(value.toIntOrNull()) { "wmp 不是整数: $value" }
+            assertTrue("wmp 越界: $index", index in 0..9)
+            walker.add(Calendar.DAY_OF_MONTH, 1)
+        }
+
+        // 同一天的不同时刻必须给出同一个相位（纯日期函数，不随时钟走）。
+        assertEquals(phase(2026, Calendar.AUGUST, 2), run {
+            val night = Calendar.getInstance().apply { clear(); set(2026, Calendar.AUGUST, 2, 23, 59, 0) }
+            WatchmakerTagResolver.resolve("wmp", night, snapshot).renderedValue
+        })
+    }
+
+    /** 新补的这批 tag 必须全部进 builtIn 词表，否则编译期就被判 Unsupported。 */
+    @Test
+    fun newlyAddedTagsAreRecognisedAsBuiltIn() {
+        val tags = listOf(
+            "dw", "ddim", "alangcode", "alangreg", "d24h", "cnc",
+            "stsc", "sscp", "wsr", "wss", "wmp",
+            "ddw_1", "ddww_2", "ddw1_3", "ddw2_6",
+        )
+        for (tag in tags) {
+            assertTrue(tag, WatchmakerTagResolver.isKnown(tag))
+        }
+    }
 
     private inline fun withTemporaryDirectory(block: (File) -> Unit) {
         val root = Files.createTempDirectory("flue-watch-runtime-test").toFile()

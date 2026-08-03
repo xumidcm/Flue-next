@@ -76,6 +76,7 @@ internal object WatchStaticFlatten {
     fun planSegments(
         bakeable: List<Boolean>,
         videoBoundaries: Set<Int> = emptySet(),
+        slowBuckets: List<Set<WatchTagBucket>> = emptyList(),
     ): List<WatchFlattenSegment> {
         if (bakeable.isEmpty()) return emptyList()
         val segments = ArrayList<WatchFlattenSegment>()
@@ -85,7 +86,15 @@ internal object WatchStaticFlatten {
             if (runStart < 0) return
             val length = endExclusive - runStart
             if (length >= MIN_SEGMENT_LAYERS && segments.size < MAX_SEGMENTS) {
-                segments += WatchFlattenSegment(runStart, endExclusive - 1)
+                // 段的慢桶 = 段内各层慢桶之并（对照 `wf_render.lua:3192` 的
+                // `runSlowDeps(run, fast)`：那里也是**逐段**绑定 requestBake）。
+                // 空集合意味着这一段在整个 generation 内恒定，任何 tag 变化都
+                // 不该让它重烘。
+                val buckets = LinkedHashSet<WatchTagBucket>()
+                for (index in runStart until endExclusive) {
+                    slowBuckets.getOrNull(index)?.let(buckets::addAll)
+                }
+                segments += WatchFlattenSegment(runStart, endExclusive - 1, buckets)
             }
             runStart = -1
         }
@@ -106,10 +115,15 @@ internal object WatchStaticFlatten {
 
 /**
  * 一个连续可烘区间，闭区间，下标对齐 renderPlan。
+ *
+ * [slowBuckets] 是段内各层慢依赖桶的并集，**重烘的判据就是它** —— 只有变化的桶
+ * 命中这个集合，这一段才需要重建。312 有 16 段，一次分钟跳变通常只碰一两段；
+ * 原来用一个全局布尔，任何慢桶变化都把 16 段整批回收，正是老师报的卡顿来源。
  */
 internal data class WatchFlattenSegment(
     val fromIndex: Int,
     val toIndex: Int,
+    val slowBuckets: Set<WatchTagBucket> = emptySet(),
 ) {
     val layerCount: Int
         get() = toIndex - fromIndex + 1

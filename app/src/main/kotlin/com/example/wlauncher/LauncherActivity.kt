@@ -1491,19 +1491,42 @@ fun LauncherScreen(vm: LauncherViewModel) {
         // startListening + 每个 createView 的跨进程 RemoteViews 膨胀（最贵的
         // 一项），三件事都在主线程上（老师实机反馈）。
         //
+        // 首次划开任一覆层要在同一帧里完成：该层首次组合、AppWidgetHostView
+        // 逐个膨胀 RemoteViews、AppWidgetHost.startListening 注册 —— 全挤一帧
+        // 必掉帧（老师报的）。趁加载页顶着屏幕先把这些做完。
+        //
+        // 小组件页和控制中心以前**没有**接进来，只有负一屏预热了，所以冷启动后
+        // 第一次划开小组件页照旧顿一下：那一帧要现做 WidgetPageLayer 组合 +
+        // startListening + 每个 createView 的跨进程 RemoteViews 膨胀（最贵的
+        // 一项），三件事都在主线程上（老师实机反馈）。
+        //
         // 延后一拍再挂：冷启动本来就是 IO 密集的，让表盘扫描先抢到 IO，
         // 否则预热反而拖慢加载本身。
+        //
+        // ⚠️ 预热必须在表盘加载完成后**常驻挂载**，不能表盘一好就撤。
+        // 以前 `sidePagePrewarmed && !watchFaceSelectionReady` 在加载完成的
+        // 那一帧就把三页整体 unmount 掉，widget 的 RemoteViews 全部释放 ——
+        // 于是「往哪滑都卡」：之后每一次手势的第一帧都要在主线程上重新
+        // 组合整套页面 + 重走一遍跨进程膨胀（负一屏最贵，widget 次之），
+        // 正好复现「滑向哪个方向都卡、只卡第一帧、一次只卡一次」。
+        // 一直挂着 = 首帧零成本；唯一代价是 widget 常驻占用 RemoteViews
+        // 预算与一点内存，但换取的手势首帧流畅是加载页唯一愿意预热的理由。
         var sidePagePrewarmed by remember { mutableStateOf(false) }
-        LaunchedEffect(watchFaceSelectionReady) {
-            if (sidePagePrewarmed) return@LaunchedEffect
-            if (watchFaceSelectionReady) return@LaunchedEffect
+        // key 必须是 Unit，**不能**是 watchFaceSelectionReady。以前挂在它上面
+        // 且开头就 `if (watchFaceSelectionReady) return`：热启动（Activity 重建
+        // 时表盘已选好）第一次组合就命中这条 return，预热于是**永远不会发生**，
+        // 三页全程冷挂载。冷启动能预热、热启动不能，正好是「有时候特别卡」的
+        // 那一半。改成只延后一拍、不看加载状态，两种启动都预热到。
+        LaunchedEffect(Unit) {
             delay(SIDE_PAGE_PREWARM_DELAY_MS)
             sidePagePrewarmed = true
         }
         // 预热单独一条判据，**不并进 sideSceneOverlayActive**：那个标志被表盘
         // 捕获、模糊降档等一大票逻辑当作「有覆层活跃」用，混进来会让冷启动
         // 期间那些路径全部误判。
-        val overlayPrewarming = sidePagePrewarmed && !watchFaceSelectionReady
+        // 注意这里**不再要求 !watchFaceSelectionReady** —— 见上面的常驻挂载
+        // 说明，预热挂上就挂着。
+        val overlayPrewarming = sidePagePrewarmed
         val sideScreenPrewarming = sideScreenEnabled && overlayPrewarming
         val widgetPagePrewarming = showWidgetPage && overlayPrewarming
         val controlCenterPrewarming = showControlCenter && overlayPrewarming
@@ -2509,17 +2532,23 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     overlayGestureTarget == null &&
                     !notificationGestureActive &&
                     !notificationSceneActive
-            val legacyNotificationBackdrop = rememberLegacyOverlayBlurBackdrop(
-                captureAllowed = notificationsEnabled && notificationUnderlaySettled,
-                // 底层内容变了就要重采：换页面、换表盘、小组件增删都算。
-                visualKey = listOf(
-                    screenState.name,
-                    selectedWatchFace.stableKey,
-                    watchFaceRefreshToken.toString(),
-                    sideScreenShortcuts.size.toString(),
-                    notificationGroups.size.toString(),
-                ).joinToString("|"),
-            )
+            // SDK < 31: 通知中心直接用纯色背景，不再尝试模糊（见 NotificationLayer 的背景 alpha）。
+            // PixelCopy + CPU box blur 在弱设备上是真实开销，现在可以完全省掉。
+            val legacyNotificationBackdrop = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                rememberLegacyOverlayBlurBackdrop(
+                    captureAllowed = notificationsEnabled && notificationUnderlaySettled,
+                    // 底层内容变了就要重采：换页面、换表盘、小组件增删都算。
+                    visualKey = listOf(
+                        screenState.name,
+                        selectedWatchFace.stableKey,
+                        watchFaceRefreshToken.toString(),
+                        sideScreenShortcuts.size.toString(),
+                        notificationGroups.size.toString(),
+                    ).joinToString("|"),
+                )
+            } else {
+                null
+            }
             if (notificationsEnabled && keepNotificationLayer) {
                 Box(
                     modifier = Modifier

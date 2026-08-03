@@ -158,13 +158,18 @@ fun NotificationLayer(
     val overscroll = remember(scope) { FlueElasticOffsetController(scope) }
     val latestMotionProfile = rememberUpdatedState(motionProfile)
     val launcherStyle = LauncherTheme.style
-    val hasClearableNotifications = notificationGroups.any { group ->
-        group.entries.any(NotificationEntryUi::isClearable)
+    // 缓存计算结果：notificationGroups 引用稳定时不重算。
+    val hasClearableNotifications = remember(notificationGroups) {
+        notificationGroups.any { group ->
+            group.entries.any(NotificationEntryUi::isClearable)
+        }
     }
     val groupEntryTracker = remember { NotificationGroupEntryTracker() }
-    val currentGroupKeys = notificationGroups.asSequence()
-        .map(NotificationGroupUi::packageName)
-        .toSet()
+    val currentGroupKeys = remember(notificationGroups) {
+        notificationGroups.asSequence()
+            .map(NotificationGroupUi::packageName)
+            .toSet()
+    }
     val enteringGroupKeys = groupEntryTracker.entering(currentGroupKeys)
     SideEffect { groupEntryTracker.commit(currentGroupKeys) }
     var dismissTransitionInFlight by remember { mutableStateOf(false) }
@@ -421,7 +426,15 @@ fun NotificationLayer(
                     Modifier
                 },
             )
-            .background(launcherStyle.screenBackground.copy(alpha = 0.62f))
+            // SDK < 31: 纯色背景（alpha = 1.0），遮住底层清晰图标，保证通知列表可读。
+            // SDK >= 31: 半透明玻璃（alpha = 0.62），由 RenderEffect 实时模糊。
+            .background(
+                if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) {
+                    launcherStyle.screenBackground
+                } else {
+                    launcherStyle.screenBackground.copy(alpha = 0.62f)
+                }
+            )
             // 顶部安全间距也必须属于通知页的命中区域；只观察指针，不抢
             // LazyColumn / 下拉关闭手势，但不再把这 22dp 传到底层控制中心。
             .pointerInput(Unit) {
@@ -518,23 +531,18 @@ fun NotificationLayer(
                                     groupKey = group.packageName,
                                     entering = isEnteringGroup
                                 ) {
-                                    AnimatedContent(
-                                        targetState = group.entries.size > 1,
-                                        transitionSpec = {
-                                            fadeIn(tween(durationMillis = 180)) togetherWith
-                                                fadeOut(tween(durationMillis = 140))
-                                        },
-                                        label = "notification_group_cardinality"
-                                    ) { hasMultipleEntries ->
-                                        if (hasMultipleEntries) {
-                                            AnimatedContent(
-                                                targetState = group.expanded,
-                                                transitionSpec = {
-                                                    fadeIn(tween(durationMillis = 160)) togetherWith
-                                                        fadeOut(tween(durationMillis = 120))
-                                                },
-                                                label = "notification_group_body"
-                                            ) { expanded ->
+                                    // 去掉 cardinality 那层 AnimatedContent：应用从 1 条通知变成多条
+                                    // 的瞬间极少发生，不值得为它维护一整层动画节点。
+                                    val hasMultipleEntries = group.entries.size > 1
+                                    if (hasMultipleEntries) {
+                                        AnimatedContent(
+                                            targetState = group.expanded,
+                                            transitionSpec = {
+                                                fadeIn(tween(durationMillis = 160)) togetherWith
+                                                    fadeOut(tween(durationMillis = 120))
+                                            },
+                                            label = "notification_group_body"
+                                        ) { expanded ->
                                                 if (expanded) {
                                                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                                         group.entries.forEach { entry ->
@@ -594,24 +602,23 @@ fun NotificationLayer(
                                                     }
                                                 }
                                             }
-                                        } else {
-                                            val entry = group.entries.first()
-                                            SwipeRevealDeleteContainer(
-                                                target = NotificationRevealTarget.Entry(entry.key),
-                                                revealedTarget = revealedNotificationTarget,
-                                                onRevealTargetChange = onRevealTargetChange,
-                                                enabled = entry.isClearable,
-                                                onDelete = { onDismissNotification(entry.key) },
-                                                modifier = Modifier.width(contentWidth)
-                                            ) {
-                                                NotificationCardReplacement(
-                                                    width = contentWidth,
-                                                    entry = entry,
-                                                    glassHighlightEnabled = glassHighlightEnabled,
-                                                    onOpenNotification = onOpenNotification,
-                                                    onRunNotificationAction = onRunNotificationAction
-                                                )
-                                            }
+                                    } else {
+                                        val entry = group.entries.first()
+                                        SwipeRevealDeleteContainer(
+                                            target = NotificationRevealTarget.Entry(entry.key),
+                                            revealedTarget = revealedNotificationTarget,
+                                            onRevealTargetChange = onRevealTargetChange,
+                                            enabled = entry.isClearable,
+                                            onDelete = { onDismissNotification(entry.key) },
+                                            modifier = Modifier.width(contentWidth)
+                                        ) {
+                                            NotificationCardReplacement(
+                                                width = contentWidth,
+                                                entry = entry,
+                                                glassHighlightEnabled = glassHighlightEnabled,
+                                                onOpenNotification = onOpenNotification,
+                                                onRunNotificationAction = onRunNotificationAction
+                                            )
                                         }
                                     }
                                 }

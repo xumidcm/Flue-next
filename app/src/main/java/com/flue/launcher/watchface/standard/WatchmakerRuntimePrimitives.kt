@@ -73,6 +73,46 @@ fun watchGifFrameIndex(frameCount: Int, elapsedMs: Long, delayMs: Long = 50L): I
         .toInt()
 }
 
+/** 渲染器的快 tick 周期。帧序列预取要按它推算「下一拍会落在哪一帧」。 */
+const val WATCH_FAST_TICK_INTERVAL_MS = 33L
+
+/**
+ * 帧序列该预取哪几帧 —— 按 tick 时钟推算**下几拍真正会落到的帧号**。
+ *
+ * ⚠️ 不能写成「当前帧 + 1」。渲染 tick 固定 [WATCH_FAST_TICK_INTERVAL_MS]，而帧号
+ * 由墙钟除以 `delayMs` 得出，两者不同频：`delayMs=17` 时每拍前进 ⌈33/17⌉ = 2 帧，
+ * 于是 `+1` 那帧根本不会被画，而下一拍真正要的 `+2` 永远是冷的。每拍都落回上一帧
+ * 再重新发起解码，实机表现就是「拨两下停一下、拨两下停一下」。
+ *
+ * 反过来 `delayMs` 比 tick 长时（慢速序列），连续几拍会落在同一帧上，这里靠去重
+ * 只吐一个目标 —— 解码额度（`MAX_CONCURRENT_ASSET_LOADS`）是全局共享的，抢不到时
+ * `requestBitmap` 直接返回上一帧、不排队也不重试，白占额度是有代价的。
+ *
+ * @param lookaheadTicks 往前看几拍。2 拍 ≈ 66ms，足够盖住一张 480² JPG 的解码，
+ *   又不会一次把解码队列占满。
+ * @return 去重后的目标帧号，已排除 [currentIndex]；顺序即优先级（近的在前）。
+ */
+fun frameSequencePrefetchIndices(
+    frameCount: Int,
+    currentIndex: Int,
+    elapsedMs: Long,
+    frameDelayMs: Long,
+    lookaheadTicks: Int = 2,
+): List<Int> {
+    if (frameCount <= 1 || lookaheadTicks < 1) return emptyList()
+    val targets = ArrayList<Int>(lookaheadTicks)
+    for (tick in 1..lookaheadTicks) {
+        val index = watchGifFrameIndex(
+            frameCount,
+            elapsedMs + WATCH_FAST_TICK_INTERVAL_MS * tick,
+            frameDelayMs,
+        )
+        if (index == currentIndex || index in targets) continue
+        targets += index
+    }
+    return targets
+}
+
 fun selectWatchGifFrame(pathExpression: String?, elapsedMs: Long, delayMs: Long = 50L): WatchGifFrame? {
     val paths = parseWatchGifPaths(pathExpression)
     if (paths.isEmpty()) return null

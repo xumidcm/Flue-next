@@ -1155,6 +1155,32 @@ data class WatchExpressionCompileReport(
     val referencedTags: Set<String>
         get() = tagDependencies.values.flatMapTo(LinkedHashSet()) { it }
 
+    /**
+     * 查一条属性原文的 tag 依赖。返回 `null` 表示**依赖不明**，不是「没有依赖」。
+     *
+     * ⚠️ 这个区分是阶段 3 可烘判定的安全底线。直接读 [tagDependencies] 的
+     * `[raw].orEmpty()` 会把两种情况混成同一个空集：
+     *
+     * 1. **真的没 tag**（[WatchAttr.Const]）—— 可以烘。
+     * 2. **编译不过**（[WatchAttr.Unsupported]，只进计数不进表），或者**键对不上**
+     *    （表里的键是 `trim()` + 实体解码后的文本，而调用方拿的是属性原文，带前后
+     *    空格就 miss）—— 这两种情况下属性完全可能引用 `{dss}`，当成「没有依赖」
+     *    去烘就把逐帧变化的图层烘死冻住。
+     *
+     * 所以查不到时不猜：原文含 `{` 就返回 `null`（依赖不明，调用方从严当不可烘），
+     * 不含 `{` 才是货真价实的无 tag 常量。
+     */
+    fun tagDependenciesOf(raw: String): Set<String>? {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return emptySet()
+        tagDependencies[trimmed]?.let { return it }
+        // precompile 对每条源文本同时热了原文与实体解码后的形式，两个键都试。
+        val decoded = trimmed.replace("&quot;", "\"").replace("&apos;", "'").trim()
+        tagDependencies[decoded]?.let { return it }
+        // 没有 `{` 就不可能有 tag：Const 走这条，是唯一可以放心当空集的情况。
+        return if (trimmed.indexOf('{') < 0 && decoded.indexOf('{') < 0) emptySet() else null
+    }
+
     companion object {
         val EMPTY = WatchExpressionCompileReport()
     }

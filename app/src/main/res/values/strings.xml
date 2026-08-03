@@ -412,6 +412,9 @@
     <string name="settings_watchface_canvas_reset">重置画布设置</string>
     <string name="settings_watchface_canvas_reset_desc">恢复到贴合、无缩放、无偏移</string>
     <string name="settings_watchface_canvas_section">画布调节</string>
+    <string name="settings_watchface_canvas_entry_sub">在真实表盘上实时预览缩放与偏移</string>
+    <string name="canvas_adjust_done">完成</string>
+    <string name="canvas_input_range_hint">可输入范围：%1$s ～ %2$s</string>
     <string name="settings_watchface_gravity_parallax">重力景深表盘效果</string>
     <string name="settings_watchface_gravity_parallax_on">对声明 gyro 图层的表盘启用随手腕晃动的景深移动</string>
     <string name="settings_watchface_gravity_parallax_off">关闭重力景深移动</string>

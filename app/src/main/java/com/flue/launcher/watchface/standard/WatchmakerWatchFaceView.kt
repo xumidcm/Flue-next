@@ -231,6 +231,19 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
      */
     private var pendingFlattenAssetInvalidation = false
 
+    /**
+     * 正在烘焙的这个段是否碰到了**还没就绪的素材**（缓存 miss，解码在异步路上）。
+     *
+     * 由 [requestBitmap] / [requestMovie] 在 miss 分支置位，[bakeFlattenSegments]
+     * 每烘一个段前清零、烘完读取 —— 段与段之间不串味，因为烘焙循环是顺序的、
+     * 全程在主线程。非烘焙路径也会置位它，无所谓：下一次烘段前一定先清零。
+     *
+     * 这是「素材落地后只作废缺素材的段」的判据。没有它就只能整批回收：312 有
+     * 300+ 图层在异步解码，一波持续两三秒，每次落地把 16 段全部作废重建，
+     * 每帧配额只是把白烧封顶成 2 段，永远收敛不了。
+     */
+    private var flattenBakeAssetMiss = false
+
     /** 编辑器正在实时改写某个图层的变换 —— 它可能落在某个烘焙段里。 */
     private fun editorLiveTransformActive(): Boolean = liveTransformLayerIndex >= 0
 
@@ -428,7 +441,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val scale = sizePx / DESIGN_SIZE
         canvas.scale(scale, scale)
         canvas.translate(DESIGN_SIZE / 2f, DESIGN_SIZE / 2f)
-        runCatching { withFullRenderPlan { drawRenderItem(canvas, item, prepared) } }
+        // baseScale 传 1：这张缩略图自己的 canvas.scale 是等比的，画布基变换与它
+        // 无关（那是主渲染路径的状态，此刻可能还停在上一帧）。
+        runCatching {
+            withFullRenderPlan { drawRenderItem(canvas, item, prepared, baseScaleX = 1f, baseScaleY = 1f) }
+        }
         return bitmap
     }
 
@@ -618,7 +635,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
      *
      * 只在主线程的 onDraw 里读写，不需要 cacheLock。
      */
-    private val lastDrawnFrameByLayer = LinkedHashMap<WatchImageFallbackKey, Bitmap>(8, 0.75f, true)
+    private val lastDrawnFrameByLayer =
+        LinkedHashMap<WatchImageFallbackKey, Bitmap>(MAX_LAST_FRAME_ENTRIES, 0.75f, true)
     /** Raw GIF equivalent of [lastDrawnFrameByLayer], used while a replacement Movie decodes. */
     private val lastDrawnMovieByLayer = LinkedHashMap<WatchImageFallbackKey, Movie>(4, 0.75f, true)
     /** Avoids scanning the tiny fallback LRUs unless a layer actually changes material. */
@@ -655,10 +673,39 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private val rectScratch = RectF()
     /** [composeLayerMatrix] 的逐帧复用缓冲；concat 会立即读走内容。 */
     private val layerMatrixScratch = Matrix()
+    /** [ringGradient] 的扫描渐变矩阵；setLocalMatrix 会立即拷走，可安全复用。 */
+    private val ringGradientMatrix = Matrix()
     /** 视频图层几何计算专用，不与 [layerMatrixScratch] 争用。 */
     private val videoMatrixScratch = Matrix()
     /** 设计空间 → View 空间的画布变换，每帧在 [drawPreparedSource] 里重算。 */
     private val canvasBaseMatrix = Matrix()
+
+    /**
+     * 本帧画布基变换的两轴缩放，[drawPreparedSource] 每帧写一次。
+     *
+     * STRETCH 预设与「画布调节」里 zoomX≠zoomY 都会让它非等比，那一样会把字形
+     * 横向拉扁 —— 与图层自身的 `anim_scale_x` 串联，共同决定 [textNeedsLinearRaster]。
+     */
+    private var frameCanvasScaleX = 1f
+    private var frameCanvasScaleY = 1f
+
+    /**
+     * [composeLayerMatrix] 每次求值后写下这一层的两轴缩放，供 [drawRenderItem]
+     * 沿祖先链累乘。刻意做成字段而不是返回值：那个函数的返回值是 Matrix，
+     * 视频图层路径也在用，不能改签名。
+     */
+    private var lastComposedScaleX = 1f
+    private var lastComposedScaleY = 1f
+
+    /**
+     * 当前正在绘制的图层「祖先链 × 自身」的累计缩放，[drawRenderItem] 逐层写入。
+     *
+     * 文字绘制路径读它判断要不要开 [Paint.LINEAR_TEXT_FLAG]（见
+     * [textNeedsLinearRaster]）。烘焙离屏路径也走 drawRenderItem，所以两条路径
+     * 的判定天然一致。
+     */
+    private var layerScaleX = 1f
+    private var layerScaleY = 1f
     private val bitmapFontSourceRect = Rect()
     private val bitmapFontDestRect = RectF()
     private val ancestorIndexScratch = IntArray(MAX_WATCH_PARENT_DEPTH)
@@ -753,7 +800,23 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             ) {
                 completeLiveTransformHandoffIfReady(descriptor.stableKey, refreshToken)
             }
-            requestFullRepaint()
+            // ⚠️ 这条路径**不能**无条件走 requestFullRepaint()（老师报的「312 滑下进
+            // 控制中心大卡一下，退出也卡」的第一个根因）。
+            //
+            // bind() 是从 [WatchmakerWatchFaceHost] 的 AndroidView update 块里调的，
+            // 也就是**每次重组都会跑一遍**。滑动手势期间宿主每帧重组，descriptor 与
+            // refreshToken 全程不变，于是每帧都落到这个早退分支；而
+            // requestFullRepaint() 会 invalidateAll() 把慢桶追踪器打回 pristine，
+            // 下一帧烘焙路径 consume 到失效信号就 recycleBakedSegments() —— 312 的
+            // 16 张段位图**每帧**回收重建一遍，正好压在转场动画上。
+            //
+            // 这个分支里真正会改变渲染结果的只有入场动画时钟被重置（enteringFace /
+            // enablingAnimation，都是一次性边沿）。其余入参（canvasSettings、
+            // dataProvider、重力开关）各有自己的 setter，且每个都自带相等性判断和
+            // 自己的 requestFullRepaint()，不需要这里代劳。
+            //
+            // 慢桶取值真变了也不会漏：poll() 每拍都无条件比对，变化由它置位。
+            if (enteringFace || enablingAnimation) requestFullRepaint() else invalidate()
             if (
                 loadedDescriptorKey == descriptor.stableKey &&
                 loadedRefreshToken == refreshToken
@@ -1006,6 +1069,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         clearLiveLayerTransformInternal()
         faceVisible = false
         pendingFlattenAssetInvalidation = false
+        flattenBakeAssetMiss = false
         loadJob?.cancel()
         loadJob = null
         assetGenerationJob.cancel()
@@ -1110,6 +1174,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             targetHeight = height.toFloat(),
             gravityBackdrop = gravityBackdrop,
         )
+        // 刻意放在绘制**之后**：本帧真正要画的层已经抢过 [claimAssetLoadLocked] 的额度，
+        // 预暖只吃剩下的，永远不会把可见内容的解码挤掉。也刻意只挂在 onDraw 上 ——
+        // 另外三个 [drawPreparedSource] 调用点都是 [withFullRenderPlan] 的离屏一次性
+        // 出图，那里暖缓存没有下一帧可言。
+        warmOpacityGatedImages(prepared)
         val gyroEnabledForSource = gravityParallaxEnabled && prepared.hasGyroParallax
         if (!editorPreviewPlaying) {
             // 预览暂停:定格在暂停那一刻的视角,不再向新的传感器读数插值。
@@ -1295,6 +1364,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // 视频图层的 TextureView 活在 View 空间、拿不到 Canvas 的当前矩阵，只能
         // 吃 Matrix。两条路径共用这一个矩阵，几何才不会随时间漂移。
         canvas.concat(composeCanvasBaseMatrix(canvasBaseMatrix, transform, extentW, extentH))
+        // 画布基变换本身可能非等比（STRETCH 预设、zoomX≠zoomY），那一样会拉扁字形。
+        // 记下来给 [textNeedsLinearRaster] 当种子。
+        frameCanvasScaleX = transform.scaleX
+        frameCanvasScaleY = transform.scaleY
         canvas.clipRect(-extentW / 2f, -extentH / 2f, extentW / 2f, extentH / 2f)
         if (prepared.definition.shape == WatchFaceShape.ROUND) {
             pathScratch.reset()
@@ -1373,22 +1446,55 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         if (width < 1 || height < 1) return null
         if (width > MAX_FLATTEN_BITMAP_SIZE || height > MAX_FLATTEN_BITMAP_SIZE) return null
         val sizeChanged = prepared.bakedSegmentWidth != width || prepared.bakedSegmentHeight != height
-        // ⚠️ 顺序很重要：consume 有副作用（清位），必须无条件先取，不能被 `||`
-        // 短路掉 —— 尺寸变化那一帧若跳过 consume，慢桶失效信号会残留到下一帧，
-        // 白烘一次。
+        // ⚠️ 顺序很重要：consume 有副作用（清位），三个信号必须**无条件**全取，
+        // 不能被 `||` 短路掉 —— 尺寸变化那一帧若跳过 consume，失效信号会残留到
+        // 下一帧，白烘一次。按桶集合更严重：只在需要时才取会让它越攒越多，
+        // 下次真要用时早已退化成「全都变了」。
+        val fullyInvalidated = prepared.slowTagTracker.consumeFullInvalidation()
         val slowTagsInvalidated = prepared.slowTagTracker.consumeSlowTagInvalidation()
-        // 快桶表盘（GIF / 秒针 / 计数器 / 陀螺仪）从不走 poll()，慢桶信号永远不会
-        // 到达，所以它们的段位图靠这个自己的节流器重烘：段内层按定义不含快依赖，
-        // 最快也只依赖到分钟，1s 一次足够，且与 1s tick 同频。
-        val now = SystemClock.uptimeMillis()
-        val fastFaceDue = prepared.slowTagTracker.requiresRedrawEveryTick &&
-            now - prepared.bakedSegmentsAtUptimeMs >= FLATTEN_FAST_FACE_REBAKE_INTERVAL_MS
-        if (sizeChanged || slowTagsInvalidated || fastFaceDue) {
+        val changedBuckets = prepared.slowTagTracker.consumeChangedSlowBuckets()
+        // 这里刻意**没有**时间节流器兜底。快桶表盘的慢桶信号由 shouldRedrawThisTick()
+        // 里无条件的 poll() 送达，不需要「每秒强制重烘」—— 那个兜底会让 377 层的表盘
+        // 每秒回收重建全部段位图，滑动撞上就掉帧（周期性「一下巨卡」）。
+        if (sizeChanged || fullyInvalidated) {
+            // 尺寸变了，所有段位图的宽高都不对；全量失效（压暗、主题、首帧、编辑器
+            // 改属性）语义是「什么都可能变了」。两者都只能整批重来。
             prepared.recycleBakedSegments()
             prepared.bakedSegmentWidth = width
             prepared.bakedSegmentHeight = height
+        } else if (slowTagsInvalidated && changedBuckets.isNotEmpty()) {
+            // 慢桶变化走**按段**作废：只有桶命中的段才重烘（老师报的「还是卡」）。
+            //
+            // ⚠️ `changedBuckets` 为空时**什么都不做**才是对的。慢桶位与桶集合由
+            // 同一个 poll() 成对置位，为空说明这个信号来自别处 —— 而真正的「别处」
+            // 只有全量入口，它已经在上面那条分支里整批回收过了。这里再退回整批
+            // 就等于把按桶优化整个抵消掉。
+            prepared.recycleBakedSegmentsForBuckets(changedBuckets)
         }
-        if (prepared.bakedSegmentBitmaps.isEmpty()) {
+        // 分帧烘焙的判据：**还有段没烘且预算装得下**，而不是「段表空不空」。
+        //
+        // 原判据是 `bakedSegmentBitmaps.isEmpty()`，配合「一次调用烘完全部段」才成立。
+        // 加了每帧配额（见 [bakeFlattenSegments]）之后，烘完头两段 map 就非空了，
+        // 空判据会让剩下的段永远补不上，表盘一直停在逐层直绘。
+        //
+        // ⚠️ 上界必须是「预算**装得下**几段」而不是「一共有几段」：预算只够 4 段时
+        // 用总段数当上界，这个判据永远为真 —— 于是每帧都进来重试一次 Bitmap 分配，
+        // 正是 bakedSegmentsUnavailable 当初要挡的那种每帧重试。段尺寸一致，所以
+        // 这个数直接算得出来，不用去发现。
+        val bytesPerSegment = width.toLong() * height.toLong() * 4L
+        val affordableSegments = if (bytesPerSegment <= 0L) {
+            0
+        } else {
+            minOf(
+                prepared.flattenSegments.size.toLong(),
+                MAX_FLATTEN_TOTAL_BYTES / bytesPerSegment,
+            ).toInt()
+        }
+        if (
+            !prepared.bakedSegmentsUnavailable &&
+            !prepared.bakedSegmentBakeStalled &&
+            prepared.bakedSegmentBitmaps.size < affordableSegments
+        ) {
             bakeFlattenSegments(prepared, extentW, extentH, width, height)
         }
         return prepared.flattenSegments.takeIf { prepared.bakedSegmentBitmaps.isNotEmpty() }
@@ -1399,6 +1505,15 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
      *
      * alpha 累积（`wf_render.lua:3093`）：位图初值全透明，逐层按 `SRC_OVER` 画进去，
      * 合成回主 Canvas 时**不再乘一次 alpha** —— 否则半透明层被压暗两次。
+     *
+     * **每帧只烘 [MAX_SEGMENT_BAKES_PER_FRAME] 段**（老师报的「312 滑下进控制中心
+     * 大卡一下」）：312 有 377 层、16 个段，整分钟跳变或滑动触发的一次失效原来会在
+     * **同一帧**内把 16 张 512² 位图全部重建 —— 16 次分配 + 上百层离屏绘制压在一次
+     * `onDraw` 里，正好撞上转场动画的第一帧。这里摊成多帧：本帧没轮到的段暂时缺位，
+     * [drawPreparedSource] 的段循环对缺位段本来就会退回逐层直绘，画面不会缺东西，
+     * 只是那几段这一帧没享受到烘焙加速；下一帧继续补，几帧内收敛回全烘状态。
+     *
+     * 已经烘好的段直接跳过 —— 分帧的前提是这个函数可以被反复调用而不重复劳动。
      */
     private fun bakeFlattenSegments(
         prepared: PreparedSource,
@@ -1407,14 +1522,28 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         width: Int,
         height: Int,
     ) {
-        // 无条件打点：失败路径（超预算、分配不到位图）也要计入节流，否则每帧重试。
-        prepared.bakedSegmentsAtUptimeMs = SystemClock.uptimeMillis()
         val bytesPerSegment = width.toLong() * height.toLong() * 4L
-        if (bytesPerSegment <= 0L || bytesPerSegment > MAX_FLATTEN_SEGMENT_BYTES) return
+        if (bytesPerSegment <= 0L || bytesPerSegment > MAX_FLATTEN_SEGMENT_BYTES) {
+            prepared.bakedSegmentsUnavailable = true
+            return
+        }
         // 字节记账：别再开第四个不记账的位图缓存（计划 §3.5）。
-        var budget = MAX_FLATTEN_TOTAL_BYTES
+        // 已烘的段照样占预算，所以从总额里先扣掉它们，分帧才不会超发。
+        var budget = MAX_FLATTEN_TOTAL_BYTES - prepared.bakedSegmentBitmaps.size * bytesPerSegment
+        var bakedThisFrame = 0
+        // 「这一轮真的动手试过几个段」——用来区分 [PreparedSource.bakedSegmentBakeStalled]
+        // 的两种零产出：配额用完了（正常，下一帧继续）与试了却全失败（卡住，停手）。
+        var attempted = 0
+        var quotaHit = false
         for (segment in prepared.flattenSegments) {
+            if (bakedThisFrame >= MAX_SEGMENT_BAKES_PER_FRAME) {
+                quotaHit = true
+                break
+            }
             if (budget < bytesPerSegment) break
+            // 上一帧（或本轮更早）已经烘好的段不重烘。
+            if (prepared.bakedSegmentBitmaps[segment.fromIndex]?.isRecycled == false) continue
+            attempted++
             val bitmap = runCatching {
                 Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             }.getOrNull() ?: continue
@@ -1422,19 +1551,49 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             // 段内图层的坐标是设计空间（原点在中心），位图原点在左上。
             offscreen.translate(extentW / 2f, extentH / 2f)
             var ok = true
+            // 逐段清零：段内任一图层碰到未就绪的素材，requestBitmap / requestMovie
+            // 会把它置起来（见 [flattenBakeAssetMiss]）。烘焙循环是顺序的、全程主
+            // 线程，所以段与段之间不会串。
+            flattenBakeAssetMiss = false
             for (index in segment.fromIndex..segment.toIndex) {
                 val item = prepared.renderPlan.getOrNull(index) ?: continue
                 // 段内层按定义不含快依赖，陀螺仪传 0 即可。
-                if (runCatching { drawRenderItem(offscreen, item, prepared, 0f, 0f) }.isFailure) {
+                // baseScale 传 1：离屏位图是设计空间尺寸，画布基变换是合成回主
+                // Canvas 时才施加的，这里不能把它算进字形缩放。
+                if (
+                    runCatching {
+                        drawRenderItem(offscreen, item, prepared, 0f, 0f, 1f, 1f)
+                    }.isFailure
+                ) {
                     ok = false
                     break
                 }
             }
             if (ok) {
                 prepared.bakedSegmentBitmaps[segment.fromIndex] = bitmap
+                // 缺素材就登记：这一段烘出来有空洞，等素材落地后单独重烘它，
+                // 而不是让任何一次落地把 16 段整批回收（老师报的那串尖峰）。
+                if (flattenBakeAssetMiss) {
+                    prepared.segmentsAwaitingAssets += segment.fromIndex
+                } else {
+                    prepared.segmentsAwaitingAssets -= segment.fromIndex
+                }
                 budget -= bytesPerSegment
+                bakedThisFrame++
             }
         }
+        flattenBakeAssetMiss = false
+        // 一个都没烘出来（预算不够 / 分配失败 / 逐层绘制抛异常）：记下来，别每帧重试。
+        prepared.bakedSegmentsUnavailable = prepared.bakedSegmentBitmaps.isEmpty()
+        // 卡住判据：**动手试过**却一个都没成。
+        //
+        // 三种零产出要分开看：段表已经烘满（attempted == 0，没活干）、被每帧配额
+        // 截断（quotaHit，正常的分帧中间态）、试了但 Bitmap 分配或段内绘制持续失败
+        // （真卡住）。只有第三种该停手 —— 否则调用点的 `size < affordableSegments`
+        // 一直为真，每帧都白试一次分配。quotaHit 在当前配额（>0）下必然伴随
+        // bakedThisFrame > 0，留着是防配额被改成 0 时误判。
+        prepared.bakedSegmentBakeStalled =
+            attempted > 0 && !quotaHit && bakedThisFrame == 0
     }
 
     private fun drawRenderItem(
@@ -1443,10 +1602,17 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         source: PreparedSource,
         gyroscopeX: Float = smoothedGyroscopeX,
         gyroscopeY: Float = smoothedGyroscopeY,
+        baseScaleX: Float = frameCanvasScaleX,
+        baseScaleY: Float = frameCanvasScaleY,
     ) {
         val saveCount = canvas.save()
         try {
             var alpha = 1f
+            // 字形栅格化质量要看「画布 × 祖先链 × 自身」的合成缩放，所以从画布基
+            // 变换起累乘。烘焙/缩略图路径的离屏 Canvas 不带画布基变换，由调用方
+            // 传 1f 进来。
+            var scaleX = baseScaleX
+            var scaleY = baseScaleY
             var ancestorCount = 0
             var ancestor = item.ancestorChain
             while (ancestor != null && ancestorCount < ancestorIndexScratch.size) {
@@ -1467,6 +1633,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                     gyroscopeX,
                     gyroscopeY,
                 )
+                // 紧跟 applyTransform 读：composeLayerMatrix 的输出字段会被下一次
+                // 调用覆盖（视频图层路径也在调它）。
+                scaleX *= lastComposedScaleX
+                scaleY *= lastComposedScaleY
             }
             val layer = source.definition.layers[item.layerIndex]
             val attributes = layer.attributes
@@ -1481,11 +1651,20 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 gyroscopeX,
                 gyroscopeY,
             )
+            layerScaleX = scaleX * lastComposedScaleX
+            layerScaleY = scaleY * lastComposedScaleY
             drawPrimitive(canvas, layer, item.layerIndex, alpha, source)
         } finally {
             canvas.restoreToCount(saveCount)
         }
     }
+
+    /**
+     * 这一层的文字要不要走连续坐标栅格化。判据见 [watchTextNeedsLinearRaster]；
+     * 这里只负责把当前图层的累计缩放喂进去。
+     */
+    private fun textNeedsLinearRaster(): Boolean =
+        watchTextNeedsLinearRaster(layerScaleX, layerScaleY)
 
     /**
      * 图层变换的唯一真源：把 translate/rotate/scale/skew 折叠进一个 Matrix。
@@ -1549,6 +1728,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             ).coerceIn(-500f, 500f) / 100f
         }
         if (sx != 1f || sy != 1f) into.preScale(sx, sy)
+        // 供 [drawRenderItem] 沿祖先链累乘，判断字形要不要走连续坐标栅格化。
+        lastComposedScaleX = sx
+        lastComposedScaleY = sy
         val skewX = dynamicNumber(attrs["skew_x"], 0f, source)
         val skewY = dynamicNumber(attrs["skew_y"], 0f, source)
         if (skewX != 0f || skewY != 0f) {
@@ -1729,13 +1911,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val framePaths = source.gifPathCache.getOrPut(pathExpression) {
             parseWatchGifPaths(pathExpression)
         }.orEmpty()
+        val frameDelayMs = frameDelayMsOverride
+            ?: dynamicNumber(attrs["gif_delay"], 50f, source).roundToInt().toLong()
+        val frameElapsedMs = if (animateFrames) animatedImageElapsedMs() else 0L
         val frameIndex = if (animateFrames) {
-            watchGifFrameIndex(
-                framePaths.size,
-                animatedImageElapsedMs(),
-                frameDelayMsOverride
-                    ?: dynamicNumber(attrs["gif_delay"], 50f, source).roundToInt().toLong(),
-            )
+            watchGifFrameIndex(framePaths.size, frameElapsedMs, frameDelayMs)
         } else {
             0
         }
@@ -1783,10 +1963,20 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         } else {
             null
         }
-        // 帧序列 / gallery_2d 预取：当前帧两侧都提前进入解码队列，向前播放
-        // 或时间轴跳变都能直接命中；切换期间仍由每图层最后成功帧托底。
+        // 帧序列 / gallery_2d 预取：把**下一拍真正会用到的那些帧**提前塞进解码队列。
+        //
+        // ⚠️ 预取深度必须跟着 gif_delay 走，不能写死成 `frameIndex + 1`。踩过的坑：
+        // tick 固定 33ms，而 `gif_delay=17` 的表盘每拍前进 ⌈33/17⌉ = 2 帧 —— 只暖
+        // frameIndex+1 的话，下一拍要的 frameIndex+2 永远是冷的，于是每拍都落回
+        // lastDrawnFrameByLayer 的旧帧再重新发起一次解码。实机表现就是「拨两下
+        // 停一下、拨两下停一下」：解码偶尔追上就走两帧，追不上就卡在旧帧。
         if (animateFrames && requestedMovie == null && framePaths.size > 1) {
-            listOf((frameIndex + 1) % framePaths.size).forEach { adjacentIndex ->
+            frameSequencePrefetchIndices(
+                frameCount = framePaths.size,
+                currentIndex = frameIndex,
+                elapsedMs = frameElapsedMs,
+                frameDelayMs = frameDelayMs,
+            ).forEach { adjacentIndex ->
                 val rawAdjacentPath = framePaths[adjacentIndex]
                 val preferredPath = if (usingNightWeatherSheet) {
                     watchWeatherNightAssetReference(rawAdjacentPath)
@@ -1921,6 +2111,55 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         imagePaint.colorFilter = null
     }
 
+    /**
+     * 把 opacity 表达式门控的图片层**提前**解进位图缓存。
+     *
+     * 要解决的是**冷启动**黑帧，不是 LRU 淘汰：wf528 那六张 400×400 轮换图整包解码
+     * 也才 6MB，远够不上 24MB / 128 条的预算，稳态下根本不会被淘汰。真正的路径是
+     * [drawRenderItem] 在 `alpha <= 0f` 处提前 return —— 表达式翻真之前 [drawImage]
+     * 从没跑过，于是 [requestBitmap] 也从没跑过。轮到显示的那一拍才第一次发起异步
+     * 解码，当帧只能拿到 null，[lastDrawnFrameByLayer] 里又没有这一层的旧帧
+     * （旧帧只在真画成过的时候才写），`nativeWidth` 那行 `?: return` 直接跳过整层 ——
+     * 就是老师看到的切换黑帧。这里在它还不可见的时候就把解码发出去。
+     *
+     * **每帧配额是硬要求，不是优化**：312 有 79 个动态 opacity 图片层，一帧全捅进
+     * 解码队列就是在复刻任务 3 要修的那种卡顿。所以每帧只走
+     * [MAX_OPACITY_GATED_WARM_PER_FRAME] 层，用 [PreparedSource.opacityGatedWarmCursor]
+     * 轮转，若干帧内覆盖完整张表盘；[requestBitmap] 命中缓存时几乎零成本，暖过的层
+     * 再轮到也只是查一次表。[claimAssetLoadLocked] 的并发上限还会再兜一层底：
+     * 队列满时它返回 null，多余的请求这一帧直接落空，下一帧再来。
+     */
+    private fun warmOpacityGatedImages(prepared: PreparedSource) {
+        val gated = prepared.opacityGatedImageLayers
+        if (gated.isEmpty()) return
+        val layers = prepared.definition.layers
+        var cursor = prepared.opacityGatedWarmCursor
+        if (cursor !in gated.indices) cursor = 0
+        var warmed = 0
+        var visited = 0
+        while (warmed < MAX_OPACITY_GATED_WARM_PER_FRAME && visited < gated.size) {
+            val layerIndex = gated[cursor]
+            cursor = (cursor + 1) % gated.size
+            visited++
+            // 清单是构造时按 definition.layers 的下标算的，这里必然对得上；
+            // getOrNull 只是防御性写法，不该发生。
+            val attrs = layers.getOrNull(layerIndex)?.attributes ?: continue
+            // 计划阶段已经排除了反引号帧序列和动态路径，所以这里不需要
+            // evaluateText / parseWatchGifPaths，直接就是一条静态路径。
+            val path = attrs["path"].orEmpty()
+            val resolved = resolveAsset(path, prepared, conventionalDirectory = "images") ?: continue
+            if (resolved.file.extension.equals("gif", ignoreCase = true)) {
+                requestMovie(resolved, prepared)
+            } else {
+                // animatedFrame = false：这些是单帧静态图，归 bitmapCache 管，
+                // 不该占 animatedBitmapCache 给帧序列留的那份预算。
+                requestBitmap(path = resolved.key, source = prepared, animatedFrame = false)
+            }
+            warmed++
+        }
+        prepared.opacityGatedWarmCursor = cursor
+    }
+
     private fun isWeatherNightFrame(): Boolean {
         val weather = frameDataSnapshot.weather
         weather?.isDaytime?.let { return !it }
@@ -1950,6 +2189,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val size = WatchTextLayout.ttfTextSize(designSize)
         textPaint.typeface = resolveTypeface(attrs["font"], source)
         textPaint.textSize = size
+        textPaint.isLinearText = textNeedsLinearRaster()
         textPaint.color = resolveColor(attrs["color"], Color.WHITE, source)
         textPaint.alpha = paintAlpha(alpha)
         val transform = attrs["transform"].orEmpty().lowercase(Locale.ROOT)
@@ -2031,6 +2271,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         outlinePaint.typeface = textPaint.typeface
         outlinePaint.textSize = textPaint.textSize
         outlinePaint.textAlign = textPaint.textAlign
+        // 描边必须跟正文用同一套栅格化策略，否则两遍字形的轮廓对不齐、描边会露边。
+        outlinePaint.isLinearText = textPaint.isLinearText
         outlinePaint.style = Paint.Style.STROKE
         outlinePaint.strokeJoin = Paint.Join.ROUND
         outlinePaint.strokeCap = Paint.Cap.ROUND
@@ -2116,7 +2358,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             bitmapOutlinePaint.colorFilter = null
         }
         imagePaint.alpha = paintAlpha(alpha)
-        imagePaint.colorFilter = tintFilter(resolveColor(attrs["color"], Color.WHITE, source))
+        // 文字走替换语义，不是图片那套调制：图集只是字形蒙版，图集本身什么颜色
+        // 不该影响结果。详见 [textTintFilter] 的 f1.png 黄图集实证。
+        imagePaint.colorFilter = textTintFilter(resolveColor(attrs["color"], Color.WHITE, source))
         drawBitmapGlyphRun(
             canvas = canvas,
             text = renderedText,
@@ -2218,6 +2462,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val currentTypeface = resolveTypeface(attrs["font"], source)
         val otherTypeface = resolveTypeface(attrs["font2"] ?: attrs["font"], source)
         val advance = spacing + currentSize * 1.4f
+        textPaint.isLinearText = textNeedsLinearRaster()
         items.asSequence()
             .filter { item -> kotlin.math.abs(item.offset * advance) <= DESIGN_SIZE / 2f + currentSize * 2f }
             .forEach { item ->
@@ -2266,6 +2511,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         textPaint.textAlign = Paint.Align.CENTER
         textPaint.typeface = resolveTypeface(attrs["font"], source)
         textPaint.textSize = headerSize
+        textPaint.isLinearText = textNeedsLinearRaster()
         textPaint.color = headerColor
         textPaint.alpha = paintAlpha(alpha)
         val left = -pitchX * 3.5f
@@ -2298,28 +2544,155 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         return if (luminance > 128) Color.BLACK else Color.WHITE
     }
 
+    /**
+     * `type="ring"`：环形进度。语义对齐 clox `wf_render.lua` 的 `Builders.ring`
+     * （它照的是 UL Ring shader 与 wftools 预览，**不是** WM_FORMAT_1.0 §7.3 的旧文字）：
+     *
+     * - `color3` 是**未填充轨道**，只铺 `angle..angle_total` 这一段，超出 `angle_total`
+     *   的部分保持透明。之前 Flue 画的是整整 360° 的圆，`angle_total < 360` 的表盘
+     *   会多出一圈本不该存在的轨道。
+     * - 填充段 `0..angle` 走 `color` → `color2` 渐变，插值参数是 `sweep / angle_total`
+     *   （分母是**总量**不是当前值，所以进度涨落时同一角度的颜色不会飘）。
+     * - 填充与轨道两端都是圆头（clox 的 `ringCap` = 半厚度的实心圆）。
+     * - `radius_inner > radius_outer` 时互换，容错写反的表盘。
+     *
+     * 未对齐 clox 的一处是**有意**的：clox 恒定圆头，Flue 保留 `end_style` 显式写
+     * `butt`/`square` 时的平头，默认才是圆头 —— 作者显式写了就按写的来。
+     */
     private fun drawRing(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {
-        val outer = dynamicNumber(
+        val rawOuter = dynamicNumber(
             attrs["radius_outer"],
             dynamicNumber(attrs["radius"], 100f, source),
             source,
-        ).coerceAtLeast(1f)
-        val inner = dynamicNumber(attrs["radius_inner"], outer - 8f, source).coerceIn(0f, outer - 0.5f)
+        )
+        // clox 的 radius_inner 默认是 radius_outer * 0.8（按比例），不是减固定像素。
+        val rawInner = dynamicNumber(attrs["radius_inner"], rawOuter * 0.8f, source)
+        // 写反了就互换（clox: `if ri > ro then ri, ro = ro, ri end`）。
+        val outer = max(rawOuter, rawInner).coerceAtLeast(1f)
+        val inner = min(rawOuter, rawInner).coerceIn(0f, outer - 0.5f)
         val stroke = (outer - inner).coerceAtLeast(1f)
+        // 描边画在中线上，半厚度正好等于 clox 的 capR。
         val radius = inner + stroke / 2f
         val total = dynamicNumber(attrs["angle_total"], 360f, source).coerceAtLeast(1f)
-        val sweep = dynamicNumber(attrs["angle"], total, source).coerceIn(0f, total)
+        val sweep = dynamicNumber(attrs["angle"], 0f, source).coerceIn(0f, total)
         val clockwise = !attrs["is_clockwise"].equals("N", ignoreCase = true)
+        // 环心跟随 alignment：clox 把图层盒定义成 2×radius_outer 再按锚点位移。
+        // 注意 anchoredRect 返回的就是 rectScratch 本身，先把圆心读成局部量，
+        // 下一行覆写它才安全。
+        val centerX: Float
+        val centerY: Float
+        anchoredRect(outer * 2f, outer * 2f, attrs["alignment"]).let {
+            centerX = it.centerX()
+            centerY = it.centerY()
+        }
+        rectScratch.set(centerX - radius, centerY - radius, centerX + radius, centerY + radius)
+
         strokePaint.strokeWidth = stroke
         strokePaint.style = Paint.Style.STROKE
-        strokePaint.strokeCap = if (attrs["end_style"].equals("round", true)) Paint.Cap.ROUND else Paint.Cap.BUTT
-        strokePaint.color = resolveColor(attrs["color3"], Color.TRANSPARENT, source)
-        strokePaint.alpha = paintAlpha(alpha * dynamicNumber(attrs["outside_opacity"], 100f, source) / 100f)
-        if (strokePaint.alpha > 0) canvas.drawCircle(0f, 0f, radius, strokePaint)
-        strokePaint.color = resolveColor(attrs["color"], Color.WHITE, source)
-        strokePaint.alpha = paintAlpha(alpha)
-        rectScratch.set(-radius, -radius, radius, radius)
-        canvas.drawArc(rectScratch, -90f, if (clockwise) sweep else -sweep, false, strokePaint)
+        strokePaint.strokeCap = when {
+            attrs["end_style"].equals("butt", true) -> Paint.Cap.BUTT
+            attrs["end_style"].equals("square", true) -> Paint.Cap.SQUARE
+            else -> Paint.Cap.ROUND
+        }
+        // Canvas 的 0° 在 3 点钟、顺时针为正；表盘的 0° 在 12 点钟。
+        val startDegrees = -90f
+
+        // 未填充轨道 [angle..angle_total]。只有作者真写了 color3 才画 —— 缺省值
+        // Color.TRANSPARENT 会被随后的 strokePaint.alpha 覆写成不透明黑，
+        // 无 color3 的环会平白多出一圈黑轨道。
+        val trackRaw = attrs["color3"]
+        if (!trackRaw.isNullOrBlank() && sweep < total) {
+            val outsideOpacity = dynamicNumber(attrs["outside_opacity"], 100f, source).coerceIn(0f, 100f)
+            strokePaint.shader = null
+            strokePaint.color = resolveColor(trackRaw, Color.BLACK, source)
+            strokePaint.alpha = paintAlpha(alpha * outsideOpacity / 100f)
+            if (strokePaint.alpha > 0) {
+                // 顺时针：轨道从 sweep 扫到 total；逆时针：从 -total 扫到 -sweep。
+                val trackSweep = total - sweep
+                val trackStart = if (clockwise) sweep else -total
+                canvas.drawArc(rectScratch, startDegrees + trackStart, trackSweep, false, strokePaint)
+            }
+        }
+
+        // 填充段 [0..angle]。sweep == 0 时 clox 整段跳过（连端帽都不画）。
+        if (sweep <= 0f) {
+            strokePaint.shader = null
+            return
+        }
+        val fillAlpha = paintAlpha(alpha)
+        val startColor = resolveColor(attrs["color"], Color.WHITE, source) or OPAQUE_ALPHA_MASK
+        val endRaw = attrs["color2"]
+        val endColor = if (endRaw.isNullOrBlank()) {
+            startColor
+        } else {
+            resolveColor(endRaw, Color.WHITE, source) or OPAQUE_ALPHA_MASK
+        }
+        val gradient = if (startColor == endColor) {
+            null
+        } else {
+            ringGradient(centerX, centerY, startColor, endColor, total, clockwise, fillAlpha)
+        }
+        strokePaint.shader = gradient
+        if (gradient == null) {
+            strokePaint.color = startColor
+            strokePaint.alpha = fillAlpha
+        } else {
+            // alpha 已经烘进 stop 色，paint alpha 必须置满：Skia 会拿 paint alpha
+            // 再乘一遍着色器输出，不置满就是平方衰减（14.90% 的环会淡到看不见）。
+            strokePaint.alpha = 255
+        }
+        canvas.drawArc(
+            rectScratch,
+            startDegrees,
+            if (clockwise) sweep else -sweep,
+            false,
+            strokePaint,
+        )
+        strokePaint.shader = null
+    }
+
+    /**
+     * 圆环填充的 `color` → `color2` 扫描渐变。
+     *
+     * 等价于 clox 的 `fillArc(..., function(s) return lerpRGB(ca, cb, s / total) end)`：
+     * 两端 stop 落在扫掠 0 与 `angle_total` 处，中间由 Skia 线性插值 ——
+     * clox 靠 3° 一片的三角带手工插值，这里一次成型，无接缝也无重叠混色。
+     *
+     * 关键是**方向对齐**：[android.graphics.SweepGradient] 的参数 0 在 +X（3 点钟）、
+     * 随 Canvas 角度顺时针增长，而表盘扫掠从 12 点钟起算。矩阵把着色器空间旋到表盘
+     * 空间：顺时针环转 -90°；逆时针环先沿 Y 翻转（让参数随 Canvas 角度**递减**）再
+     * 转 -90°。
+     *
+     * alpha 直接烘进 stop 色而不依赖 `Paint.alpha`，避免「着色器输出再乘一次 paint
+     * alpha」的实现差异。
+     */
+    private fun ringGradient(
+        centerX: Float,
+        centerY: Float,
+        startColor: Int,
+        endColor: Int,
+        total: Float,
+        clockwise: Boolean,
+        alpha: Int,
+    ): android.graphics.SweepGradient {
+        val alphaBits = alpha shl 24
+        val colors = intArrayOf(
+            (startColor and 0x00FFFFFF) or alphaBits,
+            (endColor and 0x00FFFFFF) or alphaBits,
+        )
+        // angle_total > 360 的环，渐变在绕满一圈时就走到 color2 并保持。
+        val positions = floatArrayOf(0f, (total / 360f).coerceIn(0.001f, 1f))
+        val matrix = ringGradientMatrix
+        matrix.reset()
+        if (clockwise) {
+            matrix.setRotate(-90f, centerX, centerY)
+        } else {
+            matrix.setScale(1f, -1f, centerX, centerY)
+            matrix.postRotate(-90f, centerX, centerY)
+        }
+        return android.graphics.SweepGradient(centerX, centerY, colors, positions).apply {
+            setLocalMatrix(matrix)
+        }
     }
 
     private fun drawProgress(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {
@@ -2459,6 +2832,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         textPaint.textSize = WatchTextLayout.ttfTextSize(
             dynamicNumber(attrs["text_size"] ?: attrs["size"], 24f, source),
         )
+        textPaint.isLinearText = textNeedsLinearRaster()
         textPaint.color = resolveColor(attrs["color"], Color.WHITE, source)
         textPaint.alpha = paintAlpha(alpha)
         textPaint.textAlign = Paint.Align.CENTER
@@ -2476,6 +2850,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         textPaint.textSize = WatchTextLayout.ttfTextSize(
             dynamicNumber(attrs["text_size"] ?: attrs["size"], 24f, source),
         )
+        textPaint.isLinearText = textNeedsLinearRaster()
         textPaint.color = resolveColor(attrs["color"], Color.WHITE, source)
         textPaint.alpha = paintAlpha(alpha)
         textPaint.textAlign = Paint.Align.CENTER
@@ -2993,9 +3368,21 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 if (inCooldown) return previousFrame
                 bitmapFailures.remove(key)
             }
+            // 走到这里 = 两级缓存都没命中、也不在失败冷却里 = **素材尚未就绪**。
+            // 不管是这次才发起加载，还是别人已经在加载路上，对烘焙都是同一件事：
+            // 这一段现在烘出来会缺东西，得等落地后重烘（见 [flattenBakeAssetMiss]）。
+            // 只有 resolveAsset 失败（路径无效，永远不会落地）走不到这里 —— 那种
+            // 段不该被记成「等素材」，否则每次任意素材落地都白烘它一次。
+            flattenBakeAssetMiss = true
             if (bitmapLoading[key] == null) {
                 val generation = bindGeneration
-                val claim = claimAssetLoadLocked(AssetLoadKind.BITMAP, key, generation)
+                val claim = claimAssetLoadLocked(
+                    kind = AssetLoadKind.BITMAP,
+                    key = key,
+                    generation = generation,
+                    // 帧序列帧不进烘焙段，落地后不该触发重烘（见 finishAssetLoad）。
+                    affectsFlatten = !animatedFrame,
+                )
                 if (claim != null) {
                     bitmapLoading[key] = generation
                     // 编辑器预览最多只需要当前 View 像素级的清晰度。把 2K/4K
@@ -3097,6 +3484,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 if (inCooldown) return null
                 movieFailures.remove(key)
             }
+            // 同 requestBitmap：缓存没命中且不在失败冷却 = 素材尚未就绪，这一段
+            // 现在烘出来会缺东西。
+            flattenBakeAssetMiss = true
             if (movieLoading[key] == null) {
                 val generation = bindGeneration
                 val claim = claimAssetLoadLocked(AssetLoadKind.MOVIE, key, generation)
@@ -3467,9 +3857,15 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         kind: AssetLoadKind,
         key: String,
         generation: Long,
+        affectsFlatten: Boolean = true,
     ): AssetLoadClaim? {
         if (activeAssetLoads.size >= MAX_CONCURRENT_ASSET_LOADS) return null
-        val claim = AssetLoadClaim(kind = kind, key = key, generation = generation)
+        val claim = AssetLoadClaim(
+            kind = kind,
+            key = key,
+            generation = generation,
+            affectsFlatten = affectsFlatten,
+        )
         return claim.takeIf(activeAssetLoads::add)
     }
 
@@ -3490,19 +3886,25 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
         if (disposed) return
         // 素材是异步解码的：烘焙时这张图可能还没就绪，段里会留一个空洞，而慢桶
-        // tag 又没变 → 空洞永远不会被填上。所以素材落地后要作废烘焙产物重烘一次。
+        // tag 又没变 → 空洞永远不会被填上。所以素材落地后要重烘。
         //
-        // ⚠️ 但**只作废一次**，靠 pendingFlattenAssetInvalidation 去重。循环背景是
-        // 几十上百帧逐帧异步解码的，若每帧落地都作废，就会「解一帧→整批重烘→
-        // 挤占主线程→解码排队→再落地再重烘」形成正反馈，实机表现正是循环背景
-        // 播两下就卡住变静态。同一批解码合并成一次重烘即可。
-        if (!pendingFlattenAssetInvalidation) {
+        // ⚠️ 但只重烘**上次烘的时候真的缺素材**的那几段（[segmentsAwaitingAssets]），
+        // 不是整批回收。312 有 300+ 图层在异步解码，一波持续两三秒；原来任何一次
+        // 落地都把 16 段全部作废，每帧配额只是把白烧封顶成 2 段 × 120ms，
+        // 收敛不了 —— framestats 里那串紧跟输入、8 帧 × 240ms 的尖峰就是它。
+        //
+        // 另外两层过滤保留：按 [AssetLoadClaim.affectsFlatten] 跳过帧序列/GIF 帧
+        // （它们逐帧持续解码，落地速率接近每帧一次，且根本不可能出现在烘焙段里），
+        // 以及用 pendingFlattenAssetInvalidation 把同一批解码合并成一次 post。
+        //
+        // 它们的重绘不会因此丢：解码落地时主线程侧已经 invalidate() 过一次
+        // （见 [requestBitmap] / [requestMovie] 的 withContext(Main) 尾部）。
+        if (claim.affectsFlatten && !pendingFlattenAssetInvalidation) {
             pendingFlattenAssetInvalidation = true
             post {
                 pendingFlattenAssetInvalidation = false
                 if (disposed) return@post
-                source?.recycleBakedSegments()
-                invalidate()
+                if (source?.recycleSegmentsAwaitingAssets() == true) invalidate()
             }
         }
         if (claim.generation == sourceTransitionGeneration) {
@@ -3613,18 +4015,30 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // 编辑器交互、退场动画、过渡帧的时间来源都不是 tag，桶模型看不见它们。
         if (textExitAnimationActive || sourceTransitionFrame != null) return true
         if (editorAnimationPlaybackLimited || editorAnimatedImageLayerIndex != null) return true
-        if (requiresFastTicksNow(prepared)) return true
         // 慢桶取值比对要用到当帧的 snapshot（电量、天气、步数都在里面）。
         calendar.timeInMillis = System.currentTimeMillis()
         frameDataSnapshot = runCatching { dataProvider.snapshot(calendar.timeInMillis) }
             .getOrDefault(WatchDataSnapshot())
-        return prepared.slowTagTracker.poll { tag ->
+        // ⚠️ [WatchTagChangeTracker.poll] 必须无条件先跑，**不能被快桶判定短路掉**。
+        //
+        // 它是慢桶失效信号（`hasPendingSlowTagInvalidation`）的唯一来源，而烘焙路径
+        // [resolveActiveFlattenSegments] 全靠这个信号决定重烘。这里若对快桶表盘提前
+        // return，信号永远到不了烘焙路径 —— 曾经为此在烘焙侧加过一个「每秒强制重烘」
+        // 的节流器兜底，结果 377 层的表盘每秒把全部段位图回收重建一遍，滑动时撞上
+        // 就掉帧，实机表现正是「一下流畅一下巨卡一下流畅」的周期性卡顿。
+        //
+        // 代价只是快桶表盘每帧多算一遍慢桶 tag：snapshot 是读缓存字段，tag 求值有
+        // 阶段 1 的编译缓存，相比逐层绘制是小头。
+        val slowTagsChanged = prepared.slowTagTracker.poll { tag ->
             when (val resolution = resolveTagResolution(tag, calendar, prepared)) {
                 is WatchTagResolution.Resolved -> resolution.renderedValue
                 // 不可用 / 不支持在一个 generation 内是稳定的，映射成同一个哨兵值即可。
                 else -> null
             }
         }
+        // poll() 对快桶表盘已经恒返回 true；这里再并一次是为了覆盖不在追踪器里的
+        // 陀螺仪快依赖。
+        return slowTagsChanged || requiresFastTicksNow(prepared)
     }
 
     /**
@@ -3861,8 +4275,70 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     private fun paintAlpha(alpha: Float): Int = (alpha.coerceIn(0f, 1f) * 255f).roundToInt()
 
-    private fun tintFilter(color: Int): android.graphics.ColorFilter? =
-        if (color == Color.WHITE) null else android.graphics.PorterDuffColorFilter(color, android.graphics.PorterDuff.Mode.SRC_IN)
+    /**
+     * 图层 `color` 的染色滤镜。语义是**调制**（`结果 = 贴图 × 颜色`），不是整体替换。
+     *
+     * 对照 clox `wf_render.lua` 的 `bindTint`：它走 `sprite:setColor(c3b(hex))`，
+     * 也就是 cocos2d 的顶点色调制 —— 片元 `rgb = texture.rgb × color.rgb`，
+     * `alpha = texture.a`（`c3b` 不带 alpha）。贴图自带的明暗、渐变、纹理全部留着，
+     * 颜色只是给它「乘一层色玻璃」。
+     *
+     * 之前用 [android.graphics.PorterDuff.Mode.SRC_IN] 是错的：那是拿滤镜色**整体
+     * 替换** RGB、只留贴图 alpha，等于把贴图拍平成一块纯色剪影。对纯白图标看不出
+     * 差别（白 × 色 == 色），但 wftools-2 转出来的 `wfs_adjustmentcolor_*.png`
+     * 模板图**自带明暗**，312 有 28 个这样的图层染 `ebebe2`，SRC_IN 直接把顶部/底部
+     * 那两块 448×133 的面板压成了均匀灰块 —— 就是老师圈出来的「灰蒙蒙」。
+     *
+     * [android.graphics.PorterDuff.Mode.MULTIPLY] 在 Skia 里是 `[Sa×Da, Sc×Dc]`，
+     * 把滤镜色强制成不透明（`Sa = 1`）之后就退化成 `alpha 不变、rgb 逐通道相乘`，
+     * 与上面的 cocos2d 公式逐位对齐。强制不透明这一步不能省：`resolveColor` 允许
+     * 解析 8 位带 alpha 的色值，`Sa < 1` 会连带把贴图 alpha 也乘下去、图整体变淡；
+     * clox 的 `c3b` 同样丢掉 alpha，这里保持一致。
+     *
+     * 白色仍走 `null` 快路径：白是乘法恒等元（×1.0），也正是 clox `"ffffff"` 默认值
+     * 的含义，省掉一次逐像素滤镜。
+     *
+     * 调用点只有 [drawImage]（普通图片 / image_cond / GIF）。**文字不要用这个** ——
+     * 文字的 `color` 是「字是什么颜色」，走 [textTintFilter]。
+     */
+    private fun tintFilter(color: Int): android.graphics.ColorFilter? {
+        val opaque = color or OPAQUE_ALPHA_MASK
+        return if (opaque == Color.WHITE) {
+            null
+        } else {
+            android.graphics.PorterDuffColorFilter(opaque, android.graphics.PorterDuff.Mode.MULTIPLY)
+        }
+    }
+
+    /**
+     * 位图字体正文的染色滤镜。语义是**替换**（`结果 rgb = 颜色`，只留字形 alpha），
+     * 与 [tintFilter] 的调制**故意不同**。
+     *
+     * 两者必须分开，因为 `color` 在两种图层上的含义不一样：
+     * - 图片层：贴图是**画面**，`color` 是盖在上面的一层色玻璃 → 调制，保留明暗。
+     * - 文字层：字形图集只是**蒙版**，`color` 就是「这些字是什么颜色」→ 替换。
+     *   TTF 路径本来就是 `textPaint.color = ...`（纯替换），位图字体要与它同语义，
+     *   否则同一个表盘换个字体类型颜色就变，作者无从下手。
+     *
+     * 实证：`小猫烧-动态` 的星期层写 `color="6ad8df"`（青），但它的位图图集
+     * `fonts_bm/f1.png` 字形像素是**黄色 `f6fe00`**（作者随手拿黄底图切的）。
+     * 调制算出来 `0xf6×0x6a, 0xfe×0xd8, 0x00×0xdf` = `66d700` —— 一片荒谬的绿，
+     * 正是老师报的「渲染成 6ed90e」。而包内 `preview.jpg`（源 App 的真实渲染）
+     * 在该区域取样为 `#69d8df`，即**作者写的色值原样出现**，图集的黄被整个丢弃。
+     * clox 的 `lab:setColor(c3b(hex))` 是 cocos2d 顶点色调制，遇到这种非白图集
+     * 会和调制一样跑偏；这里以作者预览图为准，不照抄。
+     *
+     * 白色仍走 `null`：图集若是作者精心画的彩色/渐变字（没写 `color`，
+     * [resolveColor] 兜底给白），保持原样比拍成纯白正确。
+     */
+    private fun textTintFilter(color: Int): android.graphics.ColorFilter? {
+        val opaque = color or OPAQUE_ALPHA_MASK
+        return if (opaque == Color.WHITE) {
+            null
+        } else {
+            android.graphics.PorterDuffColorFilter(opaque, android.graphics.PorterDuff.Mode.SRC_IN)
+        }
+    }
 
     private data class PreparedSource(
         val sourceGeneration: Long,
@@ -3930,25 +4406,74 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
          * 主线程的绘制路径上建（见 [bakedSegmentBitmaps]）。
          */
         val flattenSegments: List<WatchFlattenSegment> = run {
-            val bakeable = renderPlan.map { item ->
+            val bakeable = ArrayList<Boolean>(renderPlan.size)
+            // 与 [bakeable] 同序的每层慢依赖桶 —— 段的重烘判据由它们求并集得来。
+            // ⚠️ 漏传过一次：`planSegments` 少给这个参数，段的 slowBuckets 全是空集，
+            // 按桶回收因此永远匹配不上任何段，分钟跳变后烘焙段的像素永久冻住。
+            val slowBuckets = ArrayList<Set<WatchTagBucket>>(renderPlan.size)
+            for (item in renderPlan) {
                 val layer = definition.layers.getOrNull(item.layerIndex)
-                    ?: return@map false
-                val tags = layer.attributes.values.flatMapTo(LinkedHashSet()) { value ->
-                    expressionCompileReport.tagDependencies[value].orEmpty()
+                if (layer == null) {
+                    bakeable += false
+                    // ⚠️ 只能用 add：元素本身是 Set，`+=` 会被解析成
+                    // `Collection.plus(Iterable)`（返回新 List 再赋回 val）而不是
+                    // `plusAssign(element)`，直接编译不过。
+                    slowBuckets.add(emptySet())
+                    continue
                 }
-                WatchStaticFlatten.isBakeable(
-                    layer = layer,
-                    item = item,
-                    profile = WatchLayerTagProfile.of(tags),
-                )
+                val tags = LinkedHashSet<String>()
+                // 依赖不明的属性（编译不过 / 查不到键）一律当不可烘：见
+                // [WatchExpressionCompileReport.tagDependenciesOf] 里两种空集的区别。
+                var dependenciesKnown = true
+                for (value in layer.attributes.values) {
+                    val dependencies = expressionCompileReport.tagDependenciesOf(value)
+                    if (dependencies == null) {
+                        dependenciesKnown = false
+                        break
+                    }
+                    tags += dependencies
+                }
+                val profile = WatchLayerTagProfile.of(tags)
+                bakeable += dependenciesKnown &&
+                    WatchStaticFlatten.isBakeable(
+                        layer = layer,
+                        item = item,
+                        profile = profile,
+                    )
+                slowBuckets.add(profile.slowBuckets)
             }
             // 视频分段边界：烘焙段跨过去会让两个 View 实例各烘一份重叠内容。
             val videoBoundaries = renderPlan.indices.filterTo(HashSet()) { index ->
                 definition.layers.getOrNull(renderPlan[index].layerIndex)
                     ?.type?.trim()?.equals("video", ignoreCase = true) == true
             }
-            WatchStaticFlatten.planSegments(bakeable, videoBoundaries)
+            WatchStaticFlatten.planSegments(bakeable, videoBoundaries, slowBuckets)
         }
+
+        /**
+         * 不可见图层也要暖在位图缓存里的清单（构造时算一次，见
+         * [planOpacityGatedImageWarmup]）。由 [warmOpacityGatedImages] 消费。
+         */
+        val opacityGatedImageLayers: List<Int> = run {
+            val layers = definition.layers
+            val layerCount = layers.size
+            planOpacityGatedImageWarmup(
+                parentIndices = resolveWatchLayerParentIndices(layers),
+                layerTypes = List(layerCount) { index -> layers[index].type },
+                rawOpacityValues = List(layerCount) { index ->
+                    layers[index].attributes["opacity"].orEmpty()
+                },
+                rawPathValues = List(layerCount) { index ->
+                    layers[index].attributes["path"].orEmpty()
+                },
+            )
+        }
+
+        /**
+         * [opacityGatedImageLayers] 的轮转游标：每帧只暖固定几层，下一帧从这里接着走。
+         * 见 [warmOpacityGatedImages] 对配额的说明。
+         */
+        var opacityGatedWarmCursor: Int = 0
 
         /** Main-thread-only bounded memoization; the installed tree is immutable. */
         val assetResolutionCache = WatchStringLruCache<ResolvedAsset>(
@@ -3980,12 +4505,41 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         var bakedSegmentHeight: Int = 0
 
         /**
-         * 上一次**尝试**烘焙的时刻，快桶表盘的重烘节流基准。
+         * 上一次烘焙尝试没能产出任何位图（超预算或分配失败）。
          *
-         * 记「尝试」而不是「成功」：位图分配失败或超预算时段表是空的，若不记时间
-         * 就会每帧重试一次分配，正是这条路径想避免的开销。
+         * 判据是「段表为空」而不是「有没有尝试过」：失败时 [bakedSegmentBitmaps] 为空，
+         * 调用点若只看空不空就会**每帧**重试一次 Bitmap 分配 —— 正是烘焙想避免的开销。
+         * 所以失败一次就记下来，等到下一次真正的失效（尺寸变化 / 慢桶 tag 变化 /
+         * [recycleBakedSegments]）再重试。
          */
-        var bakedSegmentsAtUptimeMs: Long = 0L
+        var bakedSegmentsUnavailable: Boolean = false
+
+        /**
+         * 分帧烘焙**卡住**了：上一轮烘焙循环跑完整个段表，配额没到、预算还够，
+         * 却一个位图都没产出（Bitmap 分配失败 / 段内逐层绘制抛异常）。
+         *
+         * 和 [bakedSegmentsUnavailable] 的区别在粒度：[bakedSegmentsUnavailable]
+         * 只认「段表空不空」，分帧之后段表非空但缺位的中间态是常态，不能用它挡重试。
+         * 这个旗标挡的是更窄的坏情况：**部分**烘焙永远补不完 —— 比如内存压力下
+         * `Bitmap.createBitmap` 每帧都失败，而调用点的 `size < affordableSegments`
+         * 判据一直为真，于是每帧都进来重试一次分配。记下「这轮没产出」就停手，
+         * 等下一次真正的失效（[recycleBakedSegments]）再给机会。
+         */
+        var bakedSegmentBakeStalled: Boolean = false
+
+        /**
+         * 烘焙时素材还没就绪的那些段（键同 [bakedSegmentBitmaps]，段的 `fromIndex`）。
+         *
+         * 素材是异步解码的：一个段烘的时候图可能还在路上，烘出来就缺一块，而慢桶
+         * tag 又没变 → 空洞永远补不上。所以素材落地后要重烘 —— 但**只重烘这些段**。
+         *
+         * 原来是任何素材落地就 [recycleBakedSegments] 整批回收。312 有 300+ 图层
+         * 在异步解码，一波持续两三秒，每次落地把 16 段全作废，每帧配额只把白烧封顶
+         * 成 2 段 × 120ms，永远收敛不了 —— 正是老师报的「紧跟输入的一串尖峰」。
+         * 按段之后，素材落地只影响真的缺它的那一两段，且重烘时缓存已命中，集合
+         * 自然收敛到空。
+         */
+        val segmentsAwaitingAssets: MutableSet<Int> = HashSet()
 
         /**
          * 丢掉全部烘焙位图。
@@ -3999,6 +4553,60 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             bakedSegmentBitmaps.clear()
             bakedSegmentWidth = 0
             bakedSegmentHeight = 0
+            // 作废等于「重新给一次机会」：尺寸可能变小了、内存可能腾出来了。
+            bakedSegmentsUnavailable = false
+            bakedSegmentBakeStalled = false
+            // 全部段都要重烘，「缺素材」的旧结论一并作废：重烘时会重新登记。
+            segmentsAwaitingAssets.clear()
+        }
+
+        /**
+         * 只作废**上一次烘焙时缺素材**的那几段，并清空登记。
+         *
+         * 清空是安全的：素材落地才会调到这里，这些段重烘时缓存已命中；万一还缺
+         * 别的素材，重烘会把它重新登记进来，等那个素材落地再作废一次。所以集合
+         * 会随着解码波推进单调收敛到空，而不是每次落地都全量回收。
+         */
+        fun recycleSegmentsAwaitingAssets(): Boolean {
+            if (segmentsAwaitingAssets.isEmpty()) return false
+            var removedAny = false
+            for (fromIndex in segmentsAwaitingAssets) {
+                if (bakedSegmentBitmaps.remove(fromIndex) != null) removedAny = true
+            }
+            segmentsAwaitingAssets.clear()
+            if (removedAny) {
+                bakedSegmentsUnavailable = false
+                bakedSegmentBakeStalled = false
+            }
+            return removedAny
+        }
+
+        /**
+         * 只作废**慢桶命中**的那几段，其余段的位图原样留用。
+         *
+         * 这是「还是卡」的正解。原来任何慢桶变化（分钟跳变最常见）都走
+         * [recycleBakedSegments] 整批回收，312 的 16 段全部重建 —— 单段离屏
+         * 栅格化就要上百毫秒，摊到每帧 2 段也要连卡 8 帧。而一次分钟跳变实际
+         * 只碰得到含分钟 tag 的那一两段，其余十几段的像素一个都没变。
+         *
+         * ⚠️ 不动 [bakedSegmentWidth] / [bakedSegmentHeight]：尺寸没变，留着的段
+         * 仍然有效，清零会让下一帧的 `sizeChanged` 误判成真而整批回收，等于白改。
+         */
+        fun recycleBakedSegmentsForBuckets(changedBuckets: Set<WatchTagBucket>) {
+            if (changedBuckets.isEmpty()) return
+            var removedAny = false
+            for (segment in flattenSegments) {
+                if (segment.slowBuckets.none(changedBuckets::contains)) continue
+                if (bakedSegmentBitmaps.remove(segment.fromIndex) != null) removedAny = true
+                // 这一段要重烘了，「上次烘时缺素材」的旧结论作废 —— 重烘会重新登记。
+                segmentsAwaitingAssets.remove(segment.fromIndex)
+            }
+            // 有段被腾空 → 给烘焙路径重新开一次门。两个旗标都是「上一轮没产出」的
+            // 记录，段表变了就不再适用。
+            if (removedAny) {
+                bakedSegmentsUnavailable = false
+                bakedSegmentBakeStalled = false
+            }
         }
 
         fun clearRuntimeCaches() {
@@ -4048,11 +4656,42 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val kind: AssetLoadKind,
         val key: String,
         val generation: Long,
+        /**
+         * 这次解码落地后是否需要作废烘焙产物（见 [finishAssetLoad]）。
+         *
+         * 帧序列 / GIF 帧恒为 false：[WatchStaticFlatten.isBakeable] 对
+         * [watchLayerRequiresFrameTicks] 的图层一律返回 false，所以这些素材**不可能**
+         * 出现在任何烘焙段里，重烘对它们毫无意义，只是白烧主线程。
+         */
+        val affectsFlatten: Boolean = true,
     )
 
     companion object {
         private const val DESIGN_SIZE = WatchmakerGeometry.DESIGN_SIZE
-        private const val MAX_CONCURRENT_ASSET_LOADS = 4
+
+        /**
+         * 同时在飞的素材解码上限。
+         *
+         * 4 太紧：帧序列一层就要「当前帧 + 预取 2 帧」= 3 个额度
+         * （见 [frameSequencePrefetchIndices]），剩 1 个要分给位图字体图集、静态图、
+         * 视频首帧。额度抢不到时 [requestBitmap] 直接返回上一帧、**不排队也不重试**，
+         * 要等下一拍再碰运气 —— 帧序列于是一直追不上时钟，表现成「拨两下停一下」。
+         *
+         * 8 是按「2 个帧序列图层各 3 + 图集/静态图 2」算的。解码跑在 [assetScope]
+         * 的 IO 线程池上，主线程只承担 `withContext(Main)` 里的入缓存，所以放宽的是
+         * 后台并行度，不是主线程负载；真正的内存护栏仍是各 LRU 的字节预算。
+         */
+        private const val MAX_CONCURRENT_ASSET_LOADS = 8
+
+        /**
+         * 一帧最多预暖几个 opacity 门控图片层（见 [warmOpacityGatedImages]）。
+         *
+         * 2 是照 [MAX_CONCURRENT_ASSET_LOADS] 的账反推的：那 8 个额度先要留给**本帧
+         * 真正在画**的层（帧序列一层就吃 3 个），预暖只能拿边角料。312 有 79 个门控层，
+         * 按 2 轮转一圈是 40 帧、约 1.3 秒 —— 而门控表达式最快的也是 `{ds}` 的 4 秒一档，
+         * 一圈跑完远早于下一次翻真，够用。
+         */
+        private const val MAX_OPACITY_GATED_WARM_PER_FRAME = 2
 
         /**
          * 阶段 3 烘焙位图的边长上限。超过就不烘 —— 一张 4096² ARGB 是 64MB，
@@ -4072,16 +4711,17 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         private const val MAX_FLATTEN_TOTAL_BYTES = 16L * 1024L * 1024L
 
         /**
-         * 快桶表盘的重烘间隔。
+         * 一帧最多重烘几个段（见 [bakeFlattenSegments]）。
          *
-         * 快桶表盘（GIF / 秒针 / 计数器 / 陀螺仪）永远走不到 `poll()`，慢桶失效
-         * 信号到不了烘焙路径，所以它们靠这个节流器自己重烘。段内图层按定义不含
-         * 快依赖、最快只依赖到分钟，1s 一次既够用又与慢 tick 同频。
+         * 312 有 16 个段，一次失效原来在同一帧里全部重建 —— 老师报的「滑下进控制中心
+         * 大卡一下」就是这一下。摊成每帧 2 段后，最坏单帧代价降到 1/8，16 段在 30fps
+         * 下约 0.27 秒补齐；补齐之前缺位的段走逐层直绘，只是没享受到加速，不缺内容。
          *
-         * ⚠️ 别把它调小：曾经这里等价于「每帧重烘」，30fps 下每秒重建十几 MB
-         * 位图，比完全不烘还慢得多，实机表现就是切回表盘依旧卡、循环背景抖。
+         * 不设成 1：首次进入表盘时全部段都是缺的，配额太小会让「完全没烘焙」的状态
+         * 持续得太久，反而拖长了启动阶段的逐层直绘。
          */
-        private const val FLATTEN_FAST_FACE_REBAKE_INTERVAL_MS = 1_000L
+        private const val MAX_SEGMENT_BAKES_PER_FRAME = 2
+
         /**
          * 图片缓存的条数上限。
          *
@@ -4124,8 +4764,22 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         private const val MAX_FONT_ATLAS_CACHE_ENTRIES = 4
         private const val MAX_FONT_ATLAS_CACHE_BYTES = 24L * 1024L * 1024L
         private const val MAX_MOVIE_CACHE_ENTRIES = 4
-        /** 帧序列兜底图上限：一块表盘同时有几个 GIF 图层已属极端情况。 */
-        private const val MAX_LAST_FRAME_ENTRIES = 8
+
+        /**
+         * [lastDrawnFrameByLayer] 的条数上限。
+         *
+         * 原值 8 是按「同时有几个 GIF 图层已属极端」估的，但 [rememberLastDrawnFrame]
+         * 其实对**每一个画成功的图片层**都记一条，不只帧序列。wf528 有 23 个图片层，
+         * 8 条装不下一轮 opacity 门控轮换（6 张）加上常驻层 —— 兜底图刚写进去就被
+         * 后面的层挤掉，真需要兜底那一拍反而是空的，这条通路等于形同虚设。24 条能
+         * 完整覆盖 wf528，312 的 78 层也能覆盖住同屏那批。
+         *
+         * 这是**条数**上限而非字节上限，看着比各 LRU 松，但实际占用不是叠加的：
+         * 绝大多数条目与 [bitmapCache] 指向同一张位图（画成功那一拍写进来的就是
+         * 缓存里那张），只有被 LRU 淘汰过的才真正额外占内存，而它们下一次该层绘制
+         * 就会被替换、由 [recycleDetachedLastFrame] 释放。
+         */
+        private const val MAX_LAST_FRAME_ENTRIES = 24
         private const val MAX_LAST_MOVIE_ENTRIES = 4
         private const val MAX_TYPEFACE_CACHE_ENTRIES = 16
         private const val MAX_BITMAP_FAILURE_ENTRIES = 64
@@ -4165,6 +4819,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         private const val BITMAP_FAILURE_RETRY_MS = 30_000L
         private const val DEFAULT_MOVIE_DURATION_MS = 1_000
         private const val SOURCE_TRANSITION_MAX_HOLD_MS = 8_000L
+
+        /** 强制色值不透明用的 alpha 位掩码；见 [tintFilter] 为什么必须补满 alpha。 */
+        private const val OPAQUE_ALPHA_MASK = 0xFF000000.toInt()
         private val WATCH_GALLERY_IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "bmp", "gif")
         private val WINDOWS_ABSOLUTE_PATH = Regex("^[a-zA-Z]:[/\\\\].*")
         private val TEXT_RING_LABELS = (1..12).map(Int::toString)

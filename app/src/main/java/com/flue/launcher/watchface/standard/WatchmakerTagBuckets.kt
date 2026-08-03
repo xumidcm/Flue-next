@@ -83,6 +83,10 @@ object WatchTagBuckets {
     private val DAY_TAGS = setOf(
         "dd", "ddz", "ddw0", "ddw", "ddw1", "ddw2", "ddww",
         "dn", "dnn", "dnnn", "dnnnn", "dy", "dyy", "dyyyy",
+        // {dw} 周序号、{ddim} 本月天数、{wmp} 月相序号：都是纯日期函数，
+        // 一天最多变一次。{wmp} 虽然名字像天气，实现是本地天文算法（见
+        // WatchmakerTagResolver.moonPhaseIndex），不随天气推送变化。
+        "dw", "ddim", "wmp",
         // 时区缩写会随夏令时切换而变，跟着日期桶走。
         "dz", "dzz",
     )
@@ -90,6 +94,14 @@ object WatchTagBuckets {
     private val SENSOR_TAGS = setOf("sgx", "sgy", "sgz")
 
     private val STATIC_TAGS = setOf("ucolor")
+
+    /**
+     * `{ddw1_3}` 之类「N 天后的星期名」家族，与 [WatchTagBucket.DAY] 同频。
+     *
+     * 与 `WatchmakerTagResolver.futureWeekdayTagParts` 的正则保持一致；那边是
+     * 解析取值，这里只判归桶，分歧的后果仅是多比对一次（落 PUSH），不影响正确性。
+     */
+    private val FUTURE_WEEKDAY_PATTERN = Regex("^(?:ddw|ddww|ddw1|ddw2)_\\d+$")
 
     /**
      * 归桶。未知 tag 一律进 [WatchTagBucket.PUSH]（**不是** STATIC）：
@@ -108,6 +120,7 @@ object WatchTagBuckets {
             base in MINUTE_TAGS -> WatchTagBucket.MINUTE
             base in HOUR_TAGS -> WatchTagBucket.HOUR
             base in DAY_TAGS -> WatchTagBucket.DAY
+            FUTURE_WEEKDAY_PATTERN.matches(base) -> WatchTagBucket.DAY
             base in SENSOR_TAGS -> WatchTagBucket.SENSOR
             base in STATIC_TAGS -> WatchTagBucket.STATIC
             else -> WatchTagBucket.PUSH

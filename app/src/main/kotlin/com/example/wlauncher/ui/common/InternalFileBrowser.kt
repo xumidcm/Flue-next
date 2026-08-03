@@ -73,6 +73,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import com.flue.launcher.R
 import com.flue.launcher.ui.settings.miuix.MiuixIcons
+import com.flue.launcher.ui.theme.ProvideDialogUiScale
 import java.io.File
 import java.util.Locale
 import kotlin.math.max
@@ -220,6 +221,8 @@ private fun InternalFileBrowserDialog(
         ),
     ) {
         BackHandler(onBack = ::goUpOrDismiss)
+        // Dialog 是独立 Window，density 要在这里重新缩放一次（见 ProvideDialogUiScale）。
+        ProvideDialogUiScale {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(
                 modifier = Modifier
@@ -327,6 +330,7 @@ private fun InternalFileBrowserDialog(
                 }
             }
         }
+        } // ProvideDialogUiScale
     }
 }
 

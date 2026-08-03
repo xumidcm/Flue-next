@@ -15,6 +15,7 @@ import android.hardware.SensorManager
 import android.os.BatteryManager
 import android.os.Build
 import android.net.wifi.WifiManager
+import android.text.format.DateFormat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -174,6 +175,12 @@ internal class AndroidWatchDataProvider(
             gyroscopeZ = gyro?.third,
             wifiSignalFraction = wifiSignalFraction,
             bluetoothEnabled = bluetoothEnabled,
+            // {cnc}：渲染层不能反向依赖启动器的 NotificationListenerService，
+            // 由宿主通过 WatchNotificationCounts 这个 seam 推进来。
+            notificationCount = WatchNotificationCounts.current(),
+            // {d24h}：DateFormat 需要 Context，而 tag 解析器是纯函数，所以在
+            // provider 侧读。用户在系统设置里改制式后，下一帧快照就跟上。
+            is24Hour = runCatching { DateFormat.is24HourFormat(appContext) }.getOrNull(),
             weather = weather,
             // Compatibility fields retain the first slice's public snapshot
             // shape. New renderers consume [weather], whose values are

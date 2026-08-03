@@ -16,6 +16,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.util.LruCache
 import android.view.PixelCopy
@@ -195,54 +196,101 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     else -> null
 }
 
+/**
+ * 取一张真实窗口合成帧。
+ *
+ * **整个函数体跑在 [Dispatchers.Default] 上**，主线程一点都不碰：
+ * - `Bitmap.createBitmap` 按表盘实测边界分配 ARGB_8888（方屏 466² 约 870KB，
+ *   手机全屏可到 10MB 级），主线程分配这个量级本身就是一次可见掉帧；
+ * - `PixelCopy.request` 是跨进程 binder 提交，主线程提交等于把 SurfaceFlinger
+ *   的往返压进当帧预算。
+ *
+ * 这两件事以前都在调用侧的 `LaunchedEffect`（主线程）里做，而
+ * [rememberLegacyWatchFacePixelCopyFrame] 的触发点是**手势 DOWN**
+ * （`GestureHost` 的 DOWN 观察器 → `requestCleanWatchFaceFrame`）——
+ * 也就是每一次滑动的第一帧都要先扛一次全屏位图分配 + binder 往返，
+ * 与老师报的「往哪滑都卡」时序完全吻合。
+ *
+ * 完成回调仍派发到**后台 Looper**（[pixelCopyCallbackHandler]），不是主线程：
+ * 回调只做 `continuation.resume`，协程恢复后由调用侧的协程上下文决定在哪继续，
+ * 没有任何理由占用主线程 Looper 的一个消息位。
+ *
+ * 位图所有权：成功时交给调用方（由 `captured` 持有、换帧时延迟回收）；
+ * 失败、越界、协程已取消时在这里就地 recycle，绝不泄漏。
+ */
 private suspend fun requestWindowPixelCopy(
     window: Window,
     requestedBounds: android.graphics.Rect,
     windowWidth: Int,
     windowHeight: Int,
-): Bitmap? = suspendCancellableCoroutine { continuation ->
-    val maxRight = windowWidth.coerceAtLeast(1)
-    val maxBottom = windowHeight.coerceAtLeast(1)
-    // Rect.intersect() leaves the receiver untouched when there is no
-    // intersection. Clamp every edge explicitly so an off-window stale layout
-    // bound can never allocate a huge bitmap or be sent to PixelCopy.
-    val bounds = android.graphics.Rect(
-        requestedBounds.left.coerceIn(0, maxRight),
-        requestedBounds.top.coerceIn(0, maxBottom),
-        requestedBounds.right.coerceIn(0, maxRight),
-        requestedBounds.bottom.coerceIn(0, maxBottom),
-    )
-    if (bounds.isEmpty) {
-        continuation.resume(null)
-        return@suspendCancellableCoroutine
-    }
-    val destination = runCatching {
-        Bitmap.createBitmap(bounds.width(), bounds.height(), Bitmap.Config.ARGB_8888)
-    }.getOrNull()
-    if (destination == null) {
-        continuation.resume(null)
-        return@suspendCancellableCoroutine
-    }
-    val handler = Handler(Looper.getMainLooper())
-    runCatching {
-        PixelCopy.request(
-            window,
-            bounds,
-            destination,
-            { result ->
-                if (result == PixelCopy.SUCCESS && continuation.isActive) {
-                    continuation.resume(destination)
-                } else {
-                    if (!destination.isRecycled) destination.recycle()
-                    if (continuation.isActive) continuation.resume(null)
-                }
-            },
-            handler,
+): Bitmap? = withContext(Dispatchers.Default) {
+    suspendCancellableCoroutine { continuation ->
+        val maxRight = windowWidth.coerceAtLeast(1)
+        val maxBottom = windowHeight.coerceAtLeast(1)
+        // Rect.intersect() leaves the receiver untouched when there is no
+        // intersection. Clamp every edge explicitly so an off-window stale layout
+        // bound can never allocate a huge bitmap or be sent to PixelCopy.
+        val bounds = android.graphics.Rect(
+            requestedBounds.left.coerceIn(0, maxRight),
+            requestedBounds.top.coerceIn(0, maxBottom),
+            requestedBounds.right.coerceIn(0, maxRight),
+            requestedBounds.bottom.coerceIn(0, maxBottom),
         )
-    }.onFailure {
-        if (!destination.isRecycled) destination.recycle()
-        if (continuation.isActive) continuation.resume(null)
+        if (bounds.isEmpty) {
+            continuation.resume(null)
+            return@suspendCancellableCoroutine
+        }
+        val destination = runCatching {
+            Bitmap.createBitmap(bounds.width(), bounds.height(), Bitmap.Config.ARGB_8888)
+        }.getOrNull()
+        if (destination == null) {
+            continuation.resume(null)
+            return@suspendCancellableCoroutine
+        }
+        // 协程在 PixelCopy 回来之前被取消（覆层开始显示就会取消）时，
+        // 回调里的 isActive 分支不再持有位图所有权，必须在这里兜底回收。
+        continuation.invokeOnCancellation {
+            synchronized(destination) {
+                if (!destination.isRecycled) destination.recycle()
+            }
+        }
+        runCatching {
+            PixelCopy.request(
+                window,
+                bounds,
+                destination,
+                { result ->
+                    if (result == PixelCopy.SUCCESS && continuation.isActive) {
+                        continuation.resume(destination)
+                    } else {
+                        synchronized(destination) {
+                            if (!destination.isRecycled) destination.recycle()
+                        }
+                        if (continuation.isActive) continuation.resume(null)
+                    }
+                },
+                pixelCopyCallbackHandler,
+            )
+        }.onFailure {
+            synchronized(destination) {
+                if (!destination.isRecycled) destination.recycle()
+            }
+            if (continuation.isActive) continuation.resume(null)
+        }
     }
+}
+
+/**
+ * PixelCopy 完成回调的派发线程。
+ *
+ * 单独一条常驻后台 [HandlerThread]，进程内共用一条即可：回调体只是
+ * `continuation.resume`，既不画也不解码。用主线程 Looper 会把每次捕获的完成
+ * 通知排到当帧的消息队列里，正是手势首帧要避开的东西。
+ */
+private val pixelCopyCallbackHandler: Handler by lazy {
+    Handler(
+        HandlerThread("flue-pixelcopy").apply { start() }.looper,
+    )
 }
 
 private enum class LegacyBackdropSourceKind {

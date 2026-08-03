@@ -48,6 +48,31 @@ object WatchTextLayout {
 }
 
 /**
+ * 这一层的文字要不要走连续坐标栅格化（Android 的 `Paint.LINEAR_TEXT_FLAG`）。
+ *
+ * 判据只有一个：合成后的两轴缩放**不相等**。非等比缩放下，字形先被 hinting
+ * 对齐到整数像素网格、再被横向压扁，笔画粗细就不均匀了 —— wf528 的手写体
+ * Patrick Hand 配 `anim_scale_x="80"` 正是这个症状。关掉 hinting 让字形在
+ * 连续坐标下栅格化，压扁后粗细才均匀。
+ *
+ * 反过来，等比缩放时**绝不能开**：这个标志会连带关掉字形缓存。312 有 181 个
+ * text 图层且一个 `anim_scale_x` 都没有，无条件打开等于让它们每帧重新栅格化，
+ * 白付成本还拖帧。
+ *
+ * 传入的缩放是「画布基变换 × 祖先组链 × 图层自身」的累乘，所以 STRETCH 预设
+ * 和画布调节里 zoomX≠zoomY 造成的非等比也一并覆盖。
+ */
+fun watchTextNeedsLinearRaster(scaleX: Float, scaleY: Float): Boolean {
+    // 镜像（负缩放）不改变笔画粗细，比绝对值。
+    val sx = abs(scaleX)
+    val sy = abs(scaleY)
+    if (!sx.isFinite() || !sy.isFinite() || sx <= 0f || sy <= 0f) return false
+    // 容差按较大轴取 1%：画布变换算出来的比例带浮点尾数，别让等比缩放误判成
+    // 非等比而白白丢掉字形缓存。
+    return abs(sx - sy) > max(sx, sy) * 0.01f
+}
+
+/**
  * WM_FORMAT 文字/形状描边通道的取值契约。`outline` 取 "Outline"（硬描边）
  * 或 "Glow"（发光）；`o_size` 是描边/发光尺寸（Outline 默认 4、Glow 默认
  * 10）；`o_color` 默认白；`o_opacity` 0-100。尺寸全局封顶 [MAX_WATCH_OUTLINE_SIZE]
@@ -452,12 +477,32 @@ data class WatchDataSnapshot(
     val batteryPercent: Int? = null,
     val isCharging: Boolean? = null,
     val steps: Int? = null,
+    /**
+     * 日步数目标，供 `{stsc}` / `{sscp}` 使用。null 表示没有用户档案，解析器
+     * 回落到 [WatchmakerTagResolver] 的规范默认值（对齐 clox
+     * `watchface_bridge.lua:127` 的 `stepGoal = 10000`）。
+     */
+    val stepGoal: Int? = null,
     val heartRateBpm: Int? = null,
     val gyroscopeX: Float? = null,
     val gyroscopeY: Float? = null,
     val gyroscopeZ: Float? = null,
     val wifiSignalFraction: Float? = null,
     val bluetoothEnabled: Boolean? = null,
+    /**
+     * 未读通知数，供 `{cnc}` 使用。
+     *
+     * standard 包是**单向依赖**的渲染层，不能反过来 import 启动器的
+     * NotificationListenerService；由宿主（provider 实现）把计数推进快照里。
+     */
+    val notificationCount: Int? = null,
+    /**
+     * 系统是否 24 小时制，供 `{d24h}` 使用。
+     *
+     * `DateFormat.is24HourFormat()` 需要 Context，而 [WatchmakerTagResolver.resolve]
+     * 是纯函数（可测、可在编辑器预览里跑），所以在 provider 侧读一次塞进快照。
+     */
+    val is24Hour: Boolean? = null,
     /**
      * Preferred weather contract. Values inside [WatchWeatherSnapshot] are
      * always Celsius; the display unit is a presentation choice, never an
@@ -567,6 +612,14 @@ data class WatchWeatherSnapshot(
     /** Optional source-formatted value; when absent the resolver emits HH:mm:ss. */
     val lastUpdatedText: String? = null,
     val isDaytime: Boolean? = null,
+    /**
+     * 日出/日落时刻，`HH:mm` 本地时间字符串，供 `{wsr}` / `{wss}` 使用。
+     *
+     * 与 clox 一致（`WeatherProvider.kt:368` `parseIsoTime` 取 ISO 串的 `HH:mm`
+     * 部分，`wf_tagdefs.lua:323-324` 直接把它当字符串渲染）。
+     */
+    val sunriseText: String? = null,
+    val sunsetText: String? = null,
     val forecast: List<WatchWeatherForecast> = emptyList(),
     val hourlyForecast: List<WatchWeatherHourlyForecast> = emptyList(),
     /** WatchMaker `{wcl}` contract: cloud cover as a fraction in 0..1. */
@@ -646,6 +699,28 @@ object WatchWeatherSources {
     fun publish(snapshot: WatchWeatherSnapshot, receivedAtEpochMs: Long = System.currentTimeMillis()) {
         cache.update(snapshot, receivedAtEpochMs)
     }
+}
+
+/**
+ * `{cnc}`（未读通知数）的注入 seam。
+ *
+ * 与 [WatchWeatherSources] 同构，理由也一样：`standard` 包是**单向依赖**的渲染层，
+ * 不能反过来 import 启动器的 `NotificationListenerService`。宿主监听到通知变化后
+ * 调 [publish]，渲染层只读。
+ *
+ * 没有宿主发布过时返回 `0` 而不是 null —— 与 `{shr}` 的处理一致：表盘会写
+ * `{cnc} > 0` 这类表达式，代入 nil 会让整条表达式失效，进而让 opacity 回落到
+ * 默认 100（历史事故：九个天气图标同时全亮）。0 让算式照常算。
+ */
+object WatchNotificationCounts {
+    @Volatile
+    private var count: Int = 0
+
+    fun publish(value: Int) {
+        count = value.coerceAtLeast(0)
+    }
+
+    internal fun current(): Int = count
 }
 
 /** Converts legacy string weather payloads into the typed Celsius contract. */
@@ -1046,6 +1121,80 @@ internal data class WatchLayerRenderPlanResult(
 )
 
 /**
+ * 一张「不可见图层也要暖在位图缓存里」的清单，按图层索引排序。
+ *
+ * 判据是**整条祖先链 × 自身**的 `opacity` 表达式：
+ *
+ * - 全部不含 `{tag}`（常量）→ 不列入。`opacity="0"` 是作者关掉的层（比如
+ *   wf528 那三个挂 tap_action 的隐形 shape），拉进来纯属白占解码。
+ * - 至少一个含 `{tag}`（动态）→ 列入。这类层由表达式门控显隐（wf528 的
+ *   `(math.floor({ds}/4) % 6 == 1) and 100 or 0` 正是这个模式），表达式翻真前
+ *   永远不会被画到，`drawRenderItem` 的 `alpha <= 0f` 提前 return 让
+ *   `requestBitmap` 压根没机会跑 —— 轮到显示的那一拍才冷启动异步解码，画不出
+ *   东西就黑一帧。这里预先发起解码把它们暖进 LRU，轮换时直接命中。
+ *
+ * 注意：这是**冷启动**问题的解，不是 LRU 淘汰的解 —— 本函数也不碰 LRU。
+ * 温热度只由「画到的层」维持；表达式周期很长的层（wf528 的 `{dm}` 门控层，
+ * 20~40 分钟一轮）在一次缓存清理（换表盘、系统回收）后仍可能冷，那种情况由
+ * 绘制路径的 `lastDrawnFrameByLayer` 旧帧兜底顶上。
+ *
+ * 另外三类**故意不列入**，因为暖它们不解决问题或反而制造问题：
+ *
+ * - `svg`：文档在 [PreparedSource] 构造时就解析成 Path 了，绘制时只查表，
+ *   压根没有异步解码这一步，不存在冷启动。
+ * - `gallery` / `gallery_2d`：路径不来自 `path`，而是 gallery 目录扫描的结果，
+ *   本函数拿不到；而且画廊本身在持续轮播，一直是热的。
+ * - 反引号帧序列（[rawPathValues] 里含 `` ` ``）：翻真那一拍要哪一帧取决于
+ *   届时的 `animatedImageElapsedMs()`，现在无从得知；312 里这类层有 19 个、
+ *   每个几十上百帧，全暖一遍等于把整包图片解一遍，正是要避免的卡顿源。
+ *   它们由 [WatchmakerWatchFaceView] 绘制路径里的相邻帧预取负责。
+ * - 动态路径（[rawPathValues] 里含 `{tag}`）：同理，现在算出来的值不一定是
+ *   翻真那一拍要的值，且大表达式的 `evaluateText` 本身就不便宜。
+ *
+ * @param rawOpacityValues 每层的原始 `opacity` 属性文本（下标即图层索引），
+ *   取不到用空串。父链的 opacity 由 [resolveWatchLayerGraph] 的 parentIndices
+ *   推导，不读 XML 的 group 子节点。
+ * @param rawPathValues 每层的原始 `path` 属性文本，用途见上。
+ */
+internal fun planOpacityGatedImageWarmup(
+    parentIndices: List<Int?>,
+    layerTypes: List<String>,
+    rawOpacityValues: List<String>,
+    rawPathValues: List<String>,
+): List<Int> {
+    val result = ArrayList<Int>()
+    for (layerIndex in layerTypes.indices) {
+        val normalizedType = layerTypes[layerIndex].lowercase(Locale.ROOT)
+        if (normalizedType !in WARMABLE_IMAGE_LAYER_TYPES) continue
+        val rawPath = rawPathValues.getOrElse(layerIndex) { "" }
+        if (rawPath.isBlank() || '`' in rawPath || '{' in rawPath) continue
+        // 父链可能因为损坏的 XML 成环，用步数封顶而不是靠 visited 集合：
+        // 层数本来就被 MAX_WATCH_LAYER_COUNT 限住，多走几步比多分配一个集合便宜。
+        var dynamic = false
+        var cursor: Int? = layerIndex
+        var hops = 0
+        while (cursor != null && hops++ <= MAX_WATCH_LAYER_COUNT) {
+            if ('{' in rawOpacityValues.getOrElse(cursor) { "" }) {
+                dynamic = true
+                break
+            }
+            cursor = parentIndices.getOrNull(cursor)
+        }
+        if (dynamic) result += layerIndex
+    }
+    return result
+}
+
+/** 见 [planOpacityGatedImageWarmup]：只含「一张静态图 + 走 drawImage」的类型。 */
+private val WARMABLE_IMAGE_LAYER_TYPES = setOf(
+    "image",
+    "gif",
+    "image_gif",
+    "image_tap",
+    "image_cond",
+)
+
+/**
  * Keeps WatchMaker's global document z-order while carrying the group chain
  * needed to reproduce inherited transforms for each drawable layer.
  */
@@ -1244,10 +1393,10 @@ object WatchmakerTagResolver {
     private val knownUnavailableTags = setOf(
         // Providers are optional on Android. They stay known so a missing
         // source renders "--" and never leaks a literal tag into a face.
-        "weather", "wp", "wr", "wsr", "wss",
+        "weather", "wp", "wr",
         "cal", "calendar", "next_event",
         "phone_battery", "pbl", "pblp", "pbc",
-        "bv", "bi", "btc", "btf", "sscp", "stsc",
+        "bv", "bi", "btc", "btf",
         "alat", "alon",
         "sax", "say", "saz", "sprs", "pwc", "nwip", "nc", "ncc", "ncs", "ngc",
     )
@@ -1260,11 +1409,16 @@ object WatchmakerTagResolver {
         "dz", "dzz", "dtp",
         "dd", "ddz", "ddw0", "ddw", "ddw1", "ddw2", "ddww",
         "dn", "dnn", "dnnn", "dnnnn", "dy", "dyy", "dyyyy",
+        // {dw} = 一年中的第几周（**不是**星期几），{ddim} = 本月天数。
+        "dw", "ddim",
+        // 设备/系统信息：语言码、区域码、是否 24 小时制。
+        "alangcode", "alangreg", "d24h",
+        "cnc",
         "bl", "blp", "batt", "battery", "battery_level",
         "pbl", "pblp", "pbr",
         "bc", "charging", "is_charging",
         "ssc", "steps", "step_count", "shr", "heart", "heart_rate", "heart_rate_bpm",
-        "sthr", "shrp",
+        "sthr", "shrp", "stsc", "sscp",
         // {shr_1..9}：最近 N 分钟的历史心率读数。
         "shr_1", "shr_2", "shr_3", "shr_4", "shr_5", "shr_6", "shr_7", "shr_8", "shr_9",
         "sgx", "sgy", "sgz", "pws", "nbc",
@@ -1275,6 +1429,8 @@ object WatchmakerTagResolver {
         "wlow", "weather_low", "wtl", "wtld",
         "whum", "weather_humidity", "wh", "whp", "wchn", "wchp",
         "wcl", "wl", "wml", "wlc", "wloc", "weather_location", "wlu", "wisday",
+        // 日出/日落时刻与月相。{wmp} 是 0..9 的**整数**相位序号。
+        "wsr", "wss", "wmp",
         // Legacy WatchMaker five-day forecast vocabulary.
         "wfah", "wfal", "wfact", "wfaci",
         "wbbh", "wfbl", "wfbct", "wfbci",
@@ -1305,7 +1461,8 @@ object WatchmakerTagResolver {
             isWatchCounterTag(normalized) ||
             utcBaseTag(normalized) != null ||
             forecastTagParts(normalized) != null ||
-            hourlyForecastTagParts(normalized) != null
+            hourlyForecastTagParts(normalized) != null ||
+            futureWeekdayTagParts(normalized) != null
     }
 
     /** Shared high-refresh vocabulary for runtime and editor preview. */
@@ -1395,6 +1552,14 @@ object WatchmakerTagResolver {
             "dnnnn" -> effectiveNow.getDisplayName(Calendar.MONTH, Calendar.LONG, locale)
             "dy" -> (effectiveNow.get(Calendar.YEAR) % 100).toString().padStart(2, '0')
             "dyy", "dyyyy" -> effectiveNow.get(Calendar.YEAR).toString()
+            // {dw} = 一年中的第几周。⚠️ **不是**星期几 —— 星期几是 {ddw0}/{ddw}。
+            // 对齐 clox `wf_tagdefs.lua:252` `os.date("%W") + 1`：strftime 的 %W
+            // 以**周一**为周首、首个周一之前的日子算第 00 周，clox 再 +1。
+            // 这里不用 Calendar.WEEK_OF_YEAR：它的语义受 locale 的 firstDayOfWeek
+            // 与 minimalDaysInFirstWeek 影响，同一天在不同 locale 会给出不同结果。
+            "dw" -> (strftimeWeekOfYearMondayBased(effectiveNow) + 1).toString()
+            // {ddim} = 本月天数（clox `wf_tagdefs.lua:240` daysInMonth）。
+            "ddim" -> effectiveNow.getActualMaximum(Calendar.DAY_OF_MONTH).toString()
             "dz" -> effectiveNow.timeZone.getDisplayName(
                 effectiveNow.timeZone.inDaylightTime(effectiveNow.time),
                 java.util.TimeZone.SHORT,
@@ -1479,8 +1644,34 @@ object WatchmakerTagResolver {
                     }.format(updatedAt)
                 }
             "ucolor" -> userColor
+            // ── 设备/系统信息（clox `wf_tagdefs.lua:442-443,473`）──
+            // {alangcode}/{alangreg} 跟随 resolve 的 locale 形参，与日期/星期
+            // 标签同源：设置里选了 zh/en/ja 时，表盘的语言码要一起变。
+            "alangcode" -> locale.language.takeIf(String::isNotEmpty)
+            "alangreg" -> locale.country.takeIf(String::isNotEmpty)
+            // clox 用 boolStr，落在表盘上是 "true"/"false"。
+            "d24h" -> snapshot.is24Hour?.let { if (it) "true" else "false" }
+            // 没有宿主推过计数时给 0，**不给 null**：与 {shr} 同理，表盘会写
+            // `{cnc} > 0` 这类表达式，代入 nil 会让整条算式失效、opacity 回落
+            // 默认 100（历史事故：九个天气图标同时全亮）。0 让算式照常算。
+            "cnc" -> (snapshot.notificationCount ?: 0).coerceAtLeast(0).toString()
+            // ── 步数目标（clox `wf_tagdefs.lua:347-351`）──
+            "stsc" -> effectiveStepGoal(snapshot).toString()
+            "sscp" -> {
+                val goal = effectiveStepGoal(snapshot)
+                if (goal > 0) ((snapshot.steps ?: 0).toLong() * 100 / goal).toInt().toString() else "0"
+            }
+            // ── 日出/日落与月相 ──
+            "wsr" -> weather?.sunriseText?.trim()?.takeIf(String::isNotEmpty)
+            "wss" -> weather?.sunsetText?.trim()?.takeIf(String::isNotEmpty)
+            // {wmp} 必须是 0..9 的**整数**：表盘用 `{wmp}==5` 这种等值比较，
+            // 推小数永远不匹配（clox `wf_tagdefs.lua:329-334` 记了这个坑）。
+            // Flue 没有月相 provider，按 clox `WeatherProvider.kt:124` 的本地
+            // 天文算法自算，纯日期函数、无需数据源。
+            "wmp" -> moonPhaseIndex(effectiveNow).toString()
             else -> resolveForecastTag(normalized, weather)
                 ?: resolveHourlyForecastTag(normalized, weather)
+                ?: resolveFutureWeekdayTag(normalized, effectiveNow, locale)
         }
         if (value != null) return WatchTagResolution.Resolved(value)
         return if (isKnown(requestedTag)) {
@@ -1640,8 +1831,99 @@ object WatchmakerTagResolver {
             value.toString()
         }
 
+    /**
+     * strftime `%W`：以**周一**为周首的周序号，首个周一之前的日子为第 0 周。
+     *
+     * 刻意不用 `Calendar.WEEK_OF_YEAR` —— 后者的取值受 locale 的
+     * `firstDayOfWeek` / `minimalDaysInFirstWeek` 影响（美国 locale 周日为周首、
+     * 首周只需 1 天；ISO locale 周一为周首、首周需 4 天），同一天能差出 1。
+     * `{dw}` 要和 clox 逐日对齐，所以直接照 C 库的定义算。
+     */
+    private fun strftimeWeekOfYearMondayBased(now: Calendar): Int {
+        val dayOfYear = now.get(Calendar.DAY_OF_YEAR) // 1-based
+        // Calendar.SUNDAY==1 … SATURDAY==7 → 周一=0 … 周日=6（strftime 的 %u-1）
+        val mondayBasedWeekday = (now.get(Calendar.DAY_OF_WEEK) + 5) % 7
+        return (dayOfYear + 6 - mondayBasedWeekday) / 7
+    }
+
+    /**
+     * 月相序号 0..9（1=新月后渐盈、5=满月、9=残月），照 clox
+     * `WeatherProvider.kt:124` 的 `moonPhase()` + `wf_tagdefs.lua:332` 的整数化。
+     *
+     * 基准新月取 2000-01-06，朔望月长 29.53058867 天。
+     */
+    private fun moonPhaseIndex(now: Calendar): Int {
+        // 两个日历都用 UTC，只为让「天数差」是精确整数：夏令时切换那天，两个
+        // **本地**午夜之间只差 23 小时（或 25 小时），整除会把相位算错整整一天。
+        // 取的年月日仍然是 now 的本地日期。
+        val utc = java.util.TimeZone.getTimeZone("UTC")
+        val reference = Calendar.getInstance(utc).apply {
+            clear()
+            set(2000, Calendar.JANUARY, 6)
+        }
+        val today = Calendar.getInstance(utc).apply {
+            clear()
+            set(now.get(Calendar.YEAR), now.get(Calendar.MONTH), now.get(Calendar.DAY_OF_MONTH))
+        }
+        val elapsedDays = Math.floorDiv(today.timeInMillis - reference.timeInMillis, 86_400_000L)
+        // ⚠️ 这里对朔望月取模用的是 29.53058867，而 clox 的 Kotlin 侧写的是
+        // `% 29`（`WeatherProvider.kt:126`）再除以 29.53058867。整数 29 会让相位
+        // 每个月提前约半天复位，几个月后就和真实月相错开一格。表盘用
+        // `{wmp}==5` 判满月，错一格就是画错图，所以这里按真实周期取模。
+        val lunationDay = elapsedDays.toDouble().mod(SYNODIC_MONTH_DAYS)
+        return Math.floor(lunationDay / SYNODIC_MONTH_DAYS * 10).toInt().coerceIn(0, 9)
+    }
+
+    private fun effectiveStepGoal(snapshot: WatchDataSnapshot): Int =
+        snapshot.stepGoal?.takeIf { it > 0 } ?: DEFAULT_DAILY_STEP_GOAL
+
+    private data class FutureWeekdayTagParts(
+        val kind: String,
+        val dayOffset: Int,
+    )
+
+    /**
+     * `{ddw_N}` / `{ddww_N}` / `{ddw1_N}` / `{ddw2_N}` —— N 天后的星期名。
+     *
+     * 对照 clox `wf_tagdefs.lua:800-811` 的家族正则 `^ddww?[12]?_%d+$`，N 限
+     * 1..6（与它的显式范围检查一致）。312 用的是 `{ddw1_1}`~`{ddw1_6}`。
+     */
+    private fun futureWeekdayTagParts(tag: String): FutureWeekdayTagParts? {
+        val match = Regex("^(ddw|ddww|ddw1|ddw2)_(\\d+)$").matchEntire(tag) ?: return null
+        val offset = match.groupValues[2].toIntOrNull()?.takeIf { it in 1..6 } ?: return null
+        return FutureWeekdayTagParts(match.groupValues[1], offset)
+    }
+
+    private fun resolveFutureWeekdayTag(tag: String, now: Calendar, locale: Locale): String? {
+        val parts = futureWeekdayTagParts(tag) ?: return null
+        val future = (now.clone() as Calendar).apply {
+            add(Calendar.DAY_OF_MONTH, parts.dayOffset)
+        }
+        // 与上面 {ddw}/{ddw1}/{ddw2}/{ddww} 的取名方式逐项对齐，包括 trimEnd('.')。
+        return when (parts.kind) {
+            "ddw" -> future.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, locale)
+                ?.trimEnd('.')
+            "ddw1" -> future.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.NARROW_FORMAT, locale)
+                ?.trimEnd('.')
+            "ddw2" -> future.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, locale)
+                ?.trimEnd('.')
+                ?.take(2)
+            else -> future.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.LONG, locale)
+                ?.trimEnd('.')
+        }
+    }
+
     /** WM_TAGS.md 中 {sthr} 的默认最大心率（BPM）。 */
     private const val DEFAULT_MAX_HEART_RATE_BPM = 200
+
+    /**
+     * `{stsc}` 的默认日步数目标。Flue 没有用户健康档案，取 clox
+     * `watchface_bridge.lua:127` 的同一默认值，让 `{sscp}` 有可用分母。
+     */
+    private const val DEFAULT_DAILY_STEP_GOAL = 10_000
+
+    /** 朔望月长度（天），clox `WeatherProvider.kt:129` 同值。 */
+    private const val SYNODIC_MONTH_DAYS = 29.53058867
 }
 
 /**

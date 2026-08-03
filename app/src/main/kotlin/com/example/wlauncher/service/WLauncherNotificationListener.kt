@@ -18,6 +18,7 @@ import android.util.Log
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
+import com.flue.launcher.watchface.standard.WatchNotificationCounts
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -117,6 +118,7 @@ class WLauncherNotificationListener : NotificationListenerService() {
         instance = null
         Log.d(TAG, "Notification listener disconnected")
         _notifications.value = emptyList()
+        WatchNotificationCounts.publish(0)
         synchronized(pendingIntentMap) { pendingIntentMap.clear() }
         synchronized(pendingActionIntentMap) { pendingActionIntentMap.clear() }
         synchronized(packageIconCache) { packageIconCache.clear() }
@@ -141,12 +143,15 @@ class WLauncherNotificationListener : NotificationListenerService() {
             }
             .getOrDefault(emptyArray())
         val pm = applicationContext.packageManager
-        val parsedNotifications = sbns
-            .filter { sbn ->
-                val flags = sbn.notification.flags
-                val isGroupSummary = flags and Notification.FLAG_GROUP_SUMMARY != 0
-                !isGroupSummary
-            }
+        val visible = sbns.filter { sbn ->
+            val flags = sbn.notification.flags
+            val isGroupSummary = flags and Notification.FLAG_GROUP_SUMMARY != 0
+            !isGroupSummary
+        }
+        // 表盘 {cnc} 要的是真实条数，所以用 take(20) **之前**的数量：那个上限是
+        // 通知层 UI 的显示预算，不是「用户有多少条通知」。
+        WatchNotificationCounts.publish(visible.size)
+        val parsedNotifications = visible
             .sortedByDescending { it.postTime }
             .take(20)
             .mapNotNull { sbn ->
