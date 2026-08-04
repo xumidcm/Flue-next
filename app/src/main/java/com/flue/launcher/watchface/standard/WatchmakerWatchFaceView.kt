@@ -163,6 +163,13 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
      */
     private var canvasSettings = WatchCanvasSettings.DEFAULT
     private var gravityParallaxEnabled = false
+    /**
+     * 重力景深表盘底部那层模糊背景图的开关。默认开（保持现有观感）。
+     *
+     * 关掉之后走 clox 的观感：底下只留根 `bg_color`，不再垫一张自己糊出来的
+     * 背景。作者本来就叠了一层背景素材时，两层叠一起会打架。
+     */
+    private var gravityBackdropBlurEnabled = true
     private var smoothedGyroscopeX = 0f
     private var smoothedGyroscopeY = 0f
     private var gravityBackdropFrame: Bitmap? = null
@@ -586,7 +593,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val bitmapWidth = (extentW * scale).roundToInt().coerceAtLeast(1)
         val bitmapHeight = (extentH * scale).roundToInt().coerceAtLeast(1)
         val bitmap = Bitmap.createBitmap(bitmapWidth, bitmapHeight, Bitmap.Config.ARGB_8888)
-        val backdrop = if (gravityParallaxEnabled && prepared.hasGyroParallax) {
+        val backdrop = if (
+            gravityParallaxEnabled && gravityBackdropBlurEnabled && prepared.hasGyroParallax
+        ) {
             resolveGravityBackdrop(prepared)
         } else {
             null
@@ -669,6 +678,15 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG)
     /** 位图字体描边副本专用（带 SRC_IN 滤色把字形染成描边色）。 */
     private val bitmapOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    /**
+     * 阴影通道专用。阴影是本体的**实心**偏移拷贝（clox 里就是一份 setColor 过的
+     * label/sprite），所以必须是 FILL —— 不能蹭 [outlinePaint]，那个是 STROKE。
+     */
+    private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+    /** 位图字体阴影副本专用（SRC_IN 把字形整串染成阴影色）。 */
+    private val bitmapShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val pathScratch = Path()
     private val rectScratch = RectF()
     /** [composeLayerMatrix] 的逐帧复用缓冲；concat 会立即读走内容。 */
@@ -750,6 +768,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         setWatchDataProvider(primary.dataProvider)
         setCanvasSettings(primary.canvasSettings)
         setGravityParallaxEnabled(primary.gravityParallaxEnabled)
+        setGravityBackdropBlurEnabled(primary.gravityBackdropBlurEnabled)
         bind(
             descriptor = descriptor,
             refreshToken = primary.boundRefreshToken,
@@ -965,6 +984,22 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * 重力景深表盘底部模糊背景层的开关。关掉后底下只剩根 `bg_color`（对齐 clox）。
+     *
+     * 关的时候顺手把缓存的模糊位图丢掉：那两张图只服务这个效果，留着白占内存。
+     */
+    fun setGravityBackdropBlurEnabled(enabled: Boolean) {
+        if (gravityBackdropBlurEnabled == enabled) return
+        gravityBackdropBlurEnabled = enabled
+        if (!enabled) {
+            gravityBackdropFrame = null
+            gravityBackdropBlurFrame = null
+            gravityBackdropBlurPrepared = false
+        }
+        if (!disposed) requestFullRepaint()
+    }
+
     /** Limits animated image playback to the selected editor layer. */
     fun setEditorAnimatedImageLayer(layerIndex: Int?) {
         if (editorAnimationPlaybackLimited && editorAnimatedImageLayerIndex == layerIndex) return
@@ -1158,7 +1193,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         trackTransitionAssetReadiness =
             transition != null && sourceTransitionGeneration == bindGeneration
         transitionFrameHasUnreadyVisualAsset = false
-        val gravityBackdrop = if (gravityParallaxEnabled && prepared.hasGyroParallax) {
+        val gravityBackdrop = if (
+            gravityParallaxEnabled && gravityBackdropBlurEnabled && prepared.hasGyroParallax
+        ) {
             resolveGravityBackdrop(prepared)
         } else {
             null
@@ -1695,12 +1732,14 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         } else {
             0f
         }
-        // CloX's contract is x += sgy * gyro and y += sgx * gyro. The
-        // native provider exposes those streams directly; keep the authored
-        // coordinate stable and only add the opt-in parallax offset.
+        // clox `applyPos` 的契约（wf_render.lua 自带注释，原文照抄）：
+        //   "UL (screen coords, y-down): x += sgy*gyro, y += sgx*(-gyro)"
+        // 它自己是 y 轴向上的 cocos 空间，两个分量写出来都是加号；Android Canvas
+        // 是 y 轴向下，等价于上面那句 screen 坐标契约 —— y 分量必须取负，
+        // 否则开了景深的图层会往反方向甩（老师报的第 3 项）。x 分量本来就对。
         into.preTranslate(
             baseX + gyroscopeY * gyroScale,
-            baseY + gyroscopeX * gyroScale,
+            baseY - gyroscopeX * gyroScale,
         )
         val rotation = if (live) {
             liveTransformRotation
@@ -1734,9 +1773,15 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val skewX = dynamicNumber(attrs["skew_x"], 0f, source)
         val skewY = dynamicNumber(attrs["skew_y"], 0f, source)
         if (skewX != 0f || skewY != 0f) {
+            // cocos `setSkewX/Y` 的仿射矩阵是 (1, tan(sy), tan(sx), 1, 0, 0)，
+            // 即在 **y 轴向上** 的空间里 x' = x + tan(sx)·v、v' = v + tan(sy)·x。
+            // 代入 v = −y 换到 Android 的 y-down 空间，两个分量都会翻号：
+            //   x' = x − tan(sx)·y      y' = y − tan(sy)·x
+            // 所以喂给 preSkew 的两个值都要取负 —— 只翻一个的话会变成沿另一根
+            // 轴镜像，正是老师报的「倾斜方向相反」（第 2 项）。
             into.preSkew(
-                kotlin.math.tan(Math.toRadians(skewX.toDouble())).toFloat(),
-                kotlin.math.tan(Math.toRadians(skewY.toDouble())).toFloat(),
+                -kotlin.math.tan(Math.toRadians(skewX.toDouble())).toFloat(),
+                -kotlin.math.tan(Math.toRadians(skewY.toDouble())).toFloat(),
             )
         }
         return into
@@ -2075,7 +2120,16 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         } else {
             0
         }
-        val dst = anchoredRect(width, height, attrs["alignment"])
+        // wftools 的定尺怪癖（clox `setBaseScale`）：非方图被塞进方形框时两轴都按
+        // 宽度比缩，图片保持原比例而不是被压成正方形 —— 老师报的第 4 项。
+        // 判据用**单格**尺寸，因为 clox 给 sprite sheet 喂的就是 texture ÷ grid。
+        val drawHeight = watchImageDrawHeight(
+            texWidth = nativeWidth / grid.first.coerceAtLeast(1),
+            texHeight = nativeHeight / grid.second.coerceAtLeast(1),
+            boxWidth = width,
+            boxHeight = height,
+        )
+        val dst = anchoredRect(width, drawHeight, attrs["alignment"])
         imagePaint.alpha = paintAlpha(alpha)
         imagePaint.colorFilter = tintFilter(resolveColor(attrs["color"], Color.WHITE, source))
         if (movie != null) {
@@ -2088,7 +2142,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             movie.setTime(if (animateFrames) (elapsed % durationMs).toInt() else 0)
             canvas.save()
             canvas.translate(dst.left, dst.top)
-            canvas.scale(width / nativeWidth, height / nativeHeight)
+            canvas.scale(width / nativeWidth, drawHeight / nativeHeight)
             movie.draw(canvas, 0f, 0f, imagePaint)
             canvas.restore()
         } else {
@@ -2233,6 +2287,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         resolveOutline(attrs, source)?.let { outline ->
             drawTextOutline(canvas, text, x, y, outline, alpha)
         }
+        // 阴影在描边之上、本体之下 —— clox 里描边拷贝 z=-2、阴影拷贝 z=-1，
+        // cocos 按 z 升序绘制，所以叠放顺序就是 描边 → 阴影 → 本体。
+        resolveShadow(attrs, source)?.let { shadow ->
+            drawTextShadow(canvas, text, x, y, shadow, alpha)
+        }
         canvas.drawText(text, x, y, textPaint)
     }
 
@@ -2288,6 +2347,67 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             }
             outlinePaint.alpha = paintAlpha(alpha * outline.opacity * ringAlpha)
             canvas.drawText(text, x, y, outlinePaint)
+        }
+    }
+
+    /**
+     * 求值 shadow/w_distance/w_angle/w_color/w_opacity 五个属性。没有阴影
+     * （模式为 NONE、份数为 0 或不透明度为 0）时返回 null，渲染路径零开销。
+     *
+     * `w_color` 缺省黑、`w_opacity` 缺省 100 —— 与 clox `bindEffects` 一致。
+     */
+    private fun resolveShadow(attrs: Map<String, String>, source: PreparedSource): ResolvedShadow? {
+        val mode = watchShadowMode(attrs["shadow"])
+        if (mode == WatchShadowMode.NONE) return null
+        val distance = watchShadowDistance(
+            attrs["w_distance"]?.let { raw -> dynamicNumber(raw, 5f, source) },
+        )
+        val copies = watchShadowCopyCount(mode, distance)
+        if (copies <= 0) return null
+        val opacity = dynamicNumber(attrs["w_opacity"], 100f, source).coerceIn(0f, 100f) / 100f
+        if (opacity <= 0f) return null
+        return ResolvedShadow(
+            mode = mode,
+            distance = distance,
+            angleDegrees = watchShadowAngleDegrees(
+                attrs["w_angle"]?.let { raw -> dynamicNumber(raw, 135f, source) },
+            ),
+            color = resolveColor(attrs["w_color"], Color.BLACK, source),
+            opacity = opacity,
+            copies = copies,
+        )
+    }
+
+    /**
+     * TTF 文字阴影：同一串字、换阴影色，按偏移平移后画在本体之下。
+     *
+     * 偏移在**图层局部坐标系**里加（此时 canvas 已经吃过该图层的旋转/倾斜矩阵），
+     * 和 clox 把拷贝挂在 `rec.holder` 下同源 —— 阴影会跟着图层一起转，而不是
+     * 永远指向屏幕的某个固定方向。
+     */
+    private fun drawTextShadow(
+        canvas: Canvas,
+        text: String,
+        x: Float,
+        y: Float,
+        shadow: ResolvedShadow,
+        alpha: Float,
+    ) {
+        shadowPaint.typeface = textPaint.typeface
+        shadowPaint.textSize = textPaint.textSize
+        shadowPaint.textAlign = textPaint.textAlign
+        shadowPaint.isLinearText = textPaint.isLinearText
+        shadowPaint.color = shadow.color
+        shadowPaint.alpha = paintAlpha(alpha * shadow.opacity)
+        // 由远及近：Flat 的第 copies 份最远，先画，近处的覆盖在上面。
+        for (copy in shadow.copies downTo 1) {
+            val distance = watchShadowCopyDistance(shadow.mode, shadow.distance, copy)
+            canvas.drawText(
+                text,
+                x + watchShadowOffsetX(distance, shadow.angleDegrees),
+                y + watchShadowOffsetY(distance, shadow.angleDegrees),
+                shadowPaint,
+            )
         }
     }
 
@@ -2356,6 +2476,31 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 }
             }
             bitmapOutlinePaint.colorFilter = null
+        }
+        // 位图字阴影：整串字形按偏移重绘成阴影色剪影，在描边之上、本体之下。
+        // 成本上限 = Flat 的 floor(w_distance) 份，由 MAX_WATCH_SHADOW_DISTANCE 收口。
+        resolveShadow(attrs, source)?.let { shadow ->
+            bitmapShadowPaint.colorFilter = android.graphics.PorterDuffColorFilter(
+                shadow.color,
+                android.graphics.PorterDuff.Mode.SRC_IN,
+            )
+            bitmapShadowPaint.alpha = paintAlpha(alpha * shadow.opacity)
+            for (copy in shadow.copies downTo 1) {
+                val distance = watchShadowCopyDistance(shadow.mode, shadow.distance, copy)
+                drawBitmapGlyphRun(
+                    canvas = canvas,
+                    text = renderedText,
+                    preparedFont = preparedFont,
+                    source = source,
+                    scale = scale,
+                    startX = startX,
+                    lineTop = lineTop,
+                    offsetX = watchShadowOffsetX(distance, shadow.angleDegrees),
+                    offsetY = watchShadowOffsetY(distance, shadow.angleDegrees),
+                    paint = bitmapShadowPaint,
+                )
+            }
+            bitmapShadowPaint.colorFilter = null
         }
         imagePaint.alpha = paintAlpha(alpha)
         // 文字走替换语义，不是图片那套调制：图集只是字形蒙版，图集本身什么颜色
@@ -2720,6 +2865,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         resolveOutline(attrs, source)?.let { outline ->
             drawShapeOutline(canvas, shape, width, height, outline, alpha)
         }
+        // 阴影在描边之上、本体之下（同文字：clox 描边 z=-2、阴影 z=-1）。
+        resolveShadow(attrs, source)?.let { shadow ->
+            drawShapeShadow(canvas, shape, width, height, shadow, alpha)
+        }
         shapePaint.color = resolveColor(attrs["color"], Color.WHITE, source)
         shapePaint.alpha = paintAlpha(alpha)
         when {
@@ -2770,6 +2919,56 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                     canvas.drawPath(pathScratch, outlinePaint)
                 }
                 else -> canvas.drawRect(-width / 2f, -height / 2f, width / 2f, height / 2f, outlinePaint)
+            }
+        }
+    }
+
+    /**
+     * shape 阴影：本体的**实心**偏移拷贝，几何与本体完全一致（FILL，不是描边环）。
+     *
+     * 偏移直接加进顶点坐标，不走 `canvas.translate` —— 省掉每份拷贝一次
+     * save/restore；而且此处 canvas 已经吃过该图层的矩阵，加出来的偏移天然是
+     * **图层局部**的，会跟着图层一起旋转/倾斜，和 clox 把拷贝挂在 `rec.holder`
+     * 下同源。
+     */
+    private fun drawShapeShadow(
+        canvas: Canvas,
+        shape: String,
+        width: Float,
+        height: Float,
+        shadow: ResolvedShadow,
+        alpha: Float,
+    ) {
+        shadowPaint.color = shadow.color
+        shadowPaint.alpha = paintAlpha(alpha * shadow.opacity)
+        // 由远及近：Flat 的第 copies 份最远，先画，近处的覆盖在上面。
+        for (copy in shadow.copies downTo 1) {
+            val distance = watchShadowCopyDistance(shadow.mode, shadow.distance, copy)
+            val dx = watchShadowOffsetX(distance, shadow.angleDegrees)
+            val dy = watchShadowOffsetY(distance, shadow.angleDegrees)
+            when {
+                shape.contains("circle") -> canvas.drawOval(
+                    dx - width / 2f,
+                    dy - height / 2f,
+                    dx + width / 2f,
+                    dy + height / 2f,
+                    shadowPaint,
+                )
+                shape.contains("triangle") -> {
+                    pathScratch.reset()
+                    pathScratch.moveTo(dx, dy - height / 2f)
+                    pathScratch.lineTo(dx + width / 2f, dy + height / 2f)
+                    pathScratch.lineTo(dx - width / 2f, dy + height / 2f)
+                    pathScratch.close()
+                    canvas.drawPath(pathScratch, shadowPaint)
+                }
+                else -> canvas.drawRect(
+                    dx - width / 2f,
+                    dy - height / 2f,
+                    dx + width / 2f,
+                    dy + height / 2f,
+                    shadowPaint,
+                )
             }
         }
     }
@@ -4644,6 +4843,19 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val opacity: Float,
     )
 
+    /**
+     * 求值好的阴影参数。[copies] 已经是最终份数（Drop=1、Flat=floor(w_distance)），
+     * 渲染路径只按 1..copies 循环取 [WatchmakerRuntimeContractsKt] 的偏移即可。
+     */
+    private data class ResolvedShadow(
+        val mode: WatchShadowMode,
+        val distance: Float,
+        val angleDegrees: Float,
+        val color: Int,
+        val opacity: Float,
+        val copies: Int,
+    )
+
     private data class BitmapFailure(val generation: Long, val failedAtUptimeMs: Long)
 
     private enum class AssetLoadKind {
@@ -4863,6 +5075,8 @@ fun WatchmakerWatchFaceHost(
     onTapAction: ((WatchTapAction) -> Unit)? = null,
     canvasSettings: WatchCanvasSettings = WatchCanvasSettings.DEFAULT,
     gravityParallaxEnabled: Boolean = false,
+    /** 重力景深底部模糊背景层；关掉后底下只剩根 `bg_color`（对齐 clox）。 */
+    gravityBackdropBlurEnabled: Boolean = true,
     textEntryAnimationEnabled: Boolean = true,
     textExitAnimationEnabled: Boolean = true,
     textExitAnimationActive: Boolean = false,
@@ -4884,6 +5098,7 @@ fun WatchmakerWatchFaceHost(
             view.setWatchDataProvider(resolvedDataProvider)
             view.setCanvasSettings(canvasSettings)
             view.setGravityParallaxEnabled(gravityParallaxEnabled)
+            view.setGravityBackdropBlurEnabled(gravityBackdropBlurEnabled)
             view.bind(
                 descriptor = descriptor,
                 refreshToken = refreshToken,

@@ -487,6 +487,103 @@ class WatchmakerRuntimeContractsTest {
     }
 
     @Test
+    fun shadowContractParsesModesAppliesDefaultsAndCapsDistance() {
+        // shadow 只认 "Drop"（单份）与 "Flat"（堆叠），大小写不敏感。
+        assertEquals(WatchShadowMode.DROP, watchShadowMode("Drop"))
+        assertEquals(WatchShadowMode.FLAT, watchShadowMode("flat"))
+        assertEquals(WatchShadowMode.NONE, watchShadowMode(null))
+        assertEquals(WatchShadowMode.NONE, watchShadowMode("Outline"))
+
+        // w_distance 缺省 5（对齐 clox evalNum("w_distance", 5)），负数收 0。
+        assertEquals(5f, watchShadowDistance(null))
+        assertEquals(10f, watchShadowDistance(10f))
+        assertEquals(MAX_WATCH_SHADOW_DISTANCE, watchShadowDistance(9_999f))
+        assertEquals(0f, watchShadowDistance(-3f))
+
+        // w_angle 缺省 135°（光照方向）。
+        assertEquals(135f, watchShadowAngleDegrees(null))
+        assertEquals(45f, watchShadowAngleDegrees(45f))
+    }
+
+    @Test
+    fun shadowCopyCountAndDistanceFollowCloxDropVersusFlat() {
+        // Drop 恒一份，偏移就是 w_distance 本身。
+        assertEquals(1, watchShadowCopyCount(WatchShadowMode.DROP, 10f))
+        assertEquals(10f, watchShadowCopyDistance(WatchShadowMode.DROP, 10f, 1))
+
+        // Flat = floor(w_distance) 份，第 i 份偏移 i —— 堆成实心拖影。
+        assertEquals(10, watchShadowCopyCount(WatchShadowMode.FLAT, 10f))
+        assertEquals(3, watchShadowCopyCount(WatchShadowMode.FLAT, 3.9f))
+        assertEquals(1f, watchShadowCopyDistance(WatchShadowMode.FLAT, 10f, 1))
+        assertEquals(7f, watchShadowCopyDistance(WatchShadowMode.FLAT, 10f, 7))
+
+        // 距离不足 1px 的 Flat 一份都不画；NONE 恒 0 份。
+        assertEquals(0, watchShadowCopyCount(WatchShadowMode.FLAT, 0.5f))
+        assertEquals(0, watchShadowCopyCount(WatchShadowMode.NONE, 10f))
+        // 封顶同时约束 Flat 的拷贝份数，恶意表盘不能靠 w_distance 拖帧。
+        assertEquals(
+            MAX_WATCH_SHADOW_DISTANCE.toInt(),
+            watchShadowCopyCount(WatchShadowMode.FLAT, watchShadowDistance(9_999f)),
+        )
+    }
+
+    @Test
+    fun shadowOffsetFallsOppositeTheLightAndFlipsYForCanvas() {
+        // w_angle 是光照方向，影子朝反方向落。
+        // 0° 光从右照来 → 影子落在左边（-x），y 不动。
+        assertEquals(-10f, watchShadowOffsetX(10f, 0f), 0.0001f)
+        assertEquals(0f, watchShadowOffsetY(10f, 0f), 0.0001f)
+
+        // 90°：clox 在 y-up 空间算 -d·sin = -10（往下）。Android Canvas y 向下，
+        // 同一个视觉方向必须是 +10；这里翻符号翻对了才不会上下颠倒。
+        assertEquals(0f, watchShadowOffsetX(10f, 90f), 0.0001f)
+        assertEquals(10f, watchShadowOffsetY(10f, 90f), 0.0001f)
+
+        // 默认 135°（左上打光）→ 影子落右下：+x、+y（Canvas 坐标系）。
+        val d = 10f
+        val diagonal = d * kotlin.math.sqrt(2f) / 2f
+        assertEquals(diagonal, watchShadowOffsetX(d, 135f), 0.0001f)
+        assertEquals(diagonal, watchShadowOffsetY(d, 135f), 0.0001f)
+
+        // 距离 0 时两轴都不偏移（画在本体正下方，等于看不见影子）。
+        assertEquals(0f, watchShadowOffsetX(0f, 135f), 0.0001f)
+        assertEquals(0f, watchShadowOffsetY(0f, 135f), 0.0001f)
+    }
+
+    /**
+     * 图片定尺跟着 clox `setBaseScale`：只有「非方图 + 方形框」才等比，
+     * 其余一律按框拉伸。宽度在两个分支里都等于作者写的 width，所以只验高度。
+     */
+    @Test
+    fun nonSquareImageInSquareBoxKeepsAspectInsteadOfSquashing() {
+        // 老师报的第 4 项实测素材：MOON 的 1284×1482 声明成 463×512（非方框）
+        // → 走 else 分支，高度就是作者写的 512，和改动前一致。
+        assertEquals(512f, watchImageDrawHeight(1284f, 1482f, 463f, 512f), 0.0001f)
+
+        // 同一张图塞进方形框 512×512 → 等比：512/1284 × 1482 ≈ 590.85，
+        // 比框更高，不再被压成正方形。
+        assertEquals(
+            1482f * (512f / 1284f),
+            watchImageDrawHeight(1284f, 1482f, 512f, 512f),
+            0.0001f,
+        )
+
+        // 横图进方形框：高度反而小于框。
+        assertEquals(256f, watchImageDrawHeight(1024f, 512f, 512f, 512f), 0.0001f)
+
+        // 方图 + 方框（Android13 的 1080×1080 声明 512×512）→ 不进等比分支，
+        // 高度照框走；数值上和等比一致，但走的是 else，行为定义清楚。
+        assertEquals(512f, watchImageDrawHeight(1080f, 1080f, 512f, 512f), 0.0001f)
+
+        // 方图 + 非方框 → 按框拉伸（作者显式要求变形，clox 也照做）。
+        assertEquals(200f, watchImageDrawHeight(1024f, 1024f, 512f, 200f), 0.0001f)
+
+        // 纹理尺寸拿不到（0 或负）时不猜，退回框高。
+        assertEquals(300f, watchImageDrawHeight(0f, 0f, 512f, 300f), 0.0001f)
+        assertEquals(300f, watchImageDrawHeight(-1f, 512f, 512f, 300f), 0.0001f)
+    }
+
+    @Test
     fun canonicalWeatherAliasesUseSnapshotFieldsWithoutLeakingRawTags() {
         val calendar = Calendar.getInstance()
         val snapshot = WatchDataSnapshot(

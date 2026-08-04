@@ -14,11 +14,18 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.toRect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 
 /**
@@ -337,6 +344,73 @@ object LauncherTheme {
         @ReadOnlyComposable
         get() = LocalLauncherStyle.current
 }
+
+/**
+ * 圆屏胶囊形状：够扁的行取满半高（真胶囊），偏方/偏长的块退回 [fallback]。
+ *
+ * ## 为什么不能直接用 [CircleShape]
+ *
+ * `CircleShape` 等于 `RoundedCornerShape(50%)`，半径按**短边**算：
+ * - 设置行（181dp × 56dp，宽高比 3.2）→ 半径 28 = 半高 → 正好是胶囊 ✅
+ * - 关于页整块竖卡片（181dp × 400dp，宽高比 0.45）→ 半径 90 = 半宽 → 左右各顶一个
+ *   大半圆的「竖药丸」，里面的图标文字全被啃掉 ❌
+ *
+ * 所以护栏必须看实际宽高比。放在 [Shape] 里而不是调用点：调用点在组合期不知道自己
+ * 会被测成多高（[MiuixSettingsCard] 这种容器更是完全取决于塞了几行），而
+ * `createOutline` 拿到的是绘制期的真实 size —— 只影响裁剪轮廓，不参与测量，
+ * 不会踩「布局属性 → 重测量」那个反馈环。
+ *
+ * @param threshold 宽 ≥ 高 × 该值才算「行状」。2.4 是按圆屏实测量出来的分界：
+ *   普通设置行 3.2 在上面，滑块行（含标题 + 数值 + 轨道，约 100dp 高）1.8 在下面 ——
+ *   滑块行取满半高会让 50dp 的圆角啃到滑轨两端。
+ */
+internal data class RowCapsuleShape(
+    private val fallback: Shape,
+    private val threshold: Float = 2.4f,
+) : Shape {
+    /** 给定尺寸下是否取真胶囊（= 半高圆角）。抽出来是为了可单测阈值行为。 */
+    fun isCapsuleAt(size: Size): Boolean =
+        size.height > 0f && size.width >= size.height * threshold
+
+    override fun createOutline(
+        size: Size,
+        layoutDirection: LayoutDirection,
+        density: Density,
+    ): Outline = if (isCapsuleAt(size)) {
+        Outline.Rounded(RoundRect(size.toRect(), CornerRadius(size.height / 2f)))
+    } else {
+        fallback.createOutline(size, layoutDirection, density)
+    }
+}
+
+/**
+ * 圆屏取胶囊、方屏保持原值的形状入口（[cardShape] 档）。
+ *
+ * 老师定的：圆屏下按钮/卡片一律胶囊，**三套风格统一**（三套的 [chipShape] 都已经是
+ * `CircleShape`，天然统一，所以不用新加令牌，也不许新写 `RoundedCornerShape(数字)`
+ * 字面量）。方屏继续走各风格自己的 [cardShape]，观感与改动前完全一致。
+ *
+ * 圆屏返回的是 [RowCapsuleShape]：行状元素取真胶囊，偏方/偏长的块自动退回
+ * [cardShape]，调用点不用自己判断高度。
+ */
+@Composable
+@ReadOnlyComposable
+fun LauncherStyle.roundAwareCardShape(): Shape =
+    if (com.flue.launcher.ui.common.isFlueScreenRound()) {
+        RowCapsuleShape(fallback = cardShape)
+    } else {
+        cardShape
+    }
+
+/** [roundAwareCardShape] 的 [compactShape] 档。 */
+@Composable
+@ReadOnlyComposable
+fun LauncherStyle.roundAwareCompactShape(): Shape =
+    if (com.flue.launcher.ui.common.isFlueScreenRound()) {
+        RowCapsuleShape(fallback = compactShape)
+    } else {
+        compactShape
+    }
 
 fun styleAwareEnterTransition(style: LauncherStyle): EnterTransition = EnterTransition.None
 

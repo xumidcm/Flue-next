@@ -330,6 +330,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val watchfaceGravityParallaxEnabled by vm.watchfaceGravityParallaxEnabled.collectAsStateWithLifecycle()
+    val watchfaceGravityBackdropBlurEnabled by
+        vm.watchfaceGravityBackdropBlurEnabled.collectAsStateWithLifecycle()
     val doubleTapLockScreenEnabled by vm.doubleTapLockScreenEnabled.collectAsStateWithLifecycle()
     val powerMenuButtonEnabled by vm.powerMenuButtonEnabled.collectAsStateWithLifecycle()
     val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
@@ -451,6 +453,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
         watchFaceBottomFadeEnabled,
         watchfaceCanvasSettings,
         watchfaceGravityParallaxEnabled,
+        // 模糊底图开关直接改合成帧（关掉后底下变纯背景色），必须进缓存身份，
+        // 否则切换后桌面还在用上一张预制模糊。
+        watchfaceGravityBackdropBlurEnabled,
         honeycombBottomFade,
         honeycombEdgeBlurRadius,
         edgeBlurEnabled,
@@ -1959,6 +1964,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 dataProvider = watchmakerDataProvider,
                                 canvasSettings = watchfaceCanvasSettings,
                                 gravityParallaxEnabled = watchfaceGravityParallaxEnabled,
+                                gravityBackdropBlurEnabled = watchfaceGravityBackdropBlurEnabled,
                                 textEntryAnimationEnabled = watchFaceTextEntryAnimation,
                                 textExitAnimationEnabled = watchFaceTextExitAnimation,
                                 textExitAnimationActive = overlayBackdropActive,

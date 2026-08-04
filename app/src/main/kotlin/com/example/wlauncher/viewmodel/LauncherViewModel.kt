@@ -201,6 +201,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
          */
         val KEY_WATCHFACE_CANVAS_OVERRIDES = stringPreferencesKey("watchface_canvas_overrides")
         val KEY_WATCHFACE_GRAVITY_PARALLAX = booleanPreferencesKey("watchface_gravity_parallax_enabled")
+        /**
+         * 重力景深表盘底部那层模糊背景图的开关，默认开（保持现有观感）。
+         *
+         * 关掉之后底下只留根 `bg_color`，和 clox 一致 —— 作者本来就叠了背景素材
+         * 的表盘，两层背景叠一起会打架。
+         */
+        val KEY_WATCHFACE_GRAVITY_BACKDROP_BLUR =
+            booleanPreferencesKey("watchface_gravity_backdrop_blur_enabled")
         val KEY_WATCHFACE_DATE_LOCALE = stringPreferencesKey("watchface_date_locale")
         val KEY_DEVICE_PRESET_APPLIED = booleanPreferencesKey("device_preset_applied")
         val KEY_HIDDEN_APPS = stringPreferencesKey("hidden_apps")
@@ -512,8 +520,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _watchfaceCanvasOverrides = MutableStateFlow<Map<String, WatchCanvasSettings>>(emptyMap())
     val watchfaceCanvasOverrides: StateFlow<Map<String, WatchCanvasSettings>> =
         _watchfaceCanvasOverrides.asStateFlow()
-    private val _watchfaceGravityParallaxEnabled = MutableStateFlow(false)
+    /** 重力景深默认开启（老师要求）：装了就能看到晃动效果，不用先进设置翻开关。 */
+    private val _watchfaceGravityParallaxEnabled = MutableStateFlow(true)
     val watchfaceGravityParallaxEnabled: StateFlow<Boolean> = _watchfaceGravityParallaxEnabled.asStateFlow()
+    /** 底部模糊背景层默认开（保持现有观感）；关掉后只剩根 `bg_color`。 */
+    private val _watchfaceGravityBackdropBlurEnabled = MutableStateFlow(true)
+    val watchfaceGravityBackdropBlurEnabled: StateFlow<Boolean> =
+        _watchfaceGravityBackdropBlurEnabled.asStateFlow()
     // 表盘日期语言：system/zh/en/ja 四档，默认跟随系统。
     private val _watchfaceDateLocale = MutableStateFlow(WatchDateLocale.PREFERENCE_SYSTEM)
     val watchfaceDateLocale: StateFlow<String> = _watchfaceDateLocale.asStateFlow()
@@ -1089,9 +1102,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 if (_watchfaceCanvasOverrides.value != loadedCanvasOverrides) {
                     _watchfaceCanvasOverrides.value = loadedCanvasOverrides
                 }
-                val loadedGravityParallax = prefs[KEY_WATCHFACE_GRAVITY_PARALLAX] ?: false
+                val loadedGravityParallax = prefs[KEY_WATCHFACE_GRAVITY_PARALLAX] ?: true
                 if (_watchfaceGravityParallaxEnabled.value != loadedGravityParallax) {
                     _watchfaceGravityParallaxEnabled.value = loadedGravityParallax
+                }
+                val loadedGravityBackdropBlur =
+                    prefs[KEY_WATCHFACE_GRAVITY_BACKDROP_BLUR] ?: true
+                if (_watchfaceGravityBackdropBlurEnabled.value != loadedGravityBackdropBlur) {
+                    _watchfaceGravityBackdropBlurEnabled.value = loadedGravityBackdropBlur
                 }
 
                 val loadedWatchfaceDateLocale =
@@ -2465,6 +2483,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_WATCHFACE_GRAVITY_PARALLAX] = enabled } }
     }
 
+    fun setWatchfaceGravityBackdropBlurEnabled(enabled: Boolean) {
+        _watchfaceGravityBackdropBlurEnabled.value = enabled
+        persist { store.edit { it[KEY_WATCHFACE_GRAVITY_BACKDROP_BLUR] = enabled } }
+    }
+
     /** 表盘日期语言四档：system/zh/en/ja；未知值按跟随系统兜底。 */
     fun setWatchfaceDateLocale(value: String) {
         _watchfaceDateLocale.value = value
@@ -3366,7 +3389,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _watchfaceCanvasOverrides.value = emptyMap()
         // 这一项的写盘半区在下面的 store.edit 里，StateFlow 半区必须同步复位，
         // 否则 reset 后 UI 还显示旧值、下一次落盘又把旧值写回去。
-        _watchfaceGravityParallaxEnabled.value = false
+        _watchfaceGravityParallaxEnabled.value = true
+        _watchfaceGravityBackdropBlurEnabled.value = true
         _watchfaceDateLocale.value = WatchDateLocale.PREFERENCE_SYSTEM
         WatchDateLocale.override = null
         _hiddenApps.value = emptySet()
@@ -3489,7 +3513,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_WATCHMAKER_FORCE_FILL] = false
                 it.remove(KEY_WATCHFACE_CANVAS_DEFAULT)
                 it.remove(KEY_WATCHFACE_CANVAS_OVERRIDES)
-                it[KEY_WATCHFACE_GRAVITY_PARALLAX] = false
+                it[KEY_WATCHFACE_GRAVITY_PARALLAX] = true
+                it[KEY_WATCHFACE_GRAVITY_BACKDROP_BLUR] = true
                 it.remove(KEY_WATCHFACE_DATE_LOCALE)
                 it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
                 it.remove(KEY_SIDE_SCREEN_SHORTCUTS)

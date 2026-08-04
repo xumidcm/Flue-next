@@ -152,6 +152,8 @@ private fun CanvasAdjustScreen(
     val canvasOverrides by vm.watchfaceCanvasOverrides.collectAsStateWithLifecycle()
     val refreshToken by vm.watchFaceRefreshToken.collectAsStateWithLifecycle()
     val gravityParallaxEnabled by vm.watchfaceGravityParallaxEnabled.collectAsStateWithLifecycle()
+    val gravityBackdropBlurEnabled by
+        vm.watchfaceGravityBackdropBlurEnabled.collectAsStateWithLifecycle()
     val textEntryAnimation by vm.watchFaceTextEntryAnimation.collectAsStateWithLifecycle()
 
     // 传进来的 id 优先；找不到（表盘刚被删）就退回当前选中的那张。
@@ -192,6 +194,7 @@ private fun CanvasAdjustScreen(
                 dataProvider = dataProvider,
                 canvasSettings = draft,
                 gravityParallaxEnabled = gravityParallaxEnabled,
+                gravityBackdropBlurEnabled = gravityBackdropBlurEnabled,
                 textEntryAnimationEnabled = textEntryAnimation,
                 // 本页没有覆层进出，退场动画恒关，免得面板一动表盘文字就跟着淡。
                 textExitAnimationEnabled = false,

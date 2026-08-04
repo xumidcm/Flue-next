@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideLauncherStyle
+import com.flue.launcher.ui.theme.roundAwareCardShape
 import com.flue.launcher.ui.theme.UiStyle
 
 /**
@@ -105,7 +106,10 @@ fun MiuixSettingsCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(style.cardShape)
+                // 圆屏走胶囊（老师定：三套统一）。这里是「一组设置行」的容器，塞几行
+                // 由调用方决定，组合期算不出高度 —— 交给 RowCapsuleShape 在绘制期按
+                // 真实宽高比判断：单行组取真胶囊，多行组自动退回 cardShape。
+                .clip(style.roundAwareCardShape())
                 .background(style.cardColor),
             content = content
         )

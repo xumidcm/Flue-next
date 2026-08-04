@@ -143,6 +143,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -192,6 +193,8 @@ import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
+import com.flue.launcher.ui.theme.roundAwareCardShape
+import com.flue.launcher.ui.theme.roundAwareCompactShape
 import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
@@ -583,6 +586,8 @@ private fun SettingsRootScreen(
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val watchfaceGravityParallaxEnabled by vm.watchfaceGravityParallaxEnabled.collectAsStateWithLifecycle()
+    val watchfaceGravityBackdropBlurEnabled by
+        vm.watchfaceGravityBackdropBlurEnabled.collectAsStateWithLifecycle()
     val watchfaceDateLocale by vm.watchfaceDateLocale.collectAsStateWithLifecycle()
     val appLanguage by vm.appLanguage.collectAsStateWithLifecycle()
     // 表盘保存会原地覆盖 preview.jpg：令牌自增时列表缩略图重读文件。
@@ -1211,6 +1216,7 @@ private fun SettingsRootScreen(
                         query = settingsSearchQuery,
                         onQueryChange = { settingsSearchQuery = it },
                         modifier = Modifier.padding(bottom = 4.dp),
+                        scale = itemFisheye(listState, "settings_search", screenCenterY, screenHeightPx),
                     )
                 }
                 if (settingsSearchQuery.isNotBlank()) {
@@ -1239,7 +1245,12 @@ private fun SettingsRootScreen(
                                         .getOrNull()
                                         ?.let(navigateTo)
                                 },
-                                scale = 1f
+                                scale = itemFisheye(
+                                    listState,
+                                    "search_result_$resultIndex",
+                                    screenCenterY,
+                                    screenHeightPx,
+                                )
                             )
                         }
                     }
@@ -1392,7 +1403,7 @@ private fun SettingsRootScreen(
                             }
                             hiddenAppsDirty = true
                         },
-                        scale = 1f,
+                        scale = itemFisheye(listState, app.componentKey, screenCenterY, screenHeightPx),
                         // LazyColumn already composes only visible/prefetched rows. Do not
                         // drive a second visibility state that unloads/reloads icons while
                         // crossing every item boundary during a fling.
@@ -1802,6 +1813,25 @@ private fun SettingsRootScreen(
                         scale = itemFisheye(
                             listState,
                             "watchface_gravity_parallax",
+                            screenCenterY,
+                            screenHeightPx,
+                        ),
+                    )
+                }
+                // 紧跟景深开关：这一项只对景深表盘有意义，放一起才看得懂它管什么。
+                item("watchface_gravity_backdrop_blur") {
+                    SettingsSwitchRow(
+                        title = stringResource(R.string.settings_watchface_gravity_backdrop_blur),
+                        subtitle = if (watchfaceGravityBackdropBlurEnabled) {
+                            stringResource(R.string.settings_watchface_gravity_backdrop_blur_on)
+                        } else {
+                            stringResource(R.string.settings_watchface_gravity_backdrop_blur_off)
+                        },
+                        checked = watchfaceGravityBackdropBlurEnabled,
+                        onToggle = vm::setWatchfaceGravityBackdropBlurEnabled,
+                        scale = itemFisheye(
+                            listState,
+                            "watchface_gravity_backdrop_blur",
                             screenCenterY,
                             screenHeightPx,
                         ),
@@ -3720,6 +3750,38 @@ private fun restartFlueProcess(context: android.content.Context) {
  * 一遍就能拿到完整顺序——item 的 @Composable 内容一行都不会执行，只登记
  * key，所以没有额外开销也没有副作用（content 本身不是 @Composable）。
  */
+/**
+ * 脚手架顶栏（返回按钮 + 大标题）那一项的 key。
+ *
+ * 原先是匿名 `item {}`，圆屏下 `chordScaleForListItem` 靠
+ * `visibleItemsInfo.firstOrNull { it.key == key }` 找行，没有 key 就永远找不到，
+ * 顶栏因此不跟随缩放（老师报的「设置顶栏不会适配圆屏」）。
+ *
+ * [SettingsKeyIndexRecorder] 那边同步登记这个 key：它只关心「登记了几项」来对齐
+ * index，用具名 key 替换原来的 null 不影响计数，还顺带让搜索跳转不会误命中。
+ */
+private const val SETTINGS_HEADER_ITEM_KEY = "settings_page_header"
+
+/**
+ * 顶栏项高度的一半（估值），圆屏首项居中要用。
+ *
+ * 顶栏 ≈ 42dp 的返回按钮 + 8dp 底距 ≈ 50dp（26sp 单行标题比按钮矮，撑不高这一项）。
+ *
+ * 这里刻意取**静态估值**而不是实测高度：把实测高度回头喂给 `contentPadding`
+ * 就是「布局 → 内边距 → 重新布局」的反馈环，正是圆屏抽搐的根因。标题换成两行
+ * 时首项会比正中略高一点点，可接受。
+ */
+private val SETTINGS_HEADER_HALF_HEIGHT = 25.dp
+
+/**
+ * 普通设置行高度的一半（估值），圆屏底部留白要用。
+ *
+ * 设置行的 `defaultMinSize(minHeight = 56.dp)` 是这套页面里最常见的行高，取半即
+ * 28dp。底部留 `半屏 − 28dp` 之后，末项滑到底时中心大致落在屏幕正中。
+ * 同样是静态估值，理由见 [SETTINGS_HEADER_HALF_HEIGHT]。
+ */
+private val SETTINGS_ROW_HALF_HEIGHT = 28.dp
+
 private class SettingsKeyIndexRecorder : LazyListScope {
     private val keys = ArrayList<Any?>()
 
@@ -3764,6 +3826,7 @@ private fun SettingsPageScaffold(
 ) {
     val launcherStyle = LauncherTheme.style
     val context = LocalContext.current
+    val density = LocalDensity.current
     val settingsRoundScreen = com.flue.launcher.ui.common.isFlueScreenRound()
     val leftSafeInsetPercent = LocalSettingsLeftSafeInsetPercent.current
     val rotaryHapticsEnabled = LocalSettingsRotaryHapticsEnabled.current
@@ -3809,10 +3872,37 @@ private fun SettingsPageScaffold(
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val screenHeightPx = constraints.maxHeight.toFloat()
         val screenCenterY = screenHeightPx / 2f
+        // 圆屏弦宽适配要用视口全宽当直径。靠 CompositionLocal 下发而不是加
+        // 参数：itemFisheye 有 200+ 调用点，加参数等于逐个改一遍。
+        val screenWidthPx = constraints.maxWidth.toFloat()
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val safeDrawingPadding = WindowInsets.safeDrawing.asPaddingValues()
         val horizontalContentPadding = if (settingsRoundScreen) 26.dp else 16.dp
         val verticalContentPadding = if (settingsRoundScreen) 30.dp else 18.dp
+        // 圆屏上下各留半屏（蜂窝列表观感）：首项在进页面时就落在屏幕正中，
+        // 末项也能一直滑到正中。取 `maxHeight / 2 − 半个首项高度`。
+        //
+        // 这是**静态**值：只看屏幕尺寸，不随滚动变化，所以不违反「禁止动态
+        // padding」那条铁律（禁的是「每帧按缩放结果改布局属性」的反馈环）。
+        //
+        // 另外靠 padding 让首项居中，而不是进页面再 scrollToItem 纠一次：
+        // 偏移量为 0 时首项本来就在正中，既省掉一次首帧跳动，也不会跟
+        // initialFirstVisibleItemScrollOffset 的滚动位置恢复打架。
+        val halfScreenPadding = maxHeight / 2f
+        val topContentPadding = if (settingsRoundScreen) {
+            (halfScreenPadding - SETTINGS_HEADER_HALF_HEIGHT).coerceAtLeast(46.dp)
+        } else {
+            verticalContentPadding
+        }
+        val bottomContentPadding = if (settingsRoundScreen) {
+            (halfScreenPadding - SETTINGS_ROW_HALF_HEIGHT).coerceAtLeast(30.dp)
+        } else {
+            verticalContentPadding
+        }
+        // 圆屏行距收窄：外圈的项缩到 0.62，槽位高度不变（graphicsLayer 的固有
+        // 代价），10dp 槽位间距叠上收缩留白就是老师说的「间隔太大」。槽位间距
+        // 压到 6dp 抵消一部分，居中那几行也还不至于挤在一起。
+        val itemSpacing = if (settingsRoundScreen) 6.dp else 10.dp
 
         // 搜索结果跳转定位。目标 key 不属于本页时 indexOf 返回 -1，本页
         // 什么都不做（转场期间新旧两页同时在树上，靠这条区分）。
@@ -3821,17 +3911,27 @@ private fun SettingsPageScaffold(
             val target = searchTarget ?: return@LaunchedEffect
             val recorder = SettingsKeyIndexRecorder()
             // 标题项也要登记，否则算出来的 index 会整体偏移。
-            recorder.item(null, null) {}
+            recorder.item(SETTINGS_HEADER_ITEM_KEY, null) {}
             with(recorder) {
                 content(listState, screenCenterY, screenHeightPx, emptySet())
             }
             val index = recorder.indexOf(target.itemKey)
             if (index < 0) return@LaunchedEffect
             // 目标行滚到靠上位置（留一点上文），而不是贴着顶边。
-            listState.animateScrollToItem(index, scrollOffset = -(screenHeightPx * 0.18f).toInt())
+            // 圆屏改成滚到屏幕正中：那里弦最宽、缩放为 1，行本身也最清楚；
+            // 靠上 18% 的位置在圆屏上恰好是被弧线切得最狠的一段。
+            val jumpOffset = if (settingsRoundScreen) {
+                -(screenCenterY - with(density) { SETTINGS_ROW_HALF_HEIGHT.toPx() })
+            } else {
+                -(screenHeightPx * 0.18f)
+            }
+            listState.animateScrollToItem(index, scrollOffset = jumpOffset.toInt())
             target.onConsumed()
         }
 
+        CompositionLocalProvider(
+            com.flue.launcher.ui.common.LocalChordViewportWidth provides screenWidthPx,
+        ) {
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -3854,14 +3954,37 @@ private fun SettingsPageScaffold(
             // contentPadding + tail spacer stacked into permanent empty bands.
             contentPadding = PaddingValues(
                 start = horizontalContentPadding + leftSafeInset,
-                top = safeDrawingPadding.calculateTopPadding() + verticalContentPadding,
+                // 圆屏那条分支单独取值、不再叠 safeDrawing：半屏留白本来就远大于
+                // 任何系统 inset，叠上去只会把首项顶得偏离屏幕中心。
+                top = if (settingsRoundScreen) {
+                    topContentPadding
+                } else {
+                    safeDrawingPadding.calculateTopPadding() + topContentPadding
+                },
                 end = horizontalContentPadding,
-                bottom = safeDrawingPadding.calculateBottomPadding() + verticalContentPadding,
+                bottom = if (settingsRoundScreen) {
+                    bottomContentPadding
+                } else {
+                    safeDrawingPadding.calculateBottomPadding() + bottomContentPadding
+                },
             ),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(itemSpacing)
         ) {
-            item {
-                Box(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+            item(SETTINGS_HEADER_ITEM_KEY) {
+                // 顶栏整体（返回按钮 + 大标题）吃弦宽缩放。缩放施加在最外层 Box，
+                // 里面的对齐/内边距全是静态值，不会被卷进布局反馈环。
+                val headerScale = itemFisheye(
+                    listState,
+                    SETTINGS_HEADER_ITEM_KEY,
+                    screenCenterY,
+                    screenHeightPx,
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .chordScaled(headerScale)
+                        .padding(bottom = 8.dp)
+                ) {
                     HeaderBackButton(onClick = onBack)
                     Text(
                         text = title,
@@ -3886,6 +4009,7 @@ private fun SettingsPageScaffold(
                 }
             }
             content(listState, screenCenterY, screenHeightPx, emptySet())
+        }
         }
     }
 }
@@ -3914,7 +4038,7 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
     val launcherStyle = LauncherTheme.style
     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
         // MIUIX：成组大圆角卡片包一行设置行 + Forward 箭头。
-        MiuixSettingsCard {
+        MiuixSettingsCard(modifier = Modifier.chordScaled(scale)) {
             MiuixSettingsRow(
                 title = title,
                 subtitle = subtitle.takeIf { it.isNotBlank() },
@@ -3942,6 +4066,7 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
         if (pressed) launcherStyle.pressedCardColor else launcherStyle.cardColor,
         label = "settings_category_bg"
     )
+    val cardShape = launcherStyle.roundAwareCardShape()
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -3950,9 +4075,9 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
                 scaleY = scale * pressedScale.value
                 alpha = scale.coerceIn(0.55f, 1f)
             }
-            .clip(launcherStyle.cardShape)
+            .clip(cardShape)
             .drawBehind { drawRect(background.value) }
-            .border(1.dp, launcherStyle.outlineColor, launcherStyle.cardShape)
+            .border(1.dp, launcherStyle.outlineColor, cardShape)
             .instantPressGesture(pressedState, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 18.dp)
     ) {
@@ -3978,6 +4103,16 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
 @Composable
 private fun SectionTitle(text: String, scale: Float) {
     val launcherStyle = LauncherTheme.style
+    // 圆屏：组标题改居中并去掉左内边距。左对齐的标题贴着弧线，实测「系统设置」
+    // 会被切成「⼄设置」。这是静态判断（只看屏幕形状，不随滚动变化），不属于
+    // 「动态 padding」那条禁令。
+    val roundScreen = com.flue.launcher.ui.common.isFlueScreenRound()
+    // 标题与分组名同样吃弦宽缩放；alpha 跟着收一点，让贴近弧线的标题自然淡出。
+    val scaleModifier = Modifier.graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+        alpha = scale.coerceIn(0.55f, 1f)
+    }
     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
         // MIUIX：组标题小灰字，对齐 MiuixSettingsCard 的 title 风格。
         Text(
@@ -3985,7 +4120,11 @@ private fun SectionTitle(text: String, scale: Float) {
             color = launcherStyle.secondaryTextColor,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(top = 8.dp, start = 14.dp)
+            textAlign = if (roundScreen) TextAlign.Center else null,
+            modifier = Modifier
+                .then(if (roundScreen) Modifier.fillMaxWidth() else Modifier)
+                .padding(top = 8.dp, start = if (roundScreen) 0.dp else 14.dp)
+                .then(scaleModifier)
         )
         return
     }
@@ -3994,13 +4133,11 @@ private fun SectionTitle(text: String, scale: Float) {
         color = launcherStyle.secondaryTextColor,
         fontSize = 13.sp,
         fontWeight = FontWeight.Bold,
+        textAlign = if (roundScreen) TextAlign.Center else null,
         modifier = Modifier
-            .padding(top = 4.dp, start = 4.dp, bottom = 2.dp)
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                alpha = scale.coerceIn(0.55f, 1f)
-            }
+            .then(if (roundScreen) Modifier.fillMaxWidth() else Modifier)
+            .padding(top = 4.dp, start = if (roundScreen) 0.dp else 4.dp, bottom = 2.dp)
+            .then(scaleModifier)
     )
 }
 
@@ -4131,7 +4268,7 @@ private fun MessageCard(text: String, background: Color, onClick: () -> Unit) {
                 scaleX = pressedScale.value
                 scaleY = pressedScale.value
             }
-            .clip(launcherStyle.compactShape)
+            .clip(launcherStyle.roundAwareCompactShape())
             .background(background)
             .instantPressGesture(pressedState, onClick = onClick)
             .padding(14.dp)
@@ -4152,7 +4289,7 @@ private fun SettingsChoiceRow(
     val launcherStyle = LauncherTheme.style
     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
         // MIUIX：56dp 设置行，选中态在右侧显示 Check 图标。
-        MiuixSettingsCard {
+        MiuixSettingsCard(modifier = Modifier.chordScaled(scale, enabled)) {
             MiuixSettingsRow(
                 title = title,
                 subtitle = subtitle.takeIf { it.isNotBlank() },
@@ -4179,6 +4316,7 @@ private fun SettingsChoiceRow(
         animationSpec = launcherStyle.pressScaleSpec,
         label = "choice_row_scale"
     )
+    val rowShape = launcherStyle.roundAwareCompactShape()
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -4187,7 +4325,7 @@ private fun SettingsChoiceRow(
                 scaleY = scale * pressedScale.value
                 alpha = if (enabled) scale.coerceIn(0.55f, 1f) else 0.48f
             }
-            .clip(launcherStyle.compactShape)
+            .clip(rowShape)
             .background(
                 when {
                     pressed && selected -> launcherStyle.selectedCardColor.copy(alpha = 0.80f)
@@ -4196,7 +4334,7 @@ private fun SettingsChoiceRow(
                     else -> launcherStyle.cardColor
                 }
             )
-            .border(1.dp, launcherStyle.outlineColor, launcherStyle.compactShape)
+            .border(1.dp, launcherStyle.outlineColor, rowShape)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -4261,10 +4399,11 @@ private fun SettingsSwitchRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .chordScaled(scale, enabled)
                 .defaultMinSize(minHeight = 56.dp)
                 .background(
                     color = if (pressed) launcherStyle.pressedCardColor else launcherStyle.cardColor,
-                    shape = launcherStyle.cardShape,
+                    shape = launcherStyle.roundAwareCardShape(),
                 )
                 .clickable(
                     interactionSource = interactionSource,
@@ -4348,6 +4487,7 @@ private fun SettingsSwitchRow(
         animationSpec = spring(stiffness = 760f, dampingRatio = 0.82f),
         label = "switch_knob_progress"
     )
+    val switchRowShape = launcherStyle.roundAwareCompactShape()
 
     Box(
         modifier = Modifier
@@ -4357,9 +4497,9 @@ private fun SettingsSwitchRow(
                 scaleY = scale * pressedScale.value
                 alpha = if (enabled) scale.coerceIn(0.55f, 1f) else 0.5f
             }
-            .clip(launcherStyle.compactShape)
+            .clip(switchRowShape)
             .background(if (pressed) launcherStyle.pressedCardColor else launcherStyle.cardColor)
-            .border(1.dp, launcherStyle.outlineColor, launcherStyle.compactShape)
+            .border(1.dp, launcherStyle.outlineColor, switchRowShape)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -4445,7 +4585,7 @@ private fun SettingsSliderRow(
     LaunchedEffect(value) { localValue = value }
     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
         // MIUIX：设置行显示标题与当前值，下面接胶囊 MiuixSlider。
-        MiuixSettingsCard {
+        MiuixSettingsCard(modifier = Modifier.chordScaled(scale, enabled)) {
             MiuixSettingsRow(
                 title = title,
                 subtitle = localValueText?.invoke(localValue) ?: valueText,
@@ -4474,6 +4614,9 @@ private fun SettingsSliderRow(
         }
         return
     }
+    // 滑块行比普通行高（标题 + 数值 + 轨道 ≈ 100dp），宽高比落在 RowCapsuleShape 的
+    // 阈值以下，会自动退回 compactShape 的圆角 —— 不需要在这里特判。
+    val sliderShape = launcherStyle.roundAwareCompactShape()
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -4482,9 +4625,9 @@ private fun SettingsSliderRow(
                 scaleY = scale
                 alpha = if (enabled) scale.coerceIn(0.55f, 1f) else 0.5f
             }
-            .clip(launcherStyle.compactShape)
+            .clip(sliderShape)
             .background(launcherStyle.cardColor)
-            .border(1.dp, launcherStyle.outlineColor, launcherStyle.compactShape)
+            .border(1.dp, launcherStyle.outlineColor, sliderShape)
             .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
         Column {
@@ -4530,7 +4673,7 @@ private fun ActionCard(
     val pressed by pressedState
     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
         // MIUIX：动作行走强调色标题；保留长按支持（导入表盘彩蛋）。
-        MiuixSettingsCard {
+        MiuixSettingsCard(modifier = Modifier.chordScaled(scale)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -4567,6 +4710,7 @@ private fun ActionCard(
         animationSpec = launcherStyle.pressScaleSpec,
         label = "action_card_scale"
     )
+    val actionShape = launcherStyle.roundAwareCompactShape()
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -4575,9 +4719,9 @@ private fun ActionCard(
                 scaleY = scale * pressedScale.value
                 alpha = scale.coerceIn(0.55f, 1f)
             }
-            .clip(launcherStyle.compactShape)
+            .clip(actionShape)
             .background(if (pressed) launcherStyle.pressedCardColor else launcherStyle.cardColor)
-            .border(1.dp, launcherStyle.outlineColor, launcherStyle.compactShape)
+            .border(1.dp, launcherStyle.outlineColor, actionShape)
             .instantPressGesture(
                 pressedState,
                 onLongPress = onLongPress,
@@ -4636,9 +4780,12 @@ private fun AboutCard(
                 scaleY = scale
                 alpha = scale.coerceIn(0.55f, 1f)
             }
-            .clip(launcherStyle.cardShape)
+            // 关于页这张卡是整块竖内容（图标 + 版本 + 三个操作），宽高比远小于
+            // RowCapsuleShape 的阈值，圆屏下会自动退回 cardShape 的大圆角。挂着是为了
+            // 「圆屏形状取值统一走这个入口」，不是指望它变胶囊。
+            .clip(launcherStyle.roundAwareCardShape())
             .background(launcherStyle.cardColor)
-            .border(1.dp, launcherStyle.outlineColor, launcherStyle.cardShape)
+            .border(1.dp, launcherStyle.outlineColor, launcherStyle.roundAwareCardShape())
             .padding(horizontal = 20.dp, vertical = 24.dp)
     ) {
         Column(
@@ -5088,6 +5235,20 @@ private fun DonatePreviewDialog(resId: Int, onDismiss: () -> Unit) {
     }
 }
 
+/**
+ * 设置页逐条缩放通道。名字沿用历史（曾经是底部鱼眼），现在承载的是**圆屏
+ * 弦宽适配**：
+ *
+ * - 方屏：恒返回 1f，全部平铺，与改动前逐像素一致。
+ * - 圆屏：按元素所在高度的弦宽等比缩放，避免左对齐文字被弧线切掉。
+ *
+ * 200+ 个调用点已经把返回值接进了 `graphicsLayer { scaleX/scaleY }`，正好是
+ * 弦宽适配要求的形状（布局值测量 + 只改合成属性），所以调用点一处都不用改。
+ * 算法与三条铁律见 [com.flue.launcher.ui.common.chordScaleForPosition]。
+ *
+ * @param screenHeight 保留参数：视口高度对弦宽计算不是必需的（圆心 y 由
+ *   `screenCenterY` 给出），但签名要和 200+ 调用点保持一致。
+ */
 @Composable
 private fun itemFisheye(
     listState: LazyListState,
@@ -5095,10 +5256,30 @@ private fun itemFisheye(
     screenCenterY: Float,
     screenHeight: Float
 ): Float {
-    // 设置页不再做鱼眼：全部平铺（用户明确要求）。保留函数签名让 200+ 个
-    // 调用点不用逐个改，后续重构设置页时随新组件一起删除。
-    return 1f
+    if (!com.flue.launcher.ui.common.isFlueScreenRound()) return 1f
+    return com.flue.launcher.ui.common.chordScale(
+        listState = listState,
+        key = key,
+        screenCenterY = screenCenterY,
+        viewportWidth = com.flue.launcher.ui.common.LocalChordViewportWidth.current,
+    )
 }
+
+/**
+ * 把弦宽缩放施加到某个组件上的统一入口。
+ *
+ * 几个设置行组件在 MIUIX 分支里提前 `return`，各自的 `scale` 参数一次都没用到，
+ * 圆屏下那条分支就会整页平铺（老师报的「miuix 还是平铺」）。通用路径里那段
+ * `graphicsLayer { scaleX/scaleY/alpha }` 抄五遍不现实，抽成这个 modifier。
+ *
+ * 只改合成属性，不碰任何布局属性 —— 弦宽适配的第三条铁律。
+ */
+private fun Modifier.chordScaled(scale: Float, enabled: Boolean = true): Modifier =
+    graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+        alpha = if (enabled) scale.coerceIn(0.55f, 1f) else 0.48f
+    }
 
 @Composable
 private fun BackupOptionsDialog(
@@ -5634,6 +5815,7 @@ private fun buildSettingsSearchIndex(context: Context): List<SettingsSearchEntry
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_date_locale_header", s(R.string.settings_watchface_date_language), s(R.string.search_d_watchface_date_locale), listOf("rqyy", "date locale", "yuyan")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchmaker_force_fill", s(R.string.settings_watchmaker_force_fill), s(R.string.search_d_force_fill), listOf("qzpm", "force fill", "puman")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_gravity_parallax", s(R.string.settings_watchface_gravity_parallax), s(R.string.settings_watchface_gravity_parallax_on), listOf("景深", "gravity", "gyro", "parallax", "jing shen")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_gravity_backdrop_blur", s(R.string.settings_watchface_gravity_backdrop_blur), s(R.string.settings_watchface_gravity_backdrop_blur_on), listOf("模糊", "背景", "blur", "backdrop", "mo hu", "bei jing")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchmaker_body_sensors", s(R.string.settings_watchface_heart_rate), s(R.string.search_d_heart_rate), listOf("bpxl", "heart rate", "xinlv")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_font", s(R.string.settings_watchface_font), s(R.string.search_d_watchface_font), listOf("bpzt", "font", "ziti")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_bottom_fade", s(R.string.settings_watchface_bottom_fade), s(R.string.search_d_watchface_bottom_fade), listOf("bpdb", "bottom fade")),

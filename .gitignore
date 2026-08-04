@@ -23,6 +23,7 @@ pr-body.md
 
 # Local diagnostics and one-off build output
 /*.log
+/round-preview-*.png
 /honeycomb_current_backup.kt
 /honeycomb_diff.txt
 /honeycomb_main.txt

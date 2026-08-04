@@ -418,6 +418,9 @@
     <string name="settings_watchface_gravity_parallax">重力景深表盘效果</string>
     <string name="settings_watchface_gravity_parallax_on">对声明 gyro 图层的表盘启用随手腕晃动的景深移动</string>
     <string name="settings_watchface_gravity_parallax_off">关闭重力景深移动</string>
+    <string name="settings_watchface_gravity_backdrop_blur">景深表盘模糊底图</string>
+    <string name="settings_watchface_gravity_backdrop_blur_on">在景深表盘底层垫一张模糊背景图</string>
+    <string name="settings_watchface_gravity_backdrop_blur_off">底层只填充表盘背景色</string>
     <string name="settings_watchface_heart_rate">表盘心率数据</string>
     <string name="settings_watchface_heart_rate_on">已授权身体传感器；支持的 .watch 标签可读取心率</string>
     <string name="settings_watchface_heart_rate_off">未授权时心率保持不可用；点击后由系统询问授权</string>

@@ -101,6 +101,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -133,7 +134,9 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.min
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -162,6 +165,9 @@ import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.util.RecentsVisibility
+import com.flue.launcher.ui.common.chordScaleForListItem
+import com.flue.launcher.ui.common.chordScaleForPosition
+import com.flue.launcher.ui.common.chordScaleItem
 import com.flue.launcher.ui.common.flueElasticNestedScroll
 import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.ui.common.InternalFileBrowserHost
@@ -358,6 +364,9 @@ private fun WatchEditorRoute(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
+    // 预览的模糊底图跟随设置（景深本身在预览里强制开，理由见 WatchEditorPreview）。
+    val editorGravityBackdropBlurEnabled by
+        vm.watchfaceGravityBackdropBlurEnabled.collectAsStateWithLifecycle()
     var session by remember { mutableStateOf<WatchEditorSession?>(null) }
     var snapshot by remember { mutableStateOf<WatchEditorSnapshot?>(null) }
     var selectedLayerKey by remember { mutableStateOf<WatchEditorLayerKey?>(null) }
@@ -1491,6 +1500,7 @@ private fun WatchEditorRoute(
                         errorMessage = errorMessage,
                         imageSizeLookup = imageSizeLookup,
                         draftDirectory = active.draftDirectory,
+                        gravityBackdropBlurEnabled = editorGravityBackdropBlurEnabled,
                         onBack = ::requestClose,
                         onSelectLayer = ::selectLayer,
                         onBeginTransform = { key ->
@@ -1960,6 +1970,8 @@ private fun WatchEditorScreen(
     onImportWatchLong: () -> Unit,
     onConvertWatch: () -> Unit,
     onConvertWatchLong: () -> Unit,
+    /** 底部模糊背景层开关，跟随设置（预览要和桌面观感一致）。 */
+    gravityBackdropBlurEnabled: Boolean = true,
     onPreviewRefreshReady: (Int) -> Unit = {},
     onPreviewRefreshFailed: (Int) -> Unit = {},
     /**
@@ -2107,12 +2119,21 @@ private fun WatchEditorScreen(
             onRefreshReady = onPreviewRefreshReady,
             onRefreshFailed = onPreviewRefreshFailed,
             previewPlaying = previewPlaying,
+            gravityBackdropBlurEnabled = gravityBackdropBlurEnabled,
             designExtentWidth = WatchCanvasSize.DEFAULT.designExtentWidth,
             designExtentHeight = WatchCanvasSize.DEFAULT.designExtentHeight,
         )
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    // 圆屏弦宽适配的两个测量点（详见下方 chordViewportWidth 处的注释）。
+    var chordRootTopInWindow by remember { mutableFloatStateOf(0f) }
+    var chordLayerListTopInWindow by remember { mutableFloatStateOf(0f) }
+    var chordWatchListTopInWindow by remember { mutableFloatStateOf(0f) }
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { chordRootTopInWindow = it.positionInWindow().y },
+    ) {
         val editorMaxHeight = maxHeight
         // Column 内部拿不到 BoxWithConstraints 作用域，宽度约束要在这里捕获。
         val editorMaxWidth = maxWidth
@@ -2138,6 +2159,21 @@ private fun WatchEditorScreen(
             top = 10.dp,
             bottom = bottomListPadding,
         )
+        // 圆屏弦宽适配需要「圆」的坐标系：直径 = 编辑器根视口全宽，圆心 y =
+        // 根视口垂直中心。图层列表不是从屏幕顶端开始的（上面还有预览画布和
+        // TabRow），所以要记录列表顶边相对根容器的偏移，把它补进元素中心 y，
+        // 否则圆心会被当成列表自己的中点，弦宽全算错。
+        //
+        // 两点测量（根容器顶边 + 列表顶边）而不是只读 positionInRoot：编辑器
+        // 根容器未必就贴在 composition root 上，做差才不依赖这个假设。
+        //
+        // 用 mutableFloatStateOf + 只在 graphicsLayer 的 lambda 里读：那是绘制期
+        // 回调，值变化只让图层失效，不会重组带缩略图的图层行。
+        val chordDensity = LocalDensity.current
+        val chordViewportWidth = with(chordDensity) { editorMaxWidth.toPx() }
+        val chordCenterY = with(chordDensity) { editorMaxHeight.toPx() } / 2f
+        val layerListTopInViewport = { chordLayerListTopInWindow - chordRootTopInWindow }
+        val watchListTopInViewport = { chordWatchListTopInWindow - chordRootTopInWindow }
         // 兜底裁剪：任何一档的子项越界都不会再画到兄弟节点上面。
         Column(modifier = Modifier.fillMaxSize().clipToBounds()) {
             // 顶栏在两个全屏档整块滑出让位（高度动画驱动下方内容重排）。
@@ -2358,6 +2394,9 @@ private fun WatchEditorScreen(
                         state = layerListState,
                         modifier = Modifier
                             .fillMaxSize()
+                        .onGloballyPositioned {
+                            chordLayerListTopInWindow = it.positionInWindow().y
+                        }
                         // 手势挂在稳定的列表容器上：被拖行滚出可见区并销毁时，
                         // pointer session 仍继续，直到抬手才提交一次层级变更。
                         .pointerInput(treeRows, busyMessage) {
@@ -2531,6 +2570,19 @@ private fun WatchEditorScreen(
                                 enabled = busyMessage == null,
                                 modifier = Modifier.graphicsLayer {
                                     alpha = if (draggedLayerKey == layer.key) 0f else 1f
+                                    // 圆屏弦宽：只在这里施加 scale，绝不改行宽/
+                                    // padding/字号（那会触发重新测量 → 抽搐）。
+                                    if (isRound) {
+                                        val s = chordScaleForListItem(
+                                            listState = layerListState,
+                                            key = layer.key.value,
+                                            screenCenterY = chordCenterY,
+                                            viewportWidth = chordViewportWidth,
+                                            listTopInViewport = layerListTopInViewport(),
+                                        )
+                                        scaleX = s
+                                        scaleY = s
+                                    }
                                 },
                                 dragging = false,
                                 dragOffsetY = 0f,
@@ -2619,7 +2671,21 @@ private fun WatchEditorScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = horizontalListPadding)
-                                .graphicsLayer { translationY = overlayTop }
+                                .graphicsLayer {
+                                    translationY = overlayTop
+                                    // 拖拽浮层是绝对定位的兄弟节点，不在 LazyList
+                                    // 的可见项里，弦宽只能按它自己的 top + 高度算。
+                                    if (isRound) {
+                                        val s = chordScaleForPosition(
+                                            itemCenterY = layerListTopInViewport() +
+                                                overlayTop + draggedLayerHeightPx / 2f,
+                                            viewportWidth = chordViewportWidth,
+                                            screenCenterY = chordCenterY,
+                                        )
+                                        scaleX = s
+                                        scaleY = s
+                                    }
+                                }
                                 .zIndex(20f),
                         ) {
                             EditorLayerRow(
@@ -2700,13 +2766,26 @@ private fun WatchEditorScreen(
                     state = watchListState,
                     modifier = Modifier
                         .fillMaxSize()
+                        .onGloballyPositioned {
+                            chordWatchListTopInWindow = it.positionInWindow().y
+                        }
                         .flueElasticNestedScroll(watchListState),
                     contentPadding = listContentPadding,
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     editorStatusItems(busyMessage, errorMessage)
                     item("watch_summary") {
-                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Column(
+                            modifier = Modifier.chordScaleItem(
+                                listState = watchListState,
+                                key = "watch_summary",
+                                screenCenterY = chordCenterY,
+                                viewportWidth = chordViewportWidth,
+                                enabled = isRound,
+                                listTopInViewport = watchListTopInViewport,
+                            ),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
                             Text(
                                 snapshot.rootAttributes["name"].orEmpty().ifBlank {
                                     stringResource(R.string.watch_editor_unnamed_face)
@@ -2725,21 +2804,53 @@ private fun WatchEditorScreen(
                         }
                     }
                     item("watch_shape") {
-                        EditorWatchShapeCard(
-                            rawShape = snapshot.rootAttributes["shape"],
-                            enabled = busyMessage == null,
-                            onUpdateShape = onUpdateShape,
-                        )
+                        // 卡片组件本身不收 modifier，外面包一层挂弦宽缩放，
+                        // 比逐个改卡片签名侵入小。
+                        Box(
+                            modifier = Modifier.chordScaleItem(
+                                listState = watchListState,
+                                key = "watch_shape",
+                                screenCenterY = chordCenterY,
+                                viewportWidth = chordViewportWidth,
+                                enabled = isRound,
+                                listTopInViewport = watchListTopInViewport,
+                            ),
+                        ) {
+                            EditorWatchShapeCard(
+                                rawShape = snapshot.rootAttributes["shape"],
+                                enabled = busyMessage == null,
+                                onUpdateShape = onUpdateShape,
+                            )
+                        }
                     }
                     item("watch_bg_color") {
-                        EditorWatchBackgroundCard(
-                            rawBackground = snapshot.rootAttributes["bg_color"],
-                            enabled = busyMessage == null,
-                            onUpdateBackground = onUpdateBackground,
-                        )
+                        Box(
+                            modifier = Modifier.chordScaleItem(
+                                listState = watchListState,
+                                key = "watch_bg_color",
+                                screenCenterY = chordCenterY,
+                                viewportWidth = chordViewportWidth,
+                                enabled = isRound,
+                                listTopInViewport = watchListTopInViewport,
+                            ),
+                        ) {
+                            EditorWatchBackgroundCard(
+                                rawBackground = snapshot.rootAttributes["bg_color"],
+                                enabled = busyMessage == null,
+                                onUpdateBackground = onUpdateBackground,
+                            )
+                        }
                     }
                     item("watch_data_permission") {
                         Surface(
+                            modifier = Modifier.chordScaleItem(
+                                listState = watchListState,
+                                key = "watch_data_permission",
+                                screenCenterY = chordCenterY,
+                                viewportWidth = chordViewportWidth,
+                                enabled = isRound,
+                                listTopInViewport = watchListTopInViewport,
+                            ),
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             shape = RoundedCornerShape(14.dp),
                         ) {
@@ -2778,7 +2889,17 @@ private fun WatchEditorScreen(
                         }
                     }
                     item("watch_actions") {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(
+                            modifier = Modifier.chordScaleItem(
+                                listState = watchListState,
+                                key = "watch_actions",
+                                screenCenterY = chordCenterY,
+                                viewportWidth = chordViewportWidth,
+                                enabled = isRound,
+                                listTopInViewport = watchListTopInViewport,
+                            ),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
                             Button(
                                 onClick = onSaveAsNew,
                                 enabled = busyMessage == null,
@@ -2843,7 +2964,18 @@ private fun WatchEditorScreen(
                             text = stringResource(R.string.watch_editor_current_watch_size_fmt, formatEditorFileSize(draftSizeBytes)),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                            textAlign = if (isRound) TextAlign.Center else null,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp)
+                                .chordScaleItem(
+                                    listState = watchListState,
+                                    key = "current_watch_size",
+                                    screenCenterY = chordCenterY,
+                                    viewportWidth = chordViewportWidth,
+                                    enabled = isRound,
+                                    listTopInViewport = watchListTopInViewport,
+                                ),
                         )
                     }
                 }
@@ -3064,6 +3196,14 @@ private fun WatchEditorPreview(
     onRefreshReady: (Int) -> Unit,
     onRefreshFailed: (Int) -> Unit,
     previewPlaying: Boolean,
+    /**
+     * 底部模糊背景层开关，跟随设置。
+     *
+     * 与上面强制 `setGravityParallaxEnabled(true)` 的理由相反：景深是「作者要调
+     * gyro 图层就得看得见」的编辑能力，而这一层是纯观感，预览就该和用户桌面
+     * 上看到的一致 —— 作者自己叠了背景素材时，两层打不打架必须在这里看得出来。
+     */
+    gravityBackdropBlurEnabled: Boolean,
     modifier: Modifier = Modifier,
     onFaceViewChanged: (WatchmakerWatchFaceView?) -> Unit = {},
     /**
@@ -3134,6 +3274,7 @@ private fun WatchEditorPreview(
                 // setting: authors must be able to see and tune gyro layers even
                 // when the everyday gravity-parallax switch is disabled.
                 view.setGravityParallaxEnabled(true)
+                view.setGravityBackdropBlurEnabled(gravityBackdropBlurEnabled)
                 view.setEditorAnimatedImageLayer(animatedPreviewLayerIndex)
                 // 统一的预览播放开关：序列帧、视频、重力景深三者同进同退。
                 view.setEditorPreviewPlaying(previewPlaying)

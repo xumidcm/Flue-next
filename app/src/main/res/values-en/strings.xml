@@ -418,6 +418,9 @@
     <string name="settings_watchface_gravity_parallax">Gyro depth watch faces</string>
     <string name="settings_watchface_gravity_parallax_on">Enable wrist-motion parallax for faces that declare gyro layers</string>
     <string name="settings_watchface_gravity_parallax_off">Disable gyro depth movement</string>
+    <string name="settings_watchface_gravity_backdrop_blur">Blurred backdrop on depth faces</string>
+    <string name="settings_watchface_gravity_backdrop_blur_on">Draw a blurred backdrop image behind gyro depth faces</string>
+    <string name="settings_watchface_gravity_backdrop_blur_off">Fill the bottom layer with the face background colour only</string>
     <string name="settings_watchface_heart_rate">Watch face heart rate</string>
     <string name="settings_watchface_heart_rate_on">Body sensors granted; supported .watch tags can read heart rate</string>
     <string name="settings_watchface_heart_rate_off">Heart rate stays unavailable until granted; tap to let the system ask</string>

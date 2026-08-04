@@ -89,6 +89,65 @@ class WatchLayerMatrixContractTest {
     }
 
     /**
+     * skew 的符号：cocos 在 **y 轴向上** 的空间里做 `u' = u + tan(sx)·v`、
+     * `v' = v + tan(sy)·u`；Flue 的 Canvas 是 y 轴向下。
+     *
+     * 这里不复读实现里的表达式（那样等于自证），而是**独立**走一遍换算 ——
+     * 把点翻进 y-up、套 cocos 公式、再翻回来 —— 拿它当基准去比对
+     * `preSkew(-tan(sx), -tan(sy))`。两个分量少取一次负，就会变成沿另一根轴
+     * 镜像，也就是老师报的「数字倾斜方向相反」。
+     */
+    @Test
+    fun skewNegatesBothComponentsWhenCrossingIntoCanvasYDown() {
+        val skewXDegrees = 18.0
+        val skewYDegrees = -9.0
+        val tanX = tan(Math.toRadians(skewXDegrees)).toFloat()
+        val tanY = tan(Math.toRadians(skewYDegrees)).toFloat()
+
+        // 实现侧：两个分量都取负。
+        val actual = floatArrayOf(24f, -37f, -15f, 61f)
+        Matrix().apply { preSkew(-tanX, -tanY) }.mapPoints(actual)
+
+        // 基准侧：y-down → y-up → cocos skew → y-down。
+        val expected = floatArrayOf(24f, -37f, -15f, 61f)
+        for (i in expected.indices step 2) {
+            val x = expected[i]
+            val v = -expected[i + 1]                 // 翻进 cocos 的 y-up
+            expected[i] = x + tanX * v
+            expected[i + 1] = -(v + tanY * x)        // 算完再翻回 Canvas
+        }
+
+        assertArrayEquals(expected, actual, 1e-4f)
+    }
+
+    /**
+     * gyro 视差的符号。clox `applyPos` 自带的注释就是判据（原文）：
+     * `UL (screen coords, y-down): x += sgy*gyro, y += sgx*(-gyro)`。
+     *
+     * 它自己在 y-up 空间里两个分量都写成加号，是因为 `baseY = Y_SIGN * y` 已经
+     * 翻过一次。Flue 直接在 y-down 里排版，所以只有 y 分量取负 —— x 分量本来
+     * 就是对的，别顺手一起翻。
+     */
+    @Test
+    fun gyroParallaxNegatesOnlyTheYComponentInCanvasSpace() {
+        val baseX = 120f
+        val baseY = -64f
+        val gyroscopeX = 0.35f
+        val gyroscopeY = -0.8f
+        val gyroScale = 12f
+
+        val actual = floatArrayOf(0f, 0f)
+        Matrix().apply {
+            preTranslate(baseX + gyroscopeY * gyroScale, baseY - gyroscopeX * gyroScale)
+        }.mapPoints(actual)
+
+        // 基准侧：在 cocos 的 y-up 里按 clox 原式摆位，再翻回 Canvas。
+        val cocosX = baseX + gyroscopeY * gyroScale
+        val cocosY = -baseY + gyroscopeX * gyroScale     // baseY 先翻成 y-up
+        assertArrayEquals(floatArrayOf(cocosX, -cocosY), actual, 1e-4f)
+    }
+
+    /**
      * 祖先组链：外层组的变换必须先作用、内层后作用，图层自身最后。
      * 顺序反了整组元素会绕错误的锚点旋转。
      */

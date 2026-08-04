@@ -21,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -61,18 +62,30 @@ fun searchSettingsEntries(
     return titleHits + otherHits
 }
 
-/** MIUIX 风格胶囊搜索框（各风格通用，取色走令牌）。 */
+/**
+ * MIUIX 风格胶囊搜索框（各风格通用，取色走令牌）。
+ *
+ * @param scale 圆屏弦宽缩放。默认 1f = 不缩放（方屏与其他调用点不受影响）。
+ *   只走 graphicsLayer，不动 height/padding —— 改布局属性会触发重测量，正是
+ *   圆屏适配抽搐的根因。
+ */
 @Composable
 fun SettingsSearchField(
     query: String,
     onQueryChange: (String) -> Unit,
     modifier: Modifier = Modifier,
     placeholder: String = "搜索设置",
+    scale: Float = 1f,
 ) {
     val style = LauncherTheme.style
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                alpha = scale.coerceIn(0.55f, 1f)
+            }
             .height(40.dp)
             .clip(RoundedCornerShape(999.dp))
             .background(style.cardColor)

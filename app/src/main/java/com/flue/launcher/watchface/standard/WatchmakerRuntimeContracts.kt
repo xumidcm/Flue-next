@@ -5,12 +5,16 @@ import java.io.FileInputStream
 import java.io.InputStream
 import java.util.Calendar
 import java.util.Locale
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.round
+import kotlin.math.sin
 
 /** The canvas contract used by WatchMaker exports. Values are design pixels. */
 object WatchmakerGeometry {
@@ -119,6 +123,108 @@ fun watchGlowRingAlpha(ring: Int, ringCount: Int): Float {
     val clamped = ring.coerceIn(1, ringCount)
     return (ringCount - clamped + 1).toFloat() / (ringCount + 1).toFloat()
 }
+
+/**
+ * WM_FORMAT 阴影通道的取值契约（`shadow` / `w_distance` / `w_angle` /
+ * `w_color` / `w_opacity`）。
+ *
+ * 语义对齐 clox `bindEffects`（wf_render.lua）：阴影是本体的**偏移拷贝**，
+ * 画在本体后面、描边前面（clox 里阴影拷贝 z=-1、描边拷贝 z=-2）。
+ *
+ * - `Drop`：一份拷贝，偏移 `w_distance`
+ * - `Flat`：`floor(w_distance)` 份堆叠拷贝，偏移分别为 1..floor(w_distance)，
+ *   形成一条实心的拖影
+ *
+ * `w_angle` 是**光照方向**，阴影朝反方向落，所以偏移取负：clox 用
+ * `(bx − d·cos, by − d·sin)`。注意 cocos 是 y 轴向上，Android Canvas 是
+ * y 轴向下，**y 分量要再翻一次符号**才是同一个视觉方向。
+ * 这个换算收在 [watchShadowOffsetY] 里，渲染路径别自己写三角函数。
+ */
+enum class WatchShadowMode {
+    NONE,
+
+    /** 单份偏移拷贝。 */
+    DROP,
+
+    /** 1..floor(w_distance) 逐像素堆叠，视觉上是实心拖影。 */
+    FLAT,
+}
+
+/** w_distance 的全局封顶（设计像素）。Flat 的拷贝数就是它，必须收口。 */
+const val MAX_WATCH_SHADOW_DISTANCE = 64f
+
+fun watchShadowMode(raw: String?): WatchShadowMode =
+    when (raw.orEmpty().trim().lowercase(Locale.ROOT)) {
+        "drop" -> WatchShadowMode.DROP
+        "flat" -> WatchShadowMode.FLAT
+        else -> WatchShadowMode.NONE
+    }
+
+/** `w_distance` 缺省 5（clox `evalNum("w_distance", 5)`），按封顶收口。 */
+fun watchShadowDistance(raw: Float?): Float =
+    (raw ?: 5f).coerceIn(0f, MAX_WATCH_SHADOW_DISTANCE)
+
+/**
+ * 拷贝份数：Drop 恒 1；Flat 取 `floor(w_distance)`（clox 同式），距离不足
+ * 1 像素时为 0 —— 一份都不画。
+ */
+fun watchShadowCopyCount(mode: WatchShadowMode, distance: Float): Int = when (mode) {
+    WatchShadowMode.NONE -> 0
+    WatchShadowMode.DROP -> 1
+    WatchShadowMode.FLAT -> floor(distance.coerceIn(0f, MAX_WATCH_SHADOW_DISTANCE)).toInt()
+        .coerceAtLeast(0)
+}
+
+/**
+ * 第 [copyIndex]（1 起）份拷贝的偏移距离：Drop 恒为 `distance`，Flat 为
+ * `copyIndex`（clox `local d = Drop and dist or i`）。
+ */
+fun watchShadowCopyDistance(mode: WatchShadowMode, distance: Float, copyIndex: Int): Float =
+    if (mode == WatchShadowMode.FLAT) copyIndex.toFloat() else distance
+
+/** `w_angle` 缺省 135°（光照方向）。 */
+fun watchShadowAngleDegrees(raw: Float?): Float = raw ?: 135f
+
+/** 阴影 x 偏移。光照朝 `angle`，阴影朝反向，故取 `−d·cos(angle)`（同 clox）。 */
+fun watchShadowOffsetX(distance: Float, angleDegrees: Float): Float =
+    -distance * cos(angleDegrees * PI.toFloat() / 180f)
+
+/**
+ * 阴影 y 偏移。clox 在 y 轴向上的 cocos 空间里用 `−d·sin(angle)`；Android
+ * Canvas 的 y 轴向下，同一个视觉方向要再翻一次符号 → `+d·sin(angle)`。
+ */
+fun watchShadowOffsetY(distance: Float, angleDegrees: Float): Float =
+    distance * sin(angleDegrees * PI.toFloat() / 180f)
+
+/**
+ * 图片图层的实际绘制高度 —— wftools 的定尺怪癖，clox `setBaseScale` 原样照搬：
+ *
+ * ```lua
+ * if texW ~= texH and W == H then
+ *     local s = W / texW
+ *     rec.bsx, rec.bsy = s, s     -- 非方图 + 方形框 → 等比，不压成正方形
+ * else
+ *     rec.bsx, rec.bsy = W / texW, H / texH
+ * end
+ * ```
+ *
+ * 两个分支的 x 比例都是 `W / texW`，所以**绘制宽度恒等于作者写的 width**，
+ * 只有高度会变 —— 这里就只求高度。
+ *
+ * [texWidth]/[texHeight] 传的是**单格**尺寸：clox 给 sprite sheet 喂的是
+ * `texture ÷ grid`，非 sheet 时单格就是整张图。
+ */
+fun watchImageDrawHeight(
+    texWidth: Float,
+    texHeight: Float,
+    boxWidth: Float,
+    boxHeight: Float,
+): Float =
+    if (texWidth > 0f && texHeight > 0f && texWidth != texHeight && boxWidth == boxHeight) {
+        texHeight * (boxWidth / texWidth)
+    } else {
+        boxHeight
+    }
 
 /**
  * 设计画布 → 视口的变换。

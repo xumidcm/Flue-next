@@ -418,6 +418,9 @@
     <string name="settings_watchface_gravity_parallax">ジャイロ奥行き文字盤</string>
     <string name="settings_watchface_gravity_parallax_on">gyro レイヤーを持つ文字盤で手首の動きによる視差を有効化</string>
     <string name="settings_watchface_gravity_parallax_off">ジャイロ奥行き移動を無効化</string>
+    <string name="settings_watchface_gravity_backdrop_blur">奥行き文字盤のぼかし背景</string>
+    <string name="settings_watchface_gravity_backdrop_blur_on">奥行き文字盤の最背面にぼかし背景画像を敷く</string>
+    <string name="settings_watchface_gravity_backdrop_blur_off">最背面は文字盤の背景色のみで塗る</string>
     <string name="settings_watchface_heart_rate">文字盤の心拍データ</string>
     <string name="settings_watchface_heart_rate_on">身体センサーを許可済み。対応する .watch タグで心拍を取得できます</string>
     <string name="settings_watchface_heart_rate_off">未許可の間は心拍を利用できません。タップすると許可を求めます</string>
