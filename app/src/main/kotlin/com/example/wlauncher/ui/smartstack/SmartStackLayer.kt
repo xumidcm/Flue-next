@@ -193,7 +193,6 @@ private const val SIDE_SCREEN_NOTIFICATION_RELEASE_PROGRESS = 0.6f
 private const val SIDE_SCREEN_NOTIFICATION_FLING_VELOCITY = 1350f
 private const val STACKED_PREVIEW_TRANSLATION_DP = 14
 private const val STACKED_PREVIEW_HORIZONTAL_INSET_DP = 5
-private const val SIDE_SCREEN_APP_WIDGET_HOST_ID = 1024
 private const val SIDE_SCREEN_SHORTCUT_MENU_TRIGGER_MS = 410L
 private const val SIDE_SCREEN_OVERSCROLL_LIMIT = 140f
 private const val SIDE_SCREEN_OVERSCROLL_RESISTANCE = 0.35f
@@ -976,9 +975,10 @@ fun WidgetPageLayer(
     val effectiveWidgetGlassHighlightEnabled =
         glassHighlightEnabled && widgetGlassHighlightEnabled
     val roundScreen = isFlueScreenRound()
-    val widgetRepository = remember(context) { FlueApplication.repositories(context).widgetRepository }
+    val repositories = remember(context) { FlueApplication.repositories(context) }
+    val widgetRepository = remember(repositories) { repositories.widgetRepository }
     val appWidgetManager = remember(context) { AppWidgetManager.getInstance(context) }
-    val appWidgetHost = remember(context) { AppWidgetHost(context, SIDE_SCREEN_APP_WIDGET_HOST_ID) }
+    val appWidgetHost = remember(repositories) { repositories.appWidgetHost }
     val listState = rememberLazyListState()
     val sharedElasticState = rememberFlueElasticScrollState(listState)
     val scope = rememberCoroutineScope()
@@ -1119,15 +1119,9 @@ fun WidgetPageLayer(
         }
     }
 
-    DisposableEffect(appWidgetHost, widgetCards.isNotEmpty()) {
-        if (widgetCards.isNotEmpty()) {
-            runCatching { appWidgetHost.startListening() }
-        }
+    DisposableEffect(Unit) {
         onDispose {
             discardPendingWidgetSelection()
-            if (widgetCards.isNotEmpty()) {
-                runCatching { appWidgetHost.stopListening() }
-            }
         }
     }
 

@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -135,6 +136,7 @@ import kotlin.math.abs
 private const val SIDE_SCREEN_TRANSITION_MS = 260
 private const val NOTIFICATION_TRANSITION_MS = 240
 private const val APP_RETURN_MAINTENANCE_DELAY_MS = 260L
+private const val WIDGET_HOST_LOG_TAG = "FlueWidgetHost"
 
 /**
  * 加载页出现后多久开始预热负一屏。
@@ -187,6 +189,9 @@ private fun ExternalLaunchState.sessionSourceStateOrNull(): ScreenState? = when 
 class LauncherActivity : FlueComponentActivity() {
 
     private val vm: LauncherViewModel by viewModels()
+    private val widgetHostLifecycle by lazy {
+        FlueApplication.repositories(this).widgetHostLifecycle
+    }
     private var deferredResumeMaintenance: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -223,6 +228,14 @@ class LauncherActivity : FlueComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        runCatching { widgetHostLifecycle.acquire(this) }
+            .onFailure { error ->
+                Log.e(WIDGET_HOST_LOG_TAG, "Unable to start AppWidgetHost listening", error)
+            }
+    }
+
     override fun onResume() {
         super.onResume()
         RecentsVisibility.apply(this)
@@ -246,8 +259,12 @@ class LauncherActivity : FlueComponentActivity() {
     }
 
     override fun onStop() {
-        super.onStop()
+        runCatching { widgetHostLifecycle.release(this) }
+            .onFailure { error ->
+                Log.e(WIDGET_HOST_LOG_TAG, "Unable to stop AppWidgetHost listening", error)
+            }
         vm.onLauncherStopped()
+        super.onStop()
     }
 
     private fun scheduleDeferredResumeMaintenance() {

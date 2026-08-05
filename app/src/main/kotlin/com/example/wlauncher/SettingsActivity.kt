@@ -142,6 +142,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.findRootCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -3877,6 +3880,8 @@ private fun SettingsPageScaffold(
         val screenWidthPx = constraints.maxWidth.toFloat()
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val safeDrawingPadding = WindowInsets.safeDrawing.asPaddingValues()
+        var chordListTopInRoot by remember { mutableFloatStateOf(0f) }
+        var chordScreenCenterY by remember { mutableFloatStateOf(screenCenterY) }
         val horizontalContentPadding = if (settingsRoundScreen) 26.dp else 16.dp
         val verticalContentPadding = if (settingsRoundScreen) 30.dp else 18.dp
         // 圆屏上下各留半屏（蜂窝列表观感）：首项在进页面时就落在屏幕正中，
@@ -3931,11 +3936,17 @@ private fun SettingsPageScaffold(
 
         CompositionLocalProvider(
             com.flue.launcher.ui.common.LocalChordViewportWidth provides screenWidthPx,
+            com.flue.launcher.ui.common.LocalChordListTopInViewport provides chordListTopInRoot,
+            com.flue.launcher.ui.common.LocalChordScreenCenterY provides chordScreenCenterY,
         ) {
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
+                .onGloballyPositioned { coordinates ->
+                    chordListTopInRoot = coordinates.positionInRoot().y
+                    chordScreenCenterY = coordinates.findRootCoordinates().size.height / 2f
+                }
                 .flueRotaryScrollable(
                     focusRequester,
                     rotaryScrollMultiplier,
@@ -5257,11 +5268,13 @@ private fun itemFisheye(
     screenHeight: Float
 ): Float {
     if (!com.flue.launcher.ui.common.isFlueScreenRound()) return 1f
+    val rootCenterY = com.flue.launcher.ui.common.LocalChordScreenCenterY.current
     return com.flue.launcher.ui.common.chordScale(
         listState = listState,
         key = key,
-        screenCenterY = screenCenterY,
+        screenCenterY = rootCenterY.takeIf(Float::isFinite) ?: screenCenterY,
         viewportWidth = com.flue.launcher.ui.common.LocalChordViewportWidth.current,
+        listTopInViewport = com.flue.launcher.ui.common.LocalChordListTopInViewport.current,
     )
 }
 

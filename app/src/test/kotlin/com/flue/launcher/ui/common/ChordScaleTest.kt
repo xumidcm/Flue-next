@@ -56,6 +56,40 @@ class ChordScaleTest {
     }
 
     @Test
+    fun `list offset is included when the screen centre belongs to the root`() {
+        // A list can be laid out 200px below its root; its item offsets remain
+        // list-local, so that origin has to be included before scaling.
+        val itemCenterInRoot = chordItemCenterY(
+            itemOffset = 440,
+            itemSize = 120,
+            listTopInViewport = 200f,
+        )
+
+        assertEquals(700f, itemCenterInRoot, 0f)
+        assertEquals(1f, chordScaleForPosition(itemCenterInRoot, width, 700f), 0f)
+        assertEquals(
+            chordScaleForPosition(itemCenterInRoot - 180f, width, itemCenterInRoot),
+            chordScaleForPosition(itemCenterInRoot + 180f, width, itemCenterInRoot),
+            0.0001f,
+        )
+    }
+
+    @Test
+    fun `before content padding is converted from lazy viewport coordinates`() {
+        // With 950px of before-content padding, LazyList reports the first
+        // item's offset as 0 while the visible viewport starts at -950.
+        // The row is therefore centred at 1000px on screen, not 50px.
+        val itemCenterInRoot = chordItemCenterY(
+            itemOffset = 0,
+            itemSize = 100,
+            viewportStartOffset = -950,
+        )
+
+        assertEquals(1000f, itemCenterInRoot, 0f)
+        assertEquals(1f, chordScaleForPosition(itemCenterInRoot, 1000f, 1000f), 0f)
+    }
+
+    @Test
     fun `chord for an item spans the readable range across the viewport`() {
         // 视口顶端（元素中心贴 0）→ 夹到下限；四分位处 → 圆的 86.6% 弦宽。
         assertEquals(MIN_CHORD_SCALE, chordScaleForPosition(0f, width, centerY), 0f)

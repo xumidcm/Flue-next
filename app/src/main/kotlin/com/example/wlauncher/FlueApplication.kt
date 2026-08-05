@@ -1,6 +1,7 @@
 package com.flue.launcher
 
 import android.app.Application
+import android.appwidget.AppWidgetHost
 import android.content.Context
 import com.flue.launcher.logging.FlueLog
 import com.flue.launcher.data.repository.AppRepository
@@ -10,6 +11,8 @@ import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.watchface.standard.WatchWeatherRepository
 import com.flue.launcher.watchface.standard.WatchWeatherSources
+import com.flue.launcher.widget.SIDE_SCREEN_APP_WIDGET_HOST_ID
+import com.flue.launcher.widget.WidgetHostLifecycleController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -46,6 +49,15 @@ class FlueRepositories(context: Context) {
     val sharedState = SharedLauncherState()
     val appRepository: AppRepository by lazy { AppRepository(appContext) }
     val widgetRepository: WidgetRepository by lazy { WidgetRepository(appContext) }
+    val appWidgetHost: AppWidgetHost by lazy {
+        AppWidgetHost(appContext, SIDE_SCREEN_APP_WIDGET_HOST_ID)
+    }
+    internal val widgetHostLifecycle: WidgetHostLifecycleController by lazy {
+        WidgetHostLifecycleController(
+            startListening = appWidgetHost::startListening,
+            stopListening = appWidgetHost::stopListening,
+        )
+    }
 }
 
 class SharedLauncherState {

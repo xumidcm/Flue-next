@@ -62,6 +62,10 @@ const val MIN_CHORD_SCALE = 0.62f
  */
 val LocalChordViewportWidth = compositionLocalOf { 0f }
 
+/** Coordinates that keep item offsets aligned with the visible display centre. */
+val LocalChordListTopInViewport = compositionLocalOf { 0f }
+val LocalChordScreenCenterY = compositionLocalOf { Float.NaN }
+
 /**
  * 纯函数版：给定元素中心的 y 坐标，算出它那一行的弦宽缩放。
  *
@@ -86,6 +90,20 @@ fun chordScaleForPosition(
 }
 
 /**
+ * 把 LazyList 的 item offset 换算到圆所在的显示坐标系。
+ *
+ * `LazyListItemInfo.offset` 不含 before-content padding；Compose 只在最终 placement
+ * 时通过 visual offset 把这段 padding 加回去。`viewportStartOffset` 恰好是这段
+ * padding 的负值，所以这里要减掉它，否则半屏 padding 会让鱼眼圆心下移半屏。
+ */
+fun chordItemCenterY(
+    itemOffset: Int,
+    itemSize: Int,
+    listTopInViewport: Float = 0f,
+    viewportStartOffset: Int = 0,
+): Float = listTopInViewport + itemOffset - viewportStartOffset + itemSize / 2f
+
+/**
  * 列表版（非 @Composable）：按 key 在可见项里找到该行，用它的布局位置算弦宽缩放。
  *
  * 之所以留一个非 Composable 版本：图层列表那种「每行带缩略图」的重列表不能
@@ -97,7 +115,7 @@ fun chordScaleForPosition(
  *
  * @param listTopInViewport 列表容器顶边在「圆所在坐标系」里的 y。列表不一定
  *   从屏幕顶端开始（编辑器上面还有预览画布和 TabRow），要把这段偏移补回去，
- *   否则圆心算在列表中点上，弦宽就错了。设置页列表铺满全屏时传 0f。
+ *   否则圆心算在列表中点上，弦宽就错了。
  * @param viewportWidth 视口全宽 px；传 0f 或负数表示未知 → 不缩放
  */
 fun chordScaleForListItem(
@@ -118,7 +136,12 @@ fun chordScaleForListItem(
     val radius = viewportWidth / 2f
     if (info.size > radius) return 1f
     // offset 与 size 都是布局值（不含 graphicsLayer 变换），满足铁律 1。
-    val itemCenterY = listTopInViewport + info.offset + info.size / 2f
+    val itemCenterY = chordItemCenterY(
+        itemOffset = info.offset,
+        itemSize = info.size,
+        listTopInViewport = listTopInViewport,
+        viewportStartOffset = listState.layoutInfo.viewportStartOffset,
+    )
     return chordScaleForPosition(itemCenterY, viewportWidth, screenCenterY)
 }
 
@@ -133,7 +156,14 @@ fun chordScale(
     key: Any,
     screenCenterY: Float,
     viewportWidth: Float,
-): Float = chordScaleForListItem(listState, key, screenCenterY, viewportWidth)
+    listTopInViewport: Float = 0f,
+): Float = chordScaleForListItem(
+    listState = listState,
+    key = key,
+    screenCenterY = screenCenterY,
+    viewportWidth = viewportWidth,
+    listTopInViewport = listTopInViewport,
+)
 
 /**
  * 给列表项挂弦宽缩放的现成 Modifier。
