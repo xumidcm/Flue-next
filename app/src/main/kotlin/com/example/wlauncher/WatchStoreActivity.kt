@@ -215,6 +215,7 @@ class WatchStoreActivity : FlueComponentActivity() {
         setContent {
             val themeMode by launcherViewModel.themeMode.collectAsStateWithLifecycle()
             val uiStyle by launcherViewModel.uiStyle.collectAsStateWithLifecycle()
+            val screenShapeOverride by launcherViewModel.screenShapeOverride.collectAsStateWithLifecycle()
             val uiScale by launcherViewModel.globalUiScalePercent.collectAsStateWithLifecycle()
             val availableWatchFaces by launcherViewModel.availableWatchFaces.collectAsStateWithLifecycle()
             val resumeToken by resumeGeneration.collectAsStateWithLifecycle()
@@ -246,7 +247,11 @@ class WatchStoreActivity : FlueComponentActivity() {
                     }
                 }
             }
-            WatchLauncherTheme(themeMode = themeMode, uiStyle = uiStyle) {
+            WatchLauncherTheme(
+                themeMode = themeMode,
+                uiStyle = uiStyle,
+                screenShape = screenShapeOverride,
+            ) {
                 ProvideGlobalUiScale(uiScale) {
                     WatchStoreScreen(
                         repository = repository,

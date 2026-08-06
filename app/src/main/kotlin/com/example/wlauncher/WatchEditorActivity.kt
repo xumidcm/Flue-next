@@ -75,11 +75,9 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -2327,11 +2325,7 @@ private fun WatchEditorScreen(
                 val previewHeight = previewWidth / ratio
                 previewContent(
                     Modifier
-                        .size(width = previewWidth, height = previewHeight)
-                        // 画布全屏且圆屏时按圆形裁剪提示真实表框边界。
-                        .clip(
-                            if (isRound && previewFraction > 0.92f) CircleShape else RectangleShape,
-                        ),
+                        .size(width = previewWidth, height = previewHeight),
                 )
             }
             // 面板全屏态的紧凑返回条：上箭头回到分屏，切换 tab 仍在下面顶部。
