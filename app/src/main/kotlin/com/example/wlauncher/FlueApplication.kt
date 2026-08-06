@@ -9,6 +9,7 @@ import com.flue.launcher.data.repository.WidgetRepository
 import com.flue.launcher.i18n.FlueLocaleManager
 import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
+import com.flue.launcher.ui.theme.DEFAULT_UI_STYLE
 import com.flue.launcher.watchface.standard.WatchWeatherRepository
 import com.flue.launcher.watchface.standard.WatchWeatherSources
 import com.flue.launcher.widget.SIDE_SCREEN_APP_WIDGET_HOST_ID
@@ -62,5 +63,5 @@ class FlueRepositories(context: Context) {
 
 class SharedLauncherState {
     val themeMode = MutableStateFlow(ThemeMode.SYSTEM)
-    val uiStyle = MutableStateFlow(UiStyle.APPLE_WATCH)
+    val uiStyle = MutableStateFlow(DEFAULT_UI_STYLE)
 }

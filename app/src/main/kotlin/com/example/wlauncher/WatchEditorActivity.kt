@@ -168,6 +168,7 @@ import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.ui.common.chordScaleForListItem
 import com.flue.launcher.ui.common.chordScaleForPosition
 import com.flue.launcher.ui.common.chordScaleItem
+import com.flue.launcher.ui.common.roundScrollablePadding
 import com.flue.launcher.ui.common.flueElasticNestedScroll
 import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.ui.common.InternalFileBrowserHost
@@ -2011,6 +2012,11 @@ private fun WatchEditorScreen(
         bodySensorsPermissionGranted = hasEditorBodySensorsPermission(context)
     }
     val isRound = isFlueScreenRound()
+    val roundContentMode = roundEditorContentMode(
+        isRound = isRound,
+        panelFullscreen = editorLayout == WatchEditorLayout.PANEL_FULL,
+    )
+    val editorFisheyeEnabled = roundContentMode == RoundEditorContentMode.FISHEYE
     // 图层缩略图渲染器：直接借预览的 WatchmakerWatchFaceView（同一资源缓存）。
     var thumbnailRenderer by remember { mutableStateOf<WatchmakerWatchFaceView?>(null) }
     var textThumbnailClockTick by remember { mutableIntStateOf(0) }
@@ -2128,6 +2134,7 @@ private fun WatchEditorScreen(
     // 圆屏弦宽适配的两个测量点（详见下方 chordViewportWidth 处的注释）。
     var chordRootTopInWindow by remember { mutableFloatStateOf(0f) }
     var chordLayerListTopInWindow by remember { mutableFloatStateOf(0f) }
+    var chordPropertiesListTopInWindow by remember { mutableFloatStateOf(0f) }
     var chordWatchListTopInWindow by remember { mutableFloatStateOf(0f) }
     BoxWithConstraints(
         modifier = Modifier
@@ -2152,13 +2159,6 @@ private fun WatchEditorScreen(
             label = "editor_preview_fraction",
         )
         val horizontalListPadding = if (isRound) 24.dp else 10.dp
-        val bottomListPadding = if (isRound) 28.dp else 12.dp
-        val listContentPadding = PaddingValues(
-            start = horizontalListPadding,
-            end = horizontalListPadding,
-            top = 10.dp,
-            bottom = bottomListPadding,
-        )
         // 圆屏弦宽适配需要「圆」的坐标系：直径 = 编辑器根视口全宽，圆心 y =
         // 根视口垂直中心。图层列表不是从屏幕顶端开始的（上面还有预览画布和
         // TabRow），所以要记录列表顶边相对根容器的偏移，把它补进元素中心 y，
@@ -2173,7 +2173,30 @@ private fun WatchEditorScreen(
         val chordViewportWidth = with(chordDensity) { editorMaxWidth.toPx() }
         val chordCenterY = with(chordDensity) { editorMaxHeight.toPx() } / 2f
         val layerListTopInViewport = { chordLayerListTopInWindow - chordRootTopInWindow }
+        val propertiesListTopInViewport = { chordPropertiesListTopInWindow - chordRootTopInWindow }
         val watchListTopInViewport = { chordWatchListTopInWindow - chordRootTopInWindow }
+        fun editorListContentPadding(contentTopPx: Float): PaddingValues {
+            if (!editorFisheyeEnabled) {
+                return PaddingValues(
+                    start = horizontalListPadding,
+                    end = horizontalListPadding,
+                    top = 10.dp,
+                    bottom = 12.dp,
+                )
+            }
+            val roundPadding = roundScrollablePadding(
+                viewportHeight = with(chordDensity) { editorMaxHeight.toPx() },
+                contentTop = contentTopPx,
+                itemHeight = with(chordDensity) { 72.dp.toPx() },
+                minimumPadding = with(chordDensity) { 10.dp.toPx() },
+            )
+            return PaddingValues(
+                start = horizontalListPadding,
+                end = horizontalListPadding,
+                top = with(chordDensity) { roundPadding.top.toDp() },
+                bottom = with(chordDensity) { roundPadding.bottom.toDp() },
+            )
+        }
         // 兜底裁剪：任何一档的子项越界都不会再画到兄弟节点上面。
         Column(modifier = Modifier.fillMaxSize().clipToBounds()) {
             // 顶栏在两个全屏档整块滑出让位（高度动画驱动下方内容重排）。
@@ -2460,13 +2483,23 @@ private fun WatchEditorScreen(
                             )
                         }
                         .flueElasticNestedScroll(layerListState),
-                    contentPadding = listContentPadding,
+                    contentPadding = editorListContentPadding(layerListTopInViewport()),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     editorStatusItems(busyMessage, errorMessage)
                     item("add_actions") {
                         Row(
-                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .chordScaleItem(
+                                    listState = layerListState,
+                                    key = "add_actions",
+                                    screenCenterY = chordCenterY,
+                                    viewportWidth = chordViewportWidth,
+                                    enabled = editorFisheyeEnabled,
+                                    listTopInViewport = layerListTopInViewport,
+                                )
+                                .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
                             insertableLayerTypes(snapshot.formatVersion).forEach { (type, labelRes) ->
@@ -2572,7 +2605,7 @@ private fun WatchEditorScreen(
                                     alpha = if (draggedLayerKey == layer.key) 0f else 1f
                                     // 圆屏弦宽：只在这里施加 scale，绝不改行宽/
                                     // padding/字号（那会触发重新测量 → 抽搐）。
-                                    if (isRound) {
+                                    if (editorFisheyeEnabled) {
                                         val s = chordScaleForListItem(
                                             listState = layerListState,
                                             key = layer.key.value,
@@ -2675,7 +2708,7 @@ private fun WatchEditorScreen(
                                     translationY = overlayTop
                                     // 拖拽浮层是绝对定位的兄弟节点，不在 LazyList
                                     // 的可见项里，弦宽只能按它自己的 top + 高度算。
-                                    if (isRound) {
+                                    if (editorFisheyeEnabled) {
                                         val s = chordScaleForPosition(
                                             itemCenterY = layerListTopInViewport() +
                                                 overlayTop + draggedLayerHeightPx / 2f,
@@ -2715,8 +2748,11 @@ private fun WatchEditorScreen(
                     state = propertiesListState,
                     modifier = Modifier
                         .fillMaxSize()
+                        .onGloballyPositioned {
+                            chordPropertiesListTopInWindow = it.positionInWindow().y
+                        }
                         .flueElasticNestedScroll(propertiesListState),
-                    contentPadding = listContentPadding,
+                    contentPadding = editorListContentPadding(propertiesListTopInViewport()),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     editorStatusItems(busyMessage, errorMessage)
@@ -2729,11 +2765,21 @@ private fun WatchEditorScreen(
                         }
                     } else {
                         item("properties") {
-                            LayerPropertiesEditor(
-                                layer = selectedLayer,
-                                draftResetKey = propertyDraftRevision,
-                                enabled = busyMessage == null,
-                                fontOptions = remember(snapshot.resourcePaths, selectedLayer.attributes["font"]) {
+                            Box(
+                                modifier = Modifier.chordScaleItem(
+                                    listState = propertiesListState,
+                                    key = "properties",
+                                    screenCenterY = chordCenterY,
+                                    viewportWidth = chordViewportWidth,
+                                    enabled = editorFisheyeEnabled,
+                                    listTopInViewport = propertiesListTopInViewport,
+                                ),
+                            ) {
+                                LayerPropertiesEditor(
+                                    layer = selectedLayer,
+                                    draftResetKey = propertyDraftRevision,
+                                    enabled = busyMessage == null,
+                                    fontOptions = remember(snapshot.resourcePaths, selectedLayer.attributes["font"]) {
                                     buildList {
                                         addAll(snapshot.resourcePaths.filter { path ->
                                             path.substringAfterLast('.', "").lowercase(Locale.ROOT) in EDITOR_FONT_EXTENSIONS
@@ -2756,8 +2802,9 @@ private fun WatchEditorScreen(
                                 onImportFont = onImportFont,
                                 onImportFontLong = onImportFontLong,
                                 onImportBitmapFont = onImportBitmapFont,
-                                onImportBitmapFontLong = onImportBitmapFontLong,
-                            )
+                                    onImportBitmapFontLong = onImportBitmapFontLong,
+                                )
+                            }
                         }
                     }
                 }
@@ -2770,7 +2817,7 @@ private fun WatchEditorScreen(
                             chordWatchListTopInWindow = it.positionInWindow().y
                         }
                         .flueElasticNestedScroll(watchListState),
-                    contentPadding = listContentPadding,
+                    contentPadding = editorListContentPadding(watchListTopInViewport()),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     editorStatusItems(busyMessage, errorMessage)
@@ -2781,7 +2828,7 @@ private fun WatchEditorScreen(
                                 key = "watch_summary",
                                 screenCenterY = chordCenterY,
                                 viewportWidth = chordViewportWidth,
-                                enabled = isRound,
+                                enabled = editorFisheyeEnabled,
                                 listTopInViewport = watchListTopInViewport,
                             ),
                             verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -2812,7 +2859,7 @@ private fun WatchEditorScreen(
                                 key = "watch_shape",
                                 screenCenterY = chordCenterY,
                                 viewportWidth = chordViewportWidth,
-                                enabled = isRound,
+                                enabled = editorFisheyeEnabled,
                                 listTopInViewport = watchListTopInViewport,
                             ),
                         ) {
@@ -2830,7 +2877,7 @@ private fun WatchEditorScreen(
                                 key = "watch_bg_color",
                                 screenCenterY = chordCenterY,
                                 viewportWidth = chordViewportWidth,
-                                enabled = isRound,
+                                enabled = editorFisheyeEnabled,
                                 listTopInViewport = watchListTopInViewport,
                             ),
                         ) {
@@ -2848,7 +2895,7 @@ private fun WatchEditorScreen(
                                 key = "watch_data_permission",
                                 screenCenterY = chordCenterY,
                                 viewportWidth = chordViewportWidth,
-                                enabled = isRound,
+                                enabled = editorFisheyeEnabled,
                                 listTopInViewport = watchListTopInViewport,
                             ),
                             color = MaterialTheme.colorScheme.surfaceVariant,
@@ -2895,7 +2942,7 @@ private fun WatchEditorScreen(
                                 key = "watch_actions",
                                 screenCenterY = chordCenterY,
                                 viewportWidth = chordViewportWidth,
-                                enabled = isRound,
+                                enabled = editorFisheyeEnabled,
                                 listTopInViewport = watchListTopInViewport,
                             ),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2973,7 +3020,7 @@ private fun WatchEditorScreen(
                                     key = "current_watch_size",
                                     screenCenterY = chordCenterY,
                                     viewportWidth = chordViewportWidth,
-                                    enabled = isRound,
+                                    enabled = editorFisheyeEnabled,
                                     listTopInViewport = watchListTopInViewport,
                                 ),
                         )
@@ -3015,6 +3062,21 @@ private enum class WatchEditorLayout {
     CANVAS_FULL,
     SPLIT,
     PANEL_FULL,
+}
+
+internal enum class RoundEditorContentMode {
+    NONE,
+    STATIC_SAFE_AREA,
+    FISHEYE,
+}
+
+internal fun roundEditorContentMode(
+    isRound: Boolean,
+    panelFullscreen: Boolean,
+): RoundEditorContentMode = when {
+    !isRound -> RoundEditorContentMode.NONE
+    panelFullscreen -> RoundEditorContentMode.FISHEYE
+    else -> RoundEditorContentMode.STATIC_SAFE_AREA
 }
 
 internal fun shouldHandleWatchEditorTransformEnd(cancelled: Boolean, busy: Boolean): Boolean =

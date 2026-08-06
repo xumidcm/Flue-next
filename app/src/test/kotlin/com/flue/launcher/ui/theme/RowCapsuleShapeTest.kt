@@ -65,4 +65,35 @@ class RowCapsuleShapeTest {
         // 18dp × 2.0 密度 = 36px，来自 fallback 而不是半高 400px。
         assertEquals(CornerRadius(36f, 36f), outline.roundRect.topLeftCornerRadius)
     }
+
+    @Test
+    fun `显式胶囊角色让高滑块也取半高圆角`() {
+        val capsule = RoundElementShape(
+            fallback = RoundedCornerShape(fallbackRadius),
+            role = RoundElementRole.CAPSULE,
+        )
+        val outline = capsule.createOutline(
+            Size(width = 362f, height = 200f),
+            LayoutDirection.Ltr,
+            density,
+        ) as Outline.Rounded
+
+        assertEquals(100f, outline.roundRect.topLeftCornerRadius.x, 0.01f)
+        assertEquals(100f, outline.roundRect.bottomRightCornerRadius.y, 0.01f)
+    }
+
+    @Test
+    fun `面板角色始终保留风格圆角`() {
+        val panel = RoundElementShape(
+            fallback = RoundedCornerShape(fallbackRadius),
+            role = RoundElementRole.PANEL,
+        )
+        val outline = panel.createOutline(
+            Size(width = 362f, height = 112f),
+            LayoutDirection.Ltr,
+            density,
+        ) as Outline.Rounded
+
+        assertEquals(CornerRadius(36f, 36f), outline.roundRect.topLeftCornerRadius)
+    }
 }

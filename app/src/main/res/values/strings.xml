@@ -33,6 +33,7 @@
     <string name="settings_display_fit">显示适配</string>
     <string name="settings_display_fit_sub">全局 UI、应用列表大小和安全区</string>
     <string name="settings_global_ui_size">全局 UI 大小</string>
+    <string name="settings_global_ui_restart_hint">调整后如遇显示异常请重新启动。</string>
     <string name="settings_honeycomb_cols">蜂窝列数</string>
     <string name="settings_honeycomb_cols_fmt">%d 列</string>
     <string name="settings_app_list_size">应用列表整体大小</string>
@@ -498,6 +499,8 @@
     <string name="settings_layout_honeycomb_sub">Apple Watch 风格</string>
     <string name="settings_layout_list">列表布局</string>
     <string name="settings_layout_list_sub">经典纵向列表</string>
+    <string name="settings_layout_grid">网格布局</string>
+    <string name="settings_layout_grid_sub">紧凑的规则网格</string>
     <string name="settings_top_fade">顶部渐隐范围</string>
     <string name="settings_bottom_fade">底部渐隐范围</string>
     <string name="settings_section_launch">启动</string>
@@ -702,6 +705,8 @@
     <string name="widget_done">完成</string>
     <string name="widget_add">添加</string>
     <string name="widget_unavailable">小组件不可用</string>
+    <string name="widget_recovering">正在恢复小组件…</string>
+    <string name="widget_rebind">点按重新绑定</string>
     <string name="widget_empty">还没有小组件，点右上角添加</string>
     <string name="side_hidden_messages_fmt">+%1$d 条新消息</string>
     <string name="side_add_shortcut">添加快捷启动</string>

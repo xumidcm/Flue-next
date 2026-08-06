@@ -383,6 +383,33 @@ internal data class RowCapsuleShape(
     }
 }
 
+/** 圆屏元素的轮廓角色。AUTO 保留旧的宽高比护栏。 */
+enum class RoundElementRole {
+    AUTO,
+    CAPSULE,
+    PANEL,
+}
+
+/** 显式圆屏轮廓策略：行状交互控件可强制胶囊，大型面板固定保留风格圆角。 */
+internal data class RoundElementShape(
+    private val fallback: Shape,
+    private val role: RoundElementRole,
+) : Shape {
+    override fun createOutline(
+        size: Size,
+        layoutDirection: LayoutDirection,
+        density: Density,
+    ): Outline = when (role) {
+        RoundElementRole.CAPSULE -> if (size.height > 0f) {
+            Outline.Rounded(RoundRect(size.toRect(), CornerRadius(size.height / 2f)))
+        } else {
+            fallback.createOutline(size, layoutDirection, density)
+        }
+        RoundElementRole.PANEL -> fallback.createOutline(size, layoutDirection, density)
+        RoundElementRole.AUTO -> RowCapsuleShape(fallback).createOutline(size, layoutDirection, density)
+    }
+}
+
 /**
  * 圆屏取胶囊、方屏保持原值的形状入口（[cardShape] 档）。
  *
@@ -395,9 +422,11 @@ internal data class RowCapsuleShape(
  */
 @Composable
 @ReadOnlyComposable
-fun LauncherStyle.roundAwareCardShape(): Shape =
+fun LauncherStyle.roundAwareCardShape(
+    role: RoundElementRole = RoundElementRole.AUTO,
+): Shape =
     if (com.flue.launcher.ui.common.isFlueScreenRound()) {
-        RowCapsuleShape(fallback = cardShape)
+        RoundElementShape(fallback = cardShape, role = role)
     } else {
         cardShape
     }
@@ -405,9 +434,11 @@ fun LauncherStyle.roundAwareCardShape(): Shape =
 /** [roundAwareCardShape] 的 [compactShape] 档。 */
 @Composable
 @ReadOnlyComposable
-fun LauncherStyle.roundAwareCompactShape(): Shape =
+fun LauncherStyle.roundAwareCompactShape(
+    role: RoundElementRole = RoundElementRole.AUTO,
+): Shape =
     if (com.flue.launcher.ui.common.isFlueScreenRound()) {
-        RowCapsuleShape(fallback = compactShape)
+        RoundElementShape(fallback = compactShape, role = role)
     } else {
         compactShape
     }

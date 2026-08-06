@@ -53,6 +53,8 @@ import com.flue.launcher.motion.MotionPhaseKey
 import com.flue.launcher.service.FlueAccessibilityService
 import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
+import com.flue.launcher.ui.theme.DEFAULT_UI_STYLE
+import com.flue.launcher.ui.theme.uiStyleFromPreference
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.navigation.ScreenState
 import com.flue.launcher.ui.notification.NotificationActionUi
@@ -798,13 +800,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 } ?: ThemeMode.SYSTEM
                 if (_themeMode.value != loadedThemeMode) _themeMode.value = loadedThemeMode
 
-                val loadedUiStyle = prefs[KEY_UI_STYLE]?.let {
-                    try {
-                        UiStyle.valueOf(it)
-                    } catch (_: Exception) {
-                        UiStyle.APPLE_WATCH
-                    }
-                } ?: UiStyle.APPLE_WATCH
+                val loadedUiStyle = uiStyleFromPreference(prefs[KEY_UI_STYLE])
                 if (_uiStyle.value != loadedUiStyle) _uiStyle.value = loadedUiStyle
 
                 val loadedSideScreenEnabled = prefs[KEY_SIDE_SCREEN_ENABLED] ?: true
@@ -3325,6 +3321,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun resetSettings() {
         val defaultBlurEnabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         _layoutMode.value = LayoutMode.Honeycomb
+        _uiStyle.value = DEFAULT_UI_STYLE
         _sideScreenEnabled.value = true
         _sideScreenShortcutRows.value = 2
         _sideScreenShortcutCols.value = 3
@@ -3449,6 +3446,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist {
             store.edit {
                 it[KEY_LAYOUT] = LayoutMode.Honeycomb.name
+                it[KEY_UI_STYLE] = DEFAULT_UI_STYLE.name
                 it[KEY_SIDE_SCREEN_ENABLED] = true
                 it[KEY_SIDE_SCREEN_SHORTCUT_ROWS] = 2
                 it[KEY_SIDE_SCREEN_SHORTCUT_COLS] = 3

@@ -97,4 +97,52 @@ class ChordScaleTest {
         assertEquals(quarter, chordScaleForPosition(250f, width, centerY), 0.0001f)
         assertEquals(quarter, chordScaleForPosition(750f, width, centerY), 0.0001f)
     }
+
+    @Test
+    fun `round scroll padding centres the first card below a fixed toolbar`() {
+        val padding = roundScrollablePadding(
+            viewportHeight = 1_000f,
+            contentTop = 240f,
+            itemHeight = 160f,
+            minimumPadding = 20f,
+        )
+
+        assertEquals(180f, padding.top, 0f)
+        assertEquals(420f, padding.bottom, 0f)
+    }
+
+    @Test
+    fun `round scroll padding never becomes negative`() {
+        val padding = roundScrollablePadding(
+            viewportHeight = 400f,
+            contentTop = 260f,
+            itemHeight = 160f,
+            minimumPadding = 12f,
+        )
+
+        assertEquals(12f, padding.top, 0f)
+        assertEquals(120f, padding.bottom, 0f)
+    }
+
+    @Test
+    fun `tall market cards can explicitly opt into chord scaling`() {
+        val guarded = chordScaleForItemGeometry(
+            itemCenterY = 750f,
+            itemHeight = 600f,
+            viewportWidth = width,
+            screenCenterY = centerY,
+            allowTallItem = false,
+        )
+        val marketCard = chordScaleForItemGeometry(
+            itemCenterY = 750f,
+            itemHeight = 600f,
+            viewportWidth = width,
+            screenCenterY = centerY,
+            allowTallItem = true,
+        )
+
+        assertEquals(1f, guarded, 0f)
+        assertTrue(marketCard < 1f)
+        assertEquals(chordScaleForPosition(750f, width, centerY), marketCard, 0f)
+    }
 }

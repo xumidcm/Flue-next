@@ -25,6 +25,11 @@ enum class UiStyle {
     MIUIX
 }
 
+val DEFAULT_UI_STYLE: UiStyle = UiStyle.MIUIX
+
+fun uiStyleFromPreference(raw: String?): UiStyle =
+    raw?.let { value -> runCatching { UiStyle.valueOf(value) }.getOrNull() } ?: DEFAULT_UI_STYLE
+
 // 深色 Material3 颜色方案
 private val DarkColorScheme = darkColorScheme(
     primary = WatchColorsDark.ActiveCyan,

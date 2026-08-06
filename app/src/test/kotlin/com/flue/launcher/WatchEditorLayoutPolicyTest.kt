@@ -6,6 +6,30 @@ import org.junit.Test
 
 class WatchEditorLayoutPolicyTest {
     @Test
+    fun roundSplitEditorUsesOnlyTheStaticSafeArea() {
+        assertEquals(
+            RoundEditorContentMode.STATIC_SAFE_AREA,
+            roundEditorContentMode(isRound = true, panelFullscreen = false),
+        )
+    }
+
+    @Test
+    fun roundFullscreenPanelEnablesFisheyeScaling() {
+        assertEquals(
+            RoundEditorContentMode.FISHEYE,
+            roundEditorContentMode(isRound = true, panelFullscreen = true),
+        )
+    }
+
+    @Test
+    fun rectangularEditorDoesNotUseRoundScreenScaling() {
+        assertEquals(
+            RoundEditorContentMode.NONE,
+            roundEditorContentMode(isRound = false, panelFullscreen = true),
+        )
+    }
+
+    @Test
     fun staleTransformCommitDoesNotRestoreAnOlderSelection() {
         assertTrue(
             !shouldKeepWatchEditorSelectionForTransformCommit(

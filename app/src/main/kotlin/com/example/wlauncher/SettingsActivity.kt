@@ -196,6 +196,7 @@ import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
+import com.flue.launcher.ui.theme.RoundElementRole
 import com.flue.launcher.ui.theme.roundAwareCardShape
 import com.flue.launcher.ui.theme.roundAwareCompactShape
 import com.flue.launcher.util.RecentsVisibility
@@ -1658,6 +1659,7 @@ private fun SettingsRootScreen(
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.WATCH_FACE_MORE).index,
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.WATCH_FACE_MORE).offset,
+            roundFirstActionIndex = 2,
             onScrollChanged = { index, offset -> updateScroll(SettingsDestination.WATCH_FACE_MORE, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("watch_weather_header") {
@@ -2007,6 +2009,7 @@ private fun SettingsRootScreen(
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.APPEARANCE).index,
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.APPEARANCE).offset,
+            roundFirstActionIndex = 2,
             onScrollChanged = { index, offset -> updateScroll(SettingsDestination.APPEARANCE, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
             item("layout_header") { SectionTitle(stringResource(R.string.settings_section_layout), itemFisheye(listState, "layout_header", screenCenterY, screenHeightPx)) }
@@ -2026,6 +2029,15 @@ private fun SettingsRootScreen(
                     selected = layoutMode == LayoutMode.List,
                     onClick = { vm.setLayoutMode(LayoutMode.List) },
                     scale = itemFisheye(listState, "layout_list", screenCenterY, screenHeightPx)
+                )
+            }
+            item("layout_grid") {
+                SettingsChoiceRow(
+                    title = stringResource(R.string.settings_layout_grid),
+                    subtitle = stringResource(R.string.settings_layout_grid_sub),
+                    selected = layoutMode == LayoutMode.Grid,
+                    onClick = { vm.setLayoutMode(LayoutMode.Grid) },
+                    scale = itemFisheye(listState, "layout_grid", screenCenterY, screenHeightPx)
                 )
             }
             item("display_header") {
@@ -2267,7 +2279,8 @@ private fun SettingsRootScreen(
                     steps = 19,
                     onValueChange = {},
                     onValueChangeFinished = { vm.setGlobalUiScalePercent(((it / 5f).roundToInt() * 5).coerceIn(50, 150)) },
-                    scale = itemFisheye(listState, "global_ui_scale", screenCenterY, screenHeightPx)
+                    scale = itemFisheye(listState, "global_ui_scale", screenCenterY, screenHeightPx),
+                    supportingText = stringResource(R.string.settings_global_ui_restart_hint),
                 )
             }
             item("honeycomb_cols") {
@@ -3824,6 +3837,7 @@ private fun SettingsPageScaffold(
     headerTime: String,
     initialFirstVisibleItemIndex: Int = 0,
     initialFirstVisibleItemScrollOffset: Int = 0,
+    roundFirstActionIndex: Int = 1,
     onScrollChanged: (Int, Int) -> Unit = { _, _ -> },
     content: LazyListScope.(LazyListState, Float, Float, Set<Any>) -> Unit
 ) {
@@ -3833,9 +3847,22 @@ private fun SettingsPageScaffold(
     val settingsRoundScreen = com.flue.launcher.ui.common.isFlueScreenRound()
     val leftSafeInsetPercent = LocalSettingsLeftSafeInsetPercent.current
     val rotaryHapticsEnabled = LocalSettingsRotaryHapticsEnabled.current
+    val initialPosition = remember(
+        settingsRoundScreen,
+        initialFirstVisibleItemIndex,
+        initialFirstVisibleItemScrollOffset,
+        roundFirstActionIndex,
+    ) {
+        settingsInitialPosition(
+            isRound = settingsRoundScreen,
+            savedIndex = initialFirstVisibleItemIndex,
+            savedOffset = initialFirstVisibleItemScrollOffset,
+            firstActionIndex = roundFirstActionIndex,
+        )
+    }
     val listState = rememberLazyListState(
-        initialFirstVisibleItemIndex = initialFirstVisibleItemIndex,
-        initialFirstVisibleItemScrollOffset = initialFirstVisibleItemScrollOffset
+        initialFirstVisibleItemIndex = initialPosition.index,
+        initialFirstVisibleItemScrollOffset = initialPosition.offset
     )
     val focusRequester = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
@@ -3908,6 +3935,15 @@ private fun SettingsPageScaffold(
         // 代价），10dp 槽位间距叠上收缩留白就是老师说的「间隔太大」。槽位间距
         // 压到 6dp 抵消一部分，居中那几行也还不至于挤在一起。
         val itemSpacing = if (settingsRoundScreen) 6.dp else 10.dp
+
+        LaunchedEffect(initialPosition, screenHeightPx) {
+            if (initialPosition.centerOnScreen) {
+                val centerOffset = -(
+                    screenCenterY - with(density) { SETTINGS_ROW_HALF_HEIGHT.toPx() }
+                ).toInt()
+                listState.scrollToItem(initialPosition.index, centerOffset)
+            }
+        }
 
         // 搜索结果跳转定位。目标 key 不属于本页时 indexOf 返回 -1，本页
         // 什么都不做（转场期间新旧两页同时在树上，靠这条区分）。
@@ -4047,9 +4083,13 @@ private fun HeaderBackButton(onClick: () -> Unit) {
 @Composable
 private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () -> Unit, scale: Float) {
     val launcherStyle = LauncherTheme.style
+    val horizontalPadding = if (com.flue.launcher.ui.common.isFlueScreenRound()) 24.dp else 18.dp
     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
         // MIUIX：成组大圆角卡片包一行设置行 + Forward 箭头。
-        MiuixSettingsCard(modifier = Modifier.chordScaled(scale)) {
+        MiuixSettingsCard(
+            modifier = Modifier.chordScaled(scale),
+            roundRole = RoundElementRole.CAPSULE,
+        ) {
             MiuixSettingsRow(
                 title = title,
                 subtitle = subtitle.takeIf { it.isNotBlank() },
@@ -4077,7 +4117,7 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
         if (pressed) launcherStyle.pressedCardColor else launcherStyle.cardColor,
         label = "settings_category_bg"
     )
-    val cardShape = launcherStyle.roundAwareCardShape()
+    val cardShape = launcherStyle.roundAwareCardShape(RoundElementRole.CAPSULE)
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -4090,7 +4130,7 @@ private fun SettingsCategoryCard(title: String, subtitle: String, onClick: () ->
             .drawBehind { drawRect(background.value) }
             .border(1.dp, launcherStyle.outlineColor, cardShape)
             .instantPressGesture(pressedState, onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 18.dp)
+            .padding(horizontal = horizontalPadding, vertical = 18.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -4298,9 +4338,13 @@ private fun SettingsChoiceRow(
     enabled: Boolean = true,
 ) {
     val launcherStyle = LauncherTheme.style
+    val horizontalPadding = if (com.flue.launcher.ui.common.isFlueScreenRound()) 22.dp else 16.dp
     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
         // MIUIX：56dp 设置行，选中态在右侧显示 Check 图标。
-        MiuixSettingsCard(modifier = Modifier.chordScaled(scale, enabled)) {
+        MiuixSettingsCard(
+            modifier = Modifier.chordScaled(scale, enabled),
+            roundRole = RoundElementRole.CAPSULE,
+        ) {
             MiuixSettingsRow(
                 title = title,
                 subtitle = subtitle.takeIf { it.isNotBlank() },
@@ -4327,7 +4371,7 @@ private fun SettingsChoiceRow(
         animationSpec = launcherStyle.pressScaleSpec,
         label = "choice_row_scale"
     )
-    val rowShape = launcherStyle.roundAwareCompactShape()
+    val rowShape = launcherStyle.roundAwareCompactShape(RoundElementRole.CAPSULE)
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -4352,7 +4396,7 @@ private fun SettingsChoiceRow(
                 enabled = enabled,
                 onClick = onClick
             )
-            .padding(horizontal = 16.dp, vertical = 14.dp)
+            .padding(horizontal = horizontalPadding, vertical = 14.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -4387,6 +4431,7 @@ private fun SettingsSwitchRow(
     reserveLeadingIconSpace: Boolean = false
 ) {
     val launcherStyle = LauncherTheme.style
+    val horizontalPadding = if (com.flue.launcher.ui.common.isFlueScreenRound()) 22.dp else 16.dp
     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
         // The hidden-app page can compose a new row on nearly every fling frame.
         // Keep this common MIUIX switch row to one clickable node and one small
@@ -4414,7 +4459,7 @@ private fun SettingsSwitchRow(
                 .defaultMinSize(minHeight = 56.dp)
                 .background(
                     color = if (pressed) launcherStyle.pressedCardColor else launcherStyle.cardColor,
-                    shape = launcherStyle.roundAwareCardShape(),
+                    shape = launcherStyle.roundAwareCardShape(RoundElementRole.CAPSULE),
                 )
                 .clickable(
                     interactionSource = interactionSource,
@@ -4422,7 +4467,7 @@ private fun SettingsSwitchRow(
                     enabled = enabled,
                     onClick = { onToggle(!checked) },
                 )
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = horizontalPadding, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (leadingIcon != null || reserveLeadingIconSpace) {
@@ -4498,7 +4543,7 @@ private fun SettingsSwitchRow(
         animationSpec = spring(stiffness = 760f, dampingRatio = 0.82f),
         label = "switch_knob_progress"
     )
-    val switchRowShape = launcherStyle.roundAwareCompactShape()
+    val switchRowShape = launcherStyle.roundAwareCompactShape(RoundElementRole.CAPSULE)
 
     Box(
         modifier = Modifier
@@ -4517,7 +4562,7 @@ private fun SettingsSwitchRow(
                 enabled = enabled,
                 onClick = { onToggle(!checked) }
             )
-            .padding(horizontal = 16.dp, vertical = 14.dp)
+            .padding(horizontal = horizontalPadding, vertical = 14.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -4589,14 +4634,19 @@ private fun SettingsSliderRow(
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: ((Float) -> Unit)? = null,
     scale: Float,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    supportingText: String? = null,
 ) {
     val launcherStyle = LauncherTheme.style
+    val horizontalPadding = if (com.flue.launcher.ui.common.isFlueScreenRound()) 22.dp else 16.dp
     var localValue by remember(title) { mutableFloatStateOf(value) }
     LaunchedEffect(value) { localValue = value }
     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
         // MIUIX：设置行显示标题与当前值，下面接胶囊 MiuixSlider。
-        MiuixSettingsCard(modifier = Modifier.chordScaled(scale, enabled)) {
+        MiuixSettingsCard(
+            modifier = Modifier.chordScaled(scale, enabled),
+            roundRole = RoundElementRole.CAPSULE,
+        ) {
             MiuixSettingsRow(
                 title = title,
                 subtitle = localValueText?.invoke(localValue) ?: valueText,
@@ -4604,7 +4654,7 @@ private fun SettingsSliderRow(
             )
             Box(
                 modifier = Modifier
-                    .padding(horizontal = 16.dp)
+                    .padding(horizontal = horizontalPadding)
                     .padding(bottom = 14.dp)
             ) {
                 MiuixSlider(
@@ -4622,12 +4672,22 @@ private fun SettingsSliderRow(
                     }
                 )
             }
+            if (!supportingText.isNullOrBlank()) {
+                Text(
+                    text = supportingText,
+                    color = launcherStyle.secondaryTextColor,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(
+                        start = horizontalPadding,
+                        end = horizontalPadding,
+                        bottom = 12.dp,
+                    ),
+                )
+            }
         }
         return
     }
-    // 滑块行比普通行高（标题 + 数值 + 轨道 ≈ 100dp），宽高比落在 RowCapsuleShape 的
-    // 阈值以下，会自动退回 compactShape 的圆角 —— 不需要在这里特判。
-    val sliderShape = launcherStyle.roundAwareCompactShape()
+    val sliderShape = launcherStyle.roundAwareCompactShape(RoundElementRole.CAPSULE)
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -4639,7 +4699,7 @@ private fun SettingsSliderRow(
             .clip(sliderShape)
             .background(launcherStyle.cardColor)
             .border(1.dp, launcherStyle.outlineColor, sliderShape)
-            .padding(horizontal = 16.dp, vertical = 14.dp)
+            .padding(horizontal = horizontalPadding, vertical = 14.dp)
     ) {
         Column {
             Text(title, color = launcherStyle.titleColor, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
@@ -4665,6 +4725,14 @@ private fun SettingsSliderRow(
                     activeTrackColor = launcherStyle.accentColor
                 )
             )
+            if (!supportingText.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = supportingText,
+                    color = launcherStyle.secondaryTextColor,
+                    fontSize = 11.sp,
+                )
+            }
         }
     }
 }
@@ -4680,11 +4748,15 @@ private fun ActionCard(
     scale: Float
 ) {
     val launcherStyle = LauncherTheme.style
+    val horizontalPadding = if (com.flue.launcher.ui.common.isFlueScreenRound()) 22.dp else 16.dp
     val pressedState = rememberPressedState()
     val pressed by pressedState
     if (launcherStyle.uiStyle == UiStyle.MIUIX) {
         // MIUIX：动作行走强调色标题；保留长按支持（导入表盘彩蛋）。
-        MiuixSettingsCard(modifier = Modifier.chordScaled(scale)) {
+        MiuixSettingsCard(
+            modifier = Modifier.chordScaled(scale),
+            roundRole = RoundElementRole.CAPSULE,
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -4696,7 +4768,7 @@ private fun ActionCard(
                         longPressDurationMs = longPressDurationMs,
                         onClick = onClick
                     )
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                    .padding(horizontal = horizontalPadding, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -4721,7 +4793,7 @@ private fun ActionCard(
         animationSpec = launcherStyle.pressScaleSpec,
         label = "action_card_scale"
     )
-    val actionShape = launcherStyle.roundAwareCompactShape()
+    val actionShape = launcherStyle.roundAwareCompactShape(RoundElementRole.CAPSULE)
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -4739,7 +4811,7 @@ private fun ActionCard(
                 longPressDurationMs = longPressDurationMs,
                 onClick = onClick
             )
-            .padding(horizontal = 16.dp, vertical = 14.dp)
+            .padding(horizontal = horizontalPadding, vertical = 14.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),

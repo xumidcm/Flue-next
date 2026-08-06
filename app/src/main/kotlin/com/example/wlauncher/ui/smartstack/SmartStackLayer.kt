@@ -148,6 +148,9 @@ import com.flue.launcher.data.model.iconForDisplay
 import com.flue.launcher.FlueApplication
 import com.flue.launcher.R
 import com.flue.launcher.data.repository.WidgetRepository
+import com.flue.launcher.widget.WidgetBindingDecision
+import com.flue.launcher.widget.WidgetRecoveryGate
+import com.flue.launcher.widget.widgetBindingDecision
 import com.flue.launcher.ui.common.FrostedHeader
 import com.flue.launcher.ui.common.glassSurface
 import com.flue.launcher.ui.common.instantPressGesture
@@ -289,6 +292,11 @@ private data class PendingWidgetSelection(
     val widget: WidgetInfo,
     val appWidgetId: Int
 )
+
+private enum class WidgetRecoveryUiState {
+    RECOVERING,
+    REBIND_REQUIRED,
+}
 
 private fun SideScreenWidgetCardItem.stableKey(): String {
     keyOverride?.let { return it }
@@ -1034,6 +1042,8 @@ fun WidgetPageLayer(
     var widgetPageRootOffset by remember { mutableStateOf(Offset.Zero) }
     val removingWidgetKeys = remember { mutableStateListOf<String>() }
     val enteringWidgetKeys = remember { mutableStateListOf<String>() }
+    val widgetRecoveryGate = remember { WidgetRecoveryGate() }
+    val widgetRecoveryStates = remember { mutableStateMapOf<String, WidgetRecoveryUiState>() }
     // null = 首帧尚未记账。以前初值空集把首次组合的全部既有卡判成"新增"，
     // 每次打开小组件页整页卡片重播入场动画。
     var previousWidgetKeys by remember { mutableStateOf<Set<String>?>(null) }
@@ -1121,6 +1131,48 @@ fun WidgetPageLayer(
 
     DisposableEffect(Unit) {
         onDispose {
+            discardPendingWidgetSelection()
+        }
+    }
+
+    fun resolveWidgetBinding(widget: WidgetInfo): WidgetBindingDecision {
+        val providerInstalled = widgetRepository.findProviderInfo(widget.widgetKey) != null
+        val hostIds = runCatching { appWidgetHost.appWidgetIds.toSet() }.getOrDefault(emptySet())
+        val actualProviderKey = runCatching {
+            appWidgetManager.getAppWidgetInfo(widget.widgetId)
+                ?.provider
+                ?.flattenToString()
+        }.getOrNull()
+        return widgetBindingDecision(
+            savedId = widget.widgetId,
+            expectedProviderKey = widget.widgetKey,
+            hostIds = hostIds,
+            actualProviderKey = actualProviderKey,
+            providerInstalled = providerInstalled,
+        )
+    }
+
+    fun requestWidgetRebind(slotIndex: Int, widget: WidgetInfo) {
+        val providerInfo = widgetRepository.findProviderInfo(widget.widgetKey) ?: return
+        discardPendingWidgetSelection()
+        val newId = runCatching { appWidgetHost.allocateAppWidgetId() }.getOrNull() ?: return
+        val selection = PendingWidgetSelection(slotIndex, widget, newId)
+        pendingWidgetSelection = selection
+        val bindExtras = buildWidgetBindOptions(providerInfo)
+        val bound = runCatching {
+            appWidgetManager.bindAppWidgetIdIfAllowed(newId, providerInfo.provider, bindExtras)
+        }.getOrDefault(false)
+        if (bound) {
+            continueWidgetBinding(selection, configureWidgetLauncher)
+        } else if (activity != null) {
+            bindWidgetLauncher.launch(
+                Intent(AppWidgetManager.ACTION_APPWIDGET_BIND).apply {
+                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, newId)
+                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, providerInfo.provider)
+                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_OPTIONS, bindExtras)
+                }
+            )
+        } else {
             discardPendingWidgetSelection()
         }
     }
@@ -1244,6 +1296,43 @@ fun WidgetPageLayer(
             targetWidth: Dp
         ) {
             val cardKey = card.stableKey()
+            val recoveryKey = "${card.widgetIndex}|${card.widget.widgetKey}|${card.widget.widgetId}"
+            val bindingDecision = resolveWidgetBinding(card.widget)
+            val recoveryState = widgetRecoveryStates[recoveryKey]
+            LaunchedEffect(recoveryKey, bindingDecision) {
+                if (
+                    bindingDecision == WidgetBindingDecision.RECOVER &&
+                    widgetRecoveryGate.tryStart(recoveryKey)
+                ) {
+                    widgetRecoveryStates[recoveryKey] = WidgetRecoveryUiState.RECOVERING
+                    val providerInfo = widgetRepository.findProviderInfo(card.widget.widgetKey)
+                    val newId = providerInfo?.let {
+                        runCatching { appWidgetHost.allocateAppWidgetId() }.getOrNull()
+                    }
+                    val recovered = if (providerInfo != null && newId != null) {
+                        val bound = runCatching {
+                            appWidgetManager.bindAppWidgetIdIfAllowed(
+                                newId,
+                                providerInfo.provider,
+                                buildWidgetBindOptions(providerInfo),
+                            )
+                        }.getOrDefault(false)
+                        if (bound && providerInfo.configure == null) {
+                            persistBoundWidget(card.widgetIndex, card.widget, newId)
+                            true
+                        } else {
+                            runCatching { appWidgetHost.deleteAppWidgetId(newId) }
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                    widgetRecoveryStates[recoveryKey] =
+                        if (recovered) WidgetRecoveryUiState.RECOVERING
+                        else WidgetRecoveryUiState.REBIND_REQUIRED
+                    widgetRecoveryGate.finish(recoveryKey)
+                }
+            }
             val resizing = activeWidgetResize?.takeIf { it.cardKey == cardKey }
             val displayLayout = resizing
                 ?.let {
@@ -1380,6 +1469,16 @@ fun WidgetPageLayer(
                                     widgetRepository = widgetRepository,
                                     appWidgetHost = appWidgetHost,
                                     glassHighlightEnabled = effectiveWidgetGlassHighlightEnabled,
+                                    bindingDecision = bindingDecision,
+                                    recoveryInProgress = recoveryState == WidgetRecoveryUiState.RECOVERING,
+                                    onRebind = if (
+                                        bindingDecision == WidgetBindingDecision.RECOVER ||
+                                        recoveryState == WidgetRecoveryUiState.REBIND_REQUIRED
+                                    ) {
+                                        { requestWidgetRebind(card.widgetIndex, card.widget) }
+                                    } else {
+                                        null
+                                    },
                                     onLongPress = if (!editMode && !showPicker) {
                                         {
                                             editMode = true
@@ -2188,6 +2287,9 @@ private fun WidgetCard(
     widgetRepository: WidgetRepository,
     appWidgetHost: AppWidgetHost,
     glassHighlightEnabled: Boolean = true,
+    bindingDecision: WidgetBindingDecision = WidgetBindingDecision.VALID,
+    recoveryInProgress: Boolean = false,
+    onRebind: (() -> Unit)? = null,
     onLongPress: (() -> Unit)?,
     onMeasuredHeight: (Int) -> Unit
 ) {
@@ -2238,7 +2340,11 @@ private fun WidgetCard(
                 },
             )
     ) {
-        if (providerInfo != null && widget.widgetId != -1) {
+        if (
+            providerInfo != null &&
+            widget.widgetId > 0 &&
+            bindingDecision == WidgetBindingDecision.VALID
+        ) {
             val widgetBindTag = remember(widget.widgetId, providerInfo) {
                 "${widget.widgetId}|${providerInfo.provider.flattenToString()}|${providerInfo.minWidth}x${providerInfo.minHeight}"
             }
@@ -2384,7 +2490,7 @@ private fun WidgetCard(
                     .combinedClickable(
                         interactionSource = interactionSource,
                         indication = null,
-                        onClick = {},
+                        onClick = { onRebind?.invoke() },
                         onLongClick = {
                             if (onLongPress != null) {
                                 vibrateHaptic(context)
@@ -2394,13 +2500,29 @@ private fun WidgetCard(
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = stringResource(R.string.widget_unavailable),
-                    color = WatchColors.TextSecondary,
-                    fontSize = 13.sp,
-                    textAlign = TextAlign.Center,
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.padding(horizontal = 20.dp),
-                )
+                ) {
+                    Text(
+                        text = if (recoveryInProgress) {
+                            stringResource(R.string.widget_recovering)
+                        } else {
+                            stringResource(R.string.widget_unavailable)
+                        },
+                        color = WatchColors.TextSecondary,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center,
+                    )
+                    if (!recoveryInProgress && onRebind != null) {
+                        Text(
+                            text = stringResource(R.string.widget_rebind),
+                            color = launcherStyle.accentColor,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
             }
         }
     }

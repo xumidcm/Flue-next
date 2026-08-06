@@ -39,8 +39,11 @@ import androidx.core.graphics.drawable.toBitmap
 import com.flue.launcher.R
 import com.flue.launcher.ui.home.BuiltInWatchFacePreview
 import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.RoundElementRole
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.WatchColors
+import com.flue.launcher.ui.theme.roundAwareCompactShape
+import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
@@ -88,6 +91,8 @@ fun WatchFaceSettingCard(
         label = "watchface_card_press_scale"
     )
     val launcherStyle = LauncherTheme.style
+    val cardShape = launcherStyle.roundAwareCompactShape(RoundElementRole.CAPSULE)
+    val cardPadding = if (isFlueScreenRound()) 20.dp else 14.dp
     // 表盘管理属于 Activity 的本地化界面。内置项不能沿用由
     // Application/ViewModel 缓存的 displayName，否则应用内切换语言后仍会显示旧语言。
     val localizedDisplayName = when (descriptor.id) {
@@ -110,10 +115,10 @@ fun WatchFaceSettingCard(
                 scaleY = scale * pressScale
                 alpha = scale.coerceIn(0.3f, 1f)
             }
-            .clip(launcherStyle.compactShape)
+            .clip(cardShape)
             .background(if (selected) launcherStyle.selectedCardColor else launcherStyle.cardColor)
             .clickable(interactionSource = cardInteraction, indication = null, onClick = onSelect)
-            .padding(14.dp),
+            .padding(horizontal = cardPadding, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {

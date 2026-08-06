@@ -46,8 +46,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideLauncherStyle
+import com.flue.launcher.ui.theme.RoundElementRole
 import com.flue.launcher.ui.theme.roundAwareCardShape
 import com.flue.launcher.ui.theme.UiStyle
+import com.flue.launcher.ui.common.isFlueScreenRound
 
 /**
  * MIUIX（HyperOS 视觉语言）设置组件。
@@ -90,6 +92,7 @@ fun SettingsIcon(
 fun MiuixSettingsCard(
     modifier: Modifier = Modifier,
     title: String? = null,
+    roundRole: RoundElementRole = RoundElementRole.AUTO,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val style = LauncherTheme.style
@@ -109,7 +112,7 @@ fun MiuixSettingsCard(
                 // 圆屏走胶囊（老师定：三套统一）。这里是「一组设置行」的容器，塞几行
                 // 由调用方决定，组合期算不出高度 —— 交给 RowCapsuleShape 在绘制期按
                 // 真实宽高比判断：单行组取真胶囊，多行组自动退回 cardShape。
-                .clip(style.roundAwareCardShape())
+                .clip(style.roundAwareCardShape(roundRole))
                 .background(style.cardColor),
             content = content
         )
@@ -147,6 +150,7 @@ fun MiuixSettingsRow(
     trailing: (@Composable () -> Unit)? = null
 ) {
     val style = LauncherTheme.style
+    val horizontalPadding = if (isFlueScreenRound()) 22.dp else 16.dp
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     val background = animateColorAsState(
@@ -173,7 +177,7 @@ fun MiuixSettingsRow(
                     Modifier
                 }
             )
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = horizontalPadding, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {

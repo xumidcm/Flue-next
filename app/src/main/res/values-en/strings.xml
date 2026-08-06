@@ -33,6 +33,7 @@
     <string name="settings_display_fit">Display Fit</string>
     <string name="settings_display_fit_sub">Global UI, app list size, and safe area</string>
     <string name="settings_global_ui_size">Global UI Size</string>
+    <string name="settings_global_ui_restart_hint">Restart if the display looks abnormal after adjustment.</string>
     <string name="settings_honeycomb_cols">Honeycomb Columns</string>
     <string name="settings_honeycomb_cols_fmt">%d columns</string>
     <string name="settings_app_list_size">App List Size</string>
@@ -495,6 +496,8 @@
     <string name="settings_layout_honeycomb_sub">Apple Watch style</string>
     <string name="settings_layout_list">List layout</string>
     <string name="settings_layout_list_sub">Classic vertical list</string>
+    <string name="settings_layout_grid">Grid layout</string>
+    <string name="settings_layout_grid_sub">Compact regular grid</string>
     <string name="settings_top_fade">Top fade range</string>
     <string name="settings_bottom_fade">Bottom fade range</string>
     <string name="settings_section_launch">Launch</string>
@@ -694,6 +697,8 @@
     <string name="widget_done">Done</string>
     <string name="widget_add">Add</string>
     <string name="widget_unavailable">Widgets unavailable</string>
+    <string name="widget_recovering">Restoring widget…</string>
+    <string name="widget_rebind">Tap to rebind</string>
     <string name="widget_empty">No widgets yet. Tap Add in the top-right corner.</string>
     <string name="side_hidden_messages_fmt">+%1$d more messages</string>
     <string name="side_add_shortcut">Add quick launch</string>

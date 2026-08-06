@@ -79,6 +79,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -98,8 +99,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -132,7 +136,11 @@ import com.flue.launcher.ui.common.FluePullToRefreshState
 import com.flue.launcher.ui.common.fluePressScale
 import com.flue.launcher.ui.common.flueElasticNestedScroll
 import com.flue.launcher.ui.common.fluePullToRefresh
+import com.flue.launcher.ui.common.chordScaleGridItem
+import com.flue.launcher.ui.common.chordScaleItem
+import com.flue.launcher.ui.common.chordScaleForPosition
 import com.flue.launcher.ui.common.isFlueScreenRound
+import com.flue.launcher.ui.common.roundScrollablePadding
 import com.flue.launcher.ui.common.rememberFluePressScale
 import com.flue.launcher.ui.common.rememberFluePullToRefreshState
 import com.flue.launcher.ui.theme.LauncherTheme
@@ -867,12 +875,20 @@ private fun WatchStoreScreen(
         ),
         label = "watch_store_browse_hierarchy_offset",
     )
+    var browseRootTopInWindow by remember { mutableFloatStateOf(0f) }
+    var browseListTopInWindow by remember { mutableFloatStateOf(0f) }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
+            .onGloballyPositioned { browseRootTopInWindow = it.positionInWindow().y }
             .background(style.screenBackground),
     ) {
+        val browseDensity = LocalDensity.current
+        val browseViewportWidthPx = with(browseDensity) { maxWidth.toPx() }
+        val browseViewportHeightPx = with(browseDensity) { maxHeight.toPx() }
+        val browseScreenCenterY = browseViewportHeightPx / 2f
+        val browseListTopInViewport = { browseListTopInWindow - browseRootTopInWindow }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -886,82 +902,103 @@ private fun WatchStoreScreen(
                     }
                 }
                 .padding(
-                    horizontal = if (isScreenRound) 16.dp else 10.dp,
+                    horizontal = if (isScreenRound) 26.dp else 10.dp,
                     vertical = if (isScreenRound) 10.dp else 6.dp,
                 ),
         ) {
-            StoreHeader(
-                onBack = onBack,
-                viewMode = viewMode,
-                onToggleViewMode = {
-                    val next = if (viewMode == WatchStoreViewMode.LIST) {
-                        WatchStoreViewMode.GRID
-                    } else {
-                        WatchStoreViewMode.LIST
-                    }
-                    viewMode = next
-                    uiPreferences.writeViewMode(next)
-                },
-                onUpload = { uploadVisible = true },
-                onMyUploads = { myUploadsVisible = true },
-            )
-            OutlinedTextField(
-                value = searchText,
-                onValueChange = { searchText = it.take(200) },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                shape = style.rowShape,
-                placeholder = {
-                    Text(
-                        stringResource(R.string.watch_store_search_hint),
-                        color = style.secondaryTextColor,
-                        fontSize = 13.sp,
-                    )
-                },
-                leadingIcon = {
-                    Icon(
-                        MiuixIcons.Search,
-                        contentDescription = stringResource(R.string.watch_store_search),
-                        tint = style.secondaryTextColor,
-                    )
-                },
-                trailingIcon = {
-                    if (searchText.isNotEmpty()) {
-                        IconButton(onClick = { searchText = "" }) {
-                            Icon(
-                                MiuixIcons.Clear,
-                                contentDescription = stringResource(R.string.watch_store_clear_search),
-                                tint = style.secondaryTextColor,
-                            )
+            RoundStoreChordContainer(
+                enabled = isScreenRound,
+                rootTopInWindow = { browseRootTopInWindow },
+                viewportWidth = browseViewportWidthPx,
+                screenCenterY = browseScreenCenterY,
+            ) {
+                StoreHeader(
+                    onBack = onBack,
+                    viewMode = viewMode,
+                    onToggleViewMode = {
+                        val next = if (viewMode == WatchStoreViewMode.LIST) {
+                            WatchStoreViewMode.GRID
+                        } else {
+                            WatchStoreViewMode.LIST
                         }
-                    }
-                },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = style.accentColor,
-                    unfocusedBorderColor = style.outlineColor,
-                    focusedContainerColor = style.cardColor,
-                    unfocusedContainerColor = style.cardColor,
-                    cursorColor = style.accentColor,
-                    focusedTextColor = style.bodyColor,
-                    unfocusedTextColor = style.bodyColor,
-                ),
-            )
+                        viewMode = next
+                        uiPreferences.writeViewMode(next)
+                    },
+                    onUpload = { uploadVisible = true },
+                    onMyUploads = { myUploadsVisible = true },
+                )
+            }
+            RoundStoreChordContainer(
+                enabled = isScreenRound,
+                rootTopInWindow = { browseRootTopInWindow },
+                viewportWidth = browseViewportWidthPx,
+                screenCenterY = browseScreenCenterY,
+            ) {
+                OutlinedTextField(
+                    value = searchText,
+                    onValueChange = { searchText = it.take(200) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = style.rowShape,
+                    placeholder = {
+                        Text(
+                            stringResource(R.string.watch_store_search_hint),
+                            color = style.secondaryTextColor,
+                            fontSize = 13.sp,
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            MiuixIcons.Search,
+                            contentDescription = stringResource(R.string.watch_store_search),
+                            tint = style.secondaryTextColor,
+                        )
+                    },
+                    trailingIcon = {
+                        if (searchText.isNotEmpty()) {
+                            IconButton(onClick = { searchText = "" }) {
+                                Icon(
+                                    MiuixIcons.Clear,
+                                    contentDescription = stringResource(R.string.watch_store_clear_search),
+                                    tint = style.secondaryTextColor,
+                                )
+                            }
+                        }
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = style.accentColor,
+                        unfocusedBorderColor = style.outlineColor,
+                        focusedContainerColor = style.cardColor,
+                        unfocusedContainerColor = style.cardColor,
+                        cursorColor = style.accentColor,
+                        focusedTextColor = style.bodyColor,
+                        unfocusedTextColor = style.bodyColor,
+                    ),
+                )
+            }
             Spacer(Modifier.height(7.dp))
-            FilterBar(
-                sort = sort,
-                onSortChange = { sort = it },
-                screenType = screenType,
-                onScreenTypeChange = { screenType = it },
-                selectedCategory = selectedCategory,
-                categories = categories,
-                categoriesError = categoriesError,
-                categoryMenuExpanded = categoryMenuExpanded,
-                onCategoryMenuExpandedChange = { categoryMenuExpanded = it },
-                onCategoryChange = {
-                    selectedCategory = it
-                    categoryMenuExpanded = false
-                },
-            )
+            RoundStoreChordContainer(
+                enabled = isScreenRound,
+                rootTopInWindow = { browseRootTopInWindow },
+                viewportWidth = browseViewportWidthPx,
+                screenCenterY = browseScreenCenterY,
+            ) {
+                FilterBar(
+                    sort = sort,
+                    onSortChange = { sort = it },
+                    screenType = screenType,
+                    onScreenTypeChange = { screenType = it },
+                    selectedCategory = selectedCategory,
+                    categories = categories,
+                    categoriesError = categoriesError,
+                    categoryMenuExpanded = categoryMenuExpanded,
+                    onCategoryMenuExpandedChange = { categoryMenuExpanded = it },
+                    onCategoryChange = {
+                        selectedCategory = it
+                        categoryMenuExpanded = false
+                    },
+                )
+            }
             Spacer(Modifier.height(4.dp))
 
             val showEntries = catalogInitialized && catalog.diagnostic == null
@@ -1069,9 +1106,15 @@ private fun WatchStoreScreen(
                 }
             }
             // 圆屏：上下 contentPadding 按弦宽加大，避免首尾卡片被表盘圆角裁掉。
+            val roundPadding = roundScrollablePadding(
+                viewportHeight = browseViewportHeightPx,
+                contentTop = browseListTopInViewport(),
+                itemHeight = with(browseDensity) { 104.dp.toPx() },
+                minimumPadding = with(browseDensity) { 14.dp.toPx() },
+            )
             val browseContentPadding = PaddingValues(
-                top = if (isScreenRound) 14.dp else 4.dp,
-                bottom = if (isScreenRound) 48.dp else 20.dp,
+                top = if (isScreenRound) with(browseDensity) { roundPadding.top.toDp() } else 4.dp,
+                bottom = if (isScreenRound) with(browseDensity) { roundPadding.bottom.toDp() } else 20.dp,
             )
             val pullRefreshState = rememberFluePullToRefreshState(
                 refreshing = pullRefreshing,
@@ -1105,6 +1148,7 @@ private fun WatchStoreScreen(
                         state = listState,
                         modifier = Modifier
                             .fillMaxSize()
+                            .onGloballyPositioned { browseListTopInWindow = it.positionInWindow().y }
                             .flueElasticNestedScroll(listState)
                             .fluePullToRefresh(pullRefreshState),
                         contentPadding = browseContentPadding,
@@ -1125,6 +1169,15 @@ private fun WatchStoreScreen(
                                 onOpen = { openDetail(item.id) },
                                 onDownload = { download(item.id, item.screenType) },
                                 onCancelDownload = { cancelDownload(item.id) },
+                                modifier = Modifier.chordScaleItem(
+                                    listState = listState,
+                                    key = item.id,
+                                    screenCenterY = browseScreenCenterY,
+                                    viewportWidth = browseViewportWidthPx,
+                                    enabled = isScreenRound,
+                                    listTopInViewport = browseListTopInViewport,
+                                    allowTallItem = true,
+                                ),
                             )
                         }
                         items(
@@ -1139,6 +1192,7 @@ private fun WatchStoreScreen(
                         state = gridState,
                         modifier = Modifier
                             .fillMaxSize()
+                            .onGloballyPositioned { browseListTopInWindow = it.positionInWindow().y }
                             .fluePullToRefresh(pullRefreshState),
                         contentPadding = browseContentPadding,
                         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -1159,6 +1213,15 @@ private fun WatchStoreScreen(
                                 onOpen = { openDetail(item.id) },
                                 onDownload = { download(item.id, item.screenType) },
                                 onCancelDownload = { cancelDownload(item.id) },
+                                modifier = Modifier.chordScaleGridItem(
+                                    gridState = gridState,
+                                    key = item.id,
+                                    screenCenterY = browseScreenCenterY,
+                                    viewportWidth = browseViewportWidthPx,
+                                    enabled = isScreenRound,
+                                    gridTopInViewport = browseListTopInViewport,
+                                    allowTallItem = true,
+                                ),
                             )
                         }
                         gridItems(
@@ -1265,6 +1328,40 @@ private fun WatchStoreScreen(
                 onDismiss = { myUploadsVisible = false },
             )
         }
+    }
+}
+
+@Composable
+private fun RoundStoreChordContainer(
+    enabled: Boolean,
+    rootTopInWindow: () -> Float,
+    viewportWidth: Float,
+    screenCenterY: Float,
+    content: @Composable () -> Unit,
+) {
+    var itemCenterYInViewport by remember { mutableFloatStateOf(screenCenterY) }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { coordinates ->
+                itemCenterYInViewport = coordinates.positionInWindow().y - rootTopInWindow() +
+                    coordinates.size.height / 2f
+            }
+            .graphicsLayer {
+                val scale = if (enabled) {
+                    chordScaleForPosition(
+                        itemCenterY = itemCenterYInViewport,
+                        viewportWidth = viewportWidth,
+                        screenCenterY = screenCenterY,
+                    )
+                } else {
+                    1f
+                }
+                scaleX = scale
+                scaleY = scale
+            },
+    ) {
+        content()
     }
 }
 
@@ -1620,6 +1717,7 @@ private fun WatchFaceListCard(
     onOpen: () -> Unit,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val style = LauncherTheme.style
     val displayName = (downloadState as? WatchStoreInstallState.Installed)
@@ -1634,7 +1732,7 @@ private fun WatchFaceListCard(
     val interactionSource = remember(item.id) { MutableInteractionSource() }
     val pressScale = rememberFluePressScale(interactionSource)
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .fluePressScale(pressScale)
             .clip(style.cardShape)
@@ -1701,6 +1799,7 @@ private fun WatchFaceGridCard(
     onOpen: () -> Unit,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val style = LauncherTheme.style
     val displayName = (downloadState as? WatchStoreInstallState.Installed)
@@ -1710,7 +1809,7 @@ private fun WatchFaceGridCard(
     val interactionSource = remember(item.id) { MutableInteractionSource() }
     val pressScale = rememberFluePressScale(interactionSource)
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .fluePressScale(pressScale)
             .clip(style.cardShape)

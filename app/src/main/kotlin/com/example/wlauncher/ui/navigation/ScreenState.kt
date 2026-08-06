@@ -33,5 +33,6 @@ enum class ScreenState {
 /** 应用抽屉布局模式 */
 enum class LayoutMode {
     Honeycomb,
+    Grid,
     List
 }

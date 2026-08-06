@@ -1,6 +1,7 @@
 package com.flue.launcher.ui.common
 
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Modifier
@@ -50,6 +51,26 @@ import kotlin.math.sqrt
 
 /** 弦宽缩放下限。再小文字就不可读了，也会让行间空隙大到不像一个列表。 */
 const val MIN_CHORD_SCALE = 0.62f
+
+data class RoundScrollablePadding(
+    val top: Float,
+    val bottom: Float,
+)
+
+/** 让首尾卡片都能滚到圆屏圆心，固定顶栏高度通过 [contentTop] 扣除。 */
+fun roundScrollablePadding(
+    viewportHeight: Float,
+    contentTop: Float,
+    itemHeight: Float,
+    minimumPadding: Float = 0f,
+): RoundScrollablePadding {
+    val itemHalf = itemHeight.coerceAtLeast(0f) / 2f
+    val center = viewportHeight.coerceAtLeast(0f) / 2f
+    return RoundScrollablePadding(
+        top = (center - contentTop - itemHalf).coerceAtLeast(minimumPadding),
+        bottom = (center - itemHalf).coerceAtLeast(minimumPadding),
+    )
+}
 
 /**
  * 当前列表视口的宽度（px）。
@@ -124,6 +145,7 @@ fun chordScaleForListItem(
     screenCenterY: Float,
     viewportWidth: Float,
     listTopInViewport: Float = 0f,
+    allowTallItem: Boolean = false,
 ): Float {
     if (viewportWidth <= 0f) return 1f
     val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key } ?: return 1f
@@ -133,8 +155,6 @@ fun chordScaleForListItem(
     // 弧线上差别很大的一段：按中心算，中心滚到远端时整块会被夹到下限
     // 0.62，而它靠近屏幕中央的那半截本该接近全宽 —— 那比不缩放还难看。
     // 这种项（例如编辑器里 8 个按钮那一整段）继续吃圆屏的静态内边距。
-    val radius = viewportWidth / 2f
-    if (info.size > radius) return 1f
     // offset 与 size 都是布局值（不含 graphicsLayer 变换），满足铁律 1。
     val itemCenterY = chordItemCenterY(
         itemOffset = info.offset,
@@ -142,6 +162,25 @@ fun chordScaleForListItem(
         listTopInViewport = listTopInViewport,
         viewportStartOffset = listState.layoutInfo.viewportStartOffset,
     )
+    return chordScaleForItemGeometry(
+        itemCenterY = itemCenterY,
+        itemHeight = info.size.toFloat(),
+        viewportWidth = viewportWidth,
+        screenCenterY = screenCenterY,
+        allowTallItem = allowTallItem,
+    )
+}
+
+fun chordScaleForItemGeometry(
+    itemCenterY: Float,
+    itemHeight: Float,
+    viewportWidth: Float,
+    screenCenterY: Float,
+    allowTallItem: Boolean = false,
+): Float {
+    if (viewportWidth <= 0f) return 1f
+    val radius = viewportWidth / 2f
+    if (!allowTallItem && itemHeight > radius) return 1f
     return chordScaleForPosition(itemCenterY, viewportWidth, screenCenterY)
 }
 
@@ -183,6 +222,7 @@ fun Modifier.chordScaleItem(
     viewportWidth: Float,
     enabled: Boolean = true,
     listTopInViewport: () -> Float = { 0f },
+    allowTallItem: Boolean = false,
 ): Modifier = if (!enabled) {
     this
 } else {
@@ -193,8 +233,59 @@ fun Modifier.chordScaleItem(
             screenCenterY = screenCenterY,
             viewportWidth = viewportWidth,
             listTopInViewport = listTopInViewport(),
+            allowTallItem = allowTallItem,
         )
         scaleX = s
         scaleY = s
+    }
+}
+
+fun chordScaleForGridItem(
+    gridState: LazyGridState,
+    key: Any,
+    screenCenterY: Float,
+    viewportWidth: Float,
+    gridTopInViewport: Float = 0f,
+    allowTallItem: Boolean = false,
+): Float {
+    if (viewportWidth <= 0f) return 1f
+    val info = gridState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key } ?: return 1f
+    val itemCenterY = chordItemCenterY(
+        itemOffset = info.offset.y,
+        itemSize = info.size.height,
+        listTopInViewport = gridTopInViewport,
+        viewportStartOffset = gridState.layoutInfo.viewportStartOffset,
+    )
+    return chordScaleForItemGeometry(
+        itemCenterY = itemCenterY,
+        itemHeight = info.size.height.toFloat(),
+        viewportWidth = viewportWidth,
+        screenCenterY = screenCenterY,
+        allowTallItem = allowTallItem,
+    )
+}
+
+fun Modifier.chordScaleGridItem(
+    gridState: LazyGridState,
+    key: Any,
+    screenCenterY: Float,
+    viewportWidth: Float,
+    enabled: Boolean = true,
+    gridTopInViewport: () -> Float = { 0f },
+    allowTallItem: Boolean = false,
+): Modifier = if (!enabled) {
+    this
+} else {
+    this.graphicsLayer {
+        val scale = chordScaleForGridItem(
+            gridState = gridState,
+            key = key,
+            screenCenterY = screenCenterY,
+            viewportWidth = viewportWidth,
+            gridTopInViewport = gridTopInViewport(),
+            allowTallItem = allowTallItem,
+        )
+        scaleX = scale
+        scaleY = scale
     }
 }

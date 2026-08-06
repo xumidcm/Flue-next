@@ -887,7 +887,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     } else {
         appListTransformOrigin
     }
-    val activeAppListBackend = appListBackend(layoutMode, uiStyle)
+    val activeAppListBackend = appListBackend(layoutMode)
     val appListMotionPhase = when {
         isReturningFromApp || appListIconReturnActive -> activeMotionProfile.appReturn
         // 关闭回表盘就是进入动画的倒放：同一条 appListEnter 谱反向跑，
