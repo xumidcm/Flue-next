@@ -343,6 +343,8 @@ private data class StoreQueryKey(
     val search: String,
 )
 
+private const val STORE_BROWSE_CONTROLS_KEY = "watch_store_browse_controls"
+
 @Composable
 private fun WatchStoreScreen(
     repository: WatchStoreRepository,
@@ -911,101 +913,6 @@ private fun WatchStoreScreen(
                     vertical = if (isScreenRound) 10.dp else 6.dp,
                 ),
         ) {
-            RoundStoreChordContainer(
-                enabled = isScreenRound,
-                rootTopInWindow = { browseRootTopInWindow },
-                viewportWidth = browseViewportWidthPx,
-                screenCenterY = browseScreenCenterY,
-            ) {
-                StoreHeader(
-                    onBack = onBack,
-                    viewMode = viewMode,
-                    onToggleViewMode = {
-                        val next = if (viewMode == WatchStoreViewMode.LIST) {
-                            WatchStoreViewMode.GRID
-                        } else {
-                            WatchStoreViewMode.LIST
-                        }
-                        viewMode = next
-                        uiPreferences.writeViewMode(next)
-                    },
-                    onUpload = { uploadVisible = true },
-                    onMyUploads = { myUploadsVisible = true },
-                )
-            }
-            RoundStoreChordContainer(
-                enabled = isScreenRound,
-                rootTopInWindow = { browseRootTopInWindow },
-                viewportWidth = browseViewportWidthPx,
-                screenCenterY = browseScreenCenterY,
-            ) {
-                OutlinedTextField(
-                    value = searchText,
-                    onValueChange = { searchText = it.take(200) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    shape = style.rowShape,
-                    placeholder = {
-                        Text(
-                            stringResource(R.string.watch_store_search_hint),
-                            color = style.secondaryTextColor,
-                            fontSize = 13.sp,
-                        )
-                    },
-                    leadingIcon = {
-                        Icon(
-                            MiuixIcons.Search,
-                            contentDescription = stringResource(R.string.watch_store_search),
-                            tint = style.secondaryTextColor,
-                        )
-                    },
-                    trailingIcon = {
-                        if (searchText.isNotEmpty()) {
-                            IconButton(onClick = { searchText = "" }) {
-                                Icon(
-                                    MiuixIcons.Clear,
-                                    contentDescription = stringResource(R.string.watch_store_clear_search),
-                                    tint = style.secondaryTextColor,
-                                )
-                            }
-                        }
-                    },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = style.accentColor,
-                        unfocusedBorderColor = style.outlineColor,
-                        focusedContainerColor = style.cardColor,
-                        unfocusedContainerColor = style.cardColor,
-                        cursorColor = style.accentColor,
-                        focusedTextColor = style.bodyColor,
-                        unfocusedTextColor = style.bodyColor,
-                    ),
-                )
-            }
-            Spacer(Modifier.height(7.dp))
-            RoundStoreChordContainer(
-                enabled = isScreenRound,
-                rootTopInWindow = { browseRootTopInWindow },
-                viewportWidth = browseViewportWidthPx,
-                screenCenterY = browseScreenCenterY,
-            ) {
-                FilterBar(
-                    sort = sort,
-                    onSortChange = { sort = it },
-                    screenType = screenType,
-                    onScreenTypeChange = { screenType = it },
-                    selectedCategory = selectedCategory,
-                    categories = categories,
-                    categoriesError = categoriesError,
-                    categoryMenuExpanded = categoryMenuExpanded,
-                    onCategoryMenuExpandedChange = { categoryMenuExpanded = it },
-                    onCategoryChange = {
-                        selectedCategory = it
-                        categoryMenuExpanded = false
-                    },
-                )
-            }
-            Spacer(Modifier.height(4.dp))
-
             val showEntries = catalogInitialized && catalog.diagnostic == null
             val visibleEntries = if (showEntries) entries else emptyList()
             val currentCatalogError = catalogError
@@ -1159,6 +1066,42 @@ private fun WatchStoreScreen(
                         contentPadding = browseContentPadding,
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
+                        item(STORE_BROWSE_CONTROLS_KEY) {
+                            WatchStoreBrowseControls(
+                                isScreenRound = isScreenRound,
+                                rootTopInWindow = { browseRootTopInWindow },
+                                viewportWidth = browseViewportWidthPx,
+                                screenCenterY = browseScreenCenterY,
+                                searchText = searchText,
+                                onSearchTextChange = { searchText = it.take(200) },
+                                sort = sort,
+                                onSortChange = { sort = it },
+                                screenType = screenType,
+                                onScreenTypeChange = { screenType = it },
+                                selectedCategory = selectedCategory,
+                                categories = categories,
+                                categoriesError = categoriesError,
+                                categoryMenuExpanded = categoryMenuExpanded,
+                                onCategoryMenuExpandedChange = { categoryMenuExpanded = it },
+                                onCategoryChange = {
+                                    selectedCategory = it
+                                    categoryMenuExpanded = false
+                                },
+                                viewMode = viewMode,
+                                onToggleViewMode = {
+                                    val next = if (viewMode == WatchStoreViewMode.LIST) {
+                                        WatchStoreViewMode.GRID
+                                    } else {
+                                        WatchStoreViewMode.LIST
+                                    }
+                                    viewMode = next
+                                    uiPreferences.writeViewMode(next)
+                                },
+                                onUpload = { uploadVisible = true },
+                                onMyUploads = { myUploadsVisible = true },
+                                onBack = onBack,
+                            )
+                        }
                         items(
                             items = visibleEntries,
                             key = { it.id },
@@ -1203,6 +1146,45 @@ private fun WatchStoreScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
+                        item(
+                            key = STORE_BROWSE_CONTROLS_KEY,
+                            span = { GridItemSpan(maxLineSpan) },
+                        ) {
+                            WatchStoreBrowseControls(
+                                isScreenRound = isScreenRound,
+                                rootTopInWindow = { browseRootTopInWindow },
+                                viewportWidth = browseViewportWidthPx,
+                                screenCenterY = browseScreenCenterY,
+                                searchText = searchText,
+                                onSearchTextChange = { searchText = it.take(200) },
+                                sort = sort,
+                                onSortChange = { sort = it },
+                                screenType = screenType,
+                                onScreenTypeChange = { screenType = it },
+                                selectedCategory = selectedCategory,
+                                categories = categories,
+                                categoriesError = categoriesError,
+                                categoryMenuExpanded = categoryMenuExpanded,
+                                onCategoryMenuExpandedChange = { categoryMenuExpanded = it },
+                                onCategoryChange = {
+                                    selectedCategory = it
+                                    categoryMenuExpanded = false
+                                },
+                                viewMode = viewMode,
+                                onToggleViewMode = {
+                                    val next = if (viewMode == WatchStoreViewMode.LIST) {
+                                        WatchStoreViewMode.GRID
+                                    } else {
+                                        WatchStoreViewMode.LIST
+                                    }
+                                    viewMode = next
+                                    uiPreferences.writeViewMode(next)
+                                },
+                                onUpload = { uploadVisible = true },
+                                onMyUploads = { myUploadsVisible = true },
+                                onBack = onBack,
+                            )
+                        }
                         gridItems(
                             items = visibleEntries,
                             key = { it.id },
@@ -1333,6 +1315,118 @@ private fun WatchStoreScreen(
                 onDismiss = { myUploadsVisible = false },
             )
         }
+    }
+}
+
+@Composable
+private fun WatchStoreBrowseControls(
+    isScreenRound: Boolean,
+    rootTopInWindow: () -> Float,
+    viewportWidth: Float,
+    screenCenterY: Float,
+    searchText: String,
+    onSearchTextChange: (String) -> Unit,
+    sort: WatchStoreSort,
+    onSortChange: (WatchStoreSort) -> Unit,
+    screenType: WatchStoreScreenType?,
+    onScreenTypeChange: (WatchStoreScreenType?) -> Unit,
+    selectedCategory: WatchStoreCategory?,
+    categories: List<WatchStoreCategory>,
+    categoriesError: String?,
+    categoryMenuExpanded: Boolean,
+    onCategoryMenuExpandedChange: (Boolean) -> Unit,
+    onCategoryChange: (WatchStoreCategory?) -> Unit,
+    viewMode: WatchStoreViewMode,
+    onToggleViewMode: () -> Unit,
+    onUpload: () -> Unit,
+    onMyUploads: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val style = LauncherTheme.style
+    Column(modifier = Modifier.fillMaxWidth()) {
+        RoundStoreChordContainer(
+            enabled = isScreenRound,
+            rootTopInWindow = rootTopInWindow,
+            viewportWidth = viewportWidth,
+            screenCenterY = screenCenterY,
+        ) {
+            StoreHeader(
+                onBack = onBack,
+                viewMode = viewMode,
+                onToggleViewMode = onToggleViewMode,
+                onUpload = onUpload,
+                onMyUploads = onMyUploads,
+            )
+        }
+        RoundStoreChordContainer(
+            enabled = isScreenRound,
+            rootTopInWindow = rootTopInWindow,
+            viewportWidth = viewportWidth,
+            screenCenterY = screenCenterY,
+        ) {
+            OutlinedTextField(
+                value = searchText,
+                onValueChange = onSearchTextChange,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                shape = style.rowShape,
+                placeholder = {
+                    Text(
+                        stringResource(R.string.watch_store_search_hint),
+                        color = style.secondaryTextColor,
+                        fontSize = 13.sp,
+                    )
+                },
+                leadingIcon = {
+                    Icon(
+                        MiuixIcons.Search,
+                        contentDescription = stringResource(R.string.watch_store_search),
+                        tint = style.secondaryTextColor,
+                    )
+                },
+                trailingIcon = {
+                    if (searchText.isNotEmpty()) {
+                        IconButton(onClick = { onSearchTextChange("") }) {
+                            Icon(
+                                MiuixIcons.Clear,
+                                contentDescription = stringResource(R.string.watch_store_clear_search),
+                                tint = style.secondaryTextColor,
+                            )
+                        }
+                    }
+                },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = style.accentColor,
+                    unfocusedBorderColor = style.outlineColor,
+                    focusedContainerColor = style.cardColor,
+                    unfocusedContainerColor = style.cardColor,
+                    cursorColor = style.accentColor,
+                    focusedTextColor = style.bodyColor,
+                    unfocusedTextColor = style.bodyColor,
+                ),
+            )
+        }
+        Spacer(Modifier.height(7.dp))
+        RoundStoreChordContainer(
+            enabled = isScreenRound,
+            rootTopInWindow = rootTopInWindow,
+            viewportWidth = viewportWidth,
+            screenCenterY = screenCenterY,
+        ) {
+            FilterBar(
+                sort = sort,
+                onSortChange = onSortChange,
+                screenType = screenType,
+                onScreenTypeChange = onScreenTypeChange,
+                selectedCategory = selectedCategory,
+                categories = categories,
+                categoriesError = categoriesError,
+                categoryMenuExpanded = categoryMenuExpanded,
+                onCategoryMenuExpandedChange = onCategoryMenuExpandedChange,
+                onCategoryChange = onCategoryChange,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
     }
 }
 

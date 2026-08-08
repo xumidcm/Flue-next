@@ -150,6 +150,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -1464,6 +1465,7 @@ private fun SettingsRootScreen(
             headerTime = headerTime,
             initialFirstVisibleItemIndex = scrollFor(SettingsDestination.WATCH_FACES).index,
             initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.WATCH_FACES).offset,
+            roundFirstActionHalfHeight = 40.dp,
             onScrollChanged = { index, offset -> updateScroll(SettingsDestination.WATCH_FACES, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
             if (!watchFaceLastError.isNullOrBlank()) {
@@ -3838,6 +3840,7 @@ private fun SettingsPageScaffold(
     initialFirstVisibleItemIndex: Int = 0,
     initialFirstVisibleItemScrollOffset: Int = 0,
     roundFirstActionIndex: Int = 1,
+    roundFirstActionHalfHeight: Dp = SETTINGS_ROW_HALF_HEIGHT,
     onScrollChanged: (Int, Int) -> Unit = { _, _ -> },
     content: LazyListScope.(LazyListState, Float, Float, Set<Any>) -> Unit
 ) {
@@ -3938,9 +3941,10 @@ private fun SettingsPageScaffold(
 
         LaunchedEffect(initialPosition, screenHeightPx) {
             if (initialPosition.centerOnScreen) {
-                val centerOffset = -(
-                    screenCenterY - with(density) { SETTINGS_ROW_HALF_HEIGHT.toPx() }
-                ).toInt()
+                val centerOffset = settingsCenteredItemScrollOffset(
+                    screenCenterY = screenCenterY,
+                    itemHalfHeight = with(density) { roundFirstActionHalfHeight.toPx() },
+                )
                 listState.scrollToItem(initialPosition.index, centerOffset)
             }
         }

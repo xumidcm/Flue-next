@@ -34,6 +34,37 @@ class RoundScreenActivityContractTest {
         )
     }
 
+    @Test
+    fun watchStoreControlsAreScrollableInBothListAndGridModes() {
+        val source = sourceFile("WatchStoreActivity.kt").readText()
+
+        assertTrue(
+            "圆屏市场标题、搜索和筛选必须作为列表首项滚入安全弦宽，不能固定在屏幕顶部",
+            source.contains(
+                "item(STORE_BROWSE_CONTROLS_KEY) {\n" +
+                    "                            WatchStoreBrowseControls(",
+            ),
+        )
+        assertTrue(
+            "网格模式也必须把市场控件作为全宽首项，否则切换网格后顶部控件仍不可触达",
+            Regex(
+                """item\(\s*key\s*=\s*STORE_BROWSE_CONTROLS_KEY,\s*span\s*=\s*\{\s*GridItemSpan\(maxLineSpan\)\s*},\s*\)\s*\{\s*WatchStoreBrowseControls\(""",
+            ).containsMatchIn(source),
+        )
+    }
+
+    @Test
+    fun watchFaceSettingsCentersTheTallFirstCardInsteadOfAGenericRow() {
+        val source = sourceFile("SettingsActivity.kt").readText()
+
+        assertTrue(
+            "表盘页首项约 80dp 高，圆屏初始定位必须使用 40dp 半高，标题才会位于圆心上方",
+            Regex(
+                """SettingsDestination\.WATCH_FACES\s*->\s*SettingsPageScaffold\([\s\S]*?roundFirstActionHalfHeight\s*=\s*40\.dp,""",
+            ).containsMatchIn(source),
+        )
+    }
+
     private fun sourceFile(name: String): File {
         val mainSource = sequenceOf(
             File("src/main/kotlin/com/example/wlauncher"),
