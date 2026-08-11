@@ -39,6 +39,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -112,6 +113,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
@@ -171,6 +174,7 @@ private const val CONTROL_NOTIFICATION_STACK_HORIZONTAL_INSET_DP = 8f
 private const val MUSIC_TEXT_FADE_EDGE_DP = 18f
 private const val MUSIC_TEXT_FADE_TRANSITION_MS = 80
 private const val MUSIC_TEXT_MARQUEE_SIDE_PADDING_DP = 8f
+internal const val CONTROL_TOGGLE_LABEL_MARQUEE_SPEED_DP_PER_SECOND = 14f
 
 private data class ControlCenterMediaState(
     val controller: MediaController? = null,
@@ -188,6 +192,88 @@ private data class ControlCenterMediaState(
     val durationMs: Long = 0L,
     val appPackage: String? = null
 )
+
+internal data class ControlCenterCardPlacement(
+    val musicInControlCenter: Boolean,
+    val musicOnSideScreen: Boolean,
+    val notificationInControlCenter: Boolean,
+    val notificationOnSideScreen: Boolean,
+)
+
+internal fun controlCenterCardPlacement(
+    showMusic: Boolean,
+    showNotifications: Boolean,
+    swapped: Boolean,
+): ControlCenterCardPlacement = if (swapped) {
+    ControlCenterCardPlacement(
+        musicInControlCenter = false,
+        musicOnSideScreen = showMusic,
+        notificationInControlCenter = showNotifications,
+        notificationOnSideScreen = false,
+    )
+} else {
+    ControlCenterCardPlacement(
+        musicInControlCenter = showMusic,
+        musicOnSideScreen = false,
+        notificationInControlCenter = false,
+        notificationOnSideScreen = showNotifications,
+    )
+}
+
+internal fun controlCenterHeaderScrollOffset(
+    verticalScrollEnabled: Boolean,
+    scrollOffsetPx: Int,
+): Float = if (verticalScrollEnabled) scrollOffsetPx.toFloat() else 0f
+
+internal data class MediaCardLayoutSpec(
+    val cardHeightDp: Int,
+    val paddingDp: Int,
+    val artworkSizeDp: Int,
+    val artworkGapDp: Int,
+    val titleFontSizeSp: Int,
+    val artistFontSizeSp: Int,
+    val controlButtonDp: Int,
+)
+
+internal fun mediaCardLayoutSpec(compact: Boolean): MediaCardLayoutSpec = if (compact) {
+    MediaCardLayoutSpec(
+        cardHeightDp = 116,
+        paddingDp = 10,
+        artworkSizeDp = 92,
+        artworkGapDp = 8,
+        titleFontSizeSp = 13,
+        artistFontSizeSp = 10,
+        controlButtonDp = 28,
+    )
+} else {
+    MediaCardLayoutSpec(
+        cardHeightDp = 156,
+        paddingDp = 12,
+        artworkSizeDp = 132,
+        artworkGapDp = 12,
+        titleFontSizeSp = 15,
+        artistFontSizeSp = 11,
+        controlButtonDp = 36,
+    )
+}
+
+internal fun sideScreenMediaCardLayoutSpec(): MediaCardLayoutSpec =
+    mediaCardLayoutSpec(compact = false)
+
+internal fun sideScreenContentAllowsVerticalScroll(
+    showMusicCard: Boolean,
+    showNotificationPreview: Boolean,
+): Boolean = showMusicCard || showNotificationPreview
+
+internal fun controlToggleLabelOverflows(slotWidthPx: Float, textWidthPx: Float): Boolean =
+    slotWidthPx.isFinite() && textWidthPx.isFinite() && textWidthPx > slotWidthPx
+
+internal fun controlToggleLabelSlotWidthPx(
+    buttonWidthPx: Float,
+    actualSpacingPx: Float,
+    edge: Boolean,
+): Float = buttonWidthPx.coerceAtLeast(0f) +
+    actualSpacingPx.coerceAtLeast(0f) * if (edge) 0.5f else 1f
 
 private data class ControlCenterMediaAction(
     val action: String,
@@ -471,6 +557,20 @@ fun ControlCenterLayer(
         )
         val toggleRowFits = !toggleRowLayout.scrollable
         val fittedToggleRowSpacing = with(density) { toggleRowLayout.spacingPx.toDp() }
+        val innerToggleLabelSlotWidth = with(density) {
+            controlToggleLabelSlotWidthPx(
+                buttonWidthPx = toggleSize.toPx(),
+                actualSpacingPx = toggleRowLayout.actualSpacingPx,
+                edge = false,
+            ).toDp()
+        }
+        val edgeToggleLabelSlotWidth = with(density) {
+            controlToggleLabelSlotWidthPx(
+                buttonWidthPx = toggleSize.toPx(),
+                actualSpacingPx = toggleRowLayout.actualSpacingPx,
+                edge = true,
+            ).toDp()
+        }
         val estimatedControlsHeight = toggleSize +
             controlsSpacing +
             sliderHeight +
@@ -489,6 +589,9 @@ fun ControlCenterLayer(
             footerTopGap
         val verticalScrollEnabled = estimatedContentHeight > maxHeight
         LaunchedEffect(verticalScrollEnabled, toggleRowFits) {
+            if (!verticalScrollEnabled) {
+                verticalScrollState.scrollTo(0)
+            }
             verticalOverscroll.snapTo(0f)
             toggleOverscroll.snapTo(0f)
             sharedVerticalElasticState.reset()
@@ -624,7 +727,12 @@ fun ControlCenterLayer(
             // 保留在 content 里；滚动量取自 verticalScrollState（内容不足一屏、
             // 滚动关闭时恒为 0，头部保持全透明）。
             FrostedHeader(
-                scrollProvider = { verticalScrollState.value.toFloat() },
+                scrollProvider = {
+                    controlCenterHeaderScrollOffset(
+                        verticalScrollEnabled = verticalScrollEnabled,
+                        scrollOffsetPx = verticalScrollState.value,
+                    )
+                },
                 height = topStatusHeaderHeight
             ) {
                 Box(
@@ -743,6 +851,7 @@ fun ControlCenterLayer(
                                 size = toggleSize,
                                 iconSize = toggleIconSize,
                                 labelGap = toggleLabelGap,
+                                labelSlotWidth = edgeToggleLabelSlotWidth,
                                 onGestureLockChange = lockControlCenterGesture,
                                 onClick = {
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -761,6 +870,7 @@ fun ControlCenterLayer(
                                 size = toggleSize,
                                 iconSize = toggleIconSize,
                                 labelGap = toggleLabelGap,
+                                labelSlotWidth = innerToggleLabelSlotWidth,
                                 onGestureLockChange = lockControlCenterGesture,
                                 onClick = {
                                     requestBluetoothToggle(
@@ -780,6 +890,7 @@ fun ControlCenterLayer(
                                 size = toggleSize,
                                 iconSize = toggleIconSize,
                                 labelGap = toggleLabelGap,
+                                labelSlotWidth = innerToggleLabelSlotWidth,
                                 onGestureLockChange = lockControlCenterGesture,
                                 onClick = {
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -798,6 +909,7 @@ fun ControlCenterLayer(
                                 size = toggleSize,
                                 iconSize = toggleIconSize,
                                 labelGap = toggleLabelGap,
+                                labelSlotWidth = edgeToggleLabelSlotWidth,
                                 activeColor = Color(0xFFBF5AF2),
                                 onGestureLockChange = lockControlCenterGesture,
                                 onClick = {
@@ -831,6 +943,7 @@ fun ControlCenterLayer(
                                     size = toggleSize,
                                     iconSize = toggleIconSize,
                                     labelGap = toggleLabelGap,
+                                    labelSlotWidth = edgeToggleLabelSlotWidth,
                                     onGestureLockChange = lockControlCenterGesture,
                                     onClick = {
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -849,6 +962,7 @@ fun ControlCenterLayer(
                                     size = toggleSize,
                                     iconSize = toggleIconSize,
                                     labelGap = toggleLabelGap,
+                                    labelSlotWidth = innerToggleLabelSlotWidth,
                                     onGestureLockChange = lockControlCenterGesture,
                                     onClick = {
                                         requestBluetoothToggle(
@@ -868,6 +982,7 @@ fun ControlCenterLayer(
                                     size = toggleSize,
                                     iconSize = toggleIconSize,
                                     labelGap = toggleLabelGap,
+                                    labelSlotWidth = innerToggleLabelSlotWidth,
                                     onGestureLockChange = lockControlCenterGesture,
                                     onClick = {
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -886,6 +1001,7 @@ fun ControlCenterLayer(
                                     size = toggleSize,
                                     iconSize = toggleIconSize,
                                     labelGap = toggleLabelGap,
+                                    labelSlotWidth = edgeToggleLabelSlotWidth,
                                     activeColor = Color(0xFFBF5AF2),
                                     onGestureLockChange = lockControlCenterGesture,
                                     onClick = {
@@ -971,7 +1087,7 @@ fun ControlCenterLayer(
 }
 
 @Composable
-fun CompactControlCenterMusicCard(
+fun SideScreenControlCenterMusicCard(
     notificationAccessGranted: Boolean,
     musicTextSwitchAnimation: String = MusicTextSwitchAnimations.DEFAULT_ID,
     showMediaCustomActions: Boolean = true,
@@ -994,6 +1110,7 @@ fun CompactControlCenterMusicCard(
                 openMusicApp(context, mediaState.appPackage)
             }
         },
+        compact = false,
         modifier = modifier
     )
 }
@@ -1192,12 +1309,32 @@ private fun ControlToggle(
     size: androidx.compose.ui.unit.Dp,
     iconSize: androidx.compose.ui.unit.Dp,
     labelGap: androidx.compose.ui.unit.Dp,
+    labelSlotWidth: androidx.compose.ui.unit.Dp,
     // watchOS 语义：连接类开关亮蓝，勿扰亮紫 —— 而不是四个开关同一个纯白。
     activeColor: Color = Color(0xFF0A84FF),
     onGestureLockChange: (Boolean) -> Unit = {},
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
+    val density = LocalDensity.current
+    val labelStyle = TextStyle(
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Medium,
+        textAlign = TextAlign.Center,
+    )
+    val textMeasurer = rememberTextMeasurer()
+    val labelTextWidthPx = remember(label, labelStyle, textMeasurer) {
+        textMeasurer.measure(
+            text = label,
+            style = labelStyle,
+            maxLines = 1,
+            softWrap = false,
+        ).size.width.toFloat()
+    }
+    val labelOverflows = controlToggleLabelOverflows(
+        slotWidthPx = with(density) { labelSlotWidth.toPx() },
+        textWidthPx = labelTextWidthPx,
+    )
     val pressedState = rememberPressedState()
     val pressed by pressedState
     val darkMode = WatchColors.isDark
@@ -1259,13 +1396,23 @@ private fun ControlToggle(
         Text(
             text = label,
             color = WatchColors.TextSecondary,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
+            style = labelStyle,
             maxLines = 1,
             softWrap = false,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
+            overflow = TextOverflow.Clip,
+            modifier = Modifier
+                .width(labelSlotWidth)
+                .then(
+                    if (labelOverflows) {
+                        Modifier.basicMarquee(
+                            iterations = Int.MAX_VALUE,
+                            initialDelayMillis = 1_200,
+                            velocity = CONTROL_TOGGLE_LABEL_MARQUEE_SPEED_DP_PER_SECOND.dp,
+                        )
+                    } else {
+                        Modifier
+                    }
+                ),
         )
     }
 }
@@ -1273,6 +1420,7 @@ private fun ControlToggle(
 internal data class ControlToggleRowLayout(
     val scrollable: Boolean,
     val spacingPx: Float,
+    val actualSpacingPx: Float,
     val useSpaceBetween: Boolean,
 )
 
@@ -1296,6 +1444,7 @@ internal fun controlToggleRowLayout(
         return ControlToggleRowLayout(
             scrollable = availableWidthPx < safeButtonWidth,
             spacingPx = 0f,
+            actualSpacingPx = 0f,
             useSpaceBetween = false,
         )
     }
@@ -1305,6 +1454,7 @@ internal fun controlToggleRowLayout(
         return ControlToggleRowLayout(
             scrollable = true,
             spacingPx = safePreferredSpacing,
+            actualSpacingPx = safePreferredSpacing,
             useSpaceBetween = false,
         )
     }
@@ -1317,6 +1467,7 @@ internal fun controlToggleRowLayout(
         } else {
             exactSpacing.coerceAtLeast(minimumSpacingPx)
         },
+        actualSpacingPx = exactSpacing.coerceAtLeast(minimumSpacingPx),
         useSpaceBetween = useSpaceBetween,
     )
 }
@@ -1415,8 +1566,10 @@ private fun MediaControlCard(
     onOpenApp: () -> Unit,
     onOpenNotificationAccess: () -> Unit,
     onOpenOutputSwitcherOrApp: () -> Unit,
+    compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    val layout = mediaCardLayoutSpec(compact)
     val launcherStyle = LauncherTheme.style
     val resolvedMediaTitle = mediaState.title.ifBlank {
         stringResource(R.string.cc_media_not_playing)
@@ -1484,7 +1637,7 @@ private fun MediaControlCard(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(156.dp)
+            .height(layout.cardHeightDp.dp)
             .graphicsLayer {
                 scaleX = cardScale
                 scaleY = cardScale
@@ -1562,20 +1715,22 @@ private fun MediaControlCard(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(12.dp)
+                .padding(layout.paddingDp.dp)
         ) {
             if (!notificationAccessGranted) {
                 MediaNotificationAccessPrompt(
                     primaryColor = primaryContentColor,
                     secondaryColor = secondaryContentColor,
                     controlColor = controlContentColor,
+                    compact = compact,
                 )
             } else {
                 BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val artworkGap = 12.dp
-            val preferredArtworkSize = 132.dp
-            val minArtworkSize = 96.dp
-            val preferredControlsWidth = 36.dp * 3f + 8.dp * 2f
+            val artworkGap = layout.artworkGapDp.dp
+            val preferredArtworkSize = layout.artworkSizeDp.dp
+            val minArtworkSize = if (compact) 68.dp else 96.dp
+            val preferredControlsWidth = layout.controlButtonDp.dp * 3f +
+                (if (compact) 5.dp else 8.dp) * 2f
             val artworkSize = if (maxWidth >= preferredArtworkSize + artworkGap + preferredControlsWidth) {
                 preferredArtworkSize
             } else {
@@ -1617,7 +1772,7 @@ private fun MediaControlCard(
                                     contentDescription = null,
                                     tint = controlContentColor,
                                     modifier = Modifier
-                                        .size(34.dp)
+                                        .size(if (compact) 26.dp else 34.dp)
                                         .offset(x = (-2).dp),
                                 )
                             }
@@ -1646,14 +1801,14 @@ private fun MediaControlCard(
                                 AnimatedMusicText(
                                     text = resolvedMediaTitle,
                                     color = primaryContentColor,
-                                    fontSize = 15.sp,
+                                    fontSize = layout.titleFontSizeSp.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     animationStyleId = musicTextSwitchAnimation
                                 )
                                 AnimatedMusicText(
                                     text = resolvedMediaArtist,
                                     color = secondaryContentColor,
-                                    fontSize = 11.sp,
+                                    fontSize = layout.artistFontSizeSp.sp,
                                     fontWeight = FontWeight.Normal,
                                     animationStyleId = musicTextSwitchAnimation
                                 )
@@ -1675,6 +1830,7 @@ private fun MediaControlCard(
                         onGestureLockChange = onGestureLockChange,
                         foregroundColor = controlContentColor,
                         secondaryTextColor = secondaryContentColor,
+                        compact = compact,
                         modifier = Modifier.fillMaxWidth()
                     )
                     MediaControlsRow(
@@ -1682,6 +1838,7 @@ private fun MediaControlCard(
                         showCustomActions = showCustomActions,
                         onGestureLockChange = onGestureLockChange,
                         foregroundColor = controlContentColor,
+                        compact = compact,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -1805,6 +1962,7 @@ private fun MediaNotificationAccessPrompt(
     primaryColor: Color,
     secondaryColor: Color,
     controlColor: Color,
+    compact: Boolean,
 ) {
     Row(
         modifier = Modifier.fillMaxSize(),
@@ -1812,8 +1970,8 @@ private fun MediaNotificationAccessPrompt(
     ) {
         Box(
             modifier = Modifier
-                .size(132.dp)
-                .clip(RoundedCornerShape(24.dp))
+                .size(if (compact) 92.dp else 132.dp)
+                .clip(RoundedCornerShape(if (compact) 18.dp else 24.dp))
                 .background(controlColor.copy(alpha = 0.12f)),
             contentAlignment = Alignment.Center
         ) {
@@ -1821,10 +1979,10 @@ private fun MediaNotificationAccessPrompt(
                 imageVector = MiuixIcons.Music,
                 contentDescription = null,
                 tint = controlColor,
-                modifier = Modifier.size(34.dp),
+                modifier = Modifier.size(if (compact) 26.dp else 34.dp),
             )
         }
-        Spacer(Modifier.width(12.dp))
+        Spacer(Modifier.width(if (compact) 8.dp else 12.dp))
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.Center
@@ -1832,27 +1990,32 @@ private fun MediaNotificationAccessPrompt(
             Text(
                 text = stringResource(R.string.cc_notification_permission_title),
                 color = primaryColor,
-                fontSize = 15.sp,
+                fontSize = if (compact) 13.sp else 15.sp,
                 fontWeight = FontWeight.SemiBold
             )
-            Spacer(Modifier.height(5.dp))
+            Spacer(Modifier.height(if (compact) 2.dp else 5.dp))
             Text(
                 text = stringResource(R.string.cc_media_permission_subtitle),
                 color = secondaryColor,
-                fontSize = 11.sp,
-                lineHeight = 15.sp
+                fontSize = if (compact) 9.sp else 11.sp,
+                lineHeight = if (compact) 12.sp else 15.sp,
+                maxLines = if (compact) 1 else Int.MAX_VALUE,
+                overflow = TextOverflow.Ellipsis,
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(if (compact) 5.dp else 12.dp))
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(999.dp))
                     .background(controlColor.copy(alpha = 0.14f))
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .padding(
+                        horizontal = if (compact) 8.dp else 12.dp,
+                        vertical = if (compact) 4.dp else 6.dp,
+                    )
             ) {
                 Text(
                     text = stringResource(R.string.cc_media_permission_action),
                     color = controlColor,
-                    fontSize = 11.sp,
+                    fontSize = if (compact) 9.sp else 11.sp,
                     fontWeight = FontWeight.SemiBold
                 )
             }
@@ -1905,15 +2068,16 @@ private fun MediaControlsRow(
     showCustomActions: Boolean,
     onGestureLockChange: (Boolean) -> Unit,
     foregroundColor: Color,
+    compact: Boolean,
     modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(modifier = modifier, contentAlignment = Alignment.Center) {
         val customActions = if (showCustomActions) mediaState.customActions.take(2) else emptyList()
-        val preferredButtonSize = 36.dp
-        val minButtonSize = 24.dp
-        val customButtonScale = 1.12f
-        val preferredSpacing = 8.dp
-        val minSpacing = 4.dp
+        val preferredButtonSize = if (compact) 28.dp else 36.dp
+        val minButtonSize = if (compact) 22.dp else 24.dp
+        val customButtonScale = if (compact) 1.05f else 1.12f
+        val preferredSpacing = if (compact) 5.dp else 8.dp
+        val minSpacing = if (compact) 3.dp else 4.dp
         val customCountFloat = customActions.size.toFloat()
         val buttonCount = 3 + customActions.size
         val gapCountFloat = (buttonCount - 1).coerceAtLeast(1).toFloat()
@@ -2335,6 +2499,7 @@ private fun MediaProgressSection(
     onGestureLockChange: (Boolean) -> Unit,
     foregroundColor: Color,
     secondaryTextColor: Color,
+    compact: Boolean,
     modifier: Modifier = Modifier
 ) {
     val currentMediaState by rememberUpdatedState(mediaState)
@@ -2372,6 +2537,8 @@ private fun MediaProgressSection(
             localProgress = mediaState.progress.coerceIn(0f, 1f)
         }
     }
+    val hitHeightDp = if (compact) 16f else MEDIA_PROGRESS_HIT_HEIGHT_DP
+    val timeFontSize = if (compact) 8.sp else 10.sp
     val trackHeight by animateFloatAsState(
         if (dragging) MEDIA_PROGRESS_EXPANDED_HEIGHT_DP else MEDIA_PROGRESS_COLLAPSED_HEIGHT_DP,
         label = "media_progress_height"
@@ -2385,10 +2552,10 @@ private fun MediaProgressSection(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(MEDIA_PROGRESS_HIT_HEIGHT_DP.dp)
+                .height(hitHeightDp.dp)
                 .onSizeChanged { widthPx = it.width.coerceAtLeast(1) }
                 .pointerInput(Unit) {
-                    val dragHitHeightPx = MEDIA_PROGRESS_HIT_HEIGHT_DP.dp.toPx()
+                    val dragHitHeightPx = hitHeightDp.dp.toPx()
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         val centerY = size.height / 2f
@@ -2461,12 +2628,12 @@ private fun MediaProgressSection(
             Text(
                 text = formatMediaTime((localProgress.coerceIn(0f, 1f) * mediaState.durationMs).toLong()),
                 color = secondaryTextColor,
-                fontSize = 10.sp
+                fontSize = timeFontSize
             )
             Text(
                 text = formatMediaTime(mediaState.durationMs),
                 color = secondaryTextColor,
-                fontSize = 10.sp
+                fontSize = timeFontSize
             )
         }
     }

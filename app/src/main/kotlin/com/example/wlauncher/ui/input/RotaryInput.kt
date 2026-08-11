@@ -14,7 +14,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import kotlin.math.abs
 import kotlin.math.sign
 
-private const val ROTARY_HAPTIC_MIN_INTERVAL_MS = 90L
+internal const val ROTARY_HAPTIC_MIN_INTERVAL_MS = 140L
+internal const val ROTARY_SCROLL_MULTIPLIER = 0.65f
+internal const val ROTARY_SCROLL_MAX_STEP_PX = 48f
 
 internal class RotaryHapticGate(
     private val minIntervalMs: Long = ROTARY_HAPTIC_MIN_INTERVAL_MS
@@ -54,7 +56,10 @@ suspend fun FocusRequester.requestFocusAfterFirstFrame() {
     runCatching { requestFocus() }
 }
 
-fun tunedRotaryScrollDelta(verticalScrollPixels: Float, multiplier: Float = 1f): Float {
+fun tunedRotaryScrollDelta(
+    verticalScrollPixels: Float,
+    multiplier: Float = ROTARY_SCROLL_MULTIPLIER,
+): Float {
     val magnitude = abs(verticalScrollPixels)
     if (magnitude < 0.01f) return 0f
 
@@ -69,8 +74,9 @@ fun tunedRotaryScrollDelta(verticalScrollPixels: Float, multiplier: Float = 1f):
         magnitude < 24f -> magnitude * 2.2f
         else -> 64f
     }
-    val maxStep = 72f * multiplier.coerceIn(0.5f, 1.25f)
-    return sign(verticalScrollPixels) * (tunedMagnitude * multiplier).coerceAtMost(maxStep)
+    return sign(verticalScrollPixels) *
+        (tunedMagnitude * multiplier.coerceIn(0.5f, 1.25f))
+            .coerceAtMost(ROTARY_SCROLL_MAX_STEP_PX)
 }
 
 fun normalizeDrawerScrollDelta(
@@ -105,21 +111,21 @@ fun normalizeDrawerScrollDelta(
 
     val modeMultiplier = when (mode) {
         DrawerInputMode.Honeycomb -> when (source) {
-            DrawerInputSource.Rotary -> 0.68f
+            DrawerInputSource.Rotary -> ROTARY_SCROLL_MULTIPLIER
             DrawerInputSource.MouseWheel -> 0.76f
         }
         DrawerInputMode.List -> when (source) {
-            DrawerInputSource.Rotary -> 0.82f
+            DrawerInputSource.Rotary -> ROTARY_SCROLL_MULTIPLIER
             DrawerInputSource.MouseWheel -> 0.92f
         }
     }
     val maxStep = when (mode) {
         DrawerInputMode.Honeycomb -> when (source) {
-            DrawerInputSource.Rotary -> 54f
+            DrawerInputSource.Rotary -> ROTARY_SCROLL_MAX_STEP_PX
             DrawerInputSource.MouseWheel -> 72f
         }
         DrawerInputMode.List -> when (source) {
-            DrawerInputSource.Rotary -> 64f
+            DrawerInputSource.Rotary -> ROTARY_SCROLL_MAX_STEP_PX
             DrawerInputSource.MouseWheel -> 82f
         }
     }
@@ -161,8 +167,9 @@ private fun Modifier.tunedPointerWheelScrollable(
 
 fun Modifier.flueRotaryScrollable(
     focusRequester: FocusRequester,
-    multiplier: Float = 1f,
+    multiplier: Float = ROTARY_SCROLL_MULTIPLIER,
     onRotaryScroll: (() -> Unit)? = null,
+    onRotaryDelta: ((Float) -> Unit)? = null,
     onScroll: (Float) -> Unit
 ): Modifier = composed {
     val hapticGate = remember { RotaryHapticGate() }
@@ -170,13 +177,17 @@ fun Modifier.flueRotaryScrollable(
     fun consume(deltaPixels: Float): Boolean {
         val tuned = tunedRotaryScrollDelta(-deltaPixels, multiplier)
         if (tuned == 0f) return false
-        if (onRotaryScroll != null) {
+        if (onRotaryDelta != null) {
+            onRotaryDelta(tuned)
+        } else if (onRotaryScroll != null) {
             val now = android.os.SystemClock.elapsedRealtime()
             if (hapticGate.tryAcquire(now)) {
                 onRotaryScroll()
             }
+            onScroll(tuned)
+        } else {
+            onScroll(tuned)
         }
-        onScroll(tuned)
         return true
     }
 
@@ -193,6 +204,7 @@ fun Modifier.flueDrawerRotaryScrollable(
     focusRequester: FocusRequester,
     mode: DrawerInputMode,
     onRotaryScroll: (() -> Unit)? = null,
+    onRotaryDelta: ((Float) -> Unit)? = null,
     onScroll: (Float) -> Unit
 ): Modifier = composed {
     val hapticGate = remember { RotaryHapticGate() }
@@ -204,13 +216,17 @@ fun Modifier.flueDrawerRotaryScrollable(
             mode = mode
         )
         if (tuned == 0f) return false
-        if (onRotaryScroll != null) {
+        if (onRotaryDelta != null) {
+            onRotaryDelta(tuned)
+        } else if (onRotaryScroll != null) {
             val now = android.os.SystemClock.elapsedRealtime()
             if (hapticGate.tryAcquire(now)) {
                 onRotaryScroll()
             }
+            onScroll(tuned)
+        } else {
+            onScroll(tuned)
         }
-        onScroll(tuned)
         return true
     }
 

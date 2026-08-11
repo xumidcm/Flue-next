@@ -75,6 +75,7 @@ import com.flue.launcher.ui.anim.LayerPivot
 import com.flue.launcher.motion.asFloatAnimationSpec
 import com.flue.launcher.motion.LocalFlueMotionProfile
 import com.flue.launcher.ui.controlcenter.ControlCenterLayer
+import com.flue.launcher.ui.controlcenter.controlCenterCardPlacement
 import com.flue.launcher.ui.drawer.AppFolderOverlay
 import com.flue.launcher.ui.drawer.NativeListDrawerScreen
 import com.flue.launcher.ui.drawer.NativeAppListEdgeFadeOverlay
@@ -359,6 +360,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val showMusicControls by vm.showMusicControls.collectAsStateWithLifecycle()
     val showMediaCustomActions by vm.showMediaCustomActions.collectAsStateWithLifecycle()
     val swapMusicNotificationComponents by vm.swapMusicNotificationComponents.collectAsStateWithLifecycle()
+    val cardPlacement = controlCenterCardPlacement(
+        showMusic = showMusicControls,
+        showNotifications = showNotification,
+        swapped = swapMusicNotificationComponents,
+    )
     val musicTextSwitchAnimation by vm.musicTextSwitchAnimation.collectAsStateWithLifecycle()
     val glassHighlightEnabled by vm.glassHighlightEnabled.collectAsStateWithLifecycle()
     val launchSourceState by vm.launchSourceState.collectAsStateWithLifecycle()
@@ -2377,13 +2383,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         apps = allApps,
                         sideScreenShortcuts = sideScreenShortcuts,
                         previewGroups = sideScreenPreviewGroups,
-                        showMusicCard = showMusicControls && swapMusicNotificationComponents,
+                        showMusicCard = cardPlacement.musicOnSideScreen,
                         showMediaCustomActions = showMediaCustomActions,
                         musicTextSwitchAnimation = musicTextSwitchAnimation,
                         glassHighlightEnabled = glassHighlightEnabled,
                         overlayMaskCornerRadiusDp = overlayMaskCornerRadiusDp,
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
-                        notificationsEnabled = notificationsEnabled,
+                        notificationsEnabled =
+                            notificationsEnabled && cardPlacement.notificationOnSideScreen,
                         notificationAccessGranted = notificationAccessGranted,
                         notificationsSceneActive = notificationSceneActive,
                         notificationTransitionProgress = notificationProgress,
@@ -2508,11 +2515,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 ) {
                     ControlCenterLayer(
                         leftSafeInsetPercent = appListLeftSafeInsetPercent,
-                        showMusicControls = showMusicControls && !swapMusicNotificationComponents,
+                        showMusicControls = cardPlacement.musicInControlCenter,
                         notificationAccessGranted = notificationAccessGranted,
                         musicTextSwitchAnimation = musicTextSwitchAnimation,
                         showMediaCustomActions = showMediaCustomActions,
-                        showNotificationCard = showNotification && swapMusicNotificationComponents,
+                        showNotificationCard = cardPlacement.notificationInControlCenter,
                         notificationGroups = sideScreenPreviewGroups,
                         onOpenNotifications = { openNotificationsFrom(ScreenState.ControlCenter) },
                         onDismissProgressChange = { progress ->

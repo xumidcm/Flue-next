@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.annotation.StringRes
@@ -35,6 +36,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -88,6 +90,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
@@ -143,6 +146,11 @@ import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.ui.common.roundScrollablePadding
 import com.flue.launcher.ui.common.rememberFluePressScale
 import com.flue.launcher.ui.common.rememberFluePullToRefreshState
+import com.flue.launcher.ui.drawer.vibrateHaptic
+import com.flue.launcher.ui.input.ROTARY_SCROLL_MULTIPLIER
+import com.flue.launcher.ui.input.RotaryHapticGate
+import com.flue.launcher.ui.input.flueRotaryScrollable
+import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchColors
@@ -191,6 +199,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
@@ -217,6 +226,8 @@ class WatchStoreActivity : FlueComponentActivity() {
             val uiStyle by launcherViewModel.uiStyle.collectAsStateWithLifecycle()
             val screenShapeOverride by launcherViewModel.screenShapeOverride.collectAsStateWithLifecycle()
             val uiScale by launcherViewModel.globalUiScalePercent.collectAsStateWithLifecycle()
+            val rotaryHapticsEnabled by
+                launcherViewModel.rotaryHapticsEnabled.collectAsStateWithLifecycle()
             val availableWatchFaces by launcherViewModel.availableWatchFaces.collectAsStateWithLifecycle()
             val resumeToken by resumeGeneration.collectAsStateWithLifecycle()
             val exportScope = rememberCoroutineScope()
@@ -257,6 +268,7 @@ class WatchStoreActivity : FlueComponentActivity() {
                         repository = repository,
                         uiPreferences = uiPreferences,
                         reconcileToken = resumeToken,
+                        rotaryHapticsEnabled = rotaryHapticsEnabled,
                         onBack = ::finish,
                         installArchive = { archive, installAsRound ->
                             val installed = launcherViewModel.installWatchStoreArchive(archive, installAsRound)
@@ -350,6 +362,7 @@ private fun WatchStoreScreen(
     repository: WatchStoreRepository,
     uiPreferences: WatchStoreUiPreferences,
     reconcileToken: Int,
+    rotaryHapticsEnabled: Boolean,
     onBack: () -> Unit,
     installArchive: suspend (java.io.File, installAsRound: Boolean) -> Result<InstalledStoreWatchFace>,
     useInstalled: (launcherId: String) -> Unit,
@@ -361,8 +374,14 @@ private fun WatchStoreScreen(
     val style = LauncherTheme.style
     val isScreenRound = isFlueScreenRound()
     val scope = rememberCoroutineScope()
+    val focusRequester = remember { FocusRequester() }
+    val rotaryHapticGate = remember { RotaryHapticGate() }
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocusAfterFirstFrame()
+    }
     var viewMode by remember { mutableStateOf(uiPreferences.readViewMode()) }
     var sort by remember { mutableStateOf(WatchStoreSort.LATEST) }
     var screenType by remember { mutableStateOf<WatchStoreScreenType?>(null) }
@@ -1061,6 +1080,24 @@ private fun WatchStoreScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .onGloballyPositioned { browseListTopInWindow = it.positionInWindow().y }
+                            .flueRotaryScrollable(
+                                focusRequester = focusRequester,
+                                multiplier = ROTARY_SCROLL_MULTIPLIER,
+                                onRotaryDelta = { rotaryDelta ->
+                                    scope.launch {
+                                        val consumed = listState.scrollBy(-rotaryDelta)
+                                        if (
+                                            rotaryHapticsEnabled &&
+                                            abs(consumed) > 0.01f &&
+                                            rotaryHapticGate.tryAcquire(SystemClock.elapsedRealtime())
+                                        ) {
+                                            vibrateHaptic(context)
+                                        }
+                                    }
+                                },
+                            ) { pointerDelta ->
+                                scope.launch { listState.scrollBy(-pointerDelta) }
+                            }
                             .flueElasticNestedScroll(listState)
                             .fluePullToRefresh(pullRefreshState),
                         contentPadding = browseContentPadding,
@@ -1141,6 +1178,24 @@ private fun WatchStoreScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .onGloballyPositioned { browseListTopInWindow = it.positionInWindow().y }
+                            .flueRotaryScrollable(
+                                focusRequester = focusRequester,
+                                multiplier = ROTARY_SCROLL_MULTIPLIER,
+                                onRotaryDelta = { rotaryDelta ->
+                                    scope.launch {
+                                        val consumed = gridState.scrollBy(-rotaryDelta)
+                                        if (
+                                            rotaryHapticsEnabled &&
+                                            abs(consumed) > 0.01f &&
+                                            rotaryHapticGate.tryAcquire(SystemClock.elapsedRealtime())
+                                        ) {
+                                            vibrateHaptic(context)
+                                        }
+                                    }
+                                },
+                            ) { pointerDelta ->
+                                scope.launch { gridState.scrollBy(-pointerDelta) }
+                            }
                             .fluePullToRefresh(pullRefreshState),
                         contentPadding = browseContentPadding,
                         verticalArrangement = Arrangement.spacedBy(10.dp),

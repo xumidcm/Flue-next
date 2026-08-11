@@ -18,6 +18,7 @@ import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings as AndroidSettings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -182,6 +183,8 @@ import com.flue.launcher.motion.MotionPhaseKey
 import com.flue.launcher.ui.controlcenter.MusicTextSwitchAnimations
 import com.flue.launcher.ui.drawer.vibrateHaptic
 import com.flue.launcher.ui.input.flueRotaryScrollable
+import com.flue.launcher.ui.input.ROTARY_SCROLL_MULTIPLIER
+import com.flue.launcher.ui.input.RotaryHapticGate
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.settings.WatchFaceSettingCard
@@ -231,6 +234,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.Locale
 import kotlin.math.roundToInt
+import kotlin.math.abs
 
 private val ABOUT_VERSION = BuildConfig.VERSION_NAME
 private data class OpenSourceProject(val name: String, val url: String)
@@ -3869,6 +3873,7 @@ private fun SettingsPageScaffold(
     )
     val focusRequester = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
+    val rotaryHapticGate = remember { RotaryHapticGate() }
     val latestOnScrollChanged = rememberUpdatedState(onScrollChanged)
 
     LaunchedEffect(listState) {
@@ -3900,7 +3905,7 @@ private fun SettingsPageScaffold(
         focusRequester.requestFocusAfterFirstFrame()
     }
 
-    val rotaryScrollMultiplier = 1.18f
+    val rotaryScrollMultiplier = ROTARY_SCROLL_MULTIPLIER
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val screenHeightPx = constraints.maxHeight.toFloat()
@@ -3990,9 +3995,18 @@ private fun SettingsPageScaffold(
                 .flueRotaryScrollable(
                     focusRequester,
                     rotaryScrollMultiplier,
-                    onRotaryScroll = {
-                        if (rotaryHapticsEnabled) vibrateHaptic(context)
-                    }
+                    onRotaryDelta = { rotaryDelta ->
+                        scope.launch {
+                            val consumed = listState.scrollBy(-rotaryDelta)
+                            if (
+                                rotaryHapticsEnabled &&
+                                abs(consumed) > 0.01f &&
+                                rotaryHapticGate.tryAcquire(SystemClock.elapsedRealtime())
+                            ) {
+                                vibrateHaptic(context)
+                            }
+                        }
+                    },
                 ) { rotaryDelta ->
                     scope.launch {
                         listState.scrollBy(-rotaryDelta)

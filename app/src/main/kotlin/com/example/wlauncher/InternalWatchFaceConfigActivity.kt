@@ -71,6 +71,7 @@ import com.flue.launcher.ui.home.BuiltInWatchFacePreview
 import com.flue.launcher.ui.home.FIXED_PREVIEW_CLOCK
 import com.flue.launcher.ui.common.flueElasticNestedScroll
 import com.flue.launcher.ui.input.flueRotaryScrollable
+import com.flue.launcher.ui.input.ROTARY_SCROLL_MULTIPLIER
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
@@ -345,7 +346,7 @@ private fun InternalWatchFaceConfigScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .background(launcherStyle.screenBackground)
-                .flueRotaryScrollable(focusRequester, 0.9f) { rotaryDelta ->
+                .flueRotaryScrollable(focusRequester, ROTARY_SCROLL_MULTIPLIER) { rotaryDelta ->
                     scope.launch { scrollState.scrollBy(-rotaryDelta) }
                 }
                 .flueElasticNestedScroll(scrollState)

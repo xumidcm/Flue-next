@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.input.flueRotaryScrollable
+import com.flue.launcher.ui.input.ROTARY_SCROLL_MULTIPLIER
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.common.flueElasticNestedScroll
 import com.flue.launcher.ui.theme.LauncherTheme
@@ -185,7 +186,7 @@ private fun BuiltInFileManagerScreen(
             .fillMaxSize()
             .background(launcherStyle.screenBackground)
             .padding(16.dp)
-            .flueRotaryScrollable(focusRequester, 0.95f) { rotaryDelta ->
+            .flueRotaryScrollable(focusRequester, ROTARY_SCROLL_MULTIPLIER) { rotaryDelta ->
                 scope.launch { listState.scrollBy(-rotaryDelta) }
             }
     ) {

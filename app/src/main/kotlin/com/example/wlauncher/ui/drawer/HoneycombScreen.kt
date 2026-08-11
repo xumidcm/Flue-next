@@ -1,5 +1,6 @@
 package com.flue.launcher.ui.drawer
 
+import android.os.SystemClock
 import android.os.Build
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
@@ -79,6 +80,7 @@ import com.flue.launcher.ui.anim.platformBlur
 import com.flue.launcher.ui.input.DrawerInputMode
 import com.flue.launcher.ui.input.DrawerInputSource
 import com.flue.launcher.ui.input.flueDrawerRotaryScrollable
+import com.flue.launcher.ui.input.RotaryHapticGate
 import com.flue.launcher.ui.input.normalizeDrawerScrollDelta
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.theme.LauncherTheme
@@ -276,6 +278,7 @@ fun HoneycombScreen(
 
         val scrollOffset = remember { Animatable(maxScroll) }
         val scope = rememberCoroutineScope()
+        val rotaryHapticGate = remember { RotaryHapticGate() }
         val overlayBlurActive = (longPressedApp != null || folderOpen) && blurEnabled && !suppressHeavyEffects
         val honeycombAutoScrollEdgePx = with(density) { HONEYCOMB_AUTO_SCROLL_EDGE_DP.dp.toPx() }
         LaunchedEffect(apps) {
@@ -288,7 +291,7 @@ fun HoneycombScreen(
             directScrollOffset = directScrollOffset,
             animatedScrollOffset = scrollOffset.value
         )
-        fun launchWheelScroll(delta: Float) {
+        fun launchWheelScroll(delta: Float, onInitialScrollConsumed: ((Boolean) -> Unit)? = null) {
             if (delta == 0f) return
             wheelMomentumJob?.cancel()
             wheelMomentumJob = scope.launch {
@@ -297,6 +300,7 @@ fun HoneycombScreen(
                 }
                 val start = currentScrollOffsetValue()
                 scrollOffset.snapTo((start + delta).coerceIn(minScroll, maxScroll))
+                onInitialScrollConsumed?.invoke(abs(scrollOffset.value - start) > 0.01f)
                 directScrollOffset = Float.NaN
                 var tail = delta * 0.55f
                 repeat(6) {
@@ -432,7 +436,17 @@ fun HoneycombScreen(
                 .flueDrawerRotaryScrollable(
                     focusRequester,
                     DrawerInputMode.Honeycomb,
-                    onRotaryScroll = { if (rotaryHapticsEnabled) vibrateHaptic(context) }
+                    onRotaryDelta = { rotaryDelta ->
+                        launchWheelScroll(-rotaryDelta) { scrollOffsetChanged ->
+                            if (
+                                rotaryHapticsEnabled &&
+                                scrollOffsetChanged &&
+                                rotaryHapticGate.tryAcquire(SystemClock.elapsedRealtime())
+                            ) {
+                                vibrateHaptic(context)
+                            }
+                        }
+                    },
                 ) { rotaryDelta ->
                     launchWheelScroll(-rotaryDelta)
                 }
@@ -1265,6 +1279,7 @@ private fun MaterialDenseGridScreen(
     val appKeys = remember(apps) { apps.map { AppItemKey(it.componentKey) } }
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
+    val rotaryHapticGate = remember { RotaryHapticGate() }
     val launcherStyle = LauncherTheme.style
     val appPalette = appListPalette(themeColor, darkMode, UiStyle.MATERIAL_3, useWatchFaceColors)
     val entryVisuals = appListEntryVisuals(
@@ -1416,7 +1431,18 @@ private fun MaterialDenseGridScreen(
             .flueDrawerRotaryScrollable(
                 focusRequester,
                 DrawerInputMode.Honeycomb,
-                onRotaryScroll = { if (rotaryHapticsEnabled) vibrateHaptic(context) }
+                onRotaryDelta = { rotaryDelta ->
+                    scope.launch {
+                        val consumed = gridState.scrollBy(-rotaryDelta)
+                        if (
+                            rotaryHapticsEnabled &&
+                            abs(consumed) > 0.01f &&
+                            rotaryHapticGate.tryAcquire(SystemClock.elapsedRealtime())
+                        ) {
+                            vibrateHaptic(context)
+                        }
+                    }
+                },
             ) { rotaryDelta ->
                 scope.launch { gridState.scrollBy(-rotaryDelta) }
             }

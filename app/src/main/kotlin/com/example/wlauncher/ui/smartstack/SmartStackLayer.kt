@@ -160,7 +160,8 @@ import com.flue.launcher.ui.common.fluePressScale
 import com.flue.launcher.ui.common.rememberFluePressScale
 import com.flue.launcher.ui.common.rememberFlueElasticScrollState
 import com.flue.launcher.ui.common.flueElasticNestedScroll
-import com.flue.launcher.ui.controlcenter.CompactControlCenterMusicCard
+import com.flue.launcher.ui.controlcenter.SideScreenControlCenterMusicCard
+import com.flue.launcher.ui.controlcenter.sideScreenContentAllowsVerticalScroll
 import com.flue.launcher.ui.controlcenter.MusicTextSwitchAnimations
 import com.flue.launcher.ui.drawer.AppBubble
 import com.flue.launcher.ui.drawer.AppShortcutOverlay
@@ -641,8 +642,8 @@ fun SmartStackLayer(
                         lastDragEventUptime = 0L
                     },
                     onDrag = { change, dragAmount ->
-                        val listAtTop = true
-                        val listAtBottom = true
+                        val listAtTop = contentScrollState.value <= 0
+                        val listAtBottom = contentScrollState.value >= contentScrollState.maxValue
                         if (lastDragEventUptime != 0L) {
                             val deltaMs = (change.uptimeMillis - lastDragEventUptime).coerceAtLeast(1L)
                             val instantVelocityX = dragAmount.x / deltaMs * 1000f
@@ -767,7 +768,10 @@ fun SmartStackLayer(
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val availableWidth = maxWidth - leftSafeInset
         val contentWidth = availableWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
-        val verticalScrollEnabled = false
+        val verticalScrollEnabled = sideScreenContentAllowsVerticalScroll(
+            showMusicCard = showMusicCard,
+            showNotificationPreview = showNotificationPreview,
+        )
         val bottomSafePadding = 18.dp
 
         Column(
@@ -839,7 +843,7 @@ fun SmartStackLayer(
             )
             if (showMusicCard) {
                 Spacer(Modifier.height(16.dp))
-                CompactControlCenterMusicCard(
+                SideScreenControlCenterMusicCard(
                     notificationAccessGranted = notificationAccessGranted,
                     musicTextSwitchAnimation = musicTextSwitchAnimation,
                     showMediaCustomActions = showMediaCustomActions,
@@ -918,8 +922,10 @@ fun SmartStackLayer(
                         }
                     }
                 }
-                Spacer(Modifier.height(52.dp))
             }
+            // Reserve the bottom capsule's hit area even when notifications are hidden.
+            // Full-size cards can continue below the viewport and scroll clear of this pill.
+            Spacer(Modifier.height(52.dp))
         }
         WatchBatteryAndStepsPill(
             level = battery.level,

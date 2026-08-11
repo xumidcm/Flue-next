@@ -36,14 +36,44 @@ class NativeAppListScrollControllerTest {
     }
 
     @Test
-    fun rotaryAxisUsesTheSystemVerticalScrollFactor() {
+    fun liveHapticSettingChangesApplyWithoutRecreatingTheScrollOwner() {
+        val target = FakeNativeAppListScrollTarget().apply { consumeScroll = true }
+        var enabled = true
+        val owner = NativeAppListConsumedScrollOwner(
+            target = target,
+            configProvider = { NativeAppListConfig(rotaryHapticsEnabled = enabled) },
+            hapticGate = NativeAppListHapticGate(minIntervalMs = 0L),
+        )
+
+        owner.scrollBy(NativeAppListScrollSource.RotaryEncoder, 10, 0L)
+        enabled = false
+        owner.scrollBy(NativeAppListScrollSource.RotaryEncoder, 10, 1L)
+        enabled = true
+        owner.scrollBy(NativeAppListScrollSource.RotaryEncoder, 10, 2L)
+
+        assertEquals(2, target.clockTickCount)
+    }
+
+    @Test
+    fun rotaryAxisUsesTheSystemVerticalScrollFactorAndCrownMultiplier() {
         val delta = nativeAppListScrollDeltaPixels(
             source = NativeAppListScrollSource.RotaryEncoder,
             axisValue = 1.5f,
             verticalScrollFactor = 40f,
         )
 
-        assertEquals(-60, delta)
+        assertEquals(-39, delta)
+    }
+
+    @Test
+    fun rotaryAxisIsTunedToTheSlowerCrownRateAndCappedPerEvent() {
+        val delta = nativeAppListScrollDeltaPixels(
+            source = NativeAppListScrollSource.RotaryEncoder,
+            axisValue = 4f,
+            verticalScrollFactor = 40f,
+        )
+
+        assertEquals(-48, delta)
     }
 
     @Test
@@ -92,6 +122,15 @@ class NativeAppListScrollControllerTest {
         assertTrue(gate.tryAcquire(nowMs = 0L))
         assertFalse(gate.tryAcquire(nowMs = 89L))
         assertTrue(gate.tryAcquire(nowMs = 90L))
+    }
+
+    @Test
+    fun defaultNativeGateKeepsA140MillisecondMinimumInterval() {
+        val gate = NativeAppListHapticGate()
+
+        assertTrue(gate.tryAcquire(nowMs = 1_000L))
+        assertFalse(gate.tryAcquire(nowMs = 1_139L))
+        assertTrue(gate.tryAcquire(nowMs = 1_140L))
     }
 
     @Test

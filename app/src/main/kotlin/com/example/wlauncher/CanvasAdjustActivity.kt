@@ -66,6 +66,7 @@ import com.flue.launcher.i18n.FlueComponentActivity
 import com.flue.launcher.ui.common.flueElasticNestedScroll
 import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.ui.input.flueRotaryScrollable
+import com.flue.launcher.ui.input.ROTARY_SCROLL_MULTIPLIER
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.settings.miuix.MiuixSettingsCard
 import com.flue.launcher.ui.settings.miuix.MiuixSettingsRow
@@ -268,7 +269,7 @@ private fun CanvasAdjustPanel(
             // clox 那张卡片的 0xD9（85%）。
             .background(style.glassThick.fill)
             .border(style.glassThick.borderWidth, style.glassThick.highlight, style.panelShape)
-            .flueRotaryScrollable(focusRequester, 0.9f) { rotaryDelta ->
+                .flueRotaryScrollable(focusRequester, ROTARY_SCROLL_MULTIPLIER) { rotaryDelta ->
                 scope.launch { scrollState.scrollBy(-rotaryDelta) }
             }
             .flueElasticNestedScroll(scrollState)

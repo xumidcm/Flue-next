@@ -7,6 +7,15 @@ import org.junit.Test
 class RotaryHapticGateTest {
 
     @Test
+    fun `default gate keeps a 140 millisecond minimum interval`() {
+        val gate = RotaryHapticGate()
+
+        assertTrue(gate.tryAcquire(nowMs = 1_000L))
+        assertFalse(gate.tryAcquire(nowMs = 1_139L))
+        assertTrue(gate.tryAcquire(nowMs = 1_140L))
+    }
+
+    @Test
     fun `first event is allowed even when elapsed realtime is zero`() {
         val gate = RotaryHapticGate(minIntervalMs = 90L)
 

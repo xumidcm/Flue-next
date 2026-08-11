@@ -17,6 +17,9 @@ class ControlToggleRowLayoutTest {
         assertFalse(layout.scrollable)
         assertEquals(14f, layout.spacingPx, 0f)
         assertTrue(layout.useSpaceBetween)
+        assertEquals(56f, layout.actualSpacingPx, 0f)
+        assertEquals(114f, controlToggleLabelSlotWidthPx(58f, layout.actualSpacingPx, false), 0f)
+        assertEquals(86f, controlToggleLabelSlotWidthPx(58f, layout.actualSpacingPx, true), 0f)
     }
 
     @Test
@@ -56,5 +59,13 @@ class ControlToggleRowLayoutTest {
         assertTrue(layout.scrollable)
         assertEquals(14f, layout.spacingPx, 0f)
         assertFalse(layout.useSpaceBetween)
+    }
+
+    @Test
+    fun `long labels use their own marquee slot without ellipsis`() {
+        assertTrue(controlToggleLabelOverflows(slotWidthPx = 58f, textWidthPx = 74f))
+        assertFalse(controlToggleLabelOverflows(slotWidthPx = 58f, textWidthPx = 52f))
+        assertFalse(controlToggleLabelOverflows(slotWidthPx = 74f, textWidthPx = 74f))
+        assertEquals(14f, CONTROL_TOGGLE_LABEL_MARQUEE_SPEED_DP_PER_SECOND, 0f)
     }
 }

@@ -1,5 +1,6 @@
 package com.flue.launcher.ui.drawer
 
+import android.os.SystemClock
 import android.os.Build
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.Animatable
@@ -79,6 +80,7 @@ import com.flue.launcher.ui.anim.platformBlur
 import com.flue.launcher.ui.input.DrawerInputMode
 import com.flue.launcher.ui.input.DrawerInputSource
 import com.flue.launcher.ui.input.flueDrawerRotaryScrollable
+import com.flue.launcher.ui.input.RotaryHapticGate
 import com.flue.launcher.ui.input.normalizeDrawerScrollDelta
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.theme.UiStyle
@@ -143,6 +145,7 @@ fun ListDrawerScreen(
     val configuration = LocalConfiguration.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val rotaryHapticGate = remember { RotaryHapticGate() }
     val focusRequester = remember { FocusRequester() }
     val appKeys = remember(apps) { apps.map { AppItemKey(it.componentKey) } }
 
@@ -259,7 +262,19 @@ fun ListDrawerScreen(
                     .flueDrawerRotaryScrollable(
                         focusRequester,
                         DrawerInputMode.List,
-                        onRotaryScroll = { if (rotaryHapticsEnabled) vibrateHaptic(context) }
+                        onRotaryDelta = { rotaryDelta ->
+                            wheelMomentumJob?.cancel()
+                            scope.launch {
+                                val consumed = listState.scrollBy(-rotaryDelta)
+                                if (
+                                    rotaryHapticsEnabled &&
+                                    abs(consumed) > 0.01f &&
+                                    rotaryHapticGate.tryAcquire(SystemClock.elapsedRealtime())
+                                ) {
+                                    vibrateHaptic(context)
+                                }
+                            }
+                        },
                     ) { rotaryDelta ->
                         wheelMomentumJob?.cancel()
                         scope.launch {

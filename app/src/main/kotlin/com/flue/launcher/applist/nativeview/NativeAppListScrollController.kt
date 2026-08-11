@@ -5,9 +5,10 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import androidx.recyclerview.widget.RecyclerView
+import com.flue.launcher.ui.input.ROTARY_HAPTIC_MIN_INTERVAL_MS
+import com.flue.launcher.ui.input.ROTARY_SCROLL_MAX_STEP_PX
+import com.flue.launcher.ui.input.ROTARY_SCROLL_MULTIPLIER
 import kotlin.math.roundToInt
-
-private const val ROTARY_HAPTIC_MIN_INTERVAL_MS = 90L
 
 internal enum class NativeAppListScrollSource {
     RotaryEncoder,
@@ -39,7 +40,10 @@ internal fun nativeAppListScrollDeltaPixels(
     }
 
     val pixelDelta = when (source) {
-        NativeAppListScrollSource.RotaryEncoder,
+        NativeAppListScrollSource.RotaryEncoder ->
+            (-axisValue * verticalScrollFactor * ROTARY_SCROLL_MULTIPLIER)
+                .coerceIn(-ROTARY_SCROLL_MAX_STEP_PX, ROTARY_SCROLL_MAX_STEP_PX)
+
         NativeAppListScrollSource.MouseOrTouchpad -> -axisValue * verticalScrollFactor
     }
     return if (pixelDelta.isFinite()) pixelDelta.roundToInt() else 0

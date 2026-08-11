@@ -5,8 +5,12 @@ import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Path
 import android.util.AttributeSet
+import android.view.MotionEvent
 import android.widget.FrameLayout
 import kotlin.math.min
+
+internal fun shouldRouteStageTouchToPrimary(videoLayerCount: Int): Boolean =
+    videoLayerCount > 0
 
 /**
  * `video` 图层的合成宿主。
@@ -211,6 +215,16 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
         } else {
             super.dispatchDraw(canvas)
         }
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (shouldRouteStageTouchToPrimary(videoViews.size)) {
+            // TextureView sits above the primary renderer. FrameLayout does not retry
+            // lower siblings after that top child declines ACTION_DOWN, so route the
+            // complete gesture to the renderer that owns double-tap/long-press/taps.
+            return primaryView.onTouchEvent(event)
+        }
+        return super.dispatchTouchEvent(event)
     }
 
     override fun onDetachedFromWindow() {
