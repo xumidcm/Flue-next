@@ -20,7 +20,7 @@ data class WatchStoreCompatibilityReport(
     val inspectionError: String? = null,
     /**
      * True when the package ships a WatchMaker Global Script (`scripts/script.txt`).
-     * Flue does not execute Lua, so such faces render without their scripted behaviour.
+     * Flue executes this script inside the same bounded Lua sandbox used by the renderer.
      */
     val hasGlobalScript: Boolean = false,
 ) {
@@ -43,16 +43,14 @@ data class WatchStoreCompatibilityReport(
             unsupportedLayerTypes.isEmpty() &&
             unsupportedExpressions.isEmpty() &&
             previewIssue == null &&
-            inspectionError == null &&
-            !hasGlobalScript
+            inspectionError == null
 
     val issueCount: Int
         get() = unsupportedTags.size +
             unsupportedLayerTypes.size +
             unsupportedExpressions.size +
             (if (previewIssue != null) 1 else 0) +
-            (if (inspectionError != null) 1 else 0) +
-            (if (hasGlobalScript) 1 else 0)
+            (if (inspectionError != null) 1 else 0)
 
     internal companion object {
         const val MAX_ITEMS = 128

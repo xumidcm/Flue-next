@@ -10,6 +10,7 @@
     <string name="internal_watchface_config_title">Built-in Watch Face Settings</string>
     <string name="flue_accessibility_label">Flue Accessibility Control</string>
     <string name="flue_accessibility_description">This permission is used only to control double-tap screen lock and open power options. Flue does not connect to the internet and does not collect any user data.</string>
+    <string name="flue_device_admin_description">On Android 8.1, this permission is used only for double-tap screen lock. It cannot erase device data or change the lock-screen password.</string>
 
     <!-- General -->
     <string name="follow_system">Follow System</string>
@@ -165,6 +166,8 @@
     <string name="settings_double_tap_lock">Double Tap to Lock</string>
     <string name="settings_double_tap_on">Accessibility is enabled; double tap the watch face to lock the screen</string>
     <string name="settings_double_tap_require">Requires Accessibility; used only for double-tap screen lock</string>
+    <string name="settings_double_tap_device_admin_on">Device administrator is enabled; double tap the watch face to lock the screen</string>
+    <string name="settings_double_tap_device_admin_require">Android 8.1 requires device administrator access only for double-tap screen lock</string>
 
     <!-- App List Behavior -->
     <string name="settings_app_list_behavior_title">App List Behavior</string>
@@ -273,7 +276,7 @@
     <string name="search_d_media_actions">Extra action buttons on the media card</string>
     <string name="search_d_cc_power">Open power options (requires accessibility)</string>
     <string name="search_d_gestures">Double-tap to sleep etc.</string>
-    <string name="search_d_double_tap">Requires accessibility permission</string>
+    <string name="search_d_double_tap">Requires system screen-lock permission</string>
     <string name="search_d_app_list_behavior">Mask color, row background, folders</string>
     <string name="search_d_folders">Drag icons together to create a folder</string>
     <string name="search_d_launch_mask">Launch overlay follows watch face colors</string>
@@ -337,6 +340,8 @@
     <string name="toast_deleted_fmt">Deleted %s</string>
     <string name="toast_grant_accessibility">Grant Flue accessibility access in system settings</string>
     <string name="toast_accessibility_connecting">Flue accessibility is connecting. Try again shortly.</string>
+    <string name="toast_grant_device_admin">Grant Flue device administrator access for double-tap screen lock</string>
+    <string name="toast_open_device_admin_failed">Unable to open device administrator settings</string>
     <string name="toast_no_custom_curves">No custom motion curves to export</string>
     <string name="toast_curves_exported">Motion curves exported</string>
     <string name="toast_curves_imported_fmt">Imported %d motion curves</string>
@@ -1082,7 +1087,7 @@
     <string name="watch_store_scan_warning_fmt">%1$d installation directories could not be scanned</string>
     <string name="watch_store_scan_warning_detail_fmt">%1$s; first failed directory: %2$s (%3$s)</string>
     <string name="watch_store_unknown_directory">Unknown directory</string>
-    <string name="watch_store_lua_script_warning">This watch face contains a Global Script (Lua). Flue may not render it correctly or support all of its features.</string>
+    <string name="watch_store_lua_script_warning">This watch face contains a Global Script (Lua). Flue runs it in a restricted sandbox.</string>
     <string name="watch_store_error_superseded_cleanup_fmt">The new revision was installed, but the old revision could not be removed: %1$s</string>
     <string name="watch_store_error_transaction_cleanup_fmt">Installation failed and its temporary transaction could not be removed: %1$s</string>
     <string name="watch_store_error_catalog_restore_after_install">The watch face is installed, but its store record has not been restored. Rescan and try again.</string>

@@ -79,6 +79,29 @@ internal data class WatchVideoLayerPlanEntry(
     val absolutePath: String,
 )
 
+internal fun shouldRenderWatchLayer(
+    alpha: Float,
+    isDisplayed: Boolean,
+    hasTapAction: Boolean,
+): Boolean = isDisplayed && (alpha > 0f || hasTapAction)
+
+internal inline fun evaluateWatchFaceTickRedraw(
+    luaCallbackRan: Boolean,
+    shouldRedrawThisTick: () -> Boolean,
+): Boolean {
+    val tickRequiresRedraw = shouldRedrawThisTick()
+    return luaCallbackRan || tickRequiresRedraw
+}
+
+internal fun watchFaceNeedsLuaRuntime(
+    initialScript: String?,
+    layers: List<WatchmakerLayer>,
+): Boolean = !initialScript.isNullOrBlank() || layers.any { layer ->
+    WatchTapActionParser.parse(
+        layer.attributes["tap_action"] ?: layer.attributes["action"],
+    ) is WatchTapAction.Script
+}
+
 /** MediaPlayer 能直接播的容器；序列帧导入产物走 image 路径，不在此列。 */
 internal val PLAYABLE_VIDEO_EXTENSIONS = setOf("mp4", "webm", "mkv", "3gp")
 
@@ -110,6 +133,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private var bindGeneration = 0L
     private var disposed = false
     private var source: PreparedSource? = null
+    /** Extra video-compositing segments borrow the primary segment's face VM. */
+    private var inheritedLuaRuntime: WatchFaceLuaRuntime? = null
     private var descriptorKey: String? = null
     private var loadedDescriptorKey: String? = null
     private var loadedRefreshToken: Int? = null
@@ -765,6 +790,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     internal fun adoptRenderStateFrom(primary: WatchmakerWatchFaceView) {
         if (disposed) return
         val descriptor = primary.boundDescriptor ?: return
+        inheritedLuaRuntime = primary.source?.luaRuntime
         setWatchDataProvider(primary.dataProvider)
         setCanvasSettings(primary.canvasSettings)
         setGravityParallaxEnabled(primary.gravityParallaxEnabled)
@@ -888,6 +914,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                     prepared.sourceGeneration != generation ||
                     disposed
                 ) {
+                    prepared.clearRuntimeCaches()
                     return@launch
                 }
                 val current = source
@@ -895,6 +922,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                     it.rootCacheKey == prepared.rootCacheKey &&
                         it.definitionRevision == prepared.definitionRevision
                 } ?: prepared
+                if (replacement !== prepared) prepared.clearRuntimeCaches()
                 if (
                     replacement !== current &&
                     current != null &&
@@ -1677,9 +1705,20 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             }
             val layer = source.definition.layers[item.layerIndex]
             val attributes = layer.attributes
+            val hasTapAction = !attributes["tap_action"].isNullOrBlank() ||
+                !attributes["action"].isNullOrBlank()
             alpha *= dynamicNumber(attributes["opacity"], 100f, source)
                 .coerceIn(0f, 100f) / 100f
-            if (alpha <= 0f || !isDisplayed(attributes["display"], source)) return
+            // WatchMaker intentionally uses opacity=0 shapes as invisible touch
+            // grids (Nexus 2.2 has 100 of them).  They must still reach the
+            // primitive so it can register its hit rectangle.
+            if (
+                !shouldRenderWatchLayer(
+                    alpha = alpha,
+                    isDisplayed = isDisplayed(attributes["display"], source),
+                    hasTapAction = hasTapAction,
+                )
+            ) return
             applyTransform(
                 canvas,
                 attributes,
@@ -2258,41 +2297,64 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             align.endsWith('r') -> Paint.Align.RIGHT
             else -> Paint.Align.CENTER
         }
-        val x = when (textPaint.textAlign) {
-            Paint.Align.LEFT -> 0f
-            Paint.Align.RIGHT -> 0f
-            else -> 0f
-        }
+        val x = 0f
         val metrics = textPaint.fontMetrics
-        val y = when {
-            align.startsWith('t') -> -metrics.ascent
-            align.startsWith('b') -> -metrics.descent
-            else -> -(metrics.ascent + metrics.descent) / 2f
-        }
+        val lines = WatchTextLayout.lines(text)
+        val lineHeight = (metrics.descent - metrics.ascent + metrics.leading).coerceAtLeast(0f)
+        val baselines = WatchTextLayout.baselines(
+            lineCount = lines.size,
+            ascent = metrics.ascent,
+            descent = metrics.descent,
+            lineHeight = lineHeight,
+            verticalAlignment = align,
+        )
         if (!attrs["tap_action"].isNullOrBlank()) {
             // 文字图层（如心率读数）也可以携带 tap_action；用文字包围盒记录
             // 点按区域，坐标随当前画布矩阵映射回视图空间。
-            val textWidth = textPaint.measureText(text)
-            val left = when (textPaint.textAlign) {
-                Paint.Align.LEFT -> x
-                Paint.Align.RIGHT -> x - textWidth
-                else -> x - textWidth / 2f
+            lines.forEachIndexed { index, line ->
+                val textWidth = textPaint.measureText(line)
+                val left = when (textPaint.textAlign) {
+                    Paint.Align.LEFT -> x
+                    Paint.Align.RIGHT -> x - textWidth
+                    else -> x - textWidth / 2f
+                }
+                val baseline = baselines[index]
+                if (index == 0) {
+                    rectScratch.set(
+                        left,
+                        baseline + metrics.ascent,
+                        left + textWidth,
+                        baseline + metrics.descent,
+                    )
+                } else {
+                    rectScratch.union(
+                        left,
+                        baseline + metrics.ascent,
+                        left + textWidth,
+                        baseline + metrics.descent,
+                    )
+                }
             }
-            rectScratch.set(left, y + metrics.ascent, left + textWidth, y + metrics.descent)
             recordTapTarget(canvas, rectScratch, attrs)
         }
         // 描边通道：先 STROKE 后 FILL——Android 描边以字形轮廓为中心线，
         // 内半会被随后的正文填充盖住，因此外观宽度 = o_size 需要
         // strokeWidth = 2×o_size。Glow 用多环 STROKE 由外向内递增透明度。
         resolveOutline(attrs, source)?.let { outline ->
-            drawTextOutline(canvas, text, x, y, outline, alpha)
+            lines.forEachIndexed { index, line ->
+                drawTextOutline(canvas, line, x, baselines[index], outline, alpha)
+            }
         }
         // 阴影在描边之上、本体之下 —— clox 里描边拷贝 z=-2、阴影拷贝 z=-1，
         // cocos 按 z 升序绘制，所以叠放顺序就是 描边 → 阴影 → 本体。
         resolveShadow(attrs, source)?.let { shadow ->
-            drawTextShadow(canvas, text, x, y, shadow, alpha)
+            lines.forEachIndexed { index, line ->
+                drawTextShadow(canvas, line, x, baselines[index], shadow, alpha)
+            }
         }
-        canvas.drawText(text, x, y, textPaint)
+        lines.forEachIndexed { index, line ->
+            canvas.drawText(line, x, baselines[index], textPaint)
+        }
     }
 
     /**
@@ -2422,22 +2484,33 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     ) {
         val font = preparedFont.definition
         val renderedText = font.normalizeText(text)
+        val lines = WatchTextLayout.lines(renderedText)
         val scale = designSize / font.nominalSize.coerceAtLeast(1).toFloat()
         val align = attrs["alignment"].orEmpty().lowercase(Locale.ROOT)
-        val width = font.measureAdvance(renderedText) * scale
-        val startX = when {
-            align.endsWith('l') -> 0f
-            align.endsWith('r') -> -width
-            else -> -width / 2f
-        }
         val lineHeight = font.lineHeight * scale
-        val lineTop = when {
+        val firstLineTop = when {
             align.startsWith('t') -> 0f
-            align.startsWith('b') -> -lineHeight
-            else -> -lineHeight / 2f
+            align.startsWith('b') -> -lineHeight * lines.size
+            else -> -lineHeight * lines.size / 2f
+        }
+        val runs = lines.mapIndexed { index, line ->
+            val width = font.measureAdvance(line) * scale
+            val startX = when {
+                align.endsWith('l') -> 0f
+                align.endsWith('r') -> -width
+                else -> -width / 2f
+            }
+            Triple(line, startX, firstLineTop + lineHeight * index)
         }
         if (!attrs["tap_action"].isNullOrBlank()) {
-            rectScratch.set(startX, lineTop, startX + width, lineTop + lineHeight)
+            runs.forEachIndexed { index, (line, startX, lineTop) ->
+                val width = font.measureAdvance(line) * scale
+                if (index == 0) {
+                    rectScratch.set(startX, lineTop, startX + width, lineTop + lineHeight)
+                } else {
+                    rectScratch.union(startX, lineTop, startX + width, lineTop + lineHeight)
+                }
+            }
             recordTapTarget(canvas, rectScratch, attrs)
         }
         // 描边通道：整串字形按 8 方向偏移重绘成描边色剪影。硬描边 = 一环，
@@ -2460,18 +2533,20 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 bitmapOutlinePaint.alpha = paintAlpha(alpha * outline.opacity * ringAlpha)
                 var direction = 0
                 while (direction < BITMAP_OUTLINE_DIRECTIONS.size) {
-                    drawBitmapGlyphRun(
-                        canvas = canvas,
-                        text = renderedText,
-                        preparedFont = preparedFont,
-                        source = source,
-                        scale = scale,
-                        startX = startX,
-                        lineTop = lineTop,
-                        offsetX = BITMAP_OUTLINE_DIRECTIONS[direction] * radius,
-                        offsetY = BITMAP_OUTLINE_DIRECTIONS[direction + 1] * radius,
-                        paint = bitmapOutlinePaint,
-                    )
+                    runs.forEach { (line, startX, lineTop) ->
+                        drawBitmapGlyphRun(
+                            canvas = canvas,
+                            text = line,
+                            preparedFont = preparedFont,
+                            source = source,
+                            scale = scale,
+                            startX = startX,
+                            lineTop = lineTop,
+                            offsetX = BITMAP_OUTLINE_DIRECTIONS[direction] * radius,
+                            offsetY = BITMAP_OUTLINE_DIRECTIONS[direction + 1] * radius,
+                            paint = bitmapOutlinePaint,
+                        )
+                    }
                     direction += 2
                 }
             }
@@ -2487,18 +2562,20 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             bitmapShadowPaint.alpha = paintAlpha(alpha * shadow.opacity)
             for (copy in shadow.copies downTo 1) {
                 val distance = watchShadowCopyDistance(shadow.mode, shadow.distance, copy)
-                drawBitmapGlyphRun(
-                    canvas = canvas,
-                    text = renderedText,
-                    preparedFont = preparedFont,
-                    source = source,
-                    scale = scale,
-                    startX = startX,
-                    lineTop = lineTop,
-                    offsetX = watchShadowOffsetX(distance, shadow.angleDegrees),
-                    offsetY = watchShadowOffsetY(distance, shadow.angleDegrees),
-                    paint = bitmapShadowPaint,
-                )
+                runs.forEach { (line, startX, lineTop) ->
+                    drawBitmapGlyphRun(
+                        canvas = canvas,
+                        text = line,
+                        preparedFont = preparedFont,
+                        source = source,
+                        scale = scale,
+                        startX = startX,
+                        lineTop = lineTop,
+                        offsetX = watchShadowOffsetX(distance, shadow.angleDegrees),
+                        offsetY = watchShadowOffsetY(distance, shadow.angleDegrees),
+                        paint = bitmapShadowPaint,
+                    )
+                }
             }
             bitmapShadowPaint.colorFilter = null
         }
@@ -2506,18 +2583,20 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // 文字走替换语义，不是图片那套调制：图集只是字形蒙版，图集本身什么颜色
         // 不该影响结果。详见 [textTintFilter] 的 f1.png 黄图集实证。
         imagePaint.colorFilter = textTintFilter(resolveColor(attrs["color"], Color.WHITE, source))
-        drawBitmapGlyphRun(
-            canvas = canvas,
-            text = renderedText,
-            preparedFont = preparedFont,
-            source = source,
-            scale = scale,
-            startX = startX,
-            lineTop = lineTop,
-            offsetX = 0f,
-            offsetY = 0f,
-            paint = imagePaint,
-        )
+        runs.forEach { (line, startX, lineTop) ->
+            drawBitmapGlyphRun(
+                canvas = canvas,
+                text = line,
+                preparedFont = preparedFont,
+                source = source,
+                scale = scale,
+                startX = startX,
+                lineTop = lineTop,
+                offsetX = 0f,
+                offsetY = 0f,
+                paint = imagePaint,
+            )
+        }
         imagePaint.colorFilter = null
     }
 
@@ -2861,6 +2940,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val width = dynamicNumber(attrs["width"] ?: sharedSize, 64f, source).coerceAtLeast(1f)
         val height = dynamicNumber(attrs["height"] ?: sharedSize, width, source).coerceAtLeast(1f)
         val shape = attrs["shape"].orEmpty().lowercase(Locale.ROOT)
+        if (!attrs["tap_action"].isNullOrBlank() || !attrs["action"].isNullOrBlank()) {
+            rectScratch.set(-width / 2f, -height / 2f, width / 2f, height / 2f)
+            recordTapTarget(canvas, rectScratch, attrs)
+        }
         // 描边通道：与文字同一规格，先 STROKE 环、后 FILL 本体（内半被填充盖住）。
         resolveOutline(attrs, source)?.let { outline ->
             drawShapeOutline(canvas, shape, width, height, outline, alpha)
@@ -3335,9 +3418,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             sourceDigest.update(0.toByte())
         }
         // Editor saves can happen more than once within a filesystem timestamp
-        // quantum and may keep the same byte length. Hash only watch.xml (small
-        // and already parser-bounded) so definition refreshes cannot be missed
-        // without re-reading every image/font asset.
+        // quantum and may keep the same byte length. Hash bounded executable/
+        // definition content so refreshes cannot be missed without re-reading
+        // every image/font/movie asset.
         watchXml.inputStream().buffered().use { input ->
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
             while (true) {
@@ -3347,10 +3430,19 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             }
         }
         val renderPlanResult = buildWatchLayerRenderPlanResult(definition.layers)
-        val initialScript = files.firstOrNull { file ->
+        val initialScriptFile = files.firstOrNull { file ->
             file.relativeTo(canonicalRoot).invariantSeparatorsPath.equals("scripts/script.txt", true)
         }?.takeIf { file -> file.length() in 1..MAX_INITIAL_SCRIPT_BYTES }
+        val initialScript = initialScriptFile
             ?.readText(Charsets.UTF_8)
+        initialScriptFile?.let { file ->
+            val metadataRevision = revisionByAbsolutePath[file.absolutePath].orEmpty()
+            sourceDigest.update(
+                watchExecutableContentRevision(metadataRevision, initialScript)
+                    .toByteArray(Charsets.UTF_8),
+            )
+            sourceDigest.update(0.toByte())
+        }
         val bitmapFonts = buildBitmapFontIndex(canonicalRoot, files)
         // SVG XML and native Path construction are both bounded and happen on
         // the IO preparation dispatcher. The generation-gated PreparedSource
@@ -3416,6 +3508,31 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             } == true
         }
         val expressionScope = WatchExpressionScope.fromInitialScript(initialScript)
+        val inheritedRuntime = inheritedLuaRuntime
+        val initialScriptNow = Calendar.getInstance()
+        val initialScriptSnapshot = runCatching {
+            dataProvider.snapshot(initialScriptNow.timeInMillis)
+        }.getOrDefault(WatchDataSnapshot())
+        val initialScriptResolver: (String) -> WatchTagResolution = { tag ->
+            val normalized = tag.trim().lowercase(Locale.ROOT)
+            resolveWatchCounterTag(normalized, elapsedMs = 0L)
+                ?.let(WatchTagResolution::Resolved)
+                ?: WatchmakerTagResolver.resolve(
+                    tag = normalized,
+                    now = initialScriptNow,
+                    snapshot = initialScriptSnapshot,
+                    userColor = definition.rootAttributes["ucolor_default"],
+                )
+        }
+        val luaRuntime = inheritedRuntime ?: if (
+            watchFaceNeedsLuaRuntime(initialScript, definition.layers)
+        ) {
+            runCatching {
+                WatchFaceLuaRuntime.create(initialScript, initialScriptResolver)
+            }.getOrNull()
+        } else {
+            null
+        }
         // 表达式预编译。对照 wf_expr.lua:11「Import is allowed to be slow; the
         // running face is not.」——这里已经在 IO dispatcher 上、已经受
         // sourceGeneration 保护，是天然的导入期。先把全部属性原文编译好塞进缓存，
@@ -3445,6 +3562,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             fontIndex = WatchFontIndex.build(canonicalRoot, files),
             bitmapFonts = bitmapFonts,
             expressionScope = expressionScope,
+            luaRuntime = luaRuntime,
+            ownsLuaRuntime = luaRuntime != null && inheritedRuntime == null,
             expressionCompileReport = expressionCompileReport,
             renderPlan = renderPlanResult.items,
             renderPlanDiagnostics = renderPlanResult.diagnostics,
@@ -4177,7 +4296,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                             !editorAnimationInteractionFrozen &&
                             editorPreviewPlaying
                         )
-            else -> source?.needsFastTicks == true || gyroNeedsTicks
+            else -> source?.needsFastTicks == true ||
+                source?.luaRuntime?.needsFrame() == true ||
+                gyroNeedsTicks
         }
         val delay = when {
             !needsFastTicks -> 1_000L
@@ -4189,7 +4310,17 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private val tickRunnable = Runnable {
         tickPosted = false
         if (faceVisible || textExitAnimationActive) {
-            if (shouldRedrawThisTick()) {
+            val prepared = source
+            val luaCallbackRan = if (prepared?.ownsLuaRuntime == true && prepared.luaRuntime != null) {
+                prepared.luaRuntime.stepClock(
+                    elapsedSeconds = SystemClock.uptimeMillis() / 1_000.0,
+                    wallTimeMillis = System.currentTimeMillis(),
+                ) { tag -> resolveTagResolutionWithoutLua(tag, calendar, prepared) }
+                    .getOrDefault(false)
+            } else {
+                false
+            }
+            if (evaluateWatchFaceTickRedraw(luaCallbackRan, ::shouldRedrawThisTick)) {
                 invalidate()
                 // 视频图层的几何要跟着表盘时钟走：图层的 x/y/rotation 可以绑定
                 // 动态表达式，每帧都可能变。
@@ -4249,6 +4380,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
      */
     private fun requiresFastTicksNow(prepared: PreparedSource): Boolean =
         prepared.slowTagTracker.requiresRedrawEveryTick ||
+            prepared.luaRuntime?.needsFrame() == true ||
             (gravityParallaxEnabled && prepared.hasGyroParallax && editorPreviewPlaying)
 
     /**
@@ -4283,12 +4415,27 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     private fun evaluateText(raw: String, source: PreparedSource): String {
         val value = raw.replace("&quot;", "\"").replace("&apos;", "'")
+        source.luaRuntime?.evaluateFaceText(value) { tag ->
+            resolveTagResolutionWithoutLua(tag, calendar, source)
+        }?.let { return it.take(WatchExpressionLimits.MAX_RESULT_TEXT_LENGTH) }
         return WatchmakerExpressionEvaluator.evaluateText(value, source.expressionScope) { tag ->
             resolveTagResolution(tag, calendar, source)
         }
     }
 
     private fun resolveTagResolution(
+        tag: String,
+        now: Calendar,
+        source: PreparedSource,
+    ): WatchTagResolution {
+        val normalized = tag.trim().lowercase(Locale.ROOT)
+        source.luaRuntime?.globalRenderedValue(normalized)?.let { value ->
+            return WatchTagResolution.Resolved(value)
+        }
+        return resolveTagResolutionWithoutLua(normalized, now, source)
+    }
+
+    private fun resolveTagResolutionWithoutLua(
         tag: String,
         now: Calendar,
         source: PreparedSource,
@@ -4318,6 +4465,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     private fun isDisplayed(display: String?, source: PreparedSource): Boolean {
         val value = display?.trim().orEmpty()
+        source.luaRuntime?.evaluateFaceBoolean(value) { tag ->
+            resolveTagResolutionWithoutLua(tag, calendar, source)
+        }?.let { return it }
         return when {
             value.isBlank() -> true
             value.equals("y", true) || value.equals("yes", true) || value.equals("true", true) -> true
@@ -4328,20 +4478,23 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 value,
                 false,
                 source.expressionScope,
-            ) { tag ->
-                resolveTagResolution(tag, calendar, source)
-            }
+            ) { tag -> resolveTagResolution(tag, calendar, source) }
         }
     }
 
-    private fun dynamicNumber(value: String?, fallback: Float, source: PreparedSource): Float =
-        WatchmakerExpressionEvaluator.evaluateNumber(
+    private fun dynamicNumber(value: String?, fallback: Float, source: PreparedSource): Float {
+        val raw = value.orEmpty()
+        source.luaRuntime?.evaluateFaceNumber(raw) { tag ->
+            resolveTagResolutionWithoutLua(tag, calendar, source)
+        }?.let { return it.toFloat() }
+        return WatchmakerExpressionEvaluator.evaluateNumber(
             value,
             fallback,
             source.expressionScope,
         ) { tag ->
             resolveTagResolution(tag, calendar, source)
         }
+    }
 
     /**
      * Resolve an asset reference without touching the filesystem.  Watchmaker
@@ -4396,6 +4549,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     private fun dispatchTap(x: Float, y: Float) {
         val target = tapTargets.asReversed().firstOrNull { it.bounds.contains(x, y) } ?: return
+        if (target.action is WatchTapAction.Script) {
+            routeTapAction(target.action)
+            return
+        }
         val handler = tapActionHandler
         if (handler != null) {
             handler(target.action)
@@ -4405,6 +4562,27 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     }
 
     private fun routeTapAction(action: WatchTapAction) {
+        if (action is WatchTapAction.Script) {
+            val prepared = source
+            val runtime = prepared?.luaRuntime
+            val result = if (prepared == null || runtime == null) {
+                Result.failure(IllegalStateException("face has no script runtime"))
+            } else {
+                runtime.runSnippet(action.source) { tag ->
+                    resolveTagResolutionWithoutLua(tag, calendar, prepared)
+                }
+            }
+            if (result.isSuccess) {
+                performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                prepared?.recycleBakedSegments()
+                cancelTicks()
+                scheduleTicks()
+                requestFullRepaint()
+            } else {
+                Toast.makeText(context, "表盘脚本执行失败", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
         if (action === WatchTapAction.HeartRate) {
             performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
             runCatching { dataProvider.requestRefresh() }
@@ -4415,6 +4593,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             WatchTapAction.Calendar -> Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CALENDAR)
             WatchTapAction.Weather -> Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_WEATHER)
             WatchTapAction.HeartRate -> null
+            is WatchTapAction.Script -> null
             is WatchTapAction.AppLaunch -> {
                 val act = action.activityClass
                 if (act != null) {
@@ -4556,6 +4735,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val fontIndex: WatchFontIndex,
         val bitmapFonts: Map<String, PreparedBitmapFont?>,
         val expressionScope: WatchExpressionScope,
+        val luaRuntime: WatchFaceLuaRuntime?,
+        val ownsLuaRuntime: Boolean,
         /**
          * 导入期预编译的产物摘要。随 generation 一起换掉，所以不需要额外的失效逻辑。
          *
@@ -4638,6 +4819,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                         layer = layer,
                         item = item,
                         profile = profile,
+                        hasFaceScriptDependency = luaRuntime?.let { runtime ->
+                            layer.attributes.values.any(runtime::referencesFaceState)
+                        } == true,
                     )
                 slowBuckets.add(profile.slowBuckets)
             }
@@ -4816,6 +5000,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             calendarCellsCache.clear()
             calendarLabelsCache.clear()
             recycleBakedSegments()
+            if (ownsLuaRuntime) luaRuntime?.close()
         }
     }
 

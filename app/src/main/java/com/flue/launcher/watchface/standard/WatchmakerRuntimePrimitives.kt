@@ -977,6 +977,9 @@ sealed interface WatchTapAction {
      */
     data object HeartRate : WatchTapAction
 
+    /** Execute inside the loaded face's shared CloX-compatible Lua sandbox. */
+    data class Script(val source: String) : WatchTapAction
+
     /**
      * w_app:com.example.pkg/.MainActivity 或 m_app:com.example.pkg
      * 或 WatchMaker 社区格式 w_app:label`pkg`activity（backtick 分隔）。
@@ -999,7 +1002,11 @@ object WatchTapActionParser {
             lower.startsWith("w_fit"))
             return WatchTapAction.HeartRate
         if (lower.isBlank()) return WatchTapAction.Unsupported("empty tap action")
-        if (lower.startsWith("script:")) return WatchTapAction.Unsupported("scripts are disabled")
+        if (lower.startsWith("script:")) {
+            val source = value.substringAfter(':').trim()
+            return if (source.isBlank()) WatchTapAction.Unsupported("empty face script")
+            else WatchTapAction.Script(source)
+        }
         if (lower.startsWith("w_app:") || lower.startsWith("m_app:")) {
             val payload = value.substringAfter(':')
             // WatchMaker 社区格式：w_app:label`pkg`activity（反引号分隔）

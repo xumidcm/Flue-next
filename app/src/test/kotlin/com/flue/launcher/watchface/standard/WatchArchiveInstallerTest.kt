@@ -620,7 +620,7 @@ class WatchArchiveInstallerTest {
     }
 
     @Test
-    fun compatibilityReportAcceptsSafeDynamicMathButRejectsScripts() =
+    fun compatibilityReportAcceptsSafeDynamicMathAndSandboxedTapScripts() =
         withTemporaryDirectory { root ->
             val xml = File(root, "expressions.xml").apply {
                 writeText(
@@ -639,12 +639,7 @@ class WatchArchiveInstallerTest {
                 .compatibilityReport
                 .unsupportedExpressions
 
-            assertEquals(
-                setOf(
-                    "script:var_chime=(var_chime+1)%2",
-                ),
-                unsupported,
-            )
+            assertTrue(unsupported.isEmpty())
             assertFalse("{dh23z}:{dmz}" in unsupported)
         }
 

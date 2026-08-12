@@ -10,6 +10,7 @@
     <string name="internal_watchface_config_title">内蔵文字盤設定</string>
     <string name="flue_accessibility_label">Flue アクセシビリティ制御</string>
     <string name="flue_accessibility_description">この権限はダブルタップ画面ロックと電源オプションの表示にのみ使用されます。Flueはインターネットに接続せず、ユーザー情報を収集しません。</string>
+    <string name="flue_device_admin_description">Android 8.1 では、ダブルタップ画面ロックにのみこの権限を使用します。端末データの消去やロック画面パスワードの変更はできません。</string>
 
     <!-- 汎用 -->
     <string name="follow_system">システムに従う</string>
@@ -165,6 +166,8 @@
     <string name="settings_double_tap_lock">ダブルタップでロック</string>
     <string name="settings_double_tap_on">アクセシビリティが有効：文字盤をダブルタップで画面ロック</string>
     <string name="settings_double_tap_require">アクセシビリティが必要：ダブルタップ画面ロックにのみ使用</string>
+    <string name="settings_double_tap_device_admin_on">デバイス管理者が有効：文字盤をダブルタップで画面ロック</string>
+    <string name="settings_double_tap_device_admin_require">Android 8.1 ではダブルタップ画面ロックにのみデバイス管理者権限が必要です</string>
 
     <!-- アプリリスト動作 -->
     <string name="settings_app_list_behavior_title">アプリリスト動作</string>
@@ -273,7 +276,7 @@
     <string name="search_d_media_actions">メディアカードの追加操作ボタン</string>
     <string name="search_d_cc_power">電源オプションを開く（ユーザー補助が必要）</string>
     <string name="search_d_gestures">ダブルタップでスリープなど</string>
-    <string name="search_d_double_tap">ユーザー補助の許可が必要</string>
+    <string name="search_d_double_tap">システムの画面ロック権限が必要</string>
     <string name="search_d_app_list_behavior">マスクの色・行の背景・フォルダー</string>
     <string name="search_d_folders">アイコンをドラッグしてフォルダーを作成</string>
     <string name="search_d_launch_mask">起動オーバーレイを文字盤の色に合わせる</string>
@@ -337,6 +340,8 @@
     <string name="toast_deleted_fmt">%s を削除しました</string>
     <string name="toast_grant_accessibility">システム設定で Flue のユーザー補助を許可してください</string>
     <string name="toast_accessibility_connecting">Flue のユーザー補助サービスに接続中です。少し待ってから再試行してください。</string>
+    <string name="toast_grant_device_admin">ダブルタップ画面ロックのため Flue のデバイス管理者を許可してください</string>
+    <string name="toast_open_device_admin_failed">デバイス管理者の設定画面を開けません</string>
     <string name="toast_no_custom_curves">エクスポートできるカスタムモーションカーブがありません</string>
     <string name="toast_curves_exported">モーションカーブをエクスポートしました</string>
     <string name="toast_curves_imported_fmt">%d 件のモーションカーブをインポートしました</string>
@@ -1082,7 +1087,7 @@
     <string name="watch_store_scan_warning_fmt">%1$d 個のインストール先をスキャンできませんでした</string>
     <string name="watch_store_scan_warning_detail_fmt">%1$s；最初に失敗したフォルダー：%2$s（%3$s）</string>
     <string name="watch_store_unknown_directory">不明なフォルダー</string>
-    <string name="watch_store_lua_script_warning">この文字盤には Global Script（Lua）が含まれています。Flue では正しく描画できず、機能を再現できない場合があります。</string>
+    <string name="watch_store_lua_script_warning">この文字盤には Global Script（Lua）が含まれています。Flue は制限付きサンドボックスで実行します。</string>
     <string name="watch_store_error_superseded_cleanup_fmt">新版はインストールされましたが、旧版を削除できませんでした：%1$s</string>
     <string name="watch_store_error_transaction_cleanup_fmt">インストールに失敗し、一時トランザクションも削除できませんでした：%1$s</string>
     <string name="watch_store_error_catalog_restore_after_install">文字盤はインストール済みですが、ストア記録を復元できていません。再スキャンしてもう一度お試しください。</string>

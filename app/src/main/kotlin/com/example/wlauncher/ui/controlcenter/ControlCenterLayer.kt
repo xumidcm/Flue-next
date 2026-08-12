@@ -265,6 +265,8 @@ internal fun sideScreenContentAllowsVerticalScroll(
     showNotificationPreview: Boolean,
 ): Boolean = showMusicCard || showNotificationPreview
 
+internal fun sideScreenContentUsesElasticOverscroll(showMusicCard: Boolean): Boolean = showMusicCard
+
 internal fun controlToggleLabelOverflows(slotWidthPx: Float, textWidthPx: Float): Boolean =
     slotWidthPx.isFinite() && textWidthPx.isFinite() && textWidthPx > slotWidthPx
 

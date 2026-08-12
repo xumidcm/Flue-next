@@ -167,6 +167,9 @@ import com.flue.launcher.logging.FlueLog
 import com.flue.launcher.backup.FlueBackupOptions
 import com.flue.launcher.backup.FlueBackupPreview
 import com.flue.launcher.service.FlueAccessibilityService
+import com.flue.launcher.service.FlueDeviceAdminController
+import com.flue.launcher.service.ScreenLockControlMode
+import com.flue.launcher.service.screenLockControlMode
 import com.flue.launcher.ui.common.FlueScreenShape
 import com.flue.launcher.ui.common.MAX_OVERLAY_MASK_CORNER_RADIUS_DP
 import com.flue.launcher.ui.common.bottomFisheyeScale
@@ -605,6 +608,11 @@ private fun SettingsRootScreen(
     var accessibilityServiceEnabled by remember {
         mutableStateOf(FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected)
     }
+    val doubleTapLockMode = remember { screenLockControlMode(Build.VERSION.SDK_INT) }
+    val doubleTapUsesDeviceAdmin = doubleTapLockMode == ScreenLockControlMode.DEVICE_ADMIN
+    var deviceAdminEnabled by remember {
+        mutableStateOf(FlueDeviceAdminController.isActive(context))
+    }
     // The current settings header no longer renders a clock. Keeping a ticking
     // state here used to invalidate the whole active page every 30 seconds.
     val headerTime = ""
@@ -810,6 +818,23 @@ private fun SettingsRootScreen(
         {
             Toast.makeText(context, context.getString(R.string.toast_grant_accessibility), Toast.LENGTH_SHORT).show()
             context.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS))
+            Unit
+        }
+    }
+    val openDeviceAdminSettings = remember(context) {
+        {
+            Toast.makeText(
+                context,
+                context.getString(R.string.toast_grant_device_admin),
+                Toast.LENGTH_SHORT,
+            ).show()
+            if (!FlueDeviceAdminController.requestActivation(context)) {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.toast_open_device_admin_failed),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
             Unit
         }
     }
@@ -1036,6 +1061,7 @@ private fun SettingsRootScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 accessibilityServiceEnabled = FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected
+                deviceAdminEnabled = FlueDeviceAdminController.isActive(context)
                 bodySensorsPermissionGranted = hasBodySensorsPermission(context)
                 coarseLocationPermissionGranted =
                     ContextCompat.checkSelfPermission(
@@ -2654,7 +2680,11 @@ private fun SettingsRootScreen(
             item("double_tap_lock_screen") {
                 SettingsSwitchRow(
                     title = stringResource(R.string.settings_double_tap_lock),
-                    subtitle = if (accessibilityServiceEnabled) {
+                    subtitle = if (doubleTapUsesDeviceAdmin && deviceAdminEnabled) {
+                        stringResource(R.string.settings_double_tap_device_admin_on)
+                    } else if (doubleTapUsesDeviceAdmin) {
+                        stringResource(R.string.settings_double_tap_device_admin_require)
+                    } else if (accessibilityServiceEnabled) {
                         stringResource(R.string.settings_double_tap_on)
                     } else {
                         stringResource(R.string.settings_double_tap_require)
@@ -2662,9 +2692,16 @@ private fun SettingsRootScreen(
                     checked = doubleTapLockScreenEnabled,
                     onToggle = { enabled ->
                         vm.setDoubleTapLockScreenEnabled(enabled)
-                        accessibilityServiceEnabled = FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected
-                        if (enabled && !accessibilityServiceEnabled) {
-                            openAccessibilitySettings()
+                        if (doubleTapUsesDeviceAdmin) {
+                            deviceAdminEnabled = FlueDeviceAdminController.isActive(context)
+                            if (enabled && !deviceAdminEnabled) {
+                                openDeviceAdminSettings()
+                            }
+                        } else {
+                            accessibilityServiceEnabled = FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected
+                            if (enabled && !accessibilityServiceEnabled) {
+                                openAccessibilitySettings()
+                            }
                         }
                     },
                     scale = itemFisheye(listState, "double_tap_lock_screen", screenCenterY, screenHeightPx)

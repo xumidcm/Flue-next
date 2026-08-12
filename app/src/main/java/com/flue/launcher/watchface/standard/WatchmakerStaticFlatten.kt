@@ -32,6 +32,7 @@ internal object WatchStaticFlatten {
         layer: WatchmakerLayer,
         item: WatchLayerRenderItem,
         profile: WatchLayerTagProfile,
+        hasFaceScriptDependency: Boolean = false,
     ): Boolean {
         // 1. 不是舞台直接子节点 —— group 的继承变换要逐层复现，烘掉就丢了。
         //    clox 的第一条不可烘条件在 Flue 这里正好是一个判空。
@@ -42,6 +43,10 @@ internal object WatchStaticFlatten {
         val attrs = layer.attributes
         // 3. 视频图层由 TextureView 承载，根本不在 Canvas 上。
         if (type == "video") return false
+        // Script globals/functions can mutate on every on_millisecond or tap.
+        // They are not ordinary {tag} dependencies, so the tag profile cannot
+        // see them; baking such a layer would freeze Nexus-style particles.
+        if (hasFaceScriptDependency) return false
         // 4. 点击热区是**在绘制过程中**登记的（drawRenderItem → recordTapTarget），
         //    烘掉这一层就再也不会登记，热区凭空消失。
         if (!attrs["tap_action"].isNullOrBlank() || !attrs["action"].isNullOrBlank()) return false

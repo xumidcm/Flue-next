@@ -20,4 +20,10 @@ class MediaCardLayoutTest {
         assertEquals(true, sideScreenContentAllowsVerticalScroll(showMusicCard = false, showNotificationPreview = true))
         assertEquals(false, sideScreenContentAllowsVerticalScroll(showMusicCard = false, showNotificationPreview = false))
     }
+
+    @Test
+    fun `scrollable side-screen cards use the shared elastic edge`() {
+        assertEquals(true, sideScreenContentUsesElasticOverscroll(showMusicCard = true))
+        assertEquals(false, sideScreenContentUsesElasticOverscroll(showMusicCard = false))
+    }
 }

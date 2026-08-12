@@ -434,13 +434,16 @@ class WatchmakerRuntimePrimitivesTest {
     }
 
     @Test
-    fun tapActionsOnlyAllowCalendarWeatherAndHeartRateFamilies() {
+    fun tapActionsRecognizeSandboxedFaceScriptsAndBuiltInFamilies() {
         assertEquals(WatchTapAction.Calendar, WatchTapActionParser.parse("widget_calendar_month"))
         assertEquals(WatchTapAction.Weather, WatchTapActionParser.parse("m_update_weather_now"))
         assertEquals(WatchTapAction.HeartRate, WatchTapActionParser.parse("w_heart_rate"))
         assertEquals(WatchTapAction.HeartRate, WatchTapActionParser.parse("widget_health"))
         assertEquals(WatchTapAction.HeartRate, WatchTapActionParser.parse("w_fit"))
-        assertTrue(WatchTapActionParser.parse("script:do_anything()") is WatchTapAction.Unsupported)
+        assertEquals(
+            WatchTapAction.Script("do_anything()"),
+            WatchTapActionParser.parse("script:do_anything()"),
+        )
         // w_app: 现在解析为 AppLaunch 而非 Unsupported
         val appLaunch = WatchTapActionParser.parse("w_app:com.example/.MainActivity")
         assertTrue(appLaunch is WatchTapAction.AppLaunch)

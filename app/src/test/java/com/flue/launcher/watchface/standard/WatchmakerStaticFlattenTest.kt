@@ -63,6 +63,18 @@ class WatchStaticFlattenBakeableTest {
     }
 
     @Test
+    fun `Lua函数驱动的图层不可烘`() {
+        assertFalse(
+            WatchStaticFlatten.isBakeable(
+                layer = layer("image", mapOf("x" to "var_T_x(0, var_TP)")),
+                item = stageChild(),
+                profile = WatchLayerTagProfile.of(emptyList()),
+                hasFaceScriptDependency = true,
+            ),
+        )
+    }
+
+    @Test
     fun `慢 tag 图层可以烘`() {
         // 分钟跳一次由 hasPendingSlowTagInvalidation 触发重烘，不需要禁烘。
         for (tag in listOf("dm", "dh", "dd", "bl", "wt")) {

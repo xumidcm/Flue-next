@@ -47,6 +47,27 @@ class WatchStoreCompatibilityReportTest {
         assertEquals(null, report.previewIssue)
     }
 
+    @Test
+    fun `sandboxed global script is reported as supported metadata`() = withTempRoot { root ->
+        root.resolve("watch.xml").toFile().writeText(
+            "<Watch name=\"Scripted\"><Layer type=\"shape\" action=\"script:restart()\" /></Watch>",
+        )
+        root.resolve("scripts/script.txt").toFile().apply {
+            parentFile.mkdirs()
+            writeText("function restart() var_value = 1 end")
+        }
+        val preview = root.resolve("preview.jpg").toFile().apply {
+            writeBytes(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0x00))
+        }
+
+        val report = WatchStoreCompatibilityInspector.inspect(root.toFile(), preview)
+
+        assertTrue(report.hasGlobalScript)
+        assertTrue(report.unsupportedExpressions.isEmpty())
+        assertTrue(report.isFullyCompatible)
+        assertEquals(0, report.issueCount)
+    }
+
     private inline fun withTempRoot(block: (java.nio.file.Path) -> Unit) {
         val root = Files.createTempDirectory("flue-watch-compat-")
         try {

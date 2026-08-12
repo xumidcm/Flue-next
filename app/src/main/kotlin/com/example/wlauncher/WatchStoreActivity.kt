@@ -2271,9 +2271,8 @@ private fun WatchFaceDetailPage(
                                         fontSize = 12.sp,
                                     )
                                 }
-                                // Flue 不执行 Lua，带 Global Script 的表盘装上后脚本不生效。
-                                // 只提示这一项：其余兼容性字段刻意不展示。报告随 catalog
-                                // 持久化，所以进程重启后回到这一页仍然看得到。
+                                // Global Script 会在 Flue 的受限 Lua 沙箱中运行。
+                                // 只提示这一项：其余兼容性字段刻意不展示。
                                 if (record.compatibilityReport?.hasGlobalScript == true) {
                                     Text(
                                         stringResource(R.string.watch_store_lua_script_warning),

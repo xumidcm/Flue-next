@@ -65,6 +65,9 @@ import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.launchsession.ExternalLaunchState
 import com.flue.launcher.launchsession.ReturnKind
 import com.flue.launcher.service.FlueAccessibilityService
+import com.flue.launcher.service.FlueDeviceAdminController
+import com.flue.launcher.service.ScreenLockControlMode
+import com.flue.launcher.service.screenLockControlMode
 import com.flue.launcher.ui.anim.appListLaunchPlateValues
 import com.flue.launcher.ui.anim.appListLaunchValues
 import com.flue.launcher.ui.anim.appListLayerValues
@@ -542,24 +545,52 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Unit
         }
     }
-    val lockScreenWithAccessibility: () -> Unit = remember(context, openAccessibilitySettings) {
+    val openDeviceAdminSettings: () -> Unit = remember(context) {
         {
-            if (FlueAccessibilityService.lockScreen()) {
-                vibrateHaptic(context)
-            } else {
-                if (FlueAccessibilityService.isEnabled(context)) {
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.toast_accessibility_connecting),
-                        Toast.LENGTH_SHORT,
-                    ).show()
+            Toast.makeText(
+                context,
+                context.getString(R.string.toast_grant_device_admin),
+                Toast.LENGTH_SHORT,
+            ).show()
+            if (!FlueDeviceAdminController.requestActivation(context)) {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.toast_open_device_admin_failed),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+    val lockScreenWithPlatform: () -> Unit = remember(
+        context,
+        openAccessibilitySettings,
+        openDeviceAdminSettings,
+    ) {
+        {
+            if (screenLockControlMode(Build.VERSION.SDK_INT) == ScreenLockControlMode.DEVICE_ADMIN) {
+                if (FlueDeviceAdminController.lockScreen(context)) {
+                    vibrateHaptic(context)
                 } else {
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.toast_grant_accessibility),
-                        Toast.LENGTH_SHORT,
-                    ).show()
-                    openAccessibilitySettings()
+                    openDeviceAdminSettings()
+                }
+            } else {
+                if (FlueAccessibilityService.lockScreen()) {
+                    vibrateHaptic(context)
+                } else {
+                    if (FlueAccessibilityService.isEnabled(context)) {
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.toast_accessibility_connecting),
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    } else {
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.toast_grant_accessibility),
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                        openAccessibilitySettings()
+                    }
                 }
             }
         }
@@ -1965,7 +1996,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 launcherInteractive &&
                                 screenState == ScreenState.Face &&
                                 !sideSceneOverlayActive
-                            ) lockScreenWithAccessibility else null
+                            ) lockScreenWithPlatform else null
                         )
                     } else if (selectedWatchFace.isWatchmaker) {
                         Box(modifier = Modifier.fillMaxSize()) {
@@ -1979,7 +2010,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                     launcherInteractive &&
                                     screenState == ScreenState.Face &&
                                     !sideSceneOverlayActive
-                                ) lockScreenWithAccessibility else null,
+                                ) lockScreenWithPlatform else null,
                                 onLoadFailure = { descriptor, error ->
                                     val rootCause = generateSequence(error) { it.cause }.last()
                                     vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
@@ -2012,7 +2043,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                     launcherInteractive &&
                                     screenState == ScreenState.Face &&
                                     !sideSceneOverlayActive
-                                ) lockScreenWithAccessibility else null,
+                                ) lockScreenWithPlatform else null,
                                 onLoadFailure = { descriptor, error ->
                                     val rootCause = generateSequence(error) { it.cause }.last()
                                     vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
@@ -2049,7 +2080,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 launcherInteractive &&
                                 screenState == ScreenState.Face &&
                                 !sideSceneOverlayActive
-                            ) lockScreenWithAccessibility else null,
+                            ) lockScreenWithPlatform else null,
                         )
                     }
                 }

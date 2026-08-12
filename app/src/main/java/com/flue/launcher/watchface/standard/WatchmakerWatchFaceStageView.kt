@@ -12,6 +12,12 @@ import kotlin.math.min
 internal fun shouldRouteStageTouchToPrimary(videoLayerCount: Int): Boolean =
     videoLayerCount > 0
 
+internal fun shouldRefreshBorrowedSegmentState(
+    appliedSignature: String?,
+    nextSignature: String,
+    videoLayerCount: Int,
+): Boolean = videoLayerCount > 0 && appliedSignature == nextSignature
+
 /**
  * `video` 图层的合成宿主。
  *
@@ -92,7 +98,12 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
     fun syncVideoSegments() {
         val entries = primaryView.videoLayerPlanEntries()
         val signature = entries.joinToString("|") { "${it.planIndex}:${it.absolutePath}" }
-        if (signature == appliedSignature) {
+        if (shouldRefreshBorrowedSegmentState(appliedSignature, signature, entries.size)) {
+            // A face reload can keep the same video path/signature while its
+            // Lua VM, data provider, or segment range has changed. Re-adopt the
+            // primary state before updating geometry so extra Canvas segments
+            // never keep a closed/stale VM.
+            syncSegmentState()
             updateVideoGeometry()
             return
         }

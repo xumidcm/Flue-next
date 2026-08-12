@@ -63,6 +63,40 @@ class WatchmakerRuntimeContractsTest {
     }
 
     @Test
+    fun editorNewlinesProduceSeparateCenteredTextBaselines() {
+        assertEquals(listOf("First", "Second"), WatchTextLayout.lines("First\nSecond"))
+        assertEquals(
+            listOf(-8f, 12f),
+            WatchTextLayout.baselines(
+                lineCount = 2,
+                ascent = -8f,
+                descent = 4f,
+                lineHeight = 20f,
+                verticalAlignment = "c",
+            ),
+        )
+    }
+
+    @Test
+    fun watchMakerExportedWhitespaceRunRestoresTheAuthoredLineBreak() {
+        val exported =
+            "\"Rome wasn't built in a day,                                    " +
+                "but they didn't have Claude code or codex\" XD"
+
+        assertEquals(
+            listOf(
+                "\"Rome wasn't built in a day,",
+                "but they didn't have Claude code or codex\" XD",
+            ),
+            WatchTextLayout.lines(exported),
+        )
+        assertEquals(
+            listOf("keep", "ordinary  spacing"),
+            WatchTextLayout.lines("keep\nordinary  spacing"),
+        )
+    }
+
+    @Test
     fun linearRasterOnlyForAnisotropicScaleComposedFromCanvasAncestorsAndLayer() {
         // 等比缩放（含画布基变换的非 1 缩放）一律不触发：312 的 181 个 text 图层
         // 全靠字形缓存，误开 LINEAR_TEXT_FLAG 会让它们每帧重新栅格化、拖慢整帧。
@@ -1035,7 +1069,7 @@ class WatchmakerRuntimeContractsTest {
     }
 
     @Test
-    fun compatibilityReportAcceptsBoundedBuiltInsButStillReportsScripts() =
+    fun compatibilityReportAcceptsLuaVariablesHandledByTheFaceSandbox() =
         withTemporaryDirectory { root ->
             val definition = WatchmakerDefinitionParser().parse(
                 File(root, "watch.xml").apply {
@@ -1151,6 +1185,22 @@ class WatchmakerRuntimeContractsTest {
 
         assertEquals(first, sameRevision)
         assertFalse(first == changedFile)
+    }
+
+    @Test
+    fun executableRevisionChangesWhenSameSizeSameTimestampLuaContentChanges() {
+        val metadata = watchAssetCacheRevision(
+            rootKey = "/faces/watch-a",
+            relativePath = "scripts/script.txt",
+            length = 13L,
+            lastModifiedEpochMs = 2_000L,
+        )
+
+        val first = watchExecutableContentRevision(metadata, "var_value = 1")
+        val changedScript = watchExecutableContentRevision(metadata, "var_value = 2")
+
+        assertFalse(first == changedScript)
+        assertEquals(first, watchExecutableContentRevision(metadata, "var_value = 1"))
     }
 
     @Test

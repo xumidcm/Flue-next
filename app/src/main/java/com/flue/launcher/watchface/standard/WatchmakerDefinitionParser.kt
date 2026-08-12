@@ -225,9 +225,7 @@ private val DYNAMIC_TAG_PATTERN = Regex("\\{([^\\{\\}]+)\\}")
  * grammar stay in the report instead of being rendered as literal strings.
  */
 private fun containsUnsupportedExpression(value: String): Boolean {
-    if (value.contains("lua:", ignoreCase = true) ||
-        value.contains("script:", ignoreCase = true)
-    ) {
+    if (value.contains("lua:", ignoreCase = true)) {
         return true
     }
     val hasBoundedFunction = value.contains("string.", ignoreCase = true) ||

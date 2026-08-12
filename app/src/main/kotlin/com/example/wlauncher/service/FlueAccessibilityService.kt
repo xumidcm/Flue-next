@@ -1,6 +1,7 @@
 package com.flue.launcher.service
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -8,6 +9,7 @@ import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityManager
 import com.flue.launcher.launchsession.ForegroundPackageEvidence
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -89,16 +91,25 @@ class FlueAccessibilityService : AccessibilityService() {
                 context.contentResolver,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
             )
-            return enabledServices
-                ?.split(':')
-                ?.mapNotNull { ComponentName.unflattenFromString(it) }
-                ?.any { it.packageName == component.packageName && it.className == component.className }
-                ?: false
+            val managerEnabledComponents = context
+                .getSystemService(AccessibilityManager::class.java)
+                ?.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+                .orEmpty()
+                .mapNotNull { info ->
+                    info.resolveInfo?.serviceInfo?.let { serviceInfo ->
+                        ComponentName(serviceInfo.packageName, serviceInfo.name).flattenToString()
+                    }
+                }
+            return isConnected() || containsFlueAccessibilityService(
+                enabledServiceSetting = enabledServices,
+                managerEnabledComponents = managerEnabledComponents,
+                expectedComponent = component.flattenToString(),
+            )
         }
 
         fun lockScreen(): Boolean {
-            val service = activeService ?: return false
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false
+            val service = activeService ?: return false
             return service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN)
         }
 
@@ -107,4 +118,35 @@ class FlueAccessibilityService : AccessibilityService() {
             return service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_POWER_DIALOG)
         }
     }
+}
+
+internal fun containsFlueAccessibilityService(
+    enabledServiceSetting: String?,
+    managerEnabledComponents: Iterable<String>,
+    expectedComponent: String,
+): Boolean {
+    val normalizedExpected = normalizeAccessibilityComponent(expectedComponent)
+    val secureSettingMatch = enabledServiceSetting
+        .orEmpty()
+        .split(':')
+        .asSequence()
+        .map(::normalizeAccessibilityComponent)
+        .any { it == normalizedExpected }
+    return secureSettingMatch || managerEnabledComponents.any {
+        normalizeAccessibilityComponent(it) == normalizedExpected
+    }
+}
+
+internal fun normalizeAccessibilityComponent(raw: String): String {
+    val value = raw.trim()
+    val slash = value.indexOf('/')
+    if (slash <= 0 || slash == value.lastIndex) return value
+    val packageName = value.substring(0, slash)
+    val className = value.substring(slash + 1)
+    val qualifiedClassName = when {
+        className.startsWith('.') -> packageName + className
+        className.contains('.') -> className
+        else -> "$packageName.$className"
+    }
+    return "$packageName/$qualifiedClassName"
 }

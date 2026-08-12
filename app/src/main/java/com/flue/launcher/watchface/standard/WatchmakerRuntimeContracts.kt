@@ -49,6 +49,39 @@ object WatchTextLayout {
         } else {
             WatchCurveArc(startDegrees = 180f, sweepDegrees = 180f)
         }
+
+    fun lines(text: String): List<String> =
+        text.replace("\r\n", "\n")
+            .replace('\r', '\n')
+            // Some WatchMaker exporters normalize an authored XML-attribute
+            // newline into a long padding run.  Eight spaces is deliberately
+            // conservative: ordinary typography is preserved, while the real
+            // Vibe_coder sample's 36-space marker becomes its preview's 2 lines.
+            .replace(Regex(" {8,}"), "\n")
+            .split('\n')
+
+    fun baselines(
+        lineCount: Int,
+        ascent: Float,
+        descent: Float,
+        lineHeight: Float,
+        verticalAlignment: String?,
+    ): List<Float> {
+        val count = lineCount.coerceAtLeast(1)
+        val spacing = lineHeight.coerceAtLeast(0f)
+        val singleBaseline = when {
+            verticalAlignment.orEmpty().lowercase(Locale.ROOT).startsWith('t') -> -ascent
+            verticalAlignment.orEmpty().lowercase(Locale.ROOT).startsWith('b') -> -descent
+            else -> -(ascent + descent) / 2f
+        }
+        val firstBaseline = when {
+            verticalAlignment.orEmpty().lowercase(Locale.ROOT).startsWith('t') -> singleBaseline
+            verticalAlignment.orEmpty().lowercase(Locale.ROOT).startsWith('b') ->
+                singleBaseline - (count - 1) * spacing
+            else -> singleBaseline - (count - 1) * spacing / 2f
+        }
+        return List(count) { index -> firstBaseline + index * spacing }
+    }
 }
 
 /**
@@ -1047,6 +1080,18 @@ internal fun watchAssetCacheRevision(
     append(length.coerceAtLeast(0L))
     append('\u0000')
     append(lastModifiedEpochMs.coerceAtLeast(0L))
+}
+
+/** Metadata plus bounded executable content used to decide whether a Lua VM may be reused. */
+internal fun watchExecutableContentRevision(
+    metadataRevision: String,
+    initialScript: String?,
+): String = buildString(metadataRevision.length + (initialScript?.length ?: 0) + 1) {
+    append(metadataRevision)
+    initialScript?.let { script ->
+        append('\u0000')
+        append(script)
+    }
 }
 
 /**

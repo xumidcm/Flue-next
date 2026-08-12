@@ -10,6 +10,7 @@
     <string name="internal_watchface_config_title">内置表盘设置</string>
     <string name="flue_accessibility_label">Flue 辅助控制</string>
     <string name="flue_accessibility_description">该权限仅用于控制双击息屏与打开电源选项。Flue并不联网，不会窃取用户任何信息。</string>
+    <string name="flue_device_admin_description">Android 8.1 仅使用此权限执行双击息屏，不会擦除设备数据或更改锁屏密码。</string>
 
     <!-- 通用 -->
     <string name="follow_system">跟随系统</string>
@@ -165,6 +166,8 @@
     <string name="settings_double_tap_lock">双击表盘息屏</string>
     <string name="settings_double_tap_on">已授权无障碍，双击表盘会立即息屏</string>
     <string name="settings_double_tap_require">开启后跳转无障碍授权，仅用于双击息屏</string>
+    <string name="settings_double_tap_device_admin_on">已授权设备管理员，双击表盘会立即息屏</string>
+    <string name="settings_double_tap_device_admin_require">Android 8.1 需授权设备管理员，仅用于双击息屏</string>
 
     <!-- 应用列表行为 -->
     <string name="settings_app_list_behavior_title">应用列表行为</string>
@@ -273,7 +276,7 @@
     <string name="search_d_media_actions">媒体卡额外操作按钮</string>
     <string name="search_d_cc_power">打开电源选项（需无障碍）</string>
     <string name="search_d_gestures">双击息屏等</string>
-    <string name="search_d_double_tap">需无障碍授权</string>
+    <string name="search_d_double_tap">需系统锁屏授权</string>
     <string name="search_d_app_list_behavior">遮罩取色、底色、文件夹</string>
     <string name="search_d_folders">拖动合成文件夹</string>
     <string name="search_d_launch_mask">启动遮罩跟随表盘颜色</string>
@@ -337,6 +340,8 @@
     <string name="toast_deleted_fmt">已删除 %s</string>
     <string name="toast_grant_accessibility">请在无障碍中授权 Flue 辅助控制</string>
     <string name="toast_accessibility_connecting">Flue 无障碍服务连接中，请稍后重试</string>
+    <string name="toast_grant_device_admin">请授权 Flue 设备管理员以使用双击息屏</string>
+    <string name="toast_open_device_admin_failed">无法打开设备管理员授权页面</string>
     <string name="toast_no_custom_curves">没有可导出的自定义动画曲线</string>
     <string name="toast_curves_exported">动画曲线已导出</string>
     <string name="toast_curves_imported_fmt">已导入 %d 条动画曲线</string>
@@ -1101,7 +1106,7 @@
     <string name="watch_store_scan_warning_fmt">有 %1$d 个安装目录未能扫描</string>
     <string name="watch_store_scan_warning_detail_fmt">%1$s；首个失败目录：%2$s（%3$s）</string>
     <string name="watch_store_unknown_directory">未知目录</string>
-    <string name="watch_store_lua_script_warning">该表盘含有 Global Script Lua 脚本，Flue 可能无法完全正确渲染并实现其功能</string>
+    <string name="watch_store_lua_script_warning">该表盘含有 Global Script Lua 脚本，Flue 将在受限沙箱中运行</string>
     <string name="watch_store_error_superseded_cleanup_fmt">新版本已安装，但清理旧版本失败：%1$s</string>
     <string name="watch_store_error_transaction_cleanup_fmt">安装失败，且清理临时事务失败：%1$s</string>
     <string name="watch_store_error_catalog_restore_after_install">表盘已经安装，但市场记录尚未恢复；请重新扫描后再试</string>

@@ -162,6 +162,7 @@ import com.flue.launcher.ui.common.rememberFlueElasticScrollState
 import com.flue.launcher.ui.common.flueElasticNestedScroll
 import com.flue.launcher.ui.controlcenter.SideScreenControlCenterMusicCard
 import com.flue.launcher.ui.controlcenter.sideScreenContentAllowsVerticalScroll
+import com.flue.launcher.ui.controlcenter.sideScreenContentUsesElasticOverscroll
 import com.flue.launcher.ui.controlcenter.MusicTextSwitchAnimations
 import com.flue.launcher.ui.drawer.AppBubble
 import com.flue.launcher.ui.drawer.AppShortcutOverlay
@@ -554,6 +555,7 @@ fun SmartStackLayer(
     val stepSnapshot = rememberStepSnapshot(showSteps, stepPermissionGranted)
     val slotCenters = remember { mutableStateMapOf<Int, Offset>() }
     val showNotificationPreview = notificationsEnabled && !showMusicCard
+    val usesElasticOverscroll = sideScreenContentUsesElasticOverscroll(showMusicCard)
     val canOpenNotificationsFromSide = showNotificationPreview
     // 快捷启动 dock 固定 2 行 × 4 列（设计蓝本 §9）。
     val visibleShortcutCount = 8
@@ -585,7 +587,9 @@ fun SmartStackLayer(
     var transitionInFlight by remember { mutableStateOf(false) }
     val sideOverscroll = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
-    val contentTranslationY = if (notificationsSceneActive || transitionInFlight) 0f else sideOverscroll.value
+    val contentTranslationY = if (
+        usesElasticOverscroll || notificationsSceneActive || transitionInFlight
+    ) 0f else sideOverscroll.value
 
     fun releaseSideOverscroll() {
         scope.launch {
@@ -611,7 +615,7 @@ fun SmartStackLayer(
         }
     }
 
-    LaunchedEffect(notificationsSceneActive) {
+    LaunchedEffect(notificationsSceneActive, usesElasticOverscroll) {
         sideOverscroll.snapTo(0f)
         dragDx = 0f
         dragDy = 0f
@@ -630,7 +634,14 @@ fun SmartStackLayer(
             // 半透明玻璃：表盘背衬在下面被压暗模糊，这层透出它就是毛玻璃。
             .clip(flueOverlayMaskShape(overlayMaskCornerRadiusDp))
             .background(launcherStyle.screenBackground.copy(alpha = 0.62f))
-            .pointerInput(notificationAccessGranted, canOpenNotificationsFromSide, modalState, notificationsSceneActive, transitionInFlight) {
+            .pointerInput(
+                notificationAccessGranted,
+                canOpenNotificationsFromSide,
+                usesElasticOverscroll,
+                modalState,
+                notificationsSceneActive,
+                transitionInFlight,
+            ) {
                 if (modalState != SideScreenModalState.None || notificationsSceneActive || transitionInFlight) return@pointerInput
                 detectDragGestures(
                     onDragStart = {
@@ -674,10 +685,14 @@ fun SmartStackLayer(
                             )
                         } else if (abs(dragDx) > abs(dragDy)) {
                             Unit
-                        } else if (sideOverscroll.value != 0f) {
+                        } else if (!usesElasticOverscroll && sideOverscroll.value != 0f) {
                             change.consume()
                             applySideOverscroll(dragAmount.y)
-                        } else if (!canOpenNotificationsFromSide && ((dragAmount.y > 0f && listAtTop) || (dragAmount.y < 0f && listAtBottom))) {
+                        } else if (
+                            !usesElasticOverscroll &&
+                            !canOpenNotificationsFromSide &&
+                            ((dragAmount.y > 0f && listAtTop) || (dragAmount.y < 0f && listAtBottom))
+                        ) {
                             change.consume()
                             applySideOverscroll(dragAmount.y)
                         } else if (canOpenNotificationsFromSide && (dragDy < 0f || notificationTransitionProgress > 0f)) {
@@ -782,7 +797,15 @@ fun SmartStackLayer(
                 .padding(top = 10.dp, bottom = bottomSafePadding)
                 .then(
                     if (verticalScrollEnabled) {
-                        Modifier.verticalScroll(contentScrollState)
+                        Modifier
+                            .then(
+                                if (usesElasticOverscroll) {
+                                    Modifier.flueElasticNestedScroll(contentScrollState)
+                                } else {
+                                    Modifier
+                                }
+                            )
+                            .verticalScroll(contentScrollState)
                     } else {
                         Modifier
                     }

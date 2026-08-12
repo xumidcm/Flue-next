@@ -130,6 +130,10 @@ dependencies {
     // ffmpeg-kit-maintained 8.1.7 publishes an empty dependency POM even though
     // its Java API still calls com.arthenica.smartexception.java.Exceptions.
     implementation(libs.smart.exception.java)
+    // WatchMaker face scripts run inside a Flue-owned whitelist sandbox.  LuaJ is
+    // used only as the pure-Java VM/compiler; its file, package and Java bridge
+    // libraries are never exposed to a face.
+    implementation(libs.luaj.jse)
 
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.compose.ui.tooling.preview)

@@ -24,13 +24,28 @@ fun Modifier.instantPressGesture(
     return pointerInput(onClick, enabled) {
         detectTapGestures(
             onPress = {
-                pressedState.value = true
-                val released = tryAwaitRelease()
-                pressedState.value = false
-                if (released) onClick()
+                runInstantPressGesture(
+                    setPressed = { pressedState.value = it },
+                    awaitRelease = { tryAwaitRelease() },
+                    onClick = onClick,
+                )
             }
         )
     }
+}
+
+internal suspend fun runInstantPressGesture(
+    setPressed: (Boolean) -> Unit,
+    awaitRelease: suspend () -> Boolean,
+    onClick: () -> Unit,
+) {
+    setPressed(true)
+    val released = try {
+        awaitRelease()
+    } finally {
+        setPressed(false)
+    }
+    if (released) onClick()
 }
 
 @Composable
