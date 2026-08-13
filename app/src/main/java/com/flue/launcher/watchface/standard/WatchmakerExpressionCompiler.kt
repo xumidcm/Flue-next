@@ -1058,8 +1058,7 @@ internal fun evaluateWatchExpr(
  * 未解析 / 不支持的 tag 取 `nil`，与老路径代入 `"nil"` 等价。
  */
 private fun WatchTagResolution.toBareTagValue(): ExpressionValue {
-    if (this !is WatchTagResolution.Resolved) return ExpressionValue.Nil
-    val value = renderedValue.trim()
+    val value = expressionValue()?.trim() ?: return ExpressionValue.Nil
     value.toDoubleOrNull()?.takeIf(Double::isFinite)?.let { return ExpressionValue.Numeric(it) }
     if (value.equals("true", true)) return ExpressionValue.Logical(true)
     if (value.equals("false", true)) return ExpressionValue.Logical(false)

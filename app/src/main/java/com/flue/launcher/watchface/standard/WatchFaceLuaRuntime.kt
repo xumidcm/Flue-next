@@ -164,8 +164,7 @@ class WatchFaceLuaRuntime private constructor(
     /** True only when the expression references a global defined by face code. */
     fun referencesFaceState(expression: String): Boolean {
         if (closed || expression.isBlank()) return false
-        return IDENTIFIER.findAll(expression).any { match ->
-            val name = match.value
+        return identifiersOutsideTagsAndStrings(expression).any { name ->
             name !in BUILTIN_ROOTS && (name in dynamicFaceNames || !globals.rawget(name).isnil())
         }
     }
@@ -187,7 +186,11 @@ class WatchFaceLuaRuntime private constructor(
         expression: String,
         resolver: (String) -> WatchTagResolution,
     ): String? = if (!referencesFaceState(expression)) null else {
-        evaluateValue(expression, resolver)?.let(::renderLuaValue)
+        // Once a layer references a face-owned name, a Lua nil is a valid
+        // rendered value (blank), not a signal to fall back to the raw WM
+        // template. Compile/runtime failures also stay blank so `var_s_t4 +`
+        // can never leak source code onto the face.
+        evaluateValue(expression, resolver)?.let(::renderLuaValue).orEmpty()
     }
 
     fun evaluateFaceBoolean(
@@ -259,10 +262,7 @@ class WatchFaceLuaRuntime private constructor(
             // __index(table, name); the key is the last argument in both forms.
             val name = args.arg(args.narg())
             val normalized = name.checkjstring().trim().lowercase(Locale.ROOT)
-            return when (val resolved = resolveTag(normalized)) {
-                is WatchTagResolution.Resolved -> resolved.renderedValue.toLuaInput()
-                else -> NIL
-            }
+            return resolveTag(normalized).expressionValue()?.toLuaInput() ?: NIL
         }
     }
 
@@ -558,7 +558,6 @@ class WatchFaceLuaRuntime private constructor(
         private const val FORMAT_FLAGS = "-+ #0"
         private const val INSTRUCTION_LIMIT_MESSAGE =
             "instruction limit exceeded (possible infinite loop in face script)"
-        private val IDENTIFIER = Regex("[A-Za-z_][A-Za-z0-9_]*")
         private val DECLARED_FACE_NAME = Regex(
             "(?:\\bfunction\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\(|\\b([A-Za-z_][A-Za-z0-9_]*)\\s*=)",
         )
@@ -678,6 +677,46 @@ class WatchFaceLuaRuntime private constructor(
                     match.groupValues[1].ifBlank { match.groupValues[2] }
                 }
 
+        /** Layer expressions may contain WatchMaker tags and quoted labels that are not Lua globals. */
+        private fun identifiersOutsideTagsAndStrings(source: String): Sequence<String> = sequence {
+            var index = 0
+            var quote: Char? = null
+            while (index < source.length) {
+                val char = source[index]
+                if (quote != null) {
+                    when {
+                        char == '\\' && index + 1 < source.length -> index += 2
+                        char == quote -> {
+                            quote = null
+                            index++
+                        }
+                        else -> index++
+                    }
+                    continue
+                }
+                when {
+                    char == '\'' || char == '"' -> {
+                        quote = char
+                        index++
+                    }
+                    char == '{' -> {
+                        val closing = source.indexOf('}', index + 1)
+                        index = if (closing >= 0) closing + 1 else source.length
+                    }
+                    char.isLetter() || char == '_' -> {
+                        val start = index++
+                        while (index < source.length &&
+                            (source[index].isLetterOrDigit() || source[index] == '_')
+                        ) {
+                            index++
+                        }
+                        yield(source.substring(start, index))
+                    }
+                    else -> index++
+                }
+            }
+        }
+
         /** CloX-compatible source splicing without rewriting Lua table constructors. */
         private fun spliceTags(source: String): String {
             if ('{' !in source) return source
@@ -770,8 +809,10 @@ class WatchFaceLuaRuntime private constructor(
 
         private fun renderLuaValue(value: LuaValue): String = when {
             value.isboolean() -> value.toboolean().toString()
-            value.isnumber() -> ExpressionValue.Numeric(value.todouble()).renderText()
-            value.isstring() -> value.tojstring()
+            // LuaJ's isnumber() also returns true for numeric-looking strings.
+            // Color text such as "0066e6" must keep its exact string bytes.
+            value.type() == LuaValue.TNUMBER -> ExpressionValue.Numeric(value.todouble()).renderText()
+            value.type() == LuaValue.TSTRING -> value.tojstring()
             else -> value.tojstring()
         }
 

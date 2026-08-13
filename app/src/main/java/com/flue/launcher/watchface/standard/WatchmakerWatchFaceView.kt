@@ -85,6 +85,26 @@ internal fun shouldRenderWatchLayer(
     hasTapAction: Boolean,
 ): Boolean = isDisplayed && (alpha > 0f || hasTapAction)
 
+internal data class WatchTapBox(
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+)
+
+/** Local-space tap bounds shared by primitives that own a rectangular box. */
+internal fun watchLayerTapBox(type: String, width: Float, height: Float): WatchTapBox? {
+    if (type.lowercase(Locale.ROOT) !in setOf("shape", "rounded", "text_ring")) return null
+    val safeWidth = width.takeIf(Float::isFinite)?.coerceAtLeast(0f) ?: return null
+    val safeHeight = height.takeIf(Float::isFinite)?.coerceAtLeast(0f) ?: return null
+    return WatchTapBox(
+        left = -safeWidth / 2f,
+        top = -safeHeight / 2f,
+        right = safeWidth / 2f,
+        bottom = safeHeight / 2f,
+    )
+}
+
 internal inline fun evaluateWatchFaceTickRedraw(
     luaCallbackRan: Boolean,
     shouldRedrawThisTick: () -> Boolean,
@@ -2025,6 +2045,31 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val resolved = nightResolved
             ?: resolveAsset(path, source, conventionalDirectory = "images")
         val sharedSize = attrs["size"]
+        val grid = if (sprite) {
+            parseWatchGrid(
+                attrs["cond_grid"]
+                    ?: attrs["grid"]
+                    ?: attrs["sprite_grid"]
+                    ?: buildString {
+                        append(attrs["columns"] ?: "1")
+                        append('x')
+                        append(attrs["rows"] ?: "1")
+                    },
+            )
+        } else {
+            1 to 1
+        }
+        val spriteDecodeDimensionPx = if (sprite) {
+            watchSpriteDecodeDimensionPx(
+                targetWidth = (attrs["width"] ?: sharedSize)?.trim()?.toFloatOrNull(),
+                targetHeight = (attrs["height"] ?: sharedSize)?.trim()?.toFloatOrNull(),
+                columns = grid.first,
+                rows = grid.second,
+                maximumDimensionPx = MAX_SPRITE_SHEET_DECODE_DIMENSION_PX,
+            )
+        } else {
+            null
+        }
         val requestedMovie = resolved
             ?.takeIf { it.file.extension.equals("gif", true) }
             ?.let { requestMovie(it, source) }
@@ -2043,6 +2088,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 path = selectedPath,
                 source = source,
                 animatedFrame = animateFrames && framePaths.size > 1,
+                minimumDecodeDimensionPx = spriteDecodeDimensionPx,
             )
         } else {
             null
@@ -2128,20 +2174,6 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val nativeHeight = movie?.height()?.toFloat() ?: bitmap?.height?.toFloat() ?: return
         val width = dynamicNumber(attrs["width"] ?: sharedSize, nativeWidth, source).coerceAtLeast(1f)
         val height = dynamicNumber(attrs["height"] ?: sharedSize, nativeHeight, source).coerceAtLeast(1f)
-        val grid = if (sprite) {
-            parseWatchGrid(
-                attrs["cond_grid"]
-                    ?: attrs["grid"]
-                    ?: attrs["sprite_grid"]
-                    ?: buildString {
-                        append(attrs["columns"] ?: "1")
-                        append('x')
-                        append(attrs["rows"] ?: "1")
-                    },
-            )
-        } else {
-            1 to 1
-        }
         val index = if (sprite) {
             val dayIndex = watchSpriteIndex(
                 dynamicNumber(
@@ -2246,7 +2278,31 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             } else {
                 // animatedFrame = false：这些是单帧静态图，归 bitmapCache 管，
                 // 不该占 animatedBitmapCache 给帧序列留的那份预算。
-                requestBitmap(path = resolved.key, source = prepared, animatedFrame = false)
+                val layerType = layers[layerIndex].type.lowercase(Locale.ROOT)
+                val spriteDecodeDimensionPx = if (layerType == "image_cond") {
+                    val grid = parseWatchGrid(
+                        attrs["cond_grid"]
+                            ?: attrs["grid"]
+                            ?: attrs["sprite_grid"]
+                            ?: "${attrs["columns"] ?: "1"}x${attrs["rows"] ?: "1"}",
+                    )
+                    val sharedSize = attrs["size"]
+                    watchSpriteDecodeDimensionPx(
+                        targetWidth = (attrs["width"] ?: sharedSize)?.trim()?.toFloatOrNull(),
+                        targetHeight = (attrs["height"] ?: sharedSize)?.trim()?.toFloatOrNull(),
+                        columns = grid.first,
+                        rows = grid.second,
+                        maximumDimensionPx = MAX_SPRITE_SHEET_DECODE_DIMENSION_PX,
+                    )
+                } else {
+                    null
+                }
+                requestBitmap(
+                    path = resolved.key,
+                    source = prepared,
+                    animatedFrame = false,
+                    minimumDecodeDimensionPx = spriteDecodeDimensionPx,
+                )
             }
             warmed++
         }
@@ -2292,14 +2348,14 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             else -> value
         }
         val align = attrs["alignment"].orEmpty().lowercase(Locale.ROOT)
-        textPaint.textAlign = when {
-            align.endsWith('l') -> Paint.Align.LEFT
-            align.endsWith('r') -> Paint.Align.RIGHT
-            else -> Paint.Align.CENTER
-        }
-        val x = 0f
+        // The layer alignment anchors the whole multi-line block. Individual
+        // lines then share that block's left edge; centering every line by its
+        // own width turns an authored paragraph into a ragged centered stack.
+        textPaint.textAlign = Paint.Align.LEFT
         val metrics = textPaint.fontMetrics
         val lines = WatchTextLayout.lines(text)
+        val lineWidths = lines.map(textPaint::measureText)
+        val lineStartXs = WatchTextLayout.lineStartXs(lineWidths, align)
         val lineHeight = (metrics.descent - metrics.ascent + metrics.leading).coerceAtLeast(0f)
         val baselines = WatchTextLayout.baselines(
             lineCount = lines.size,
@@ -2312,12 +2368,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             // 文字图层（如心率读数）也可以携带 tap_action；用文字包围盒记录
             // 点按区域，坐标随当前画布矩阵映射回视图空间。
             lines.forEachIndexed { index, line ->
-                val textWidth = textPaint.measureText(line)
-                val left = when (textPaint.textAlign) {
-                    Paint.Align.LEFT -> x
-                    Paint.Align.RIGHT -> x - textWidth
-                    else -> x - textWidth / 2f
-                }
+                val textWidth = lineWidths[index]
+                val left = lineStartXs[index]
                 val baseline = baselines[index]
                 if (index == 0) {
                     rectScratch.set(
@@ -2342,18 +2394,18 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // strokeWidth = 2×o_size。Glow 用多环 STROKE 由外向内递增透明度。
         resolveOutline(attrs, source)?.let { outline ->
             lines.forEachIndexed { index, line ->
-                drawTextOutline(canvas, line, x, baselines[index], outline, alpha)
+                drawTextOutline(canvas, line, lineStartXs[index], baselines[index], outline, alpha)
             }
         }
         // 阴影在描边之上、本体之下 —— clox 里描边拷贝 z=-2、阴影拷贝 z=-1，
         // cocos 按 z 升序绘制，所以叠放顺序就是 描边 → 阴影 → 本体。
         resolveShadow(attrs, source)?.let { shadow ->
             lines.forEachIndexed { index, line ->
-                drawTextShadow(canvas, line, x, baselines[index], shadow, alpha)
+                drawTextShadow(canvas, line, lineStartXs[index], baselines[index], shadow, alpha)
             }
         }
         lines.forEachIndexed { index, line ->
-            canvas.drawText(line, x, baselines[index], textPaint)
+            canvas.drawText(line, lineStartXs[index], baselines[index], textPaint)
         }
     }
 
@@ -2493,13 +2545,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             align.startsWith('b') -> -lineHeight * lines.size
             else -> -lineHeight * lines.size / 2f
         }
+        val lineWidths = lines.map { line -> font.measureAdvance(line) * scale }
+        val lineStartXs = WatchTextLayout.lineStartXs(lineWidths, align)
         val runs = lines.mapIndexed { index, line ->
-            val width = font.measureAdvance(line) * scale
-            val startX = when {
-                align.endsWith('l') -> 0f
-                align.endsWith('r') -> -width
-                else -> -width / 2f
-            }
+            val startX = lineStartXs[index]
             Triple(line, startX, firstLineTop + lineHeight * index)
         }
         if (!attrs["tap_action"].isNullOrBlank()) {
@@ -3061,13 +3110,19 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val width = dynamicNumber(attrs["width"] ?: sharedSize, 64f, source).coerceAtLeast(1f)
         val height = dynamicNumber(attrs["height"] ?: sharedSize, 64f, source).coerceAtLeast(1f)
         val radius = dynamicNumber(attrs["radius"], min(width, height) / 4f, source).coerceAtLeast(0f)
+        if (!attrs["tap_action"].isNullOrBlank() || !attrs["action"].isNullOrBlank()) {
+            watchLayerTapBox("rounded", width, height)?.let { box ->
+                rectScratch.set(box.left, box.top, box.right, box.bottom)
+                recordTapTarget(canvas, rectScratch, attrs)
+            }
+        }
         shapePaint.color = resolveColor(attrs["color"], Color.WHITE, source)
         shapePaint.alpha = paintAlpha(alpha)
         canvas.drawRoundRect(-width / 2f, -height / 2f, width / 2f, height / 2f, radius, radius, shapePaint)
     }
 
     private fun drawMarkers(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {
-        val count = dynamicNumber(attrs["m_count"], 12f, source).roundToInt().coerceIn(1, 120)
+        val count = watchMarkerCount(dynamicNumber(attrs["m_count"], 12f, source))
         val radius = dynamicNumber(attrs["radius"], 220f, source)
         val markWidth = dynamicNumber(attrs["m_width"], 6f, source).coerceAtLeast(1f)
         val markHeight = dynamicNumber(attrs["m_height"], 20f, source).coerceAtLeast(1f)
@@ -3136,13 +3191,50 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         textPaint.color = resolveColor(attrs["color"], Color.WHITE, source)
         textPaint.alpha = paintAlpha(alpha)
         textPaint.textAlign = Paint.Align.CENTER
-        TEXT_RING_LABELS.forEachIndexed { index, label ->
-            val angle = start + (end - start) * index / TEXT_RING_LABELS.size - 90f
-            val radians = Math.toRadians(angle.toDouble())
-            canvas.save()
-            canvas.rotate(angle + 90f)
-            canvas.drawText(label, 0f, -radius, textPaint)
-            canvas.restore()
+        val hiddenValues = attrs["hide_text"].orEmpty()
+            .split(',')
+            .mapNotNull { value -> value.trim().toIntOrNull() }
+            .toSet()
+        val showEvery = dynamicNumber(attrs["show_every"], 1f, source)
+            .roundToInt()
+            .coerceAtLeast(1)
+        val items = watchTextRingItems(
+            // ring_type is a range/enumeration literal (for example 1-12),
+            // not arithmetic. Evaluating it turns the authored range into -11.
+            ringType = watchTextRingType(attrs["ring_type"]),
+            showEvery = showEvery,
+            hiddenValues = hiddenValues,
+            startDegrees = start,
+            endDegrees = end,
+        )
+        val transform = attrs["transform"].orEmpty().lowercase(Locale.ROOT)
+        val rotateLabels = attrs["rotated_text"].equals("y", ignoreCase = true)
+        val metrics = textPaint.fontMetrics
+        val baselineOffset = -(metrics.ascent + metrics.descent) / 2f
+        items.forEach { item ->
+            val label = when (transform) {
+                "uc", "uppercase" -> item.label.uppercase(Locale.getDefault())
+                "lc", "lowercase" -> item.label.lowercase(Locale.getDefault())
+                else -> item.label
+            }
+            val radians = Math.toRadians(item.angleDegrees.toDouble())
+            val x = sin(radians).toFloat() * radius
+            val y = -cos(radians).toFloat() * radius
+            if (rotateLabels) {
+                canvas.save()
+                canvas.rotate(item.angleDegrees)
+                canvas.drawText(label, 0f, -radius + baselineOffset, textPaint)
+                canvas.restore()
+            } else {
+                canvas.drawText(label, x, y + baselineOffset, textPaint)
+            }
+        }
+        if (!attrs["tap_action"].isNullOrBlank() || !attrs["action"].isNullOrBlank()) {
+            val extent = radius + textPaint.textSize
+            watchLayerTapBox("text_ring", extent * 2f, extent * 2f)?.let { box ->
+                rectScratch.set(box.left, box.top, box.right, box.bottom)
+                recordTapTarget(canvas, rectScratch, attrs)
+            }
         }
     }
 
@@ -3660,11 +3752,23 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         source: PreparedSource,
         animatedFrame: Boolean = false,
         fontAtlas: Boolean = false,
+        minimumDecodeDimensionPx: Int? = null,
     ): Bitmap? {
         if (path.isBlank()) return null
         val resolved = resolveAsset(path, source, conventionalDirectory = "images") ?: return null
         val assetPrefix = "${source.rootCacheKey}\u0000${resolved.key}\u0000"
-        val key = resolved.cacheRevision
+        val decodeDimensionPx = when {
+            fontAtlas -> MAX_FONT_ATLAS_DECODE_DIMENSION_PX
+            minimumDecodeDimensionPx != null -> max(
+                bitmapDecodeDimensionPx(),
+                minimumDecodeDimensionPx.coerceAtMost(MAX_SPRITE_SHEET_DECODE_DIMENSION_PX),
+            )
+            else -> bitmapDecodeDimensionPx()
+        }
+        // A low-resolution request must never satisfy a later sprite-sheet
+        // request for the same file. Include the decode budget in the cache key
+        // so editor warm-up ordering cannot permanently pin a blurry bitmap.
+        val key = "${resolved.cacheRevision}\u0000decode=$decodeDimensionPx"
         synchronized(cacheLock) {
             // 图集走自己的 LRU，绝不和图片/帧序列共享字节预算（见 [fontAtlasCache]）。
             val primaryCache = when {
@@ -3712,11 +3816,6 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                     // 尺寸给整张图 inSampleSize 降采样，等于把每个字形的分辨率
                     // 同比砍掉，放大绘制必然糊（老师报的「位图字体非常模糊，
                     // 以前不会这样」就是这里）。图集另给一档上限，不吃编辑器降档。
-                    val decodeDimensionPx = if (fontAtlas) {
-                        MAX_FONT_ATLAS_DECODE_DIMENSION_PX
-                    } else {
-                        bitmapDecodeDimensionPx()
-                    }
                     val job = assetScope.launch {
                         var decoded: Bitmap? = null
                         try {
@@ -4454,12 +4553,12 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     }
 
     private fun resolveColor(raw: String?, fallback: Int, source: PreparedSource): Int {
-        val value = evaluateText(raw.orEmpty(), source)
-            .replace("#", "")
-            .trim()
+        val literal = normalizeWatchColorLiteral(raw)
+        val value = literal ?: evaluateText(raw.orEmpty(), source).trim()
         if (value.isBlank() || value == "--") return fallback
         return runCatching {
-            Color.parseColor(if (value.length == 6 || value.length == 8) "#$value" else value)
+            val normalized = value.replace("#", "")
+            Color.parseColor(if (normalized.length == 6 || normalized.length == 8) "#$normalized" else value)
         }.getOrDefault(fallback)
     }
 
@@ -5192,6 +5291,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         private const val MAX_SERIES_CACHE_ENTRIES = 32
         private const val MAX_CALENDAR_CACHE_ENTRIES = 8
         private const val MAX_DECODE_DIMENSION_PX = 1_024
+        /** High-resolution sprite sheets keep per-cell detail, with an OOM guard. */
+        private const val MAX_SPRITE_SHEET_DECODE_DIMENSION_PX = 4_096
 
         /**
          * 编辑器降档的下限。表盘设计画布是 512 见方，低于这个值就等于在

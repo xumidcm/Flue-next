@@ -12,6 +12,39 @@ import java.util.Locale
 
 class WatchmakerRuntimeContractsTest {
     @Test
+    fun conditionalSpriteDecodeKeepsEnoughPixelsForEachGridCell() {
+        // Tilt_Interactive uses a 15x15 sheet with a 512px authored cell. The
+        // whole texture must not be reduced to the ordinary 768px editor cap.
+        assertEquals(
+            4_096,
+            watchSpriteDecodeDimensionPx(
+                targetWidth = 512f,
+                targetHeight = 512f,
+                columns = 15,
+                rows = 15,
+            ),
+        )
+        assertEquals(
+            1_024,
+            watchSpriteDecodeDimensionPx(
+                targetWidth = 512f,
+                targetHeight = 512f,
+                columns = 2,
+                rows = 2,
+            ),
+        )
+        assertEquals(
+            null,
+            watchSpriteDecodeDimensionPx(
+                targetWidth = null,
+                targetHeight = null,
+                columns = 15,
+                rows = 15,
+            ),
+        )
+    }
+
+    @Test
     fun fontIndexResolvesFullPathBasenameStemAndMissingExtension() =
         withTemporaryDirectory { root ->
             val font = File(root, "fonts/ChironGoRoundTC-Bold.ttf").apply {
@@ -94,6 +127,143 @@ class WatchmakerRuntimeContractsTest {
             listOf("keep", "ordinary  spacing"),
             WatchTextLayout.lines("keep\nordinary  spacing"),
         )
+    }
+
+    @Test
+    fun multiLineTextUsesTheFirstLineAsTheSharedLeftAlignedAnchor() {
+        assertEquals(
+            listOf(-24f, -24f),
+            WatchTextLayout.lineStartXs(
+                lineWidths = listOf(48f, 120f),
+                horizontalAlignment = "cc",
+            ),
+        )
+        assertEquals(
+            listOf(0f, 0f),
+            WatchTextLayout.lineStartXs(
+                lineWidths = listOf(48f, 120f),
+                horizontalAlignment = "cl",
+            ),
+        )
+        assertEquals(
+            listOf(-48f, -48f),
+            WatchTextLayout.lineStartXs(
+                lineWidths = listOf(48f, 120f),
+                horizontalAlignment = "cr",
+            ),
+        )
+    }
+
+    @Test
+    fun hexadecimalColorLiteralsAreNotEvaluatedAsScientificNotation() {
+        assertEquals("#0066e6", normalizeWatchColorLiteral("0066e6"))
+        assertEquals("#ff0066e6", normalizeWatchColorLiteral("#ff0066e6"))
+        assertNull(normalizeWatchColorLiteral("var_T_col(0, var_TP)"))
+        assertNull(normalizeWatchColorLiteral("blue"))
+    }
+
+    @Test
+    fun cloxMixedExpressionPrefixConcatenatesWithStressAndChargingTemplates() {
+        val values = mapOf("ssc" to "8543", "sstr" to "35", "bc" to "0")
+        val resolver: (String) -> WatchTagResolution = { tag ->
+            values[tag]?.let(WatchTagResolution::Resolved) ?: WatchTagResolution.Unsupported(tag)
+        }
+        assertEquals(
+            "8543 35",
+            WatchmakerExpressionEvaluator.evaluateText(
+                "((((({ssc}~=false)) and ({ssc}) or (0)))) {sstr}",
+                resolver,
+            ),
+        )
+        val unavailableSteps: (String) -> WatchTagResolution = { tag ->
+            when (tag) {
+                "ssc" -> WatchTagResolution.Unavailable(tag, expressionFallback = "0")
+                "sstr" -> WatchTagResolution.Resolved("0")
+                else -> WatchTagResolution.Unsupported(tag)
+            }
+        }
+        assertEquals(
+            "0 0",
+            WatchmakerExpressionEvaluator.evaluateText(
+                "((((({ssc}~=false)) and ({ssc}) or (0)))) {sstr}",
+                unavailableSteps,
+            ),
+        )
+        assertEquals("Battery 0", WatchmakerExpressionEvaluator.evaluateText("Battery {bc}", resolver))
+        assertEquals(
+            "off",
+            WatchmakerExpressionEvaluator.evaluateText(
+                "({bc} == 0) and 'off' or 'on'",
+                resolver,
+            ),
+        )
+    }
+
+    @Test
+    fun chargingStateUsesWatchMakerTextWhileNumericAliasesStayExpressionSafe() {
+        val calendar = Calendar.getInstance()
+        assertEquals("0", WatchmakerTagResolver.resolve("sstr", calendar, WatchDataSnapshot()).renderedValue)
+        assertEquals(
+            "discharging",
+            WatchmakerTagResolver.resolve("bc", calendar, WatchDataSnapshot()).renderedValue.lowercase(),
+        )
+        assertEquals(
+            "charging",
+            WatchmakerTagResolver.resolve(
+                "bc",
+                calendar,
+                WatchDataSnapshot(isCharging = true),
+            ).renderedValue.lowercase(),
+        )
+        assertEquals("0", WatchmakerTagResolver.resolve("charging", calendar, WatchDataSnapshot()).renderedValue)
+        assertEquals(
+            "1",
+            WatchmakerTagResolver.resolve(
+                "is_charging",
+                calendar,
+                WatchDataSnapshot(isCharging = true),
+            ).renderedValue,
+        )
+    }
+
+    @Test
+    fun textRingUsesAuthoredRangeFilteringAndOneBasedAngles() {
+        assertEquals("1-12", watchTextRingType("1-12"))
+        assertEquals("1-60", watchTextRingType(" 1-60 "))
+        assertEquals("1-12", watchTextRingType(null))
+
+        val coarse = watchTextRingItems(
+            ringType = "1-60",
+            showEvery = 5,
+            hiddenValues = emptySet(),
+            startDegrees = 0f,
+            endDegrees = 360f,
+        )
+        assertEquals((5..60 step 5).map(Int::toString), coarse.map(WatchTextRingItem::label))
+        assertEquals(30f, coarse.first().angleDegrees, 0.0001f)
+        assertEquals(360f, coarse.last().angleDegrees, 0.0001f)
+
+        val precise = watchTextRingItems(
+            ringType = "1-12",
+            showEvery = 1,
+            hiddenValues = setOf(1, 12),
+            startDegrees = 0f,
+            endDegrees = 360f,
+        )
+        assertEquals((2..11).map(Int::toString), precise.map(WatchTextRingItem::label))
+        assertEquals(60f, precise.first().angleDegrees, 0.0001f)
+
+        assertEquals(
+            listOf("I", "II", "III", "IIII", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"),
+            watchTextRingLabels("I-XII"),
+        )
+    }
+
+    @Test
+    fun markerCountKeepsAuthoredPrecisionWithinTheRuntimeSafetyBound() {
+        assertEquals(60, watchMarkerCount(60f))
+        assertEquals(600, watchMarkerCount(600f))
+        assertEquals(1_200, watchMarkerCount(50_000f))
     }
 
     @Test
@@ -446,7 +616,7 @@ class WatchmakerRuntimeContractsTest {
         assertEquals("18", WatchmakerTagResolver.resolve("dh23", calendar, snapshot).renderedValue)
         assertEquals("87%", WatchmakerTagResolver.resolve("blp", calendar, snapshot).renderedValue)
         assertEquals("87", WatchmakerTagResolver.resolve("bl", calendar, snapshot).renderedValue)
-        assertEquals("1", WatchmakerTagResolver.resolve("bc", calendar, snapshot).renderedValue)
+        assertEquals("charging", WatchmakerTagResolver.resolve("bc", calendar, snapshot).renderedValue.lowercase())
         assertEquals("12345", WatchmakerTagResolver.resolve("ssc", calendar, snapshot).renderedValue)
         assertEquals("76", WatchmakerTagResolver.resolve("shr", calendar, snapshot).renderedValue)
         // WM_TAGS.md: {sthr} = 最大心率（默认 200），{shrp} = 心率占最大值百分比。
@@ -463,19 +633,21 @@ class WatchmakerRuntimeContractsTest {
     }
 
     @Test
-    fun heartRateTagsRenderZeroWithoutDataAndKeepExpressionsAlive() {
+    fun heartRateTagsShowUnavailableWithoutDataButKeepExpressionsAlive() {
         val calendar = Calendar.getInstance()
         val empty = WatchDataSnapshot()
 
-        // Watchmaker/clox 惯例：心率无数据渲染 0，而不是 "--"。
-        assertEquals("0", WatchmakerTagResolver.resolve("shr", calendar, empty).renderedValue)
-        assertEquals("0", WatchmakerTagResolver.resolve("shrp", calendar, empty).renderedValue)
-        // {shr_1..9} 历史心率：Flue 不保存历史，固定渲染 0，且必须是已知标签。
-        assertEquals("0", WatchmakerTagResolver.resolve("shr_1", calendar, empty).renderedValue)
-        assertEquals("0", WatchmakerTagResolver.resolve("shr_9", calendar, empty).renderedValue)
+        assertEquals("--", WatchmakerTagResolver.resolve("shr", calendar, empty).renderedValue)
+        assertEquals("--", WatchmakerTagResolver.resolve("shrp", calendar, empty).renderedValue)
+        assertEquals("--", WatchmakerExpressionEvaluator.evaluateText("{shr}") { tag ->
+            WatchmakerTagResolver.resolve(tag, calendar, empty)
+        })
+        // {shr_1..9} 历史心率：Flue 不保存历史，必须明确显示为不可用。
+        assertEquals("--", WatchmakerTagResolver.resolve("shr_1", calendar, empty).renderedValue)
+        assertEquals("--", WatchmakerTagResolver.resolve("shr_9", calendar, empty).renderedValue)
         assertTrue(WatchmakerTagResolver.isKnown("shr_5"))
 
-        // 表达式里 {shr} 是数值 0，不再被替换成 nil 把整个算式打哑。
+        // 表达式/脚本内部仍使用数值 0，避免图表坐标和门控表达式整体失效。
         assertEquals(
             5f,
             WatchmakerExpressionEvaluator.evaluateNumber("{shr} + 5", -1f) { tag ->
@@ -483,6 +655,21 @@ class WatchmakerRuntimeContractsTest {
             },
             0.001f,
         )
+    }
+
+    @Test
+    fun tiltAccelerometerTagsExposeRawAxesAndDefaultToZero() {
+        val calendar = Calendar.getInstance()
+        val sample = WatchDataSnapshot(
+            accelerometerX = -4.25f,
+            accelerometerY = 1.5f,
+            accelerometerZ = 8.75f,
+        )
+
+        assertEquals("-4.25", WatchmakerTagResolver.resolve("sax", calendar, sample).renderedValue)
+        assertEquals("1.5", WatchmakerTagResolver.resolve("say", calendar, sample).renderedValue)
+        assertEquals("8.75", WatchmakerTagResolver.resolve("saz", calendar, sample).renderedValue)
+        assertEquals("--", WatchmakerTagResolver.resolve("sax", calendar, WatchDataSnapshot()).renderedValue)
     }
 
     @Test

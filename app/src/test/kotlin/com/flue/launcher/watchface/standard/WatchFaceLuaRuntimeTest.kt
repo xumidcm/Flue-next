@@ -219,6 +219,84 @@ class WatchFaceLuaRuntimeTest {
     }
 
     @Test
+    fun watchMakerTagsDoNotBecomeFaceStateWhenScriptsDeclareTheSameNames() {
+        WatchFaceLuaRuntime.create("ssc = 999; sstr = 88; var_owned = 1").use { runtime ->
+            assertFalse(
+                runtime.referencesFaceState(
+                    "((((({ssc}~=false)) and ({ssc}) or (0)))) {sstr}",
+                ),
+            )
+            assertFalse(runtime.referencesFaceState("'label var_owned' .. {ssc}"))
+            assertTrue(runtime.referencesFaceState("ssc + 1"))
+        }
+    }
+
+    @Test
+    fun unavailableHeartRateStaysNumericInsideLineGraphScript() {
+        val resolver: (String) -> WatchTagResolution = { tag ->
+            when (tag) {
+                "shr" -> WatchTagResolution.Unavailable(tag, expressionFallback = "0")
+                "ds" -> WatchTagResolution.Resolved("0")
+                "dm" -> WatchTagResolution.Resolved("5")
+                "dh24" -> WatchTagResolution.Resolved("12")
+                "dd" -> WatchTagResolution.Resolved("13")
+                "dn" -> WatchTagResolution.Resolved("8")
+                else -> WatchTagResolution.Unsupported(tag)
+            }
+        }
+        WatchFaceLuaRuntime.create(
+            """
+                var_s_arr = {1,2,3,4,5,6}
+                var_s_arrTime = {}
+                var_s_v1 = 0
+                var_s_t1 = '--'
+                var_s_lastUpdate = 0
+                function on_second()
+                  local counter = {ds}+{dm}*60+{dh24}*3600+{dd}*86400+{dn}*2678400
+                  if counter > var_s_lastUpdate + 600 then
+                    var_s_lastUpdate = counter
+                    var_s_arr[1] = {shr}
+                    var_s_arrTime[1] = {dh24}..':'..{dm}
+                    var_s_v1 = var_s_arr[1]
+                    var_s_t1 = var_s_arrTime[1]
+                  end
+                end
+            """.trimIndent(),
+            resolver,
+        ).use { runtime ->
+            assertTrue(runtime.stepClock(1.0, 1_786_556_700_000L, resolver).isSuccess)
+            assertEquals(0.0, runtime.evaluateNumber("var_s_v1", resolver), 0.0)
+            assertEquals("12:5", runtime.evaluateText("var_s_t1", resolver))
+        }
+    }
+
+    @Test
+    fun tiltScriptUsesLiveAccelerometerTagsToSelectZoomFrame() {
+        var ax = 0.0
+        var az = 9.8
+        val resolver: (String) -> WatchTagResolution = { tag ->
+            when (tag) {
+                "sax" -> WatchTagResolution.Resolved(ax.toString())
+                "say" -> WatchTagResolution.Resolved("0")
+                "saz" -> WatchTagResolution.Resolved(az.toString())
+                else -> WatchTagResolution.Unsupported(tag)
+            }
+        }
+        WatchFaceLuaRuntime.create(TILT_SCRIPT, resolver).use { runtime ->
+            assertTrue(runtime.stepMilliseconds(1.0, resolver).isSuccess)
+            assertTrue(runtime.stepMilliseconds(1.1, resolver).isSuccess)
+            assertEquals(1.0, runtime.evaluateNumber("var_frame", resolver), 0.0)
+
+            ax = 9.8
+            az = 9.8
+            repeat(12) { index ->
+                assertTrue(runtime.stepMilliseconds(1.2 + index * 0.1, resolver).isSuccess)
+            }
+            assertTrue(runtime.evaluateNumber("var_frame", resolver) > 180.0)
+        }
+    }
+
+    @Test
     fun dependencySnapshotIncludesGlobalsAssignedInsideFutureCallbacks() {
         WatchFaceLuaRuntime.create(
             """
@@ -237,6 +315,42 @@ class WatchFaceLuaRuntimeTest {
             assertTrue(runtime.runSnippet("var_tapped = 4").isSuccess)
             assertTrue(runtime.referencesFaceState("var_tapped * 2"))
             assertEquals(8.0, runtime.evaluateNumber("var_tapped * 2"), 0.0)
+        }
+    }
+
+    @Test
+    fun declaredFaceVariableThatBecomesNilRendersBlankInsteadOfItsSourceName() {
+        WatchFaceLuaRuntime.create(
+            """
+                var_s_t4 = "--"
+                function clear_sample() var_s_t4 = nil end
+            """.trimIndent(),
+        ).use { runtime ->
+            assertEquals("--", runtime.evaluateFaceText("var_s_t4") { WatchTagResolution.Unsupported(it) })
+            assertTrue(runtime.runSnippet("clear_sample()").isSuccess)
+            assertTrue(runtime.referencesFaceState("var_s_t4"))
+            assertEquals("", runtime.evaluateFaceText("var_s_t4") { WatchTagResolution.Unsupported(it) })
+            assertEquals("", runtime.evaluateFaceText("var_s_t4 +") { WatchTagResolution.Unsupported(it) })
+        }
+    }
+
+    @Test
+    fun lua51NumberBasesAndTableResultsSupportTheProvided2048Expressions() {
+        WatchFaceLuaRuntime.create(
+            """
+                var_B = "A000000000000000"
+                function exponent_at(i) return tonumber(string.sub(var_B, i, i), 36) end
+                function joined() return table.concat({"1", "2", "A"}) end
+                function pair() return {1, 2, 0, 0}, 4 end
+                function score()
+                    local row, add = pair()
+                    return tonumber(row[2]) + add
+                end
+            """.trimIndent(),
+        ).use { runtime ->
+            assertEquals(10.0, runtime.evaluateNumber("exponent_at(1)"), 0.0)
+            assertEquals("12A", runtime.evaluateText("joined()"))
+            assertEquals(6.0, runtime.evaluateNumber("score()"), 0.0)
         }
     }
 
@@ -266,8 +380,28 @@ class WatchFaceLuaRuntimeTest {
                 "(function() local n=0 for i=0,49 do if var_TP[i].active==1 and var_TP[i].type==1 then n=n+1 end end return n end)()",
             )
             assertEquals(4.0, pulses, 0.0)
+            val pulseColors = (12..15).map { index ->
+                runtime.evaluateText("var_T_col($index, var_TP)")
+            }.toSet()
+            assertEquals(setOf("ff0000", "00cc00", "0066e6", "ffcc00"), pulseColors)
             assertTrue(runtime.evaluateNumber("var_T_x(0, var_TP)").isFinite())
             assertTrue(runtime.referencesFaceState("var_T_x(0, var_TP)"))
+        }
+    }
+
+    @Test
+    fun preciseTimeRingTapAnimatesRadiusAndFineLabelOpacity() {
+        WatchFaceLuaRuntime.create(PRECISE_TIME_RING_SCRIPT).use { runtime ->
+            assertEquals(185.0, runtime.evaluateNumber("var_sr"), 0.0)
+            assertEquals(0.0, runtime.evaluateNumber("var_sf * 100"), 0.0)
+
+            assertTrue(runtime.runSnippet("wf_tap()").isSuccess)
+            assertTrue(runtime.stepMilliseconds(10.0).isSuccess)
+            assertTrue(runtime.stepMilliseconds(10.5).isSuccess)
+
+            assertTrue(runtime.evaluateNumber("var_sr") > 185.0)
+            assertTrue(runtime.evaluateNumber("var_sf * 100") > 0.0)
+            assertTrue(runtime.referencesFaceState("var_sr"))
         }
     }
 
@@ -363,6 +497,63 @@ class WatchFaceLuaRuntimeTest {
                     if var_TP[i].active == 1 and var_TP[i].type == 1 then count = count + 1 end
                 end
                 return count
+            end
+        """.trimIndent()
+
+        val PRECISE_TIME_RING_SCRIPT = """
+            var_state = 0
+            var_sf = 0
+            var_sf_goal = 0
+            var_sf_goal_cur = 0
+            var_sf_from = 0
+            var_sf_t = 1
+            var_sr = 185
+            local SR0 = 185
+
+            function wf_tap()
+                var_state = (var_state + 1) % 3
+                if var_state == 0 then var_sf_goal = 0 else var_sf_goal = 1 end
+            end
+
+            function on_millisecond(dt)
+                dt = dt or 0.016
+                if var_sf_goal ~= var_sf_goal_cur then
+                    var_sf_goal_cur = var_sf_goal
+                    var_sf_from = var_sf
+                    var_sf_t = 0
+                end
+                if var_sf_t < 1 then
+                    var_sf_t = math.min(1, var_sf_t + dt)
+                    local e = var_sf_t * var_sf_t * (3 - 2 * var_sf_t)
+                    var_sf = var_sf_from + (var_sf_goal_cur - var_sf_from) * e
+                end
+                var_sr = SR0 * (1 + 4 * var_sf)
+            end
+        """.trimIndent()
+
+        val TILT_SCRIPT = """
+            var_frame = var_frame or 1
+            local _accel_gate = sax or 0
+            local _ang = 0
+            local NFRAMES = 214
+            local DEG = 57.29577951308232
+            on_millisecond = function(dt)
+                if dt > 0.1 then dt = 0.1 end
+                local ax = sax or 0
+                local az = saz or 9.8
+                local ang = math.abs(math.atan2(ax, az)) * DEG
+                _ang = _ang + (ang - _ang) * math.min(1, dt * 12)
+                local p = (_ang - 2.5) / 42.5
+                if p < 0 then p = 0 elseif p > 1 then p = 1 end
+                local target = 1 + math.floor(p * (NFRAMES - 1) + 0.5)
+                if target > NFRAMES then target = NFRAMES end
+                if math.abs(var_frame - target) < 1.5 then
+                    var_frame = target
+                else
+                    var_frame = var_frame + (target - var_frame) * math.min(1, dt * 10)
+                    var_frame = math.floor(var_frame + 0.5)
+                end
+                if var_frame < 1 then var_frame = 1 end
             end
         """.trimIndent()
     }

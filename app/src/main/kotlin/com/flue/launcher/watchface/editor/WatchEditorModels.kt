@@ -86,6 +86,8 @@ data class WatchEditorSnapshot(
     val dirty: Boolean,
     val canUndo: Boolean,
     val canRedo: Boolean,
+    /** Changes whenever scripts/script.txt content changes, including undo/redo. */
+    val globalScriptRevision: String,
 ) {
     /**
      * 文档的格式版本，从 [rootAttributes] 推出。

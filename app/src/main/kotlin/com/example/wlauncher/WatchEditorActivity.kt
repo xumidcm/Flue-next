@@ -379,6 +379,7 @@ private fun WatchEditorRoute(
     var showUploadSaveRequiredDialog by remember { mutableStateOf(false) }
     var openUploadAfterSave by remember { mutableStateOf(false) }
     var showStoreUpload by remember { mutableStateOf(false) }
+    var globalScriptDraft by remember(session) { mutableStateOf<String?>(null) }
     var pendingSaveName by remember { mutableStateOf("") }
     // 作者信息（老师指定）：保存时若用户没改过，自动填已登录账户名，
     // 未登录填 "flue"；改过就按用户输入原样写入。
@@ -1714,6 +1715,22 @@ private fun WatchEditorRoute(
                                 selectedLayerKey
                             })
                         },
+                        onEditGlobalScript = {
+                            if (busyMessage == null) {
+                                scope.launch {
+                                    runCatching {
+                                        withContext(Dispatchers.IO) { active.globalScript() }
+                                    }.onSuccess { script ->
+                                        globalScriptDraft = script
+                                    }.onFailure { error ->
+                                        errorMessage = context.localizedEditorError(
+                                            R.string.watch_editor_error_operation,
+                                            error,
+                                        )
+                                    }
+                                }
+                            }
+                        },
                         onUploadToStore = {
                             if (busyMessage == null) {
                                 scope.launch {
@@ -1814,6 +1831,23 @@ private fun WatchEditorRoute(
                             snapshot = current,
                             onSnapshotRefreshed = { next -> updateSnapshot(next) },
                             onDismiss = { showStoreUpload = false },
+                        )
+                    }
+                    globalScriptDraft?.let { script ->
+                        EditorGlobalScriptOverlay(
+                            initialScript = script,
+                            errorMessage = errorMessage,
+                            onCancel = { globalScriptDraft = null },
+                            onSave = { updated ->
+                                runSessionOperation(
+                                    status = context.getString(R.string.watch_editor_status_saving_script),
+                                    operation = { editor ->
+                                        editor.updateGlobalScript(updated)
+                                        selectedLayerKey
+                                    },
+                                    onComplete = { globalScriptDraft = null },
+                                )
+                            },
                         )
                     }
                     InternalFileBrowserHost(
@@ -1964,6 +1998,7 @@ private fun WatchEditorScreen(
     onExportLong: () -> Unit,
     onUpdateShape: (String) -> Unit,
     onUpdateBackground: (String?) -> Unit,
+    onEditGlobalScript: () -> Unit,
     onUploadToStore: () -> Unit,
     onImportWatch: () -> Unit,
     onImportWatchLong: () -> Unit,
@@ -2929,6 +2964,42 @@ private fun WatchEditorScreen(
                             }
                         }
                     }
+                    item("watch_global_script") {
+                        Surface(
+                            modifier = Modifier.chordScaleItem(
+                                listState = watchListState,
+                                key = "watch_global_script",
+                                screenCenterY = chordCenterY,
+                                viewportWidth = chordViewportWidth,
+                                enabled = editorFisheyeEnabled,
+                                listTopInViewport = watchListTopInViewport,
+                            ),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(14.dp),
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(
+                                    stringResource(R.string.watch_editor_global_script),
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    stringResource(R.string.watch_editor_global_script_description),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                OutlinedButton(
+                                    onClick = onEditGlobalScript,
+                                    enabled = busyMessage == null,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text(stringResource(R.string.watch_editor_edit_script))
+                                }
+                            }
+                        }
+                    }
                     item("watch_actions") {
                         Column(
                             modifier = Modifier.chordScaleItem(
@@ -3049,6 +3120,98 @@ private enum class WatchEditorPanel(@StringRes val labelRes: Int) {
     LAYERS(R.string.watch_editor_panel_layers),
     PROPERTIES(R.string.watch_editor_panel_properties),
     WATCH(R.string.watch_editor_panel_watch),
+}
+
+internal fun watchEditorScriptByteCount(script: String): Int =
+    script.toByteArray(Charsets.UTF_8).size
+
+internal fun canSaveWatchEditorScript(script: String): Boolean =
+    watchEditorScriptByteCount(script) <= WatchEditorSession.MAX_WATCH_SCRIPT_BYTES
+
+@Composable
+private fun EditorGlobalScriptOverlay(
+    initialScript: String,
+    errorMessage: String?,
+    onCancel: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var script by remember(initialScript) {
+        mutableStateOf(
+            TextFieldValue(
+                text = initialScript,
+                selection = TextRange(initialScript.length),
+            ),
+        )
+    }
+    val byteCount = remember(script.text) { watchEditorScriptByteCount(script.text) }
+    val withinLimit = byteCount <= WatchEditorSession.MAX_WATCH_SCRIPT_BYTES
+    BackHandler(onBack = onCancel)
+
+    Surface(
+        modifier = Modifier.fillMaxSize().zIndex(20f),
+        color = MaterialTheme.colorScheme.background,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onCancel) {
+                    Text(stringResource(R.string.watch_editor_cancel))
+                }
+                Text(
+                    text = stringResource(R.string.watch_editor_global_script),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    enabled = withinLimit,
+                    onClick = { onSave(script.text) },
+                ) {
+                    Text(stringResource(R.string.watch_editor_save))
+                }
+            }
+            OutlinedTextField(
+                value = script,
+                onValueChange = { script = it },
+                textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                placeholder = { Text(stringResource(R.string.watch_editor_script_placeholder)) },
+                modifier = Modifier.fillMaxWidth().weight(1f),
+            )
+            Text(
+                text = stringResource(
+                    R.string.watch_editor_script_bytes_fmt,
+                    byteCount,
+                    WatchEditorSession.MAX_WATCH_SCRIPT_BYTES,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (withinLimit) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (!withinLimit) {
+                Text(
+                    text = stringResource(R.string.watch_editor_script_too_large),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            } else if (!errorMessage.isNullOrBlank()) {
+                Text(
+                    text = errorMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
 }
 
 /** 编辑器三档布局：画布全屏 / 分屏 / 面板全屏。 */

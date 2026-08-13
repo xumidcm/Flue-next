@@ -1272,4 +1272,11 @@
     <string name="internal_file_browser_pick_conversion">変換する文字盤を選択</string>
     <string name="watch_face_loading">文字盤を読み込んでいます</string>
     <string name="watch_face_loading_fallback">既定の文字盤に切り替えて再起動</string>
+    <string name="watch_editor_global_script">グローバルスクリプト</string>
+    <string name="watch_editor_global_script_description">scripts/script.txt を編集します。保存するとプレビューが更新され、元に戻す・やり直しもできます。</string>
+    <string name="watch_editor_edit_script">スクリプトを編集</string>
+    <string name="watch_editor_script_placeholder">-- WatchMaker Lua を入力</string>
+    <string name="watch_editor_script_bytes_fmt">UTF-8：%1$d / %2$d バイト</string>
+    <string name="watch_editor_script_too_large">スクリプトが 256 KiB を超えています。短くしてから保存してください。</string>
+    <string name="watch_editor_status_saving_script">グローバルスクリプトを保存中</string>
 </resources>

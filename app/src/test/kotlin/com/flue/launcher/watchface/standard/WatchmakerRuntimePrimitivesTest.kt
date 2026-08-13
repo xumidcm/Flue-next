@@ -144,10 +144,12 @@ class WatchmakerRuntimePrimitivesTest {
     @Test
     fun conditionalImageAndChartInputsAreBoundedAndDeterministic() {
         assertEquals(3 to 2, parseWatchGrid("3x2"))
+        assertEquals(15 to 15, parseWatchGrid("15x15"))
         assertEquals(1 to 1, parseWatchGrid("garbage"))
         assertEquals(0, watchSpriteIndex(1f, cellCount = 6))
         assertEquals(5, watchSpriteIndex(99f, cellCount = 6))
         assertEquals(0, watchSpriteIndex(null, cellCount = 6))
+        assertEquals(213, watchSpriteIndex(214f, cellCount = 225))
 
         assertEquals(
             listOf(1f, 2.5f, 3f, 4f),

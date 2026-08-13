@@ -24,6 +24,23 @@ import androidx.core.content.ContextCompat
 import java.util.Calendar
 import kotlin.math.roundToInt
 
+internal fun watchChargingState(status: Int, plugged: Int, previous: Boolean?): Boolean? = when {
+    status == BatteryManager.BATTERY_STATUS_CHARGING ||
+        status == BatteryManager.BATTERY_STATUS_FULL ||
+        plugged != 0 -> true
+    status == BatteryManager.BATTERY_STATUS_DISCHARGING ||
+        status == BatteryManager.BATTERY_STATUS_NOT_CHARGING -> false
+    else -> previous
+}
+
+internal fun watchMotionSensorTypes(hasGyroscope: Boolean): List<Int> = buildList {
+    if (hasGyroscope) add(Sensor.TYPE_GYROSCOPE)
+    add(Sensor.TYPE_ACCELEROMETER)
+}
+
+internal fun watchHeartRateValue(hasPermission: Boolean, value: Int?): Int? =
+    value?.takeIf { hasPermission }
+
 internal class AndroidWatchDataProvider(
     context: Context,
     weatherSource: WatchWeatherSource? = null,
@@ -63,6 +80,9 @@ internal class AndroidWatchDataProvider(
 
     @Volatile
     private var gyroscope: Triple<Float, Float, Float>? = null
+
+    @Volatile
+    private var accelerometer: Triple<Float, Float, Float>? = null
     private var previousRoll = 0f
     private var previousPitch = 0f
     private var smoothedSimulatedPitch = 0f
@@ -137,13 +157,7 @@ internal class AndroidWatchDataProvider(
         if (hasHeartRatePermission(appContext)) {
             registerSensor(Sensor.TYPE_HEART_RATE)
         }
-        if (hasGyroscopeSensor) {
-            registerSensor(Sensor.TYPE_GYROSCOPE)
-        } else {
-            // Wear OS devices frequently omit a physical gyro. Match CloX's
-            // fallback by deriving a low-pass angular signal from tilt.
-            registerSensor(Sensor.TYPE_ACCELEROMETER)
-        }
+        watchMotionSensorTypes(hasGyroscopeSensor).forEach(::registerSensor)
     }
 
     fun stop() {
@@ -165,14 +179,22 @@ internal class AndroidWatchDataProvider(
             .getOrNull()
             ?.let(::canonicalWatchWeatherSnapshot)
         val gyro = gyroscope
+        val accel = accelerometer
+        val currentHeartRate = watchHeartRateValue(
+            hasPermission = hasHeartRatePermission(appContext),
+            value = heartRate,
+        )
         return WatchDataSnapshot(
             batteryPercent = batteryPercent,
             isCharging = charging,
             steps = steps,
-            heartRateBpm = heartRate,
+            heartRateBpm = currentHeartRate,
             gyroscopeX = gyro?.first,
             gyroscopeY = gyro?.second,
             gyroscopeZ = gyro?.third,
+            accelerometerX = accel?.first,
+            accelerometerY = accel?.second,
+            accelerometerZ = accel?.third,
             wifiSignalFraction = wifiSignalFraction,
             bluetoothEnabled = bluetoothEnabled,
             // {cnc}：渲染层不能反向依赖启动器的 NotificationListenerService，
@@ -221,6 +243,8 @@ internal class AndroidWatchDataProvider(
                 runCatching { sensorManager.unregisterListener(this, sensor) }
                 registerSensor(Sensor.TYPE_HEART_RATE)
             }
+        } else {
+            heartRate = null
         }
     }
 
@@ -233,10 +257,14 @@ internal class AndroidWatchDataProvider(
             gyroscope = Triple(x, y, z)
             return
         }
-        if (sensorEvent.sensor.type == Sensor.TYPE_ACCELEROMETER && !hasGyroscopeSensor) {
+        if (sensorEvent.sensor.type == Sensor.TYPE_ACCELEROMETER) {
             val x = sensorEvent.values.getOrNull(0)?.takeIf(Float::isFinite) ?: return
             val y = sensorEvent.values.getOrNull(1)?.takeIf(Float::isFinite) ?: return
             val z = sensorEvent.values.getOrNull(2)?.takeIf(Float::isFinite) ?: return
+            accelerometer = Triple(x, y, z)
+            if (hasGyroscopeSensor) return
+            // Wear OS devices frequently omit a physical gyro. Match CloX's
+            // fallback by deriving a low-pass angular signal from tilt.
             val roll = Math.toDegrees(
                 Math.atan2(x.toDouble(), Math.sqrt((y * y + z * z).toDouble()))
             ).toFloat()
@@ -293,6 +321,7 @@ internal class AndroidWatchDataProvider(
             batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
         }.getOrNull()
         batteryPercent = capacity?.takeIf { it in 0..100 } ?: batteryPercent
+        charging = runCatching { batteryManager?.isCharging }.getOrNull() ?: charging
     }
 
     private fun restoreDailySteps(nowEpochMs: Long = System.currentTimeMillis()) {
@@ -343,15 +372,14 @@ internal class AndroidWatchDataProvider(
         } else {
             batteryPercent
         }
-        charging = when (intent.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)) {
-            BatteryManager.BATTERY_STATUS_CHARGING,
-            BatteryManager.BATTERY_STATUS_FULL,
-            -> true
-            BatteryManager.BATTERY_STATUS_DISCHARGING,
-            BatteryManager.BATTERY_STATUS_NOT_CHARGING,
-            -> false
-            else -> charging
-        }
+        charging = watchChargingState(
+            status = intent.getIntExtra(
+                BatteryManager.EXTRA_STATUS,
+                BatteryManager.BATTERY_STATUS_UNKNOWN,
+            ),
+            plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0),
+            previous = charging,
+        )
     }
 
     private fun hasPermission(permission: String): Boolean =

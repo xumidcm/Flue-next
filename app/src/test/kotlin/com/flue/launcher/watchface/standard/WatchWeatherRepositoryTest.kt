@@ -1,18 +1,125 @@
 package com.flue.launcher.watchface.standard
 
+import android.content.Context
 import java.io.ByteArrayInputStream
 import java.io.InputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [27], manifest = Config.NONE)
 class WatchWeatherRepositoryTest {
+    @Test
+    fun changingTheConfiguredLocationDoesNotExposeThePreviousLocationsWeather() {
+        val now = System.currentTimeMillis()
+        val context = RuntimeEnvironment.getApplication().applicationContext
+        val preferences = context.getSharedPreferences(
+            WatchWeatherRepository.PREFERENCES,
+            Context.MODE_PRIVATE,
+        )
+        preferences.edit().clear().apply()
+        preferences.edit()
+            .putString(WatchWeatherRepository.KEY_LABEL, "Old City")
+            .putString(WatchWeatherRepository.KEY_LATITUDE, "31.2304")
+            .putString(WatchWeatherRepository.KEY_LONGITUDE, "121.4737")
+            .putLong(WatchWeatherRepository.KEY_CACHE_RECEIVED_AT, now)
+            .putString(
+                WatchWeatherRepository.KEY_CACHE_JSON,
+                JSONObject()
+                    .put("temperatureCelsius", 9.0)
+                    .put("location", "Old City")
+                    .put("sourceLatitude", 31.2304)
+                    .put("sourceLongitude", 121.4737)
+                    .put("forecast", org.json.JSONArray())
+                    .put("hourlyForecast", org.json.JSONArray())
+                    .toString(),
+            )
+            .commit()
+        val repository = WatchWeatherRepository(
+            context = context,
+            transport = WatchWeatherHttpTransport { _, _ -> null },
+        )
+
+        assertEquals("Old City", repository.snapshot(now + 1L)?.location)
+
+        repository.setManualLocation(
+            WatchWeatherLocation(39.9042, 116.4074, "New City"),
+        )
+
+        assertNull(repository.snapshot(now + 2L))
+    }
+
+    @Test
+    fun anInFlightRefreshCannotRestoreWeatherForThePreviousLocation() {
+        val context = RuntimeEnvironment.getApplication().applicationContext
+        val preferences = context.getSharedPreferences(
+            WatchWeatherRepository.PREFERENCES,
+            Context.MODE_PRIVATE,
+        )
+        preferences.edit().clear()
+            .putString(WatchWeatherRepository.KEY_LABEL, "Old City")
+            .putString(WatchWeatherRepository.KEY_LATITUDE, "31.2304")
+            .putString(WatchWeatherRepository.KEY_LONGITUDE, "121.4737")
+            .commit()
+        val oldRequestStarted = CountDownLatch(1)
+        val releaseOldRequest = CountDownLatch(1)
+        val oldResponseReturned = CountDownLatch(1)
+        val newRequestStarted = CountDownLatch(1)
+        val releaseNewRequest = CountDownLatch(1)
+        val transport = WatchWeatherHttpTransport { url, _ ->
+            when {
+                "api.met.no" !in url -> null
+                "lat=31.23040" in url -> {
+                    oldRequestStarted.countDown()
+                    releaseOldRequest.await(2, TimeUnit.SECONDS)
+                    oldResponseReturned.countDown()
+                    metNoTemperaturePayload(9.0)
+                }
+                "lat=39.90420" in url -> {
+                    newRequestStarted.countDown()
+                    releaseNewRequest.await(2, TimeUnit.SECONDS)
+                    metNoTemperaturePayload(21.0)
+                }
+                else -> null
+            }
+        }
+        val repository = WatchWeatherRepository(context, transport = transport)
+        repository.requestRefresh()
+        assertTrue(oldRequestStarted.await(2, TimeUnit.SECONDS))
+
+        repository.setManualLocation(
+            WatchWeatherLocation(39.9042, 116.4074, "New City"),
+        )
+        releaseOldRequest.countDown()
+        assertTrue(oldResponseReturned.await(2, TimeUnit.SECONDS))
+        Thread.sleep(100L)
+
+        try {
+            assertNull(repository.snapshot(System.currentTimeMillis()))
+            assertTrue(newRequestStarted.await(2, TimeUnit.SECONDS))
+        } finally {
+            releaseNewRequest.countDown()
+        }
+
+        val deadline = System.currentTimeMillis() + 3_000L
+        var snapshot: WatchWeatherSnapshot? = null
+        while (System.currentTimeMillis() < deadline && snapshot?.location != "New City") {
+            snapshot = repository.snapshot(System.currentTimeMillis())
+            Thread.sleep(20L)
+        }
+        assertEquals("New City", snapshot?.location)
+        assertEquals(21.0, snapshot?.temperatureCelsius ?: Double.NaN, 0.0)
+    }
+
     @Test
     fun boundedUtf8ReaderAcceptsAResponseAtTheExactByteLimit() {
         val expected = "上海 21℃"
@@ -96,4 +203,7 @@ class WatchWeatherRepositoryTest {
             return count
         }
     }
+
+    private fun metNoTemperaturePayload(temperature: Double): String =
+        """{"properties":{"timeseries":[{"data":{"instant":{"details":{"air_temperature":$temperature}},"next_1_hours":{"summary":{"symbol_code":"clearsky_day"}}}}]}}"""
 }

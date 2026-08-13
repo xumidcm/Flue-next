@@ -16,6 +16,105 @@ import java.util.zip.ZipFile
 
 class WatchEditorSessionTest {
     @Test
+    fun globalScriptReadsExistingContentAndIsHiddenFromOrdinaryResources() =
+        withTemporaryDirectory { root ->
+            val installed = File(root, "installed").apply { mkdirs() }
+            File(installed, "watch.xml").writeText(SOURCE_XML)
+            File(installed, "scripts/script.txt").apply {
+                parentFile.mkdirs()
+                writeText("function on_display_bright()\nend\n")
+            }
+
+            WatchEditorSession.openInstalled(installed, File(root, "cache")).use { session ->
+                assertEquals("function on_display_bright()\nend\n", session.globalScript())
+                assertFalse("scripts/script.txt" in session.snapshot().resourcePaths)
+                assertFalse(session.isDirty)
+            }
+        }
+
+    @Test
+    fun globalScriptCreateOverwriteUndoRedoAndSaveTrackContent() =
+        withTemporaryDirectory { root ->
+            WatchEditorSession.createBlank(File(root, "cache")).use { session ->
+                val initialRevision = session.snapshot().globalScriptRevision
+
+                session.updateGlobalScript("var_score = 1")
+                assertEquals("var_score = 1", session.globalScript())
+                assertTrue(session.isDirty)
+                assertNotEquals(initialRevision, session.snapshot().globalScriptRevision)
+
+                session.save()
+                assertFalse(session.isDirty)
+                session.updateGlobalScript("var_score = 2")
+                assertTrue(session.isDirty)
+
+                assertTrue(session.undo())
+                assertEquals("var_score = 1", session.globalScript())
+                assertFalse(session.isDirty)
+                assertTrue(session.redo())
+                assertEquals("var_score = 2", session.globalScript())
+                assertTrue(session.isDirty)
+            }
+        }
+
+    @Test
+    fun blankGlobalScriptDeletesFileAndCanBeUndone() = withTemporaryDirectory { root ->
+        WatchEditorSession.createBlank(File(root, "cache")).use { session ->
+            session.updateGlobalScript("var_enabled = true")
+            val script = File(session.draftDirectory, "scripts/script.txt")
+            assertTrue(script.isFile)
+
+            session.updateGlobalScript("")
+            assertFalse(script.exists())
+            assertEquals("", session.globalScript())
+            assertTrue(session.undo())
+            assertTrue(script.isFile)
+            assertEquals("var_enabled = true", session.globalScript())
+        }
+    }
+
+    @Test
+    fun oversizedGlobalScriptIsRejectedWithoutChangingExistingContent() =
+        withTemporaryDirectory { root ->
+            WatchEditorSession.createBlank(File(root, "cache")).use { session ->
+                session.updateGlobalScript("keep me")
+                val tooLarge = "界".repeat(WatchEditorSession.MAX_WATCH_SCRIPT_BYTES / 3 + 1)
+
+                assertEditorFailure { session.updateGlobalScript(tooLarge) }
+
+                assertEquals("keep me", session.globalScript())
+                assertEquals("keep me", File(session.draftDirectory, "scripts/script.txt").readText())
+            }
+        }
+
+    @Test
+    fun exportedWatchContainsUpdatedScriptAndOmitsDeletedScript() =
+        withTemporaryDirectory { root ->
+            WatchEditorSession.createBlank(File(root, "cache")).use { session ->
+                session.updateGlobalScript("var_exported = 42")
+                val withScript = File(root, "with-script.watch")
+                session.exportWatch(withScript)
+                ZipFile(withScript).use { zip ->
+                    val entry = zip.getEntry("scripts/script.txt")
+                    assertTrue(entry != null)
+                    assertEquals(
+                        "var_exported = 42",
+                        zip.getInputStream(entry).use { it.readBytes().toString(StandardCharsets.UTF_8) },
+                    )
+                }
+                assertFalse(session.isDirty)
+
+                session.updateGlobalScript("")
+                val withoutScript = File(root, "without-script.watch")
+                session.exportWatch(withoutScript)
+                ZipFile(withoutScript).use { zip ->
+                    assertTrue(zip.getEntry("scripts/script.txt") == null)
+                }
+                assertFalse(session.isDirty)
+            }
+        }
+
+    @Test
     fun opensInstalledFaceAsCacheDraftWithoutMutatingSource() = withTemporaryDirectory { root ->
         val installed = File(root, "installed").apply { mkdirs() }
         val sourceXml = File(installed, "watch.xml").apply { writeText(SOURCE_XML) }

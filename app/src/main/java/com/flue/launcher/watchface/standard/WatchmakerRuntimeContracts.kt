@@ -14,6 +14,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.round
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /** The canvas contract used by WatchMaker exports. Values are design pixels. */
@@ -60,6 +61,25 @@ object WatchTextLayout {
             .replace(Regex(" {8,}"), "\n")
             .split('\n')
 
+    /**
+     * Start x for every line in a multi-line block. WatchMaker anchors the
+     * first authored line, then keeps following lines left-aligned with it.
+     * Using the widest line instead moves short first lines toward the edge.
+     */
+    fun lineStartXs(
+        lineWidths: List<Float>,
+        horizontalAlignment: String?,
+    ): List<Float> {
+        if (lineWidths.isEmpty()) return emptyList()
+        val anchorWidth = lineWidths.firstOrNull()?.takeIf(Float::isFinite)?.coerceAtLeast(0f) ?: 0f
+        val blockLeft = when {
+            horizontalAlignment.orEmpty().lowercase(Locale.ROOT).endsWith('l') -> 0f
+            horizontalAlignment.orEmpty().lowercase(Locale.ROOT).endsWith('r') -> -anchorWidth
+            else -> -anchorWidth / 2f
+        }
+        return List(lineWidths.size) { blockLeft }
+    }
+
     fun baselines(
         lineCount: Int,
         ascent: Float,
@@ -81,6 +101,79 @@ object WatchTextLayout {
             else -> singleBaseline - (count - 1) * spacing / 2f
         }
         return List(count) { index -> firstBaseline + index * spacing }
+    }
+}
+
+private val WATCH_HEX_COLOR_LITERAL = Regex("^[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$")
+
+/** Returns a canonical Android color only for an authored 6/8 digit literal. */
+fun normalizeWatchColorLiteral(raw: String?): String? {
+    val value = raw.orEmpty().trim().removePrefix("#")
+    return value.takeIf(WATCH_HEX_COLOR_LITERAL::matches)?.let { "#$it" }
+}
+
+/** Literal boundary for the range/enumeration-valued text_ring attribute. */
+fun watchTextRingType(raw: String?): String = raw.orEmpty().trim().ifBlank { "1-12" }
+
+/** Bounded high-density marker count; CloX accepts the sample's authored 600 ticks. */
+fun watchMarkerCount(raw: Float): Int = raw.roundToInt().coerceIn(1, 1_200)
+
+data class WatchTextRingItem(
+    val label: String,
+    val sourceValue: Int,
+    val angleDegrees: Float,
+)
+
+/** Ordered WatchMaker label set for the common text_ring families. */
+fun watchTextRingLabels(ringType: String?): List<String> {
+    val value = ringType.orEmpty().trim().ifBlank { "1-12" }
+    return when (value) {
+        "I-XII" -> listOf("I", "II", "III", "IIII", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII")
+        "Mo-Su" -> listOf("Su", "Mo", "Tu", "We", "Th", "Fr", "Sa")
+        "Mon-Sun" -> listOf("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+        "Jan-Dec" -> listOf(
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        )
+        else -> {
+            val parts = if (value.contains(" to ")) {
+                value.split(" to ", limit = 2)
+            } else {
+                value.split('-', limit = 2)
+            }
+            val first = parts.getOrNull(0)?.trim()?.toIntOrNull()
+            val last = parts.getOrNull(1)?.trim()?.toIntOrNull()
+            if (first == null || last == null) {
+                listOf(value)
+            } else if (first <= last) {
+                (first..last).map(Int::toString)
+            } else {
+                (first downTo last).map(Int::toString)
+            }
+        }
+    }
+}
+
+/** Filters a text ring and applies CloX's one-based angular placement. */
+fun watchTextRingItems(
+    ringType: String?,
+    showEvery: Int,
+    hiddenValues: Set<Int>,
+    startDegrees: Float,
+    endDegrees: Float,
+): List<WatchTextRingItem> {
+    val labels = watchTextRingLabels(ringType)
+    if (labels.isEmpty()) return emptyList()
+    val step = showEvery.coerceAtLeast(1)
+    val span = endDegrees - startDegrees
+    return labels.mapIndexedNotNull { index, label ->
+        val sourceValue = label.toIntOrNull() ?: (index + 1)
+        if (sourceValue % step != 0 || sourceValue in hiddenValues) return@mapIndexedNotNull null
+        WatchTextRingItem(
+            label = label,
+            sourceValue = sourceValue,
+            angleDegrees = startDegrees + span * (index + 1) / labels.size,
+        )
     }
 }
 
@@ -258,6 +351,35 @@ fun watchImageDrawHeight(
     } else {
         boxHeight
     }
+
+/**
+ * Long-edge decode budget for a conditional-image sprite sheet.
+ *
+ * A sheet is sampled one cell at a time, so applying the ordinary view-sized
+ * decode cap to the whole texture destroys every cell. Preserve at least the
+ * authored destination pixels per cell, while retaining a hard upper bound for
+ * hostile or malformed grids. A null result means the layer has no usable
+ * authored destination size and should keep the ordinary image policy.
+ */
+internal fun watchSpriteDecodeDimensionPx(
+    targetWidth: Float?,
+    targetHeight: Float?,
+    columns: Int,
+    rows: Int,
+    maximumDimensionPx: Int = 4_096,
+): Int? {
+    val width = targetWidth?.takeIf { it.isFinite() && it > 0f }
+    val height = targetHeight?.takeIf { it.isFinite() && it > 0f }
+    if (width == null && height == null) return null
+    val fallbackDimension = width ?: height ?: return null
+    val safeColumns = columns.coerceIn(1, 32)
+    val safeRows = rows.coerceIn(1, 32)
+    val requiredWidth = (width ?: fallbackDimension) * safeColumns
+    val requiredHeight = (height ?: fallbackDimension) * safeRows
+    return ceil(max(requiredWidth, requiredHeight).toDouble())
+        .toInt()
+        .coerceIn(1, maximumDimensionPx.coerceAtLeast(1))
+}
 
 /**
  * 设计画布 → 视口的变换。
@@ -626,6 +748,9 @@ data class WatchDataSnapshot(
     val gyroscopeX: Float? = null,
     val gyroscopeY: Float? = null,
     val gyroscopeZ: Float? = null,
+    val accelerometerX: Float? = null,
+    val accelerometerY: Float? = null,
+    val accelerometerZ: Float? = null,
     val wifiSignalFraction: Float? = null,
     val bluetoothEnabled: Boolean? = null,
     /**
@@ -1428,8 +1553,18 @@ internal fun accumulateDailySteps(
 
 sealed class WatchTagResolution(open val renderedValue: String) {
     data class Resolved(override val renderedValue: String) : WatchTagResolution(renderedValue)
-    data class Unavailable(val tag: String) : WatchTagResolution("--")
+    data class Unavailable(
+        val tag: String,
+        val expressionFallback: String? = null,
+    ) : WatchTagResolution("--")
     data class Unsupported(val tag: String) : WatchTagResolution("--")
+}
+
+/** Value supplied to arithmetic/Lua while [WatchTagResolution.renderedValue] remains user-facing. */
+internal fun WatchTagResolution.expressionValue(): String? = when (this) {
+    is WatchTagResolution.Resolved -> renderedValue
+    is WatchTagResolution.Unavailable -> expressionFallback
+    is WatchTagResolution.Unsupported -> null
 }
 
 /**
@@ -1568,7 +1703,7 @@ object WatchmakerTagResolver {
         "bl", "blp", "batt", "battery", "battery_level",
         "pbl", "pblp", "pbr",
         "bc", "charging", "is_charging",
-        "ssc", "steps", "step_count", "shr", "heart", "heart_rate", "heart_rate_bpm",
+        "ssc", "steps", "step_count", "sstr", "shr", "heart", "heart_rate", "heart_rate_bpm",
         "sthr", "shrp", "stsc", "sscp",
         // {shr_1..9}：最近 N 分钟的历史心率读数。
         "shr_1", "shr_2", "shr_3", "shr_4", "shr_5", "shr_6", "shr_7", "shr_8", "shr_9",
@@ -1732,26 +1867,29 @@ object WatchmakerTagResolver {
             "pbl" -> snapshot.batteryPercent?.toString()
             "pblp" -> snapshot.batteryPercent?.let { "$it%" }
             "pbr" -> snapshot.batteryPercent?.let { (it * 3.6f).toString() }
-            "bc", "charging", "is_charging" -> snapshot.isCharging?.let { if (it) "1" else "0" }
+            "bc" -> if (snapshot.isCharging == true) "Charging" else "Discharging"
+            "charging", "is_charging" -> if (snapshot.isCharging == true) "1" else "0"
             "ssc", "steps", "step_count" -> snapshot.steps?.toString()
-            // Watchmaker/clox 生态惯例：心率无数据渲染 0，而不是 "--"。
-            // 返回 nil 会把 `{shr} + 5` 这类表达式整体打哑；0 让算式照常算。
-            // 权限门控完全不动：没权限时 snapshot.heartRateBpm 依旧是 null，
-            // 这里只是把 null 的呈现从 Unavailable 收敛为数值 0。
+            // BHT 2.0 stress is not yet backed by a Flue provider. The
+            // WatchMaker definition explicitly specifies a numeric 0 default.
+            "sstr" -> "0"
             "shr", "heart", "heart_rate", "heart_rate_bpm" ->
-                (snapshot.heartRateBpm ?: 0).toString()
+                snapshot.heartRateBpm?.toString()
             // WM_TAGS.md: {sthr} = Maximum recorded heart rate（示例 200），
             // {shrp} = Heart rate as % of maximum。Flue 没有用户健康档案，
             // 因此按规范示例使用固定的 200 BPM 作为最大心率。
             "sthr" -> DEFAULT_MAX_HEART_RATE_BPM.toString()
-            "shrp" -> ((snapshot.heartRateBpm ?: 0) * 100 / DEFAULT_MAX_HEART_RATE_BPM)
-                .coerceIn(0, 100)
-                .toString()
-            // {shr_1..9}：Flue 不保存心率历史，按无数据惯例渲染 0。
-            "shr_1", "shr_2", "shr_3", "shr_4", "shr_5", "shr_6", "shr_7", "shr_8", "shr_9" -> "0"
+            "shrp" -> snapshot.heartRateBpm?.let { bpm ->
+                (bpm * 100 / DEFAULT_MAX_HEART_RATE_BPM).coerceIn(0, 100).toString()
+            }
+            // Flue does not persist the vendor's minute-by-minute heart-rate history.
+            "shr_1", "shr_2", "shr_3", "shr_4", "shr_5", "shr_6", "shr_7", "shr_8", "shr_9" -> null
             "sgx" -> renderCompactNumber(snapshot.gyroscopeX ?: 0f)
             "sgy" -> renderCompactNumber(snapshot.gyroscopeY ?: 0f)
             "sgz" -> renderCompactNumber(snapshot.gyroscopeZ ?: 0f)
+            "sax" -> snapshot.accelerometerX?.let(::renderCompactNumber)
+            "say" -> snapshot.accelerometerY?.let(::renderCompactNumber)
+            "saz" -> snapshot.accelerometerZ?.let(::renderCompactNumber)
             "pws" -> renderCompactNumber(
                 (snapshot.wifiSignalFraction ?: 0f).coerceIn(0f, 1f),
             )
@@ -1826,7 +1964,12 @@ object WatchmakerTagResolver {
         }
         if (value != null) return WatchTagResolution.Resolved(value)
         return if (isKnown(requestedTag)) {
-            WatchTagResolution.Unavailable(requestedTag)
+            val expressionFallback = when (normalized) {
+                "shr", "heart", "heart_rate", "heart_rate_bpm", "shrp",
+                "shr_1", "shr_2", "shr_3", "shr_4", "shr_5", "shr_6", "shr_7", "shr_8", "shr_9" -> "0"
+                else -> null
+            }
+            WatchTagResolution.Unavailable(requestedTag, expressionFallback)
         } else {
             WatchTagResolution.Unsupported(requestedTag)
         }
@@ -2299,11 +2442,20 @@ object WatchmakerExpressionEvaluator {
         scope: WatchExpressionScope,
         resolveTag: (String) -> WatchTagResolution,
     ): String {
+        // A lone unavailable tag is display text, not arithmetic. Keep its
+        // user-facing placeholder while compound expressions can still use
+        // the tag's numeric fallback through evaluate().
+        tagPattern.matchEntire(raw.trim())?.let { match ->
+            val resolution = resolveTag(match.groupValues[1])
+            if (resolution is WatchTagResolution.Unavailable) return resolution.renderedValue
+        }
         // interpolate 只在「求值失败或结果该让位给模板」这几条分支里才用得上，
         // 而它是一遍正则替换 + 重建字符串。原来无条件先跑一次，等于每个文字
         // 图层每帧白烧一次正则（377 层的表盘每秒上万次），缓存也盖不住它 ——
         // 改成惰性，命中率最高的纯文本分支彻底不跑。
-        val value = evaluate(raw, scope, resolveTag) ?: return interpolate(raw, resolveTag)
+        val value = evaluate(raw, scope, resolveTag)
+            ?: evaluateExpressionPrefixTemplate(raw, scope, resolveTag)?.let { return it }
+            ?: return interpolate(raw, resolveTag)
         if (value === ExpressionValue.Nil ||
             value is ExpressionValue.Logical && !value.value
         ) {
@@ -2315,6 +2467,52 @@ object WatchmakerExpressionEvaluator {
             if (template.trim().toDoubleOrNull() != null) return template
         }
         return value.renderText().take(MAX_RESULT_TEXT_LENGTH)
+    }
+
+    /**
+     * WatchMaker Studio can concatenate one Lua expression with a plain text
+     * template without an explicit `..`, for example `(expr) {sstr}`. Try only
+     * top-level whitespace boundaries, longest prefix first, so nested spaces
+     * and quoted strings are never treated as split points.
+     */
+    private fun evaluateExpressionPrefixTemplate(
+        raw: String,
+        scope: WatchExpressionScope,
+        resolveTag: (String) -> WatchTagResolution,
+    ): String? {
+        val boundaries = ArrayList<Int>()
+        var depth = 0
+        var quote: Char? = null
+        var escaped = false
+        raw.forEachIndexed { index, char ->
+            if (quote != null) {
+                when {
+                    escaped -> escaped = false
+                    char == '\\' -> escaped = true
+                    char == quote -> quote = null
+                }
+                return@forEachIndexed
+            }
+            when (char) {
+                '\'', '"' -> quote = char
+                '(' -> depth++
+                ')' -> if (depth > 0) depth--
+                else -> if (depth == 0 && char.isWhitespace() &&
+                    (index == 0 || !raw[index - 1].isWhitespace())
+                ) {
+                    boundaries += index
+                }
+            }
+        }
+        for (boundary in boundaries.asReversed()) {
+            val prefix = raw.substring(0, boundary).trim()
+            if (prefix.isEmpty()) continue
+            val prefixValue = evaluate(prefix, scope, resolveTag) ?: continue
+            val renderedPrefix = prefixValue.renderText()
+            val renderedSuffix = interpolate(raw.substring(boundary), resolveTag)
+            return (renderedPrefix + renderedSuffix).take(MAX_RESULT_TEXT_LENGTH)
+        }
+        return null
     }
 
     fun evaluateNumber(
@@ -2523,9 +2721,7 @@ object WatchmakerExpressionEvaluator {
                     if (quote == null) {
                         output.append(
                             when (resolution) {
-                                is WatchTagResolution.Resolved -> resolution.renderedValue.toExpressionLiteral()
-                                is WatchTagResolution.Unavailable,
-                                is WatchTagResolution.Unsupported -> "nil"
+                                else -> resolution.expressionValue()?.toExpressionLiteral() ?: "nil"
                             },
                         )
                     } else {

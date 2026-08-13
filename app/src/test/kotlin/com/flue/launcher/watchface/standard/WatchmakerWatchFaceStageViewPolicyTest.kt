@@ -97,4 +97,16 @@ class WatchmakerWatchFaceStageViewPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `rounded buttons and text rings expose rectangular tap bounds`() {
+        assertEquals(
+            WatchTapBox(-42f, -17f, 42f, 17f),
+            watchLayerTapBox("rounded", width = 84f, height = 34f),
+        )
+        assertEquals(
+            WatchTapBox(-215f, -215f, 215f, 215f),
+            watchLayerTapBox("text_ring", width = 430f, height = 430f),
+        )
+    }
 }

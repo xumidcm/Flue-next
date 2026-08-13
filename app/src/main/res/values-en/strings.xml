@@ -1272,4 +1272,11 @@
     <string name="internal_file_browser_pick_conversion">Choose a watch face to convert</string>
     <string name="watch_face_loading">Loading watch face</string>
     <string name="watch_face_loading_fallback">Use default watch face and restart</string>
+    <string name="watch_editor_global_script">Global script</string>
+    <string name="watch_editor_global_script_description">Edit scripts/script.txt. Saving refreshes the preview and supports undo and redo.</string>
+    <string name="watch_editor_edit_script">Edit script</string>
+    <string name="watch_editor_script_placeholder">-- Enter WatchMaker Lua here</string>
+    <string name="watch_editor_script_bytes_fmt">UTF-8: %1$d / %2$d bytes</string>
+    <string name="watch_editor_script_too_large">The script exceeds 256 KiB. Shorten it before saving.</string>
+    <string name="watch_editor_status_saving_script">Saving global script</string>
 </resources>

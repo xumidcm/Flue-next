@@ -90,6 +90,8 @@ class WatchWeatherRepository(
         Thread(runnable, "flue-weather-refresh").apply { isDaemon = true }
     }
     private val refreshInFlight = AtomicBoolean(false)
+    private val locationCacheLock = Any()
+    private var locationRevision = 0L
 
     @Volatile
     private var lastRefreshAttemptMs = Long.MIN_VALUE
@@ -162,6 +164,7 @@ class WatchWeatherRepository(
             .remove(KEY_SYSTEM_LATITUDE)
             .remove(KEY_SYSTEM_LONGITUDE)
         editor.apply()
+        invalidateWeatherForLocationChange()
         requestRefresh()
     }
 
@@ -187,6 +190,7 @@ class WatchWeatherRepository(
             .remove(KEY_SYSTEM_LATITUDE)
             .remove(KEY_SYSTEM_LONGITUDE)
             .apply()
+        invalidateWeatherForLocationChange()
         requestRefresh()
     }
 
@@ -248,12 +252,20 @@ class WatchWeatherRepository(
             .putString(KEY_SYSTEM_LATITUDE, normalized.latitude.toString())
             .putString(KEY_SYSTEM_LONGITUDE, normalized.longitude.toString())
             .apply()
+        invalidateWeatherForLocationChange()
         requestRefresh()
     }
 
     fun clearCache() {
         cache.clear()
         preferences.edit().remove(KEY_CACHE_JSON).remove(KEY_CACHE_RECEIVED_AT).apply()
+    }
+
+    private fun invalidateWeatherForLocationChange() {
+        synchronized(locationCacheLock) {
+            locationRevision++
+            clearCache()
+        }
     }
 
     /** Forces the next cache read to schedule a foreground/background refresh. */
@@ -264,6 +276,7 @@ class WatchWeatherRepository(
 
     private fun scheduleRefresh(nowEpochMs: Long) {
         if (!refreshInFlight.compareAndSet(false, true)) return
+        val scheduledRevision = synchronized(locationCacheLock) { locationRevision }
         lastRefreshAttemptMs = nowEpochMs
         refreshExecutor.execute {
             try {
@@ -305,11 +318,14 @@ class WatchWeatherRepository(
                     )
                 }
                 refreshed?.let { snapshot ->
-                    val canonical = canonicalWatchWeatherSnapshot(snapshot).copy(
-                        displayUnit = temperatureUnitValue,
-                    )
-                    cache.update(canonical, nowEpochMs)
-                    persistSnapshot(canonical, nowEpochMs)
+                    synchronized(locationCacheLock) {
+                        if (scheduledRevision != locationRevision) return@synchronized
+                        val canonical = canonicalWatchWeatherSnapshot(snapshot).copy(
+                            displayUnit = temperatureUnitValue,
+                        )
+                        cache.update(canonical, nowEpochMs)
+                        persistSnapshot(canonical, nowEpochMs, location)
+                    }
                 }
             } finally {
                 refreshInFlight.set(false)
@@ -531,8 +547,14 @@ class WatchWeatherRepository(
     private fun readTemperatureUnit(): WatchTemperatureUnit =
         WatchTemperatureUnit.fromRaw(preferences.getString(KEY_TEMPERATURE_UNIT, null))
 
-    private fun persistSnapshot(snapshot: WatchWeatherSnapshot, receivedAtEpochMs: Long) {
+    private fun persistSnapshot(
+        snapshot: WatchWeatherSnapshot,
+        receivedAtEpochMs: Long,
+        sourceLocation: WatchWeatherLocation,
+    ) {
         val root = JSONObject().apply {
+            put("sourceLatitude", sourceLocation.latitude)
+            put("sourceLongitude", sourceLocation.longitude)
             putNullable("temperatureCelsius", snapshot.temperatureCelsius)
             putNullable("highCelsius", snapshot.highCelsius)
             putNullable("lowCelsius", snapshot.lowCelsius)
@@ -583,6 +605,13 @@ class WatchWeatherRepository(
         val root = preferences.getString(KEY_CACHE_JSON, null)
             ?.let { raw -> runCatching { JSONObject(raw) }.getOrNull() }
             ?: return null
+        val configuredLocation = manualLocation ?: systemLocationValue ?: return null
+        val sourceLatitude = root.optDoubleOrNull("sourceLatitude") ?: return null
+        val sourceLongitude = root.optDoubleOrNull("sourceLongitude") ?: return null
+        if (
+            abs(sourceLatitude - configuredLocation.latitude) > CACHE_LOCATION_TOLERANCE_DEGREES ||
+            abs(sourceLongitude - configuredLocation.longitude) > CACHE_LOCATION_TOLERANCE_DEGREES
+        ) return null
         val forecastJson = root.optJSONArray("forecast")
         val forecast = buildList {
             if (forecastJson != null) {
@@ -834,6 +863,7 @@ class WatchWeatherRepository(
         const val USER_AGENT = "FlueNext/2.0 (weather; https://github.com/xumidcm/Flue)"
         private const val CURRENT_LOCATION_TIMEOUT_MS = 6_000L
         private const val SYSTEM_LOCATION_LABEL_TOLERANCE_DEGREES = 0.005
+        private const val CACHE_LOCATION_TOLERANCE_DEGREES = 0.00001
 
         @Volatile
         private var defaultInstance: WatchWeatherRepository? = null

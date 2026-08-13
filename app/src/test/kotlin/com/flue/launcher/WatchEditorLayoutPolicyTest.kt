@@ -1,5 +1,6 @@
 package com.flue.launcher
 
+import com.flue.launcher.watchface.editor.WatchEditorSession
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -141,5 +142,20 @@ class WatchEditorLayoutPolicyTest {
         assertTrue(gate.tryBeginGesture())
         gate.cancelGesture()
         assertTrue(!gate.isBusy())
+    }
+
+    @Test
+    fun scriptLimitCountsUtf8BytesInsteadOfUtf16Characters() {
+        assertEquals(3, watchEditorScriptByteCount("界"))
+        assertTrue(
+            canSaveWatchEditorScript(
+                "界".repeat(WatchEditorSession.MAX_WATCH_SCRIPT_BYTES / 3),
+            ),
+        )
+        assertTrue(
+            !canSaveWatchEditorScript(
+                "界".repeat(WatchEditorSession.MAX_WATCH_SCRIPT_BYTES / 3 + 1),
+            ),
+        )
     }
 }

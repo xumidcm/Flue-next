@@ -26,6 +26,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import java.util.ArrayDeque
 import java.util.Locale
 import java.util.UUID
@@ -58,6 +59,7 @@ class WatchEditorSession private constructor(
         val xml: ByteArray,
         val layerKeys: List<WatchEditorLayerKey>,
         val resourcePaths: Set<String>,
+        val scriptBytes: ByteArray?,
     )
 
     private val undoStack = ArrayDeque<EditorState>()
@@ -72,6 +74,7 @@ class WatchEditorSession private constructor(
     private var layerKeys = mutableListOf<WatchEditorLayerKey>()
     private var savedXml: ByteArray
     private var savedResourcePaths: Set<String>
+    private var savedScriptBytes: ByteArray?
     private var closed = false
     private var activeTransformGesture: TransformGesture? = null
 
@@ -85,6 +88,7 @@ class WatchEditorSession private constructor(
         validateDocument()
         savedXml = serializeDocument(document)
         savedResourcePaths = resourcePathsInternal().toSet()
+        savedScriptBytes = scriptBytesInternal()
     }
 
     val watchXmlFile: File
@@ -94,7 +98,8 @@ class WatchEditorSession private constructor(
         @Synchronized get() {
             ensureOpen()
             return !serializeDocument(document).contentEquals(savedXml) ||
-                resourcePathsInternal().toSet() != savedResourcePaths
+                resourcePathsInternal().toSet() != savedResourcePaths ||
+                !sameNullableBytes(scriptBytesInternal(), savedScriptBytes)
         }
 
     /**
@@ -122,7 +127,38 @@ class WatchEditorSession private constructor(
             dirty = isDirty,
             canUndo = undoStack.isNotEmpty(),
             canRedo = redoStack.isNotEmpty(),
+            globalScriptRevision = scriptRevision(scriptBytesInternal()),
         )
+    }
+
+    /** Returns scripts/script.txt as UTF-8, or an empty string when it is absent. */
+    @Synchronized
+    fun globalScript(): String {
+        ensureOpen()
+        return scriptBytesInternal()?.toString(StandardCharsets.UTF_8).orEmpty()
+    }
+
+    /**
+     * Replaces the WatchMaker global script as one undoable editor mutation.
+     * An exactly empty value removes scripts/script.txt instead of retaining an
+     * empty archive entry.
+     */
+    @Synchronized
+    fun updateGlobalScript(script: String) {
+        val bytes = script.toByteArray(StandardCharsets.UTF_8)
+        if (bytes.size > MAX_WATCH_SCRIPT_BYTES) {
+            throw WatchEditorException("全局脚本超过 $MAX_WATCH_SCRIPT_BYTES 字节限制")
+        }
+        mutate {
+            val scriptFile = globalScriptFile()
+            if (bytes.isEmpty()) {
+                if (scriptFile.exists() && !scriptFile.delete()) {
+                    throw WatchEditorException("无法删除全局脚本")
+                }
+            } else {
+                writeAtomically(scriptFile, bytes)
+            }
+        }
     }
 
     @Synchronized
@@ -603,6 +639,7 @@ class WatchEditorSession private constructor(
         writeAtomically(watchXmlFile, bytes)
         savedXml = bytes
         savedResourcePaths = resourcePathsInternal().toSet()
+        savedScriptBytes = scriptBytesInternal()
         return watchXmlFile
     }
 
@@ -644,6 +681,7 @@ class WatchEditorSession private constructor(
             targetPublished = true
             savedXml = xmlBytes
             savedResourcePaths = resourcePathsInternal().toSet()
+            savedScriptBytes = scriptBytesInternal()
             return target
         } catch (error: Exception) {
             if (originalMoved && !targetPublished && !target.exists() && backup.exists()) {
@@ -783,6 +821,7 @@ class WatchEditorSession private constructor(
             atomicMove(temporary, output)
             savedXml = draftXmlBytes
             savedResourcePaths = resourcePathsInternal().toSet()
+            savedScriptBytes = scriptBytesInternal()
             return WatchEditorExportResult(output, output.length(), entryCount)
         } catch (error: Exception) {
             temporary.delete()
@@ -836,6 +875,7 @@ class WatchEditorSession private constructor(
         xml = serializeDocument(document),
         layerKeys = layerKeys.toList(),
         resourcePaths = resourcePathsInternal().toSet(),
+        scriptBytes = scriptBytesInternal(),
     )
 
     private fun restoreState(state: EditorState) {
@@ -859,6 +899,15 @@ class WatchEditorSession private constructor(
             destination.parentFile?.mkdirs()
             atomicMove(stash, destination)
         }
+        val scriptFile = globalScriptFile()
+        val scriptBytes = state.scriptBytes
+        if (scriptBytes == null) {
+            if (scriptFile.exists() && !scriptFile.delete()) {
+                throw WatchEditorException("无法恢复全局脚本删除状态")
+            }
+        } else {
+            writeAtomically(scriptFile, scriptBytes)
+        }
         document = parseXml(ByteArrayInputStream(state.xml), limits)
         rebindLayerKeys(state.layerKeys)
     }
@@ -866,6 +915,7 @@ class WatchEditorSession private constructor(
     private fun sameState(first: EditorState, second: EditorState): Boolean =
         first.layerKeys == second.layerKeys &&
             first.resourcePaths == second.resourcePaths &&
+            sameNullableBytes(first.scriptBytes, second.scriptBytes) &&
             first.xml.contentEquals(second.xml)
 
     private fun cancelActiveTransformGesture() {
@@ -877,25 +927,25 @@ class WatchEditorSession private constructor(
 
     private fun pushUndo(state: EditorState) {
         undoStack.addLast(state)
-        undoBytes += state.xml.size
+        undoBytes += state.historyBytes
         trimHistory(undoStack, HistorySide.UNDO)
     }
 
     private fun pushRedo(state: EditorState) {
         redoStack.addLast(state)
-        redoBytes += state.xml.size
+        redoBytes += state.historyBytes
         trimHistory(redoStack, HistorySide.REDO)
     }
 
     private fun popUndo(): EditorState {
         val state = undoStack.removeLast()
-        undoBytes -= state.xml.size
+        undoBytes -= state.historyBytes
         return state
     }
 
     private fun popRedo(): EditorState {
         val state = redoStack.removeLast()
-        redoBytes -= state.xml.size
+        redoBytes -= state.historyBytes
         return state
     }
 
@@ -925,7 +975,7 @@ class WatchEditorSession private constructor(
         fun bytes(): Long = if (side == HistorySide.UNDO) undoBytes else redoBytes
         while (stack.size > MAX_HISTORY_STEPS || bytes() > limits.maxHistoryBytes) {
             val removed = stack.removeFirst()
-            if (side == HistorySide.UNDO) undoBytes -= removed.xml.size else redoBytes -= removed.xml.size
+            if (side == HistorySide.UNDO) undoBytes -= removed.historyBytes else redoBytes -= removed.historyBytes
         }
     }
 
@@ -1211,7 +1261,34 @@ class WatchEditorSession private constructor(
 
     private fun resourcePathsInternal(): List<String> = draftFiles()
         .map(::relativePath)
-        .filterNot { it == watchXmlRelativePath }
+        .filterNot { it == watchXmlRelativePath || it == GLOBAL_SCRIPT_RELATIVE_PATH }
+
+    private fun globalScriptFile(): File = resolveDraftPath(GLOBAL_SCRIPT_RELATIVE_PATH)
+
+    private fun scriptBytesInternal(): ByteArray? {
+        val script = globalScriptFile()
+        if (!script.isFile) return null
+        require(script.length() <= MAX_WATCH_SCRIPT_BYTES) {
+            "全局脚本超过 $MAX_WATCH_SCRIPT_BYTES 字节限制"
+        }
+        return script.readBytes()
+    }
+
+    private fun scriptRevision(bytes: ByteArray?): String {
+        if (bytes == null) return "absent"
+        return MessageDigest.getInstance("SHA-256")
+            .digest(bytes)
+            .joinToString(separator = "") { byte -> "%02x".format(byte) }
+    }
+
+    private fun sameNullableBytes(first: ByteArray?, second: ByteArray?): Boolean = when {
+        first == null -> second == null
+        second == null -> false
+        else -> first.contentEquals(second)
+    }
+
+    private val EditorState.historyBytes: Long
+        get() = xml.size.toLong() + (scriptBytes?.size ?: 0)
 
     private fun draftFiles(): List<File> {
         val result = mutableListOf<File>()
@@ -1279,6 +1356,9 @@ class WatchEditorSession private constructor(
         private const val WATCHMAKER_SCALE_NORMAL = 100f
         private const val MIN_TRANSFORM_SCALE = 0.05f
         private const val MAX_TRANSFORM_SCALE = 8f
+        private const val GLOBAL_SCRIPT_RELATIVE_PATH = "scripts/script.txt"
+
+        const val MAX_WATCH_SCRIPT_BYTES: Int = 256 * 1024
 
         /** Keeps memory and disk-history bounded while still allowing a useful edit chain. */
         const val MAX_HISTORY_STEPS: Int = 32

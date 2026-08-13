@@ -920,6 +920,13 @@
     <string name="watch_editor_canvas_matches_screen_suffix"> · 与本机屏幕一致</string>
     <string name="watch_editor_canvas_size_description">图层坐标以画布中心为原点；改画布尺寸不会移动已有图层，只改变设计空间大小。</string>
     <string name="watch_editor_change_canvas_size">修改画布尺寸</string>
+    <string name="watch_editor_global_script">全局脚本</string>
+    <string name="watch_editor_global_script_description">编辑 scripts/script.txt；保存后会刷新预览，并支持撤销和重做。</string>
+    <string name="watch_editor_edit_script">编辑脚本</string>
+    <string name="watch_editor_script_placeholder">-- 在这里输入 WatchMaker Lua 脚本</string>
+    <string name="watch_editor_script_bytes_fmt">UTF-8：%1$d / %2$d 字节</string>
+    <string name="watch_editor_script_too_large">脚本超过 256 KiB，缩短后才能保存。</string>
+    <string name="watch_editor_status_saving_script">正在保存全局脚本</string>
     <string name="watch_editor_default_watch_name">Flue 表盘</string>
     <string name="watch_store_community_subtitle" translatable="false">Watchmaker Community</string>
     <string name="watch_editor_draft_display_name">编辑器草稿</string>
