@@ -347,8 +347,9 @@ class WatchFaceLuaRuntime private constructor(
                 upperBound += maxOf(width.toLong(), convertedBytes)
                 rejectOversized(upperBound)
             }
-            reserve(upperBound)
-            return invokeDelegate(args)
+            val formatted = formatLuaString(args)
+            reserve(formatted.toByteArray(Charsets.UTF_8).size.toLong())
+            return LuaValue.valueOf(formatted)
         }
     }
 
@@ -676,6 +677,155 @@ class WatchFaceLuaRuntime private constructor(
                 .mapTo(LinkedHashSet()) { match ->
                     match.groupValues[1].ifBlank { match.groupValues[2] }
                 }
+
+        /**
+         * LuaJ's JSE formatter does not consistently honour floating-point
+         * precision (for example `%.1f` may render `1.44`).  WatchMaker and
+         * CloX expect ordinary printf semantics, so format the bounded subset
+         * explicitly while keeping the surrounding allocation guard.
+         */
+        private fun formatLuaString(args: Varargs): String {
+            val format = args.checkjstring(1)
+            val output = StringBuilder(format.length + 16)
+            var index = 0
+            var argumentIndex = 2
+            while (index < format.length) {
+                if (format[index] != '%') {
+                    output.append(format[index++])
+                    continue
+                }
+                if (index + 1 < format.length && format[index + 1] == '%') {
+                    output.append('%')
+                    index += 2
+                    continue
+                }
+                val specStart = index++
+                val flagsStart = index
+                while (index < format.length && format[index] in FORMAT_FLAGS) index++
+                val flags = format.substring(flagsStart, index)
+                val widthStart = index
+                while (index < format.length && format[index].isDigit()) index++
+                val width = format.substring(widthStart, index).toIntOrNull() ?: 0
+                require(width <= MAX_STRING_RESULT_BYTES) { STRING_RESULT_LIMIT_MESSAGE }
+                var precision: Int? = null
+                if (index < format.length && format[index] == '.') {
+                    index++
+                    val precisionStart = index
+                    while (index < format.length && format[index].isDigit()) index++
+                    precision = format.substring(precisionStart, index).toIntOrNull() ?: 0
+                    require(precision <= MAX_STRING_RESULT_BYTES) { STRING_RESULT_LIMIT_MESSAGE }
+                }
+                require(index < format.length) { "incomplete format specifier" }
+                val conversion = format[index++]
+                val value = args.arg(argumentIndex++)
+                val spec = format.substring(specStart, index)
+                val rendered = when (conversion) {
+                    'd', 'i' -> formatLuaInteger(
+                        value = value.checklong(),
+                        flags = flags,
+                        width = width,
+                        precision = precision,
+                        unsigned = false,
+                    )
+                    'o', 'x', 'X' -> String.format(Locale.ROOT, spec, value.checklong())
+                    'u' -> formatLuaInteger(
+                        value = value.checklong(),
+                        flags = flags,
+                        width = width,
+                        precision = precision,
+                        unsigned = true,
+                    )
+                    'f', 'e', 'E', 'g', 'G' ->
+                        String.format(Locale.ROOT, spec, value.checkdouble())
+                    'c' -> applyLuaFormatWidth(
+                        value.checkint().toChar().toString(),
+                        flags,
+                        width,
+                        precision = null,
+                    )
+                    's' -> applyLuaFormatWidth(
+                        value.tojstring(),
+                        flags,
+                        width,
+                        precision,
+                    )
+                    'q' -> applyLuaFormatWidth(
+                        quoteLuaString(value.tojstring()),
+                        flags,
+                        width,
+                        precision = null,
+                    )
+                    else -> error("unsupported format type: $conversion")
+                }
+                output.append(rendered)
+                require(output.toString().toByteArray(Charsets.UTF_8).size <= MAX_STRING_RESULT_BYTES) {
+                    STRING_RESULT_LIMIT_MESSAGE
+                }
+            }
+            return output.toString()
+        }
+
+        private fun applyLuaFormatWidth(
+            raw: String,
+            flags: String,
+            width: Int,
+            precision: Int?,
+        ): String {
+            val value = precision?.let(raw::take) ?: raw
+            if (value.length >= width) return value
+            val padding = width - value.length
+            if ('-' in flags) return value + " ".repeat(padding)
+            val pad = if ('0' in flags) '0' else ' '
+            return pad.toString().repeat(padding) + value
+        }
+
+        private fun formatLuaInteger(
+            value: Long,
+            flags: String,
+            width: Int,
+            precision: Int?,
+            unsigned: Boolean,
+        ): String {
+            val negative = !unsigned && value < 0
+            val sign = when {
+                negative -> "-"
+                '+' in flags -> "+"
+                ' ' in flags -> " "
+                else -> ""
+            }
+            val digits = if (unsigned) {
+                value.toULong().toString()
+            } else {
+                value.toString().removePrefix("-")
+            }
+            val minimumDigits = precision ?: 0
+            val paddedDigits = digits.padStart(minimumDigits, '0')
+            val combined = sign + paddedDigits
+            if (combined.length >= width) return combined
+            val padding = width - combined.length
+            if ('-' in flags) return combined + " ".repeat(padding)
+            if ('0' in flags && precision == null) return sign + "0".repeat(padding) + paddedDigits
+            return " ".repeat(padding) + combined
+        }
+
+        private fun quoteLuaString(raw: String): String = buildString(raw.length + 2) {
+            append('"')
+            raw.forEach { char ->
+                when (char) {
+                    '\\' -> append("\\\\")
+                    '"' -> append("\\\"")
+                    '\n' -> append("\\n")
+                    '\r' -> append("\\r")
+                    '\t' -> append("\\t")
+                    in '\u0000'..'\u001f', '\u007f' -> {
+                        append('\\')
+                        append(char.code.toString().padStart(3, '0'))
+                    }
+                    else -> append(char)
+                }
+            }
+            append('"')
+        }
 
         /** Layer expressions may contain WatchMaker tags and quoted labels that are not Lua globals. */
         private fun identifiersOutsideTagsAndStrings(source: String): Sequence<String> = sequence {

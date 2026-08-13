@@ -8,6 +8,31 @@ import org.junit.Test
 
 class WatchFaceLuaRuntimeTest {
     @Test
+    fun stringFormatHonoursFloatingPointPrecisionAndLiteralSuffixes() {
+        WatchFaceLuaRuntime.create(null).use { runtime ->
+            assertEquals("1.4", runtime.evaluateText("string.format('%.1f', 1.44)"))
+            assertEquals("1.4km", runtime.evaluateText("string.format('%.1fkm', 1.44)"))
+            assertEquals("0007", runtime.evaluateText("string.format('%04d', 7)"))
+            assertEquals("007", runtime.evaluateText("string.format('%.3d', 7)"))
+            assertEquals("00123", runtime.evaluateText("string.format('%.5u', 123)"))
+            assertEquals("123", runtime.evaluateText("string.format('%.1u', 123)"))
+        }
+    }
+
+    @Test
+    fun stringFormatQuoteEscapesLuaControlCharacters() {
+        WatchFaceLuaRuntime.create(null).use { runtime ->
+            val expected = "\"" + "\\000\\008\\011\\012\\026\\\"\\\\" + "\""
+            assertEquals(
+                expected,
+                runtime.evaluateText(
+                    "string.format('%q', string.char(0, 8, 11, 12, 26) .. '\"\\\\')",
+                ),
+            )
+        }
+    }
+
+    @Test
     fun flueWatchTapStartsItsFrameCallbackInTheSameFaceEnvironment() {
         WatchFaceLuaRuntime.create(FLUE_WATCH_SCRIPT).use { runtime ->
             assertEquals(1.0, runtime.evaluateNumber("var_frame"), 0.0)

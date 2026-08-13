@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -376,6 +377,12 @@ fun JbWatchFaceHost(
         }
         result.onSuccess { value = it }.onFailure { loadError = it }
     }
+    val luaRuntime = remember(face, descriptor.stableKey, refreshToken) {
+        face?.let { JbWatchLuaExpressionRuntime.create() }
+    }
+    DisposableEffect(luaRuntime) {
+        onDispose { luaRuntime?.close() }
+    }
     LaunchedEffect(loadError) {
         loadError?.let { onLoadFailure(descriptor, it) }
     }
@@ -409,6 +416,7 @@ fun JbWatchFaceHost(
     val latestFace by rememberUpdatedState(face)
     val latestNowMillis by rememberUpdatedState(nowMillis)
     val latestDataSnapshot by rememberUpdatedState(dataSnapshot)
+    val latestLuaRuntime by rememberUpdatedState(luaRuntime)
     LaunchedEffect(
         isFaceVisible,
         face?.needsHighRefresh,
@@ -437,6 +445,7 @@ fun JbWatchFaceHost(
                                 viewHeight = size.height.toFloat(),
                                 nowMillis = latestNowMillis,
                                 dataSnapshot = latestDataSnapshot,
+                                luaRuntime = latestLuaRuntime,
                             )
                         }
                     },
@@ -460,6 +469,7 @@ fun JbWatchFaceHost(
                             face = renderFace,
                             nowMillis = nowMillis,
                             dataSnapshot = dataSnapshot,
+                            luaRuntime = luaRuntime,
                             width = size.width.toInt(),
                             height = size.height.toInt(),
                             is24Hour = is24Hour,
@@ -482,6 +492,7 @@ private fun drawJbFace(
     face: JbWatchFace,
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
+    luaRuntime: JbWatchLuaExpressionRuntime?,
     width: Int,
     height: Int,
     is24Hour: Boolean,
@@ -507,6 +518,7 @@ private fun drawJbFace(
             layer,
             nowMillis,
             dataSnapshot,
+            luaRuntime,
             is24Hour,
             textEntryAnimationEnabled,
             textExitAnimationActive,
@@ -523,6 +535,7 @@ private fun drawJbLayer(
     layer: JbWatchLayer,
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
+    luaRuntime: JbWatchLuaExpressionRuntime?,
     is24Hour: Boolean,
     textEntryAnimationEnabled: Boolean,
     textExitAnimationActive: Boolean,
@@ -535,6 +548,7 @@ private fun drawJbLayer(
         nowMillis = nowMillis,
         dataSnapshot = dataSnapshot,
         animationElapsedMs = animationElapsedMs,
+        luaRuntime = luaRuntime,
     )
     val textAnimation = if (textExitAnimationActive && animatedLayer.type.startsWith("text")) {
         watchTextExitAnimationFrame(
@@ -574,16 +588,17 @@ private fun drawJbLayer(
                 nowMillis = nowMillis,
                 dataSnapshot = dataSnapshot,
                 animationElapsedMs = animationElapsedMs,
+                luaRuntime = luaRuntime,
             )
         }
         "text" -> drawJbTextLayer(
-            canvas, face, drawableLayer, nowMillis, dataSnapshot, is24Hour, animationElapsedMs,
+            canvas, face, drawableLayer, nowMillis, dataSnapshot, is24Hour, animationElapsedMs, luaRuntime,
         )
         "text_curved" -> drawJbCurvedTextLayer(
-            canvas, face, drawableLayer, nowMillis, dataSnapshot, is24Hour, animationElapsedMs,
+            canvas, face, drawableLayer, nowMillis, dataSnapshot, is24Hour, animationElapsedMs, luaRuntime,
         )
         "ring" -> drawJbRingLayer(
-            canvas, face, drawableLayer, nowMillis, dataSnapshot, animationElapsedMs,
+            canvas, face, drawableLayer, nowMillis, dataSnapshot, animationElapsedMs, luaRuntime,
         )
         "markers_hm" -> drawJbMarkersLayer(canvas, face, drawableLayer)
         "shape" -> drawJbShapeLayer(canvas, face, drawableLayer)
@@ -599,13 +614,15 @@ private fun drawJbBitmapLayer(
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
     animationElapsedMs: Long,
+    luaRuntime: JbWatchLuaExpressionRuntime?,
 ) {
-    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot, animationElapsedMs)) return
+    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot, animationElapsedMs, luaRuntime)) return
     val resolvedPathLayer = resolveJbDynamicPathLayer(
         layer = layer,
         nowMillis = nowMillis,
         dataSnapshot = dataSnapshot,
         animationElapsedMs = animationElapsedMs,
+        luaRuntime = luaRuntime,
     )
     val dayFile = resolveJbWatchPath(
         rootDir = face.rootDir,
@@ -653,14 +670,14 @@ private fun drawJbBitmapLayer(
         val durationMs = movie.duration().takeIf { it > 0 } ?: DEFAULT_JB_GIF_DURATION_MS
         movie.setTime((animationElapsedMs % durationMs).toInt())
         canvas.save()
-        rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot, animationElapsedMs)
+        rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot, animationElapsedMs, luaRuntime)
         canvas.translate(rect.left, rect.top)
         canvas.scale(rect.width() / nativeWidth, rect.height() / nativeHeight)
         movie.draw(canvas, 0f, 0f, paint)
         canvas.restore()
     } else if (bitmap != null) {
         canvas.save()
-        rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot, animationElapsedMs)
+        rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot, animationElapsedMs, luaRuntime)
         canvas.drawBitmap(bitmap, null, rect, paint)
         canvas.restore()
     }
@@ -696,9 +713,10 @@ private fun drawJbTextLayer(
     dataSnapshot: WatchDataSnapshot,
     is24Hour: Boolean,
     animationElapsedMs: Long,
+    luaRuntime: JbWatchLuaExpressionRuntime?,
 ) {
-    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot, animationElapsedMs)) return
-    val text = resolveJbText(layer.text, nowMillis, dataSnapshot, is24Hour, animationElapsedMs)
+    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot, animationElapsedMs, luaRuntime)) return
+    val text = resolveJbText(layer.text, nowMillis, dataSnapshot, is24Hour, animationElapsedMs, luaRuntime)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = parseJbColor(layer.color)
         textSize = layer.textSize
@@ -731,12 +749,12 @@ private fun drawJbTextLayer(
             alpha = ((layer.oOpacity.coerceIn(0, 100) / 100f) * 255).toInt()
         }
         canvas.save()
-        rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot, animationElapsedMs)
+        rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot, animationElapsedMs, luaRuntime)
         canvas.drawText(text, x, y, outlinePaint)
         canvas.restore()
     }
     canvas.save()
-    rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot, animationElapsedMs)
+    rotateJbLayer(canvas, rect, layer.rotation, nowMillis, dataSnapshot, animationElapsedMs, luaRuntime)
     canvas.drawText(text, x, y, paint)
     canvas.restore()
 }
@@ -749,9 +767,10 @@ private fun drawJbCurvedTextLayer(
     dataSnapshot: WatchDataSnapshot,
     is24Hour: Boolean,
     animationElapsedMs: Long,
+    luaRuntime: JbWatchLuaExpressionRuntime?,
 ) {
-    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot, animationElapsedMs)) return
-    val text = resolveJbText(layer.text, nowMillis, dataSnapshot, is24Hour, animationElapsedMs)
+    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot, animationElapsedMs, luaRuntime)) return
+    val text = resolveJbText(layer.text, nowMillis, dataSnapshot, is24Hour, animationElapsedMs, luaRuntime)
     if (text.isBlank()) return
     val center = jbLayerCenter(face, layer)
     val radius = layer.radius.takeIf { it > 0f } ?: 180f
@@ -760,6 +779,7 @@ private fun drawJbCurvedTextLayer(
         nowMillis,
         dataSnapshot,
         animationElapsedMs,
+        luaRuntime = luaRuntime,
     )
     val radians = Math.toRadians((angle - 90f).toDouble())
     val x = center.x + cos(radians).toFloat() * radius
@@ -788,14 +808,17 @@ private fun drawJbRingLayer(
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
     animationElapsedMs: Long,
+    luaRuntime: JbWatchLuaExpressionRuntime?,
 ) {
-    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot, animationElapsedMs)) return
+    if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot, animationElapsedMs, luaRuntime)) return
     val center = jbLayerCenter(face, layer)
     val outer = layer.radiusOuter.takeIf { it > 0f } ?: layer.radius.takeIf { it > 0f } ?: 210f
     val inner = layer.radiusInner.takeIf { it > 0f } ?: (outer - 14f)
     val stroke = (outer - inner).coerceAtLeast(1f)
     val radius = inner + stroke / 2f
-    val sweep = evaluateJbNumericExpression(layer.angle, nowMillis, dataSnapshot, animationElapsedMs)
+    val sweep = evaluateJbNumericExpression(
+        layer.angle, nowMillis, dataSnapshot, animationElapsedMs, luaRuntime = luaRuntime,
+    )
         .takeIf { it > 0f }
         ?: layer.angleTotal.takeIf { it > 0f }
         ?: 360f
@@ -804,6 +827,7 @@ private fun drawJbRingLayer(
         nowMillis,
         dataSnapshot,
         animationElapsedMs,
+        luaRuntime = luaRuntime,
     ) - 90f
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -861,6 +885,7 @@ private fun resolveJbText(
     dataSnapshot: WatchDataSnapshot,
     is24Hour: Boolean,
     animationElapsedMs: Long,
+    luaRuntime: JbWatchLuaExpressionRuntime?,
 ): String {
     val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
     // EEE / MMM 在部分 locale 会带尾句号（es "lun."、de "Mo."），
@@ -868,28 +893,30 @@ private fun resolveJbText(
     val weekday = SimpleDateFormat("EEE", Locale.getDefault()).format(nowMillis).trimEnd('.')
     val monthName = SimpleDateFormat("MMM", Locale.getDefault()).format(nowMillis).trimEnd('.')
     val dayOfWeekZero = (calendar.get(Calendar.DAY_OF_WEEK) - Calendar.SUNDAY).coerceIn(0, 6)
-    val source = (resolveJbDayConditionalText(raw, dayOfWeekZero) ?: raw)
-        .replace("{time}", "__JB_TIME__")
-        .replace("{ddm}", "__JB_DDM__")
-        .replace("{dmm}", "__JB_DMM__")
+    val resolver: (String) -> WatchTagResolution = { tag ->
+        when (tag.trim().lowercase(Locale.ROOT)) {
+            "time" -> WatchTagResolution.Resolved(
+                SimpleDateFormat(if (is24Hour) "HH:mm" else "hh:mm", Locale.getDefault()).format(nowMillis),
+            )
+            "ddm" -> WatchTagResolution.Resolved(
+                calendar.get(Calendar.MONTH).plus(1).toString().padStart(2, '0'),
+            )
+            "dmm" -> WatchTagResolution.Resolved(monthName)
+            else -> resolveJbTag(
+                tag = tag,
+                now = calendar,
+                dataSnapshot = dataSnapshot,
+                animationElapsedMs = animationElapsedMs,
+            )
+        }
+    }
+    val source = resolveJbDayConditionalText(raw, dayOfWeekZero) ?: raw
+    val evaluated = luaRuntime?.evaluateText(source, resolver)
+    if (evaluated != null) return evaluated
     val interpolated = JB_DYNAMIC_TAG_PATTERN.replace(source) { match ->
-        resolveJbTag(
-            tag = match.groupValues[1],
-            now = calendar,
-            dataSnapshot = dataSnapshot,
-            animationElapsedMs = animationElapsedMs,
-        ).renderedValue
+        resolver(match.groupValues[1]).renderedValue
     }
     return interpolated
-        // JB exports use these two aliases even though they are not part of
-        // the oldest standard vocabulary. Keep them deterministic here.
-        .replace("__JB_DDM__", calendar.get(Calendar.MONTH).plus(1).toString().padStart(2, '0'))
-        .replace("__JB_DMM__", monthName)
-        .replace("__JB_TIME__", if (is24Hour) {
-            SimpleDateFormat("HH:mm", Locale.getDefault()).format(nowMillis)
-        } else {
-            SimpleDateFormat("hh:mm", Locale.getDefault()).format(nowMillis)
-        })
         .replace("{dh12z}", WatchmakerTagResolver.resolve("dh12z", calendar, dataSnapshot).renderedValue)
         .replace("{ddw2}", weekday)
         .replace("{ddw}", weekday)
@@ -1006,12 +1033,14 @@ private fun rotateJbLayer(
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
     animationElapsedMs: Long,
+    luaRuntime: JbWatchLuaExpressionRuntime? = null,
 ) {
     val rotation = evaluateJbNumericExpression(
         rotationRaw,
         nowMillis,
         dataSnapshot,
         animationElapsedMs,
+        luaRuntime = luaRuntime,
     )
     if (rotation == 0f) return
     canvas.rotate(rotation, rect.centerX(), rect.centerY())
@@ -1023,14 +1052,18 @@ private fun evaluateJbNumericExpression(
     dataSnapshot: WatchDataSnapshot,
     animationElapsedMs: Long = 0L,
     fallback: Float = 0f,
+    luaRuntime: JbWatchLuaExpressionRuntime? = null,
 ): Float {
     val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val resolver: (String) -> WatchTagResolution = { tag ->
+        resolveJbTag(tag, calendar, dataSnapshot, animationElapsedMs)
+    }
+    luaRuntime?.evaluateNumber(raw, resolver)?.toFloat()?.takeIf(Float::isFinite)?.let { return it }
     return WatchmakerExpressionEvaluator.evaluateNumber(
         raw = raw,
         fallback = fallback,
-    ) { tag ->
-        resolveJbTag(tag, calendar, dataSnapshot, animationElapsedMs)
-    }
+        resolveTag = resolver,
+    )
 }
 
 /** Shared WatchMaker text timeline used by both standard and JB renderers. */
@@ -1053,6 +1086,7 @@ private fun resolveJbAnimatedTransform(
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
     animationElapsedMs: Long,
+    luaRuntime: JbWatchLuaExpressionRuntime? = null,
 ): JbWatchLayer {
     if (layer.xExpression.isNullOrBlank() && layer.yExpression.isNullOrBlank()) return layer
     return layer.copy(
@@ -1062,6 +1096,7 @@ private fun resolveJbAnimatedTransform(
             dataSnapshot = dataSnapshot,
             animationElapsedMs = animationElapsedMs,
             fallback = layer.x,
+            luaRuntime = luaRuntime,
         ),
         y = evaluateJbNumericExpression(
             raw = layer.yExpression ?: layer.y.toString(),
@@ -1069,6 +1104,7 @@ private fun resolveJbAnimatedTransform(
             dataSnapshot = dataSnapshot,
             animationElapsedMs = animationElapsedMs,
             fallback = layer.y,
+            luaRuntime = luaRuntime,
         ),
     )
 }
@@ -1078,12 +1114,17 @@ private fun resolveJbDynamicPathLayer(
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
     animationElapsedMs: Long,
+    luaRuntime: JbWatchLuaExpressionRuntime? = null,
 ): JbWatchLayer {
     val rawPath = layer.path?.takeIf(String::isNotBlank) ?: return layer
     val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
-    val resolvedPath = WatchmakerExpressionEvaluator.evaluateText(rawPath) { tag ->
+    val resolver: (String) -> WatchTagResolution = { tag ->
         resolveJbTag(tag, calendar, dataSnapshot, animationElapsedMs)
-    }.trim()
+    }
+    val resolvedPath = (
+        luaRuntime?.evaluateText(rawPath, resolver)
+            ?: WatchmakerExpressionEvaluator.evaluateText(rawPath, resolver)
+        ).trim()
     if (resolvedPath == rawPath && layer.pathFrames == parsePaths(resolvedPath)) return layer
     return layer.copy(
         path = resolvedPath,
@@ -1320,12 +1361,15 @@ private fun shouldDisplayLayer(
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
     animationElapsedMs: Long = 0L,
+    luaRuntime: JbWatchLuaExpressionRuntime? = null,
 ): Boolean {
     val expr = layer.condValue?.takeIf { it.isNotBlank() } ?: return true
     val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
-    val result = WatchmakerExpressionEvaluator.evaluateNumber(expr, Float.NaN) { tag ->
+    val resolver: (String) -> WatchTagResolution = { tag ->
         resolveJbTag(tag, calendar, dataSnapshot, animationElapsedMs)
     }
+    luaRuntime?.evaluateBoolean(expr, resolver)?.let { return it }
+    val result = WatchmakerExpressionEvaluator.evaluateNumber(expr, Float.NaN, resolver)
     return result.isNaN() || result != 0f
 }
 
@@ -1433,6 +1477,7 @@ private fun handleJbWatchTap(
     viewHeight: Float,
     nowMillis: Long,
     dataSnapshot: WatchDataSnapshot,
+    luaRuntime: JbWatchLuaExpressionRuntime?,
 ) {
     val canvasWidth = face.designWidth.coerceAtLeast(1)
     val canvasHeight = face.designHeight.coerceAtLeast(1)
@@ -1453,9 +1498,10 @@ private fun handleJbWatchTap(
                 nowMillis,
                 dataSnapshot,
                 animationElapsedMs,
+                luaRuntime,
             )
             val hitSize = resolveJbHitContentSize(face, animatedLayer, animationElapsedMs)
-            shouldDisplayLayer(animatedLayer, nowMillis, dataSnapshot, animationElapsedMs) &&
+            shouldDisplayLayer(animatedLayer, nowMillis, dataSnapshot, animationElapsedMs, luaRuntime) &&
                 !animatedLayer.tapAction.isNullOrBlank() &&
                 resolveJbRect(
                     face = face,
