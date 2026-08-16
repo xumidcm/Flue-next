@@ -17,10 +17,30 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.RuntimeEnvironment
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [27], manifest = Config.NONE)
 class WatchStoreParsingTest {
+    @Test
+    fun `upload limit matches current community store contract`() {
+        assertEquals(20L * 1024L * 1024L, HttpWatchStoreApi.MAX_UPLOAD_BYTES)
+    }
+    @Test
+    fun `ui preferences persist custom http market and recover default`() {
+        val context = RuntimeEnvironment.getApplication()
+        context.getSharedPreferences("flue_watch_store_ui", android.content.Context.MODE_PRIVATE)
+            .edit().clear().commit()
+        val preferences = WatchStoreUiPreferences(context)
+        assertEquals(DEFAULT_WATCH_STORE_BASE_URL, preferences.readBaseUrl())
+        assertEquals("http://watch.example/api", preferences.writeBaseUrl("http://watch.example/api/"))
+        assertEquals("http://watch.example/api", preferences.readBaseUrl())
+        assertThrows(IllegalArgumentException::class.java) {
+            preferences.writeBaseUrl("ftp://watch.example/api")
+        }
+        preferences.resetBaseUrl()
+        assertEquals(DEFAULT_WATCH_STORE_BASE_URL, preferences.readBaseUrl())
+    }
     @Test
     fun `url policy builds encoded paginated endpoint`() {
         val base = WatchStoreUrlPolicy.normalizeBaseUrl(DEFAULT_WATCH_STORE_BASE_URL)
@@ -60,9 +80,10 @@ class WatchStoreParsingTest {
 
     @Test
     fun `url policy rejects insecure bases and redirects`() {
-        assertThrows(IllegalArgumentException::class.java) {
-            WatchStoreUrlPolicy.normalizeBaseUrl("http://example.com/api")
-        }
+        assertEquals(
+            "http://example.com/api",
+            WatchStoreUrlPolicy.normalizeBaseUrl("http://example.com/api/").toASCIIString(),
+        )
         assertThrows(WatchStoreRedirectException::class.java) {
             WatchStoreUrlPolicy.resolveRedirect(
                 URI("https://example.com/api/watchfaces/1"),
@@ -87,6 +108,20 @@ class WatchStoreParsingTest {
                 "https://[::ffff:127.0.0.1]/file.watch",
             )
         }
+    }
+
+    @Test
+    fun `url policy preserves http for explicit custom market`() {
+        val base = WatchStoreUrlPolicy.normalizeBaseUrl("http://watch.example:8080/api/")
+        assertEquals("http", base.scheme)
+        assertEquals("http://watch.example:8080/api/categories", WatchStoreUrlPolicy.categories(base).toASCIIString())
+        assertEquals(
+            "http://8.8.8.8/file.watch",
+            WatchStoreUrlPolicy.resolveRedirect(
+                URI("http://8.8.8.8/api/watchfaces/1"),
+                "/file.watch",
+            ).toASCIIString(),
+        )
     }
 
     @Test
@@ -202,7 +237,41 @@ class WatchStoreParsingTest {
         assertTrue(!body.contains("name=\"file\""))
     }
 
+    @Test
+    fun `upload follows parse then create endpoints with bearer on both requests`() {
+        val archive = java.nio.file.Files.createTempFile("flue-upload", ".watch").toFile()
+        archive.writeBytes("watch-data".toByteArray())
+        val connections = mutableListOf<RecordingHttpURLConnection>()
+        val api = HttpWatchStoreApi(
+            baseUrl = "https://8.8.8.8/api",
+            connectionFactory = { url ->
+                RecordingHttpURLConnection(url).also { connections += it }
+            },
+        )
+        try {
+            api.uploadWatchFace(
+                token = "test-token",
+                file = archive,
+                name = "Gravity",
+                description = "Gravity simulation",
+                screenType = WatchStoreScreenType.ROUND,
+                categoryId = "675f3e3c-a644-4954-a3d8-8d300c5c36a4",
+            )
+            assertEquals(2, connections.size)
+            assertTrue(connections[0].targetUrl.path.endsWith("/api/my/watchfaces/parse"))
+            assertTrue(connections[1].targetUrl.path.endsWith("/api/my/watchfaces"))
+            connections.forEach { assertEquals("Bearer test-token", it.getRequestProperty("Authorization")) }
+            assertTrue(!connections[0].writtenBody.toString(StandardCharsets.UTF_8.name()).contains("name=\"name\""))
+            val finalBody = connections[1].writtenBody.toString(StandardCharsets.UTF_8.name())
+            assertTrue(finalBody.contains("name=\"name\""))
+            assertTrue(finalBody.contains("\r\nGravity\r\n"))
+        } finally {
+            archive.delete()
+        }
+    }
+
     private class RecordingHttpURLConnection(url: URL) : HttpURLConnection(url) {
+        val targetUrl: URL = url
         val writtenBody = ByteArrayOutputStream()
 
         override fun connect() = Unit

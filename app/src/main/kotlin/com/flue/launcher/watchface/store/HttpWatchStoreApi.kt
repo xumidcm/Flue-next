@@ -27,7 +27,7 @@ data class WatchStoreHttpConfig(
     }
 }
 
-/** Minimal HTTPS transport; deliberately does not add an HTTP client dependency. */
+/** Minimal HTTP(S) transport; deliberately does not add an HTTP client dependency. */
 class HttpWatchStoreApi(
     baseUrl: String = DEFAULT_WATCH_STORE_BASE_URL,
     private val config: WatchStoreHttpConfig = WatchStoreHttpConfig(),
@@ -114,46 +114,55 @@ class HttpWatchStoreApi(
         val normalizedCategoryId = categoryId.trim().lowercase(Locale.ROOT)
         require(UPLOAD_CATEGORY_ID_PATTERN.matches(normalizedCategoryId)) { "分类无效，请重新选择" }
 
-        val boundary = "FlueWatchStore${UUID.randomUUID().toString().replace("-", "")}"
-        val head = buildString {
-            appendFormField(boundary, "name", trimmedName)
-            appendFormField(boundary, "description", trimmedDescription)
-            appendFormField(boundary, "screen_type", screenType.apiValue)
-            appendFormField(boundary, "category_id", normalizedCategoryId)
-            append("--").append(boundary).append("\r\n")
-            append("Content-Disposition: form-data; name=\"file\"; filename=\"upload.watch\"\r\n")
-            append("Content-Type: application/octet-stream\r\n\r\n")
-        }.toByteArray(Charsets.UTF_8)
-        val tail = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
-        post(
-            url = WatchStoreUrlPolicy.upload(base),
-            contentType = "multipart/form-data; boundary=$boundary",
-            contentLength = head.size.toLong() + totalFileBytes + tail.size.toLong(),
-            headers = mapOf("Authorization" to "Bearer $safeToken"),
-            readTimeoutMs = maxOf(config.readTimeoutMs, UPLOAD_READ_TIMEOUT_MS),
-            expectJson = false,
-            writeBody = { output ->
-                output.write(head)
-                file.inputStream().use { input ->
-                    val buffer = ByteArray(32 * 1024)
-                    var sent = 0L
-                    while (true) {
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        sent += count
-                        if (sent > totalFileBytes) {
+        fun uploadMultipart(url: URI, includeMetadata: Boolean, progress: ((Long, Long) -> Unit)?) {
+            val boundary = "FlueWatchStore${UUID.randomUUID().toString().replace("-", "")}"
+            val head = buildString {
+                if (includeMetadata) {
+                    appendFormField(boundary, "name", trimmedName)
+                    appendFormField(boundary, "description", trimmedDescription)
+                    appendFormField(boundary, "screen_type", screenType.apiValue)
+                    appendFormField(boundary, "category_id", normalizedCategoryId)
+                }
+                append("--").append(boundary).append("\r\n")
+                append("Content-Disposition: form-data; name=\"file\"; filename=\"upload.watch\"\r\n")
+                append("Content-Type: application/octet-stream\r\n\r\n")
+            }.toByteArray(Charsets.UTF_8)
+            val tail = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
+            post(
+                url = url,
+                contentType = "multipart/form-data; boundary=$boundary",
+                contentLength = head.size.toLong() + totalFileBytes + tail.size.toLong(),
+                headers = mapOf("Authorization" to "Bearer $safeToken"),
+                readTimeoutMs = maxOf(config.readTimeoutMs, UPLOAD_READ_TIMEOUT_MS),
+                expectJson = false,
+                writeBody = { output ->
+                    output.write(head)
+                    file.inputStream().use { input ->
+                        val buffer = ByteArray(32 * 1024)
+                        var sent = 0L
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            sent += count
+                            if (sent > totalFileBytes) {
+                                throw WatchStoreProtocolException("上传期间 .watch 文件发生了变化")
+                            }
+                            output.write(buffer, 0, count)
+                            progress?.invoke(sent, totalFileBytes)
+                        }
+                        if (sent != totalFileBytes) {
                             throw WatchStoreProtocolException("上传期间 .watch 文件发生了变化")
                         }
-                        output.write(buffer, 0, count)
-                        onProgress?.invoke(sent, totalFileBytes)
                     }
-                    if (sent != totalFileBytes) {
-                        throw WatchStoreProtocolException("上传期间 .watch 文件发生了变化")
-                    }
-                }
-                output.write(tail)
-            },
-        ) { }
+                    output.write(tail)
+                },
+            ) { }
+        }
+
+        // The current community-store API first parses/scans the archive, then
+        // creates the authenticated record with metadata.
+        uploadMultipart(WatchStoreUrlPolicy.myWatchFacesParse(base), includeMetadata = false, progress = null)
+        uploadMultipart(WatchStoreUrlPolicy.myWatchFacesList(base), includeMetadata = true, progress = onProgress)
     }
 
     /**
@@ -845,7 +854,7 @@ class HttpWatchStoreApi(
         const val MAX_WATCH_BYTES: Long = 500L * 1024L * 1024L
 
         /** Server-side cap for one uploaded `.watch` archive. */
-        const val MAX_UPLOAD_BYTES: Long = 50L * 1024L * 1024L
+        const val MAX_UPLOAD_BYTES: Long = 20L * 1024L * 1024L
         private const val MAX_UPLOAD_NAME_LENGTH = 100
         private const val MIN_PASSWORD_LENGTH = 6
         private const val MAX_PASSWORD_LENGTH = 128

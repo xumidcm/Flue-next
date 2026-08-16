@@ -220,6 +220,7 @@ import com.flue.launcher.watchface.standard.WatchWeatherRepository
 import com.flue.launcher.watchface.standard.hasHeartRatePermission
 import com.flue.launcher.watchface.standard.requiredHeartRatePermission
 import com.flue.launcher.watchface.store.WatchStoreRepository
+import com.flue.launcher.watchface.store.WatchStoreUiPreferences
 import top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator
 import top.yukonga.miuix.kmp.icon.MiuixIcons as OfficialMiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Add as OfficialAdd
@@ -262,6 +263,7 @@ private const val COMMUNITY_GROUP_URL = "https://qun.qq.com/universal-share/shar
 const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
 const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
+const val SETTINGS_DESTINATION_TOOLS = "tools"
 private val LocalSettingsLeftSafeInsetPercent = compositionLocalOf { 0 }
 private val LocalSettingsRotaryHapticsEnabled = compositionLocalOf { true }
 
@@ -415,6 +417,7 @@ class SettingsActivity : FlueComponentActivity() {
         launchRequestId += 1
         val initialDestination = when (getStringExtra(EXTRA_SETTINGS_DESTINATION)) {
             SETTINGS_DESTINATION_WATCH_FACES -> SettingsDestination.WATCH_FACES
+            SETTINGS_DESTINATION_TOOLS -> SettingsDestination.TOOLS
             else -> SettingsDestination.ROOT
         }
         return SettingsLaunchConfig(
@@ -466,6 +469,10 @@ private fun SettingsRootScreen(
     val rawSelectedWatchFace by vm.selectedWatchFace.collectAsStateWithLifecycle()
     val watchCatalogRepository = remember(context) { WatchStoreRepository(context) }
     var watchCatalogReloadToken by remember { mutableStateOf(0) }
+    val watchStoreUiPreferences = remember(context) { WatchStoreUiPreferences(context) }
+    var customWatchStoreUrlDialogVisible by remember { mutableStateOf(false) }
+    var customWatchStoreUrlDraft by remember { mutableStateOf(watchStoreUiPreferences.readBaseUrl()) }
+    var customWatchStoreUrlError by remember { mutableStateOf<String?>(null) }
     var watchCatalogDisplayNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     LaunchedEffect(watchCatalogRepository, watchCatalogReloadToken) {
         val snapshot = runCatching { watchCatalogRepository.readCatalog() }.getOrNull()
@@ -3310,6 +3317,23 @@ private fun SettingsRootScreen(
                     )
                 )
             }
+            item("watch_store_market_url") {
+                ActionCard(
+                    title = stringResource(R.string.settings_watch_store_market_url),
+                    subtitle = watchStoreUiPreferences.readBaseUrl(),
+                    onClick = {
+                        customWatchStoreUrlDraft = watchStoreUiPreferences.readBaseUrl()
+                        customWatchStoreUrlError = null
+                        customWatchStoreUrlDialogVisible = true
+                    },
+                    scale = itemFisheye(
+                        listState,
+                        "watch_store_market_url",
+                        screenCenterY,
+                        screenHeightPx,
+                    ),
+                )
+            }
             item("diagnostic_logging") {
                 SettingsSwitchRow(
                     title = stringResource(R.string.settings_diagnostic_logging),
@@ -3716,6 +3740,72 @@ private fun SettingsRootScreen(
                 dismissButton = {
                     TextButton(onClick = { weatherCityDialogVisible = false }) {
                         Text(stringResource(R.string.action_cancel))
+                    }
+                },
+            )
+        }
+
+        if (customWatchStoreUrlDialogVisible) {
+            val isHttp = customWatchStoreUrlDraft.trim().startsWith("http://", ignoreCase = true)
+            AlertDialog(
+                onDismissRequest = { customWatchStoreUrlDialogVisible = false },
+                title = { Text(stringResource(R.string.settings_watch_store_market_url_title)) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = customWatchStoreUrlDraft,
+                            onValueChange = {
+                                customWatchStoreUrlDraft = it
+                                customWatchStoreUrlError = null
+                            },
+                            singleLine = true,
+                            isError = customWatchStoreUrlError != null,
+                            label = { Text(stringResource(R.string.settings_watch_store_market_url)) },
+                            placeholder = {
+                                Text(stringResource(R.string.settings_watch_store_market_url_hint))
+                            },
+                        )
+                        customWatchStoreUrlError?.let { Text(it, color = WatchColors.ActiveRed) }
+                        if (isHttp) {
+                            Text(
+                                stringResource(R.string.settings_watch_store_market_url_http_warning),
+                                color = WatchColors.ActiveRed,
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        runCatching { watchStoreUiPreferences.writeBaseUrl(customWatchStoreUrlDraft) }
+                            .onSuccess {
+                                customWatchStoreUrlDialogVisible = false
+                                settingsScope.launch {
+                                    runCatching { watchCatalogRepository.clearPreviewCache() }
+                                }
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.settings_watch_store_market_url_saved),
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                            .onFailure {
+                                customWatchStoreUrlError = context.getString(
+                                    R.string.settings_watch_store_market_url_invalid,
+                                )
+                            }
+                    }) { Text(stringResource(R.string.action_save)) }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(onClick = {
+                            watchStoreUiPreferences.resetBaseUrl()
+                            customWatchStoreUrlDraft = watchStoreUiPreferences.readBaseUrl()
+                            customWatchStoreUrlError = null
+                        }) { Text(stringResource(R.string.settings_watch_store_market_url_reset)) }
+                        TextButton(onClick = { customWatchStoreUrlDialogVisible = false }) {
+                            Text(stringResource(R.string.action_cancel))
+                        }
                     }
                 },
             )

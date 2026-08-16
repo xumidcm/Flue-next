@@ -12,6 +12,19 @@ import java.util.Calendar
 import java.util.Locale
 
 class WatchmakerRuntimePrimitivesTest {
+
+    @Test
+    fun `community tap actions are recognized`() {
+        assertTrue(WatchTapActionParser.parse("battery_status") is WatchTapAction.BatteryStatus)
+        assertTrue(WatchTapActionParser.parse("open_settings") is WatchTapAction.OpenSettings)
+        listOf("w_camera", "w_clock", "browser", "w_music", "w_calculator").forEach { raw ->
+            assertEquals(WatchTapAction.Named(raw), WatchTapActionParser.parse(raw))
+        }
+        assertEquals(
+            WatchTapAction.DeepLink("https://example.com/watch"),
+            WatchTapActionParser.parse("w_link:https://example.com/watch"),
+        )
+    }
     @Test
     fun animatedImageFallbackIdentityChangesWhenReusedLayerGetsNewMaterial() {
         val imported = WatchImageFallbackKey(

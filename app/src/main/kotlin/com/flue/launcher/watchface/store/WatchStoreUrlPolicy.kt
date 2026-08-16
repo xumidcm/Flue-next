@@ -18,7 +18,7 @@ internal object WatchStoreUrlPolicy {
         if (parsed.rawQuery != null) throw IllegalArgumentException("Watch store base URL cannot contain a query")
         val path = parsed.rawPath.orEmpty().trimEnd('/').ifBlank { "/" }
         return URI(
-            "https",
+            parsed.scheme.lowercase(Locale.ROOT),
             null,
             parsed.host.lowercase(Locale.ROOT),
             parsed.port,
@@ -54,7 +54,7 @@ internal object WatchStoreUrlPolicy {
 
     fun authRegister(base: URI): URI = endpoint(base, "auth/register")
 
-    fun upload(base: URI): URI = endpoint(base, "watchfaces/upload")
+    fun myWatchFacesParse(base: URI): URI = endpoint(base, "my/watchfaces/parse")
 
     fun myWatchFacesList(base: URI): URI = endpoint(base, "my/watchfaces")
 
@@ -70,6 +70,11 @@ internal object WatchStoreUrlPolicy {
             current.resolve(URI(location.trim()))
         } catch (error: Exception) {
             throw WatchStoreRedirectException("Redirect Location is malformed")
+        }
+        if (current.scheme.equals("https", ignoreCase = true) &&
+            target.scheme.equals("http", ignoreCase = true)
+        ) {
+            throw WatchStoreRedirectException("Watch store redirect cannot downgrade HTTPS to HTTP")
         }
         try {
             requirePublicHttps(target, label = "redirect URL")
@@ -125,8 +130,10 @@ internal object WatchStoreUrlPolicy {
     }
 
     private fun requireSafeHttps(uri: URI, label: String) {
-        if (!uri.scheme.equals("https", ignoreCase = true)) {
-            throw IllegalArgumentException("Watch store $label must use HTTPS")
+        if (!uri.scheme.equals("https", ignoreCase = true) &&
+            !uri.scheme.equals("http", ignoreCase = true)
+        ) {
+            throw IllegalArgumentException("Watch store $label must use HTTP or HTTPS")
         }
         if (uri.host.isNullOrBlank() || uri.rawUserInfo != null || uri.rawFragment != null) {
             throw IllegalArgumentException("Watch store $label has an unsafe authority")

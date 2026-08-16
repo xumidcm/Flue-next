@@ -852,7 +852,7 @@
     <string name="watch_editor_video_frame_rate">Frame rate (fps)</string>
     <string name="watch_editor_video_bitrate">Bit rate (kbps)</string>
     <string name="watch_editor_video_invalid_options">Check the clip time, resolution, frame rate, and bit rate</string>
-    <string name="watch_editor_video_estimated_frames_fmt">About %1$d frames. The 50MB limit does not block local conversion; it is shown only when uploading to the store.</string>
+    <string name="watch_editor_video_estimated_frames_fmt">About %1$d frames. The 20MB limit does not block local conversion; it is shown only when uploading to the store.</string>
     <string name="watch_editor_start_conversion">Start conversion</string>
     <string name="watch_editor_converting_video">Converting video</string>
     <string name="watch_editor_video_conversion_message">FFmpeg will convert the selected clip into looping watch-face frames.</string>
@@ -977,7 +977,7 @@
     <string name="watch_store_error_auth_expired">Your login expired. Log in again.</string>
     <string name="watch_store_error_rejected_detail_fmt">The server rejected this content: %1$s</string>
     <string name="watch_store_error_rejected">The server rejected this content. Check the name, description, and category.</string>
-    <string name="watch_store_error_package_too_large">The watch package exceeds the 50MB limit. Compress image resources and try again.</string>
+    <string name="watch_store_error_package_too_large">The watch package exceeds the 20MB limit. Compress image resources and try again.</string>
     <string name="watch_store_error_rate_limited">Too many requests. Wait a minute and try again.</string>
     <string name="watch_store_error_service_detail_fmt">The store returned error %1$d: %2$s</string>
     <string name="watch_store_error_service_fmt">The store returned error %1$d. Try again later.</string>
@@ -1016,7 +1016,7 @@
     <string name="watch_store_status_loading_categories">Loading categories…</string>
     <string name="watch_store_no_categories">No store categories are available right now. Try again later.</string>
     <string name="watch_store_upload_current">Upload current watch face</string>
-    <string name="watch_store_upload_note">The current draft is automatically exported as a .watch package before upload (50MB limit). The store generates its preview from the package.</string>
+    <string name="watch_store_upload_note">The current draft is automatically exported as a .watch package before upload (20MB limit). The store generates its preview from the package.</string>
     <string name="watch_store_title">Watch face store</string>
     <string name="watch_store_search">Search</string>
     <string name="watch_store_search_hint">Search watch faces</string>
@@ -1104,7 +1104,7 @@
     <string name="watch_store_no_uploadable_installed">There are no installed .watch faces available to upload</string>
     <string name="watch_store_or_select_installed">Or choose an installed watch face:</string>
     <string name="watch_store_upload_this_face">Upload this watch face</string>
-    <string name="watch_store_upload_installed_note">Installed watch faces are exported as .watch before upload (50 MB maximum). The store generates the preview from the package.</string>
+    <string name="watch_store_upload_installed_note">Installed watch faces are exported as .watch before upload (20 MB maximum). The store generates the preview from the package.</string>
     <string name="watch_store_error_read_selected_file">Could not read the selected file</string>
     <string name="watch_store_error_empty_selected_file">The selected file is empty</string>
     <string name="watch_store_error_invalid_selected_archive">The selected file is not a valid .watch package</string>

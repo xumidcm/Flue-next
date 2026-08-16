@@ -315,6 +315,7 @@
     <string name="toast_language_save_failed">保存语言设置失败，请重试</string>
     <string name="action_delete">删除</string>
     <string name="action_cancel">取消</string>
+    <string name="action_save">保存</string>
     <string name="action_share">分享</string>
     <string name="action_done">完成</string>
 
@@ -622,6 +623,14 @@
     <string name="settings_clear_watch_store_cache_sub">删除已缓存的表盘封面，不影响已下载或正在使用的表盘</string>
     <string name="settings_clear_watch_store_cache_done">已清理 %1$d 个表盘封面缓存文件</string>
     <string name="settings_clear_watch_store_cache_failed">清理表盘封面缓存失败</string>
+    <string name="settings_watch_store_market_url">自定义表盘市场 URL</string>
+    <string name="settings_watch_store_market_url_sub">允许 HTTP 或 HTTPS；修改后重新加载市场</string>
+    <string name="settings_watch_store_market_url_title">自定义表盘市场 URL</string>
+    <string name="settings_watch_store_market_url_hint">例如：https://example.com/api</string>
+    <string name="settings_watch_store_market_url_http_warning">HTTP 会明文传输登录令牌，仅用于你信任的网络。</string>
+    <string name="settings_watch_store_market_url_invalid">URL 无效：请输入带主机的 HTTP/HTTPS 地址</string>
+    <string name="settings_watch_store_market_url_reset">恢复默认</string>
+    <string name="settings_watch_store_market_url_saved">表盘市场 URL 已保存</string>
     <string name="settings_diagnostic_logging">诊断日志模式</string>
     <string name="settings_diagnostic_logging_on">已开启，5 分钟后自动关闭</string>
     <string name="settings_diagnostic_logging_off">默认关闭，开启后临时允许 release 输出诊断日志</string>
@@ -869,7 +878,7 @@
     <string name="watch_editor_video_frame_rate">帧率（fps）</string>
     <string name="watch_editor_video_bitrate">码率（kbps）</string>
     <string name="watch_editor_video_invalid_options">请检查裁剪时间、分辨率、帧率和码率</string>
-    <string name="watch_editor_video_estimated_frames_fmt">预计生成 %1$d 帧；50MB 限制不用于本地转换，仅在上传商店时提示。</string>
+    <string name="watch_editor_video_estimated_frames_fmt">预计生成 %1$d 帧；20MB 限制不用于本地转换，仅在上传商店时提示。</string>
     <string name="watch_editor_start_conversion">开始转换</string>
     <string name="watch_editor_converting_video">正在转换视频</string>
     <string name="watch_editor_video_conversion_message">FFmpeg 会把选定片段转换成表盘循环帧。</string>
@@ -1003,7 +1012,7 @@
     <string name="watch_store_error_auth_expired">登录已过期，请重新登录</string>
     <string name="watch_store_error_rejected_detail_fmt">内容被服务器拒绝：%1$s</string>
     <string name="watch_store_error_rejected">内容被服务器拒绝，请检查名称、描述和分类</string>
-    <string name="watch_store_error_package_too_large">表盘包超过 50MB 上限，请压缩图片资源后再试</string>
+    <string name="watch_store_error_package_too_large">表盘包超过 20MB 上限，请压缩图片资源后再试</string>
     <string name="watch_store_error_rate_limited">操作太频繁，请等一分钟后再试</string>
     <string name="watch_store_error_service_detail_fmt">商店服务返回了错误（%1$d）：%2$s</string>
     <string name="watch_store_error_service_fmt">商店服务返回了错误（%1$d），请稍后再试</string>
@@ -1042,7 +1051,7 @@
     <string name="watch_store_status_loading_categories">正在加载分类…</string>
     <string name="watch_store_no_categories">商店暂时没有可用分类，稍后再试。</string>
     <string name="watch_store_upload_current">上传当前表盘</string>
-    <string name="watch_store_upload_note">上传前会自动导出当前草稿为 .watch（上限 50MB）；预览图由商店从表盘包中自动生成。</string>
+    <string name="watch_store_upload_note">上传前会自动导出当前草稿为 .watch（上限 20MB）；预览图由商店从表盘包中自动生成。</string>
     <string name="watch_store_title">表盘市场</string>
     <string name="watch_store_search">搜索</string>
     <string name="watch_store_search_hint">搜索表盘</string>
@@ -1074,6 +1083,7 @@
     <string name="watch_store_status_processing_ellipsis">正在处理…</string>
     <string name="watch_store_installed">已安装</string>
     <string name="watch_store_retry">重试</string>
+    <string name="watch_store_custom_market_url">自定义市场 URL</string>
     <string name="watch_store_download">下载</string>
     <string name="watch_store_download_count_fmt">↓ %1$d</string>
     <string name="watch_store_installed_face">已安装表盘</string>
@@ -1130,7 +1140,7 @@
     <string name="watch_store_no_uploadable_installed">还没有可上传的已安装 .watch 表盘</string>
     <string name="watch_store_or_select_installed">或从已安装表盘选择：</string>
     <string name="watch_store_upload_this_face">上传此表盘</string>
-    <string name="watch_store_upload_installed_note">已安装表盘会先导出为 .watch 再上传（上限 50MB）；预览图由商店从表盘包中自动生成。</string>
+    <string name="watch_store_upload_installed_note">已安装表盘会先导出为 .watch 再上传（上限 20MB）；预览图由商店从表盘包中自动生成。</string>
     <string name="watch_store_error_read_selected_file">无法读取所选文件</string>
     <string name="watch_store_error_empty_selected_file">所选文件是空的</string>
     <string name="watch_store_error_invalid_selected_archive">所选文件不是有效的 .watch 表盘包</string>

@@ -2,6 +2,7 @@ package com.flue.launcher.watchface.standard
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -15,6 +16,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.media.MediaMetadataRetriever
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.AttributeSet
 import android.view.GestureDetector
 import android.view.HapticFeedbackConstants
@@ -4688,9 +4690,20 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             requestFullRepaint()
             return
         }
+        if (action is WatchTapAction.Named) {
+            // Named WatchMaker actions are intentionally delegated to the
+            // caller's mapping. When no mapping is configured, a tap is a
+            // quiet no-op instead of an alarming "unsupported action" toast.
+            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+            return
+        }
         val intent = when (action) {
             WatchTapAction.Calendar -> Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_CALENDAR)
             WatchTapAction.Weather -> Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_WEATHER)
+            WatchTapAction.OpenSettings -> Intent(Settings.ACTION_SETTINGS)
+            WatchTapAction.BatteryStatus -> Intent(Intent.ACTION_POWER_USAGE_SUMMARY)
+            is WatchTapAction.DeepLink -> Intent(Intent.ACTION_VIEW, Uri.parse(action.uri))
+            is WatchTapAction.Named -> null
             WatchTapAction.HeartRate -> null
             is WatchTapAction.Script -> null
             is WatchTapAction.AppLaunch -> {

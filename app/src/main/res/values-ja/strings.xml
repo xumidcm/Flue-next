@@ -852,7 +852,7 @@
     <string name="watch_editor_video_frame_rate">フレームレート（fps）</string>
     <string name="watch_editor_video_bitrate">ビットレート（kbps）</string>
     <string name="watch_editor_video_invalid_options">切り抜き時間、解像度、フレームレート、ビットレートを確認してください</string>
-    <string name="watch_editor_video_estimated_frames_fmt">約 %1$d フレームを生成します。50MB 制限はローカル変換を止めず、ストアへのアップロード時だけ表示されます。</string>
+    <string name="watch_editor_video_estimated_frames_fmt">約 %1$d フレームを生成します。20MB 制限はローカル変換を止めず、ストアへのアップロード時だけ表示されます。</string>
     <string name="watch_editor_start_conversion">変換を開始</string>
     <string name="watch_editor_converting_video">動画を変換しています</string>
     <string name="watch_editor_video_conversion_message">FFmpeg が選択した範囲を文字盤用のループフレームへ変換します。</string>
@@ -977,7 +977,7 @@
     <string name="watch_store_error_auth_expired">ログインの有効期限が切れました。もう一度ログインしてください。</string>
     <string name="watch_store_error_rejected_detail_fmt">サーバーが内容を拒否しました：%1$s</string>
     <string name="watch_store_error_rejected">サーバーが内容を拒否しました。名前、説明、カテゴリを確認してください。</string>
-    <string name="watch_store_error_package_too_large">文字盤パッケージが 50MB の上限を超えています。画像を圧縮して再試行してください。</string>
+    <string name="watch_store_error_package_too_large">文字盤パッケージが 20MB の上限を超えています。画像を圧縮して再試行してください。</string>
     <string name="watch_store_error_rate_limited">操作が多すぎます。1分待ってから再試行してください。</string>
     <string name="watch_store_error_service_detail_fmt">ストアでエラーが発生しました（%1$d）：%2$s</string>
     <string name="watch_store_error_service_fmt">ストアでエラーが発生しました（%1$d）。後でもう一度お試しください。</string>
@@ -1016,7 +1016,7 @@
     <string name="watch_store_status_loading_categories">カテゴリを読み込んでいます…</string>
     <string name="watch_store_no_categories">現在利用できるカテゴリがありません。後でもう一度お試しください。</string>
     <string name="watch_store_upload_current">現在の文字盤をアップロード</string>
-    <string name="watch_store_upload_note">アップロード前に現在の下書きを .watch パッケージへ自動書き出しします（上限 50MB）。プレビューはストアがパッケージから生成します。</string>
+    <string name="watch_store_upload_note">アップロード前に現在の下書きを .watch パッケージへ自動書き出しします（上限 20MB）。プレビューはストアがパッケージから生成します。</string>
     <string name="watch_store_title">文字盤ストア</string>
     <string name="watch_store_search">検索</string>
     <string name="watch_store_search_hint">文字盤を検索</string>
@@ -1104,7 +1104,7 @@
     <string name="watch_store_no_uploadable_installed">アップロードできるインストール済み .watch 文字盤がありません</string>
     <string name="watch_store_or_select_installed">またはインストール済み文字盤から選択：</string>
     <string name="watch_store_upload_this_face">この文字盤をアップロード</string>
-    <string name="watch_store_upload_installed_note">インストール済み文字盤は .watch として書き出してからアップロードします（上限 50MB）。プレビューはストアがパッケージから生成します。</string>
+    <string name="watch_store_upload_installed_note">インストール済み文字盤は .watch として書き出してからアップロードします（上限 20MB）。プレビューはストアがパッケージから生成します。</string>
     <string name="watch_store_error_read_selected_file">選択したファイルを読み込めません</string>
     <string name="watch_store_error_empty_selected_file">選択したファイルは空です</string>
     <string name="watch_store_error_invalid_selected_archive">選択したファイルは有効な .watch パッケージではありません</string>

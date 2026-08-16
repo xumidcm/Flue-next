@@ -30,8 +30,26 @@ class WatchStoreUiPreferences(context: Context) {
         preferences.edit().putString(KEY_VIEW_MODE, mode.name).apply()
     }
 
+    fun readBaseUrl(): String = runCatching {
+        WatchStoreUrlPolicy.normalizeBaseUrl(
+            preferences.getString(KEY_BASE_URL, null) ?: DEFAULT_WATCH_STORE_BASE_URL,
+        ).toASCIIString()
+    }.getOrDefault(DEFAULT_WATCH_STORE_BASE_URL)
+
+    /** Saves a normalized HTTP or HTTPS market base URL and returns it. */
+    fun writeBaseUrl(raw: String): String {
+        val normalized = WatchStoreUrlPolicy.normalizeBaseUrl(raw).toASCIIString()
+        preferences.edit().putString(KEY_BASE_URL, normalized).apply()
+        return normalized
+    }
+
+    fun resetBaseUrl() {
+        preferences.edit().remove(KEY_BASE_URL).apply()
+    }
+
     private companion object {
         const val PREFERENCES_NAME = "flue_watch_store_ui"
         const val KEY_VIEW_MODE = "view_mode"
+        const val KEY_BASE_URL = "base_url"
     }
 }

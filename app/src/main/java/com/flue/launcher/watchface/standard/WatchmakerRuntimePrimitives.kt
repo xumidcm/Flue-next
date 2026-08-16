@@ -3,6 +3,7 @@ package com.flue.launcher.watchface.standard
 import java.time.YearMonth
 import java.util.Calendar
 import java.util.Locale
+import java.net.URI
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.round
@@ -968,6 +969,14 @@ object WatchCalendarGrid {
 sealed interface WatchTapAction {
     data object Calendar : WatchTapAction
     data object Weather : WatchTapAction
+    data object OpenSettings : WatchTapAction
+    data object BatteryStatus : WatchTapAction
+
+    /** A WatchMaker/CloX action resolved by the user's app mapping. */
+    data class Named(val value: String) : WatchTapAction
+
+    /** A validated `w_link:<uri>` action. */
+    data class DeepLink(val uri: String) : WatchTapAction
 
     /**
      * WM_TAP_ACTIONS.md 里 `w_heart_rate` / `widget_health` / `w_fit` 属于
@@ -1001,6 +1010,8 @@ object WatchTapActionParser {
         if (lower.startsWith("w_heart_rate") || lower.startsWith("widget_health") ||
             lower.startsWith("w_fit"))
             return WatchTapAction.HeartRate
+        if (lower == "open_settings") return WatchTapAction.OpenSettings
+        if (lower == "battery_status") return WatchTapAction.BatteryStatus
         if (lower.isBlank()) return WatchTapAction.Unsupported("empty tap action")
         if (lower.startsWith("script:")) {
             val source = value.substringAfter(':').trim()
@@ -1036,9 +1047,27 @@ object WatchTapActionParser {
                 WatchTapAction.AppLaunch(packageName = pkg.trim(), activityClass = act?.trim())
             }
         }
+        if (lower.startsWith("w_link:")) {
+            val uri = value.substringAfter(':').trim()
+            val parsed = runCatching { URI(uri) }.getOrNull()
+            return if (uri.isBlank() || parsed?.scheme.isNullOrBlank() || uri.any(Char::isWhitespace)) {
+                WatchTapAction.Unsupported("malformed deep link")
+            } else {
+                WatchTapAction.DeepLink(uri)
+            }
+        }
+        if (lower in NAMED_ACTIONS) return WatchTapAction.Named(lower)
         // 包含 / : . 的其他格式（URL、component name 等）暂不支持
         if (lower.contains('/') || lower.contains(':') || lower.contains('.'))
             return WatchTapAction.Unsupported("custom intents are disabled")
         return WatchTapAction.Unsupported("unsupported action")
     }
+
+    private val NAMED_ACTIONS = setOf(
+        "w_camera", "w_clock", "w_music", "w_calculator", "browser",
+        "w_email", "w_sms", "w_phone", "w_maps", "w_alarm", "w_timer",
+        "w_stopwatch", "w_weather", "w_calendar", "w_contacts", "w_gallery",
+        "w_recorder", "w_settings", "m_camera", "m_clock", "m_music",
+        "m_calculator", "m_weather", "m_calendar",
+    )
 }

@@ -210,17 +210,29 @@ import kotlin.math.roundToInt
 class WatchStoreActivity : FlueComponentActivity() {
     private val launcherViewModel: LauncherViewModel by viewModels()
     private val resumeGeneration = MutableStateFlow(0)
+    private lateinit var storeUiPreferences: WatchStoreUiPreferences
+    private var storeBaseUrl: String? = null
 
     override fun onResume() {
         super.onResume()
+        if (::storeUiPreferences.isInitialized) {
+            val latest = storeUiPreferences.readBaseUrl()
+            if (storeBaseUrl != null && latest != storeBaseUrl) {
+                storeBaseUrl = latest
+                recreate()
+                return
+            }
+        }
         resumeGeneration.value += 1
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         RecentsVisibility.apply(this)
-        val repository = WatchStoreRepository(this)
-        val uiPreferences = WatchStoreUiPreferences(this)
+        storeUiPreferences = WatchStoreUiPreferences(this)
+        storeBaseUrl = storeUiPreferences.readBaseUrl()
+        val repository = WatchStoreRepository(this, api = HttpWatchStoreApi(storeBaseUrl!!))
+        val uiPreferences = storeUiPreferences
         setContent {
             val themeMode by launcherViewModel.themeMode.collectAsStateWithLifecycle()
             val uiStyle by launcherViewModel.uiStyle.collectAsStateWithLifecycle()
@@ -321,6 +333,13 @@ class WatchStoreActivity : FlueComponentActivity() {
                             }
                         },
                         deleteInstalled = launcherViewModel::deleteImportedWatchFaces,
+                        onOpenCustomMarketUrl = {
+                            startActivity(
+                                Intent(this@WatchStoreActivity, SettingsActivity::class.java)
+                                    .putExtra(EXTRA_SETTINGS_DESTINATION, SETTINGS_DESTINATION_TOOLS)
+                                    .putExtra(EXTRA_SETTINGS_RETURN_TO_FACE, true),
+                            )
+                        },
                     )
                 }
             }
@@ -369,6 +388,7 @@ private fun WatchStoreScreen(
     editInstalled: (launcherId: String) -> Unit,
     exportInstalled: (launcherId: String) -> Unit,
     deleteInstalled: suspend (launcherIds: Collection<String>) -> Result<Unit>,
+    onOpenCustomMarketUrl: () -> Unit,
 ) {
     val context = LocalContext.current
     val style = LauncherTheme.style
@@ -397,6 +417,7 @@ private fun WatchStoreScreen(
     var listLoading by remember { mutableStateOf(false) }
     var loadingMore by remember { mutableStateOf(false) }
     var listError by remember { mutableStateOf<String?>(null) }
+    var marketLoadSucceeded by remember { mutableStateOf(false) }
     var reloadToken by remember { mutableIntStateOf(0) }
     var selectedId by remember { mutableStateOf<String?>(null) }
     var lastDetailId by remember { mutableStateOf<String?>(null) }
@@ -423,9 +444,6 @@ private fun WatchStoreScreen(
             val source = record.source as? WatchFaceInstallSource.Market ?: return@mapNotNull null
             if (source.storeId == WATCHMAKER_COMMUNITY_STORE_ID) source.remoteId to record else null
         }.toMap()
-    }
-    val localMarketRecords = remember(installedMarketRecords) {
-        installedMarketRecords.values.sortedByDescending(WatchFaceRecord::installedAtEpochMs)
     }
     val downloadStates = remember { mutableStateMapOf<String, MutableStateFlow<WatchStoreInstallState>>() }
     val downloadJobs = remember { mutableMapOf<String, Job>() }
@@ -590,6 +608,7 @@ private fun WatchStoreScreen(
         listLoading = true
         loadingMore = false
         listError = null
+        marketLoadSucceeded = false
         entries = emptyList()
         pagination = null
         try {
@@ -605,6 +624,7 @@ private fun WatchStoreScreen(
             )
             entries = firstPage.data
             pagination = firstPage.pagination
+            marketLoadSucceeded = true
         } catch (error: Throwable) {
             error.throwIfCancellation()
             listError = error.userFacingMessage(context)
@@ -972,37 +992,6 @@ private fun WatchStoreScreen(
                         },
                     )
                 }
-                if (
-                    showEntries &&
-                    currentCatalogError == null &&
-                    entries.isEmpty() &&
-                    currentListError != null &&
-                    localMarketRecords.isNotEmpty()
-                ) {
-                    add(
-                        "offline_installed_header" to {
-                            Text(
-                                stringResource(R.string.watch_store_installed_faces),
-                                color = LauncherTheme.style.titleColor,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
-                            )
-                        },
-                    )
-                    localMarketRecords.forEach { record ->
-                        val source = record.source as WatchFaceInstallSource.Market
-                        add(
-                            "offline_${record.logicalId}" to {
-                                LocalInstalledWatchFaceCard(
-                                    record = record,
-                                    descriptor = record.activeLauncherIdOrNull()?.let(installedFacesById::get),
-                                    onOpen = { openDetail(source.remoteId) },
-                                )
-                            },
-                        )
-                    }
-                }
                 if (catalog.diagnostic == null) {
                     when {
                         listLoading && entries.isEmpty() ->
@@ -1014,7 +1003,11 @@ private fun WatchStoreScreen(
                         currentListError != null && entries.isEmpty() ->
                             add(
                                 "list_error" to {
-                                    ErrorStateRow(message = currentListError, onRetry = { reloadToken++ })
+                                    ErrorStateRow(
+                                        message = currentListError,
+                                        onRetry = { reloadToken++ },
+                                        onOpenCustomMarketUrl = onOpenCustomMarketUrl,
+                                    )
                                 },
                             )
                         showEntries && !listLoading && !loadingMore && entries.isEmpty() ->
@@ -1125,6 +1118,7 @@ private fun WatchStoreScreen(
                                     categoryMenuExpanded = false
                                 },
                                 viewMode = viewMode,
+                                showManagement = marketLoadSucceeded,
                                 onToggleViewMode = {
                                     val next = if (viewMode == WatchStoreViewMode.LIST) {
                                         WatchStoreViewMode.GRID
@@ -1226,6 +1220,7 @@ private fun WatchStoreScreen(
                                     categoryMenuExpanded = false
                                 },
                                 viewMode = viewMode,
+                                showManagement = marketLoadSucceeded,
                                 onToggleViewMode = {
                                     val next = if (viewMode == WatchStoreViewMode.LIST) {
                                         WatchStoreViewMode.GRID
@@ -1392,6 +1387,7 @@ private fun WatchStoreBrowseControls(
     onCategoryMenuExpandedChange: (Boolean) -> Unit,
     onCategoryChange: (WatchStoreCategory?) -> Unit,
     viewMode: WatchStoreViewMode,
+    showManagement: Boolean,
     onToggleViewMode: () -> Unit,
     onUpload: () -> Unit,
     onMyUploads: () -> Unit,
@@ -1411,6 +1407,7 @@ private fun WatchStoreBrowseControls(
                 onToggleViewMode = onToggleViewMode,
                 onUpload = onUpload,
                 onMyUploads = onMyUploads,
+                showManagement = showManagement,
             )
         }
         RoundStoreChordContainer(
@@ -1526,6 +1523,7 @@ private fun StoreHeader(
     onToggleViewMode: () -> Unit,
     onUpload: () -> Unit,
     onMyUploads: () -> Unit,
+    showManagement: Boolean,
 ) {
     val context = LocalContext.current
     val style = LauncherTheme.style
@@ -1553,21 +1551,23 @@ private fun StoreHeader(
                 fontSize = 10.sp,
             )
         }
-        IconButton(onClick = onMyUploads, modifier = Modifier.size(40.dp)) {
-            Icon(
-                imageVector = MiuixIcons.Folder,
-                contentDescription = stringResource(R.string.watch_store_my_uploads),
-                tint = style.titleColor,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-        IconButton(onClick = onUpload, modifier = Modifier.size(40.dp)) {
-            Icon(
-                imageVector = MiuixIcons.UploadCloud,
-                contentDescription = stringResource(R.string.watch_store_upload_face),
-                tint = style.titleColor,
-                modifier = Modifier.size(20.dp),
-            )
+        if (showManagement) {
+            IconButton(onClick = onMyUploads, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    imageVector = MiuixIcons.Folder,
+                    contentDescription = stringResource(R.string.watch_store_my_uploads),
+                    tint = style.titleColor,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            IconButton(onClick = onUpload, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    imageVector = MiuixIcons.UploadCloud,
+                    contentDescription = stringResource(R.string.watch_store_upload_face),
+                    tint = style.titleColor,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
         IconButton(onClick = onToggleViewMode, modifier = Modifier.size(40.dp)) {
             Icon(
@@ -4622,7 +4622,11 @@ private fun LoadingStateRow(label: String) {
 }
 
 @Composable
-private fun ErrorStateRow(message: String, onRetry: () -> Unit) {
+private fun ErrorStateRow(
+    message: String,
+    onRetry: () -> Unit,
+    onOpenCustomMarketUrl: (() -> Unit)? = null,
+) {
     val style = LauncherTheme.style
     Column(
         modifier = Modifier.fillMaxWidth().padding(vertical = 22.dp, horizontal = 16.dp),
@@ -4652,6 +4656,14 @@ private fun ErrorStateRow(message: String, onRetry: () -> Unit) {
             )
             Spacer(Modifier.width(4.dp))
             Text(stringResource(R.string.watch_store_retry), color = style.accentColor)
+        }
+        onOpenCustomMarketUrl?.let { openUrl ->
+            TextButton(onClick = openUrl) {
+                Text(
+                    stringResource(R.string.watch_store_custom_market_url),
+                    color = style.accentColor,
+                )
+            }
         }
     }
 }
